@@ -1,8 +1,29 @@
 import json
 import os
+from io import BytesIO
 from pathlib import Path
 
-from josh_room.auth import ensure_runtime_session
+from josh_room.auth import _request, ensure_runtime_session
+
+
+def test_worker_request_identifies_josh_room_instead_of_python_urllib(monkeypatch):
+    captured = []
+
+    class Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    def open_request(request, timeout):
+        captured.append((request, timeout))
+        return Response(b'{"status":"pending"}')
+
+    monkeypatch.setattr("josh_room.auth.urllib.request.urlopen", open_request)
+
+    assert _request("/session/synthetic") == {"status": "pending"}
+    assert captured[0][0].get_header("User-agent").startswith("Josh-Room/")
 
 
 def test_oauth_session_writes_private_runtime_material_and_environment(tmp_path, monkeypatch):

@@ -31,7 +31,11 @@ def ensure_runtime_session(timeout: int = 600) -> None:
 
 
 def _request(path: str, method: str = "GET") -> dict:
-    request = urllib.request.Request(WORKER_URL + path, method=method)
+    request = urllib.request.Request(
+        WORKER_URL + path,
+        method=method,
+        headers={"User-Agent": "Josh-Room/0.1 (+https://github.com/joshyorko/josh-room)"},
+    )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
 
@@ -66,4 +70,3 @@ def _write_runtime(session: dict) -> None:
     os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] = str(credentials)
     os.environ["JOSH_ROOM_IDENTITY"] = str(identity)
     os.environ["JOSH_ROOM_RUNTIME_CONFIG"] = str(config)
-

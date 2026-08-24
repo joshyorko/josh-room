@@ -51,6 +51,7 @@ def test_human_enter_uses_terminal_picker(monkeypatch, capsys):
 
 def test_documented_argv_forms_have_stable_json_exit_contract(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("JOSH_ROOM_INSTANCE", str(tmp_path / "instance"))
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda: None)
     cases = [
         (["doctor", "--json"], 2),
         (["projects", "list", "--json"], 2),
