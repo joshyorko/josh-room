@@ -53,7 +53,7 @@ def _jat_contract(jat_root: Path) -> dict[str, bool]:
     return {
         "robot": all(f"  {name}:" in robot_text for name in ("Build", "Restore", "Serve")),
         "tasks": all(f"def {name}(" in tasks_text for name in ("Build", "Restore", "Serve")),
-        "interactive": "  3tc:" in robot_text and "jat.cli" in robot_text,
+        "interactive": "  JAT:" in robot_text and "jat.cli" in robot_text,
     }
 
 

@@ -13,7 +13,7 @@ from josh_room.operations import create_snapshot, hydrate
 def _tooling():
     jat_root = os.environ.get("JOSH_ROOM_JAT_ROOT")
     required = [shutil.which(tool) for tool in ("age", "age-keygen", "hauler", "tar", "zstd")]
-    if not jat_root or not Path(jat_root, "robot.yaml").is_file() or not Path(jat_root, "tasks.py").is_file() or "  3tc:" not in Path(jat_root, "robot.yaml").read_text() or not all(required) or not shutil.which("rcc"):
+    if not jat_root or not Path(jat_root, "robot.yaml").is_file() or not Path(jat_root, "tasks.py").is_file() or "  JAT:" not in Path(jat_root, "robot.yaml").read_text() or not all(required) or not shutil.which("rcc"):
         pytest.skip("real RCC-first JAT/Hauler/age/tar/zstd tooling is unavailable")
     return Path(jat_root)
 

@@ -18,7 +18,7 @@ def test_jat_timeout_returns_bounded_metadata_and_terminates_process_group():
 
 
 def test_jat_contract_uses_rcc_tasks_and_python_surface(tmp_path):
-    (tmp_path / "robot.yaml").write_text("tasks:\n  Build:\n  Restore:\n  Serve:\n  3tc:\n    shell: python -m jat.cli\n")
+    (tmp_path / "robot.yaml").write_text("tasks:\n  Build:\n  Restore:\n  Serve:\n  JAT:\n    shell: python -m jat.cli\n")
     (tmp_path / "tasks.py").write_text(
         "from robocorp.tasks import task\n"
         "@task\ndef Build(): pass\n"

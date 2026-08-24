@@ -234,7 +234,7 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
     contract = _jat_contract(jat_root)
     record("jat-robot", contract["robot"], "Run the Josh Room bootstrap to pull a JAT checkout containing robot.yaml Build/Restore/Serve tasks.")
     record("jat-python", contract["tasks"], "Run the Josh Room bootstrap to pull the JAT Python task surface (tasks.py).")
-    record("jat-3tc", contract["interactive"], "Run the Josh Room bootstrap to pull the canonical 3tc interactive task.")
+    record("jat-interactive", contract["interactive"], "Run the Josh Room bootstrap to pull the canonical JAT interactive task.")
     identity_path = os.environ.get("JOSH_ROOM_IDENTITY")
     identity_ok = False
     if identity_path:

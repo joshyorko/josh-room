@@ -30,7 +30,7 @@ CONDA_PREFIX="${CONDA_PREFIX:-$HOME/.local/share/josh-room/jat-runtime}" \
     bash "$jat_root/scripts/install_dependencies.sh" 1
 rcc ht vars --robot "$jat_root/robot.yaml" --json >/dev/null
 test -f "$jat_root/tasks.py"
-for task in Build Restore Serve 3tc; do
+for task in Build Restore Serve JAT; do
     grep -q "^  ${task}:" "$jat_root/robot.yaml"
 done
 grep -q 'python -m jat.cli' "$jat_root/robot.yaml"
