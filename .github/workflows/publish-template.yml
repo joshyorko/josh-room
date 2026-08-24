@@ -1,0 +1,49 @@
+name: Publish Dev Container Template
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "templates/room/**"
+      - ".github/workflows/publish-template.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "templates/room/**"
+      - ".github/workflows/publish-template.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  template:
+    name: Validate and publish room template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Dev Container CLI
+        run: npm install --global @devcontainers/cli@0.88.0
+      - name: Validate template
+        run: |
+          jq -e '
+            .id == "room" and
+            (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+            (.name | type == "string" and length > 0) and
+            (.description | type == "string" and length > 0)
+          ' templates/room/devcontainer-template.json
+          jq empty templates/room/.devcontainer/devcontainer.json
+          bash -n templates/room/.devcontainer/bootstrap.sh
+      - name: Publish template
+        if: github.event_name != 'pull_request'
+        run: |
+          devcontainer templates publish \
+            --registry ghcr.io \
+            --namespace ${{ github.repository }}/templates \
+            "templates/room"
+          version=$(jq -r .version templates/room/devcontainer-template.json)
+          echo "Published ghcr.io/${{ github.repository }}/templates/room:${version}" >> "$GITHUB_STEP_SUMMARY"

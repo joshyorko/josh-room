@@ -23,7 +23,7 @@ def test_readme_and_workflows_are_josh_room_first():
     assert (ROOT / "README.md").read_text().startswith("# Josh Room\n")
     workflows = "\n".join(path.read_text() for path in (ROOT / ".github/workflows").glob("*.yml"))
     assert "Build and publish the Room of Requirement" not in workflows
-    assert "ghcr.io/joshyorko/josh-room" not in workflows
+    assert "docker build" not in workflows
 
 
 def test_thin_template_consumes_secure_ror_image():
@@ -57,9 +57,26 @@ def test_setup_is_host_only_and_room_config_is_read_only():
     assert "type=bind,readonly" in template
 
 
-def test_development_container_keeps_venv_outside_bind_mount():
-    config = (ROOT / ".devcontainer/devcontainer.json").read_text()
-    assert '"UV_PROJECT_ENVIRONMENT": "/home/vscode/.local/share/josh-room/dev-venv"' in config
+def test_root_devcontainer_is_the_personal_room_and_matches_template():
+    assert (ROOT / ".devcontainer/devcontainer.json").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/devcontainer.json"
+    ).read_bytes()
+    assert (ROOT / ".devcontainer/bootstrap.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/bootstrap.sh"
+    ).read_bytes()
+    assert (ROOT / ".vscode/tasks.json").read_bytes() == (ROOT / "templates/room/.vscode/tasks.json").read_bytes()
+
+
+def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
+    workflow = (ROOT / ".github/workflows/publish-template.yml").read_text()
+    assert 'paths:' in workflow
+    assert '"templates/room/**"' in workflow
+    assert "packages: write" in workflow
+    assert "devcontainer templates publish" in workflow
+    assert "--namespace ${{ github.repository }}/templates" in workflow
+    assert '"templates/room"' in workflow
+    assert "docker build" not in workflow
+    assert "build-image" not in workflow
 
 
 def test_personal_template_keyring_mount_has_no_uid_assumption():

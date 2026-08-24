@@ -14,6 +14,30 @@ Things provides Hauler capture and restore. Josh Room provides project
 identity, age encryption, private R2 storage, catalog resolution, safe
 hydration, and IDE entry.
 
+## Open the Room with DevPod
+
+After the one-time host setup below, the repository itself is the personal
+Room entrypoint:
+
+```bash
+devpod up github.com/joshyorko/josh-room --ide vscode
+```
+
+DevPod clones the repository, discovers the root `.devcontainer`, starts the
+Room of Requirement secure image, runs the capability-only bootstrap, and
+opens VS Code with `Josh: Enter Room` available under `Tasks: Run Task`.
+
+The same configuration is published for standard Dev Container template
+consumers:
+
+```bash
+devcontainer templates apply \
+  --template ghcr.io/joshyorko/josh-room/templates/room:0.1.0
+```
+
+The OCI template is an additional standards-based distribution path. DevPod
+does not require users to apply it when opening this repository directly.
+
 ## What it is not
 
 Josh Room is not an image factory, backup daemon, source-control system, remote
