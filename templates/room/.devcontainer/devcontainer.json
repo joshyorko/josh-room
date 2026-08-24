@@ -8,6 +8,6 @@
     "JOSH_ROOM_JAT_ROOT": "/home/vscode/.local/share/josh-room/josh-all-the-things",
     "PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"
   },
-  "onCreateCommand": "bash /workspaces/${localWorkspaceFolderBasename}/.devcontainer/prepare-workspace.sh /workspaces/${localWorkspaceFolderBasename}",
-  "postCreateCommand": "bash /workspaces/${localWorkspaceFolderBasename}/.devcontainer/bootstrap.sh"
+  "onCreateCommand": "bash /workspaces/room/.devcontainer/prepare-workspace.sh /workspaces/room",
+  "postCreateCommand": "bash /home/vscode/.local/share/josh-room/controller/.devcontainer/bootstrap.sh"
 }

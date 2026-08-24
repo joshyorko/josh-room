@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -72,14 +73,39 @@ def test_root_devcontainer_is_the_personal_room_and_matches_template():
 def test_devcontainer_opens_clean_room_not_controller_source():
     config = json.loads((ROOT / ".devcontainer/devcontainer.json").read_text())
     assert config["workspaceFolder"] == "/workspaces/room"
-    assert "${localWorkspaceFolderBasename}" in config["onCreateCommand"]
-    assert "${localWorkspaceFolderBasename}" in config["postCreateCommand"]
+    assert "${localWorkspaceFolderBasename}" not in config["onCreateCommand"]
+    assert "/workspaces/room/.devcontainer/prepare-workspace.sh" in config["onCreateCommand"]
+    assert "/home/vscode/.local/share/josh-room/controller/.devcontainer/bootstrap.sh" == config["postCreateCommand"].removeprefix("bash ")
     prepare = (ROOT / ".devcontainer/prepare-workspace.sh").read_text()
-    assert "mkdir -p /workspaces/room/.vscode" in prepare
-    assert "/workspaces/room/.vscode/tasks.json" in prepare
+    assert "JOSH_ROOM_CONTROLLER_ROOT" in prepare
     assert (ROOT / ".devcontainer/prepare-workspace.sh").read_bytes() == (
         ROOT / "templates/room/.devcontainer/prepare-workspace.sh"
     ).read_bytes()
+
+
+def test_prepare_workspace_relocates_controller_and_leaves_only_room_tasks(tmp_path):
+    room = tmp_path / "room"
+    controller = tmp_path / "controller"
+    (room / ".devcontainer").mkdir(parents=True)
+    (room / ".vscode").mkdir()
+    (room / "src/josh_room").mkdir(parents=True)
+    (room / ".devcontainer/prepare-workspace.sh").write_bytes(
+        (ROOT / ".devcontainer/prepare-workspace.sh").read_bytes()
+    )
+    (room / ".vscode/tasks.json").write_text('{"version":"2.0.0","tasks":[]}')
+    (room / "src/josh_room/__init__.py").write_text("")
+    (room / "README.md").write_text("controller source")
+
+    subprocess.run(
+        ["bash", str(room / ".devcontainer/prepare-workspace.sh"), str(room)],
+        env={"PATH": "/usr/bin:/bin", "JOSH_ROOM_CONTROLLER_ROOT": str(controller)},
+        check=True,
+    )
+
+    assert (controller / "README.md").read_text() == "controller source"
+    assert sorted(path.relative_to(room).as_posix() for path in room.rglob("*") if path.is_file()) == [
+        ".vscode/tasks.json"
+    ]
 
 
 def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
