@@ -1,7 +1,14 @@
 import argparse
 import json
 
-from josh_room.cli import _tar_capable, _workspace_root, build_parser, emit, main
+from josh_room.cli import (
+    _requires_oauth,
+    _tar_capable,
+    _workspace_root,
+    build_parser,
+    emit,
+    main,
+)
 
 
 def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):
@@ -61,11 +68,45 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     assert args.command == "rooms" and args.room_command == "remove" and args.project == "demo"
     args = parser.parse_args(["serve", "demo", "--snapshot", "latest", "--backend", "r2"])
     assert args.command == "serve" and args.project == "demo" and args.snapshot == "latest"
+    args = parser.parse_args(["jat", "build", "--source", str(tmp_path), "--output", str(tmp_path / "haul.tar.zst"), "--all-images"])
+    assert args.command == "jat" and args.jat_command == "build" and args.all_images is True
+    assert _requires_oauth(args) is False
+    args = parser.parse_args(["jat", "restore", "--haul", str(tmp_path / "haul.tar.zst"), "--destination", str(tmp_path / "restored")])
+    assert args.jat_command == "restore"
+    args = parser.parse_args(["jat", "serve", "--haul", str(tmp_path / "haul.tar.zst")])
+    assert args.jat_command == "serve"
     assert parser.parse_args(["enter", "hive"]).backend == "r2"
     assert parser.parse_args(["snapshot", "create", "demo"]).source is None
     image_args = parser.parse_args(["snapshot", "create", "demo", "--image", "example/image:tag"])
     assert image_args.images == ["example/image:tag"] and image_args.all_images is False
     assert parser.parse_args(["snapshot", "create", "demo", "--all-images"]).all_images is True
+
+
+def test_one_off_jat_commands_use_typed_service_without_room_backend(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("josh_room.cli._jat_root", lambda: tmp_path / "jat")
+    monkeypatch.setattr(
+        "josh_room.cli.run_build",
+        lambda jat, source, output, **options: calls.append(("build", jat, source, output, options)) or {"operation": "build"},
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.run_restore",
+        lambda jat, haul, destination: calls.append(("restore", jat, haul, destination)) or {"operation": "restore"},
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.run_serve",
+        lambda jat, haul: calls.append(("serve", jat, haul)) or {"operation": "serve"},
+    )
+    module = __import__("josh_room.cli", fromlist=["dispatch"])
+
+    build = build_parser().parse_args(["jat", "build", "--source", str(tmp_path), "--output", str(tmp_path / "haul"), "--all-images"])
+    restore = build_parser().parse_args(["jat", "restore", "--haul", str(tmp_path / "haul"), "--destination", str(tmp_path / "restored")])
+    serve = build_parser().parse_args(["jat", "serve", "--haul", str(tmp_path / "haul")])
+
+    assert module.dispatch(build, tmp_path / "instance")["operation"] == "build"
+    assert module.dispatch(restore, tmp_path / "instance")["operation"] == "restore"
+    assert module.dispatch(serve, tmp_path / "instance")["operation"] == "serve"
+    assert [call[0] for call in calls] == ["build", "restore", "serve"]
 
 
 def test_hydrate_passes_explicit_snapshot_to_operations(tmp_path, monkeypatch):

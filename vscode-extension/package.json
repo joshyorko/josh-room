@@ -15,6 +15,9 @@
     "onCommand:joshRoom.remove",
     "onCommand:joshRoom.serve",
     "onCommand:joshRoom.refresh",
+    "onCommand:joshRoom.jatBuild",
+    "onCommand:joshRoom.jatRestore",
+    "onCommand:joshRoom.jatServe",
     "onView:joshRoom.rooms"
   ],
   "main": "./extension.js",
@@ -49,6 +52,21 @@
         "command": "joshRoom.refresh",
         "title": "Josh: Refresh Rooms",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "joshRoom.jatBuild",
+        "title": "JAT: Pack Folder into Haul",
+        "icon": "$(package)"
+      },
+      {
+        "command": "joshRoom.jatRestore",
+        "title": "JAT: Restore Haul",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "joshRoom.jatServe",
+        "title": "JAT: Serve Hauler Haul",
+        "icon": "$(server-process)"
       }
     ],
     "viewsContainers": {
@@ -66,6 +84,12 @@
           "id": "joshRoom.rooms",
           "name": "Rooms",
           "contextualTitle": "Josh Room"
+        },
+        {
+          "id": "joshRoom.jatTools",
+          "name": "JAT Tools",
+          "contextualTitle": "JAT Tools",
+          "visibility": "collapsed"
         }
       ]
     },

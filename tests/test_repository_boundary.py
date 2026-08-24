@@ -56,7 +56,10 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
 def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency():
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
-    assert commands == {"joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh"}
+    assert commands == {
+        "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
+        "joshRoom.jatBuild", "joshRoom.jatRestore", "joshRoom.jatServe",
+    }
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
     assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
@@ -81,6 +84,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert package["contributes"]["viewsContainers"]["activitybar"][0]["id"] == "josh-room"
     assert package["contributes"]["views"]["josh-room"][0]["id"] == "joshRoom.rooms"
     assert package["contributes"]["viewsWelcome"][0]["view"] == "joshRoom.rooms"
+    assert {view["id"] for view in package["contributes"]["views"]["josh-room"]} == {"joshRoom.rooms", "joshRoom.jatTools"}
+    assert "Pack Folder into Haul" in extension and "Restore JAT Haul" in extension and "Serve Hauler Haul" in extension
     remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()

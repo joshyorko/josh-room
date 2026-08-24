@@ -159,6 +159,24 @@ class RoomsProvider {
   }
 }
 
+class JatToolsProvider {
+  getTreeItem(item) {
+    const treeItem = new vscode.TreeItem(item.label, vscode.TreeItemCollapsibleState.None);
+    treeItem.description = item.description;
+    treeItem.iconPath = new vscode.ThemeIcon(item.icon);
+    treeItem.command = { command: item.command, title: item.label };
+    return treeItem;
+  }
+
+  getChildren() {
+    return [
+      { label: "Pack Folder into Haul", description: "Build", icon: "package", command: "joshRoom.jatBuild" },
+      { label: "Restore JAT Haul", description: "Restore", icon: "folder-library", command: "joshRoom.jatRestore" },
+      { label: "Serve Hauler Haul", description: "Registry :5000", icon: "server-process", command: "joshRoom.jatServe" },
+    ];
+  }
+}
+
 async function loadCatalog(cwd, title = "Loading your Rooms…") {
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable: true },
@@ -371,6 +389,105 @@ async function serveRoom(preferredProject) {
   return "started";
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+async function jatBuild() {
+  const cwd = activeWorkspace();
+  const folders = await vscode.window.showOpenDialog({
+    title: "JAT: Pack Folder into Haul",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Pack this folder",
+  });
+  if (!folders?.length) return "cancelled";
+  const source = folders[0].fsPath;
+  const output = await vscode.window.showSaveDialog({
+    title: "Save portable JAT haul",
+    defaultUri: vscode.Uri.file(path.join(path.dirname(source), `${path.basename(source)}.haul.tar.zst`)),
+    filters: { "JAT Hauler archive": ["zst"] },
+  });
+  if (!output) return "cancelled";
+  const imageChoice = await vscode.window.showQuickPick([
+    { label: "Workspace only", allImages: false },
+    { label: "Workspace + all tagged local OCI images", allImages: true },
+  ], { title: "Include local OCI images?", ignoreFocusOut: true });
+  if (!imageChoice) return "cancelled";
+  const args = ["jat", "build", "--source", source, "--output", output.fsPath];
+  if (imageChoice.allImages) args.push("--all-images");
+  const result = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Packing ${path.basename(source)}…`, cancellable: true },
+    (_progress, token) => runJoshRoom(args, cwd, token),
+  );
+  await vscode.window.showInformationMessage(`Created ${result.payload_path || output.fsPath}.`);
+  return "built";
+}
+
+async function jatRestore() {
+  const cwd = activeWorkspace();
+  const files = await vscode.window.showOpenDialog({
+    title: "JAT: Restore Haul",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { "JAT Hauler archive": ["zst"] },
+    openLabel: "Restore this haul",
+  });
+  if (!files?.length) return "cancelled";
+  const haul = files[0].fsPath;
+  const parents = await vscode.window.showOpenDialog({
+    title: "Choose restore parent folder",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Restore here",
+  });
+  if (!parents?.length) return "cancelled";
+  const defaultName = path.basename(haul).replace(/\.tar\.zst$|\.zst$/i, "") + "-restored";
+  const name = await vscode.window.showInputBox({
+    title: "JAT: Restore Haul",
+    prompt: "New destination folder name",
+    value: defaultName,
+    ignoreFocusOut: true,
+    validateInput: (value) => value.trim() && !value.includes("/") ? undefined : "Enter one folder name.",
+  });
+  if (!name) return "cancelled";
+  const destination = path.join(parents[0].fsPath, name);
+  if (fs.existsSync(destination)) throw new Error(`Destination already exists: ${destination}`);
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Restoring ${path.basename(haul)}…`, cancellable: true },
+    (_progress, token) => runJoshRoom(["jat", "restore", "--haul", haul, "--destination", destination], cwd, token),
+  );
+  const action = await vscode.window.showInformationMessage(`Restored to ${destination}.`, "Open Folder");
+  if (action === "Open Folder") {
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
+  }
+  return "restored";
+}
+
+async function jatServe() {
+  const cwd = activeWorkspace();
+  const files = await vscode.window.showOpenDialog({
+    title: "JAT: Serve Hauler Haul",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { "Hauler archive": ["zst"] },
+    openLabel: "Serve this haul",
+  });
+  if (!files?.length) return "cancelled";
+  const terminal = vscode.window.createTerminal({ name: "JAT Hauler Registry", cwd });
+  terminal.show(true);
+  terminal.sendText(`josh-room jat serve --haul ${shellQuote(files[0].fsPath)}`, true);
+  return "started";
+}
+
 function register(context, command, operation) {
   context.subscriptions.push(vscode.commands.registerCommand(command, async (...args) => {
     try {
@@ -390,13 +507,17 @@ function activate(context) {
   statusItem.show();
   roomsProvider = new RoomsProvider();
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", { treeDataProvider: roomsProvider });
-  context.subscriptions.push(outputChannel, statusItem, roomsView);
+  const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", { treeDataProvider: new JatToolsProvider() });
+  context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
+  register(context, "joshRoom.jatBuild", jatBuild);
+  register(context, "joshRoom.jatRestore", jatRestore);
+  register(context, "joshRoom.jatServe", jatServe);
   roomsProvider.refresh().catch((error) => {
     outputChannel.appendLine(`error: ${error.message || String(error)}`);
   });

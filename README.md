@@ -109,6 +109,12 @@ Save can include all tagged local OCI images in the JAT haul. `Josh: Serve Room
 Images` decrypts the chosen snapshot only into private runtime staging and runs
 JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
 removes the temporary haul and registry store.
+
+A separate `JAT Tools` view preserves one-off automation outside the Room/R2
+workflow: pack any folder into a portable haul, restore a JAT-compatible haul
+into a new destination, or serve any Hauler haul as a foreground registry. These
+commands use the same typed RCC Build/Restore/Serve tasks but require no Room,
+catalog, OAuth, or R2 operation.
 `Josh: Remove Room` requires explicit modal confirmation, removes the encrypted
 catalog entry conditionally, then deletes only objects no remaining Room
 references. Storage, encryption, and hydration remain owned by the CLI.
@@ -124,6 +130,9 @@ josh-room snapshot create <project> [--source <path>] [--image <ref> ... | --all
 josh-room hydrate <project> --destination <path> [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room enter [<project>] [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room serve <project> [--snapshot latest|<id>] [--backend local|r2] [--json]
+josh-room jat build --source <path> --output <haul.tar.zst> [--image <ref> ... | --all-images] [--json]
+josh-room jat restore --haul <haul.tar.zst> --destination <path> [--json]
+josh-room jat serve --haul <haul.tar.zst> [--json]
 ```
 
 `enter` lists logical project display names, resolves the encrypted catalog,

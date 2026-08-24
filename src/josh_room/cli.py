@@ -13,7 +13,7 @@ from .auth import ensure_runtime_session
 from .catalog import Catalog
 from .config import auth_status, private_config, save_private_config
 from .crypto import decrypt
-from .jat import _jat_contract
+from .jat import _jat_contract, run_build, run_restore, run_serve
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
@@ -77,6 +77,21 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--snapshot", default="latest")
     serve.add_argument("--backend", choices=("local", "r2"), default="r2")
     _json_option(serve)
+    jat = commands.add_parser("jat")
+    jat_commands = jat.add_subparsers(dest="jat_command", required=True)
+    jat_build = jat_commands.add_parser("build")
+    jat_build.add_argument("--source", type=Path, required=True)
+    jat_build.add_argument("--output", type=Path, required=True)
+    jat_build.add_argument("--image", dest="images", action="append", default=[])
+    jat_build.add_argument("--all-images", action="store_true")
+    _json_option(jat_build)
+    jat_restore = jat_commands.add_parser("restore")
+    jat_restore.add_argument("--haul", type=Path, required=True)
+    jat_restore.add_argument("--destination", type=Path, required=True)
+    _json_option(jat_restore)
+    jat_serve = jat_commands.add_parser("serve")
+    jat_serve.add_argument("--haul", type=Path, required=True)
+    _json_option(jat_serve)
     setup = commands.add_parser("setup")
     setup.add_argument("--profile", required=True)
     setup.add_argument("--age-profile", required=True)
@@ -178,6 +193,23 @@ def dispatch(args, instance: Path) -> dict:
                 _backend(args.backend, instance),
             ),
         }
+    if args.command == "jat":
+        jat_root = _jat_root()
+        if args.jat_command == "build":
+            return {
+                "ok": True,
+                **run_build(
+                    jat_root,
+                    args.source,
+                    args.output,
+                    images=args.images,
+                    all_images=args.all_images,
+                ),
+            }
+        if args.jat_command == "restore":
+            return {"ok": True, **run_restore(jat_root, args.haul, args.destination)}
+        if args.jat_command == "serve":
+            return {"ok": True, **run_serve(jat_root, args.haul)}
     if args.command == "setup":
         credentials = json.load(sys.stdin)
         required = {
