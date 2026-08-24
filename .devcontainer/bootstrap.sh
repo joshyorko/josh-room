@@ -3,7 +3,7 @@ set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
 
-readonly JOSH_ROOM_GIT_SHA="c61d590526fbb5613939f9eed5d1c3ea5f9bda18"
+readonly JOSH_ROOM_GIT_SHA="f9c37126a14e9da5a2b953a7df5bb93a660f6d6b"
 readonly JAT_GIT_SHA="d1e1c3eb107cebe7273d3792aeaffdef4488ce44"
 readonly EXPECTED_RCC_VERSION="v18.18.1"
 readonly JAT_HOLOLIB_REFERENCE="ghcr.io/joshyorko/josh-all-the-things-hololib@sha256:f41f5113bdd23e8985462b43ad3ff2d5b9e7921050e0ce9859fe312b23946ae2"
