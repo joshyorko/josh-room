@@ -190,15 +190,24 @@ def dispatch(args, instance: Path) -> dict:
 
 
 def hydrate_command(args, instance: Path, backend=None) -> dict:
-    if args.snapshot != "latest":
-        raise ValueError("only --snapshot latest is supported by the local MVP")
     identity = os.environ.get("JOSH_ROOM_IDENTITY")
     jat_root = _jat_root()
     if not identity:
         raise ValueError("hydrate requires JOSH_ROOM_IDENTITY and JOSH_ROOM_JAT_ROOT")
     if backend is None:
         backend = _backend(args.backend, instance)
-    return {"ok": True, **hydrate(instance, args.project, args.destination, Path(identity), jat_root, backend)}
+    return {
+        "ok": True,
+        **hydrate(
+            instance,
+            args.project,
+            args.destination,
+            Path(identity),
+            jat_root,
+            backend,
+            snapshot_id=args.snapshot,
+        ),
+    }
 
 
 def _backend(name: str, instance: Path):

@@ -63,6 +63,25 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     assert parser.parse_args(["snapshot", "create", "demo"]).source is None
 
 
+def test_hydrate_passes_explicit_snapshot_to_operations(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setenv("JOSH_ROOM_IDENTITY", str(tmp_path / "identity"))
+    monkeypatch.setattr("josh_room.cli._jat_root", lambda: tmp_path / "jat")
+    monkeypatch.setattr("josh_room.cli._backend", lambda *_args: object())
+    monkeypatch.setattr(
+        "josh_room.cli.hydrate",
+        lambda *_args, **kwargs: captured.update(kwargs) or {"snapshot_id": kwargs["snapshot_id"]},
+    )
+    args = build_parser().parse_args([
+        "hydrate", "demo", "--snapshot", "older", "--destination", str(tmp_path / "dest"), "--backend", "r2",
+    ])
+
+    result = __import__("josh_room.cli", fromlist=["hydrate_command"]).hydrate_command(args, tmp_path / "instance")
+
+    assert result["snapshot_id"] == "older"
+    assert captured["snapshot_id"] == "older"
+
+
 def test_human_enter_uses_terminal_picker(monkeypatch, capsys):
     monkeypatch.setattr("josh_room.cli.list_projects", lambda _instance, _backend=None: [("demo", "Demo Project")])
     monkeypatch.setattr("builtins.input", lambda _prompt: "1")

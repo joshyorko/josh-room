@@ -61,6 +61,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "already has a working folder" in extension
     assert "Replace Latest" in extension
     assert "Opening existing" in extension
+    assert '"--snapshot"' in extension
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
     assert ".vscode-server-insiders/extensions/joshyorko.josh-room-0.1.0" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())

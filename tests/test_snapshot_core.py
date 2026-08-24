@@ -214,6 +214,8 @@ def test_catalog_resolves_explicit_latest_and_rejects_stale_revision():
     catalog = Catalog.empty()
     catalog = catalog.add_snapshot("demo", "Demo Project", {"snapshot_id": "snap-1", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1})
     assert catalog.latest("demo")["snapshot_id"] == "snap-1"
+    assert catalog.resolve_snapshot("demo", "snap-1")["snapshot_id"] == "snap-1"
+    assert catalog.resolve_snapshot("demo", "latest")["snapshot_id"] == "snap-1"
     with pytest.raises(CatalogConflict):
         catalog.update_if_revision(0, {"format_version": 1, "revision": 99, "projects": {}})
 

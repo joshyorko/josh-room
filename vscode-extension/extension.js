@@ -120,6 +120,22 @@ async function enterRoom() {
     { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
   );
   if (!selected) return "cancelled";
+  const history = await runJoshRoom(["snapshots", "list", selected.projectId, "--backend", "r2"], cwd);
+  let snapshotId = "latest";
+  if (history.snapshots.length > 1) {
+    const snapshot = await vscode.window.showQuickPick(
+      history.snapshots
+        .map((item) => ({
+          label: item.snapshot_id === history.latest ? "Latest snapshot" : "Previous snapshot",
+          description: item.created_at || item.snapshot_id,
+          snapshotId: item.snapshot_id,
+        }))
+        .sort((left) => left.snapshotId === history.latest ? -1 : 1),
+      { title: `Josh: Enter ${selected.label}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
+    );
+    if (!snapshot) return "cancelled";
+    snapshotId = snapshot.snapshotId;
+  }
   const root = path.basename(cwd) === "room" ? path.dirname(cwd) : cwd;
   const destination = path.join(root, selected.projectId);
   if (currentRoom(destination)?.project_id === selected.projectId) {
@@ -137,6 +153,8 @@ async function enterRoom() {
     () => runJoshRoom([
       "hydrate",
       selected.projectId,
+      "--snapshot",
+      snapshotId,
       "--destination",
       destination,
       "--backend",

@@ -48,6 +48,14 @@ class Catalog:
         project = self.body["projects"][project_id]
         return project["snapshots"][project["latest"]]
 
+    def resolve_snapshot(self, project_id: str, snapshot_id: str) -> dict:
+        project = self.body["projects"][project_id]
+        resolved = project["latest"] if snapshot_id == "latest" else snapshot_id
+        try:
+            return project["snapshots"][resolved]
+        except KeyError as error:
+            raise ValueError("snapshot is not present in the encrypted catalog") from error
+
     def remove_project(self, project_id: str):
         if project_id not in self.body["projects"]:
             raise ValueError("room is not present in the encrypted catalog")

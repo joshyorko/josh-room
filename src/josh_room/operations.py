@@ -64,7 +64,7 @@ def create_snapshot(
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
 
 
-def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, jat_root: Path, backend=None) -> dict:
+def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, jat_root: Path, backend=None, snapshot_id: str = "latest") -> dict:
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise FileExistsError("destination must be empty or absent")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
         else:
             catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
         project = catalog.body["projects"][project_id]
-        snapshot = catalog.latest(project_id)
+        snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
         if backend:
             encrypted = stage / "snapshot.jroom.age"
             backend.download_file(snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"])
