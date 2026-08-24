@@ -68,7 +68,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     commands = {item["command"] for item in package["contributes"]["commands"]}
     assert commands == {
         "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
-        "joshRoom.jatBuild", "joshRoom.jatRestore", "joshRoom.jatServe",
+        "joshRoom.removeSnapshot", "joshRoom.jatBuild", "joshRoom.jatRestore", "joshRoom.jatServe",
     }
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
@@ -76,6 +76,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "showQuickPick" in extension and "showInputBox" in extension and "showWarningMessage" in extension
     assert "already has a working folder" in extension
     assert "Replace Latest" in extension
+    assert "Remove Snapshot" in extension and "final recovery point" in extension
     assert "Opening existing" in extension
     assert '"--snapshot"' in extension
     assert "showOpenDialog" in extension and '"--source"' in extension

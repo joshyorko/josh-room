@@ -3,10 +3,10 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
+const { followProgressFile } = require("./progress");
 const { REGISTRY_URL, followLogFile, stageForLog, waitForRegistry } = require("./registry");
 
 let outputChannel;
-let registryLogChannel;
 let roomsProvider;
 let statusItem;
 
@@ -29,11 +29,35 @@ function roomsRoot(workspace) {
   return path.basename(parent) === "workspaces" ? parent : workspace;
 }
 
-function executeJoshRoom(args, cwd, cancellationToken) {
+function executeJoshRoom(args, cwd, cancellationToken, progressReporter) {
   return new Promise((resolve, reject) => {
+    const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
+    fs.chmodSync(progressDirectory, 0o700);
+    const progressPath = path.join(progressDirectory, "events.jsonl");
+    fs.writeFileSync(progressPath, "", { mode: 0o600 });
+    const followers = [followProgressFile(progressPath, (event) => {
+      outputChannel?.info(`${event.stage.toUpperCase()} · ${event.message}`);
+      progressReporter?.report({ message: event.message });
+    })];
+    if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
+      const jatRoot = process.env.JOSH_ROOM_JAT_ROOT || path.join(os.homedir(), ".local", "share", "josh-room", "josh-all-the-things");
+      const streamJat = (line, severity = "info") => {
+        outputChannel?.[severity](line);
+        const stage = stageForLog(line);
+        if (stage) progressReporter?.report({ message: stage });
+      };
+      followers.push(
+        followLogFile(path.join(jatRoot, "output", "stdout.log"), (line) => streamJat(line)),
+        followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => streamJat(line, "warn")),
+      );
+    }
+    const cleanup = () => {
+      for (const follower of followers) follower.dispose();
+      fs.rmSync(progressDirectory, { recursive: true, force: true });
+    };
     const child = childProcess.spawn("josh-room", [...args, "--json"], {
       cwd,
-      env: process.env,
+      env: { ...process.env, JOSH_ROOM_PROGRESS_FILE: progressPath },
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -51,10 +75,12 @@ function executeJoshRoom(args, cwd, cancellationToken) {
     });
     child.on("error", (error) => {
       cancellation?.dispose();
+      cleanup();
       reject(error);
     });
     child.on("close", (code) => {
       cancellation?.dispose();
+      cleanup();
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
@@ -67,15 +93,15 @@ function executeJoshRoom(args, cwd, cancellationToken) {
   });
 }
 
-async function runJoshRoom(args, cwd, cancellationToken) {
-  outputChannel?.appendLine(`> josh-room ${args.join(" ")}`);
+async function runJoshRoom(args, cwd, cancellationToken, progressReporter) {
+  outputChannel?.info(`START · josh-room ${args.join(" ")}`);
   try {
-    const { stdout } = await executeJoshRoom(args, cwd, cancellationToken);
+    const { stdout } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter);
     const result = JSON.parse(stdout);
     if (!result.ok) {
       throw new Error(result.error || "Josh Room operation failed.");
     }
-    outputChannel?.appendLine(`ok: ${result.project_id || result.operation || args[0]}`);
+    outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
     return result;
   } catch (error) {
     const output = error.stdout || error.stderr;
@@ -85,17 +111,24 @@ async function runJoshRoom(args, cwd, cancellationToken) {
         throw new Error(result.error || "Josh Room operation failed.");
       } catch (parseError) {
         if (parseError instanceof SyntaxError) {
-          outputChannel?.appendLine(`error: ${error.message || String(error)}`);
+          outputChannel?.error(error.message || String(error));
           outputChannel?.show(true);
           throw error;
         }
         throw parseError;
       }
     }
-    outputChannel?.appendLine(`error: ${error.message || String(error)}`);
+    outputChannel?.error(error.message || String(error));
     outputChannel?.show(true);
     throw error;
   }
+}
+
+function runOperation(title, args, cwd, { cancellable = true } = {}) {
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title, cancellable },
+    (progress, token) => runJoshRoom(args, cwd, token, progress),
+  );
 }
 
 class RoomsProvider {
@@ -181,10 +214,7 @@ class JatToolsProvider {
 }
 
 async function loadCatalog(cwd, title = "Loading your Rooms…") {
-  return vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title, cancellable: true },
-    (_progress, token) => runJoshRoom(["projects", "list", "--backend", "r2"], cwd, token),
-  );
+  return runOperation(title, ["projects", "list", "--backend", "r2"], cwd);
 }
 
 function currentRoom(cwd) {
@@ -259,10 +289,7 @@ async function saveRoom(options = {}) {
   if (!imageChoice) return "cancelled";
   const buildArgs = ["snapshot", "create", name, "--source", source, "--backend", "r2"];
   if (imageChoice.allImages) buildArgs.push("--all-images");
-  const result = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Saving ${name}…`, cancellable: true },
-    (_progress, token) => runJoshRoom(buildArgs, source, token),
-  );
+  const result = await runOperation(`Saving ${name}…`, buildArgs, source);
   const size = (result.ciphertext_size / (1024 * 1024)).toFixed(1);
   await vscode.window.showInformationMessage(`Saved “${name}” (${size} MiB).`);
   await roomsProvider?.refresh();
@@ -283,7 +310,11 @@ async function enterRoom(preferredProject) {
     await vscode.window.showInformationMessage(`“${selected.label}” is already open.`);
     return "current";
   }
-  const history = await runJoshRoom(["snapshots", "list", selected.projectId, "--backend", "r2"], cwd);
+  const history = await runOperation(
+    `Loading ${selected.label} recovery points…`,
+    ["snapshots", "list", selected.projectId, "--backend", "r2"],
+    cwd,
+  );
   let snapshotId = "latest";
   if (history.snapshots.length > 1) {
     const snapshot = await vscode.window.showQuickPick(
@@ -311,9 +342,9 @@ async function enterRoom(preferredProject) {
   if (fs.existsSync(destination)) {
     throw new Error(`Refusing to replace an unexplained existing folder: ${destination}`);
   }
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Restoring ${selected.label}…`, cancellable: true },
-    (_progress, token) => runJoshRoom([
+  await runOperation(
+    `Restoring ${selected.label}…`,
+    [
       "hydrate",
       selected.projectId,
       "--snapshot",
@@ -324,7 +355,8 @@ async function enterRoom(preferredProject) {
       "r2",
       "--ide",
       "terminal",
-    ], cwd, token),
+    ],
+    cwd,
   );
   await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
   return "opened";
@@ -340,19 +372,81 @@ async function removeRoom(preferredProject) {
       { title: "Josh: Remove Room", placeHolder: "Choose a Room to remove", ignoreFocusOut: true },
     );
   if (!selected) return "cancelled";
-  const snapshots = await runJoshRoom(["snapshots", "list", selected.project.id, "--backend", "r2"], cwd);
+  const snapshots = await runOperation(
+    `Loading ${selected.label} recovery points…`,
+    ["snapshots", "list", selected.project.id, "--backend", "r2"],
+    cwd,
+  );
   const confirmed = await vscode.window.showWarningMessage(
     `Remove “${selected.label}” and its ${snapshots.snapshots.length} snapshot(s)? This cannot be undone.`,
     { modal: true },
     "Remove Room",
   );
   if (confirmed !== "Remove Room") return "cancelled";
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Removing ${selected.label}…`, cancellable: true },
-    (_progress, token) => runJoshRoom(["rooms", "remove", selected.project.id, "--backend", "r2"], cwd, token),
+  await runOperation(
+    `Removing ${selected.label}…`,
+    ["rooms", "remove", selected.project.id, "--backend", "r2"],
+    cwd,
   );
   await vscode.window.showInformationMessage(`Removed “${selected.label}”.`);
   await roomsProvider?.refresh();
+  return "removed";
+}
+
+async function removeSnapshot(preferredProject) {
+  const cwd = activeWorkspace();
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const selectedRoom = preferredProject
+    ? { label: preferredProject.display_name, project: preferredProject }
+    : await vscode.window.showQuickPick(
+      catalog.projects.map((project) => ({ label: project.display_name, project })),
+      { title: "Josh: Remove Snapshot", placeHolder: "Choose a Room", ignoreFocusOut: true },
+    );
+  if (!selectedRoom) return "cancelled";
+  const history = await runOperation(
+    `Loading ${selectedRoom.label} recovery points…`,
+    ["snapshots", "list", selectedRoom.project.id, "--backend", "r2"],
+    cwd,
+  );
+  if (history.snapshots.length === 1) {
+    await vscode.window.showInformationMessage(
+      `“${selectedRoom.label}” has only its final recovery point. Use Remove Room to remove it.`,
+    );
+    return "final";
+  }
+  const selectedSnapshot = await vscode.window.showQuickPick(
+    history.snapshots
+      .map((snapshot) => ({
+        label: snapshot.snapshot_id === history.latest ? "$(star-full) Latest snapshot" : "$(history) Previous snapshot",
+        description: snapshot.created_at ? new Date(snapshot.created_at).toLocaleString() : "Date unavailable",
+        detail: snapshot.snapshot_id,
+        snapshot,
+      }))
+      .sort((left) => left.snapshot.snapshot_id === history.latest ? -1 : 1),
+    {
+      title: `Remove a ${selectedRoom.label} recovery point`,
+      placeHolder: "Choose exactly one snapshot",
+      ignoreFocusOut: true,
+    },
+  );
+  if (!selectedSnapshot) return "cancelled";
+  const latestWarning = selectedSnapshot.snapshot.snapshot_id === history.latest
+    ? " The newest remaining snapshot will become Latest."
+    : "";
+  const confirmed = await vscode.window.showWarningMessage(
+    `Permanently remove the ${selectedSnapshot.label.replace(/^\$\([^)]*\) /, "").toLowerCase()} from ${selectedRoom.label}?${latestWarning}`,
+    { modal: true },
+    "Remove Snapshot",
+  );
+  if (confirmed !== "Remove Snapshot") return "cancelled";
+  const result = await runOperation(
+    `Removing ${selectedRoom.label} recovery point…`,
+    ["snapshots", "remove", selectedRoom.project.id, selectedSnapshot.snapshot.snapshot_id, "--backend", "r2"],
+    cwd,
+  );
+  await vscode.window.showInformationMessage(
+    result.latest_promoted ? `Snapshot removed. Latest is now ${result.latest}.` : "Snapshot removed.",
+  );
   return "removed";
 }
 
@@ -369,7 +463,11 @@ async function serveRoom(preferredProject) {
     if (!selected) return "cancelled";
     project = selected.project;
   }
-  const history = await runJoshRoom(["snapshots", "list", project.id, "--backend", "r2"], cwd);
+  const history = await runOperation(
+    `Loading ${project.display_name} recovery points…`,
+    ["snapshots", "list", project.id, "--backend", "r2"],
+    cwd,
+  );
   let snapshotId = history.latest;
   if (history.snapshots.length > 1) {
     const selected = await vscode.window.showQuickPick(
@@ -386,10 +484,13 @@ async function serveRoom(preferredProject) {
   if (!/^[a-z0-9-]+$/.test(project.id) || !/^[a-z0-9-]+$/.test(snapshotId)) {
     throw new Error("Room or snapshot identity is unsafe for terminal execution.");
   }
-  const terminal = vscode.window.createTerminal({ name: `Images: ${project.display_name}`, cwd });
-  terminal.show(true);
-  terminal.sendText(`josh-room serve ${project.id} --snapshot ${snapshotId} --backend r2`, true);
-  return "started";
+  return startRegistryTerminal({
+    cwd,
+    title: `Serving ${project.display_name}`,
+    terminalName: `Images: ${project.display_name}`,
+    command: `josh-room serve ${project.id} --snapshot ${snapshotId} --backend r2`,
+    retry: () => vscode.commands.executeCommand("joshRoom.serve", project),
+  });
 }
 
 function shellQuote(value) {
@@ -421,10 +522,7 @@ async function jatBuild() {
   if (!imageChoice) return "cancelled";
   const args = ["jat", "build", "--source", source, "--output", output.fsPath];
   if (imageChoice.allImages) args.push("--all-images");
-  const result = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Packing ${path.basename(source)}…`, cancellable: true },
-    (_progress, token) => runJoshRoom(args, cwd, token),
-  );
+  const result = await runOperation(`Packing ${path.basename(source)}…`, args, cwd);
   await vscode.window.showInformationMessage(`Created ${result.payload_path || output.fsPath}.`);
   return "built";
 }
@@ -462,9 +560,10 @@ async function jatRestore() {
   if (!name) return "cancelled";
   const destination = path.join(parents[0].fsPath, name);
   if (fs.existsSync(destination)) throw new Error(`Destination already exists: ${destination}`);
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Restoring ${path.basename(haul)}…`, cancellable: true },
-    (_progress, token) => runJoshRoom(["jat", "restore", "--haul", haul, "--destination", destination], cwd, token),
+  await runOperation(
+    `Restoring ${path.basename(haul)}…`,
+    ["jat", "restore", "--haul", haul, "--destination", destination],
+    cwd,
   );
   const action = await vscode.window.showInformationMessage(`Restored to ${destination}.`, "Open Folder");
   if (action === "Open Folder") {
@@ -486,49 +585,68 @@ async function jatServe() {
   });
   if (!files?.length) return "cancelled";
   const haul = files[0].fsPath;
+  return startRegistryTerminal({
+    cwd,
+    title: `Serving ${path.basename(haul)}`,
+    terminalName: "JAT Hauler Registry",
+    command: `josh-room jat serve --haul ${shellQuote(haul)}`,
+    retry: () => vscode.commands.executeCommand("joshRoom.jatServe"),
+  });
+}
+
+async function startRegistryTerminal({ cwd, title, terminalName, command, retry }) {
   const jatRoot = process.env.JOSH_ROOM_JAT_ROOT || path.join(os.homedir(), ".local", "share", "josh-room", "josh-all-the-things");
-  const terminal = vscode.window.createTerminal({ name: "JAT Hauler Registry", cwd });
+  const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
+  fs.chmodSync(progressDirectory, 0o700);
+  const progressPath = path.join(progressDirectory, "events.jsonl");
+  fs.writeFileSync(progressPath, "", { mode: 0o600 });
+  const terminal = vscode.window.createTerminal({ name: terminalName, cwd });
   const followers = [];
   let latestLog = "";
   let progressReporter;
   let progressActive = false;
   const stream = (line, severity = "info") => {
     latestLog = line;
-    registryLogChannel?.[severity](line);
+    outputChannel?.[severity](line);
     const stage = stageForLog(line);
     if (stage && progressActive) progressReporter?.report({ message: stage });
   };
   followers.push(
+    followProgressFile(progressPath, (event) => {
+      latestLog = event.message;
+      outputChannel?.info(`${event.stage.toUpperCase()} · ${event.message}`);
+      if (progressActive) progressReporter?.report({ message: event.message });
+    }),
     followLogFile(path.join(jatRoot, "output", "stdout.log"), (line) => stream(line)),
     followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
   );
   const stopFollowing = () => {
     for (const follower of followers) follower.dispose();
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
   };
   const terminalClosed = vscode.window.onDidCloseTerminal((closed) => {
     if (closed !== terminal) return;
     stopFollowing();
     terminalClosed.dispose();
-    registryLogChannel?.info("Registry stopped.");
+    outputChannel?.info("REGISTRY · Stopped");
     setStatus("$(archive) Josh Room");
   });
-  registryLogChannel?.clear();
-  registryLogChannel?.info(`Serving ${path.basename(haul)}`);
-  registryLogChannel?.info(`Runtime logs: ${path.join(jatRoot, "output")}`);
-  setStatus("$(sync~spin) Starting registry", path.basename(haul));
+  outputChannel?.info(`START · ${title}`);
+  outputChannel?.info(`LOGS · ${path.join(jatRoot, "output")}`);
+  setStatus("$(sync~spin) Starting registry", title);
   terminal.show(true);
   try {
     const catalog = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `Serving ${path.basename(haul)}`,
+        title,
         cancellable: false,
       },
       async (progress) => {
         progressReporter = progress;
         progressActive = true;
         progress.report({ message: "Preparing RCC environment" });
-        terminal.sendText(`josh-room jat serve --haul ${shellQuote(haul)}`, true);
+        terminal.sendText(`JOSH_ROOM_PROGRESS_FILE=${shellQuote(progressPath)} ${command}`, true);
         try {
           return await waitForRegistry();
         } finally {
@@ -538,9 +656,8 @@ async function jatServe() {
     );
     const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
     const count = repositories.length;
-    setStatus("$(server-process) Registry :5000", `${count} repositories from ${path.basename(haul)}`);
-    registryLogChannel?.info(`Ready at ${REGISTRY_URL} with ${count} ${count === 1 ? "repository" : "repositories"}.`);
-    outputChannel?.appendLine(`Hauler registry ready at ${REGISTRY_URL} (${count} repositories).`);
+    setStatus("$(server-process) Registry :5000", `${count} repositories · ${title}`);
+    outputChannel?.info(`READY · ${REGISTRY_URL} · ${count} ${count === 1 ? "repository" : "repositories"}`);
     const action = await vscode.window.showInformationMessage(
       `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
       "Show Images",
@@ -563,23 +680,23 @@ async function jatServe() {
       await vscode.env.clipboard.writeText(REGISTRY_URL);
       await vscode.window.showInformationMessage(`Copied ${REGISTRY_URL}.`);
     } else if (action === "Show Logs") {
-      registryLogChannel?.show(true);
+      outputChannel?.show(true);
     }
     return "started";
   } catch (error) {
     progressActive = false;
     const detail = latestLog || error.message || String(error);
-    registryLogChannel?.error(`Registry failed: ${detail}`);
+    outputChannel?.error(`Registry failed: ${detail}`);
     setStatus("$(error) Registry failed", detail);
     const action = await vscode.window.showErrorMessage(
       `Hauler registry failed to start: ${detail.slice(0, 240)}`,
       "Show Logs",
       "Retry",
     );
-    if (action === "Show Logs") registryLogChannel?.show(true);
+    if (action === "Show Logs") outputChannel?.show(true);
     if (action === "Retry") {
       terminal.dispose();
-      await vscode.commands.executeCommand("joshRoom.jatServe");
+      await retry();
     }
     return "failed";
   }
@@ -597,8 +714,7 @@ function register(context, command, operation) {
 }
 
 function activate(context) {
-  outputChannel = vscode.window.createOutputChannel("Josh Room");
-  registryLogChannel = vscode.window.createOutputChannel("Josh Room: Registry", { log: true });
+  outputChannel = vscode.window.createOutputChannel("Josh Room", { log: true });
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusItem.command = "workbench.view.extension.josh-room";
   setStatus("$(archive) Josh Room");
@@ -606,11 +722,12 @@ function activate(context) {
   roomsProvider = new RoomsProvider();
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", { treeDataProvider: roomsProvider });
   const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", { treeDataProvider: new JatToolsProvider() });
-  context.subscriptions.push(outputChannel, registryLogChannel, statusItem, roomsView, jatToolsView);
+  context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.removeSnapshot", removeSnapshot);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
   register(context, "joshRoom.jatBuild", jatBuild);

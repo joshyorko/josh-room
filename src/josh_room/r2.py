@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 
 from .keyring import lookup
 from .local_store import ObjectRef
+from .progress import report_progress
 
 OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
 
@@ -107,6 +108,8 @@ class R2Backend:
                     if not chunk:
                         break
                     parts.append({"ETag": self.client.upload_part(Bucket=self.config.bucket, Key=key, UploadId=upload_id, PartNumber=part_number, Body=chunk)["ETag"], "PartNumber": part_number})
+                    uploaded = min(part_number * self.config.multipart_chunk_size, size)
+                    report_progress("upload", f"Uploading encrypted Room • {_percent(uploaded, size)}%", current=uploaded, total=size)
                     part_number += 1
                 try:
                     self.client.complete_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id, MultipartUpload={"Parts": parts}, IfNoneMatch="*")
@@ -156,6 +159,8 @@ class R2Backend:
                         raise ValueError("remote object exceeds maximum size")
                     digest.update(chunk)
                     output.write(chunk)
+                    if total == expected_size or total % (16 * 1024 * 1024) == 0:
+                        report_progress("download", f"Downloading encrypted Room • {_percent(total, expected_size)}%", current=total, total=expected_size)
                 output.flush()
                 os.fsync(output.fileno())
             if total != expected_size or digest.hexdigest() != expected_digest:
@@ -239,6 +244,10 @@ def _file_digest(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _percent(current: int, total: int) -> int:
+    return 100 if total <= 0 else min(100, int(current * 100 / total))
 
 
 def _is_precondition(error: ClientError) -> bool:

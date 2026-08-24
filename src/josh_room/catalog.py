@@ -73,6 +73,28 @@ class Catalog:
         body["revision"] += 1
         return Catalog(body), removable, len(removed["snapshots"])
 
+    def remove_snapshot(self, project_id: str, snapshot_id: str):
+        if project_id not in self.body["projects"]:
+            raise ValueError("room is not present in the encrypted catalog")
+        project = self.body["projects"][project_id]
+        if snapshot_id not in project["snapshots"]:
+            raise ValueError("snapshot is not present in the encrypted catalog")
+        if len(project["snapshots"]) == 1:
+            raise ValueError("cannot remove a Room's final snapshot; remove the Room instead")
+        body = json.loads(json.dumps(self.body))
+        changed = body["projects"][project_id]
+        removed = changed["snapshots"].pop(snapshot_id)
+        if changed["latest"] == snapshot_id:
+            changed["latest"] = next(reversed(changed["snapshots"]))
+        referenced = {
+            snapshot["object_key"]
+            for candidate in body["projects"].values()
+            for snapshot in candidate["snapshots"].values()
+        }
+        removable = [] if removed["object_key"] in referenced else [removed["object_key"]]
+        body["revision"] += 1
+        return Catalog(body), removable
+
     def update_if_revision(self, expected_revision: int, body: dict):
         if self.body["revision"] != expected_revision:
             raise CatalogConflict("stale catalog revision")

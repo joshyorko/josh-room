@@ -13,6 +13,7 @@ from .crypto import decrypt, decrypt_file, encrypt, encrypt_file
 from .envelope import build_envelope_file, read_envelope_file
 from .jat import run_build, run_restore, run_serve
 from .local_store import ImmutableLocalStore
+from .progress import report_progress
 
 
 def create_snapshot(
@@ -29,22 +30,28 @@ def create_snapshot(
     instance.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=instance) as work:
         haul = Path(work) / "payload.haul.tar.zst"
+        report_progress("build", "Building portable Room haul")
         producer = run_build(jat_root, source, haul, images=images, all_images=all_images)
         payload_size, payload_digest = _file_metadata(haul)
         manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source)}
         envelope = Path(work) / "snapshot.jroom"
+        report_progress("package", "Packaging the trusted snapshot envelope")
         build_envelope_file(manifest, haul, envelope)
         encrypted = Path(work) / "snapshot.jroom.age"
+        report_progress("encrypt", "Encrypting Room with age")
         encrypt_file(envelope, recipients, encrypted)
         ciphertext_size, ciphertext_digest = _file_metadata(encrypted)
         if backend:
+            report_progress("upload", "Uploading encrypted Room to private R2")
             ref = backend.put_file(f"objects/sha256/{ciphertext_digest}", encrypted)
         else:
+            report_progress("store", "Writing encrypted Room to local storage")
             ref = ImmutableLocalStore(instance).put_file(encrypted)
         if ref.sha256 != ciphertext_digest or ref.size != ciphertext_size:
             raise ValueError("published ciphertext metadata mismatch")
         catalog_path = instance / "catalog.jroom.age"
         identity_value = os.environ.get("JOSH_ROOM_IDENTITY")
+        report_progress("catalog", "Loading encrypted Room catalog")
         if backend:
             catalog, catalog_etag = _read_remote_catalog(backend, identity_value, instance)
         else:
@@ -54,6 +61,7 @@ def create_snapshot(
         observed_revision = catalog.body["revision"]
         catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), {"snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]})
         try:
+            report_progress("catalog", "Publishing the new latest Room snapshot")
             if backend:
                 backend.conditional_catalog_put(_encrypt_catalog(catalog, recipients, instance), catalog_etag)
             else:
@@ -63,6 +71,7 @@ def create_snapshot(
                 backend.record_orphan(ref)
             raise
         _write_room_marker(source, project_id, display_name or _display_name(project_id))
+        report_progress("complete", "Room saved safely")
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
 
 
@@ -74,12 +83,14 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
     stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}.josh-room-", dir=destination.parent))
     receipt = instance / "receipts" / f"{operation_id}.json"
     try:
+        report_progress("catalog", "Loading encrypted Room catalog")
         if backend:
             catalog, _catalog_etag = _read_remote_catalog(backend, identity, instance)
         else:
             catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
         project = catalog.body["projects"][project_id]
         snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
+        report_progress("download", "Downloading encrypted Room snapshot")
         if backend:
             encrypted = stage / "snapshot.jroom.age"
             backend.download_file(snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"])
@@ -89,12 +100,15 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
                 snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"]
             )
         envelope = stage / "snapshot.jroom"
+        report_progress("decrypt", "Decrypting Room with age")
         decrypt_file(encrypted, [identity], envelope)
         haul = stage / "payload.haul.tar.zst"
+        report_progress("verify", "Verifying the trusted snapshot envelope")
         manifest = read_envelope_file(envelope, haul)
         if manifest["project_id"] != project_id:
             raise ValueError("manifest project mismatch")
         workspace_stage = stage / "restore"
+        report_progress("restore", "Restoring workspace through JAT and RCC")
         jat_result = run_restore(jat_root, haul, workspace_stage)
         workspace_wrapper = workspace_stage / "workspace"
         workspace_roots = list(workspace_wrapper.iterdir()) if workspace_wrapper.is_dir() else []
@@ -110,6 +124,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
                 os.replace(backup, destination)
                 raise FileExistsError("destination became non-empty before promotion")
         try:
+            report_progress("promote", "Promoting restored workspace atomically")
             os.replace(restored_root, destination)
         except BaseException:
             if backup and backup.exists() and not destination.exists():
@@ -119,6 +134,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
             backup.rmdir()
         result = {"project_id": project_id, "snapshot_id": snapshot["snapshot_id"], "destination": str(destination), "receipt": str(receipt), "jat": jat_result}
         _write_receipt(receipt, {"operation": "hydrate", "operation_id": operation_id, "status": "success", **result})
+        report_progress("complete", "Room restored and ready to open")
         return result
     except BaseException as error:
         failure = {"operation": "hydrate", "operation_id": operation_id, "status": "failed", "error_type": type(error).__name__}
@@ -134,6 +150,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
 def remove_room(instance: Path, project_id: str, identity: Path, recipients: list[str], backend=None) -> dict:
     operation_id = uuid.uuid4().hex
     receipt = instance / "receipts" / f"{operation_id}.json"
+    report_progress("catalog", "Loading encrypted Room catalog")
     if backend:
         catalog, etag = _read_remote_catalog(backend, identity, instance)
     else:
@@ -141,11 +158,13 @@ def remove_room(instance: Path, project_id: str, identity: Path, recipients: lis
         catalog = catalog_file.read()
         etag = None
     updated, removable, snapshot_count = catalog.remove_project(project_id)
+    report_progress("catalog", "Removing Room from the encrypted catalog")
     if backend:
         backend.conditional_catalog_put(_encrypt_catalog(updated, recipients, instance), etag)
     else:
         catalog_file.update_if_revision(catalog.body["revision"], updated, recipients)
     cleanup_failed = []
+    report_progress("cleanup", "Removing unreferenced encrypted snapshots")
     for key in removable:
         try:
             if backend:
@@ -162,6 +181,54 @@ def remove_room(instance: Path, project_id: str, identity: Path, recipients: lis
     if cleanup_failed:
         result["cleanup_pending"] = len(cleanup_failed)
     _write_receipt(receipt, {"operation": "remove-room", "operation_id": operation_id, "status": "success", **result})
+    report_progress("complete", "Room removed")
+    return result
+
+
+def remove_snapshot(
+    instance: Path,
+    project_id: str,
+    snapshot_id: str,
+    identity: Path,
+    recipients: list[str],
+    backend=None,
+) -> dict:
+    operation_id = uuid.uuid4().hex
+    receipt = instance / "receipts" / f"{operation_id}.json"
+    report_progress("catalog", "Loading encrypted Room catalog")
+    if backend:
+        catalog, etag = _read_remote_catalog(backend, identity, instance)
+    else:
+        catalog_file = CatalogFile(instance / "catalog.jroom.age", identity)
+        catalog = catalog_file.read()
+        etag = None
+    latest_promoted = catalog.body["projects"][project_id]["latest"] == snapshot_id
+    updated, removable = catalog.remove_snapshot(project_id, snapshot_id)
+    report_progress("catalog", "Removing selected recovery point")
+    if backend:
+        backend.conditional_catalog_put(_encrypt_catalog(updated, recipients, instance), etag)
+    else:
+        catalog_file.update_if_revision(catalog.body["revision"], updated, recipients)
+    cleanup_failed = []
+    for key in removable:
+        try:
+            if backend:
+                backend.delete_object(key)
+            else:
+                ImmutableLocalStore(instance).delete(key)
+        except Exception:  # noqa: BLE001 - catalog removal is durable; cleanup is recorded for retry
+            cleanup_failed.append(key)
+    result = {
+        "deleted_objects": len(removable) - len(cleanup_failed),
+        "latest": updated.body["projects"][project_id]["latest"],
+        "latest_promoted": latest_promoted,
+        "project_id": project_id,
+        "snapshot_id": snapshot_id,
+    }
+    if cleanup_failed:
+        result["cleanup_pending"] = len(cleanup_failed)
+    _write_receipt(receipt, {"operation": "remove-snapshot", "operation_id": operation_id, "status": "success", **result})
+    report_progress("complete", "Recovery point removed")
     return result
 
 
@@ -169,12 +236,14 @@ def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: 
     instance.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="serve-", dir=instance) as work:
         stage = Path(work)
+        report_progress("catalog", "Loading encrypted Room catalog")
         if backend:
             catalog, _etag = _read_remote_catalog(backend, identity, instance)
         else:
             catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
         snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
         encrypted = stage / "snapshot.jroom.age"
+        report_progress("download", "Downloading encrypted Room snapshot")
         if backend:
             backend.download_file(snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"])
         else:
@@ -182,11 +251,14 @@ def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: 
                 snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"]
             )
         envelope = stage / "snapshot.jroom"
+        report_progress("decrypt", "Decrypting Room with age")
         decrypt_file(encrypted, [identity], envelope)
         haul = stage / "payload.haul.tar.zst"
+        report_progress("verify", "Verifying the trusted snapshot envelope")
         manifest = read_envelope_file(envelope, haul)
         if manifest["project_id"] != project_id:
             raise ValueError("manifest project mismatch")
+        report_progress("serve", "Starting read-only Hauler registry")
         return run_serve(jat_root, haul)
 
 

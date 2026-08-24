@@ -89,7 +89,12 @@ function followLogFile(logPath, onLine, { intervalMs = 100 } = {}) {
   };
   const timer = setInterval(poll, intervalMs);
   timer.unref?.();
-  return { dispose: () => clearInterval(timer) };
+  return {
+    dispose: () => {
+      poll();
+      clearInterval(timer);
+    },
+  };
 }
 
 module.exports = { REGISTRY_URL, cleanLogLine, followLogFile, probeRegistry, stageForLog, waitForRegistry };

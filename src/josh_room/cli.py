@@ -17,7 +17,14 @@ from .jat import _jat_contract, run_build, run_restore, run_serve
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
-from .operations import create_snapshot, hydrate, remove_room, serve_snapshot
+from .operations import (
+    create_snapshot,
+    hydrate,
+    remove_room,
+    remove_snapshot,
+    serve_snapshot,
+)
+from .progress import report_progress
 from .r2 import R2Backend, R2Config
 
 
@@ -50,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_list.add_argument("project")
     snapshot_list.add_argument("--backend", choices=("local", "r2"), default="r2")
     _json_option(snapshot_list)
+    snapshot_remove = snapshot_commands.add_parser("remove")
+    snapshot_remove.add_argument("project")
+    snapshot_remove.add_argument("snapshot")
+    snapshot_remove.add_argument("--backend", choices=("local", "r2"), default="r2")
+    _json_option(snapshot_remove)
     snapshot = commands.add_parser("snapshot")
     snapshot_commands = snapshot.add_subparsers(dest="snapshot_command", required=True)
     snapshot_create = snapshot_commands.add_parser("create")
@@ -138,6 +150,22 @@ def dispatch(args, instance: Path) -> dict:
             **remove_room(instance, args.project, Path(identity), recipients, _backend(args.backend, instance)),
         }
     if args.command == "snapshots":
+        if args.snapshots_command == "remove":
+            recipients = _recipients()
+            identity = os.environ.get("JOSH_ROOM_IDENTITY")
+            if len(recipients) < 2 or not identity:
+                raise ValueError("snapshot removal requires an age identity and two recipients")
+            return {
+                "ok": True,
+                **remove_snapshot(
+                    instance,
+                    args.project,
+                    args.snapshot,
+                    Path(identity),
+                    recipients,
+                    _backend(args.backend, instance),
+                ),
+            }
         catalog = load_catalog(instance, _backend(args.backend, instance))
         project = catalog.body["projects"].get(args.project)
         if not project:
@@ -432,6 +460,7 @@ def _identity() -> Path:
 
 
 def load_catalog(instance: Path, backend=None) -> Catalog:
+    report_progress("catalog", "Reading encrypted Room catalog")
     if backend is None:
         path = instance / "catalog.jroom.age"
         if not path.is_file():
@@ -445,7 +474,9 @@ def load_catalog(instance: Path, backend=None) -> Catalog:
         path = Path(handle.name)
         handle.write(encrypted)
     try:
-        return Catalog(json.loads(decrypt(path, [_identity()])))
+        catalog = Catalog(json.loads(decrypt(path, [_identity()])))
+        report_progress("catalog", "Room catalog is ready")
+        return catalog
     finally:
         path.unlink(missing_ok=True)
 

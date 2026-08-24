@@ -96,8 +96,10 @@ is unavailable. `enter` discovers logical project names from the encrypted R2
 catalog, hydrates safely, then launches VS Code Insiders.
 
 The bundled extension provides a native Rooms TreeView, toolbar actions,
-per-Room Enter/Serve/Remove actions, progress notifications, and a Josh Room
-output channel. Repositories do not need a Josh Room `.vscode/tasks.json`.
+per-Room Enter/Serve/Remove actions, live operation progress, and a timestamped
+Josh Room log channel. Save, Enter, Remove, and JAT Build/Restore/Serve all show
+their real auth, encryption, R2, and RCC/Hauler stages without terminal noise.
+Repositories do not need a Josh Room `.vscode/tasks.json`.
 `Josh: Save Room` first opens a native folder picker, then
 a Quick Pick of saved Rooms plus “Create a new Room”. The selected folder is
 the snapshot source and receives only the non-secret `.josh-room.json` identity
@@ -117,7 +119,10 @@ commands use the same typed RCC Build/Restore/Serve tasks but require no Room,
 catalog, OAuth, or R2 operation.
 `Josh: Remove Room` requires explicit modal confirmation, removes the encrypted
 catalog entry conditionally, then deletes only objects no remaining Room
-references. Storage, encryption, and hydration remain owned by the CLI.
+references. `Josh: Remove Snapshot` removes one selected recovery point, safely
+promotes the newest remaining snapshot when Latest is removed, and refuses to
+delete a Room's final snapshot. Storage, encryption, and hydration remain owned
+by the CLI.
 
 ## Commands
 
@@ -126,6 +131,7 @@ josh-room doctor [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [-
 josh-room projects list [--backend local|r2] [--json]
 josh-room rooms remove <project> [--backend local|r2] [--json]
 josh-room snapshots list <project> [--backend local|r2] [--json]
+josh-room snapshots remove <project> <snapshot> [--backend local|r2] [--json]
 josh-room snapshot create <project> [--source <path>] [--image <ref> ... | --all-images] [--backend local|r2] [--json]
 josh-room hydrate <project> --destination <path> [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room enter [<project>] [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
@@ -153,8 +159,7 @@ in the root devcontainer and OCI template.
 This remains a review checkpoint, not `v0.1.0`. The secure Room of Requirement
 container smoke and dedicated short-lived R2 credential rotation remain open.
 RCC Environment Artifacts, Actions Runtime, Hive projections, OpenAI uploads,
-periodic capture, garbage collection, and a native VS Code extension are
-deliberately deferred.
+periodic capture, and garbage collection are deliberately deferred.
 
 See [architecture](docs/architecture.md), [ADRs](docs/adr), and
 [deferred integrations](docs/DEFERRED-INTEGRATIONS.md).

@@ -66,6 +66,8 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     assert args.backend == "r2"
     args = parser.parse_args(["rooms", "remove", "demo", "--backend", "r2", "--json"])
     assert args.command == "rooms" and args.room_command == "remove" and args.project == "demo"
+    args = parser.parse_args(["snapshots", "remove", "demo", "snapshot-one", "--backend", "r2", "--json"])
+    assert args.snapshots_command == "remove" and args.project == "demo" and args.snapshot == "snapshot-one"
     args = parser.parse_args(["serve", "demo", "--snapshot", "latest", "--backend", "r2"])
     assert args.command == "serve" and args.project == "demo" and args.snapshot == "latest"
     args = parser.parse_args(["jat", "build", "--source", str(tmp_path), "--output", str(tmp_path / "haul.tar.zst"), "--all-images"])

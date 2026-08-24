@@ -7,6 +7,8 @@ from pathlib import Path
 
 from robocorp import log
 
+from .progress import report_progress
+
 
 class JATError(RuntimeError):
     def __init__(self, message, result=None):
@@ -73,6 +75,7 @@ def _run_task(jat_root: Path, task: str, request: dict, *, foreground: bool = Fa
     result_path.unlink(missing_ok=True)
     argv = ["rcc", "run", "-r", str(jat_root / "robot.yaml"), "-t", task, "--", "--json-input", str(request_path)]
     try:
+        report_progress("jat", f"Running JAT {task} through RCC")
         timeout = None if foreground else float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600"))
         exit_status, diagnostic = _run(argv, timeout)
         if not result_path.is_file():
@@ -96,6 +99,7 @@ def _run_task(jat_root: Path, task: str, request: dict, *, foreground: bool = Fa
         log.info(f"JAT {task} completed with exit status {exit_status}")
         if exit_status or not result.get("success", False):
             raise JATError(f"JAT {task.lower()} failed with exit {exit_status}", result)
+        report_progress("jat", f"JAT {task} completed")
         return result
     finally:
         request_path.unlink(missing_ok=True)
