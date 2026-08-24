@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
-const { shouldMarkDirty } = require("./dirty");
+const { WorkspaceBaseline, shouldMarkDirty } = require("./dirty");
 const {
   createProgressTracker,
   followProgressFile,
@@ -18,7 +18,10 @@ let statusItem;
 let activeOperationId = 0;
 let extensionContext;
 let roomDirty = false;
+let workspaceBaseline;
 let workspaceWatcher;
+let dirtyTrackingGeneration = 0;
+const dirtyBuffers = new Set();
 
 function setStatus(text, tooltip = "Open Josh Room") {
   if (!statusItem) return;
@@ -153,22 +156,42 @@ function runOperation(title, args, cwd, { cancellable = true } = {}) {
 function createVisualReporter(title, kind, progress, operationId = ++activeOperationId) {
   const tracker = createProgressTracker(kind);
   let lastPercent = 0;
+  let latestState;
+  let frame = 0;
+  let animation;
+  const updateStatus = () => {
+    if (!latestState) return;
+    const animated = formatProgressDisplay(title, kind, latestState, frame);
+    frame += 1;
+    const tooltip = new vscode.MarkdownString();
+    tooltip.appendCodeblock(animated.tooltip);
+    tooltip.appendMarkdown("\nFull details: **Output → Josh Room**");
+    setStatus(animated.statusText, tooltip);
+  };
+  const stopAnimation = () => {
+    if (animation) clearInterval(animation);
+    animation = undefined;
+  };
   const publish = (event) => {
     const state = tracker.update(event);
+    latestState = state;
     const display = formatProgressDisplay(title, kind, state);
     const increment = state.percent === undefined ? undefined : Math.max(0, state.percent - lastPercent);
     if (state.percent !== undefined) lastPercent = state.percent;
     progress.report({ message: display.notification, ...(increment ? { increment } : {}) });
-    const tooltip = new vscode.MarkdownString();
-    tooltip.appendCodeblock(display.tooltip);
-    tooltip.appendMarkdown("\nFull details: **Output → Josh Room**");
-    setStatus(display.statusText, tooltip);
+    updateStatus();
+    if (state.percent === 100) stopAnimation();
+    else if (!animation) {
+      animation = setInterval(updateStatus, 140);
+      animation.unref?.();
+    }
     outputChannel?.info(display.logLine);
   };
   return {
     event: publish,
     finish: () => {
       publish({ stage: "complete", message: "Complete" });
+      stopAnimation();
       if (activeOperationId === operationId) {
         setStatus(`$(pass-filled) ${title} 100%`, "Completed successfully");
         setTimeout(() => {
@@ -177,10 +200,12 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
       }
     },
     fail: (error) => {
+      stopAnimation();
       const message = error?.message || String(error);
       outputChannel?.error(`FAILED · ${title} · ${message}`);
       if (activeOperationId === operationId) setStatus(`$(error) ${title} failed`, message);
     },
+    dispose: stopAnimation,
   };
 }
 
@@ -310,21 +335,35 @@ function setRoomDirty(dirty) {
   refreshRoomStatus();
 }
 
-function markWorkspaceChange(uri) {
+function relativeWorkspacePath(uri) {
   let root;
   try {
     root = activeWorkspace();
   } catch (_error) {
-    return;
+    return undefined;
   }
-  if (!currentRoom(root)) return;
   const relative = path.relative(root, uri.fsPath);
-  if (shouldMarkDirty(relative)) setRoomDirty(true);
+  return shouldMarkDirty(relative) ? relative : undefined;
 }
 
-function startDirtyTracking(context) {
+async function markWorkspaceChange(uri) {
+  const relative = relativeWorkspacePath(uri);
+  if (!relative || !workspaceBaseline) return;
+  try {
+    const changed = await workspaceBaseline.check(relative);
+    setRoomDirty(changed || dirtyBuffers.size > 0);
+  } catch (error) {
+    outputChannel?.warn(`Unable to compare ${relative} with the saved Room: ${error.message}`);
+    setRoomDirty(true);
+  }
+}
+
+async function startDirtyTracking(context) {
+  const generation = ++dirtyTrackingGeneration;
   workspaceWatcher?.dispose();
   workspaceWatcher = undefined;
+  workspaceBaseline = undefined;
+  dirtyBuffers.clear();
   let root;
   try {
     root = activeWorkspace();
@@ -336,10 +375,15 @@ function startDirtyTracking(context) {
     return;
   }
   workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
-  workspaceWatcher.onDidChange(markWorkspaceChange);
-  workspaceWatcher.onDidCreate(markWorkspaceChange);
-  workspaceWatcher.onDidDelete(markWorkspaceChange);
+  const compare = (uri) => markWorkspaceChange(uri);
+  workspaceWatcher.onDidChange(compare);
+  workspaceWatcher.onDidCreate(compare);
+  workspaceWatcher.onDidDelete(compare);
   context.subscriptions.push(workspaceWatcher);
+  workspaceBaseline = new WorkspaceBaseline(root);
+  setStatus("$(sync~spin) Indexing saved Room", "Preparing exact change detection…");
+  await workspaceBaseline.capture();
+  if (generation !== dirtyTrackingGeneration) return;
   setRoomDirty(false);
   refreshRoomStatus();
 }
@@ -411,8 +455,7 @@ async function saveRoom(options = {}) {
   const size = (result.ciphertext_size / (1024 * 1024)).toFixed(1);
   await vscode.window.showInformationMessage(`Saved “${name}” (${size} MiB).`);
   if (path.resolve(source) === path.resolve(cwd)) {
-    startDirtyTracking(extensionContext);
-    setRoomDirty(false);
+    await startDirtyTracking(extensionContext);
   }
   await roomsProvider?.refresh();
   return "saved";
@@ -717,6 +760,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, command, retry 
   );
   const stopFollowing = () => {
     for (const follower of followers) follower.dispose();
+    progressReporter?.dispose();
     fs.rmSync(progressDirectory, { recursive: true, force: true });
   };
   const terminalClosed = vscode.window.onDidCloseTerminal((closed) => {
@@ -822,7 +866,23 @@ function activate(context) {
   const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", { treeDataProvider: new JatToolsProvider() });
   context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
-    if (event.document.isDirty) markWorkspaceChange(event.document.uri);
+    const relative = relativeWorkspacePath(event.document.uri);
+    if (!relative || !workspaceBaseline) return;
+    if (event.document.isDirty) dirtyBuffers.add(relative);
+    else dirtyBuffers.delete(relative);
+    setRoomDirty(workspaceBaseline.dirty.size > 0 || dirtyBuffers.size > 0);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
+    const relative = relativeWorkspacePath(document.uri);
+    if (!relative) return;
+    dirtyBuffers.delete(relative);
+    markWorkspaceChange(document.uri);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
+    const relative = relativeWorkspacePath(document.uri);
+    if (!relative) return;
+    dirtyBuffers.delete(relative);
+    markWorkspaceChange(document.uri);
   }));
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
@@ -833,7 +893,10 @@ function activate(context) {
   register(context, "joshRoom.jatBuild", jatBuild);
   register(context, "joshRoom.jatRestore", jatRestore);
   register(context, "joshRoom.jatServe", jatServe);
-  startDirtyTracking(context);
+  startDirtyTracking(context).catch((error) => {
+    outputChannel.warn(`Unable to index saved Room: ${error.message}`);
+    setRoomDirty(true);
+  });
   roomsProvider.refresh().catch((error) => {
     outputChannel.appendLine(`error: ${error.message || String(error)}`);
   });

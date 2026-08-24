@@ -115,25 +115,35 @@ function createProgressTracker(kind) {
   };
 }
 
-function progressIcon(kind, message) {
-  const normalized = String(message).toLowerCase();
-  if (normalized.includes("upload")) return "cloud-upload";
-  if (normalized.includes("download")) return "cloud-download";
-  if (normalized.includes("encrypt") || normalized.includes("decrypt")) return "lock";
-  if (kind === "remove") return "trash";
-  if (kind === "restore") return "folder-opened";
-  if (kind === "save") return "save-as";
-  return "sync~spin";
+const SCANNER_FRAMES = [
+  "▓▒░░░░░░▒▓",
+  "▒▓▒░░░░▒▓▒",
+  "░▒▓▒░░▒▓▒░",
+  "░░▒▓▒▒▓▒░░",
+  "░░░▒▓▓▒░░░",
+  "░░▒▓▒▒▓▒░░",
+  "░▒▓▒░░▒▓▒░",
+  "▒▓▒░░░░▒▓▒",
+];
+
+function renderStatusBar(percent, frame = 0, width = 10) {
+  if (percent === undefined) return SCANNER_FRAMES[frame % SCANNER_FRAMES.length];
+  const filled = Math.max(0, Math.min(width, Math.round(Number(percent) * width / 100)));
+  if (filled === width) return "█".repeat(width);
+  const empty = width - filled;
+  const pulse = frame % empty;
+  return "█".repeat(filled) + "░".repeat(pulse) + "◆" + "░".repeat(empty - pulse - 1);
 }
 
-function formatProgressDisplay(title, kind, state) {
+function formatProgressDisplay(title, _kind, state, frame = 0) {
   const percent = state.indeterminate || state.percent === undefined ? "…" : `${state.percent}%`;
   const transfer = state.transfer ? ` · ${state.transfer}` : "";
   const detail = `${state.message}${transfer}`;
+  const statusBar = renderStatusBar(state.indeterminate ? undefined : state.percent, frame);
   return {
     logLine: `${state.bar} ${percent} · ${detail}`,
     notification: `${detail} · ${percent}`,
-    statusText: `$(${progressIcon(kind, state.message)}) ${title} ${percent}`,
+    statusText: `$(sync~spin) ${statusBar} ${percent === "…" ? "" : `${percent} `}${title}`,
     tooltip: `${title}\n${state.bar} ${percent}\n${detail}`,
   };
 }
@@ -167,4 +177,5 @@ module.exports = {
   operationKind,
   parseProgressLine,
   renderProgressBar,
+  renderStatusBar,
 };

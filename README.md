@@ -100,8 +100,11 @@ per-Room Enter/Serve/Delete actions, Docker-style operation progress, and a
 timestamped Josh Room log channel. Save, Enter, Delete, and JAT
 Build/Restore/Serve show their real auth, encryption, R2 transfer, and
 RCC/Hauler stages with percentages where the underlying operation exposes real
-measurements. The current Room quietly changes to `Needs save` after workspace
-edits; clicking its status-bar Save indicator opens the existing Save flow.
+measurements. A visible pulse travels through the status-bar progress track;
+indeterminate JAT phases use a moving scanner instead of a fake percentage. The
+current Room quietly changes to `Needs save` after workspace edits and returns
+to `Saved` when those contents are reverted to the captured baseline. Clicking
+its status-bar Save indicator opens the existing Save flow.
 Repositories do not need a Josh Room `.vscode/tasks.json`.
 `Josh: Save Room` first opens a native folder picker, then
 a Quick Pick of saved Rooms plus “Create a new Room”. The selected folder is

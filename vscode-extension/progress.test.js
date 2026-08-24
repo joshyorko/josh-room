@@ -12,6 +12,7 @@ const {
   operationKind,
   parseProgressLine,
   renderProgressBar,
+  renderStatusBar,
 } = require("./progress");
 
 test("parseProgressLine accepts the stable display contract", () => {
@@ -79,6 +80,10 @@ test("JAT phases remain visibly indeterminate instead of inventing precision", (
   const state = createProgressTracker("save").update({ stage: "jat", message: "Running JAT Build through RCC" });
   assert.equal(state.indeterminate, true);
   assert.equal(state.percent, undefined);
+  assert.equal(
+    formatProgressDisplay("Saving Heather", "save", state).statusText,
+    "$(sync~spin) ▓▒░░░░░░▒▓ Saving Heather",
+  );
 });
 
 test("progress display formatting is compact and deterministic", () => {
@@ -93,7 +98,9 @@ test("progress display formatting is compact and deterministic", () => {
   }), {
     logLine: "██████████████░░░░░░ 68% · Uploading encrypted Room · 1.46 / 2.15 GiB",
     notification: "Uploading encrypted Room · 1.46 / 2.15 GiB · 68%",
-    statusText: "$(cloud-upload) Saving Heather Mk1 Room 68%",
+    statusText: "$(sync~spin) ███████◆░░ 68% Saving Heather Mk1 Room",
     tooltip: "Saving Heather Mk1 Room\n██████████████░░░░░░ 68%\nUploading encrypted Room · 1.46 / 2.15 GiB",
   });
+  assert.equal(renderStatusBar(68, 0), "███████◆░░");
+  assert.equal(renderStatusBar(68, 1), "███████░◆░");
 });
