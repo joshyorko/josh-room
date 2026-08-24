@@ -56,6 +56,11 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
+    assert "brew install --cask joshyorko/tools/rcc@18.18.1 joshyorko/tools/action-server" in body
+    assert "brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server" not in body
+    assert body.index('test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"') < body.index(
+        'sudo "$(command -v rcc)" ht shared --enable --once'
+    )
     assert "scripts/install_dependencies.sh" in body
     assert "CONDA_PREFIX=" in body
     assert "dnf " not in body
@@ -221,6 +226,7 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert hololib["environment_hash"]
     assert hololib["rcc_version"] == lock["rcc"]["version"]
     assert lock["rcc"]["version"].startswith("v")
+    assert lock["rcc"]["homebrew_cask"] == "joshyorko/tools/rcc@18.18.1"
     for config_path in (
         ROOT / ".devcontainer/devcontainer.json",
         ROOT / "templates/room/.devcontainer/devcontainer.json",

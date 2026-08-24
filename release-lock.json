@@ -29,6 +29,7 @@
   "rcc": {
     "repository": "https://github.com/joshyorko/rcc",
     "version": "v18.18.1",
+    "homebrew_cask": "joshyorko/tools/rcc@18.18.1",
     "source_sha": "f70394b4c5b160b301fc0a9fb100cf900625bd52"
   },
   "template": {

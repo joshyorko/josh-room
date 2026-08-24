@@ -21,7 +21,9 @@ trust_tap() {
 brew tap joshyorko/tools
 trust_tap joshyorko/tools
 brew install age uv libsecret jq oras
-brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server
+brew install --cask joshyorko/tools/rcc@18.18.1 joshyorko/tools/action-server
+hash -r
+test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"
 
 sudo "$(command -v rcc)" ht shared --enable --once
 rcc ht init
@@ -53,7 +55,6 @@ CONDA_PREFIX="${CONDA_PREFIX:-$HOME/.local/share/josh-room/jat-runtime}" \
     bash "$jat_root/scripts/install_dependencies.sh" 1
 export JAT_GIT_SHA EXPECTED_RCC_VERSION JAT_HOLOLIB_REFERENCE JAT_HOLOLIB_ZIP_SHA256 JAT_HOLOLIB_ZIP_SIZE JAT_HOLOLIB_ENVIRONMENT_HASH
 bash "$(dirname "${BASH_SOURCE[0]}")/bootstrap-jat-hololib.sh" "$jat_root/robot.yaml"
-test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"
 test -f "$jat_root/tasks.py"
 for task in Build Restore Serve JAT; do
     grep -q "^  ${task}:" "$jat_root/robot.yaml"
