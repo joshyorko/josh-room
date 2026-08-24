@@ -82,8 +82,11 @@ def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
 
 def test_personal_template_keyring_mount_has_no_uid_assumption():
     config = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
+    bootstrap = (ROOT / "templates/room/.devcontainer/bootstrap.sh").read_text()
     assert "/run/user/1000" not in config
-    assert "/run/josh-room/host-session-bus" in config
+    assert "source=/run/user,target=/run/josh-room/host-runtime,type=bind,readonly" in config
+    assert "host-runtime" in bootstrap
+    assert ".zshenv" in bootstrap
 
 
 def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():

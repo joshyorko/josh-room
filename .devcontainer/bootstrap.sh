@@ -7,6 +7,20 @@ readonly JOSH_ROOM_GIT_SHA="11b229d281398601323163e99869a6e63b44f51a"
 readonly JAT_GIT_SHA="67c3b78c550874a443f56d291e5bfec66dc136b0"
 readonly EXPECTED_RCC_VERSION="v18.18.1"
 
+mapfile -d '' host_buses < <(
+    find /run/josh-room/host-runtime -mindepth 2 -maxdepth 2 -type s -name bus -print0 2>/dev/null
+)
+if ((${#host_buses[@]} != 1)); then
+    printf 'Expected exactly one host Secret Service session bus; found %s.\n' "${#host_buses[@]}" >&2
+    exit 1
+fi
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${host_buses[0]}"
+zshenv="$HOME/.zshenv"
+zshenv_temp=$(mktemp "$HOME/.zshenv.XXXXXX")
+grep -v '^export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/josh-room/host-runtime/' "$zshenv" >"$zshenv_temp" 2>/dev/null || true
+printf 'export DBUS_SESSION_BUS_ADDRESS=%q\n' "$DBUS_SESSION_BUS_ADDRESS" >>"$zshenv_temp"
+mv "$zshenv_temp" "$zshenv"
+
 trust_tap() {
     local tap="$1"
     if brew help trust >/dev/null 2>&1; then
