@@ -11,7 +11,7 @@
   "josh_room": {
     "repository": "https://github.com/joshyorko/josh-room",
     "version": "0.1.0.dev0",
-    "git_sha": "d38d686ecce1f8709982910dcdd1be9a7dfa2aec"
+    "git_sha": "9bae799f7dcfb394aba3893b29aad201e24c5716"
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
