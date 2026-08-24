@@ -56,7 +56,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
 def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency():
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
-    assert commands == {"joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh"}
+    assert commands == {"joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh"}
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
     assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
@@ -68,12 +68,19 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "showOpenDialog" in extension and '"--source"' in extension
     assert "registerTaskProvider" not in extension
     assert "createTreeView" in extension and "createOutputChannel" in extension
+    assert "childProcess.spawn" in extension and "onCancellationRequested" in extension
+    assert "SIGTERM" in extension
+    assert "No saved Rooms" in extension and "Couldn't load Rooms" in extension
+    assert "is already open" in extension
+    assert "forceCreate" in extension
     assert "createTerminal" in extension and "josh-room serve" in extension
     assert "Include local OCI images" in extension and '"--all-images"' in extension
     assert "onTaskType:josh-room" not in package["activationEvents"]
     assert "taskDefinitions" not in package["contributes"]
     assert package["contributes"]["viewsContainers"]["activitybar"][0]["id"] == "josh-room"
     assert package["contributes"]["views"]["josh-room"][0]["id"] == "joshRoom.rooms"
+    remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
+    assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
     assert ".vscode-server-insiders/extensions/joshyorko.josh-room-0.1.0" in bootstrap
