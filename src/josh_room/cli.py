@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -99,7 +100,19 @@ def dispatch(args, instance: Path) -> dict:
         jat_root = _jat_root()
         if len(recipients) < 2:
             raise ValueError("snapshot create requires JOSH_ROOM_JAT_ROOT and two age recipients")
-        return {"ok": True, **create_snapshot(instance, args.project, args.source, jat_root, recipients, _backend(args.backend, instance))}
+        project_id, display_name = _room_identity(args.project)
+        return {
+            "ok": True,
+            **create_snapshot(
+                instance,
+                project_id,
+                args.source,
+                jat_root,
+                recipients,
+                _backend(args.backend, instance),
+                display_name=display_name,
+            ),
+        }
     if args.command == "hydrate":
         return hydrate_command(args, instance)
     if args.command == "enter":
@@ -124,8 +137,6 @@ def dispatch(args, instance: Path) -> dict:
             "bucket",
             "age-identity",
             "age-recipients",
-            "cloudflare-api-token",
-            "cloudflare-account-id",
         }
         if not required.issubset(credentials) or len(credentials["age-recipients"]) < 2:
             raise ValueError("setup input requires R2 credentials, endpoint, bucket, age identity, and two recipients")
@@ -301,6 +312,16 @@ def _tar_capable() -> bool:
         if result.returncode == 0 and "--zstd" in result.stdout:
             return True
     return False
+
+
+def _room_identity(value: str) -> tuple[str, str]:
+    display_name = " ".join(value.split())
+    project_id = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-")
+    if not project_id:
+        raise ValueError("room name must contain letters or numbers")
+    if display_name == project_id:
+        display_name = project_id.replace("-", " ").title()
+    return project_id, display_name
 
 
 def _launch_ide(executable: str, destination: Path) -> None:

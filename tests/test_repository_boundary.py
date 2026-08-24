@@ -100,9 +100,9 @@ def test_personal_template_keyring_mount_has_no_uid_assumption():
 
 def test_kubernetes_secret_authority_is_narrow_and_automatic():
     prepare = (ROOT / ".devcontainer/prepare-kubernetes-secret.sh").read_text()
-    assert "temp-access-credentials" in prepare
-    assert "object-read-write" in prepare
-    assert "ttlSeconds" in prepare
+    assert "mint_r2_temp.py" in prepare
+    assert "parent-secret" in prepare
+    assert "TTL_SECONDS=21600" in prepare
     assert "resourceNames" in prepare
     assert "kubectl" in prepare and "apply -f" in prepare
     assert "--from-literal" not in prepare

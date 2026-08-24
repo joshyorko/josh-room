@@ -15,7 +15,15 @@ from .jat import run_build, run_restore
 from .local_store import ImmutableLocalStore
 
 
-def create_snapshot(instance: Path, project_id: str, source: Path, jat_root: Path, recipients: list[str], backend=None) -> dict:
+def create_snapshot(
+    instance: Path,
+    project_id: str,
+    source: Path,
+    jat_root: Path,
+    recipients: list[str],
+    backend=None,
+    display_name: str | None = None,
+) -> dict:
     instance.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=instance) as work:
         haul = Path(work) / "payload.haul.tar.zst"
@@ -42,7 +50,7 @@ def create_snapshot(instance: Path, project_id: str, source: Path, jat_root: Pat
             catalog = catalog_file.read()
             catalog_etag = None
         observed_revision = catalog.body["revision"]
-        catalog = catalog.add_snapshot(project_id, _display_name(project_id), {"snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]})
+        catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), {"snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]})
         try:
             if backend:
                 backend.conditional_catalog_put(_encrypt_catalog(catalog, recipients, instance), catalog_etag)

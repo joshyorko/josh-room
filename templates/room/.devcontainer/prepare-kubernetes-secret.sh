@@ -5,7 +5,7 @@ readonly SECRET_NAME="josh-room-runtime-josh-room"
 readonly ROLE_NAME="josh-room-runtime-josh-room"
 readonly TTL_SECONDS=21600
 
-for command in devpod jq secret-tool curl kubectl base64; do
+for command in devpod jq secret-tool kubectl base64 python3; do
     command -v "$command" >/dev/null 2>&1 || {
         printf 'Josh Room Kubernetes preparation requires %s on the host.\n' "$command" >&2
         exit 1
@@ -44,6 +44,13 @@ config="$config_dir/config.json"
 r2_profile=$(jq -er '.r2.credential_profile' "$config")
 age_profile=$(jq -er '.age_identity_profile' "$config")
 bucket=$(jq -er '.r2.bucket' "$config")
+endpoint=$(jq -er '.r2.endpoint' "$config")
+account_id=${endpoint#https://}
+account_id=${account_id%%.r2.cloudflarestorage.com*}
+[[ $account_id =~ ^[0-9a-f]{32}$ ]] || {
+    printf 'Josh Room R2 endpoint does not contain a valid Cloudflare account ID.\n' >&2
+    exit 1
+}
 
 lookup() {
     local profile=$1 field=$2
@@ -51,10 +58,9 @@ lookup() {
 }
 
 parent_access_key=$(lookup "$r2_profile" access-key-id)
-api_token=$(lookup "$r2_profile" cloudflare-api-token)
-account_id=$(lookup "$r2_profile" cloudflare-account-id)
+parent_secret_key=$(lookup "$r2_profile" secret-access-key)
 age_identity=$(lookup "$age_profile" age-identity)
-[[ -n $parent_access_key && -n $api_token && -n $account_id && -n $age_identity ]] || {
+[[ -n $parent_access_key && -n $parent_secret_key && -n $age_identity ]] || {
     printf 'Josh Room host keyring is missing Kubernetes authority fields; rerun host setup.\n' >&2
     exit 1
 }
@@ -62,38 +68,31 @@ age_identity=$(lookup "$age_profile" age-identity)
 work=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/josh-room-k8s.XXXXXX")
 chmod 700 "$work"
 trap 'rm -rf -- "$work"' EXIT INT TERM
-request="$work/request.json"
-response="$work/response.json"
-curl_config="$work/curl.conf"
+request="$work/mint-input.json"
+response="$work/mint-output.json"
 manifest="$work/manifest.json"
 age_file="$work/age.identity"
 access_file="$work/access"
 secret_file="$work/secret"
 session_file="$work/session"
+parent_access_file="$work/parent-access"
+parent_secret_file="$work/parent-secret"
 
+printf '%s' "$parent_access_key" >"$parent_access_file"
+printf '%s' "$parent_secret_key" >"$parent_secret_file"
 jq -n \
+    --arg endpoint "$endpoint" \
     --arg bucket "$bucket" \
-    --arg parent "$parent_access_key" \
+    --arg account_id "$account_id" \
+    --rawfile access_key_id "$parent_access_file" \
+    --rawfile secret_access_key "$parent_secret_file" \
     --argjson ttl "$TTL_SECONDS" \
-    '{bucket:$bucket,permission:"object-read-write",ttlSeconds:$ttl,parentAccessKeyId:$parent}' >"$request"
-chmod 600 "$request"
-cat >"$curl_config" <<EOF
-silent
-show-error
-fail-with-body
-request = "POST"
-url = "https://api.cloudflare.com/client/v4/accounts/${account_id}/r2/temp-access-credentials"
-header = "Authorization: Bearer ${api_token}"
-header = "Content-Type: application/json"
-data = "@${request}"
-output = "${response}"
-EOF
-chmod 600 "$curl_config"
-curl --config "$curl_config"
-jq -e '.success == true and (.result.accessKeyId | length > 0) and (.result.secretAccessKey | length > 0) and (.result.sessionToken | length > 0)' "$response" >/dev/null
-jq -r '.result.accessKeyId' "$response" >"$access_file"
-jq -r '.result.secretAccessKey' "$response" >"$secret_file"
-jq -r '.result.sessionToken' "$response" >"$session_file"
+    '{endpoint:$endpoint,bucket:$bucket,account_id:$account_id,access_key_id:$access_key_id,secret_access_key:$secret_access_key,ttl_seconds:$ttl}' >"$request"
+chmod 600 "$request" "$parent_access_file" "$parent_secret_file"
+python3 .devcontainer/mint_r2_temp.py "$request" "$response"
+jq -r '."access-key-id"' "$response" >"$access_file"
+jq -r '."secret-access-key"' "$response" >"$secret_file"
+jq -r '."session-token"' "$response" >"$session_file"
 printf '%s\n' "$age_identity" >"$age_file"
 chmod 600 "$access_file" "$secret_file" "$session_file" "$age_file"
 
@@ -146,4 +145,3 @@ jq -n \
 chmod 600 "$manifest"
 kubectl "${kubectl_args[@]}" apply -f "$manifest" >/dev/null
 printf 'Prepared short-lived Josh Room authority for Kubernetes workspace %s.\n' "$SECRET_NAME"
-

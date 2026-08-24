@@ -33,8 +33,6 @@ def lookup(profile: str) -> dict[str, str]:
         "access-key-id",
         "secret-access-key",
         "session-token",
-        "cloudflare-api-token",
-        "cloudflare-account-id",
     ):
         process = subprocess.run(["secret-tool", "lookup", "service", "josh-room", "profile", profile, "field", field], capture_output=True, text=True, check=False)
         if process.returncode == 0:
@@ -62,8 +60,6 @@ def store(profile: str, credentials: dict[str, str]) -> None:
         "access-key-id",
         "secret-access-key",
         "session-token",
-        "cloudflare-api-token",
-        "cloudflare-account-id",
     ):
         value = credentials.get(field)
         if value is None:

@@ -9,17 +9,16 @@ only non-secret metadata to `$XDG_CONFIG_HOME/josh-room/config.json`.
 
 The personal Room mounts that config read-only and mounts the host Secret
 Service session bus for local containers. For the Kubernetes DevPod provider,
-the host initialize hook reads the same keyring, uses the stored Cloudflare API
-authority to mint six-hour bucket-scoped R2 credentials, and creates a narrowly
+the host initialize hook reads the same keyring, locally signs six-hour
+bucket-scoped R2 credentials from the parent R2 key, and creates a narrowly
 named per-workspace Kubernetes Secret. Bootstrap consumes it into pod-lifetime
 `/tmp` files and deletes the Kubernetes Secret immediately. Daily `doctor`,
 `enter`, `hydrate`, and `snapshot create` operations do not require DevPod
 environment variables or credential prompts.
 
-Host setup input therefore includes `cloudflare-api-token` and
-`cloudflare-account-id` in addition to the parent R2 S3 credential and age
-identity. Those authority values are stored only in the host keyring; neither
-is written to `config.json`.
+No separate Cloudflare API token is required. The parent R2 Access Key ID,
+Secret Access Key, endpoint, and bucket plus the daily age identity and two
+recipients are sufficient for Kubernetes enrollment.
 
 Josh Room's R2 data plane is the private Cloudflare S3-compatible API. It does
 not use the Cloudflare REST object endpoint for snapshot transfer, and normal
