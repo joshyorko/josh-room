@@ -109,7 +109,7 @@ def run_build(
     return _run_task(jat_root, "Build", {
         "folder": str(source),
         "output": str(output),
-        "selected_images": images or [],
+        "images": images or [],
         "all_images": all_images,
     })
 

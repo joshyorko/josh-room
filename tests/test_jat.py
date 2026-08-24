@@ -46,7 +46,7 @@ def test_jat_build_uses_typed_rcc_request_and_preserves_receipt(tmp_path, monkey
             "all_images": False,
             "folder": str(tmp_path / "source"),
             "output": str(tmp_path / "haul"),
-            "selected_images": [],
+            "images": [],
         }
         output.write_text('{"format_version": 1, "operation": "build", "success": true, "exit_status": 0, "producer_version": "jat-test", "payload_size": 12, "sha256": "' + "a" * 64 + '"}')
         return 0, "decorative output"
