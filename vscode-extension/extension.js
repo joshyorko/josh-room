@@ -5,6 +5,13 @@ const vscode = require("vscode");
 
 let outputChannel;
 let roomsProvider;
+let statusItem;
+
+function setStatus(text, tooltip = "Open Josh Room") {
+  if (!statusItem) return;
+  statusItem.text = text;
+  statusItem.tooltip = tooltip;
+}
 
 function activeWorkspace() {
   const folder = vscode.workspace.workspaceFolders?.[0];
@@ -105,7 +112,9 @@ class RoomsProvider {
         error: "Couldn't load Rooms — click to retry",
       };
       const treeItem = new vscode.TreeItem(labels[item.kind], vscode.TreeItemCollapsibleState.None);
-      treeItem.iconPath = new vscode.ThemeIcon(item.kind === "error" ? "error" : "cloud-download");
+      treeItem.iconPath = new vscode.ThemeIcon(
+        item.kind === "loading" ? "sync~spin" : item.kind === "error" ? "error" : "cloud-download",
+      );
       treeItem.command = { command: "joshRoom.refresh", title: "Load Rooms" };
       return treeItem;
     }
@@ -125,20 +134,25 @@ class RoomsProvider {
     if (this.state === "loading") return [{ kind: "loading" }];
     if (this.state === "error") return [{ kind: "error" }];
     if (this.state === "initial") return [{ kind: "load" }];
-    if (!this.rooms?.length) return [{ kind: "empty" }];
+    if (!this.rooms?.length) return [];
     return this.rooms.map((room) => ({ ...room, kind: "room" }));
   }
 
   async refresh() {
     this.state = "loading";
+    setStatus("$(sync~spin) Josh Room", "Loading Rooms…");
     this.emitter.fire(undefined);
     try {
       const catalog = await loadCatalog(activeWorkspace(), "Refreshing Rooms…");
       this.rooms = catalog.projects;
       this.state = "ready";
+      await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", this.rooms.length === 0);
+      setStatus(`$(archive) ${this.rooms.length} Room${this.rooms.length === 1 ? "" : "s"}`);
       this.emitter.fire(undefined);
     } catch (error) {
       this.state = "error";
+      await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", false);
+      setStatus("$(error) Josh Room", "Couldn't load Rooms — click to retry");
       this.emitter.fire(undefined);
       throw error;
     }
@@ -370,9 +384,13 @@ function register(context, command, operation) {
 
 function activate(context) {
   outputChannel = vscode.window.createOutputChannel("Josh Room");
+  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusItem.command = "workbench.view.extension.josh-room";
+  setStatus("$(archive) Josh Room");
+  statusItem.show();
   roomsProvider = new RoomsProvider();
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", { treeDataProvider: roomsProvider });
-  context.subscriptions.push(outputChannel, roomsView);
+  context.subscriptions.push(outputChannel, statusItem, roomsView);
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);

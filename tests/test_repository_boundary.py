@@ -73,12 +73,14 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "No saved Rooms" in extension and "Couldn't load Rooms" in extension
     assert "is already open" in extension
     assert "forceCreate" in extension
+    assert "createStatusBarItem" in extension and "sync~spin" in extension
     assert "createTerminal" in extension and "josh-room serve" in extension
     assert "Include local OCI images" in extension and '"--all-images"' in extension
     assert "onTaskType:josh-room" not in package["activationEvents"]
     assert "taskDefinitions" not in package["contributes"]
     assert package["contributes"]["viewsContainers"]["activitybar"][0]["id"] == "josh-room"
     assert package["contributes"]["views"]["josh-room"][0]["id"] == "joshRoom.rooms"
+    assert package["contributes"]["viewsWelcome"][0]["view"] == "joshRoom.rooms"
     remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()

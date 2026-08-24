@@ -37,6 +37,13 @@
         { "id": "joshRoom.rooms", "name": "Rooms", "contextualTitle": "Josh Room" }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "joshRoom.rooms",
+        "contents": "No Rooms yet.\n[Save a folder as your first Room](command:joshRoom.new)",
+        "when": "joshRoom.roomsEmpty"
+      }
+    ],
     "menus": {
       "view/title": [
         { "command": "joshRoom.new", "when": "view == joshRoom.rooms", "group": "navigation@1" },
