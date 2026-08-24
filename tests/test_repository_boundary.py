@@ -21,6 +21,16 @@ def test_repository_contains_no_copied_ror_implementation():
     assert not [path for path in forbidden_files if path.exists()]
 
 
+def test_windows_checkout_preserves_linux_script_line_endings():
+    attributes = (ROOT / ".gitattributes").read_text()
+    assert "*.sh text eol=lf" in attributes
+    scripts = list((ROOT / ".devcontainer").glob("*.sh")) + list(
+        (ROOT / "templates/room/.devcontainer").glob("*.sh")
+    )
+    assert scripts
+    assert not [script for script in scripts if b"\r\n" in script.read_bytes()]
+
+
 def test_readme_and_workflows_are_josh_room_first():
     assert (ROOT / "README.md").read_text().startswith("# Josh Room\n")
     workflows = "\n".join(path.read_text() for path in (ROOT / ".github/workflows").glob("*.yml"))
