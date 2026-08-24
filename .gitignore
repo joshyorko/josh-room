@@ -1,0 +1,13 @@
+.env
+.venv
+.rcc_home
+.tools
+.vscode/
+.fizzy-symphony/
+.tokensave/
+.codex/
+.serena/
+env.json
+.venv/
+uv.lock
+__pycache__/

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "default_backend": { "enum": ["r2", "local"] },
+    "default_ide": { "enum": ["vscode-insiders", "vscode", "terminal"] },
+    "workspace_root": { "type": "string", "minLength": 1 },
+    "jat_root": { "type": "string", "minLength": 1 },
+    "age_identity_profile": { "type": "string", "minLength": 1 },
+    "age_recipients": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "r2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "bucket", "credential_profile"],
+      "properties": {
+        "endpoint": { "type": "string", "format": "uri" },
+        "bucket": { "type": "string", "minLength": 1 },
+        "region": { "type": "string" },
+        "credential_profile": { "type": "string", "minLength": 1 },
+        "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "temporary_credentials": { "type": "boolean", "default": true }
+      }
+    }
+  }
+}

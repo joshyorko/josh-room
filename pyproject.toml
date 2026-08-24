@@ -1,0 +1,25 @@
+[project]
+name = "josh-room"
+version = "0.1.0.dev0"
+description = "Josh's encrypted workspace snapshot CLI"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = ["boto3>=1.35"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["build>=1.2", "pytest>=8", "ruff>=0.12"]
+
+[project.scripts]
+josh-room = "josh_room.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+markers = [
+  "integration: invokes real external snapshot tooling",
+  "r2: performs a live private R2 acceptance write",
+  "first_run: performs Josh's private fresh-state golden path",
+]

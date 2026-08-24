@@ -1,0 +1,14 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Josh: Enter Room",
+      "type": "shell",
+      "command": "josh-room enter --backend r2",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
+    }
+  ]
+}

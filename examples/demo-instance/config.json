@@ -1,0 +1,19 @@
+{
+  "default_backend": "r2",
+  "default_ide": "vscode-insiders",
+  "workspace_root": "/workspaces",
+  "jat_root": "/home/vscode/.local/share/josh-room/josh-all-the-things",
+  "age_identity_profile": "example-owner-age",
+  "age_recipients": [
+    "age1syntheticdaily",
+    "age1syntheticrecovery"
+  ],
+  "r2": {
+    "endpoint": "https://example.invalid",
+    "bucket": "synthetic-josh-room",
+    "region": "auto",
+    "credential_profile": "example-owner",
+    "catalog_key": "catalog.jroom.age",
+    "temporary_credentials": true
+  }
+}

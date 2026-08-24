@@ -1,0 +1,10 @@
+{
+  "name": "Josh Room Development",
+  "image": "ghcr.io/joshyorko/room-of-requirement:secure",
+  "remoteUser": "vscode",
+  "remoteEnv": {
+    "UV_PROJECT_ENVIRONMENT": "/home/vscode/.local/share/josh-room/dev-venv",
+    "PATH": "/home/vscode/.local/share/josh-room/dev-venv/bin:${containerEnv:PATH}"
+  },
+  "postCreateCommand": "bash .devcontainer/bootstrap.sh"
+}
