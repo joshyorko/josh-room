@@ -1,0 +1,13 @@
+{
+  "name": "josh-room-auth",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-24",
+  "observability": { "enabled": true },
+  "vars": {
+    "OAUTH_CLIENT_ID": "4e3e59ed6edecc45b06b60894c7767d5",
+    "OAUTH_REDIRECT_URI": "https://josh-room-auth.joshua-yorko.workers.dev/oauth/callback"
+  },
+  "kv_namespaces": [
+    { "binding": "OAUTH_SESSIONS", "id": "f4505b6ed7374f4184837e314c99f7f5" }
+  ]
+}
