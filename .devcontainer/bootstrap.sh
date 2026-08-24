@@ -3,7 +3,7 @@ set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
 
-readonly JOSH_ROOM_GIT_SHA="3872ea196acdc377713e042844fcaf2f35a51a69"
+readonly JOSH_ROOM_GIT_SHA="a0c1f8c16ef9ac301ed9c475a1a6babf71b42cd5"
 readonly JAT_GIT_SHA="67c3b78c550874a443f56d291e5bfec66dc136b0"
 readonly EXPECTED_RCC_VERSION="v18.18.1"
 
