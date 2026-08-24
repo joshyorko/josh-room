@@ -5,6 +5,8 @@ const util = require("util");
 const vscode = require("vscode");
 
 const execFile = util.promisify(childProcess.execFile);
+let outputChannel;
+let roomsProvider;
 
 function activeWorkspace() {
   const folder = vscode.workspace.workspaceFolders?.[0];
@@ -15,6 +17,7 @@ function activeWorkspace() {
 }
 
 async function runJoshRoom(args, cwd) {
+  outputChannel?.appendLine(`> josh-room ${args.join(" ")}`);
   try {
     const { stdout } = await execFile("josh-room", [...args, "--json"], {
       cwd,
@@ -25,6 +28,7 @@ async function runJoshRoom(args, cwd) {
     if (!result.ok) {
       throw new Error(result.error || "Josh Room operation failed.");
     }
+    outputChannel?.appendLine(`ok: ${result.project_id || result.operation || args[0]}`);
     return result;
   } catch (error) {
     const output = error.stdout || error.stderr;
@@ -34,12 +38,51 @@ async function runJoshRoom(args, cwd) {
         throw new Error(result.error || "Josh Room operation failed.");
       } catch (parseError) {
         if (parseError instanceof SyntaxError) {
+          outputChannel?.appendLine(`error: ${error.message || String(error)}`);
+          outputChannel?.show(true);
           throw error;
         }
         throw parseError;
       }
     }
+    outputChannel?.appendLine(`error: ${error.message || String(error)}`);
+    outputChannel?.show(true);
     throw error;
+  }
+}
+
+class RoomsProvider {
+  constructor() {
+    this.rooms = undefined;
+    this.emitter = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this.emitter.event;
+  }
+
+  getTreeItem(item) {
+    if (item.kind === "load") {
+      const treeItem = new vscode.TreeItem("Load Rooms", vscode.TreeItemCollapsibleState.None);
+      treeItem.iconPath = new vscode.ThemeIcon("cloud-download");
+      treeItem.command = { command: "joshRoom.refresh", title: "Load Rooms" };
+      return treeItem;
+    }
+    const current = currentRoom(activeWorkspace())?.project_id === item.id;
+    const treeItem = new vscode.TreeItem(item.display_name, vscode.TreeItemCollapsibleState.None);
+    treeItem.description = current ? "Current" : "";
+    treeItem.tooltip = current ? `${item.display_name} — current workspace` : item.display_name;
+    treeItem.contextValue = "room";
+    treeItem.iconPath = new vscode.ThemeIcon(current ? "home" : "archive");
+    treeItem.command = { command: "joshRoom.enter", title: "Enter Room", arguments: [item] };
+    return treeItem;
+  }
+
+  getChildren() {
+    return this.rooms === undefined ? [{ kind: "load" }] : this.rooms;
+  }
+
+  async refresh() {
+    const catalog = await loadCatalog(activeWorkspace(), "Refreshing Rooms…");
+    this.rooms = catalog.projects;
+    this.emitter.fire(undefined);
   }
 }
 
@@ -126,16 +169,19 @@ async function saveRoom() {
   );
   const size = (result.ciphertext_size / (1024 * 1024)).toFixed(1);
   await vscode.window.showInformationMessage(`Saved “${name}” (${size} MiB).`);
+  await roomsProvider?.refresh();
   return "saved";
 }
 
-async function enterRoom() {
+async function enterRoom(preferredProject) {
   const cwd = activeWorkspace();
   const catalog = await loadCatalog(cwd);
-  const selected = await vscode.window.showQuickPick(
-    catalog.projects.map((project) => ({ label: project.display_name, projectId: project.id })),
-    { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
-  );
+  const selected = preferredProject
+    ? { label: preferredProject.display_name, projectId: preferredProject.id }
+    : await vscode.window.showQuickPick(
+      catalog.projects.map((project) => ({ label: project.display_name, projectId: project.id })),
+      { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
+    );
   if (!selected) return "cancelled";
   const history = await runJoshRoom(["snapshots", "list", selected.projectId, "--backend", "r2"], cwd);
   let snapshotId = "latest";
@@ -184,13 +230,15 @@ async function enterRoom() {
   return "opened";
 }
 
-async function removeRoom() {
+async function removeRoom(preferredProject) {
   const cwd = activeWorkspace();
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
-  const selected = await vscode.window.showQuickPick(
-    catalog.projects.map((project) => ({ label: project.display_name, project })),
-    { title: "Josh: Remove Room", placeHolder: "Choose a Room to remove", ignoreFocusOut: true },
-  );
+  const selected = preferredProject
+    ? { label: preferredProject.display_name, project: preferredProject }
+    : await vscode.window.showQuickPick(
+      catalog.projects.map((project) => ({ label: project.display_name, project })),
+      { title: "Josh: Remove Room", placeHolder: "Choose a Room to remove", ignoreFocusOut: true },
+    );
   if (!selected) return "cancelled";
   const snapshots = await runJoshRoom(["snapshots", "list", selected.project.id, "--backend", "r2"], cwd);
   const confirmed = await vscode.window.showWarningMessage(
@@ -204,14 +252,15 @@ async function removeRoom() {
     () => runJoshRoom(["rooms", "remove", selected.project.id, "--backend", "r2"], cwd),
   );
   await vscode.window.showInformationMessage(`Removed “${selected.label}”.`);
+  await roomsProvider?.refresh();
   return "removed";
 }
 
-async function serveRoom() {
+async function serveRoom(preferredProject) {
   const cwd = activeWorkspace();
   const marker = currentRoom(cwd);
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
-  let project = catalog.projects.find((item) => item.id === marker?.project_id);
+  let project = preferredProject || catalog.projects.find((item) => item.id === marker?.project_id);
   if (!project) {
     const selected = await vscode.window.showQuickPick(
       catalog.projects.map((item) => ({ label: item.display_name, project: item })),
@@ -244,9 +293,9 @@ async function serveRoom() {
 }
 
 function register(context, command, operation) {
-  context.subscriptions.push(vscode.commands.registerCommand(command, async () => {
+  context.subscriptions.push(vscode.commands.registerCommand(command, async (...args) => {
     try {
-      return await operation();
+      return await operation(...args);
     } catch (error) {
       await vscode.window.showErrorMessage(error.message || String(error));
       return "failed";
@@ -254,35 +303,19 @@ function register(context, command, operation) {
   }));
 }
 
-function roomTask(action, label, command) {
-  return new vscode.Task(
-    { type: "josh-room", action },
-    vscode.TaskScope.Workspace,
-    label,
-    "Josh Room",
-    new vscode.ProcessExecution("/usr/bin/true", ["${command:" + command + "}"]),
-  );
-}
-
-function taskFor(action) {
-  const tasks = {
-    save: roomTask("save", "Josh: Save Room", "joshRoom.save"),
-    enter: roomTask("enter", "Josh: Enter Room", "joshRoom.enter"),
-    remove: roomTask("remove", "Josh: Remove Room", "joshRoom.remove"),
-    serve: roomTask("serve", "Josh: Serve Room Images", "joshRoom.serve"),
-  };
-  return tasks[action];
-}
-
 function activate(context) {
+  outputChannel = vscode.window.createOutputChannel("Josh Room");
+  roomsProvider = new RoomsProvider();
+  const roomsView = vscode.window.createTreeView("joshRoom.rooms", { treeDataProvider: roomsProvider });
+  context.subscriptions.push(outputChannel, roomsView);
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.serve", serveRoom);
-  context.subscriptions.push(vscode.tasks.registerTaskProvider("josh-room", {
-    provideTasks: () => [taskFor("save"), taskFor("enter"), taskFor("remove"), taskFor("serve")],
-    resolveTask: (task) => taskFor(task.definition.action),
-  }));
+  register(context, "joshRoom.refresh", () => roomsProvider.refresh());
+  roomsProvider.refresh().catch((error) => {
+    outputChannel.appendLine(`error: ${error.message || String(error)}`);
+  });
 }
 
 module.exports = { activate };

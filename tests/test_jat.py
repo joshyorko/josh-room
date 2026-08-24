@@ -69,6 +69,15 @@ def test_jat_rejects_stale_receipt(tmp_path, monkeypatch):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
 
 
+def test_jat_missing_receipt_reports_bounded_rcc_diagnostic(tmp_path, monkeypatch):
+    (tmp_path / "output").mkdir()
+    monkeypatch.setattr("josh_room.jat._run", lambda *_args: (1, "typed request validation failed"))
+    with pytest.raises(JATError, match="typed request validation failed"):
+        __import__("josh_room.jat", fromlist=["run_build"]).run_build(
+            tmp_path, tmp_path / "source", tmp_path / "haul"
+        )
+
+
 def test_jat_rejects_receipt_operation_mismatch(tmp_path, monkeypatch):
     result_path = tmp_path / "output" / "result.json"
     result_path.parent.mkdir()

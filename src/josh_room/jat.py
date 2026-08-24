@@ -39,7 +39,7 @@ def _run(argv: list[str], timeout: float | None) -> tuple[int, str]:
         os.killpg(process.pid, signal.SIGTERM)
         process.communicate()
         raise
-    return process.returncode, _diagnostic(stderr)
+    return process.returncode, _diagnostic(stderr or _stdout)
 
 
 def _jat_contract(jat_root: Path) -> dict[str, bool]:
@@ -76,7 +76,10 @@ def _run_task(jat_root: Path, task: str, request: dict, *, foreground: bool = Fa
         timeout = None if foreground else float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600"))
         exit_status, diagnostic = _run(argv, timeout)
         if not result_path.is_file():
-            raise JATError("JAT task did not produce a fresh output/result.json", {"argv": argv, "exit_status": exit_status})
+            message = "JAT task did not produce a fresh output/result.json"
+            if diagnostic:
+                message += f": {diagnostic}"
+            raise JATError(message, {"argv": argv, "exit_status": exit_status, "diagnostic": diagnostic})
         result = json.loads(result_path.read_text())
         expected_operation = task.lower()
         if result.get("operation") != expected_operation:

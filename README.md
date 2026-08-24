@@ -25,8 +25,7 @@ devpod up github.com/joshyorko/josh-room --ide vscode-insiders
 
 DevPod clones the repository, discovers the root `.devcontainer`, starts the
 Room of Requirement secure image, runs the capability-only bootstrap, and
-opens VS Code Insiders with `Josh: Save Room`, `Josh: Enter Room`, and
-`Josh: Remove Room` available under `Tasks: Run Task`.
+opens VS Code Insiders with a dedicated Josh Room Activity Bar view.
 
 The same configuration is published for standard Dev Container template
 consumers:
@@ -96,9 +95,10 @@ age, Hauler, RCC, JAT, the daily identity, R2, the encrypted catalog, or the IDE
 is unavailable. `enter` discovers logical project names from the encrypted R2
 catalog, hydrates safely, then launches VS Code Insiders.
 
-The bundled command bridge provides Save, Enter, Remove, and Serve Images through VS Code's
-task provider in every opened folder; repositories do not need a Josh Room
-`.vscode/tasks.json`. `Josh: Save Room` first opens a native folder picker, then
+The bundled extension provides a native Rooms TreeView, toolbar actions,
+per-Room Enter/Serve/Remove actions, progress notifications, and a Josh Room
+output channel. Repositories do not need a Josh Room `.vscode/tasks.json`.
+`Josh: Save Room` first opens a native folder picker, then
 a Quick Pick of saved Rooms plus “Create a new Room”. The selected folder is
 the snapshot source and receives only the non-secret `.josh-room.json` identity
 marker after a successful save. Selecting an existing Room appends an immutable

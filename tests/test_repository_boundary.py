@@ -56,7 +56,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
 def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency():
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
-    assert commands == {"joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve"}
+    assert commands == {"joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh"}
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
     assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
@@ -66,11 +66,15 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "Opening existing" in extension
     assert '"--snapshot"' in extension
     assert "showOpenDialog" in extension and '"--source"' in extension
-    assert "registerTaskProvider" in extension
+    assert "registerTaskProvider" not in extension
+    assert "createTreeView" in extension and "createOutputChannel" in extension
     assert "createTerminal" in extension and "josh-room serve" in extension
     assert "Include local OCI images" in extension and '"--all-images"' in extension
-    assert "onTaskType:josh-room" in package["activationEvents"]
-    assert package["contributes"]["taskDefinitions"] == [{"type": "josh-room", "required": ["action"], "properties": {"action": {"type": "string"}}}]
+    assert "onTaskType:josh-room" not in package["activationEvents"]
+    assert "taskDefinitions" not in package["contributes"]
+    assert package["contributes"]["viewsContainers"]["activitybar"][0]["id"] == "josh-room"
+    assert package["contributes"]["views"]["josh-room"][0]["id"] == "joshRoom.rooms"
+    assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
     assert ".vscode-server-insiders/extensions/joshyorko.josh-room-0.1.0" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
