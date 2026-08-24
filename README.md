@@ -134,6 +134,11 @@ The test suite includes real synthetic JAT/Hauler/age local hydration and a
 secret-gated private R2 create/read-back/catalog/fresh-hydrate acceptance test.
 Generic S3 tests do not substitute for live R2 evidence.
 
+The v0.1 readiness gate also resolves the `secure` Room image to an immutable
+digest and runs a clean non-root Podman smoke proving the `vscode` user,
+Homebrew, Bash, Git, zstd, and writable home contract before pinning that digest
+in the root devcontainer and OCI template.
+
 This remains a review checkpoint, not `v0.1.0`. The secure Room of Requirement
 container smoke and dedicated short-lived R2 credential rotation remain open.
 RCC Environment Artifacts, Actions Runtime, Hive projections, OpenAI uploads,
