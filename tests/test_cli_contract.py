@@ -114,10 +114,19 @@ def test_vscode_tasks_expose_save_and_enter_without_extensions():
     labels = {task["label"] for task in tasks["tasks"]}
     assert labels == {"Josh: Save Room", "Josh: Enter Room"}
     save = next(task for task in tasks["tasks"] if task["label"] == "Josh: Save Room")
-    assert "josh-room snapshot create" in save["command"]
-    assert "${input:roomName}" in save["command"]
-    assert "${input:sourceFolder}" in save["command"]
-    assert {item["id"] for item in tasks["inputs"]} == {"roomName", "sourceFolder"}
+    assert save["type"] == "process"
+    assert save["command"] == "josh-room"
+    assert save["args"] == [
+        "snapshot",
+        "create",
+        "${input:roomName}",
+        "--source",
+        "${workspaceFolder}",
+        "--backend",
+        "r2",
+    ]
+    assert {item["id"] for item in tasks["inputs"]} == {"roomName"}
+    assert all("${workspaceFolder}" not in item.get("default", "") for item in tasks["inputs"])
 
 
 def test_tar_capability_finds_linuxbrew_keg_tar(monkeypatch):

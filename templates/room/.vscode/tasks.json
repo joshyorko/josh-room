@@ -3,8 +3,17 @@
   "tasks": [
     {
       "label": "Josh: Save Room",
-      "type": "shell",
-      "command": "josh-room snapshot create \"${input:roomName}\" --source \"${input:sourceFolder}\" --backend r2",
+      "type": "process",
+      "command": "josh-room",
+      "args": [
+        "snapshot",
+        "create",
+        "${input:roomName}",
+        "--source",
+        "${workspaceFolder}",
+        "--backend",
+        "r2"
+      ],
       "problemMatcher": [],
       "presentation": {
         "reveal": "always"
@@ -26,12 +35,6 @@
       "type": "promptString",
       "description": "Room name",
       "default": "My Room"
-    },
-    {
-      "id": "sourceFolder",
-      "type": "promptString",
-      "description": "Workspace folder to save",
-      "default": "${workspaceFolder}"
     }
   ]
 }
