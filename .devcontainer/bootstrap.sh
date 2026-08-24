@@ -19,7 +19,6 @@ trust_tap joshyorko/tools
 brew install age uv libsecret jq
 brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server
 
-mv "$zshenv_temp" "$zshenv"
 uv tool install --force "git+https://github.com/joshyorko/josh-room.git@${JOSH_ROOM_GIT_SHA}"
 
 jat_root="${JOSH_ROOM_JAT_ROOT:-$HOME/.local/share/josh-room/josh-all-the-things}"
