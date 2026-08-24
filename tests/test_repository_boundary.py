@@ -69,6 +69,19 @@ def test_root_devcontainer_is_the_personal_room_and_matches_template():
     assert (ROOT / ".vscode/tasks.json").read_bytes() == (ROOT / "templates/room/.vscode/tasks.json").read_bytes()
 
 
+def test_devcontainer_opens_clean_room_not_controller_source():
+    config = json.loads((ROOT / ".devcontainer/devcontainer.json").read_text())
+    assert config["workspaceFolder"] == "/workspaces/room"
+    assert "${localWorkspaceFolderBasename}" in config["onCreateCommand"]
+    assert "${localWorkspaceFolderBasename}" in config["postCreateCommand"]
+    prepare = (ROOT / ".devcontainer/prepare-workspace.sh").read_text()
+    assert "mkdir -p /workspaces/room/.vscode" in prepare
+    assert "/workspaces/room/.vscode/tasks.json" in prepare
+    assert (ROOT / ".devcontainer/prepare-workspace.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/prepare-workspace.sh"
+    ).read_bytes()
+
+
 def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
     workflow = (ROOT / ".github/workflows/publish-template.yml").read_text()
     assert 'paths:' in workflow
