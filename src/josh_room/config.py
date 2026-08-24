@@ -11,6 +11,11 @@ def config_dir() -> Path:
 
 
 def private_config() -> dict | None:
+    runtime = os.environ.get("JOSH_ROOM_RUNTIME_CONFIG")
+    if runtime:
+        path = Path(runtime)
+        if path.is_file():
+            return json.loads(path.read_text())
     path = config_dir() / "config.json"
     if not path.is_file():
         return None

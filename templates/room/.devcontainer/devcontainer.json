@@ -2,15 +2,10 @@
   "name": "Josh Room",
   "image": "ghcr.io/joshyorko/room-of-requirement@sha256:5489eef4c4302cdb9ac6cff79ce0664511f7cfc8c31fd83ea59d9fa94ea5be25",
   "remoteUser": "vscode",
-  "mounts": [
-    "source=${localEnv:HOME}/.config/josh-room,target=/home/vscode/.config/josh-room,type=bind,readonly,consistency=cached"
-  ],
   "remoteEnv": {
-    "JOSH_ROOM_CONFIG_DIR": "/home/vscode/.config/josh-room",
     "JOSH_ROOM_INSTANCE": "/home/vscode/.local/state/josh-room",
     "JOSH_ROOM_JAT_ROOT": "/home/vscode/.local/share/josh-room/josh-all-the-things",
     "PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"
   },
-  "initializeCommand": "bash .devcontainer/prepare-kubernetes-secret.sh",
   "postCreateCommand": "bash .devcontainer/bootstrap.sh"
 }

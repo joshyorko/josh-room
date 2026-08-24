@@ -49,13 +49,14 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert "rpm-ostree" not in body
 
 
-def test_setup_is_host_only_and_room_config_is_read_only():
+def test_oauth_room_requires_no_host_setup_mount():
     readme = (ROOT / "README.md").read_text()
     setup = (ROOT / "docs/R2-SETUP.md").read_text()
     template = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
     assert "Run setup on the Bluefin host" in readme
     assert "Do not run `josh-room setup` inside the Room" in setup
-    assert "type=bind,readonly" in template
+    assert '"mounts"' not in template
+    assert '"initializeCommand"' not in template
 
 
 def test_root_devcontainer_is_the_personal_room_and_matches_template():
@@ -88,14 +89,13 @@ def test_ci_installs_real_age_tooling_before_tests():
     assert "age" in workflow
 
 
-def test_personal_template_keyring_mount_has_no_uid_assumption():
+def test_personal_template_has_no_host_runtime_assumption():
     config = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
     bootstrap = (ROOT / "templates/room/.devcontainer/bootstrap.sh").read_text()
     assert "/run/user/1000" not in config
     assert "/run/user" not in config
-    assert '"initializeCommand": "bash .devcontainer/prepare-kubernetes-secret.sh"' in config
-    assert "RUNTIME_SECRET_NAME" in bootstrap
-    assert ".zshenv" in bootstrap
+    assert "prepare-kubernetes-secret" not in config
+    assert "RUNTIME_SECRET_NAME" not in bootstrap
 
 
 def test_kubernetes_secret_authority_is_narrow_and_automatic():

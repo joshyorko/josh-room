@@ -9,6 +9,7 @@ import tempfile
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
+from .auth import ensure_runtime_session
 from .catalog import Catalog
 from .config import auth_status, private_config, save_private_config
 from .crypto import decrypt
@@ -74,6 +75,8 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     instance = _instance_root()
     try:
+        if _requires_oauth(args):
+            ensure_runtime_session()
         identity_context = nullcontext() if args.command == "setup" else _identity_environment()
         with identity_context:
             result = dispatch(args, instance)
@@ -81,6 +84,12 @@ def main(argv=None):
         result = {"ok": False, "error": str(error)}
     emit(result, getattr(args, "json", False))
     return 0 if result["ok"] else 2
+
+
+def _requires_oauth(args) -> bool:
+    if args.command not in {"projects", "snapshots", "snapshot", "hydrate", "enter"}:
+        return False
+    return getattr(args, "backend", "r2") == "r2"
 
 
 def dispatch(args, instance: Path) -> dict:

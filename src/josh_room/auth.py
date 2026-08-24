@@ -1,0 +1,69 @@
+import json
+import os
+import tempfile
+import time
+import urllib.request
+import webbrowser
+from pathlib import Path
+
+WORKER_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
+
+
+def ensure_runtime_session(timeout: int = 600) -> None:
+    if all(os.environ.get(name) and Path(os.environ[name]).is_file() for name in (
+        "JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"
+    )):
+        return
+    started = _request("/session/start", method="POST")
+    webbrowser.open(started["authorizationUrl"])
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        session = _request(f"/session/{started['sessionId']}")
+        status = session.get("status")
+        if status == "pending":
+            time.sleep(2)
+            continue
+        if status != "authorized":
+            raise RuntimeError(f"Cloudflare authorization {status or 'failed'}")
+        _write_runtime(session)
+        return
+    raise RuntimeError("Cloudflare authorization timed out")
+
+
+def _request(path: str, method: str = "GET") -> dict:
+    request = urllib.request.Request(WORKER_URL + path, method=method)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def _write_runtime(session: dict) -> None:
+    root = Path(tempfile.mkdtemp(prefix="josh-room-session-", dir=os.environ.get("XDG_RUNTIME_DIR", "/tmp")))
+    root.chmod(0o700)
+    credentials = root / "r2.json"
+    identity = root / "age.identity"
+    config = root / "config.json"
+    credentials.write_text(json.dumps({
+        "access-key-id": session["accessKeyId"],
+        "secret-access-key": session["secretAccessKey"],
+        "session-token": session["sessionToken"],
+    }))
+    identity.write_text(session["ageIdentity"].rstrip("\n") + "\n")
+    config.write_text(json.dumps({
+        "default_backend": "r2",
+        "default_ide": "vscode-insiders",
+        "age_recipients": session["ageRecipients"],
+        "r2": {
+            "endpoint": session["endpoint"],
+            "bucket": session["bucket"],
+            "region": "auto",
+            "credential_profile": "oauth-runtime",
+            "catalog_key": "catalog.jroom.age",
+            "temporary_credentials": True,
+        },
+    }))
+    for path in (credentials, identity, config):
+        path.chmod(0o600)
+    os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] = str(credentials)
+    os.environ["JOSH_ROOM_IDENTITY"] = str(identity)
+    os.environ["JOSH_ROOM_RUNTIME_CONFIG"] = str(config)
+
