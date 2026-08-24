@@ -132,6 +132,17 @@ def test_local_store_object_key_is_relative_to_instance_root(tmp_path):
     assert (tmp_path / ref.key).read_bytes() == b"body"
 
 
+def test_local_store_streams_file_publication_and_download(tmp_path):
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"streamed-body" * 100_000)
+    store = ImmutableLocalStore(tmp_path / "store")
+    ref = store.put_file(source)
+    restored = tmp_path / "restored.bin"
+    store.download_file(ref.key, restored, ref.sha256, ref.size)
+    assert restored.read_bytes() == source.read_bytes()
+    assert restored.stat().st_mode & 0o777 == 0o600
+
+
 def test_local_store_rejects_key_digest_mismatch_and_untrusted_paths(tmp_path):
     store = ImmutableLocalStore(tmp_path)
     with pytest.raises(ValueError):

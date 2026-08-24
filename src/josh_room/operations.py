@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .catalog import Catalog, CatalogFile
-from .crypto import decrypt, encrypt
-from .envelope import build_envelope, read_envelope
+from .crypto import decrypt, decrypt_file, encrypt, encrypt_file
+from .envelope import build_envelope_file, read_envelope_file
 from .jat import run_build, run_restore
 from .local_store import ImmutableLocalStore
 
@@ -20,17 +20,19 @@ def create_snapshot(instance: Path, project_id: str, source: Path, jat_root: Pat
     with tempfile.TemporaryDirectory(dir=instance) as work:
         haul = Path(work) / "payload.haul.tar.zst"
         producer = run_build(jat_root, source, haul)
-        payload = haul.read_bytes()
-        manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload), "producer_version": producer["version"]}, "source": _source_metadata(source)}
-        envelope = build_envelope(manifest, payload)
+        payload_size, payload_digest = _file_metadata(haul)
+        manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source)}
+        envelope = Path(work) / "snapshot.jroom"
+        build_envelope_file(manifest, haul, envelope)
         encrypted = Path(work) / "snapshot.jroom.age"
-        encrypt(envelope, recipients, encrypted)
-        ciphertext = encrypted.read_bytes()
+        encrypt_file(envelope, recipients, encrypted)
+        ciphertext_size, ciphertext_digest = _file_metadata(encrypted)
         if backend:
-            digest = hashlib.sha256(ciphertext).hexdigest()
-            ref = backend.put_file(f"objects/sha256/{digest}", encrypted)
+            ref = backend.put_file(f"objects/sha256/{ciphertext_digest}", encrypted)
         else:
-            ref = ImmutableLocalStore(instance).put(ciphertext)
+            ref = ImmutableLocalStore(instance).put_file(encrypted)
+        if ref.sha256 != ciphertext_digest or ref.size != ciphertext_size:
+            raise ValueError("published ciphertext metadata mismatch")
         catalog_path = instance / "catalog.jroom.age"
         identity_value = os.environ.get("JOSH_ROOM_IDENTITY")
         if backend:
@@ -69,21 +71,17 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
         if backend:
             encrypted = stage / "snapshot.jroom.age"
             backend.download_file(snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"])
-            ciphertext = encrypted.read_bytes()
         else:
-            ciphertext = ImmutableLocalStore(instance).get(snapshot["object_key"])
-        if hashlib.sha256(ciphertext).hexdigest() != snapshot["ciphertext_sha256"] or len(ciphertext) != snapshot["ciphertext_size"]:
-            raise ValueError("ciphertext integrity mismatch")
-        encrypted = stage / "snapshot.jroom.age"
-        if not encrypted.exists():
-            encrypted.write_bytes(ciphertext)
-        manifest, payload = read_envelope(decrypt(encrypted, [identity]))
+            encrypted = stage / "snapshot.jroom.age"
+            ImmutableLocalStore(instance).download_file(
+                snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"]
+            )
+        envelope = stage / "snapshot.jroom"
+        decrypt_file(encrypted, [identity], envelope)
+        haul = stage / "payload.haul.tar.zst"
+        manifest = read_envelope_file(envelope, haul)
         if manifest["project_id"] != project_id:
             raise ValueError("manifest project mismatch")
-        if len(payload) != manifest["payload"]["size"] or hashlib.sha256(payload).hexdigest() != manifest["payload"]["sha256"]:
-            raise ValueError("payload integrity mismatch")
-        haul = stage / "payload.haul.tar.zst"
-        haul.write_bytes(payload)
         workspace_stage = stage / "restore"
         jat_result = run_restore(jat_root, haul, workspace_stage)
         restored_root = workspace_stage / "workspace"
@@ -172,3 +170,13 @@ def _source_metadata(source: Path) -> dict:
     if status.returncode != 0:
         return {"git_commit": commit.stdout.strip()}
     return {"git_commit": commit.stdout.strip(), "dirty": bool(status.stdout)}
+
+
+def _file_metadata(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            size += len(chunk)
+            digest.update(chunk)
+    return size, digest.hexdigest()
