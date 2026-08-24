@@ -76,6 +76,27 @@ async function saveRoom() {
     });
   }
   if (!name) return "cancelled";
+  if (selected.project) {
+    const existing = path.join(path.dirname(cwd), selected.project.id);
+    if (existing !== cwd && currentRoom(existing)?.project_id === selected.project.id) {
+      const action = await vscode.window.showInformationMessage(
+        `“${selected.project.display_name}” already has a working folder.`,
+        "Open Room",
+      );
+      if (action === "Open Room") {
+        await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(existing), false);
+      }
+      return "opened";
+    }
+    if (marker?.project_id !== selected.project.id) {
+      const confirmed = await vscode.window.showWarningMessage(
+        `Replace the latest “${selected.project.display_name}” snapshot with the contents of ${cwd}? The previous snapshot remains recoverable.`,
+        { modal: true },
+        "Replace Latest",
+      );
+      if (confirmed !== "Replace Latest") return "cancelled";
+    }
+  }
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Saving ${name}…`, cancellable: false },
     () => runJoshRoom(["snapshot", "create", name, "--backend", "r2"], cwd),
@@ -95,6 +116,16 @@ async function enterRoom() {
   if (!selected) return "cancelled";
   const root = path.basename(cwd) === "room" ? path.dirname(cwd) : cwd;
   const destination = path.join(root, selected.projectId);
+  if (currentRoom(destination)?.project_id === selected.projectId) {
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Opening existing ${selected.label}…`, cancellable: false },
+      () => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false),
+    );
+    return "opened";
+  }
+  if (fs.existsSync(destination)) {
+    throw new Error(`Refusing to replace an unexplained existing folder: ${destination}`);
+  }
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Restoring ${selected.label}…`, cancellable: false },
     () => runJoshRoom([
