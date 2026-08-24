@@ -1,6 +1,14 @@
 const enc = new TextEncoder();
 const b64 = bytes => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 const random = () => b64(crypto.getRandomValues(new Uint8Array(32)));
+const same = (left, right) => {
+  const a = enc.encode(left || "");
+  const b = enc.encode(right || "");
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let index = 0; index < a.length; index++) difference |= a[index] ^ b[index];
+  return difference === 0;
+};
 
 export default {
   async fetch(request, env) {
@@ -23,6 +31,15 @@ export default {
       const token = await fetch("https://dash.cloudflare.com/oauth2/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
       const result = await token.json();
       if (!token.ok || !result.access_token) return new Response("Cloudflare authorization failed.", { status: 502 });
+      const identityResponse = await fetch("https://dash.cloudflare.com/oauth2/userinfo", {
+        headers: { authorization: `Bearer ${result.access_token}` }
+      });
+      const identity = await identityResponse.json();
+      const subject = identity.sub || identity.id;
+      if (!identityResponse.ok || !same(subject, env.OWNER_CLOUDFLARE_USER_ID)) {
+        await env.OAUTH_SESSIONS.put(`session:${saved.id}`, JSON.stringify({ status: "denied" }), { expirationTtl: 120 });
+        return new Response("This Cloudflare identity is not authorized for Josh Room.", { status: 403 });
+      }
       const temporary = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/r2/temp-access-credentials`, {
         method: "POST",
         headers: { authorization: `Bearer ${result.access_token}`, "content-type": "application/json" },
