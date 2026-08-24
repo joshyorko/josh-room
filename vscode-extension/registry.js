@@ -1,3 +1,4 @@
+const fs = require("fs");
 const http = require("http");
 
 const REGISTRY_URL = "http://127.0.0.1:5000";
@@ -43,4 +44,52 @@ async function waitForRegistry(
   throw new Error(`Hauler registry did not become ready: ${lastError.message}`);
 }
 
-module.exports = { REGISTRY_URL, probeRegistry, waitForRegistry };
+function cleanLogLine(line) {
+  return String(line).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim();
+}
+
+function stageForLog(line) {
+  const normalized = cleanLogLine(line).toLowerCase();
+  if (normalized.includes("listening on") && normalized.includes(":5000")) return "Registry is ready";
+  if (normalized.includes("starting registry on port")) return "Starting read-only registry";
+  if (normalized.includes("copied artifacts to")) return "Loading registry images";
+  if (normalized.includes("hauler/") && normalized.includes(":latest")) return "Inspecting haul contents";
+  if (normalized.includes("restore space from library") || normalized.includes("holotree")) {
+    return "Preparing RCC environment";
+  }
+  return undefined;
+}
+
+function followLogFile(logPath, onLine, { intervalMs = 100 } = {}) {
+  let previous = "";
+  try {
+    previous = fs.readFileSync(logPath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  let pending = "";
+  const poll = () => {
+    let current;
+    try {
+      current = fs.readFileSync(logPath, "utf8");
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      onLine(`Unable to read ${logPath}: ${error.message}`);
+      return;
+    }
+    if (current === previous) return;
+    const added = current.startsWith(previous) ? current.slice(previous.length) : current;
+    previous = current;
+    const lines = (pending + added).split(/\r?\n/);
+    pending = lines.pop() || "";
+    for (const line of lines) {
+      const cleaned = cleanLogLine(line);
+      if (cleaned) onLine(cleaned);
+    }
+  };
+  const timer = setInterval(poll, intervalMs);
+  timer.unref?.();
+  return { dispose: () => clearInterval(timer) };
+}
+
+module.exports = { REGISTRY_URL, cleanLogLine, followLogFile, probeRegistry, stageForLog, waitForRegistry };

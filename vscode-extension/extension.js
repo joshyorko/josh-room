@@ -1,10 +1,12 @@
 const childProcess = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
-const { REGISTRY_URL, waitForRegistry } = require("./registry");
+const { REGISTRY_URL, followLogFile, stageForLog, waitForRegistry } = require("./registry");
 
 let outputChannel;
+let registryLogChannel;
 let roomsProvider;
 let statusItem;
 
@@ -483,19 +485,104 @@ async function jatServe() {
     openLabel: "Serve this haul",
   });
   if (!files?.length) return "cancelled";
+  const haul = files[0].fsPath;
+  const jatRoot = process.env.JOSH_ROOM_JAT_ROOT || path.join(os.homedir(), ".local", "share", "josh-room", "josh-all-the-things");
   const terminal = vscode.window.createTerminal({ name: "JAT Hauler Registry", cwd });
+  const followers = [];
+  let latestLog = "";
+  let progressReporter;
+  let progressActive = false;
+  const stream = (line, severity = "info") => {
+    latestLog = line;
+    registryLogChannel?.[severity](line);
+    const stage = stageForLog(line);
+    if (stage && progressActive) progressReporter?.report({ message: stage });
+  };
+  followers.push(
+    followLogFile(path.join(jatRoot, "output", "stdout.log"), (line) => stream(line)),
+    followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
+  );
+  const stopFollowing = () => {
+    for (const follower of followers) follower.dispose();
+  };
+  const terminalClosed = vscode.window.onDidCloseTerminal((closed) => {
+    if (closed !== terminal) return;
+    stopFollowing();
+    terminalClosed.dispose();
+    registryLogChannel?.info("Registry stopped.");
+    setStatus("$(archive) Josh Room");
+  });
+  registryLogChannel?.clear();
+  registryLogChannel?.info(`Serving ${path.basename(haul)}`);
+  registryLogChannel?.info(`Runtime logs: ${path.join(jatRoot, "output")}`);
+  setStatus("$(sync~spin) Starting registry", path.basename(haul));
   terminal.show(true);
-  terminal.sendText(`josh-room jat serve --haul ${shellQuote(files[0].fsPath)}`, true);
-  const catalog = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Starting Hauler registry…", cancellable: false },
-    () => waitForRegistry(),
-  );
-  const count = Array.isArray(catalog.repositories) ? catalog.repositories.length : 0;
-  outputChannel?.appendLine(`Hauler registry ready at ${REGISTRY_URL} (${count} repositories).`);
-  await vscode.window.showInformationMessage(
-    `Hauler registry ready at ${REGISTRY_URL} with ${count} ${count === 1 ? "repository" : "repositories"}. Close the JAT Hauler Registry terminal to stop it.`,
-  );
-  return "started";
+  try {
+    const catalog = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Serving ${path.basename(haul)}`,
+        cancellable: false,
+      },
+      async (progress) => {
+        progressReporter = progress;
+        progressActive = true;
+        progress.report({ message: "Preparing RCC environment" });
+        terminal.sendText(`josh-room jat serve --haul ${shellQuote(haul)}`, true);
+        try {
+          return await waitForRegistry();
+        } finally {
+          progressActive = false;
+        }
+      },
+    );
+    const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
+    const count = repositories.length;
+    setStatus("$(server-process) Registry :5000", `${count} repositories from ${path.basename(haul)}`);
+    registryLogChannel?.info(`Ready at ${REGISTRY_URL} with ${count} ${count === 1 ? "repository" : "repositories"}.`);
+    outputChannel?.appendLine(`Hauler registry ready at ${REGISTRY_URL} (${count} repositories).`);
+    const action = await vscode.window.showInformationMessage(
+      `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
+      "Show Images",
+      "Copy Registry URL",
+      "Show Logs",
+    );
+    if (action === "Show Images") {
+      if (!repositories.length) {
+        await vscode.window.showInformationMessage("This haul contains no registry repositories.");
+      } else {
+        await vscode.window.showQuickPick(
+          repositories.map((repository) => ({
+            label: `$(package) ${repository}`,
+            description: `127.0.0.1:5000/${repository}`,
+          })),
+          { title: "Images served by JAT", placeHolder: "Registry contents" },
+        );
+      }
+    } else if (action === "Copy Registry URL") {
+      await vscode.env.clipboard.writeText(REGISTRY_URL);
+      await vscode.window.showInformationMessage(`Copied ${REGISTRY_URL}.`);
+    } else if (action === "Show Logs") {
+      registryLogChannel?.show(true);
+    }
+    return "started";
+  } catch (error) {
+    progressActive = false;
+    const detail = latestLog || error.message || String(error);
+    registryLogChannel?.error(`Registry failed: ${detail}`);
+    setStatus("$(error) Registry failed", detail);
+    const action = await vscode.window.showErrorMessage(
+      `Hauler registry failed to start: ${detail.slice(0, 240)}`,
+      "Show Logs",
+      "Retry",
+    );
+    if (action === "Show Logs") registryLogChannel?.show(true);
+    if (action === "Retry") {
+      terminal.dispose();
+      await vscode.commands.executeCommand("joshRoom.jatServe");
+    }
+    return "failed";
+  }
 }
 
 function register(context, command, operation) {
@@ -511,6 +598,7 @@ function register(context, command, operation) {
 
 function activate(context) {
   outputChannel = vscode.window.createOutputChannel("Josh Room");
+  registryLogChannel = vscode.window.createOutputChannel("Josh Room: Registry", { log: true });
   statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusItem.command = "workbench.view.extension.josh-room";
   setStatus("$(archive) Josh Room");
@@ -518,7 +606,7 @@ function activate(context) {
   roomsProvider = new RoomsProvider();
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", { treeDataProvider: roomsProvider });
   const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", { treeDataProvider: new JatToolsProvider() });
-  context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
+  context.subscriptions.push(outputChannel, registryLogChannel, statusItem, roomsView, jatToolsView);
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
