@@ -48,6 +48,15 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert "rpm-ostree" not in body
 
 
+def test_setup_is_host_only_and_room_config_is_read_only():
+    readme = (ROOT / "README.md").read_text()
+    setup = (ROOT / "docs/R2-SETUP.md").read_text()
+    template = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
+    assert "Run setup on the Bluefin host" in readme
+    assert "Do not run `josh-room setup` inside the Room" in setup
+    assert "type=bind,readonly" in template
+
+
 def test_development_container_keeps_venv_outside_bind_mount():
     config = (ROOT / ".devcontainer/devcontainer.json").read_text()
     assert '"UV_PROJECT_ENVIRONMENT": "/home/vscode/.local/share/josh-room/dev-venv"' in config

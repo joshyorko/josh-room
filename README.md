@@ -52,10 +52,26 @@ remains private; object keys contain only ciphertext SHA-256 digests.
 
 ## Josh's golden path
 
+### Host setup (once per device)
+
+Run setup on the Bluefin host before creating a Room. Install the Josh Room
+CLI on the host, unlock the normal desktop Secret Service, and send the private
+bootstrap JSON to stdin:
+
+```bash
+josh-room setup --profile josh-room-r2 --age-profile josh-room-age
+```
+
+The command stores sensitive R2 and age material in the host keyring and writes
+only non-secret metadata to `~/.config/josh-room/config.json` with mode `0600`.
+Do not paste secrets into argv or shell history. The Room mounts this metadata
+read-only and accesses secrets only through the mounted host session bus.
+
+### Room use (daily)
+
 The personal Room template bootstraps `age`, `uv`, stable RCC, Action Server,
 Hauler, JAT, and Josh Room without running a JAT workload. One-time
-`josh-room setup` stores R2 credentials and the daily age identity in the host
-OS keyring while writing only non-secret metadata to the private XDG config.
+host setup has already populated the OS keyring and private XDG config.
 
 Daily use is:
 

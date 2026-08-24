@@ -1,5 +1,17 @@
 # Private R2 setup and evidence boundary
 
+## Lifecycle boundary
+
+Do not run `josh-room setup` inside the Room. Run it once on the Bluefin host
+after host login, before `devpod up`. The command reads private bootstrap JSON
+from stdin, imports sensitive values into the host OS Secret Service, and writes
+only non-secret metadata to `$XDG_CONFIG_HOME/josh-room/config.json`.
+
+The personal Room mounts that config read-only and mounts the host Secret
+Service session bus. Daily `doctor`, `enter`, `hydrate`, and `snapshot create`
+operations consume the host setup without rewriting config or prompting for
+Cloudflare, AWS, or age credentials.
+
 Josh Room's R2 data plane is the private Cloudflare S3-compatible API. It does
 not use the Cloudflare REST object endpoint for snapshot transfer, and normal
 operations never open a browser or ask for a password, API token, account ID,

@@ -1,5 +1,6 @@
 import io
 import json
+import stat
 import sys
 
 from josh_room.cli import _instance_root, main
@@ -32,6 +33,7 @@ def test_setup_stores_secrets_in_keyring_and_only_metadata_in_config(tmp_path, m
         "jat-root": "/synthetic/jat",
     }
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert not (tmp_path / "config.json").exists()
     assert main(["setup", "--profile", "r2-profile", "--age-profile", "age-profile", "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["stored"] is True
@@ -43,6 +45,7 @@ def test_setup_stores_secrets_in_keyring_and_only_metadata_in_config(tmp_path, m
     assert "synthetic-access" not in serialized
     assert "synthetic-secret" not in serialized
     assert "<synthetic-age-identity>" not in serialized
+    assert stat.S_IMODE((tmp_path / "config.json").stat().st_mode) == 0o600
 
 
 def test_operation_state_is_separate_from_read_only_config(tmp_path, monkeypatch):

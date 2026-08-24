@@ -10,9 +10,9 @@ from josh_room.cli import main
 
 
 @pytest.mark.first_run
-def test_josh_fresh_state_r2_picker_hydrate_ide_and_rcc(tmp_path, monkeypatch, capsys):
+def test_josh_device_ready_r2_picker_hydrate_ide_and_rcc(tmp_path, monkeypatch, capsys):
     if os.environ.get("JOSH_ROOM_FIRST_RUN_LIVE") != "1":
-        pytest.skip("Josh's first-run acceptance is private and secret-gated")
+        pytest.skip("Josh's device-ready Room acceptance is private and secret-gated")
     required = ["JOSH_ROOM_CONFIG_DIR", "JOSH_ROOM_JAT_ROOT", "DBUS_SESSION_BUS_ADDRESS"]
     if any(not os.environ.get(name) for name in required):
         pytest.skip("first-run private config, JAT, or host keyring bus is unavailable")
