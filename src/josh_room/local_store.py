@@ -108,3 +108,11 @@ class ImmutableLocalStore:
         if size > MAX_OBJECT_SIZE:
             raise ValueError("object exceeds maximum size")
         return path.read_bytes()
+
+    def delete(self, key: str) -> None:
+        if not OBJECT_KEY.fullmatch(key):
+            raise ValueError("invalid object key")
+        path = self.root / key
+        if path.is_symlink():
+            raise ValueError("local object must not be a symlink")
+        path.unlink(missing_ok=True)

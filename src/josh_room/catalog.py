@@ -48,6 +48,23 @@ class Catalog:
         project = self.body["projects"][project_id]
         return project["snapshots"][project["latest"]]
 
+    def remove_project(self, project_id: str):
+        if project_id not in self.body["projects"]:
+            raise ValueError("room is not present in the encrypted catalog")
+        body = json.loads(json.dumps(self.body))
+        removed = body["projects"].pop(project_id)
+        referenced = {
+            snapshot["object_key"]
+            for project in body["projects"].values()
+            for snapshot in project["snapshots"].values()
+        }
+        removable = sorted({
+            snapshot["object_key"]
+            for snapshot in removed["snapshots"].values()
+        } - referenced)
+        body["revision"] += 1
+        return Catalog(body), removable, len(removed["snapshots"])
+
     def update_if_revision(self, expected_revision: int, body: dict):
         if self.body["revision"] != expected_revision:
             raise CatalogConflict("stale catalog revision")

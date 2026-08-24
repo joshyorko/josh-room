@@ -65,6 +65,10 @@ class FakeS3:
         self.calls.append(("abort_multipart_upload", kwargs))
         self.multipart.pop(kwargs["UploadId"], None)
 
+    def delete_object(self, **kwargs):
+        self.calls.append(("delete_object", kwargs))
+        self.objects.pop(kwargs["Key"], None)
+
 
 class ChunkLimitedBody(io.BytesIO):
     def __init__(self, body, limit):
@@ -159,3 +163,16 @@ def test_remote_verification_hashes_in_bounded_chunks(tmp_path):
     fake.get_object = lambda **_kwargs: {"ContentLength": len(body), "Body": stream}
     backend(fake, tmp_path)._verify_remote(key, digest, len(body))
     assert len(stream.requests) >= 2
+
+
+def test_delete_object_accepts_only_strict_content_addressed_keys(tmp_path):
+    fake = FakeS3()
+    store = backend(fake, tmp_path)
+    body = b"delete-me"
+    ref = store.put_bytes("objects/sha256/" + hashlib.sha256(body).hexdigest(), body)
+
+    store.delete_object(ref.key)
+
+    assert ref.key not in fake.objects
+    with pytest.raises(ValueError):
+        store.delete_object("catalog.jroom.age")

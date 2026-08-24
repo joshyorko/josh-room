@@ -57,6 +57,6 @@ def test_real_jat_age_dual_recipient_fresh_state_hydration(tmp_path):
     hydrate(fresh_instance, "demo-project", daily_destination, daily_identity, jat_root)
     hydrate(fresh_instance, "demo-project", recovery_destination, recovery_identity, jat_root)
     for destination in (daily_destination, recovery_destination):
-        restored = destination / "workspace" / "source" / "nested" / "file.txt"
+        restored = destination / "nested" / "file.txt"
         assert restored.read_text() == "synthetic Josh Room fixture\n"
         assert restored.stat().st_mode & 0o777 == 0o640

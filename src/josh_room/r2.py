@@ -222,6 +222,10 @@ class R2Backend:
         path.write_text(json.dumps({"status": "uploaded-unreferenced", "object_key": ref.key, "sha256": ref.sha256, "size": ref.size}, sort_keys=True))
         return path
 
+    def delete_object(self, key: str) -> None:
+        self._validate_object_key(key)
+        self.client.delete_object(Bucket=self.config.bucket, Key=key)
+
     @staticmethod
     def _validate_object_key(key: str, digest: str | None = None) -> None:
         match = OBJECT_KEY.fullmatch(key)

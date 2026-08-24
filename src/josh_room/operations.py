@@ -60,6 +60,7 @@ def create_snapshot(
             if backend:
                 backend.record_orphan(ref)
             raise
+        _write_room_marker(source, project_id, display_name or _display_name(project_id))
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
 
 
@@ -75,6 +76,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
             catalog, _catalog_etag = _read_remote_catalog(backend, identity, instance)
         else:
             catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
+        project = catalog.body["projects"][project_id]
         snapshot = catalog.latest(project_id)
         if backend:
             encrypted = stage / "snapshot.jroom.age"
@@ -92,9 +94,12 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
             raise ValueError("manifest project mismatch")
         workspace_stage = stage / "restore"
         jat_result = run_restore(jat_root, haul, workspace_stage)
-        restored_root = workspace_stage / "workspace"
-        if not restored_root.is_dir() or not any(restored_root.iterdir()):
+        workspace_wrapper = workspace_stage / "workspace"
+        workspace_roots = list(workspace_wrapper.iterdir()) if workspace_wrapper.is_dir() else []
+        if len(workspace_roots) != 1 or not workspace_roots[0].is_dir() or workspace_roots[0].is_symlink():
             raise ValueError("JAT restore did not produce an expected workspace root")
+        restored_root = workspace_roots[0]
+        _write_room_marker(restored_root, project_id, project["display_name"])
         backup = None
         if destination.exists():
             backup = destination.parent / f".{destination.name}.josh-room-backup-{operation_id}"
@@ -103,7 +108,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
                 os.replace(backup, destination)
                 raise FileExistsError("destination became non-empty before promotion")
         try:
-            os.replace(workspace_stage, destination)
+            os.replace(restored_root, destination)
         except BaseException:
             if backup and backup.exists() and not destination.exists():
                 os.replace(backup, destination)
@@ -124,6 +129,40 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
             shutil.rmtree(stage)
 
 
+def remove_room(instance: Path, project_id: str, identity: Path, recipients: list[str], backend=None) -> dict:
+    operation_id = uuid.uuid4().hex
+    receipt = instance / "receipts" / f"{operation_id}.json"
+    if backend:
+        catalog, etag = _read_remote_catalog(backend, identity, instance)
+    else:
+        catalog_file = CatalogFile(instance / "catalog.jroom.age", identity)
+        catalog = catalog_file.read()
+        etag = None
+    updated, removable, snapshot_count = catalog.remove_project(project_id)
+    if backend:
+        backend.conditional_catalog_put(_encrypt_catalog(updated, recipients, instance), etag)
+    else:
+        catalog_file.update_if_revision(catalog.body["revision"], updated, recipients)
+    cleanup_failed = []
+    for key in removable:
+        try:
+            if backend:
+                backend.delete_object(key)
+            else:
+                ImmutableLocalStore(instance).delete(key)
+        except Exception:  # noqa: BLE001 - catalog removal is durable; cleanup is retried from receipt
+            cleanup_failed.append(key)
+    result = {
+        "deleted_objects": len(removable) - len(cleanup_failed),
+        "project_id": project_id,
+        "snapshot_count": snapshot_count,
+    }
+    if cleanup_failed:
+        result["cleanup_pending"] = len(cleanup_failed)
+    _write_receipt(receipt, {"operation": "remove-room", "operation_id": operation_id, "status": "success", **result})
+    return result
+
+
 def _write_receipt(path: Path, body: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -137,6 +176,15 @@ def _write_receipt(path: Path, body: dict) -> None:
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _write_room_marker(workspace: Path, project_id: str, display_name: str) -> None:
+    marker = workspace / ".josh-room.json"
+    marker.write_text(json.dumps({
+        "display_name": display_name,
+        "format_version": 1,
+        "project_id": project_id,
+    }, sort_keys=True) + "\n")
 
 
 def _read_remote_catalog(backend, identity_value, instance: Path):

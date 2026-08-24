@@ -218,6 +218,20 @@ def test_catalog_resolves_explicit_latest_and_rejects_stale_revision():
         catalog.update_if_revision(0, {"format_version": 1, "revision": 99, "projects": {}})
 
 
+def test_catalog_remove_room_returns_only_unreferenced_objects():
+    shared = {"snapshot_id": "shared", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
+    unique = {"snapshot_id": "unique", "object_key": "objects/sha256/" + "b" * 64, "ciphertext_sha256": "b" * 64, "ciphertext_size": 1}
+    catalog = Catalog.empty().add_snapshot("one", "One", shared).add_snapshot("one", "One", unique)
+    catalog = catalog.add_snapshot("two", "Two", shared)
+
+    updated, removable, snapshot_count = catalog.remove_project("one")
+
+    assert set(updated.body["projects"]) == {"two"}
+    assert removable == [unique["object_key"]]
+    assert snapshot_count == 2
+    assert updated.body["revision"] == catalog.body["revision"] + 1
+
+
 def test_catalog_rejects_untrusted_object_key():
     with pytest.raises(ValueError, match="object key"):
         Catalog({"format_version": 1, "revision": 1, "projects": {"demo": {"display_name": "Demo", "latest": "one", "snapshots": {"one": {"snapshot_id": "one", "object_key": "objects/../secret", "ciphertext_sha256": "0" * 64, "ciphertext_size": 1}}}}})

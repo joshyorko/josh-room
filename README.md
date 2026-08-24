@@ -25,8 +25,8 @@ devpod up github.com/joshyorko/josh-room --ide vscode-insiders
 
 DevPod clones the repository, discovers the root `.devcontainer`, starts the
 Room of Requirement secure image, runs the capability-only bootstrap, and
-opens VS Code Insiders with `Josh: Save Room` and `Josh: Enter Room` available
-under `Tasks: Run Task`.
+opens VS Code Insiders with `Josh: Save Room`, `Josh: Enter Room`, and
+`Josh: Remove Room` available under `Tasks: Run Task`.
 
 The same configuration is published for standard Dev Container template
 consumers:
@@ -96,17 +96,22 @@ age, Hauler, RCC, JAT, the daily identity, R2, the encrypted catalog, or the IDE
 is unavailable. `enter` discovers logical project names from the encrypted R2
 catalog, hydrates safely, then launches VS Code Insiders.
 
-The bundled command bridge gives `Josh: Save Room` a native name prompt and
-success notification. `Josh: Enter Room` loads the encrypted catalog into a
-native Quick Pick, hydrates beside the clean bootstrap workspace, and switches
-the current VS Code window to the restored Room. Storage, encryption, and
-hydration remain owned by the CLI.
+The bundled command bridge gives `Josh: Save Room` a native Quick Pick of saved
+Rooms plus “Create a new Room”. Selecting an existing Room appends an immutable
+snapshot and advances its `latest` pointer; it does not create another logical
+Room. Restored folders carry a non-secret identity marker so the current Room
+is labeled in the picker. `Josh: Enter Room` hydrates beside the clean bootstrap
+workspace and switches the current VS Code window to the restored root.
+`Josh: Remove Room` requires explicit modal confirmation, removes the encrypted
+catalog entry conditionally, then deletes only objects no remaining Room
+references. Storage, encryption, and hydration remain owned by the CLI.
 
 ## Commands
 
 ```text
 josh-room doctor [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room projects list [--backend local|r2] [--json]
+josh-room rooms remove <project> [--backend local|r2] [--json]
 josh-room snapshots list <project> [--backend local|r2] [--json]
 josh-room snapshot create <project> [--source <path>] [--backend local|r2] [--json]
 josh-room hydrate <project> --destination <path> [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]

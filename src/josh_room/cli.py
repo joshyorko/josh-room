@@ -17,7 +17,7 @@ from .jat import _jat_contract
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
-from .operations import create_snapshot, hydrate
+from .operations import create_snapshot, hydrate, remove_room
 from .r2 import R2Backend, R2Config
 
 
@@ -38,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
     project_list = project_commands.add_parser("list")
     project_list.add_argument("--backend", choices=("local", "r2"), default="r2")
     _json_option(project_list)
+    rooms = commands.add_parser("rooms")
+    room_commands = rooms.add_subparsers(dest="room_command", required=True)
+    room_remove = room_commands.add_parser("remove")
+    room_remove.add_argument("project")
+    room_remove.add_argument("--backend", choices=("local", "r2"), default="r2")
+    _json_option(room_remove)
     snapshots = commands.add_parser("snapshots")
     snapshot_commands = snapshots.add_subparsers(dest="snapshots_command", required=True)
     snapshot_list = snapshot_commands.add_parser("list")
@@ -87,7 +93,7 @@ def main(argv=None):
 
 
 def _requires_oauth(args) -> bool:
-    if args.command not in {"projects", "snapshots", "snapshot", "hydrate", "enter"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter"}:
         return False
     return getattr(args, "backend", "r2") == "r2"
 
@@ -98,6 +104,17 @@ def dispatch(args, instance: Path) -> dict:
     if args.command == "projects":
         projects = list_projects(instance, _backend(args.backend, instance))
         return {"ok": True, "projects": [{"id": project_id, "display_name": name} for project_id, name in projects]}
+    if args.command == "rooms":
+        recipients = _recipients()
+        if len(recipients) < 2:
+            raise ValueError("room removal requires two age recipients")
+        identity = os.environ.get("JOSH_ROOM_IDENTITY")
+        if not identity:
+            raise ValueError("room removal requires an age identity")
+        return {
+            "ok": True,
+            **remove_room(instance, args.project, Path(identity), recipients, _backend(args.backend, instance)),
+        }
     if args.command == "snapshots":
         catalog = load_catalog(instance, _backend(args.backend, instance))
         project = catalog.body["projects"].get(args.project)

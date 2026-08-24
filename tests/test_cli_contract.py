@@ -57,6 +57,8 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     assert args.ide == "terminal"
     args = parser.parse_args(["projects", "list", "--backend", "r2", "--json"])
     assert args.backend == "r2"
+    args = parser.parse_args(["rooms", "remove", "demo", "--backend", "r2", "--json"])
+    assert args.command == "rooms" and args.room_command == "remove" and args.project == "demo"
     assert parser.parse_args(["enter", "hive"]).backend == "r2"
     assert parser.parse_args(["snapshot", "create", "demo"]).source is None
 
@@ -76,6 +78,7 @@ def test_documented_argv_forms_have_stable_json_exit_contract(tmp_path, capsys, 
     cases = [
         (["doctor", "--json"], 2),
         (["projects", "list", "--json"], 2),
+        (["rooms", "remove", "demo", "--json"], 2),
         (["snapshots", "list", "demo", "--json"], 2),
         (["snapshot", "create", "demo", "--source", str(tmp_path), "--backend", "r2", "--json"], 2),
         (["hydrate", "demo", "--destination", str(tmp_path / "dest"), "--ide", "terminal", "--json"], 2),
@@ -164,7 +167,7 @@ def test_workspace_root_detects_clean_room_parent(tmp_path, monkeypatch):
 def test_vscode_tasks_delegate_save_and_enter_to_native_command_bridge():
     tasks = json.loads((__import__("pathlib").Path(__file__).parents[1] / ".vscode/tasks.json").read_text())
     labels = {task["label"] for task in tasks["tasks"]}
-    assert labels == {"Josh: Save Room", "Josh: Enter Room"}
+    assert labels == {"Josh: Save Room", "Josh: Enter Room", "Josh: Remove Room"}
     save = next(task for task in tasks["tasks"] if task["label"] == "Josh: Save Room")
     enter = next(task for task in tasks["tasks"] if task["label"] == "Josh: Enter Room")
     assert save == {
@@ -181,6 +184,8 @@ def test_vscode_tasks_delegate_save_and_enter_to_native_command_bridge():
         "args": ["${command:joshRoom.enter}"],
         "problemMatcher": [],
     }
+    remove = next(task for task in tasks["tasks"] if task["label"] == "Josh: Remove Room")
+    assert remove["args"] == ["${command:joshRoom.remove}"]
     assert "inputs" not in tasks
 
 

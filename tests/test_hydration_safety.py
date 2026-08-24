@@ -8,7 +8,7 @@ from josh_room.catalog import Catalog, CatalogFile
 from josh_room.crypto import encrypt
 from josh_room.envelope import build_envelope
 from josh_room.local_store import ImmutableLocalStore
-from josh_room.operations import hydrate
+from josh_room.operations import hydrate, remove_room
 
 
 def _encrypted_instance(tmp_path):
@@ -36,15 +36,17 @@ def test_hydrate_promotes_adjacent_stage_and_handles_known_empty_destination(tmp
     instance, identity = _encrypted_instance(tmp_path)
 
     def fake_restore(_jat, _haul, destination):
-        (destination / "workspace").mkdir(parents=True)
-        (destination / "workspace" / "file.txt").write_text("restored")
+        (destination / "workspace" / "source").mkdir(parents=True)
+        (destination / "workspace" / "source" / "file.txt").write_text("restored")
         return {"argv": ["synthetic-jat"], "exit_status": 0}
 
     monkeypatch.setattr("josh_room.operations.run_restore", fake_restore)
     destination = tmp_path / "workspace"
     destination.mkdir()
     result = hydrate(instance, "demo", destination, identity, tmp_path)
-    assert (destination / "workspace" / "file.txt").read_text() == "restored"
+    assert (destination / "file.txt").read_text() == "restored"
+    marker = __import__("json").loads((destination / ".josh-room.json").read_text())
+    assert marker == {"display_name": "Demo", "format_version": 1, "project_id": "demo"}
     assert Path(result["receipt"]).read_text().find('"status": "success"') >= 0
     assert not list(tmp_path.glob(".workspace.josh-room-*"))
 
@@ -73,3 +75,27 @@ def test_hydrate_cleans_owned_stage_and_records_interrupt(tmp_path, monkeypatch)
     receipts = list((instance / "receipts").glob("*.json"))
     assert len(receipts) == 1
     assert '"status": "failed"' in receipts[0].read_text()
+
+
+def test_remove_room_updates_catalog_before_deleting_unreferenced_objects(tmp_path, monkeypatch):
+    snapshot = {"snapshot_id": "one", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
+    catalog = Catalog.empty().add_snapshot("demo", "Demo", snapshot)
+    calls = []
+
+    class Backend:
+        def conditional_catalog_put(self, body, etag):
+            calls.append(("catalog", body, etag))
+
+        def delete_object(self, key):
+            calls.append(("delete", key))
+
+    monkeypatch.setattr("josh_room.operations._read_remote_catalog", lambda *_args: (catalog, '"etag"'))
+    monkeypatch.setattr("josh_room.operations._encrypt_catalog", lambda *_args: b"encrypted-catalog")
+
+    result = remove_room(tmp_path / "instance", "demo", tmp_path / "identity", ["age1one", "age1two"], Backend())
+
+    assert calls == [
+        ("catalog", b"encrypted-catalog", '"etag"'),
+        ("delete", snapshot["object_key"]),
+    ]
+    assert result == {"deleted_objects": 1, "project_id": "demo", "snapshot_count": 1}

@@ -1,4 +1,5 @@
 const childProcess = require("child_process");
+const fs = require("fs");
 const path = require("path");
 const util = require("util");
 const vscode = require("vscode");
@@ -42,14 +43,44 @@ async function runJoshRoom(args, cwd) {
   }
 }
 
+async function loadCatalog(cwd, title = "Loading your Rooms…") {
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title, cancellable: false },
+    () => runJoshRoom(["projects", "list", "--backend", "r2"], cwd),
+  );
+}
+
+function currentRoom(cwd) {
+  try {
+    const marker = JSON.parse(fs.readFileSync(path.join(cwd, ".josh-room.json"), "utf8"));
+    return marker.format_version === 1 ? marker : undefined;
+  } catch (_error) {
+    return undefined;
+  }
+}
+
 async function saveRoom() {
   const cwd = activeWorkspace();
-  const name = await vscode.window.showInputBox({
-    title: "Josh: Save Room",
-    prompt: "Name this Room",
-    ignoreFocusOut: true,
-    validateInput: (value) => value.trim() ? undefined : "Enter a Room name.",
-  });
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const marker = currentRoom(cwd);
+  const selected = await vscode.window.showQuickPick([
+    { label: "$(add) Create a new Room…", create: true },
+    ...catalog.projects.map((project) => ({
+      label: project.display_name,
+      description: marker?.project_id === project.id ? "Current Room" : "Save a new latest snapshot",
+      project,
+    })),
+  ], { title: "Josh: Save Room", placeHolder: "Create or update a Room", ignoreFocusOut: true });
+  if (!selected) return "cancelled";
+  let name = selected.project?.display_name;
+  if (selected.create) {
+    name = await vscode.window.showInputBox({
+      title: "Josh: Save Room",
+      prompt: "Name this Room",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a Room name.",
+    });
+  }
   if (!name) return "cancelled";
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Saving ${name}…`, cancellable: false },
@@ -62,10 +93,7 @@ async function saveRoom() {
 
 async function enterRoom() {
   const cwd = activeWorkspace();
-  const catalog = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Loading your Rooms…", cancellable: false },
-    () => runJoshRoom(["projects", "list", "--backend", "r2"], cwd),
-  );
+  const catalog = await loadCatalog(cwd);
   const selected = await vscode.window.showQuickPick(
     catalog.projects.map((project) => ({ label: project.display_name, projectId: project.id })),
     { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
@@ -90,6 +118,29 @@ async function enterRoom() {
   return "opened";
 }
 
+async function removeRoom() {
+  const cwd = activeWorkspace();
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const selected = await vscode.window.showQuickPick(
+    catalog.projects.map((project) => ({ label: project.display_name, project })),
+    { title: "Josh: Remove Room", placeHolder: "Choose a Room to remove", ignoreFocusOut: true },
+  );
+  if (!selected) return "cancelled";
+  const snapshots = await runJoshRoom(["snapshots", "list", selected.project.id, "--backend", "r2"], cwd);
+  const confirmed = await vscode.window.showWarningMessage(
+    `Remove “${selected.label}” and its ${snapshots.snapshots.length} snapshot(s)? This cannot be undone.`,
+    { modal: true },
+    "Remove Room",
+  );
+  if (confirmed !== "Remove Room") return "cancelled";
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Removing ${selected.label}…`, cancellable: false },
+    () => runJoshRoom(["rooms", "remove", selected.project.id, "--backend", "r2"], cwd),
+  );
+  await vscode.window.showInformationMessage(`Removed “${selected.label}”.`);
+  return "removed";
+}
+
 function register(context, command, operation) {
   context.subscriptions.push(vscode.commands.registerCommand(command, async () => {
     try {
@@ -104,6 +155,7 @@ function register(context, command, operation) {
 function activate(context) {
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.enter", enterRoom);
+  register(context, "joshRoom.remove", removeRoom);
 }
 
 module.exports = { activate };

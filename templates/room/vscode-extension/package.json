@@ -1,7 +1,7 @@
 {
   "name": "josh-room",
   "displayName": "Josh Room",
-  "description": "Native Save Room and Enter Room controls for Josh's disposable workspace.",
+  "description": "Native Save, Enter, and Remove Room controls for Josh's disposable workspace.",
   "version": "0.1.0",
   "publisher": "joshyorko",
   "engines": {
@@ -10,13 +10,15 @@
   "categories": ["Other"],
   "activationEvents": [
     "onCommand:joshRoom.save",
-    "onCommand:joshRoom.enter"
+    "onCommand:joshRoom.enter",
+    "onCommand:joshRoom.remove"
   ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       { "command": "joshRoom.save", "title": "Josh: Save Room" },
-      { "command": "joshRoom.enter", "title": "Josh: Enter Room" }
+      { "command": "joshRoom.enter", "title": "Josh: Enter Room" },
+      { "command": "joshRoom.remove", "title": "Josh: Remove Room" }
     ]
   }
 }
