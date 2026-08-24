@@ -1,8 +1,11 @@
-import hashlib
+import json
 import os
 import signal
 import subprocess
+import tempfile
 from pathlib import Path
+
+from robocorp import log
 
 
 class JATError(RuntimeError):
@@ -39,21 +42,64 @@ def _run(argv: list[str], timeout: float) -> tuple[int, str]:
     return process.returncode, _diagnostic(stderr)
 
 
+def _jat_contract(jat_root: Path) -> dict[str, bool]:
+    robot = jat_root / "robot.yaml"
+    tasks = jat_root / "tasks.py"
+    try:
+        robot_text = robot.read_text()
+        tasks_text = tasks.read_text()
+    except OSError:
+        return {"robot": False, "tasks": False, "interactive": False}
+    return {
+        "robot": all(f"  {name}:" in robot_text for name in ("Build", "Restore", "Serve")),
+        "tasks": all(f"def {name}(" in tasks_text for name in ("Build", "Restore", "Serve")),
+        "interactive": "  3tc:" in robot_text and "jat.cli" in robot_text,
+    }
+
+
+def _request_file(root: Path, operation: str, request: dict) -> Path:
+    with tempfile.NamedTemporaryFile(
+        mode="w", prefix=f".josh-room-{operation}-", suffix=".json", dir=root, delete=False
+    ) as handle:
+        path = Path(handle.name)
+        json.dump(request, handle, sort_keys=True)
+        handle.write("\n")
+    return path
+
+
+def _run_task(jat_root: Path, task: str, request: dict) -> dict:
+    request_path = _request_file(jat_root, task.lower(), request)
+    result_path = jat_root / "output" / "result.json"
+    result_path.unlink(missing_ok=True)
+    argv = ["rcc", "run", "-r", str(jat_root / "robot.yaml"), "-t", task, "--", "--json-input", str(request_path)]
+    try:
+        exit_status, diagnostic = _run(argv, float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600")))
+        if not result_path.is_file():
+            raise JATError("JAT task did not produce a fresh output/result.json", {"argv": argv, "exit_status": exit_status})
+        result = json.loads(result_path.read_text())
+        expected_operation = task.lower()
+        if result.get("operation") != expected_operation:
+            raise JATError(f"JAT receipt operation mismatch: expected {expected_operation}", result)
+        if result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
+            raise JATError("JAT receipt exit status is inconsistent with RCC", result)
+        result.setdefault("diagnostics", diagnostic)
+        result["executable"] = argv[0]
+        result["argv"] = argv
+        result["version"] = _version(jat_root)
+        result["diagnostic"] = _diagnostic(result.get("diagnostics", diagnostic))
+        if "payload_sha256" not in result and result.get("sha256"):
+            result["payload_sha256"] = result["sha256"]
+        log.info(f"JAT {task} completed with exit status {exit_status}")
+        if exit_status or not result.get("success", False):
+            raise JATError(f"JAT {task.lower()} failed with exit {exit_status}", result)
+        return result
+    finally:
+        request_path.unlink(missing_ok=True)
+
+
 def run_build(jat_root: Path, source: Path, output: Path) -> dict:
-    argv = ["bash", str(jat_root / "joshs-all-the-things.sh"), "build", "--folder", str(source), "--output", str(output)]
-    exit_status, diagnostic = _run(argv, float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600")))
-    result = {"executable": str(jat_root / "joshs-all-the-things.sh"), "version": _version(jat_root), "argv": argv, "exit_status": exit_status, "diagnostic": diagnostic}
-    if exit_status:
-        raise JATError(f"JAT build failed with exit {exit_status}", result)
-    body = output.read_bytes()
-    result.update({"payload_path": str(output), "payload_size": len(body), "payload_sha256": hashlib.sha256(body).hexdigest()})
-    return result
+    return _run_task(jat_root, "Build", {"folder": str(source), "output": str(output)})
 
 
 def run_restore(jat_root: Path, haul: Path, destination: Path) -> dict:
-    argv = ["bash", str(jat_root / "joshs-all-the-things.sh"), "restore", "--haul", str(haul), "--destination", str(destination)]
-    exit_status, diagnostic = _run(argv, float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600")))
-    result = {"executable": str(jat_root / "joshs-all-the-things.sh"), "version": _version(jat_root), "argv": argv, "exit_status": exit_status, "diagnostic": diagnostic}
-    if exit_status:
-        raise JATError(f"JAT restore failed with exit {exit_status}", result)
-    return result
+    return _run_task(jat_root, "Restore", {"haul": str(haul), "destination": str(destination)})

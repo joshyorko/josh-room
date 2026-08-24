@@ -11,6 +11,7 @@ from pathlib import Path
 from .catalog import Catalog
 from .config import auth_status, private_config, save_private_config
 from .crypto import decrypt
+from .jat import _jat_contract
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
@@ -230,7 +231,10 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
         record(name, shutil.which(name), f"Run the Josh Room container bootstrap to install {name}.")
     record("tar", _tar_capable(), "Run the Josh Room container bootstrap to install GNU tar with zstd support.")
     jat_root = _jat_root()
-    record("jat", (jat_root / "joshs-all-the-things.sh").is_file(), "Run the Josh Room container bootstrap to pull Josh's All the Things.")
+    contract = _jat_contract(jat_root)
+    record("jat-robot", contract["robot"], "Run the Josh Room bootstrap to pull a JAT checkout containing robot.yaml Build/Restore/Serve tasks.")
+    record("jat-python", contract["tasks"], "Run the Josh Room bootstrap to pull the JAT Python task surface (tasks.py).")
+    record("jat-3tc", contract["interactive"], "Run the Josh Room bootstrap to pull the canonical 3tc interactive task.")
     identity_path = os.environ.get("JOSH_ROOM_IDENTITY")
     identity_ok = False
     if identity_path:

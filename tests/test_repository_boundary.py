@@ -38,6 +38,8 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     body = bootstrap.read_text()
     assert "git clone --depth 1" in body
     assert "rcc ht vars" in body
+    assert 'for task in Build Restore Serve 3tc' in body
+    assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
     assert "scripts/install_dependencies.sh" in body
     assert "CONDA_PREFIX=" in body

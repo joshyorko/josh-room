@@ -70,10 +70,8 @@ is unavailable. `enter` discovers logical project names from the encrypted R2
 catalog, hydrates safely, then launches VS Code Insiders.
 
 The `Josh: Enter Room` VS Code task is native `tasks.json` and calls the CLI.
-No extension is required for remembered selection because the encrypted catalog
-and CLI picker own that state. The likely extension behind the earlier
-"remember variable" idea is Command Variable, but Josh Room does not install or
-depend on it.
+No extension is required: the encrypted catalog and CLI picker own remembered
+project selection. Josh Room does not install or depend on one.
 
 ## Commands
 

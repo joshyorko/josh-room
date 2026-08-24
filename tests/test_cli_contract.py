@@ -14,7 +14,7 @@ def test_doctor_json_is_stable(tmp_path, monkeypatch, capsys):
     assert report["ok"] is False
     assert report["interactive_cloudflare_login"] is False
     missing = {check["name"] for check in report["checks"] if not check["ok"]}
-    assert {"age", "hauler", "tar", "rcc", "jat", "identity", "r2", "catalog", "ide"} <= missing
+    assert {"age", "hauler", "tar", "rcc", "jat-robot", "jat-python", "jat-3tc", "identity", "r2", "catalog", "ide"} <= missing
     assert all(check.get("remediation") for check in report["checks"] if not check["ok"])
 
 

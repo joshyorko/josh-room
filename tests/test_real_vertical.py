@@ -13,8 +13,8 @@ from josh_room.operations import create_snapshot, hydrate
 def _tooling():
     jat_root = os.environ.get("JOSH_ROOM_JAT_ROOT")
     required = [shutil.which(tool) for tool in ("age", "age-keygen", "hauler", "tar", "zstd")]
-    if not jat_root or not Path(jat_root, "joshs-all-the-things.sh").is_file() or not all(required):
-        pytest.skip("real JAT/Hauler/age/tar/zstd tooling is unavailable")
+    if not jat_root or not Path(jat_root, "robot.yaml").is_file() or not Path(jat_root, "tasks.py").is_file() or "  3tc:" not in Path(jat_root, "robot.yaml").read_text() or not all(required) or not shutil.which("rcc"):
+        pytest.skip("real RCC-first JAT/Hauler/age/tar/zstd tooling is unavailable")
     return Path(jat_root)
 
 
@@ -39,7 +39,7 @@ def test_real_jat_age_dual_recipient_fresh_state_hydration(tmp_path):
     instance = tmp_path / "instance"
     result = create_snapshot(instance, "demo-project", source, jat_root, [daily_recipient, recovery_recipient])
     assert result["producer"]["exit_status"] == 0
-    assert result["producer"]["argv"][2:4] == ["build", "--folder"]
+    assert result["producer"]["argv"][0:6] == ["rcc", "run", "-r", str(jat_root / "robot.yaml"), "-t", "Build"]
     assert result["producer"]["payload_size"] > 0
     assert len(result["producer"]["payload_sha256"]) == 64
     object_path = instance / result["object_key"]
