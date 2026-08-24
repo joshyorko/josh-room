@@ -11,7 +11,7 @@ from pathlib import Path
 from .catalog import Catalog, CatalogFile
 from .crypto import decrypt, decrypt_file, encrypt, encrypt_file
 from .envelope import build_envelope_file, read_envelope_file
-from .jat import run_build, run_restore
+from .jat import run_build, run_restore, run_serve
 from .local_store import ImmutableLocalStore
 
 
@@ -23,11 +23,13 @@ def create_snapshot(
     recipients: list[str],
     backend=None,
     display_name: str | None = None,
+    images: list[str] | None = None,
+    all_images: bool = False,
 ) -> dict:
     instance.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=instance) as work:
         haul = Path(work) / "payload.haul.tar.zst"
-        producer = run_build(jat_root, source, haul)
+        producer = run_build(jat_root, source, haul, images=images, all_images=all_images)
         payload_size, payload_digest = _file_metadata(haul)
         manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source)}
         envelope = Path(work) / "snapshot.jroom"
@@ -161,6 +163,31 @@ def remove_room(instance: Path, project_id: str, identity: Path, recipients: lis
         result["cleanup_pending"] = len(cleanup_failed)
     _write_receipt(receipt, {"operation": "remove-room", "operation_id": operation_id, "status": "success", **result})
     return result
+
+
+def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: Path, jat_root: Path, backend=None) -> dict:
+    instance.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="serve-", dir=instance) as work:
+        stage = Path(work)
+        if backend:
+            catalog, _etag = _read_remote_catalog(backend, identity, instance)
+        else:
+            catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
+        snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
+        encrypted = stage / "snapshot.jroom.age"
+        if backend:
+            backend.download_file(snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"])
+        else:
+            ImmutableLocalStore(instance).download_file(
+                snapshot["object_key"], encrypted, snapshot["ciphertext_sha256"], snapshot["ciphertext_size"]
+            )
+        envelope = stage / "snapshot.jroom"
+        decrypt_file(encrypted, [identity], envelope)
+        haul = stage / "payload.haul.tar.zst"
+        manifest = read_envelope_file(envelope, haul)
+        if manifest["project_id"] != project_id:
+            raise ValueError("manifest project mismatch")
+        return run_serve(jat_root, haul)
 
 
 def _write_receipt(path: Path, body: dict) -> None:

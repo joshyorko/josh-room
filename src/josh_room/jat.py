@@ -27,7 +27,7 @@ def _diagnostic(stderr: str) -> str:
     return cleaned[:2048]
 
 
-def _run(argv: list[str], timeout: float) -> tuple[int, str]:
+def _run(argv: list[str], timeout: float | None) -> tuple[int, str]:
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
         _stdout, stderr = process.communicate(timeout=timeout)
@@ -67,13 +67,14 @@ def _request_file(root: Path, operation: str, request: dict) -> Path:
     return path
 
 
-def _run_task(jat_root: Path, task: str, request: dict) -> dict:
+def _run_task(jat_root: Path, task: str, request: dict, *, foreground: bool = False) -> dict:
     request_path = _request_file(jat_root, task.lower(), request)
     result_path = jat_root / "output" / "result.json"
     result_path.unlink(missing_ok=True)
     argv = ["rcc", "run", "-r", str(jat_root / "robot.yaml"), "-t", task, "--", "--json-input", str(request_path)]
     try:
-        exit_status, diagnostic = _run(argv, float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600")))
+        timeout = None if foreground else float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600"))
+        exit_status, diagnostic = _run(argv, timeout)
         if not result_path.is_file():
             raise JATError("JAT task did not produce a fresh output/result.json", {"argv": argv, "exit_status": exit_status})
         result = json.loads(result_path.read_text())
@@ -97,9 +98,25 @@ def _run_task(jat_root: Path, task: str, request: dict) -> dict:
         request_path.unlink(missing_ok=True)
 
 
-def run_build(jat_root: Path, source: Path, output: Path) -> dict:
-    return _run_task(jat_root, "Build", {"folder": str(source), "output": str(output)})
+def run_build(
+    jat_root: Path,
+    source: Path,
+    output: Path,
+    *,
+    images: list[str] | None = None,
+    all_images: bool = False,
+) -> dict:
+    return _run_task(jat_root, "Build", {
+        "folder": str(source),
+        "output": str(output),
+        "selected_images": images or [],
+        "all_images": all_images,
+    })
 
 
 def run_restore(jat_root: Path, haul: Path, destination: Path) -> dict:
     return _run_task(jat_root, "Restore", {"haul": str(haul), "destination": str(destination)})
+
+
+def run_serve(jat_root: Path, haul: Path) -> dict:
+    return _run_task(jat_root, "Serve", {"haul": str(haul)}, foreground=True)

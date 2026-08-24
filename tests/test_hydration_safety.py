@@ -8,7 +8,7 @@ from josh_room.catalog import Catalog, CatalogFile
 from josh_room.crypto import encrypt
 from josh_room.envelope import build_envelope
 from josh_room.local_store import ImmutableLocalStore
-from josh_room.operations import hydrate, remove_room
+from josh_room.operations import hydrate, remove_room, serve_snapshot
 
 
 def _encrypted_instance(tmp_path):
@@ -99,3 +99,29 @@ def test_remove_room_updates_catalog_before_deleting_unreferenced_objects(tmp_pa
         ("delete", snapshot["object_key"]),
     ]
     assert result == {"deleted_objects": 1, "project_id": "demo", "snapshot_count": 1}
+
+
+def test_serve_snapshot_materializes_private_haul_for_foreground_jat(tmp_path, monkeypatch):
+    snapshot = {"snapshot_id": "one", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
+    catalog = Catalog.empty().add_snapshot("demo", "Demo", snapshot)
+    captured = {}
+
+    class Backend:
+        def download_file(self, _key, destination, _digest, _size):
+            destination.write_bytes(b"encrypted")
+
+    monkeypatch.setattr("josh_room.operations._read_remote_catalog", lambda *_args: (catalog, None))
+    monkeypatch.setattr("josh_room.operations.decrypt_file", lambda _source, _identities, destination: destination.write_bytes(b"envelope"))
+
+    def read_envelope(_envelope, haul):
+        haul.write_bytes(b"haul")
+        return {"project_id": "demo"}
+
+    monkeypatch.setattr("josh_room.operations.read_envelope_file", read_envelope)
+    monkeypatch.setattr("josh_room.operations.run_serve", lambda _jat, haul: captured.update(path=haul, body=haul.read_bytes()) or {"success": True})
+
+    result = serve_snapshot(tmp_path / "instance", "demo", "latest", tmp_path / "identity", tmp_path / "jat", Backend())
+
+    assert result["success"] is True
+    assert captured["body"] == b"haul"
+    assert not captured["path"].exists()

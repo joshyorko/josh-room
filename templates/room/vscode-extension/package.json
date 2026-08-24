@@ -12,6 +12,7 @@
     "onCommand:joshRoom.save",
     "onCommand:joshRoom.enter",
     "onCommand:joshRoom.remove",
+    "onCommand:joshRoom.serve",
     "onTaskType:josh-room"
   ],
   "main": "./extension.js",
@@ -19,7 +20,8 @@
     "commands": [
       { "command": "joshRoom.save", "title": "Josh: Save Room" },
       { "command": "joshRoom.enter", "title": "Josh: Enter Room" },
-      { "command": "joshRoom.remove", "title": "Josh: Remove Room" }
+      { "command": "joshRoom.remove", "title": "Josh: Remove Room" },
+      { "command": "joshRoom.serve", "title": "Josh: Serve Room Images" }
     ],
     "taskDefinitions": [
       {

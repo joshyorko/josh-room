@@ -96,7 +96,7 @@ age, Hauler, RCC, JAT, the daily identity, R2, the encrypted catalog, or the IDE
 is unavailable. `enter` discovers logical project names from the encrypted R2
 catalog, hydrates safely, then launches VS Code Insiders.
 
-The bundled command bridge provides Save, Enter, and Remove through VS Code's
+The bundled command bridge provides Save, Enter, Remove, and Serve Images through VS Code's
 task provider in every opened folder; repositories do not need a Josh Room
 `.vscode/tasks.json`. `Josh: Save Room` first opens a native folder picker, then
 a Quick Pick of saved Rooms plus “Create a new Room”. The selected folder is
@@ -105,6 +105,10 @@ marker after a successful save. Selecting an existing Room appends an immutable
 snapshot and advances its `latest` pointer; it does not create another logical
 Room. `Josh: Enter Room` hydrates beside the clean bootstrap workspace and
 switches the current VS Code window to the restored root.
+Save can include all tagged local OCI images in the JAT haul. `Josh: Serve Room
+Images` decrypts the chosen snapshot only into private runtime staging and runs
+JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
+removes the temporary haul and registry store.
 `Josh: Remove Room` requires explicit modal confirmation, removes the encrypted
 catalog entry conditionally, then deletes only objects no remaining Room
 references. Storage, encryption, and hydration remain owned by the CLI.
@@ -116,9 +120,10 @@ josh-room doctor [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [-
 josh-room projects list [--backend local|r2] [--json]
 josh-room rooms remove <project> [--backend local|r2] [--json]
 josh-room snapshots list <project> [--backend local|r2] [--json]
-josh-room snapshot create <project> [--source <path>] [--backend local|r2] [--json]
+josh-room snapshot create <project> [--source <path>] [--image <ref> ... | --all-images] [--backend local|r2] [--json]
 josh-room hydrate <project> --destination <path> [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room enter [<project>] [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
+josh-room serve <project> [--snapshot latest|<id>] [--backend local|r2] [--json]
 ```
 
 `enter` lists logical project display names, resolves the encrypted catalog,

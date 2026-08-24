@@ -15,8 +15,16 @@
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
-    "version": "git-67c3b78",
-    "git_sha": "67c3b78c550874a443f56d291e5bfec66dc136b0"
+    "version": "git-d1e1c3e",
+    "git_sha": "d1e1c3eb107cebe7273d3792aeaffdef4488ce44",
+    "hololib": {
+      "reference": "ghcr.io/joshyorko/josh-all-the-things-hololib@sha256:f41f5113bdd23e8985462b43ad3ff2d5b9e7921050e0ce9859fe312b23946ae2",
+      "manifest_digest": "sha256:f41f5113bdd23e8985462b43ad3ff2d5b9e7921050e0ce9859fe312b23946ae2",
+      "zip_sha256": "1f99c793de54db6f80d8bdda86859ac38089d49e4b75d691b0595ff78b265bc1",
+      "zip_size": 226010832,
+      "environment_hash": "c831b0c6ab000a0c",
+      "rcc_version": "v18.18.1"
+    }
   },
   "rcc": {
     "repository": "https://github.com/joshyorko/rcc",

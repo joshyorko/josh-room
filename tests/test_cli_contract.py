@@ -59,8 +59,13 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     assert args.backend == "r2"
     args = parser.parse_args(["rooms", "remove", "demo", "--backend", "r2", "--json"])
     assert args.command == "rooms" and args.room_command == "remove" and args.project == "demo"
+    args = parser.parse_args(["serve", "demo", "--snapshot", "latest", "--backend", "r2"])
+    assert args.command == "serve" and args.project == "demo" and args.snapshot == "latest"
     assert parser.parse_args(["enter", "hive"]).backend == "r2"
     assert parser.parse_args(["snapshot", "create", "demo"]).source is None
+    image_args = parser.parse_args(["snapshot", "create", "demo", "--image", "example/image:tag"])
+    assert image_args.images == ["example/image:tag"] and image_args.all_images is False
+    assert parser.parse_args(["snapshot", "create", "demo", "--all-images"]).all_images is True
 
 
 def test_hydrate_passes_explicit_snapshot_to_operations(tmp_path, monkeypatch):
@@ -137,7 +142,7 @@ def test_snapshot_create_preserves_human_room_name(tmp_path, monkeypatch):
     monkeypatch.setattr("josh_room.cli._jat_root", lambda: tmp_path / "jat")
     monkeypatch.setattr("josh_room.cli._backend", lambda _name, _instance: object())
 
-    def create(_instance, project_id, _source, _jat, _recipients, _backend, display_name=None):
+    def create(_instance, project_id, _source, _jat, _recipients, _backend, display_name=None, **_kwargs):
         captured.update(project_id=project_id, display_name=display_name)
         return {"project_id": project_id, "snapshot_id": "synthetic"}
 

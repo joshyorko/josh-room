@@ -17,7 +17,7 @@ from .jat import _jat_contract
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
-from .operations import create_snapshot, hydrate, remove_room
+from .operations import create_snapshot, hydrate, remove_room, serve_snapshot
 from .r2 import R2Backend, R2Config
 
 
@@ -55,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create = snapshot_commands.add_parser("create")
     snapshot_create.add_argument("project")
     snapshot_create.add_argument("--source", type=Path)
+    snapshot_create.add_argument("--image", dest="images", action="append", default=[])
+    snapshot_create.add_argument("--all-images", action="store_true")
     snapshot_create.add_argument("--backend", choices=("local", "r2"), default="r2")
     _json_option(snapshot_create)
     hydration = commands.add_parser("hydrate")
@@ -70,6 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
     enter.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
     enter.add_argument("--backend", choices=("local", "r2"), default="r2")
     _json_option(enter)
+    serve = commands.add_parser("serve")
+    serve.add_argument("project")
+    serve.add_argument("--snapshot", default="latest")
+    serve.add_argument("--backend", choices=("local", "r2"), default="r2")
+    _json_option(serve)
     setup = commands.add_parser("setup")
     setup.add_argument("--profile", required=True)
     setup.add_argument("--age-profile", required=True)
@@ -93,7 +100,7 @@ def main(argv=None):
 
 
 def _requires_oauth(args) -> bool:
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve"}:
         return False
     return getattr(args, "backend", "r2") == "r2"
 
@@ -137,6 +144,8 @@ def dispatch(args, instance: Path) -> dict:
                 recipients,
                 _backend(args.backend, instance),
                 display_name=display_name,
+                images=args.images,
+                all_images=args.all_images,
             ),
         }
     if args.command == "hydrate":
@@ -154,6 +163,21 @@ def dispatch(args, instance: Path) -> dict:
             _launch_ide(resolved, destination)
             result["launch"] = executable
         return result
+    if args.command == "serve":
+        identity = os.environ.get("JOSH_ROOM_IDENTITY")
+        if not identity:
+            raise ValueError("serve requires an age identity")
+        return {
+            "ok": True,
+            **serve_snapshot(
+                instance,
+                args.project,
+                args.snapshot,
+                Path(identity),
+                _jat_root(),
+                _backend(args.backend, instance),
+            ),
+        }
     if args.command == "setup":
         credentials = json.load(sys.stdin)
         required = {

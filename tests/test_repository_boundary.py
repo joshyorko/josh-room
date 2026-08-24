@@ -39,10 +39,10 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert bootstrap.is_file()
     body = bootstrap.read_text()
     assert "git -C \"$jat_root\" fetch" in body
-    assert "rcc ht vars" in body
+    assert "bootstrap-jat-hololib.sh" in body
     assert 'sudo "$(command -v rcc)" ht shared --enable --once' in body
     assert "rcc ht init" in body
-    assert body.index("rcc ht init") < body.index("rcc ht vars")
+    assert body.index("rcc ht init") < body.index("bootstrap-jat-hololib.sh")
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
@@ -56,7 +56,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
 def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency():
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
-    assert commands == {"joshRoom.save", "joshRoom.enter", "joshRoom.remove"}
+    assert commands == {"joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve"}
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
     assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
@@ -67,6 +67,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert '"--snapshot"' in extension
     assert "showOpenDialog" in extension and '"--source"' in extension
     assert "registerTaskProvider" in extension
+    assert "createTerminal" in extension and "josh-room serve" in extension
+    assert "Include local OCI images" in extension and '"--all-images"' in extension
     assert "onTaskType:josh-room" in package["activationEvents"]
     assert package["contributes"]["taskDefinitions"] == [{"type": "josh-room", "required": ["action"], "properties": {"action": {"type": "string"}}}]
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
@@ -181,6 +183,12 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["room_of_requirement"]["image"].endswith("@" + lock["room_of_requirement"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
     assert len(lock["jat"]["git_sha"]) == 40
+    hololib = lock["jat"]["hololib"]
+    assert hololib["reference"].startswith("ghcr.io/") and "@sha256:" in hololib["reference"]
+    assert len(hololib["manifest_digest"].removeprefix("sha256:")) == 64
+    assert len(hololib["zip_sha256"]) == 64
+    assert hololib["environment_hash"]
+    assert hololib["rcc_version"] == lock["rcc"]["version"]
     assert lock["rcc"]["version"].startswith("v")
     for config_path in (
         ROOT / ".devcontainer/devcontainer.json",
@@ -192,6 +200,51 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["jat"]["git_sha"] in bootstrap
     assert lock["rcc"]["version"] in bootstrap
     assert "josh-room.git@main" not in bootstrap
+    assert "brew install age uv libsecret jq oras" in bootstrap
+    assert "bootstrap-jat-hololib.sh" in bootstrap
+    helper = (ROOT / ".devcontainer/bootstrap-jat-hololib.sh").read_text()
+    assert "oras pull" in helper
+    assert "rcc ht import" in helper
+    assert "rcc --no-build ht vars" in helper
+    assert "Falling back to normal RCC environment build" in helper
+    assert (ROOT / ".devcontainer/bootstrap-jat-hololib.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/bootstrap-jat-hololib.sh"
+    ).read_bytes()
     assert "git clone --depth 1" not in bootstrap
     manifest = json.loads((ROOT / "templates/room/devcontainer-template.json").read_text())
     assert manifest["version"] == lock["template"]["version"]
+
+
+def test_hololib_bootstrap_falls_back_to_normal_rcc_build(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "rcc.log"
+    oras = fake_bin / "oras"
+    oras.write_text("#!/usr/bin/env bash\nexit 1\n")
+    oras.chmod(0o755)
+    rcc = fake_bin / "rcc"
+    rcc.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$RCC_LOG"\n')
+    rcc.chmod(0o755)
+    robot = tmp_path / "robot.yaml"
+    robot.write_text("tasks: {}\n")
+    environment = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "RCC_LOG": str(log),
+        "JAT_HOLOLIB_REFERENCE": "ghcr.io/example/hololib@sha256:" + "a" * 64,
+        "JAT_HOLOLIB_ZIP_SHA256": "b" * 64,
+        "JAT_HOLOLIB_ZIP_SIZE": "1",
+        "JAT_HOLOLIB_ENVIRONMENT_HASH": "environment",
+        "JAT_GIT_SHA": "c" * 40,
+        "EXPECTED_RCC_VERSION": "v18.18.1",
+    }
+
+    completed = subprocess.run(
+        ["bash", str(ROOT / ".devcontainer/bootstrap-jat-hololib.sh"), str(robot)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "Falling back to normal RCC environment build" in completed.stderr
+    assert log.read_text().strip() == f"ht vars --robot {robot} --json"

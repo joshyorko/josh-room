@@ -107,9 +107,16 @@ async function saveRoom() {
       if (confirmed !== "Replace Latest") return "cancelled";
     }
   }
+  const imageChoice = await vscode.window.showQuickPick([
+    { label: "Workspace only", allImages: false },
+    { label: "Workspace + all tagged local OCI images", allImages: true },
+  ], { title: "Include local OCI images?", ignoreFocusOut: true });
+  if (!imageChoice) return "cancelled";
+  const buildArgs = ["snapshot", "create", name, "--source", source, "--backend", "r2"];
+  if (imageChoice.allImages) buildArgs.push("--all-images");
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Saving ${name}…`, cancellable: false },
-    () => runJoshRoom(["snapshot", "create", name, "--source", source, "--backend", "r2"], source),
+    () => runJoshRoom(buildArgs, source),
   );
   const size = (result.ciphertext_size / (1024 * 1024)).toFixed(1);
   await vscode.window.showInformationMessage(`Saved “${name}” (${size} MiB).`);
@@ -186,6 +193,42 @@ async function removeRoom() {
   return "removed";
 }
 
+async function serveRoom() {
+  const cwd = activeWorkspace();
+  const marker = currentRoom(cwd);
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  let project = catalog.projects.find((item) => item.id === marker?.project_id);
+  if (!project) {
+    const selected = await vscode.window.showQuickPick(
+      catalog.projects.map((item) => ({ label: item.display_name, project: item })),
+      { title: "Josh: Serve Room Images", placeHolder: "Choose a Room", ignoreFocusOut: true },
+    );
+    if (!selected) return "cancelled";
+    project = selected.project;
+  }
+  const history = await runJoshRoom(["snapshots", "list", project.id, "--backend", "r2"], cwd);
+  let snapshotId = history.latest;
+  if (history.snapshots.length > 1) {
+    const selected = await vscode.window.showQuickPick(
+      history.snapshots.map((item) => ({
+        label: item.snapshot_id === history.latest ? "Latest snapshot" : "Previous snapshot",
+        description: item.created_at || item.snapshot_id,
+        snapshotId: item.snapshot_id,
+      })),
+      { title: `Serve images from ${project.display_name}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
+    );
+    if (!selected) return "cancelled";
+    snapshotId = selected.snapshotId;
+  }
+  if (!/^[a-z0-9-]+$/.test(project.id) || !/^[a-z0-9-]+$/.test(snapshotId)) {
+    throw new Error("Room or snapshot identity is unsafe for terminal execution.");
+  }
+  const terminal = vscode.window.createTerminal({ name: `Images: ${project.display_name}`, cwd });
+  terminal.show(true);
+  terminal.sendText(`josh-room serve ${project.id} --snapshot ${snapshotId} --backend r2`, true);
+  return "started";
+}
+
 function register(context, command, operation) {
   context.subscriptions.push(vscode.commands.registerCommand(command, async () => {
     try {
@@ -212,6 +255,7 @@ function taskFor(action) {
     save: roomTask("save", "Josh: Save Room", "joshRoom.save"),
     enter: roomTask("enter", "Josh: Enter Room", "joshRoom.enter"),
     remove: roomTask("remove", "Josh: Remove Room", "joshRoom.remove"),
+    serve: roomTask("serve", "Josh: Serve Room Images", "joshRoom.serve"),
   };
   return tasks[action];
 }
@@ -220,8 +264,9 @@ function activate(context) {
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.serve", serveRoom);
   context.subscriptions.push(vscode.tasks.registerTaskProvider("josh-room", {
-    provideTasks: () => [taskFor("save"), taskFor("enter"), taskFor("remove")],
+    provideTasks: () => [taskFor("save"), taskFor("enter"), taskFor("remove"), taskFor("serve")],
     resolveTask: (task) => taskFor(task.definition.action),
   }));
 }
