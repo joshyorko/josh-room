@@ -2,12 +2,19 @@ import hashlib
 import io
 import tarfile
 import threading
+from pathlib import Path
 
 import pytest
 
 from josh_room.catalog import Catalog, CatalogConflict, CatalogFile
-from josh_room.crypto import CryptoError, decrypt
-from josh_room.envelope import EnvelopeError, build_envelope, read_envelope
+from josh_room.crypto import CryptoError, decrypt, decrypt_file, encrypt_file
+from josh_room.envelope import (
+    EnvelopeError,
+    build_envelope,
+    build_envelope_file,
+    read_envelope,
+    read_envelope_file,
+)
 from josh_room.local_store import ImmutableLocalStore
 from josh_room.operations import _display_name, _snapshot_id, _source_metadata
 
@@ -23,6 +30,53 @@ def test_envelope_round_trip_accepts_exact_manifest_and_payload():
     }
     envelope = build_envelope(manifest, b"abc")
     assert read_envelope(envelope) == (manifest, b"abc")
+
+
+def test_file_envelope_preserves_format_and_streams_payload(tmp_path):
+    payload = tmp_path / "payload.haul.tar.zst"
+    payload.write_bytes(b"abc")
+    manifest = {
+        "format_version": 1,
+        "project_id": "demo-project",
+        "snapshot_id": "snap-1",
+        "created_at": "2026-08-24T00:00:00Z",
+        "payload": {"format": "jat-hauler", "sha256": hashlib.sha256(b"abc").hexdigest(), "size": 3, "producer_version": "synthetic"},
+        "source": {},
+    }
+    envelope = tmp_path / "snapshot.tar"
+    build_envelope_file(manifest, payload, envelope)
+    assert envelope.read_bytes() == build_envelope(manifest, b"abc")
+    restored = tmp_path / "restored.haul.tar.zst"
+    assert read_envelope_file(envelope, restored) == manifest
+    assert restored.read_bytes() == b"abc"
+    assert restored.stat().st_mode & 0o777 == 0o600
+
+
+def test_file_crypto_uses_paths_without_subprocess_input(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.write_bytes(b"payload")
+    encrypted = tmp_path / "encrypted"
+    decrypted = tmp_path / "decrypted"
+    identity = tmp_path / "identity"
+    identity.write_text("synthetic")
+    identity.chmod(0o600)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        output = Path(argv[argv.index("-o") + 1])
+        output.write_bytes(b"ciphertext" if "--decrypt" not in argv else b"payload")
+        return __import__("subprocess").CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr("josh_room.crypto.subprocess.run", fake_run)
+    encrypt_file(source, ["age1daily", "age1recovery"], encrypted)
+    size, digest = decrypt_file(encrypted, [identity], decrypted)
+    assert all("input" not in kwargs for _argv, kwargs in calls)
+    assert str(source) in calls[0][0]
+    assert str(encrypted) in calls[1][0]
+    assert decrypted.read_bytes() == b"payload"
+    assert size == 7
+    assert digest == hashlib.sha256(b"payload").hexdigest()
 
 
 def test_envelope_rejects_symlink_member():
