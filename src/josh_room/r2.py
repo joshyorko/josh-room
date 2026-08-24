@@ -96,6 +96,7 @@ class R2Backend:
             except ClientError as error:
                 if not _is_precondition(error):
                     raise
+                report_progress("verify", "Encrypted Room already exists; verifying R2 object")
                 self._verify_remote(key, digest, size)
                 return ObjectRef(key, digest, size)
         else:
@@ -116,6 +117,7 @@ class R2Backend:
                 except ClientError as error:
                     if not _is_precondition(error):
                         raise
+                    report_progress("verify", "Encrypted Room already exists; verifying R2 object")
                     self._verify_remote(key, digest, size)
                     return ObjectRef(key, digest, size)
             except BaseException:  # noqa: BLE001 - abort multipart on cancellation as well as SDK errors
@@ -123,6 +125,8 @@ class R2Backend:
                     self.client.abort_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id)
                 finally:
                     raise
+        report_progress("upload", "Encrypted Room uploaded • 100%", current=size, total=size)
+        report_progress("verify", "Verifying encrypted R2 object")
         self._verify_remote(key, digest, size)
         return ObjectRef(key, digest, size)
 

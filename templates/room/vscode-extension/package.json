@@ -1,7 +1,7 @@
 {
   "name": "josh-room",
   "displayName": "Josh Room",
-  "description": "Native Save, Enter, Serve, and Remove controls for Josh's disposable Rooms.",
+  "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
   "version": "0.1.0",
   "publisher": "joshyorko",
   "engines": {
@@ -9,11 +9,11 @@
   },
   "categories": ["Other"],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:joshRoom.save",
     "onCommand:joshRoom.new",
     "onCommand:joshRoom.enter",
     "onCommand:joshRoom.remove",
-    "onCommand:joshRoom.removeSnapshot",
     "onCommand:joshRoom.serve",
     "onCommand:joshRoom.refresh",
     "onCommand:joshRoom.jatBuild",
@@ -41,13 +41,8 @@
       },
       {
         "command": "joshRoom.remove",
-        "title": "Josh: Remove Room",
+        "title": "Josh: Delete Snapshot",
         "icon": "$(trash)"
-      },
-      {
-        "command": "joshRoom.removeSnapshot",
-        "title": "Josh: Remove Snapshot",
-        "icon": "$(history)"
       },
       {
         "command": "joshRoom.serve",
@@ -115,8 +110,7 @@
       "view/item/context": [
         { "command": "joshRoom.enter", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@1" },
         { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
-        { "command": "joshRoom.removeSnapshot", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" },
-        { "command": "joshRoom.remove", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@4" }
+        { "command": "joshRoom.remove", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" }
       ]
     }
   }

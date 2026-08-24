@@ -240,19 +240,22 @@ def test_catalog_remove_latest_snapshot_promotes_previous_and_keeps_shared_objec
     catalog = Catalog.empty().add_snapshot("demo", "Demo", shared).add_snapshot("demo", "Demo", latest)
     catalog = catalog.add_snapshot("other", "Other", latest)
 
-    updated, removable = catalog.remove_snapshot("demo", "two")
+    updated, removable, room_removed = catalog.remove_snapshot("demo", "two")
 
     assert updated.body["projects"]["demo"]["latest"] == "one"
     assert set(updated.body["projects"]["demo"]["snapshots"]) == {"one"}
     assert removable == []
+    assert room_removed is False
     assert updated.body["revision"] == catalog.body["revision"] + 1
 
 
-def test_catalog_remove_snapshot_rejects_the_last_recovery_point():
+def test_catalog_remove_final_snapshot_removes_the_room():
     snapshot = {"snapshot_id": "only", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
     catalog = Catalog.empty().add_snapshot("demo", "Demo", snapshot)
-    with pytest.raises(ValueError, match="final snapshot"):
-        catalog.remove_snapshot("demo", "only")
+    updated, removable, room_removed = catalog.remove_snapshot("demo", "only")
+    assert "demo" not in updated.body["projects"]
+    assert removable == [snapshot["object_key"]]
+    assert room_removed is True
 
 
 def test_catalog_rejects_untrusted_object_key():

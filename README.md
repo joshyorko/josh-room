@@ -96,9 +96,12 @@ is unavailable. `enter` discovers logical project names from the encrypted R2
 catalog, hydrates safely, then launches VS Code Insiders.
 
 The bundled extension provides a native Rooms TreeView, toolbar actions,
-per-Room Enter/Serve/Remove actions, live operation progress, and a timestamped
-Josh Room log channel. Save, Enter, Remove, and JAT Build/Restore/Serve all show
-their real auth, encryption, R2, and RCC/Hauler stages without terminal noise.
+per-Room Enter/Serve/Delete actions, Docker-style operation progress, and a
+timestamped Josh Room log channel. Save, Enter, Delete, and JAT
+Build/Restore/Serve show their real auth, encryption, R2 transfer, and
+RCC/Hauler stages with percentages where the underlying operation exposes real
+measurements. The current Room quietly changes to `Needs save` after workspace
+edits; clicking its status-bar Save indicator opens the existing Save flow.
 Repositories do not need a Josh Room `.vscode/tasks.json`.
 `Josh: Save Room` first opens a native folder picker, then
 a Quick Pick of saved Rooms plus “Create a new Room”. The selected folder is
@@ -117,12 +120,11 @@ workflow: pack any folder into a portable haul, restore a JAT-compatible haul
 into a new destination, or serve any Hauler haul as a foreground registry. These
 commands use the same typed RCC Build/Restore/Serve tasks but require no Room,
 catalog, OAuth, or R2 operation.
-`Josh: Remove Room` requires explicit modal confirmation, removes the encrypted
-catalog entry conditionally, then deletes only objects no remaining Room
-references. `Josh: Remove Snapshot` removes one selected recovery point, safely
-promotes the newest remaining snapshot when Latest is removed, and refuses to
-delete a Room's final snapshot. Storage, encryption, and hydration remain owned
-by the CLI.
+The single trash action lists the selected Room's snapshots and requires exact
+modal confirmation before deleting one. Removing Latest safely promotes the
+newest remaining snapshot; deleting the final snapshot removes the now-empty
+Room. Objects remain protected whenever another snapshot references them.
+Storage, encryption, and hydration remain owned by the CLI.
 
 ## Commands
 

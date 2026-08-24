@@ -203,7 +203,7 @@ def remove_snapshot(
         catalog = catalog_file.read()
         etag = None
     latest_promoted = catalog.body["projects"][project_id]["latest"] == snapshot_id
-    updated, removable = catalog.remove_snapshot(project_id, snapshot_id)
+    updated, removable, room_removed = catalog.remove_snapshot(project_id, snapshot_id)
     report_progress("catalog", "Removing selected recovery point")
     if backend:
         backend.conditional_catalog_put(_encrypt_catalog(updated, recipients, instance), etag)
@@ -220,9 +220,10 @@ def remove_snapshot(
             cleanup_failed.append(key)
     result = {
         "deleted_objects": len(removable) - len(cleanup_failed),
-        "latest": updated.body["projects"][project_id]["latest"],
+        "latest": None if room_removed else updated.body["projects"][project_id]["latest"],
         "latest_promoted": latest_promoted,
         "project_id": project_id,
+        "room_removed": room_removed,
         "snapshot_id": snapshot_id,
     }
     if cleanup_failed:

@@ -124,6 +124,7 @@ def test_remove_snapshot_publishes_promoted_latest_before_object_cleanup(tmp_pat
     assert calls == [("catalog", b"encrypted-catalog", '"etag"'), ("delete", second["object_key"])]
     assert result["latest"] == "one"
     assert result["latest_promoted"] is True
+    assert result["room_removed"] is False
 
 
 def test_serve_snapshot_materializes_private_haul_for_foreground_jat(tmp_path, monkeypatch):
