@@ -2,6 +2,7 @@ const childProcess = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const vscode = require("vscode");
+const { REGISTRY_URL, waitForRegistry } = require("./registry");
 
 let outputChannel;
 let roomsProvider;
@@ -485,6 +486,15 @@ async function jatServe() {
   const terminal = vscode.window.createTerminal({ name: "JAT Hauler Registry", cwd });
   terminal.show(true);
   terminal.sendText(`josh-room jat serve --haul ${shellQuote(files[0].fsPath)}`, true);
+  const catalog = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Starting Hauler registry…", cancellable: false },
+    () => waitForRegistry(),
+  );
+  const count = Array.isArray(catalog.repositories) ? catalog.repositories.length : 0;
+  outputChannel?.appendLine(`Hauler registry ready at ${REGISTRY_URL} (${count} repositories).`);
+  await vscode.window.showInformationMessage(
+    `Hauler registry ready at ${REGISTRY_URL} with ${count} ${count === 1 ? "repository" : "repositories"}. Close the JAT Hauler Registry terminal to stop it.`,
+  );
   return "started";
 }
 

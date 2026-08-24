@@ -18,4 +18,5 @@ jobs:
       - run: uv sync --group dev
       - run: uv run ruff check src tests
       - run: uv run pytest -q
+      - run: node --test vscode-extension/registry.test.js
       - run: git diff --check
