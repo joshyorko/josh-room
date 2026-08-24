@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -28,7 +29,7 @@ def test_readme_and_workflows_are_josh_room_first():
 
 def test_thin_template_consumes_secure_ror_image():
     template = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
-    assert "ghcr.io/joshyorko/room-of-requirement:secure" in template
+    assert "ghcr.io/joshyorko/room-of-requirement@sha256:" in template
     assert "dockerfile" not in template.lower()
 
 
@@ -36,7 +37,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     bootstrap = ROOT / "templates/room/.devcontainer/bootstrap.sh"
     assert bootstrap.is_file()
     body = bootstrap.read_text()
-    assert "git clone --depth 1" in body
+    assert "git -C \"$jat_root\" fetch" in body
     assert "rcc ht vars" in body
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
@@ -83,3 +84,26 @@ def test_personal_template_keyring_mount_has_no_uid_assumption():
     config = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
     assert "/run/user/1000" not in config
     assert "/run/josh-room/host-session-bus" in config
+
+
+def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
+    lock = json.loads((ROOT / "release-lock.json").read_text())
+    assert lock["format_version"] == 1
+    assert lock["candidate_version"] == "0.1.0"
+    assert lock["room_of_requirement"]["image"].endswith("@" + lock["room_of_requirement"]["digest"])
+    assert len(lock["josh_room"]["git_sha"]) == 40
+    assert len(lock["jat"]["git_sha"]) == 40
+    assert lock["rcc"]["version"].startswith("v")
+    for config_path in (
+        ROOT / ".devcontainer/devcontainer.json",
+        ROOT / "templates/room/.devcontainer/devcontainer.json",
+    ):
+        assert json.loads(config_path.read_text())["image"] == lock["room_of_requirement"]["image"]
+    bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
+    assert lock["josh_room"]["git_sha"] in bootstrap
+    assert lock["jat"]["git_sha"] in bootstrap
+    assert lock["rcc"]["version"] in bootstrap
+    assert "josh-room.git@main" not in bootstrap
+    assert "git clone --depth 1" not in bootstrap
+    manifest = json.loads((ROOT / "templates/room/devcontainer-template.json").read_text())
+    assert manifest["version"] == lock["template"]["version"]

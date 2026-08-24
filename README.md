@@ -20,7 +20,7 @@ After the one-time host setup below, the repository itself is the personal
 Room entrypoint:
 
 ```bash
-devpod up github.com/joshyorko/josh-room --ide vscode
+devpod up github.com/joshyorko/josh-room --ide vscode-insiders
 ```
 
 DevPod clones the repository, discovers the root `.devcontainer`, starts the

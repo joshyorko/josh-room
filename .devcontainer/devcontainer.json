@@ -1,6 +1,6 @@
 {
   "name": "Josh Room",
-  "image": "ghcr.io/joshyorko/room-of-requirement:secure",
+  "image": "ghcr.io/joshyorko/room-of-requirement@sha256:5489eef4c4302cdb9ac6cff79ce0664511f7cfc8c31fd83ea59d9fa94ea5be25",
   "remoteUser": "vscode",
   "mounts": [
     "source=${localEnv:HOME}/.config/josh-room,target=/home/vscode/.config/josh-room,type=bind,readonly,consistency=cached",
