@@ -243,7 +243,7 @@ def _workspace_root() -> Path:
     if value:
         return Path(value)
     current = Path.cwd()
-    if current.name == "room" and (current / ".vscode/tasks.json").is_file():
+    if current.name == "room":
         return current.parent
     return current
 

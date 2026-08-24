@@ -19,6 +19,9 @@ trust_tap joshyorko/tools
 brew install age uv libsecret jq
 brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server
 
+sudo "$(command -v rcc)" ht shared --enable --once
+rcc ht init
+
 uv tool install --force "git+https://github.com/joshyorko/josh-room.git@${JOSH_ROOM_GIT_SHA}"
 
 extension_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/vscode-extension"

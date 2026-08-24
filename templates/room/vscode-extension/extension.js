@@ -55,8 +55,18 @@ function currentRoom(cwd) {
 
 async function saveRoom() {
   const cwd = activeWorkspace();
+  const folders = await vscode.window.showOpenDialog({
+    title: "Josh: Save Room",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Save this folder",
+  });
+  if (!folders?.length) return "cancelled";
+  const source = folders[0].fsPath;
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
-  const marker = currentRoom(cwd);
+  const marker = currentRoom(source);
   const selected = await vscode.window.showQuickPick([
     { label: "$(add) Create a new Room…", create: true },
     ...catalog.projects.map((project) => ({
@@ -78,7 +88,7 @@ async function saveRoom() {
   if (!name) return "cancelled";
   if (selected.project) {
     const existing = path.join(path.dirname(cwd), selected.project.id);
-    if (existing !== cwd && currentRoom(existing)?.project_id === selected.project.id) {
+    if (existing !== source && currentRoom(existing)?.project_id === selected.project.id) {
       const action = await vscode.window.showInformationMessage(
         `“${selected.project.display_name}” already has a working folder.`,
         "Open Room",
@@ -90,7 +100,7 @@ async function saveRoom() {
     }
     if (marker?.project_id !== selected.project.id) {
       const confirmed = await vscode.window.showWarningMessage(
-        `Replace the latest “${selected.project.display_name}” snapshot with the contents of ${cwd}? The previous snapshot remains recoverable.`,
+        `Replace the latest “${selected.project.display_name}” snapshot with the contents of ${source}? The previous snapshot remains recoverable.`,
         { modal: true },
         "Replace Latest",
       );
@@ -99,7 +109,7 @@ async function saveRoom() {
   }
   const result = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Saving ${name}…`, cancellable: false },
-    () => runJoshRoom(["snapshot", "create", name, "--backend", "r2"], cwd),
+    () => runJoshRoom(["snapshot", "create", name, "--source", source, "--backend", "r2"], source),
   );
   const size = (result.ciphertext_size / (1024 * 1024)).toFixed(1);
   await vscode.window.showInformationMessage(`Saved “${name}” (${size} MiB).`);
@@ -187,10 +197,33 @@ function register(context, command, operation) {
   }));
 }
 
+function roomTask(action, label, command) {
+  return new vscode.Task(
+    { type: "josh-room", action },
+    vscode.TaskScope.Workspace,
+    label,
+    "Josh Room",
+    new vscode.ProcessExecution("/usr/bin/true", ["${command:" + command + "}"]),
+  );
+}
+
+function taskFor(action) {
+  const tasks = {
+    save: roomTask("save", "Josh: Save Room", "joshRoom.save"),
+    enter: roomTask("enter", "Josh: Enter Room", "joshRoom.enter"),
+    remove: roomTask("remove", "Josh: Remove Room", "joshRoom.remove"),
+  };
+  return tasks[action];
+}
+
 function activate(context) {
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
+  context.subscriptions.push(vscode.tasks.registerTaskProvider("josh-room", {
+    provideTasks: () => [taskFor("save"), taskFor("enter"), taskFor("remove")],
+    resolveTask: (task) => taskFor(task.definition.action),
+  }));
 }
 
 module.exports = { activate };

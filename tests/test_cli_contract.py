@@ -174,38 +174,12 @@ def test_snapshot_create_defaults_source_to_current_workspace(tmp_path, monkeypa
 
 def test_workspace_root_detects_clean_room_parent(tmp_path, monkeypatch):
     room = tmp_path / "room"
-    (room / ".vscode").mkdir(parents=True)
-    (room / ".vscode/tasks.json").write_text("{}")
+    room.mkdir()
     monkeypatch.chdir(room)
     monkeypatch.delenv("JOSH_ROOM_WORKSPACE_ROOT", raising=False)
     monkeypatch.setattr("josh_room.cli._configured", dict)
 
     assert _workspace_root() == tmp_path
-
-
-def test_vscode_tasks_delegate_save_and_enter_to_native_command_bridge():
-    tasks = json.loads((__import__("pathlib").Path(__file__).parents[1] / ".vscode/tasks.json").read_text())
-    labels = {task["label"] for task in tasks["tasks"]}
-    assert labels == {"Josh: Save Room", "Josh: Enter Room", "Josh: Remove Room"}
-    save = next(task for task in tasks["tasks"] if task["label"] == "Josh: Save Room")
-    enter = next(task for task in tasks["tasks"] if task["label"] == "Josh: Enter Room")
-    assert save == {
-        "label": "Josh: Save Room",
-        "type": "process",
-        "command": "/usr/bin/true",
-        "args": ["${command:joshRoom.save}"],
-        "problemMatcher": [],
-    }
-    assert enter == {
-        "label": "Josh: Enter Room",
-        "type": "process",
-        "command": "/usr/bin/true",
-        "args": ["${command:joshRoom.enter}"],
-        "problemMatcher": [],
-    }
-    remove = next(task for task in tasks["tasks"] if task["label"] == "Josh: Remove Room")
-    assert remove["args"] == ["${command:joshRoom.remove}"]
-    assert "inputs" not in tasks
 
 
 def test_tar_capability_finds_linuxbrew_keg_tar(monkeypatch):

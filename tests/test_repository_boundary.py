@@ -40,6 +40,9 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     body = bootstrap.read_text()
     assert "git -C \"$jat_root\" fetch" in body
     assert "rcc ht vars" in body
+    assert 'sudo "$(command -v rcc)" ht shared --enable --once' in body
+    assert "rcc ht init" in body
+    assert body.index("rcc ht init") < body.index("rcc ht vars")
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
@@ -62,6 +65,10 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "Replace Latest" in extension
     assert "Opening existing" in extension
     assert '"--snapshot"' in extension
+    assert "showOpenDialog" in extension and '"--source"' in extension
+    assert "registerTaskProvider" in extension
+    assert "onTaskType:josh-room" in package["activationEvents"]
+    assert package["contributes"]["taskDefinitions"] == [{"type": "josh-room", "required": ["action"], "properties": {"action": {"type": "string"}}}]
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
     assert ".vscode-server-insiders/extensions/joshyorko.josh-room-0.1.0" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
@@ -86,7 +93,8 @@ def test_root_devcontainer_is_the_personal_room_and_matches_template():
     assert (ROOT / ".devcontainer/bootstrap.sh").read_bytes() == (
         ROOT / "templates/room/.devcontainer/bootstrap.sh"
     ).read_bytes()
-    assert (ROOT / ".vscode/tasks.json").read_bytes() == (ROOT / "templates/room/.vscode/tasks.json").read_bytes()
+    assert not (ROOT / ".vscode/tasks.json").exists()
+    assert not (ROOT / "templates/room/.vscode/tasks.json").exists()
 
 
 def test_devcontainer_opens_clean_room_not_controller_source():
@@ -102,16 +110,14 @@ def test_devcontainer_opens_clean_room_not_controller_source():
     ).read_bytes()
 
 
-def test_prepare_workspace_relocates_controller_and_leaves_only_room_tasks(tmp_path):
+def test_prepare_workspace_relocates_controller_and_leaves_clean_room(tmp_path):
     room = tmp_path / "room"
     controller = tmp_path / "controller"
     (room / ".devcontainer").mkdir(parents=True)
-    (room / ".vscode").mkdir()
     (room / "src/josh_room").mkdir(parents=True)
     (room / ".devcontainer/prepare-workspace.sh").write_bytes(
         (ROOT / ".devcontainer/prepare-workspace.sh").read_bytes()
     )
-    (room / ".vscode/tasks.json").write_text('{"version":"2.0.0","tasks":[]}')
     (room / "src/josh_room/__init__.py").write_text("")
     (room / "README.md").write_text("controller source")
 
@@ -122,9 +128,7 @@ def test_prepare_workspace_relocates_controller_and_leaves_only_room_tasks(tmp_p
     )
 
     assert (controller / "README.md").read_text() == "controller source"
-    assert sorted(path.relative_to(room).as_posix() for path in room.rglob("*") if path.is_file()) == [
-        ".vscode/tasks.json"
-    ]
+    assert not any(room.iterdir())
 
 
 def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
