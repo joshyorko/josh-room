@@ -1,0 +1,28 @@
+{
+  "name": "josh-room",
+  "displayName": "Josh Room",
+  "description": "Native Save Room and Enter Room controls for Josh's disposable workspace.",
+  "version": "0.1.0",
+  "publisher": "joshyorko",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onCommand:joshRoom.save",
+    "onCommand:joshRoom.enter"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "joshRoom.save",
+        "title": "Josh: Save Room"
+      },
+      {
+        "command": "joshRoom.enter",
+        "title": "Josh: Enter Room"
+      }
+    ]
+  }
+}

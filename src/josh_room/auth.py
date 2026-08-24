@@ -1,6 +1,5 @@
 import json
 import os
-import tempfile
 import time
 import urllib.request
 import webbrowser
@@ -13,6 +12,8 @@ def ensure_runtime_session(timeout: int = 600) -> None:
     if all(os.environ.get(name) and Path(os.environ[name]).is_file() for name in (
         "JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"
     )):
+        return
+    if _load_runtime():
         return
     started = _request("/session/start", method="POST")
     webbrowser.open(started["authorizationUrl"])
@@ -41,11 +42,13 @@ def _request(path: str, method: str = "GET") -> dict:
 
 
 def _write_runtime(session: dict) -> None:
-    root = Path(tempfile.mkdtemp(prefix="josh-room-session-", dir=os.environ.get("XDG_RUNTIME_DIR", "/tmp")))
+    root = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "josh-room" / "session"
+    root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)
     credentials = root / "r2.json"
     identity = root / "age.identity"
     config = root / "config.json"
+    metadata = root / "session.json"
     credentials.write_text(json.dumps({
         "access-key-id": session["accessKeyId"],
         "secret-access-key": session["secretAccessKey"],
@@ -65,8 +68,29 @@ def _write_runtime(session: dict) -> None:
             "temporary_credentials": True,
         },
     }))
-    for path in (credentials, identity, config):
+    metadata.write_text(json.dumps({"expires_at": time.time() + int(session["expiresIn"])}))
+    for path in (credentials, identity, config, metadata):
         path.chmod(0o600)
     os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] = str(credentials)
     os.environ["JOSH_ROOM_IDENTITY"] = str(identity)
     os.environ["JOSH_ROOM_RUNTIME_CONFIG"] = str(config)
+
+
+def _load_runtime() -> bool:
+    root = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "josh-room" / "session"
+    credentials = root / "r2.json"
+    identity = root / "age.identity"
+    config = root / "config.json"
+    metadata = root / "session.json"
+    if not all(path.is_file() for path in (credentials, identity, config, metadata)):
+        return False
+    try:
+        expires_at = float(json.loads(metadata.read_text())["expires_at"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if expires_at <= time.time() + 60:
+        return False
+    os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] = str(credentials)
+    os.environ["JOSH_ROOM_IDENTITY"] = str(identity)
+    os.environ["JOSH_ROOM_RUNTIME_CONFIG"] = str(config)
+    return True

@@ -1,7 +1,27 @@
 import argparse
 import json
 
-from josh_room.cli import _tar_capable, build_parser, main
+from josh_room.cli import _tar_capable, _workspace_root, build_parser, emit, main
+
+
+def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):
+    result = {
+        "ok": True,
+        "project_id": "heather-mk1-room",
+        "snapshot_id": "snapshot-one",
+        "ciphertext_size": 2_151_210,
+        "producer": {"argv": ["rcc", "run"]},
+    }
+
+    emit(result, False)
+    human = capsys.readouterr().out
+    assert human == (
+        'Saved "heather-mk1-room".\n'
+        "Encrypted snapshot: 2.1 MiB\n"
+        "Restore it with Josh: Enter Room.\n"
+    )
+    emit(result, True)
+    assert json.loads(capsys.readouterr().out) == result
 
 
 def test_doctor_json_is_stable(tmp_path, monkeypatch, capsys):
@@ -38,6 +58,7 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     args = parser.parse_args(["projects", "list", "--backend", "r2", "--json"])
     assert args.backend == "r2"
     assert parser.parse_args(["enter", "hive"]).backend == "r2"
+    assert parser.parse_args(["snapshot", "create", "demo"]).source is None
 
 
 def test_human_enter_uses_terminal_picker(monkeypatch, capsys):
@@ -110,24 +131,57 @@ def test_snapshot_create_preserves_human_room_name(tmp_path, monkeypatch):
     }
 
 
-def test_vscode_tasks_expose_save_and_enter_without_extensions():
+def test_snapshot_create_defaults_source_to_current_workspace(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("josh_room.cli._recipients", lambda: ["age1daily", "age1recovery"])
+    monkeypatch.setattr("josh_room.cli._jat_root", lambda: tmp_path / "jat")
+    monkeypatch.setattr("josh_room.cli._backend", lambda _name, _instance: object())
+    monkeypatch.setattr(
+        "josh_room.cli.create_snapshot",
+        lambda _instance, _project, source, *_args, **_kwargs: captured.update(source=source) or {"snapshot_id": "one"},
+    )
+
+    __import__("josh_room.cli", fromlist=["dispatch"]).dispatch(
+        build_parser().parse_args(["snapshot", "create", "Demo", "--backend", "r2"]),
+        tmp_path / "instance",
+    )
+
+    assert captured["source"] == tmp_path
+
+
+def test_workspace_root_detects_clean_room_parent(tmp_path, monkeypatch):
+    room = tmp_path / "room"
+    (room / ".vscode").mkdir(parents=True)
+    (room / ".vscode/tasks.json").write_text("{}")
+    monkeypatch.chdir(room)
+    monkeypatch.delenv("JOSH_ROOM_WORKSPACE_ROOT", raising=False)
+    monkeypatch.setattr("josh_room.cli._configured", dict)
+
+    assert _workspace_root() == tmp_path
+
+
+def test_vscode_tasks_delegate_save_and_enter_to_native_command_bridge():
     tasks = json.loads((__import__("pathlib").Path(__file__).parents[1] / ".vscode/tasks.json").read_text())
     labels = {task["label"] for task in tasks["tasks"]}
     assert labels == {"Josh: Save Room", "Josh: Enter Room"}
     save = next(task for task in tasks["tasks"] if task["label"] == "Josh: Save Room")
-    assert save["type"] == "process"
-    assert save["command"] == "josh-room"
-    assert save["args"] == [
-        "snapshot",
-        "create",
-        "${input:roomName}",
-        "--source",
-        "${workspaceFolder}",
-        "--backend",
-        "r2",
-    ]
-    assert {item["id"] for item in tasks["inputs"]} == {"roomName"}
-    assert all("${workspaceFolder}" not in item.get("default", "") for item in tasks["inputs"])
+    enter = next(task for task in tasks["tasks"] if task["label"] == "Josh: Enter Room")
+    assert save == {
+        "label": "Josh: Save Room",
+        "type": "process",
+        "command": "/usr/bin/true",
+        "args": ["${command:joshRoom.save}"],
+        "problemMatcher": [],
+    }
+    assert enter == {
+        "label": "Josh: Enter Room",
+        "type": "process",
+        "command": "/usr/bin/true",
+        "args": ["${command:joshRoom.enter}"],
+        "problemMatcher": [],
+    }
+    assert "inputs" not in tasks
 
 
 def test_tar_capability_finds_linuxbrew_keg_tar(monkeypatch):

@@ -2,35 +2,19 @@
 
 ## Lifecycle boundary
 
-Do not run `josh-room setup` inside the Room. Run it once on the Bluefin host
-after host login, before `devpod up`. The command reads private bootstrap JSON
-from stdin, imports sensitive values into the host OS Secret Service, and writes
-only non-secret metadata to `$XDG_CONFIG_HOME/josh-room/config.json`.
-
-The personal Room mounts that config read-only and mounts the host Secret
-Service session bus for local containers. For the Kubernetes DevPod provider,
-the host initialize hook reads the same keyring, locally signs six-hour
-bucket-scoped R2 credentials from the parent R2 key, and creates a narrowly
-named per-workspace Kubernetes Secret. Bootstrap consumes it into pod-lifetime
-`/tmp` files and deletes the Kubernetes Secret immediately. Daily `doctor`,
-`enter`, `hydrate`, and `snapshot create` operations do not require DevPod
-environment variables or credential prompts.
-
-No separate Cloudflare API token is required. The parent R2 Access Key ID,
-Secret Access Key, endpoint, and bucket plus the daily age identity and two
-recipients are sufficient for Kubernetes enrollment.
+Normal use requires no host setup, host keyring, private XDG mount, Kubernetes
+Secret, DevPod environment variable, parent R2 credential, or local age
+identity. The first R2 operation starts the Josh Room Authority browser OAuth
+flow. After the owner allowlist succeeds, the Worker returns a short-lived,
+bucket-scoped R2 session plus the operational age material to mode-0600 files
+inside the disposable Room's runtime directory. Later CLI processes reuse that
+session until expiry; a fresh Room authenticates again.
 
 Josh Room's R2 data plane is the private Cloudflare S3-compatible API. It does
 not use the Cloudflare REST object endpoint for snapshot transfer, and normal
-operations never open a browser or ask for a password, API token, account ID,
-AWS credential, or age key.
-
-One-time setup imports credentials into the host OS Secret Service. Values must
-come from a private provider or protected bootstrap process; they must not
-appear in shell history, argv, files, logs, or the public repository. Private
-XDG config contains only endpoint, bucket, separate R2/age keyring profiles,
-public age recipients, workspace/JAT paths, defaults, and catalog-key metadata.
-The container brokers only that config and the host Secret Service socket.
+operations never ask Josh to copy a password, API token, account ID, AWS
+credential, or age key. Snapshot payloads still transfer directly over R2's
+S3-compatible API and never pass through the Worker.
 
 Use a dedicated bucket-scoped credential and separate private Josh Room bucket.
 The fixed encrypted catalog key is `catalog.jroom.age`; immutable objects use
@@ -43,8 +27,8 @@ Generic S3 behavior is covered by synthetic fake-client tests. A live gate must
 separately prove private R2 create, read-back, conditional catalog update, and
 fresh-state hydration. At this checkpoint that live gate passed against the
 separately provisioned private Josh Room bucket using the authorized bootstrap
-credential. Dedicated temporary-token rotation remains a follow-up. OAuth is a future authorization seam, not a
-substitute claim for S3 large-object credentials.
+credential. The current production path uses OAuth for human authorization and
+Cloudflare temporary credentials for the S3-compatible large-object data plane.
 
 Current source references:
 

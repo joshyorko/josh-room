@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_commands = snapshot.add_subparsers(dest="snapshot_command", required=True)
     snapshot_create = snapshot_commands.add_parser("create")
     snapshot_create.add_argument("project")
-    snapshot_create.add_argument("--source", type=Path, required=True)
+    snapshot_create.add_argument("--source", type=Path)
     snapshot_create.add_argument("--backend", choices=("local", "r2"), default="r2")
     _json_option(snapshot_create)
     hydration = commands.add_parser("hydrate")
@@ -115,7 +115,7 @@ def dispatch(args, instance: Path) -> dict:
             **create_snapshot(
                 instance,
                 project_id,
-                args.source,
+                args.source or Path.cwd(),
                 jat_root,
                 recipients,
                 _backend(args.backend, instance),
@@ -214,7 +214,12 @@ def _recipients() -> list[str]:
 
 def _workspace_root() -> Path:
     value = os.environ.get("JOSH_ROOM_WORKSPACE_ROOT") or _configured().get("workspace_root")
-    return Path(value) if value else Path.cwd()
+    if value:
+        return Path(value)
+    current = Path.cwd()
+    if current.name == "room" and (current / ".vscode/tasks.json").is_file():
+        return current.parent
+    return current
 
 
 @contextmanager
@@ -387,6 +392,11 @@ def choose_project(instance: Path, backend=None) -> str:
 def emit(result: dict, json_mode: bool) -> None:
     if json_mode:
         print(json.dumps(result, sort_keys=True))
+    elif result["ok"] and {"project_id", "snapshot_id", "ciphertext_size"} <= result.keys():
+        size_mib = result["ciphertext_size"] / (1024 * 1024)
+        print(f'Saved "{result["project_id"]}".')
+        print(f"Encrypted snapshot: {size_mib:.1f} MiB")
+        print("Restore it with Josh: Enter Room.")
     elif result["ok"]:
         print("ok: " + json.dumps(result, sort_keys=True))
     else:

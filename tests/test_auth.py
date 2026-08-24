@@ -65,3 +65,41 @@ def test_oauth_session_writes_private_runtime_material_and_environment(tmp_path,
     assert json.loads(config.read_text())["r2"]["bucket"] == "synthetic-room"
     for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"):
         os.environ.pop(name, None)
+
+
+def test_next_cli_process_reuses_unexpired_room_session(tmp_path, monkeypatch):
+    responses = iter(
+        [
+            {"sessionId": "one", "authorizationUrl": "https://example.invalid/auth"},
+            {
+                "status": "authorized",
+                "accessKeyId": "temporary-access",
+                "secretAccessKey": "temporary-secret",
+                "sessionToken": "temporary-session",
+                "ageIdentity": "AGE-SECRET-KEY-synthetic",
+                "ageRecipients": ["age1daily", "age1recovery"],
+                "endpoint": "https://example.invalid",
+                "bucket": "synthetic-room",
+                "expiresIn": 21600,
+            },
+        ]
+    )
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr("josh_room.auth._request", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr("josh_room.auth.webbrowser.open", lambda _url: True)
+
+    ensure_runtime_session()
+    for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"):
+        os.environ.pop(name, None)
+    monkeypatch.setattr(
+        "josh_room.auth._request",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("OAuth opened twice")),
+    )
+
+    ensure_runtime_session()
+
+    assert Path(os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"]).is_file()
+    assert Path(os.environ["JOSH_ROOM_RUNTIME_CONFIG"]).is_file()
+    assert Path(os.environ["JOSH_ROOM_IDENTITY"]).is_file()
+    for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"):
+        os.environ.pop(name, None)

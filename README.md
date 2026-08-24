@@ -16,8 +16,8 @@ hydration, and IDE entry.
 
 ## Open the Room with DevPod
 
-After the one-time host setup below, the repository itself is the personal
-Room entrypoint:
+The repository itself is the personal Room entrypoint; no host enrollment is
+required:
 
 ```bash
 devpod up github.com/joshyorko/josh-room --ide vscode-insiders
@@ -25,7 +25,8 @@ devpod up github.com/joshyorko/josh-room --ide vscode-insiders
 
 DevPod clones the repository, discovers the root `.devcontainer`, starts the
 Room of Requirement secure image, runs the capability-only bootstrap, and
-opens VS Code with `Josh: Enter Room` available under `Tasks: Run Task`.
+opens VS Code Insiders with `Josh: Save Room` and `Josh: Enter Room` available
+under `Tasks: Run Task`.
 
 The same configuration is published for standard Dev Container template
 consumers:
@@ -60,15 +61,14 @@ josh-room snapshot create demo-project --source ./examples/demo-project
 josh-room hydrate demo-project --destination ./demo-restored --ide terminal
 ```
 
-Production identities and credentials are bootstrapped outside the repository.
 Never commit an age identity, R2 credential, real catalog, or snapshot.
 
 ## Private instance
 
-Non-secret instance metadata lives under `$XDG_CONFIG_HOME/josh-room/` and
-conforms to [the private config schema](schemas/private-config.schema.json).
-Persistent R2 credentials live in the host OS Secret Service and are retrieved
-only for an operation. See [private R2 setup](docs/R2-SETUP.md).
+The Cloudflare Worker authenticates Josh in the browser and returns only a
+short-lived, bucket-scoped runtime session to the disposable Room. Persistent
+R2 authority and the operational age identity do not live on the host or in
+the repository. See [private R2 setup](docs/R2-SETUP.md).
 
 Production snapshots require independent daily-use and offline-recovery age
 recipients. Every recipient must decrypt independently. The private R2 bucket
@@ -76,28 +76,11 @@ remains private; object keys contain only ciphertext SHA-256 digests.
 
 ## Josh's golden path
 
-### Host setup (once per device)
-
-Run setup on the Bluefin host before creating a Room. Install the Josh Room
-CLI on the host, unlock the normal desktop Secret Service, and send the private
-bootstrap JSON to stdin:
-
-```bash
-josh-room setup --profile josh-room-r2 --age-profile josh-room-age
-```
-
-The command stores sensitive R2 and age material in the host keyring and writes
-only non-secret metadata to `~/.config/josh-room/config.json` with mode `0600`.
-Do not paste secrets into argv or shell history. The Room mounts this metadata
-read-only. Local containers use the host session bus; Kubernetes DevPod mints
-short-lived bucket-scoped R2 credentials into a one-time per-workspace Secret,
-consumes it into pod-lifetime files, and deletes the Kubernetes Secret.
-
-### Room use (daily)
+### Room use
 
 The personal Room template bootstraps `age`, `uv`, stable RCC, Action Server,
-Hauler, JAT, and Josh Room without running a JAT workload. One-time
-host setup has already populated the OS keyring and private XDG config.
+Hauler, JAT, Josh Room, and its small VS Code command bridge without running a
+JAT workload.
 
 Daily use is:
 
@@ -106,14 +89,18 @@ josh-room doctor --backend r2
 josh-room enter hive
 ```
 
-R2 and VS Code Insiders are the defaults. `doctor` fails with remediation when
+The first Save or Enter operation in a disposable Room opens Cloudflare OAuth.
+The resulting short-lived session is reused by later operations in that Room
+until expiry. R2 and VS Code Insiders are the defaults. `doctor` fails with remediation when
 age, Hauler, RCC, JAT, the daily identity, R2, the encrypted catalog, or the IDE
 is unavailable. `enter` discovers logical project names from the encrypted R2
 catalog, hydrates safely, then launches VS Code Insiders.
 
-The `Josh: Enter Room` VS Code task is native `tasks.json` and calls the CLI.
-No extension is required: the encrypted catalog and CLI picker own remembered
-project selection. Josh Room does not install or depend on one.
+The bundled command bridge gives `Josh: Save Room` a native name prompt and
+success notification. `Josh: Enter Room` loads the encrypted catalog into a
+native Quick Pick, hydrates beside the clean bootstrap workspace, and switches
+the current VS Code window to the restored Room. Storage, encryption, and
+hydration remain owned by the CLI.
 
 ## Commands
 
@@ -121,7 +108,7 @@ project selection. Josh Room does not install or depend on one.
 josh-room doctor [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room projects list [--backend local|r2] [--json]
 josh-room snapshots list <project> [--backend local|r2] [--json]
-josh-room snapshot create <project> --source <path> [--backend local|r2] [--json]
+josh-room snapshot create <project> [--source <path>] [--backend local|r2] [--json]
 josh-room hydrate <project> --destination <path> [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room enter [<project>] [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 ```

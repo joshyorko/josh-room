@@ -4,37 +4,16 @@
     {
       "label": "Josh: Save Room",
       "type": "process",
-      "command": "josh-room",
-      "args": [
-        "snapshot",
-        "create",
-        "${input:roomName}",
-        "--source",
-        "${workspaceFolder}",
-        "--backend",
-        "r2"
-      ],
-      "problemMatcher": [],
-      "presentation": {
-        "reveal": "always"
-      }
+      "command": "/usr/bin/true",
+      "args": ["${command:joshRoom.save}"],
+      "problemMatcher": []
     },
     {
       "label": "Josh: Enter Room",
-      "type": "shell",
-      "command": "josh-room enter --backend r2",
-      "problemMatcher": [],
-      "presentation": {
-        "reveal": "always"
-      }
-    }
-  ],
-  "inputs": [
-    {
-      "id": "roomName",
-      "type": "promptString",
-      "description": "Room name",
-      "default": "My Room"
+      "type": "process",
+      "command": "/usr/bin/true",
+      "args": ["${command:joshRoom.enter}"],
+      "problemMatcher": []
     }
   ]
 }

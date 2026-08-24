@@ -21,6 +21,13 @@ brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server
 
 uv tool install --force "git+https://github.com/joshyorko/josh-room.git@${JOSH_ROOM_GIT_SHA}"
 
+extension_source="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/vscode-extension"
+extension_target="$HOME/.vscode-server-insiders/extensions/joshyorko.josh-room-0.1.0"
+test -f "$extension_source/extension.js"
+mkdir -p "$(dirname "$extension_target")"
+rm -rf -- "$extension_target"
+cp -a -- "$extension_source" "$extension_target"
+
 jat_root="${JOSH_ROOM_JAT_ROOT:-$HOME/.local/share/josh-room/josh-all-the-things}"
 if [[ ! -f "$jat_root/robot.yaml" ]]; then
     mkdir -p "$(dirname "$jat_root")"

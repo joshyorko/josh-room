@@ -50,12 +50,27 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert "rpm-ostree" not in body
 
 
+def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency():
+    package = json.loads((ROOT / "vscode-extension/package.json").read_text())
+    commands = {item["command"] for item in package["contributes"]["commands"]}
+    assert commands == {"joshRoom.save", "joshRoom.enter"}
+    extension = (ROOT / "vscode-extension/extension.js").read_text()
+    assert "josh-room" in extension
+    assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
+    assert "showQuickPick" in extension and "showInputBox" in extension
+    bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
+    assert ".vscode-server-insiders/extensions/joshyorko.josh-room-0.1.0" in bootstrap
+    template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
+    assert template_package["contributes"] == package["contributes"]
+    assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
+
+
 def test_oauth_room_requires_no_host_setup_mount():
     readme = (ROOT / "README.md").read_text()
     setup = (ROOT / "docs/R2-SETUP.md").read_text()
     template = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
-    assert "Run setup on the Bluefin host" in readme
-    assert "Do not run `josh-room setup` inside the Room" in setup
+    assert "no host enrollment" in readme
+    assert "Normal use requires no host setup" in setup
     assert '"mounts"' not in template
     assert '"initializeCommand"' not in template
 
