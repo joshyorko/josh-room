@@ -15,6 +15,7 @@ from josh_room.envelope import (
     read_envelope,
     read_envelope_file,
 )
+from josh_room.keyring import lookup
 from josh_room.local_store import ImmutableLocalStore
 from josh_room.operations import _display_name, _snapshot_id, _source_metadata
 
@@ -115,6 +116,21 @@ def test_identity_permissions_are_restrictive(tmp_path):
     identity.chmod(0o644)
     with pytest.raises(CryptoError, match="permissions"):
         decrypt(tmp_path / "ciphertext", [identity])
+
+
+def test_runtime_secret_file_is_ephemeral_keyring_source(tmp_path, monkeypatch):
+    runtime = tmp_path / "r2.json"
+    runtime.write_text(
+        '{"access-key-id":"temporary","secret-access-key":"temporary-secret","session-token":"session"}'
+    )
+    runtime.chmod(0o600)
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_CREDENTIALS", str(runtime))
+    monkeypatch.setattr("josh_room.keyring.available", lambda: False)
+    assert lookup("ignored") == {
+        "access-key-id": "temporary",
+        "secret-access-key": "temporary-secret",
+        "session-token": "session",
+    }
 
 
 def test_local_store_is_immutable_and_content_addressed(tmp_path):

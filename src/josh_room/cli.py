@@ -117,7 +117,16 @@ def dispatch(args, instance: Path) -> dict:
         return result
     if args.command == "setup":
         credentials = json.load(sys.stdin)
-        required = {"access-key-id", "secret-access-key", "endpoint", "bucket", "age-identity", "age-recipients"}
+        required = {
+            "access-key-id",
+            "secret-access-key",
+            "endpoint",
+            "bucket",
+            "age-identity",
+            "age-recipients",
+            "cloudflare-api-token",
+            "cloudflare-account-id",
+        }
         if not required.issubset(credentials) or len(credentials["age-recipients"]) < 2:
             raise ValueError("setup input requires R2 credentials, endpoint, bucket, age identity, and two recipients")
         store_keyring(args.profile, credentials)

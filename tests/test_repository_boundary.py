@@ -73,6 +73,8 @@ def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
     assert 'paths:' in workflow
     assert '"templates/room/**"' in workflow
     assert "packages: write" in workflow
+    assert "docker/login-action@" in workflow
+    assert "secrets.GITHUB_TOKEN" in workflow
     assert "devcontainer templates publish" in workflow
     assert "--namespace ${{ github.repository }}/templates" in workflow
     assert '"templates/room"' in workflow
@@ -80,13 +82,34 @@ def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
     assert "build-image" not in workflow
 
 
+def test_ci_installs_real_age_tooling_before_tests():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "apt-get install" in workflow
+    assert "age" in workflow
+
+
 def test_personal_template_keyring_mount_has_no_uid_assumption():
     config = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
     bootstrap = (ROOT / "templates/room/.devcontainer/bootstrap.sh").read_text()
     assert "/run/user/1000" not in config
-    assert "source=/run/user,target=/run/josh-room/host-runtime,type=bind,readonly" in config
-    assert "host-runtime" in bootstrap
+    assert "/run/user" not in config
+    assert '"initializeCommand": "bash .devcontainer/prepare-kubernetes-secret.sh"' in config
+    assert "RUNTIME_SECRET_NAME" in bootstrap
     assert ".zshenv" in bootstrap
+
+
+def test_kubernetes_secret_authority_is_narrow_and_automatic():
+    prepare = (ROOT / ".devcontainer/prepare-kubernetes-secret.sh").read_text()
+    assert "temp-access-credentials" in prepare
+    assert "object-read-write" in prepare
+    assert "ttlSeconds" in prepare
+    assert "resourceNames" in prepare
+    assert "kubectl" in prepare and "apply -f" in prepare
+    assert "--from-literal" not in prepare
+    assert "DEVPOD_ADDITIONAL_ENV" not in prepare
+    assert (ROOT / ".devcontainer/prepare-kubernetes-secret.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/prepare-kubernetes-secret.sh"
+    ).read_bytes()
 
 
 def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():

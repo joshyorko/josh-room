@@ -1,5 +1,9 @@
+import json
+import os
 import shutil
+import stat
 import subprocess
+from pathlib import Path
 
 
 def available() -> bool:
@@ -8,10 +12,30 @@ def available() -> bool:
 
 def lookup(profile: str) -> dict[str, str]:
     """Read operation-time credentials from Secret Service without logging them."""
+    runtime_path = os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS")
+    if runtime_path:
+        path = Path(runtime_path)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+            raise RuntimeError("runtime credential source is unsafe")
+        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise RuntimeError("runtime credential source permissions are not private")
+        values = json.loads(path.read_text())
+        if not isinstance(values, dict) or not all(
+            isinstance(values.get(field), str) and values[field]
+            for field in ("access-key-id", "secret-access-key", "session-token")
+        ):
+            raise RuntimeError("runtime credential source is incomplete")
+        return {field: values[field] for field in ("access-key-id", "secret-access-key", "session-token")}
     if not available():
         raise RuntimeError("OS Secret Service is unavailable")
     values = {}
-    for field in ("access-key-id", "secret-access-key", "session-token"):
+    for field in (
+        "access-key-id",
+        "secret-access-key",
+        "session-token",
+        "cloudflare-api-token",
+        "cloudflare-account-id",
+    ):
         process = subprocess.run(["secret-tool", "lookup", "service", "josh-room", "profile", profile, "field", field], capture_output=True, text=True, check=False)
         if process.returncode == 0:
             values[field] = process.stdout.rstrip("\n")
@@ -34,7 +58,13 @@ def store(profile: str, credentials: dict[str, str]) -> None:
     """Import one-time credentials into Secret Service; values never enter argv."""
     if not available():
         raise RuntimeError("OS Secret Service is unavailable")
-    for field in ("access-key-id", "secret-access-key", "session-token"):
+    for field in (
+        "access-key-id",
+        "secret-access-key",
+        "session-token",
+        "cloudflare-api-token",
+        "cloudflare-account-id",
+    ):
         value = credentials.get(field)
         if value is None:
             continue

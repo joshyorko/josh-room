@@ -89,7 +89,9 @@ josh-room setup --profile josh-room-r2 --age-profile josh-room-age
 The command stores sensitive R2 and age material in the host keyring and writes
 only non-secret metadata to `~/.config/josh-room/config.json` with mode `0600`.
 Do not paste secrets into argv or shell history. The Room mounts this metadata
-read-only and accesses secrets only through the mounted host session bus.
+read-only. Local containers use the host session bus; Kubernetes DevPod mints
+short-lived bucket-scoped R2 credentials into a one-time per-workspace Secret,
+consumes it into pod-lifetime files, and deletes the Kubernetes Secret.
 
 ### Room use (daily)
 

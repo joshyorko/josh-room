@@ -30,6 +30,8 @@ def test_setup_stores_secrets_in_keyring_and_only_metadata_in_config(tmp_path, m
         "region": "auto",
         "age-identity": "<synthetic-age-identity>",
         "age-recipients": ["age1daily", "age1recovery"],
+        "cloudflare-api-token": "synthetic-cloudflare-token",
+        "cloudflare-account-id": "synthetic-account-id",
         "jat-root": "/synthetic/jat",
     }
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
@@ -45,6 +47,8 @@ def test_setup_stores_secrets_in_keyring_and_only_metadata_in_config(tmp_path, m
     assert "synthetic-access" not in serialized
     assert "synthetic-secret" not in serialized
     assert "<synthetic-age-identity>" not in serialized
+    assert "synthetic-cloudflare-token" not in serialized
+    assert "synthetic-account-id" not in serialized
     assert stat.S_IMODE((tmp_path / "config.json").stat().st_mode) == 0o600
 
 
