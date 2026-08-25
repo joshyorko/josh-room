@@ -225,6 +225,7 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["candidate_version"] == "0.1.0"
     assert lock["room_of_requirement"]["image"].endswith("@" + lock["room_of_requirement"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
+    assert lock["josh_room"]["git_sha"] == "edf7fa946e924569a76f0ac6a31eb015b6910a83"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["reference"].endswith("@" + artifact["manifest_digest"])
