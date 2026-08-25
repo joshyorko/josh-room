@@ -22,6 +22,8 @@ The public repository contains code, schemas, synthetic fixtures, tests, ADRs,
 and the thin consumer template. Real credentials, age identities, catalogs,
 snapshot objects, private paths, and employer/customer data stay outside Git.
 
-The personal template performs capability bootstrap only. Stable RCC remains a
-normal tool inside the hydrated workspace; RCC Environment Artifacts are a
-future environment-identity seam and are not a Josh Room v0.1 dependency.
+The personal template consumes the immutable JAT RCC v18.19.2 Environment
+Artifact during capability bootstrap. Josh Room does not own RCC acquisition:
+RCC/JAT remain responsible for environment specifications, artifacts, and
+materialization. Save asks JAT for `rcc_environment=auto` and may carry typed
+Environment Artifact receipt metadata inside the encrypted inner manifest.

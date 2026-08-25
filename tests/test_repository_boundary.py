@@ -37,6 +37,14 @@ def test_readme_and_workflows_are_josh_room_first():
     assert "Build and publish the Room of Requirement" not in workflows
     assert "docker build" not in workflows
 
+def test_environment_artifact_boundary_is_current_and_other_projections_deferred():
+    architecture = (ROOT / "docs/architecture.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+    deferred = (ROOT / "docs/DEFERRED-INTEGRATIONS.md").read_text()
+    assert "immutable JAT RCC v18.19.2 Environment" in architecture
+    assert "rcc_environment=auto" in readme
+    assert "Actions Runtime integration" in deferred and "remain deferred" in deferred
+
 
 def test_thin_template_consumes_secure_ror_image():
     template = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()

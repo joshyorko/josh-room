@@ -163,8 +163,11 @@ in the root devcontainer and OCI template.
 
 This remains a review checkpoint, not `v0.1.0`. The secure Room of Requirement
 container smoke and dedicated short-lived R2 credential rotation remain open.
-RCC Environment Artifacts, Actions Runtime, Hive projections, OpenAI uploads,
-periodic capture, and garbage collection are deliberately deferred.
+Josh Room consumes the immutable JAT RCC v18.19.2 Environment Artifact during
+bootstrap, and Save requests JAT `rcc_environment=auto` with optional typed
+receipt metadata. RCC/JAT retain ownership of acquisition and production
+details. Actions Runtime, Hive projections, OpenAI uploads, periodic capture,
+and garbage collection remain deliberately deferred.
 
 See [architecture](docs/architecture.md), [ADRs](docs/adr), and
 [deferred integrations](docs/DEFERRED-INTEGRATIONS.md).
