@@ -31,9 +31,11 @@ def create_snapshot(
     with tempfile.TemporaryDirectory(dir=instance) as work:
         haul = Path(work) / "payload.haul.tar.zst"
         report_progress("build", "Building portable Room haul")
-        producer = run_build(jat_root, source, haul, images=images, all_images=all_images)
+        producer = run_build(jat_root, source, haul, images=images, all_images=all_images, rcc_environment="auto")
         payload_size, payload_digest = _file_metadata(haul)
         manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source)}
+        if isinstance(producer.get("environment_artifact"), dict):
+            manifest["environment_artifact"] = producer["environment_artifact"]
         envelope = Path(work) / "snapshot.jroom"
         report_progress("package", "Packaging the trusted snapshot envelope")
         build_envelope_file(manifest, haul, envelope)

@@ -30,7 +30,7 @@ def build_envelope(manifest: dict, payload: bytes) -> bytes:
 def build_envelope_file(manifest: dict, payload: Path, output: Path) -> None:
     if manifest.get("format_version") != 1:
         raise EnvelopeError("unsupported envelope version")
-    if set(manifest) - {"format_version", "project_id", "snapshot_id", "created_at", "payload", "source"}:
+    if set(manifest) - {"format_version", "project_id", "snapshot_id", "created_at", "payload", "source", "environment_artifact"}:
         raise EnvelopeError("unknown manifest field")
     payload_size = payload.stat().st_size
     payload_digest = _file_digest(payload)
@@ -127,7 +127,7 @@ def _read_headers(archive: tarfile.TarFile) -> tuple[dict, tarfile.TarInfo]:
             raise EnvelopeError("invalid manifest JSON") from error
         if manifest.get("format_version") != 1:
             raise EnvelopeError("unsupported envelope version")
-        if set(manifest) - {"format_version", "project_id", "snapshot_id", "created_at", "payload", "source"}:
+        if set(manifest) - {"format_version", "project_id", "snapshot_id", "created_at", "payload", "source", "environment_artifact"}:
             raise EnvelopeError("unknown manifest field")
         payload_member = archive.getmember("payload.haul.tar.zst")
         if payload_member.size > MAX_PAYLOAD_SIZE:
@@ -139,6 +139,11 @@ def _validate_manifest(
     manifest: dict, payload_size: int, payload: bytes | None = None, digest: str | None = None
 ) -> None:
     payload_meta = manifest.get("payload")
+    artifact = manifest.get("environment_artifact")
+    if artifact is not None:
+        required = {"artifact_digest", "specification_digest", "archive_sha256", "archive_size", "archive_path", "robot_path", "provider", "acquired"}
+        if set(artifact) != required or any(not isinstance(artifact[k], str) for k in required - {"archive_size", "acquired"}) or not isinstance(artifact["archive_size"], int) or artifact["archive_size"] <= 0 or not isinstance(artifact["acquired"], bool) or not all(SHA256.fullmatch(artifact[k].removeprefix("sha256:")) for k in ("artifact_digest", "specification_digest", "archive_sha256")) or any(Path(artifact[k]).is_absolute() or ".." in Path(artifact[k]).parts for k in ("archive_path", "robot_path")) or artifact["provider"] not in {"rcc", "jat"} or not artifact["acquired"]:
+            raise EnvelopeError("invalid environment artifact metadata")
     if not isinstance(payload_meta, dict) or not isinstance(payload_meta.get("size"), int) or payload_meta["size"] < 0 or payload_meta["size"] > MAX_PAYLOAD_SIZE:
         raise EnvelopeError("invalid payload size")
     if payload_meta["size"] != payload_size:

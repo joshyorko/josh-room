@@ -112,13 +112,17 @@ def run_build(
     *,
     images: list[str] | None = None,
     all_images: bool = False,
+    rcc_environment: str | None = None,
 ) -> dict:
-    return _run_task(jat_root, "Build", {
+    request = {
         "folder": str(source),
         "output": str(output),
         "images": images or [],
         "all_images": all_images,
-    })
+    }
+    if rcc_environment is not None:
+        request["rcc_environment"] = rcc_environment
+    return _run_task(jat_root, "Build", request)
 
 
 def run_restore(jat_root: Path, haul: Path, destination: Path) -> dict:

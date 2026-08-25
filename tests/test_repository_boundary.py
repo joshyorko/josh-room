@@ -49,10 +49,10 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert bootstrap.is_file()
     body = bootstrap.read_text()
     assert "git -C \"$jat_root\" fetch" in body
-    assert "bootstrap-jat-hololib.sh" in body
+    assert "bootstrap-jat-environment.sh" in body
     assert 'sudo "$(command -v rcc)" ht shared --enable --once' in body
     assert "rcc ht init" in body
-    assert body.index("rcc ht init") < body.index("bootstrap-jat-hololib.sh")
+    assert body.index("rcc ht init") < body.index("bootstrap-jat-environment.sh")
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
@@ -218,12 +218,11 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["room_of_requirement"]["image"].endswith("@" + lock["room_of_requirement"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
     assert len(lock["jat"]["git_sha"]) == 40
-    hololib = lock["jat"]["hololib"]
-    assert hololib["reference"].startswith("ghcr.io/") and "@sha256:" in hololib["reference"]
-    assert len(hololib["manifest_digest"].removeprefix("sha256:")) == 64
-    assert len(hololib["zip_sha256"]) == 64
-    assert hololib["environment_hash"]
-    assert hololib["rcc_version"] == "v18.18.1"
+    artifact = lock["jat"]["environment_artifact"]
+    assert artifact["reference"].endswith("@" + artifact["manifest_digest"])
+    assert len(artifact["archive_sha256"]) == 64
+    assert artifact["archive_size"] > 0
+    assert artifact["rcc_version"] == "v18.19.2"
     assert lock["rcc"]["version"] == "v18.19.2"
     assert lock["rcc"]["source_sha"] == "43aa8c3f834fc84606fd1e442443fbb224324c40"
     assert lock["rcc"]["homebrew_cask"] == "joshyorko/tools/rcc"
@@ -238,21 +237,21 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["rcc"]["version"] in bootstrap
     assert "josh-room.git@main" not in bootstrap
     assert "brew install age uv libsecret jq oras" in bootstrap
-    assert "bootstrap-jat-hololib.sh" in bootstrap
-    helper = (ROOT / ".devcontainer/bootstrap-jat-hololib.sh").read_text()
+    assert "bootstrap-jat-environment.sh" in bootstrap
+    helper = (ROOT / ".devcontainer/bootstrap-jat-environment.sh").read_text()
     assert "oras pull" in helper
-    assert "rcc ht import" in helper
+    assert "rcc env acquire" in helper
     assert "rcc --no-build ht vars" in helper
     assert "Falling back to normal RCC environment build" in helper
-    assert (ROOT / ".devcontainer/bootstrap-jat-hololib.sh").read_bytes() == (
-        ROOT / "templates/room/.devcontainer/bootstrap-jat-hololib.sh"
+    assert (ROOT / ".devcontainer/bootstrap-jat-environment.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/bootstrap-jat-environment.sh"
     ).read_bytes()
     assert "git clone --depth 1" not in bootstrap
     manifest = json.loads((ROOT / "templates/room/devcontainer-template.json").read_text())
     assert manifest["version"] == lock["template"]["version"]
 
 
-def test_hololib_bootstrap_falls_back_to_normal_rcc_build(tmp_path):
+def test_environment_bootstrap_falls_back_to_normal_rcc_build(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "rcc.log"
@@ -267,17 +266,21 @@ def test_hololib_bootstrap_falls_back_to_normal_rcc_build(tmp_path):
     environment = {
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "RCC_LOG": str(log),
-        "JAT_HOLOLIB_REFERENCE": "ghcr.io/example/hololib@sha256:" + "a" * 64,
-        "JAT_HOLOLIB_ZIP_SHA256": "b" * 64,
-        "JAT_HOLOLIB_ZIP_SIZE": "1",
-        "JAT_HOLOLIB_ENVIRONMENT_HASH": "environment",
-        "JAT_HOLOLIB_RCC_VERSION": "v18.18.1",
+        "JAT_ENVIRONMENT_ARTIFACT_REFERENCE": "ghcr.io/example/jat-runtime@sha256:" + "a" * 64,
+        "JAT_ENVIRONMENT_ARTIFACT_MANIFEST_DIGEST": "sha256:" + "a" * 64,
+        "JAT_ENVIRONMENT_ARTIFACT_ARCHIVE_SHA256": "b" * 64,
+        "JAT_ENVIRONMENT_ARTIFACT_ARCHIVE_SIZE": "1",
+        "JAT_ENVIRONMENT_ARTIFACT_DIGEST": "sha256:" + "c" * 64,
+        "JAT_ENVIRONMENT_ARTIFACT_SPECIFICATION_DIGEST": "sha256:" + "d" * 64,
+        "JAT_ENVIRONMENT_ARTIFACT_LEGACY_BLUEPRINT_KEY": "legacy",
+        "JAT_ENVIRONMENT_ARTIFACT_RCC_VERSION": "v18.19.2",
+        "JAT_ENVIRONMENT_ARTIFACT_PLATFORM": "linux_amd64",
         "JAT_GIT_SHA": "c" * 40,
         "EXPECTED_RCC_VERSION": "v18.19.2",
     }
 
     completed = subprocess.run(
-        ["bash", str(ROOT / ".devcontainer/bootstrap-jat-hololib.sh"), str(robot)],
+        ["bash", str(ROOT / ".devcontainer/bootstrap-jat-environment.sh"), str(robot)],
         env=environment,
         capture_output=True,
         text=True,
