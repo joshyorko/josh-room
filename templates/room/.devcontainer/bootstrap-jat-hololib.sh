@@ -8,6 +8,7 @@ robot=${1:?robot.yaml path is required}
 : "${JAT_HOLOLIB_ENVIRONMENT_HASH:?}"
 : "${JAT_GIT_SHA:?}"
 : "${EXPECTED_RCC_VERSION:?}"
+: "${JAT_HOLOLIB_RCC_VERSION:?}"
 
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
@@ -19,7 +20,7 @@ if oras pull "$JAT_HOLOLIB_REFERENCE" --output "$stage" >/dev/null 2>&1 \
     && jq -e \
         --arg environment "$JAT_HOLOLIB_ENVIRONMENT_HASH" \
         --arg jat "$JAT_GIT_SHA" \
-        --arg rcc "$EXPECTED_RCC_VERSION" \
+        --arg rcc "$JAT_HOLOLIB_RCC_VERSION" \
         --arg digest "$JAT_HOLOLIB_ZIP_SHA256" \
         --argjson size "$JAT_HOLOLIB_ZIP_SIZE" \
         '.success == true and .verified_no_build == true and

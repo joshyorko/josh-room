@@ -56,8 +56,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
-    assert "brew install --cask joshyorko/tools/rcc@18.18.1 joshyorko/tools/action-server" in body
-    assert "brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server" not in body
+    assert "brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server" in body
     assert body.index('test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"') < body.index(
         'sudo "$(command -v rcc)" ht shared --enable --once'
     )
@@ -224,9 +223,10 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert len(hololib["manifest_digest"].removeprefix("sha256:")) == 64
     assert len(hololib["zip_sha256"]) == 64
     assert hololib["environment_hash"]
-    assert hololib["rcc_version"] == lock["rcc"]["version"]
-    assert lock["rcc"]["version"].startswith("v")
-    assert lock["rcc"]["homebrew_cask"] == "joshyorko/tools/rcc@18.18.1"
+    assert hololib["rcc_version"] == "v18.18.1"
+    assert lock["rcc"]["version"] == "v18.19.2"
+    assert lock["rcc"]["source_sha"] == "43aa8c3f834fc84606fd1e442443fbb224324c40"
+    assert lock["rcc"]["homebrew_cask"] == "joshyorko/tools/rcc"
     for config_path in (
         ROOT / ".devcontainer/devcontainer.json",
         ROOT / "templates/room/.devcontainer/devcontainer.json",
@@ -271,8 +271,9 @@ def test_hololib_bootstrap_falls_back_to_normal_rcc_build(tmp_path):
         "JAT_HOLOLIB_ZIP_SHA256": "b" * 64,
         "JAT_HOLOLIB_ZIP_SIZE": "1",
         "JAT_HOLOLIB_ENVIRONMENT_HASH": "environment",
+        "JAT_HOLOLIB_RCC_VERSION": "v18.18.1",
         "JAT_GIT_SHA": "c" * 40,
-        "EXPECTED_RCC_VERSION": "v18.18.1",
+        "EXPECTED_RCC_VERSION": "v18.19.2",
     }
 
     completed = subprocess.run(
