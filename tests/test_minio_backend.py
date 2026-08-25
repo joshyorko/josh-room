@@ -1,3 +1,8 @@
+import hashlib
+import os
+import uuid
+
+import pytest
 
 from josh_room.cli import _doctor, _requires_oauth, build_parser
 from josh_room.minio import MinioBackend, MinioConfig
@@ -52,8 +57,3 @@ def test_minio_integration_is_explicitly_gated(monkeypatch):
         assert int(head["ContentLength"]) == len(body)
     finally:
         store.delete_object(key)
-import hashlib
-import os
-import uuid
-
-import pytest
