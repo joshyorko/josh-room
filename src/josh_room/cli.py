@@ -393,7 +393,7 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
     if backend_name in {"r2", "minio"}:
         r2_ok = False
         try:
-            backend = _backend("r2", instance)
+            backend = _backend(backend_name, instance)
             encrypted, _etag = backend.read_catalog()
             r2_ok = True
             if encrypted is not None and identity_ok:
@@ -401,7 +401,9 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
                 catalog_ok = bool(catalog.body.get("projects"))
         except (OSError, RuntimeError, ValueError):
             r2_ok = False
-        record(backend_name, r2_ok, "Configure the private object-store endpoint, bucket, and OS keyring profile.", detail=f"private {backend_name} reachable" if r2_ok else None)
+        remediation = ("Run josh-room setup, unlock the host keyring, and verify the private R2 endpoint and bucket."
+                       if backend_name == "r2" else "Configure the private object-store endpoint, bucket, and OS keyring profile.")
+        record(backend_name, r2_ok, remediation, detail=f"private {backend_name} reachable" if r2_ok else None)
     else:
         record("r2", True, "Select --backend local for offline use.", detail="local backend selected")
         if identity_ok:
