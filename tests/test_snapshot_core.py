@@ -20,6 +20,11 @@ from josh_room.local_store import ImmutableLocalStore
 from josh_room.operations import _display_name, _snapshot_id, _source_metadata
 
 
+def test_environment_artifact_receipt_shape_is_accepted():
+    manifest = {"format_version": 1, "project_id": "demo", "snapshot_id": "s", "created_at": "now", "payload": {"size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, "source": {}, "environment_artifact": {"artifact": "sha256:" + "b" * 64, "specification_digest": "sha256:" + "c" * 64, "legacy_blueprint_key": "legacy", "archive": "jat-runtime.rcca", "archive_sha256": "d" * 64, "archive_size": 1, "rcc_version": "v18.19.2", "robot": "robot.yaml", "provider": "local", "acquired": False}}
+    build_envelope(manifest, b"x")
+
+
 def test_envelope_round_trip_accepts_exact_manifest_and_payload():
     manifest = {
         "format_version": 1,

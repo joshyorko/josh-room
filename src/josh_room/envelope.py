@@ -141,8 +141,9 @@ def _validate_manifest(
     payload_meta = manifest.get("payload")
     artifact = manifest.get("environment_artifact")
     if artifact is not None:
-        required = {"artifact_digest", "specification_digest", "archive_sha256", "archive_size", "archive_path", "robot_path", "provider", "acquired"}
-        if set(artifact) != required or any(not isinstance(artifact[k], str) for k in required - {"archive_size", "acquired"}) or not isinstance(artifact["archive_size"], int) or artifact["archive_size"] <= 0 or not isinstance(artifact["acquired"], bool) or not all(SHA256.fullmatch(artifact[k].removeprefix("sha256:")) for k in ("artifact_digest", "specification_digest", "archive_sha256")) or any(Path(artifact[k]).is_absolute() or ".." in Path(artifact[k]).parts for k in ("archive_path", "robot_path")) or artifact["provider"] not in {"rcc", "jat"} or not artifact["acquired"]:
+        required = {"artifact", "specification_digest", "legacy_blueprint_key", "archive", "archive_sha256", "archive_size", "rcc_version", "robot", "provider", "acquired"}
+        paths = ("archive", "robot")
+        if (set(artifact) != required or any(not isinstance(artifact[k], str) for k in required - {"archive_size", "acquired"}) or not isinstance(artifact["archive_size"], int) or artifact["archive_size"] <= 0 or not isinstance(artifact["acquired"], bool) or not SHA256.fullmatch(artifact["artifact"].removeprefix("sha256:")) or not SHA256.fullmatch(artifact["specification_digest"].removeprefix("sha256:")) or not SHA256.fullmatch(artifact["archive_sha256"]) or artifact["rcc_version"] != "v18.19.2" or not artifact["legacy_blueprint_key"] or any(not artifact[k] or Path(artifact[k]).is_absolute() or "." in Path(artifact[k]).parts or ".." in Path(artifact[k]).parts for k in paths) or artifact["provider"] != "local"):
             raise EnvelopeError("invalid environment artifact metadata")
     if not isinstance(payload_meta, dict) or not isinstance(payload_meta.get("size"), int) or payload_meta["size"] < 0 or payload_meta["size"] > MAX_PAYLOAD_SIZE:
         raise EnvelopeError("invalid payload size")
