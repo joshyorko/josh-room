@@ -1,5 +1,7 @@
 import argparse
 import json
+import subprocess
+import sys
 
 from josh_room.cli import (
     _requires_oauth,
@@ -9,6 +11,25 @@ from josh_room.cli import (
     emit,
     main,
 )
+
+
+def test_clean_cli_import_injects_truststore_before_botocore():
+    script = """
+import builtins
+events = []
+real_import = builtins.__import__
+
+def tracking_import(name, *args, **kwargs):
+    if name == 'truststore' or name == 'botocore.config':
+        events.append(name)
+    return real_import(name, *args, **kwargs)
+
+builtins.__import__ = tracking_import
+import josh_room.cli
+assert events.index('truststore') < events.index('botocore.config'), events
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
 
 
 def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):

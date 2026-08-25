@@ -9,6 +9,7 @@ import tempfile
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
+from . import r2 as _r2
 from .auth import ensure_runtime_session
 from .catalog import Catalog
 from .config import auth_status, private_config, save_private_config
@@ -26,7 +27,9 @@ from .operations import (
     serve_snapshot,
 )
 from .progress import report_progress
-from .r2 import R2Backend, R2Config
+
+R2Backend = _r2.R2Backend
+R2Config = _r2.R2Config
 
 
 def _json_option(parser):
