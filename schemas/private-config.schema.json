@@ -3,7 +3,7 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "default_backend": { "enum": ["r2", "local"] },
+    "default_backend": { "enum": ["r2", "minio", "local"] },
     "default_ide": { "enum": ["vscode-insiders", "vscode", "terminal"] },
     "workspace_root": { "type": "string", "minLength": 1 },
     "jat_root": { "type": "string", "minLength": 1 },
@@ -25,6 +25,18 @@
         "credential_profile": { "type": "string", "minLength": 1 },
         "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
         "temporary_credentials": { "type": "boolean", "default": true }
+      }
+    },
+    "minio": {
+      "type": "object", "additionalProperties": false,
+      "required": ["endpoint", "bucket", "credential_profile"],
+      "properties": {
+        "endpoint": { "type": "string", "format": "uri" }, "bucket": { "type": "string", "minLength": 1 },
+        "region": { "type": "string" }, "credential_profile": { "type": "string", "minLength": 1 },
+        "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "multipart_threshold": { "type": "integer", "minimum": 1 }, "multipart_chunk_size": { "type": "integer", "minimum": 1 },
+        "max_bytes": { "type": "integer", "minimum": 1 }, "timeout_seconds": { "type": "integer", "minimum": 1 }, "max_attempts": { "type": "integer", "minimum": 1 },
+        "verify_tls": { "type": "boolean", "default": true }, "ca_bundle": { "type": "string" }, "path_style": { "type": "boolean", "default": true }
       }
     }
   }

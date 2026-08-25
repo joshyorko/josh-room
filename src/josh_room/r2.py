@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 
 from .keyring import lookup
 from .local_store import ObjectRef
+from .object_store import ObjectStore
 from .progress import report_progress
 
 OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
@@ -46,7 +47,7 @@ class R2Config:
         return cls(endpoint=values["endpoint"], bucket=values["bucket"], credential_profile=values["credential_profile"], region=values.get("region", "auto"), catalog_key=values.get("catalog_key", "catalog.jroom.age"))
 
 
-class R2Backend:
+class R2Backend(ObjectStore):
     def __init__(self, config: R2Config, client=None, receipt_dir: Path | None = None):
         self.config = config
         self.client = client or self._client_from_keyring()

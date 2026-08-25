@@ -17,6 +17,7 @@ from .jat import _jat_contract, run_build, run_restore, run_serve
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
+from .minio import MinioBackend, MinioConfig
 from .operations import (
     create_snapshot,
     hydrate,
@@ -37,30 +38,30 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     doctor = commands.add_parser("doctor")
-    doctor.add_argument("--backend", choices=("local", "r2"), default="r2")
+    doctor.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     doctor.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
     _json_option(doctor)
     projects = commands.add_parser("projects")
     project_commands = projects.add_subparsers(dest="project_command", required=True)
     project_list = project_commands.add_parser("list")
-    project_list.add_argument("--backend", choices=("local", "r2"), default="r2")
+    project_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(project_list)
     rooms = commands.add_parser("rooms")
     room_commands = rooms.add_subparsers(dest="room_command", required=True)
     room_remove = room_commands.add_parser("remove")
     room_remove.add_argument("project")
-    room_remove.add_argument("--backend", choices=("local", "r2"), default="r2")
+    room_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(room_remove)
     snapshots = commands.add_parser("snapshots")
     snapshot_commands = snapshots.add_subparsers(dest="snapshots_command", required=True)
     snapshot_list = snapshot_commands.add_parser("list")
     snapshot_list.add_argument("project")
-    snapshot_list.add_argument("--backend", choices=("local", "r2"), default="r2")
+    snapshot_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(snapshot_list)
     snapshot_remove = snapshot_commands.add_parser("remove")
     snapshot_remove.add_argument("project")
     snapshot_remove.add_argument("snapshot")
-    snapshot_remove.add_argument("--backend", choices=("local", "r2"), default="r2")
+    snapshot_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(snapshot_remove)
     snapshot = commands.add_parser("snapshot")
     snapshot_commands = snapshot.add_subparsers(dest="snapshot_command", required=True)
@@ -69,25 +70,25 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create.add_argument("--source", type=Path)
     snapshot_create.add_argument("--image", dest="images", action="append", default=[])
     snapshot_create.add_argument("--all-images", action="store_true")
-    snapshot_create.add_argument("--backend", choices=("local", "r2"), default="r2")
+    snapshot_create.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(snapshot_create)
     hydration = commands.add_parser("hydrate")
     hydration.add_argument("project")
     hydration.add_argument("--snapshot", default="latest")
     hydration.add_argument("--destination", type=Path, required=True)
     hydration.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="terminal")
-    hydration.add_argument("--backend", choices=("local", "r2"), default="r2")
+    hydration.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(hydration)
     enter = commands.add_parser("enter")
     enter.add_argument("project", nargs="?")
     enter.add_argument("--snapshot", default="latest")
     enter.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
-    enter.add_argument("--backend", choices=("local", "r2"), default="r2")
+    enter.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(enter)
     serve = commands.add_parser("serve")
     serve.add_argument("project")
     serve.add_argument("--snapshot", default="latest")
-    serve.add_argument("--backend", choices=("local", "r2"), default="r2")
+    serve.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     _json_option(serve)
     jat = commands.add_parser("jat")
     jat_commands = jat.add_subparsers(dest="jat_command", required=True)
@@ -297,6 +298,8 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
 def _backend(name: str, instance: Path):
     if name == "local":
         return None
+    if name == "minio":
+        return MinioBackend(MinioConfig.from_private(private_config()), receipt_dir=instance / "receipts")
     return R2Backend(R2Config.from_private(private_config()), receipt_dir=instance / "receipts")
 
 
@@ -387,7 +390,7 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
     record("identity", identity_ok, "Run josh-room setup to store Josh's daily age identity in the OS keyring.")
 
     catalog_ok = False
-    if backend_name == "r2":
+    if backend_name in {"r2", "minio"}:
         r2_ok = False
         try:
             backend = _backend("r2", instance)
@@ -398,7 +401,7 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
                 catalog_ok = bool(catalog.body.get("projects"))
         except (OSError, RuntimeError, ValueError):
             r2_ok = False
-        record("r2", r2_ok, "Run josh-room setup, unlock the host keyring, and verify the private R2 endpoint and bucket.", detail="private R2 reachable" if r2_ok else None)
+        record(backend_name, r2_ok, "Configure the private object-store endpoint, bucket, and OS keyring profile.", detail=f"private {backend_name} reachable" if r2_ok else None)
     else:
         record("r2", True, "Select --backend local for offline use.", detail="local backend selected")
         if identity_ok:

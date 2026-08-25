@@ -33,7 +33,7 @@ def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):
 
 def test_doctor_json_is_stable(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
-    monkeypatch.delenv("JOSH_ROOM_JAT_ROOT", raising=False)
+    monkeypatch.setenv("JOSH_ROOM_JAT_ROOT", str(tmp_path / "jat-isolated"))
     monkeypatch.delenv("JOSH_ROOM_IDENTITY", raising=False)
     monkeypatch.setattr("josh_room.cli.shutil.which", lambda _name: None)
     assert main(["doctor", "--backend", "r2", "--ide", "vscode-insiders", "--json"]) == 2
