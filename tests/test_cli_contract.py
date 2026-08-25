@@ -13,23 +13,29 @@ from josh_room.cli import (
 )
 
 
-def test_clean_cli_import_injects_truststore_before_botocore():
+def test_clean_cli_import_does_not_mutate_global_ssl_context():
     script = """
-import builtins
-events = []
-real_import = builtins.__import__
-
-def tracking_import(name, *args, **kwargs):
-    if name == 'truststore' or name == 'botocore.config':
-        events.append(name)
-    return real_import(name, *args, **kwargs)
-
-builtins.__import__ = tracking_import
+import ssl
+original = ssl.SSLContext
 import josh_room.cli
-assert events.index('truststore') < events.index('botocore.config'), events
+assert ssl.SSLContext is original
 """
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_r2_command_initializes_system_trust_before_auth_and_dispatch(monkeypatch, capsys):
+    events = []
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: events.append("tls"))
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda: events.append("auth"))
+    monkeypatch.setattr(
+        "josh_room.cli.dispatch",
+        lambda *_args: events.append("dispatch") or {"ok": True, "projects": []},
+    )
+
+    assert main(["projects", "list", "--backend", "r2", "--json"]) == 0
+    assert events == ["tls", "auth", "dispatch"]
+    assert json.loads(capsys.readouterr().out)["projects"] == []
 
 
 def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):

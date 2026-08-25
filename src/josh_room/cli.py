@@ -27,6 +27,7 @@ from .operations import (
     serve_snapshot,
 )
 from .progress import report_progress
+from .tls import initialize_system_trust
 
 R2Backend = _r2.R2Backend
 R2Config = _r2.R2Config
@@ -116,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
+    initialize_system_trust()
     args = build_parser().parse_args(argv)
     instance = _instance_root()
     try:

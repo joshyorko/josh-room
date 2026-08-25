@@ -8,10 +8,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-import truststore
-
-truststore.inject_into_ssl()
-
 from botocore.exceptions import ClientError
 
 from .keyring import lookup
