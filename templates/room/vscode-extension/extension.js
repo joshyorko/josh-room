@@ -1245,7 +1245,8 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
   workspaceBindingTrusted = Boolean(authoritativeStatus
     && authoritativeStatus.ok
     && authoritativeStatus.path_matches
-    && authoritativeStatus.state === "clean");
+    && authoritativeStatus.state === "clean"
+    && authoritativeStatus.fingerprint_matches !== false);
   await workspaceBaseline.capture({
     savedFingerprint,
     currentFingerprint: currentFingerprint || savedFingerprint,

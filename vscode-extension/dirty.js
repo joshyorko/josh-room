@@ -25,7 +25,7 @@ async function fingerprintFile(filePath) {
     if (error.code === "ENOENT") return undefined;
     throw error;
   }
-  if (stat.isSymbolicLink()) return `link:${await fs.promises.readlink(filePath)}`;
+  if (stat.isSymbolicLink()) return `link:${stat.mode}:${await fs.promises.readlink(filePath)}`;
   if (stat.isDirectory()) return `directory:${stat.mode}`;
   if (!stat.isFile()) return `special:${stat.mode}`;
   const digest = crypto.createHash("sha256");
@@ -201,6 +201,8 @@ function isRoomMarker(marker) {
   return Boolean(
     marker && [1, 2].includes(marker.format_version)
     && typeof marker.project_id === "string"
+    && typeof marker.display_name === "string"
+    && marker.display_name.length > 0
     && (marker.format_version === 1 || typeof marker.snapshot_id === "string")
     && (marker.format_version === 1 || typeof marker.dimension_id === "string"),
   );

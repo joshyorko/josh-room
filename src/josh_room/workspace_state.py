@@ -36,21 +36,24 @@ def workspace_fingerprint(workspace: Path) -> str:
         raise ValueError("workspace must be a directory")
     digest = hashlib.sha256()
     entries = sorted(
-        (
-            path
-            for path in root.rglob("*")
-            if not path.is_symlink() and not _ignored(path, root)
-        ),
+        (path for path in root.rglob("*") if not _ignored(path, root)),
         key=lambda item: item.relative_to(root).as_posix(),
     )
     for path in entries:
         relative = path.relative_to(root).as_posix().encode()
-        metadata = path.stat()
+        metadata = path.lstat()
         mode = str(stat.S_IMODE(metadata.st_mode)).encode()
+        if path.is_symlink():
+            target = os.readlink(path).encode()
+            digest.update(b"l\0" + relative + b"\0" + mode + b"\0" + target + b"\n")
+            continue
         if path.is_dir():
             digest.update(b"d\0" + relative + b"\0" + mode + b"\n")
             continue
         if not path.is_file():
+            digest.update(
+                b"s\0" + relative + b"\0" + str(stat.S_IFMT(metadata.st_mode)).encode() + b"\0" + mode + b"\n"
+            )
             continue
         content_digest = hashlib.sha256()
         with path.open("rb") as source:
