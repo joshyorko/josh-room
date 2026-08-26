@@ -79,6 +79,10 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
     assert commands == {
+        "joshRoom.addDimension",
+        "joshRoom.openDimension",
+        "joshRoom.link",
+        "joshRoom.repair",
         "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
         "joshRoom.jatBuild", "joshRoom.jatRestore", "joshRoom.jatServe",
     }
