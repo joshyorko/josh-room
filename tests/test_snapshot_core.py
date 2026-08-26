@@ -138,6 +138,20 @@ def test_runtime_secret_file_is_ephemeral_keyring_source(tmp_path, monkeypatch):
     }
 
 
+def test_runtime_secret_file_allows_static_minio_credentials(tmp_path, monkeypatch):
+    runtime = tmp_path / "minio.json"
+    runtime.write_text(
+        '{"access-key-id":"temporary","secret-access-key":"temporary-secret"}'
+    )
+    runtime.chmod(0o600)
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_CREDENTIALS", str(runtime))
+    monkeypatch.setattr("josh_room.keyring.available", lambda: False)
+    assert lookup("ignored") == {
+        "access-key-id": "temporary",
+        "secret-access-key": "temporary-secret",
+    }
+
+
 def test_local_store_is_immutable_and_content_addressed(tmp_path):
     store = ImmutableLocalStore(tmp_path)
     first = store.put(b"ciphertext")
