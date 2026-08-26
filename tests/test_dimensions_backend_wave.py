@@ -205,3 +205,81 @@ def test_copy_snapshot_reuses_verified_ciphertext_and_creates_new_logical_jat():
     assert result["object_key"] == source_snapshot["object_key"]
     assert destination_store.puts == [(source_snapshot["object_key"], payload)]
     assert result["catalog"].body["projects"]["room"]["latest"] == result["snapshot_id"]
+
+
+def test_snapshot_copy_parser_carries_source_destination_dimensions_and_rooms():
+    parser = build_parser()
+    args = parser.parse_args([
+        "snapshot", "copy", "source-room",
+        "--source-dimension", "archive",
+        "--destination-dimension", "backup",
+        "--destination-room", "restored-room",
+        "--snapshot", "latest", "--json",
+    ])
+    assert args.snapshot_command == "copy"
+    assert args.project == "source-room"
+    assert args.source_dimension == "archive"
+    assert args.destination_dimension == "backup"
+    assert args.destination_project == "restored-room"
+    assert args.snapshot == "latest"
+
+
+def test_copy_snapshot_stream_downloads_once_puts_once_and_returns_new_jat(tmp_path):
+    from josh_room.operations import copy_snapshot_stream
+
+    source = _snapshot()
+    source_catalog = Catalog.empty(dimension_id="archive").add_snapshot("source-room", "Source", source)
+    destination_catalog = Catalog.empty(dimension_id="backup")
+    payload = b"ciphertext"
+    calls = []
+
+    class Store:
+        def download_file(self, key, destination, digest, size):
+            calls.append(("download", key, digest, size))
+            destination.write_bytes(payload)
+
+        def put_file(self, key, path):
+            calls.append(("put", key, path.read_bytes()))
+            return type("Ref", (), {"key": key, "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)})()
+
+    result = copy_snapshot_stream(
+        tmp_path / "instance", source_catalog, destination_catalog, Store(), Store(),
+        "source-room", "restored-room", "latest", ["age1daily", "age1recovery"],
+    )
+
+    assert [call[0] for call in calls] == ["download", "put"]
+    assert result["project_id"] == "restored-room"
+    assert result["snapshot_id"] != source["snapshot_id"]
+    assert result["catalog"].body["projects"]["restored-room"]["latest"] == result["snapshot_id"]
+
+
+def test_copy_snapshot_stream_records_scrubbed_orphan_on_destination_catalog_conflict(tmp_path, monkeypatch):
+    from josh_room.operations import copy_snapshot_stream
+
+    source = _snapshot()
+    source_catalog = Catalog.empty(dimension_id="archive").add_snapshot("source-room", "Source", source)
+    destination_catalog = Catalog.empty(dimension_id="backup")
+    payload = b"ciphertext"
+    orphan_receipts = []
+
+    class Store:
+        def download_file(self, _key, destination, _digest, _size):
+            destination.write_bytes(payload)
+
+        def put_file(self, key, _path):
+            return type("Ref", (), {"key": key, "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)})()
+
+        def conditional_catalog_put(self, _body, _etag):
+            raise RuntimeError("catalog conflict")
+
+        def record_orphan(self, ref):
+            orphan_receipts.append({"object_key": ref.key, "sha256": ref.sha256, "size": ref.size})
+
+    monkeypatch.setattr("josh_room.operations._encrypt_catalog", lambda *_args: b"encrypted-catalog")
+    with pytest.raises(RuntimeError, match="catalog conflict"):
+        copy_snapshot_stream(
+            tmp_path / "instance", source_catalog, destination_catalog, Store(), Store(),
+            "source-room", "restored-room", "latest", ["age1daily", "age1recovery"],
+        )
+    assert orphan_receipts and set(orphan_receipts[0]) == {"object_key", "sha256", "size"}
+    assert "secret" not in json.dumps(orphan_receipts)

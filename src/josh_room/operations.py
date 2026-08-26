@@ -423,3 +423,43 @@ def copy_snapshot(source_catalog: Catalog, destination_catalog: Catalog, source_
     project = destination_project_id or project_id
     updated = destination_catalog.add_snapshot(project, source_catalog.body["projects"][project_id]["display_name"], new_snapshot)
     return {"ok": True, "project_id": project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}
+
+
+def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_catalog: Catalog, source_backend, destination_backend, source_project: str, destination_project: str, snapshot_id: str, recipients: list[str], *, destination_etag: str | None = None) -> dict:
+    """Transfer one immutable ciphertext once, then conditionally publish its new JAT."""
+    instance = Path(instance)
+    instance.mkdir(parents=True, exist_ok=True)
+    source = source_catalog.resolve_snapshot(source_project, snapshot_id)
+    operation_id = uuid.uuid4().hex
+    with tempfile.TemporaryDirectory(prefix=f"copy-{operation_id}-", dir=instance) as work:
+        staged = Path(work) / "snapshot.jroom.age"
+        if source_backend is None:
+            ImmutableLocalStore(instance).download_file(source["object_key"], staged, source["ciphertext_sha256"], source["ciphertext_size"])
+        else:
+            source_backend.download_file(source["object_key"], staged, source["ciphertext_sha256"], source["ciphertext_size"])
+        size, digest = _file_metadata(staged)
+        if size != source["ciphertext_size"] or digest != source["ciphertext_sha256"]:
+            raise ValueError("source ciphertext metadata mismatch")
+        if destination_backend is None:
+            ref = ImmutableLocalStore(instance).put_file(staged)
+        else:
+            ref = destination_backend.put_file(source["object_key"], staged)
+        if ref.key != source["object_key"] or ref.sha256 != digest or ref.size != size:
+            raise ValueError("destination ciphertext metadata mismatch")
+        new_snapshot = dict(source)
+        new_snapshot["snapshot_id"] = _snapshot_id()
+        new_snapshot["created_at"] = datetime.now(UTC).isoformat()
+        if destination_catalog.body["format_version"] == 2:
+            new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
+        updated = destination_catalog.add_snapshot(destination_project, source_catalog.body["projects"][source_project]["display_name"], new_snapshot)
+        try:
+            if destination_backend is not None and hasattr(destination_backend, "conditional_catalog_put"):
+                body = _encrypt_catalog(updated, recipients, instance)
+                destination_backend.conditional_catalog_put(body, destination_etag)
+            elif destination_backend is None:
+                CatalogFile(instance / "catalog.jroom.age", Path(os.environ["JOSH_ROOM_IDENTITY"]), destination_catalog.dimension_id).update_if_revision(destination_catalog.body["revision"], updated, recipients)
+        except BaseException:
+            if destination_backend is not None and hasattr(destination_backend, "record_orphan"):
+                destination_backend.record_orphan(ref)
+            raise
+    return {"ok": True, "project_id": destination_project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}

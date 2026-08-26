@@ -21,6 +21,8 @@ from .keyring import store_value as store_keyring_value
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
 from .operations import (
+    _read_remote_catalog,
+    copy_snapshot_stream,
     create_snapshot,
     hydrate,
     link_workspace,
@@ -110,6 +112,13 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     snapshot_create.add_argument("--dimension")
     _json_option(snapshot_create)
+    snapshot_copy = snapshot_commands.add_parser("copy")
+    snapshot_copy.add_argument("project")
+    snapshot_copy.add_argument("--source-dimension", "--from-dimension", dest="source_dimension", required=True)
+    snapshot_copy.add_argument("--destination-dimension", "--to-dimension", dest="destination_dimension", required=True)
+    snapshot_copy.add_argument("--destination-room", "--destination-project", dest="destination_project", required=True)
+    snapshot_copy.add_argument("--snapshot", default="latest")
+    _json_option(snapshot_copy)
     hydration = commands.add_parser("hydrate")
     hydration.add_argument("project")
     hydration.add_argument("--snapshot", default="latest")
@@ -172,6 +181,12 @@ def main(argv=None):
 def _requires_oauth(args) -> bool:
     if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
+    if getattr(args, "snapshot_command", None) == "copy":
+        registry = DimensionRegistry(private_config() or {})
+        try:
+            return any(registry.select(dimension).provider == "r2" for dimension in (args.source_dimension, args.destination_dimension))
+        except ValueError:
+            return False
     dimension = getattr(args, "dimension", None)
     if dimension:
         try:
@@ -253,6 +268,14 @@ def dispatch(args, instance: Path) -> dict:
             raise ValueError("project is not present in the encrypted catalog")
         return {"ok": True, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
+        if args.snapshot_command == "copy":
+            identity = _identity()
+            recipients = _recipients()
+            source_backend = _backend("r2", instance, args.source_dimension)
+            destination_backend = _backend("r2", instance, args.destination_dimension)
+            source_catalog, _source_etag = _read_remote_catalog(source_backend, identity, instance)
+            destination_catalog, destination_etag = _read_remote_catalog(destination_backend, identity, instance)
+            return copy_snapshot_stream(instance, source_catalog, destination_catalog, source_backend, destination_backend, args.project, args.destination_project, args.snapshot, recipients, destination_etag=destination_etag)
         recipients = _recipients()
         jat_root = _jat_root()
         if len(recipients) < 2:
