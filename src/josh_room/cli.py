@@ -74,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
         state_command = commands.add_parser(action)
         state_command.add_argument("--workspace", type=Path, default=Path.cwd())
         state_command.add_argument("--dimension")
+        state_command.add_argument("--project")
+        state_command.add_argument("--snapshot")
         state_command.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
         _json_option(state_command)
     projects = commands.add_parser("projects")
@@ -170,7 +172,7 @@ def main(argv=None):
     try:
         if _requires_oauth(args):
             ensure_runtime_session()
-        identity_context = nullcontext() if args.command == "setup" else _identity_environment()
+        identity_context = nullcontext() if args.command in {"setup", "status"} else _identity_environment()
         with identity_context:
             result = dispatch(args, instance)
     except (OSError, RuntimeError, ValueError) as error:
@@ -203,6 +205,8 @@ def dispatch(args, instance: Path) -> dict:
         if args.dimension_command == "list":
             return {"ok": True, "dimensions": [{"id": key, "display_name": value.display_name, "provider": value.provider, "bucket": value.bucket, "endpoint": value.endpoint} for key, value in DimensionRegistry(config)]}
         records = dict(config.get("dimensions", {}))
+        if args.dimension_command == "add" and args.dimension in records:
+            raise ValueError(f"Dimension {args.dimension} already exists")
         current = records.get(args.dimension, {})
         values = {**current}
         for field, key in (("display_name", "display_name"), ("provider", "provider"), ("endpoint", "endpoint"), ("bucket", "bucket"), ("credential_profile", "credential_profile"), ("region", "region"), ("catalog_key", "catalog_key")):
@@ -217,19 +221,37 @@ def dispatch(args, instance: Path) -> dict:
     if args.command == "status":
         return {"ok": True, **local_status(args.workspace)}
     if args.command in {"link", "repair"}:
-        backend = _backend_for_args(args, instance)
-        catalog = load_catalog(instance, backend)
         from .workspace_state import read_workspace_marker
-        marker = read_workspace_marker(args.workspace)
-        snapshot = catalog.resolve_snapshot(marker["project_id"], marker["snapshot_id"])
+        marker = None
+        marker_path = Path(args.workspace) / ".josh-room.json"
+        if marker_path.is_file():
+            try:
+                marker = read_workspace_marker(args.workspace)
+            except ValueError:
+                if not all((args.project, args.snapshot, args.dimension)):
+                    raise
+        selected_dimension = args.dimension or (marker or {}).get("dimension_id")
+        backend = _backend(args.backend, instance, selected_dimension)
+        catalog = load_catalog(instance, backend)
+        project_id = args.project or (marker or {}).get("project_id")
+        snapshot_id = args.snapshot or (marker or {}).get("snapshot_id")
+        dimension_id = selected_dimension or catalog.dimension_id
+        if not project_id or not snapshot_id or not dimension_id:
+            raise ValueError("Link and Repair require project, snapshot, and Dimension evidence")
+        snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
+        object_evidence = {
+            "project_id": project_id,
+            "snapshot_id": snapshot["snapshot_id"],
+            "object_key": snapshot["object_key"],
+            "ciphertext_sha256": snapshot["ciphertext_sha256"],
+            "ciphertext_size": snapshot["ciphertext_size"],
+        }
         if backend:
-            backend.get_bytes(snapshot["object_key"], snapshot["ciphertext_sha256"], snapshot["ciphertext_size"])
+            backend.get_bytes(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
         else:
-            ImmutableLocalStore(instance).get(snapshot["object_key"])
-        evidence = {key: snapshot[key] for key in ("snapshot_id", "object_key", "ciphertext_sha256", "ciphertext_size")}
-        evidence["project_id"] = marker["project_id"]
+            ImmutableLocalStore(instance).get(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
         operation = link_workspace if args.command == "link" else repair_workspace
-        return operation(args.workspace, catalog, evidence)
+        return operation(args.workspace, catalog, object_evidence, project_id=project_id, snapshot_id=snapshot_id, dimension_id=dimension_id)
     if args.command == "doctor":
         return _doctor(instance, args.backend, args.ide)
     if args.command == "projects":

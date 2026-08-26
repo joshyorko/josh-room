@@ -291,7 +291,7 @@ def _write_receipt(path: Path, body: dict) -> None:
 
 
 def _write_room_marker(workspace: Path, project_id: str, display_name: str, *, dimension_id: str | None = None, snapshot_id: str | None = None, workspace_fp: str | None = None, path_binding: Path | None = None) -> None:
-    if dimension_id and snapshot_id and workspace_fp:
+    if dimension_id and snapshot_id and workspace_fp and workspace_fp != "0" * 64:
         write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=display_name, snapshot_id=snapshot_id, workspace_fingerprint=workspace_fp, path_binding=path_binding)
         return
     marker = workspace / ".josh-room.json"
@@ -360,43 +360,65 @@ def _evidence_matches(snapshot: dict, object_evidence: dict | None) -> bool:
     return all(field in object_evidence for field in ("snapshot_id", "ciphertext_sha256", "ciphertext_size"))
 
 
-def link_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None) -> dict:
-    marker = read_workspace_marker(workspace)
-    if marker.get("format_version") != 2:
-        raise ValueError("workspace marker v2 is required")
+def _workspace_binding(workspace: Path, catalog: Catalog, object_evidence: dict | None, *, project_id: str | None = None, snapshot_id: str | None = None, dimension_id: str | None = None):
+    workspace = Path(workspace)
     if not object_evidence:
         raise ValueError("object evidence is required")
-    if catalog.dimension_id != marker["dimension_id"]:
-        raise ValueError("catalog Dimension mismatch")
-    snapshot = catalog.resolve_snapshot(marker["project_id"], marker["snapshot_id"])
-    if not _evidence_matches(snapshot, object_evidence):
-        raise ValueError("object evidence does not corroborate catalog")
-    if marker["workspace_fingerprint"] != snapshot.get("workspace_fingerprint"):
-        raise ValueError("workspace fingerprint does not corroborate catalog")
-    from .workspace_state import canonical_workspace_path_sha256
-    if marker["workspace_path_sha256"] != canonical_workspace_path_sha256(workspace):
-        raise ValueError("workspace path does not match marker")
-    if workspace_fingerprint(workspace) != marker["workspace_fingerprint"]:
-        raise ValueError("workspace fingerprint does not match disk")
-    return {"ok": True, "dimension_id": marker["dimension_id"], "project_id": marker["project_id"], "snapshot_id": marker["snapshot_id"], "marker": marker}
-
-
-def repair_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None) -> dict:
-    if not catalog.body.get("projects"):
-        raise ValueError("catalog evidence is required")
-    if not object_evidence:
-        raise ValueError("object evidence is required")
-    marker = read_workspace_marker(workspace) if (Path(workspace) / ".josh-room.json").is_file() else None
-    dimension_id = catalog.dimension_id
-    project_id = object_evidence.get("project_id") or (marker.get("project_id") if marker else None)
-    snapshot_id = object_evidence.get("snapshot_id")
-    if dimension_id != catalog.dimension_id or not project_id or not snapshot_id:
+    marker = None
+    marker_path = workspace / ".josh-room.json"
+    explicit = any(value is not None for value in (project_id, snapshot_id, dimension_id))
+    if marker_path.is_file():
+        try:
+            marker = read_workspace_marker(workspace)
+        except ValueError:
+            if not explicit:
+                raise
+    project_id = project_id or (object_evidence or {}).get("project_id") or (marker or {}).get("project_id")
+    snapshot_id = snapshot_id or (object_evidence or {}).get("snapshot_id") or (marker or {}).get("snapshot_id")
+    dimension_id = dimension_id or (marker or {}).get("dimension_id") or catalog.dimension_id
+    if not project_id or not snapshot_id or not dimension_id:
         raise ValueError("catalog evidence does not identify workspace")
+    if catalog.dimension_id != dimension_id:
+        raise ValueError("catalog Dimension mismatch")
     snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
     if not _evidence_matches(snapshot, object_evidence):
         raise ValueError("object evidence does not corroborate catalog")
+    expected_fingerprint = snapshot.get("workspace_fingerprint")
+    if not expected_fingerprint:
+        raise ValueError("catalog workspace fingerprint is unavailable")
+    if workspace_fingerprint(workspace) != expected_fingerprint:
+        raise ValueError("workspace fingerprint does not corroborate catalog")
+    if marker and not explicit:
+        if marker.get("format_version") != 2:
+            raise ValueError("workspace marker v2 is required")
+        if marker.get("dimension_id") != dimension_id or marker.get("project_id") != project_id or marker.get("snapshot_id") != snapshot_id:
+            raise ValueError("workspace marker does not corroborate catalog")
+        if marker.get("workspace_fingerprint") != expected_fingerprint:
+            raise ValueError("workspace fingerprint does not corroborate catalog")
+        from .workspace_state import canonical_workspace_path_sha256
+        if marker.get("workspace_path_sha256") != canonical_workspace_path_sha256(workspace):
+            raise ValueError("workspace path does not match marker")
+    return marker, project_id, snapshot_id, dimension_id, snapshot
+
+
+def link_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None, *, project_id: str | None = None, snapshot_id: str | None = None, dimension_id: str | None = None) -> dict:
+    _marker, project_id, snapshot_id, dimension_id, snapshot = _workspace_binding(workspace, catalog, object_evidence, project_id=project_id, snapshot_id=snapshot_id, dimension_id=dimension_id)
+    display_name = catalog.body["projects"][project_id]["display_name"]
+    write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=display_name, snapshot_id=snapshot_id, workspace_fingerprint=snapshot["workspace_fingerprint"])
+    return {"ok": True, "dimension_id": dimension_id, "project_id": project_id, "snapshot_id": snapshot_id, "marker": read_workspace_marker(workspace)}
+
+
+def repair_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None, *, project_id: str | None = None, snapshot_id: str | None = None, dimension_id: str | None = None) -> dict:
+    if not catalog.body.get("projects"):
+        raise ValueError("catalog evidence is required")
+    _marker, project_id, snapshot_id, dimension_id, snapshot = _workspace_binding(workspace, catalog, object_evidence, project_id=project_id, snapshot_id=snapshot_id, dimension_id=dimension_id)
     write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=catalog.body["projects"][project_id]["display_name"], snapshot_id=snapshot_id, workspace_fingerprint=snapshot["workspace_fingerprint"])
     return {"ok": True, "dimension_id": dimension_id, "project_id": project_id, "snapshot_id": snapshot_id}
+
+
+def _record_orphan(store, ref) -> None:
+    if ref is not None and hasattr(store, "record_orphan"):
+        store.record_orphan(ref)
 
 
 def copy_snapshot(source_catalog: Catalog, destination_catalog: Catalog, source_store, destination_store, project_id: str, snapshot_id: str = "latest", destination_project_id: str | None = None) -> dict:
@@ -406,23 +428,28 @@ def copy_snapshot(source_catalog: Catalog, destination_catalog: Catalog, source_
     digest = hashlib.sha256(payload).hexdigest()
     if digest != source["ciphertext_sha256"] or len(payload) != source["ciphertext_size"]:
         raise ValueError("source ciphertext evidence mismatch")
+    put = None
     try:
-        put = destination_store.put_bytes(source["object_key"], payload)
-    except Exception:  # noqa: BLE001 - a failed create-only write is corroborated by a read-back
-        verified = destination_store.get_bytes(source["object_key"], source["ciphertext_sha256"], source["ciphertext_size"])
-        if hashlib.sha256(verified).hexdigest() != source["ciphertext_sha256"] or len(verified) != source["ciphertext_size"]:
-            raise ValueError("destination ciphertext evidence mismatch")
-        put = type("ObjectRef", (), {"key": source["object_key"], "sha256": source["ciphertext_sha256"], "size": source["ciphertext_size"]})()
-    if put.key != source["object_key"] or put.sha256 != source["ciphertext_sha256"] or put.size != source["ciphertext_size"]:
-        raise ValueError("destination ciphertext metadata mismatch")
-    new_snapshot = dict(source)
-    new_snapshot["snapshot_id"] = _snapshot_id()
-    new_snapshot["created_at"] = datetime.now(UTC).isoformat()
-    if destination_catalog.body["format_version"] == 2:
-        new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
-    project = destination_project_id or project_id
-    updated = destination_catalog.add_snapshot(project, source_catalog.body["projects"][project_id]["display_name"], new_snapshot)
-    return {"ok": True, "project_id": project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}
+        try:
+            put = destination_store.put_bytes(source["object_key"], payload)
+        except Exception:  # noqa: BLE001 - a failed create-only write is corroborated by a read-back
+            verified = destination_store.get_bytes(source["object_key"], source["ciphertext_sha256"], source["ciphertext_size"])
+            if hashlib.sha256(verified).hexdigest() != source["ciphertext_sha256"] or len(verified) != source["ciphertext_size"]:
+                raise ValueError("destination ciphertext evidence mismatch")
+            put = type("ObjectRef", (), {"key": source["object_key"], "sha256": source["ciphertext_sha256"], "size": source["ciphertext_size"]})()
+        if put.key != source["object_key"] or put.sha256 != source["ciphertext_sha256"] or put.size != source["ciphertext_size"]:
+            raise ValueError("destination ciphertext metadata mismatch")
+        new_snapshot = dict(source)
+        new_snapshot["snapshot_id"] = _snapshot_id()
+        new_snapshot["created_at"] = datetime.now(UTC).isoformat()
+        if destination_catalog.body["format_version"] == 2:
+            new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
+        project = destination_project_id or project_id
+        updated = destination_catalog.add_snapshot(project, source_catalog.body["projects"][project_id]["display_name"], new_snapshot)
+        return {"ok": True, "project_id": project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}
+    except BaseException:
+        _record_orphan(destination_store, put)
+        raise
 
 
 def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_catalog: Catalog, source_backend, destination_backend, source_project: str, destination_project: str, snapshot_id: str, recipients: list[str], *, destination_etag: str | None = None) -> dict:
@@ -440,27 +467,27 @@ def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_ca
         size, digest = _file_metadata(staged)
         if size != source["ciphertext_size"] or digest != source["ciphertext_sha256"]:
             raise ValueError("source ciphertext metadata mismatch")
-        if destination_backend is None:
-            ref = ImmutableLocalStore(instance).put_file(staged)
-        else:
-            ref = destination_backend.put_file(source["object_key"], staged)
-        if ref.key != source["object_key"] or ref.sha256 != digest or ref.size != size:
-            raise ValueError("destination ciphertext metadata mismatch")
-        new_snapshot = dict(source)
-        new_snapshot["snapshot_id"] = _snapshot_id()
-        new_snapshot["created_at"] = datetime.now(UTC).isoformat()
-        if destination_catalog.body["format_version"] == 2:
-            new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
-        updated = destination_catalog.add_snapshot(destination_project, source_catalog.body["projects"][source_project]["display_name"], new_snapshot)
+        ref = None
         try:
+            if destination_backend is None:
+                ref = ImmutableLocalStore(instance).put_file(staged)
+            else:
+                ref = destination_backend.put_file(source["object_key"], staged)
+            if ref.key != source["object_key"] or ref.sha256 != digest or ref.size != size:
+                raise ValueError("destination ciphertext metadata mismatch")
+            new_snapshot = dict(source)
+            new_snapshot["snapshot_id"] = _snapshot_id()
+            new_snapshot["created_at"] = datetime.now(UTC).isoformat()
+            if destination_catalog.body["format_version"] == 2:
+                new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
+            updated = destination_catalog.add_snapshot(destination_project, source_catalog.body["projects"][source_project]["display_name"], new_snapshot)
             if destination_backend is not None and hasattr(destination_backend, "conditional_catalog_put"):
                 body = _encrypt_catalog(updated, recipients, instance)
                 destination_backend.conditional_catalog_put(body, destination_etag)
             elif destination_backend is None:
                 CatalogFile(instance / "catalog.jroom.age", Path(os.environ["JOSH_ROOM_IDENTITY"]), destination_catalog.dimension_id).update_if_revision(destination_catalog.body["revision"], updated, recipients)
         except BaseException:
-            if destination_backend is not None and hasattr(destination_backend, "record_orphan"):
-                destination_backend.record_orphan(ref)
+            _record_orphan(destination_backend, ref)
             raise
     return {"ok": True, "project_id": destination_project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}
 

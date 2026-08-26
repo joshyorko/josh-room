@@ -3,6 +3,8 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from josh_room.cli import (
     _requires_oauth,
     _tar_capable,
@@ -70,6 +72,43 @@ def test_doctor_json_is_stable(tmp_path, monkeypatch, capsys):
     missing = {check["name"] for check in report["checks"] if not check["ok"]}
     assert {"age", "hauler", "tar", "rcc", "jat-robot", "jat-python", "jat-interactive", "identity", "r2", "catalog", "ide"} <= missing
     assert all(check.get("remediation") for check in report["checks"] if not check["ok"])
+
+
+def test_status_does_not_load_identity_or_keyring(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.json").write_text(
+        '{"age_identity_profile": "synthetic-age-profile"}'
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.lookup_keyring_value",
+        lambda *_args: pytest.fail("status must not access the keyring"),
+    )
+    assert main(["status", "--workspace", str(tmp_path / "workspace"), "--json"]) == 2
+    assert json.loads(capsys.readouterr().out)["state"] == "unlinked"
+
+
+def test_dimension_add_rejects_duplicate_named_dimension(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
+    config = {
+        "dimensions": {
+            "archive": {
+                "display_name": "Archive",
+                "provider": "r2",
+                "endpoint": "https://archive.example.invalid",
+                "bucket": "archive",
+                "credential_profile": "archive-profile",
+            }
+        }
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    assert main([
+        "dimensions", "add", "archive", "--display-name", "Other",
+        "--provider", "r2", "--endpoint", "https://other.example.invalid",
+        "--bucket", "other", "--credential-profile", "other-profile", "--json",
+    ]) == 2
+    assert "already exists" in json.loads(capsys.readouterr().out)["error"]
+    assert json.loads((tmp_path / "config.json").read_text()) == config
 
 
 def test_enter_requires_a_project_or_lists_projects(capsys):

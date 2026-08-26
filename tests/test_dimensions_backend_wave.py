@@ -159,6 +159,82 @@ def test_link_requires_catalog_and_object_evidence(tmp_path):
         link_workspace(workspace, Catalog.empty(dimension_id="archive"), object_evidence=None)
 
 
+def test_link_recovers_missing_marker_from_explicit_catalog_and_disk_evidence(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("Room")
+    fingerprint = workspace_fingerprint(workspace)
+    snapshot = _snapshot(fingerprint=fingerprint)
+    catalog = Catalog.empty(dimension_id="archive").add_snapshot("room", "Room", snapshot)
+    evidence = {"project_id": "room", **snapshot}
+
+    result = link_workspace(
+        workspace,
+        catalog,
+        evidence,
+        project_id="room",
+        snapshot_id=snapshot["snapshot_id"],
+        dimension_id="archive",
+    )
+
+    assert result["ok"] is True
+    marker = read_workspace_marker(workspace)
+    assert marker["dimension_id"] == "archive"
+    assert marker["project_id"] == "room"
+    assert marker["snapshot_id"] == snapshot["snapshot_id"]
+
+
+def test_repair_replaces_stale_marker_only_after_disk_and_object_corroboration(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("Room")
+    fingerprint = workspace_fingerprint(workspace)
+    stale = write_workspace_marker(
+        workspace,
+        dimension_id="archive",
+        project_id="old-room",
+        display_name="Old Room",
+        snapshot_id="old-snapshot",
+        workspace_fingerprint="b" * 64,
+    )
+    snapshot = _snapshot(fingerprint=fingerprint)
+    catalog = Catalog.empty(dimension_id="archive").add_snapshot("room", "Room", snapshot)
+    evidence = {"project_id": "room", **snapshot}
+
+    result = repair_workspace(
+        workspace,
+        catalog,
+        evidence,
+        project_id="room",
+        snapshot_id=snapshot["snapshot_id"],
+        dimension_id="archive",
+    )
+
+    assert result["project_id"] == "room"
+    assert read_workspace_marker(workspace)["project_id"] == "room"
+    assert read_workspace_marker(workspace)["workspace_fingerprint"] == fingerprint
+    assert stale["project_id"] == "old-room"
+
+
+def test_repair_rejects_disk_that_does_not_match_catalog_snapshot(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("changed")
+    snapshot = _snapshot(fingerprint="a" * 64)
+    catalog = Catalog.empty(dimension_id="archive").add_snapshot("room", "Room", snapshot)
+    evidence = {"project_id": "room", **snapshot}
+
+    with pytest.raises(ValueError, match="workspace fingerprint"):
+        repair_workspace(
+            workspace,
+            catalog,
+            evidence,
+            project_id="room",
+            snapshot_id=snapshot["snapshot_id"],
+            dimension_id="archive",
+        )
+
+
 def test_repair_does_not_trust_stale_ledger_and_requires_corroboration(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -283,6 +359,40 @@ def test_copy_snapshot_stream_records_scrubbed_orphan_on_destination_catalog_con
         )
     assert orphan_receipts and set(orphan_receipts[0]) == {"object_key", "sha256", "size"}
     assert "secret" not in json.dumps(orphan_receipts)
+
+
+def test_copy_snapshot_stream_records_orphan_when_destination_catalog_validation_fails(tmp_path):
+    from josh_room.operations import copy_snapshot_stream
+
+    source = _snapshot()
+    source_catalog = Catalog.empty(dimension_id="archive").add_snapshot("source-room", "Source", source)
+    payload = b"ciphertext"
+    orphan_receipts = []
+
+    class SourceStore:
+        def download_file(self, _key, destination, _digest, _size):
+            destination.write_bytes(payload)
+
+    class DestinationStore:
+        def put_file(self, key, _path):
+            return type("Ref", (), {"key": key, "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)})()
+
+        def record_orphan(self, ref):
+            orphan_receipts.append({"object_key": ref.key, "sha256": ref.sha256, "size": ref.size})
+
+    class BrokenCatalog:
+        def __init__(self):
+            self.body = {"format_version": 2}
+
+        def add_snapshot(self, *_args):
+            raise ValueError("destination catalog validation failed")
+
+    with pytest.raises(ValueError, match="catalog validation"):
+        copy_snapshot_stream(
+            tmp_path / "instance", source_catalog, BrokenCatalog(), SourceStore(), DestinationStore(),
+            "source-room", "restored-room", "latest", ["age1daily", "age1recovery"],
+        )
+    assert orphan_receipts == [{"object_key": source["object_key"], "sha256": source["ciphertext_sha256"], "size": source["ciphertext_size"]}]
 
 
 def test_copy_parser_accepts_source_folder_without_explicit_source_room_or_jat(tmp_path):
