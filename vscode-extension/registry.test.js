@@ -60,7 +60,17 @@ test("followLogFile ignores stale output and streams replacement lines", async (
 
   assert.deepEqual(lines, ["starting registry on port [5000]", "listening on [::]:5000"]);
 });
-const { buildProviderTree, dimensionArgs, snapshotCopyArgs } = require("./registry");
+const { buildProviderTree, dimensionArgs, flattenDimensionRooms, snapshotCopyArgs } = require("./registry");
+test("empty Dimensions remain visible even when a legacy top-level project list exists", () => {
+  const tree = buildProviderTree({
+    projects: [{ id: "legacy-room", display_name: "Legacy Room" }],
+    dimensions: [{ id: "empty", display_name: "Empty", provider: "r2" }],
+  });
+
+  assert.equal(tree[0].children.length, 1);
+  assert.equal(tree[0].children[0].label, "Empty");
+  assert.deepEqual(tree[0].children[0].children, []);
+});
 
 test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
   const tree = buildProviderTree({
@@ -150,4 +160,29 @@ test("snapshotCopyArgs matches the native copy contract", () => {
     "snapshot", "copy", "--source-folder", "/tmp/workspace",
     "--destination-dimension", "target", "--destination-room", "destination",
   ]);
+});
+test("flattenDimensionRooms decorates command-palette Rooms with their Dimension", () => {
+  const rooms = flattenDimensionRooms({
+    dimensions: [
+      {
+        id: "archive",
+        display_name: "Archive",
+        provider: "r2",
+        projects: [{ id: "demo-room", display_name: "Demo Room" }],
+      },
+      { id: "backup", display_name: "Backup", provider: "minio", projects: [] },
+    ],
+  });
+
+  assert.deepEqual(rooms.map((room) => ({
+    id: room.id,
+    display_name: room.display_name,
+    dimension_id: room.dimension_id,
+    dimension: room.dimension.display_name,
+  })), [{
+    id: "demo-room",
+    display_name: "Demo Room",
+    dimension_id: "archive",
+    dimension: "Archive",
+  }]);
 });

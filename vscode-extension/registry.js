@@ -156,7 +156,14 @@ function buildProviderTree(catalog = {}) {
         children: [],
       });
     }
-    const projects = records(dimension.projects || dimension.rooms || fallbackProjects, "id");
+    const projects = records(
+      Object.prototype.hasOwnProperty.call(dimension, "projects")
+        ? dimension.projects
+        : Object.prototype.hasOwnProperty.call(dimension, "rooms")
+          ? dimension.rooms
+          : dimensions.length ? [] : fallbackProjects,
+      "id",
+    );
     const roomNodes = projects.map((project) => ({
       kind: "room",
       id: project.id || project.project_id,
@@ -179,7 +186,7 @@ function buildProviderTree(catalog = {}) {
       kind: "dimension",
       id: dimension.id || dimension.dimension_id,
       label: dimension.display_name || dimension.name || dimension.id || dimension.dimension_id,
-      description: publicParts.join(" · "),
+      description: publicParts.join(" ï¿½ "),
       provider: providerId,
       dimension,
       children: roomNodes,
@@ -215,6 +222,7 @@ function dimensionArgs(args, dimension) {
 Object.assign(module.exports, {
   buildProviderTree,
   dimensionArgs,
+  flattenDimensionRooms,
   dimensionLabel: providerLabel,
   providerKey,
   providerLabel,
@@ -305,3 +313,30 @@ function exactSnapshotCopyArgs(source, target) {
 }
 
 module.exports.snapshotCopyArgs = exactSnapshotCopyArgs;
+
+function flattenDimensionRooms(catalog = {}) {
+  const dimensions = records(catalog.dimensions);
+  if (!dimensions.length) {
+    const dimension = catalog.dimension_id
+      ? { id: catalog.dimension_id, display_name: catalog.dimension_name, provider: catalog.provider }
+      : undefined;
+    return records(catalog.projects, "id").map((project) => decorateRoom(project, dimension));
+  }
+  return dimensions.flatMap((dimension) => {
+    const source = Object.prototype.hasOwnProperty.call(dimension, "projects")
+      ? dimension.projects
+      : dimension.rooms;
+    return records(source, "id").map((project) => decorateRoom(project, dimension));
+  });
+}
+
+function decorateRoom(project, dimension) {
+  const id = project.id || project.project_id;
+  return {
+    ...project,
+    id,
+    project_id: project.project_id || id,
+    dimension_id: dimension && (dimension.id || dimension.dimension_id),
+    dimension,
+  };
+}

@@ -53,3 +53,25 @@ test("room marker validation accepts v2 bindings while retaining readable v1", (
   }), true);
   assert.equal(isRoomMarker({ format_version: 2, project_id: "demo", snapshot_id: "jat-1" }), false);
 });
+
+
+test("authoritative status fingerprint clears dirty state after a revert", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-authoritative-dirty-test-"));
+  const source = path.join(root, "source.txt");
+  fs.writeFileSync(source, "saved\n");
+  let statusFingerprint = "saved-fingerprint";
+  const baseline = new WorkspaceBaseline(root, {
+    savedFingerprint: statusFingerprint,
+    currentFingerprint: statusFingerprint,
+    fingerprintProvider: async () => statusFingerprint,
+  });
+  await baseline.capture();
+
+  fs.writeFileSync(source, "changed\n");
+  statusFingerprint = "changed-fingerprint";
+  assert.equal(await baseline.check("source.txt"), true);
+  fs.writeFileSync(source, "saved\n");
+  statusFingerprint = "saved-fingerprint";
+  assert.equal(await baseline.check("source.txt"), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
