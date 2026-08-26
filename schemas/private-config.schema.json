@@ -1,9 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "provider", "endpoint", "bucket", "credential_profile"],
+      "properties": {
+        "display_name": { "type": "string", "minLength": 1 },
+        "provider": { "enum": ["r2", "minio"] },
+        "endpoint": { "type": "string", "format": "uri" },
+        "bucket": { "type": "string", "minLength": 1 },
+        "region": { "type": "string" },
+        "credential_profile": { "type": "string", "minLength": 1 },
+        "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "temporary_credentials": { "type": "boolean", "default": true },
+        "multipart_threshold": { "type": "integer", "minimum": 1 },
+        "multipart_chunk_size": { "type": "integer", "minimum": 1 },
+        "max_bytes": { "type": "integer", "minimum": 1 },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "verify_tls": { "type": "boolean", "default": true },
+        "ca_bundle": { "type": "string" },
+        "path_style": { "type": "boolean", "default": true }
+      }
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "default_backend": { "enum": ["r2", "minio", "local"] },
+    "default_dimension": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "dimensions": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+      "additionalProperties": { "$ref": "#/$defs/dimension" }
+    },
     "default_ide": { "enum": ["vscode-insiders", "vscode", "terminal"] },
     "workspace_root": { "type": "string", "minLength": 1 },
     "jat_root": { "type": "string", "minLength": 1 },

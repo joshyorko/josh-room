@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/dimension-catalog-v2.schema.json",
+  "title": "Josh Room Dimension Catalog v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "dimension_id", "revision", "projects"],
+  "properties": {
+    "format_version": { "const": 2 },
+    "dimension_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "projects": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/room" }
+    }
+  },
+  "$defs": {
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "latest", "snapshots"],
+      "properties": {
+        "display_name": { "type": "string", "minLength": 1 },
+        "latest": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "snapshots": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/snapshot" }
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_id",
+        "object_key",
+        "ciphertext_sha256",
+        "ciphertext_size",
+        "created_at",
+        "workspace_fingerprint"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "object_key": {
+          "type": "string",
+          "pattern": "^objects/sha256/[0-9a-f]{64}$"
+        },
+        "ciphertext_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "ciphertext_size": { "type": "integer", "minimum": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "workspace_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

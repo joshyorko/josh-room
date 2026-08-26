@@ -3,8 +3,151 @@ import json
 import stat
 import sys
 
+import pytest
+
+from josh_room import config as config_module
 from josh_room.cli import _instance_root, main
 from josh_room.config import auth_status, private_config
+
+
+def test_legacy_r2_config_is_available_as_a_dimension():
+    assert hasattr(config_module, "DimensionConfig"), (
+        "Dimension configuration contract is missing"
+    )
+    assert hasattr(config_module, "dimension_configs"), (
+        "Dimension compatibility reader is missing"
+    )
+    config = {
+        "default_backend": "r2",
+        "r2": {
+            "endpoint": "https://synthetic.invalid",
+            "bucket": "legacy-room",
+            "credential_profile": "legacy-profile",
+            "catalog_key": "catalog.jroom.age",
+        },
+    }
+
+    dimensions = config_module.dimension_configs(config)
+
+    assert dimensions["r2"] == config_module.DimensionConfig(
+        dimension_id="r2",
+        display_name="Cloudflare R2",
+        provider="r2",
+        endpoint="https://synthetic.invalid",
+        bucket="legacy-room",
+        credential_profile="legacy-profile",
+        catalog_key="catalog.jroom.age",
+        region="auto",
+    )
+
+
+def test_dimension_serialization_is_non_secret_and_rejects_inline_credentials():
+    assert hasattr(config_module, "DimensionConfig"), (
+        "Dimension configuration contract is missing"
+    )
+    dimension = config_module.DimensionConfig(
+        dimension_id="archive",
+        display_name="Archive",
+        provider="minio",
+        endpoint="https://minio.synthetic.invalid",
+        bucket="archive",
+        credential_profile="archive-profile",
+        catalog_key="archive.jroom.age",
+        region="us-east-1",
+    )
+
+    assert dimension.to_private() == {
+        "display_name": "Archive",
+        "provider": "minio",
+        "endpoint": "https://minio.synthetic.invalid",
+        "bucket": "archive",
+        "credential_profile": "archive-profile",
+        "catalog_key": "archive.jroom.age",
+        "region": "us-east-1",
+    }
+    assert (
+        not {"access_key_id", "secret_access_key", "session_token", "age_identity"}
+        & dimension.to_private().keys()
+    )
+
+    with pytest.raises(ValueError, match="unsupported Dimension setting"):
+        config_module.DimensionConfig.from_private(
+            "unsafe",
+            {
+                **dimension.to_private(),
+                "secret_access_key": "must-not-be-serialized",
+            },
+        )
+    with pytest.raises(ValueError, match="unsupported Dimension setting"):
+        config_module.DimensionConfig(
+            dimension_id="unsafe",
+            display_name="Unsafe",
+            provider="r2",
+            endpoint="https://synthetic.invalid",
+            bucket="unsafe",
+            credential_profile="unsafe-profile",
+            options=(("age_identity", "must-not-be-serialized"),),
+        )
+
+
+def _dimension_body(**overrides):
+    body = {
+        "display_name": "Archive",
+        "provider": "r2",
+        "endpoint": "https://example.invalid",
+        "bucket": "archive",
+        "credential_profile": "archive-profile",
+    }
+    body.update(overrides)
+    return body
+
+
+def test_dimension_rejects_endpoint_userinfo():
+    with pytest.raises(ValueError, match="userinfo"):
+        config_module.DimensionConfig.from_private(
+            "archive",
+            _dimension_body(endpoint="https://user:secret@example.invalid"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dimension_id", "../room"),
+        ("catalog_key", "catalog\\private"),
+        ("catalog_key", "catalog key"),
+    ],
+)
+def test_dimension_rejects_unsafe_identifiers(field, value):
+    body = _dimension_body()
+    dimension_id = "archive"
+    if field == "dimension_id":
+        dimension_id = value
+    else:
+        body[field] = value
+
+    with pytest.raises(ValueError, match=field.replace("_", " ")):
+        config_module.DimensionConfig.from_private(dimension_id, body)
+
+
+@pytest.mark.parametrize(
+    ("provider", "option", "value"),
+    [
+        ("r2", "temporary_credentials", "yes"),
+        ("r2", "multipart_threshold", 0),
+        ("minio", "verify_tls", "yes"),
+        ("minio", "ca_bundle", 7),
+        ("minio", "region", 7),
+    ],
+)
+def test_dimension_rejects_option_types_that_violate_the_schema(
+    provider, option, value
+):
+    with pytest.raises((TypeError, ValueError), match=option.replace("_", " ")):
+        config_module.DimensionConfig.from_private(
+            "archive",
+            _dimension_body(provider=provider, **{option: value}),
+        )
 
 
 def test_doctor_reports_keyring_profile_without_values(tmp_path, monkeypatch):

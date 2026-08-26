@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/workspace-marker-v2.schema.json",
+  "title": "Josh Room Workspace Marker v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "dimension_id",
+    "project_id",
+    "display_name",
+    "snapshot_id",
+    "workspace_fingerprint",
+    "workspace_path_sha256"
+  ],
+  "properties": {
+    "format_version": { "const": 2 },
+    "dimension_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "display_name": { "type": "string", "minLength": 1 },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "workspace_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "workspace_path_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
