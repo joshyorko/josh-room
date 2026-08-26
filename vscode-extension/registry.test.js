@@ -60,3 +60,54 @@ test("followLogFile ignores stale output and streams replacement lines", async (
 
   assert.deepEqual(lines, ["starting registry on port [5000]", "listening on [::]:5000"]);
 });
+const { buildProviderTree, dimensionArgs } = require("./registry");
+
+test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
+  const tree = buildProviderTree({
+    dimensions: [
+      {
+        id: "archive",
+        display_name: "Archive",
+        provider: "r2",
+        endpoint: "https://objects.example.test",
+        bucket: "private-room",
+        projects: [
+          {
+            id: "demo-room",
+            display_name: "Demo Room",
+            snapshots: [
+              { snapshot_id: "jat-002", created_at: "2026-08-26T12:00:00Z" },
+              { snapshot_id: "jat-001", created_at: "2026-08-25T12:00:00Z" },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].kind, "provider");
+  assert.equal(tree[0].label, "Cloudflare R2");
+  assert.equal(tree[0].children[0].kind, "dimension");
+  assert.equal(tree[0].children[0].label, "Archive");
+  assert.equal(tree[0].children[0].children[0].kind, "room");
+  assert.equal(tree[0].children[0].children[0].label, "Demo Room");
+  assert.deepEqual(
+    tree[0].children[0].children[0].children.map((item) => [item.kind, item.id]),
+    [["jat", "jat-002"], ["jat", "jat-001"]],
+  );
+  assert.match(tree[0].children[0].description, /private-room/);
+  assert.doesNotMatch(tree[0].children[0].description, /secret|access.key|identity/i);
+});
+
+test("dimensionArgs routes storage operations through the selected Dimension", () => {
+  assert.deepEqual(
+    dimensionArgs(["snapshot", "create", "demo-room", "--backend", "r2"], "archive"),
+    ["snapshot", "create", "demo-room", "--backend", "r2", "--dimension", "archive"],
+  );
+  assert.deepEqual(
+    dimensionArgs(["snapshots", "list", "demo-room", "--dimension", "old"], "archive"),
+    ["snapshots", "list", "demo-room", "--dimension", "archive"],
+  );
+  assert.deepEqual(dimensionArgs(["doctor", "--ide", "terminal"], undefined), ["doctor", "--ide", "terminal"]);
+});

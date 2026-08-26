@@ -98,3 +98,124 @@ function followLogFile(logPath, onLine, { intervalMs = 100 } = {}) {
 }
 
 module.exports = { REGISTRY_URL, cleanLogLine, followLogFile, probeRegistry, stageForLog, waitForRegistry };
+
+const PROVIDER_LABELS = {
+  r2: "Cloudflare R2",
+  minio: "MinIO",
+  local: "Local Object Store",
+};
+
+function providerKey(value) {
+  const normalized = String(value || "r2").trim().toLowerCase();
+  if (normalized.includes("cloudflare") || normalized === "s3") return "r2";
+  if (normalized.includes("minio")) return "minio";
+  if (normalized.includes("local")) return "local";
+  return normalized || "r2";
+}
+
+function providerLabel(value) {
+  const key = providerKey(value);
+  return PROVIDER_LABELS[key] || String(value || key).trim() || "Storage Provider";
+}
+
+function records(value, idField = "id") {
+  if (Array.isArray(value)) return value.map((item) => ({ ...item }));
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).map(([id, item]) => ({
+    ...(item && typeof item === "object" ? item : {}),
+    [idField]: item?.[idField] || id,
+  }));
+}
+
+function snapshotRecords(project) {
+  const source = project?.snapshots || project?.jats || [];
+  return records(source, "snapshot_id").map((snapshot) => ({
+    ...snapshot,
+    id: snapshot.snapshot_id || snapshot.id,
+    display_name: snapshot.display_name || snapshot.name || snapshot.snapshot_id || snapshot.id,
+  }));
+}
+
+function buildProviderTree(catalog = {}) {
+  const dimensions = records(catalog.dimensions);
+  const fallbackProjects = records(catalog.projects, "id");
+  const grouped = new Map();
+  for (const dimension of dimensions.length ? dimensions : [{
+    id: catalog.dimension_id || "default",
+    display_name: catalog.dimension_name || "Default",
+    provider: catalog.provider || "r2",
+    projects: fallbackProjects,
+  }]) {
+    const providerId = providerKey(dimension.provider || dimension.provider_id || dimension.kind);
+    if (!grouped.has(providerId)) {
+      grouped.set(providerId, {
+        kind: "provider",
+        id: providerId,
+        label: providerLabel(dimension.provider || providerId),
+        provider: providerId,
+        children: [],
+      });
+    }
+    const projects = records(dimension.projects || dimension.rooms || fallbackProjects, "id");
+    const roomNodes = projects.map((project) => ({
+      kind: "room",
+      id: project.id || project.project_id,
+      label: project.display_name || project.name || project.id || project.project_id,
+      project,
+      dimension,
+      children: snapshotRecords(project).map((snapshot) => ({
+        kind: "jat",
+        id: snapshot.id,
+        label: snapshot.display_name,
+        snapshot,
+        project,
+        dimension,
+      })),
+    }));
+    const publicParts = [dimension.provider || providerId, dimension.endpoint, dimension.bucket, dimension.region]
+      .filter((part) => part !== undefined && part !== null && String(part).trim() !== "")
+      .map(String);
+    grouped.get(providerId).children.push({
+      kind: "dimension",
+      id: dimension.id || dimension.dimension_id,
+      label: dimension.display_name || dimension.name || dimension.id || dimension.dimension_id,
+      description: publicParts.join(" · "),
+      provider: providerId,
+      dimension,
+      children: roomNodes,
+    });
+  }
+  return [...grouped.values()];
+}
+
+function dimensionArgs(args, dimension) {
+  const original = [...args];
+  if (!dimension) return original;
+  const routed = [];
+  let found = false;
+  for (let index = 0; index < original.length; index += 1) {
+    const arg = original[index];
+    if (arg === "--dimension") {
+      found = true;
+      index += 1;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    if (arg.startsWith("--dimension=")) {
+      found = true;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    routed.push(arg);
+  }
+  if (!found) routed.push("--dimension", String(dimension));
+  return routed;
+}
+
+Object.assign(module.exports, {
+  buildProviderTree,
+  dimensionArgs,
+  dimensionLabel: providerLabel,
+  providerKey,
+  providerLabel,
+});

@@ -106,3 +106,92 @@ class WorkspaceBaseline {
 }
 
 module.exports = { WorkspaceBaseline, fingerprintFile, shouldMarkDirty };
+
+function workspaceFingerprint(files) {
+  const digest = crypto.createHash("sha256");
+  for (const [relative, fingerprint] of [...files.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    digest.update(relative);
+    digest.update("\0");
+    digest.update(fingerprint || "missing");
+    digest.update("\n");
+  }
+  return digest.digest("hex");
+}
+
+class AuthoritativeWorkspaceBaseline {
+  constructor(root, { savedFingerprint, currentFingerprint, fingerprintProvider } = {}) {
+    this.root = path.resolve(root);
+    this.files = new Map();
+    this.dirty = new Set();
+    this.sequence = new Map();
+    this.savedFingerprint = savedFingerprint;
+    this.currentFingerprint = currentFingerprint;
+    this.fingerprintProvider = fingerprintProvider;
+  }
+
+  async capture({ savedFingerprint, currentFingerprint, fingerprintProvider } = {}) {
+    if (savedFingerprint !== undefined) this.savedFingerprint = savedFingerprint;
+    if (currentFingerprint !== undefined) this.currentFingerprint = currentFingerprint;
+    if (fingerprintProvider !== undefined) this.fingerprintProvider = fingerprintProvider;
+    this.files = await scanWorkspace(this.root);
+    this.dirty.clear();
+    this.sequence.clear();
+    if (this.savedFingerprint) {
+      const current = this.currentFingerprint || workspaceFingerprint(this.files);
+      this.currentFingerprint = current;
+      if (current !== this.savedFingerprint) this.dirty.add(".");
+    }
+  }
+
+  async check(relativePath) {
+    const relative = String(relativePath).replaceAll("\\", "/").replace(/^\.\//, "");
+    if (!shouldMarkDirty(relative)) return this.dirty.size > 0;
+    const sequence = (this.sequence.get(relative) || 0) + 1;
+    this.sequence.set(relative, sequence);
+    if (this.fingerprintProvider) {
+      const current = await this.fingerprintProvider();
+      if (this.sequence.get(relative) !== sequence) return this.dirty.size > 0;
+      this.currentFingerprint = current;
+      if (this.savedFingerprint && current === this.savedFingerprint) this.dirty.clear();
+      else this.dirty.add(".");
+      return this.dirty.size > 0;
+    }
+    const current = await fingerprintFile(path.join(this.root, relative));
+    if (this.sequence.get(relative) !== sequence) return this.dirty.size > 0;
+    if (current === "directory") return this.compare();
+    if (this.files.get(relative) === current) this.dirty.delete(relative);
+    else this.dirty.add(relative);
+    if (this.savedFingerprint && this.dirty.size === 0) {
+      const fingerprint = workspaceFingerprint(await scanWorkspace(this.root));
+      this.currentFingerprint = fingerprint;
+      if (fingerprint !== this.savedFingerprint) this.dirty.add(".");
+    }
+    return this.dirty.size > 0;
+  }
+
+  async compare() {
+    if (this.fingerprintProvider) {
+      this.currentFingerprint = await this.fingerprintProvider();
+      this.dirty.clear();
+      if (this.savedFingerprint && this.currentFingerprint !== this.savedFingerprint) this.dirty.add(".");
+      return this.dirty.size > 0;
+    }
+    const current = await scanWorkspace(this.root);
+    this.dirty.clear();
+    for (const relative of new Set([...this.files.keys(), ...current.keys()])) {
+      if (this.files.get(relative) !== current.get(relative)) this.dirty.add(relative);
+    }
+    if (this.savedFingerprint && workspaceFingerprint(current) !== this.savedFingerprint) this.dirty.add(".");
+    return this.dirty.size > 0;
+  }
+
+  reset({ savedFingerprint, currentFingerprint } = {}) {
+    this.savedFingerprint = savedFingerprint;
+    this.currentFingerprint = currentFingerprint || savedFingerprint;
+    this.dirty.clear();
+    this.sequence.clear();
+  }
+}
+
+module.exports.WorkspaceBaseline = AuthoritativeWorkspaceBaseline;
+module.exports.workspaceFingerprint = workspaceFingerprint;
