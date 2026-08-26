@@ -108,7 +108,9 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter) {
   try {
     const { stdout } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter);
     const result = JSON.parse(stdout);
-    if (!result.ok) {
+    // `status` deliberately returns ok=false for a changed or unlinked
+    // workspace. That is authoritative state, not an operation failure.
+    if (!result.ok && args[0] !== "status") {
       throw new Error(result.error || "Josh Room operation failed.");
     }
     outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
@@ -232,11 +234,12 @@ class RoomsProvider {
       treeItem.command = { command: "joshRoom.refresh", title: "Load Rooms" };
       return treeItem;
     }
-    const current = currentRoom(activeWorkspace())?.project_id === item.id;
+    const current = sameRoomBinding(currentRoom(activeWorkspace()), item);
+    const saved = current && !roomDirty && workspaceBindingTrusted;
     const treeItem = new vscode.TreeItem(item.display_name, vscode.TreeItemCollapsibleState.None);
-    treeItem.description = current ? roomDirty ? "Current • Needs save" : "Current • Saved" : "";
+    treeItem.description = current ? saved ? "Current • Saved" : "Current • Needs save" : "";
     treeItem.tooltip = current
-      ? roomDirty ? `${item.display_name} has workspace changes to save` : `${item.display_name} is saved`
+      ? saved ? `${item.display_name} is saved` : `${item.display_name} has workspace changes to save`
       : item.display_name;
     treeItem.contextValue = "room";
     treeItem.iconPath = new vscode.ThemeIcon(current ? roomDirty ? "circle-filled" : "home" : "archive");
@@ -307,6 +310,19 @@ function currentRoom(cwd) {
   }
 }
 
+function roomBindingDimensionId(item) {
+  const project = item && item.project && typeof item.project === "object" ? item.project : item;
+  const dimension = (item && item.dimension) || (project && project.dimension);
+  return (dimension && (dimension.id || dimension.dimension_id))
+    || (project && (project.dimension_id || project.dimensionId))
+    || (item && item.dimension_id);
+}
+
+function sameRoomBinding(marker, item) {
+  const project = roomProject(item);
+  return Boolean(marker && project && marker.project_id === project.id && marker.dimension_id === roomBindingDimensionId(item));
+}
+
 function refreshRoomStatus() {
   let marker;
   try {
@@ -319,9 +335,15 @@ function refreshRoomStatus() {
     setStatus("$(archive) Josh Room");
     return;
   }
-  if (roomDirty) {
+  const saved = !roomDirty && workspaceBindingTrusted;
+  if (!saved) {
     statusItem.command = "joshRoom.save";
-    setStatus(`$(circle-filled) ${marker.display_name} — Save`, "Workspace changed. Click to save this Room.");
+    setStatus(
+      `$(circle-filled) ${marker.display_name} — Save`,
+      workspaceBindingTrusted
+        ? "Workspace changed. Click to save this Room."
+        : "Workspace binding is not trusted. Link or Repair this Room before trusting it.",
+    );
   } else {
     statusItem.command = "workbench.view.extension.josh-room";
     setStatus(`$(check) ${marker.display_name} — Saved`, "This Room matches its last saved workspace state.");
@@ -424,9 +446,16 @@ async function saveRoom(options = {}) {
     });
   }
   if (!name) return "cancelled";
+  let targetDimensionId = dimensionId(selected.project);
+  if (selected.create) {
+    const selectedDimension = await chooseDimension(catalog, "Josh: Save Room");
+    if (!selectedDimension) return "cancelled";
+    targetDimensionId = dimensionId(selectedDimension);
+  }
+  if (targetDimensionId) selectedDimensionId = targetDimensionId;
   if (selected.project) {
     const existing = path.join(path.dirname(cwd), selected.project.id);
-    if (existing !== source && currentRoom(existing)?.project_id === selected.project.id) {
+    if (existing !== source && sameRoomBinding(currentRoom(existing), selected.project)) {
       const action = await vscode.window.showInformationMessage(
         `“${selected.project.display_name}” already has a working folder.`,
         "Open Room",
@@ -436,7 +465,7 @@ async function saveRoom(options = {}) {
       }
       return "opened";
     }
-    if (marker?.project_id !== selected.project.id) {
+    if (!sameRoomBinding(marker, selected.project)) {
       const confirmed = await vscode.window.showWarningMessage(
         `Replace the latest “${selected.project.display_name}” snapshot with the contents of ${source}? The previous snapshot remains recoverable.`,
         { modal: true },
@@ -452,7 +481,7 @@ async function saveRoom(options = {}) {
   if (!imageChoice) return "cancelled";
   const buildArgs = nativeRegistry.dimensionArgs(
     ["snapshot", "create", name, "--source", source, "--backend", "r2"],
-    dimensionId(selected.project) || selectedDimensionId,
+    targetDimensionId || selectedDimensionId,
   );
   if (imageChoice.allImages) buildArgs.push("--all-images");
   const result = await runOperation(`Saving ${name}…`, buildArgs, source);
@@ -477,7 +506,7 @@ async function enterRoom(preferredProject) {
       { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
   );
   if (!selected) return "cancelled";
-  if (currentRoom(cwd)?.project_id === selected.projectId) {
+  if (sameRoomBinding(currentRoom(cwd), selected.project)) {
     await vscode.window.showInformationMessage(`“${selected.label}” is already open.`);
     return "current";
   }
@@ -503,7 +532,7 @@ async function enterRoom(preferredProject) {
   }
   const root = roomsRoot(cwd);
   const destination = path.join(root, selected.projectId);
-  if (currentRoom(destination)?.project_id === selected.projectId) {
+  if (sameRoomBinding(currentRoom(destination), selected.project)) {
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Opening existing ${selected.label}…`, cancellable: false },
       () => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false),
@@ -513,9 +542,10 @@ async function enterRoom(preferredProject) {
   if (fs.existsSync(destination)) {
     throw new Error(`Refusing to replace an unexplained existing folder: ${destination}`);
   }
+  const hydrateDimensionId = dimensionId(selected.project) || selectedDimensionId;
   await runOperation(
     `Restoring ${selected.label}…`,
-    [
+    nativeRegistry.dimensionArgs([
       "hydrate",
       selected.projectId,
       "--snapshot",
@@ -526,7 +556,7 @@ async function enterRoom(preferredProject) {
       "r2",
       "--ide",
       "terminal",
-    ],
+    ], hydrateDimensionId),
     cwd,
   );
   await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
@@ -915,6 +945,18 @@ function activate(context) {
 }
 
 module.exports = { activate };
+module.exports.__test__ = {
+  enterRoom,
+  resetNativeBaseline,
+  saveRoom,
+  setSelectedDimensionId(value) {
+    selectedDimensionId = value;
+  },
+  setStatusItem(value) {
+    statusItem = value;
+  },
+  startDirtyTracking,
+};
 
 const nativeRegistry = require("./registry");
 let selectedDimensionId;
@@ -1095,7 +1137,7 @@ class HierarchyRoomsProvider {
     if (item.kind === "room") {
       let current;
       try { current = currentRoom(activeWorkspace()); } catch (_error) {}
-      if (!current || current.project_id !== item.id) {
+      if (!sameRoomBinding(current, item)) {
         treeItem.command = { command: "joshRoom.enter", title: "Enter Room", arguments: [item] };
       }
     }
@@ -1148,6 +1190,7 @@ currentRoom = function nativeCurrentRoom(cwd) {
 
 let baselineLoading = false;
 let pendingWorkspaceEvents = [];
+let workspaceBindingTrusted = false;
 const legacyStartDirtyTracking = startDirtyTracking;
 startDirtyTracking = async function nativeStartDirtyTracking(context) {
   const root = activeWorkspace();
@@ -1158,23 +1201,14 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
   workspaceWatcher && workspaceWatcher.dispose();
   pendingWorkspaceEvents = [];
   baselineLoading = true;
-  let status;
-  try {
-    status = await runJoshRoom(["status"], root);
-  } catch (error) {
-    outputChannel && outputChannel.warn("Auth-free Room status unavailable: " + error.message);
-  }
   const savedFingerprint = marker.workspace_fingerprint;
-  const currentFingerprint = status && (
-    status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
-  );
   const fingerprintProvider = async () => {
     const live = await runJoshRoom(["status"], root);
     return live.current_workspace_fingerprint || live.current_fingerprint || live.workspace_fingerprint;
   };
+  workspaceBindingTrusted = false;
   workspaceBaseline = new WorkspaceBaseline(root, {
     savedFingerprint,
-    currentFingerprint,
     fingerprintProvider,
   });
   workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
@@ -1189,13 +1223,42 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
       compare(file.newUri);
     }
   }));
-  await workspaceBaseline.capture({ savedFingerprint, currentFingerprint });
+  const statusPromise = runJoshRoom(["status"], root)
+    .then((result) => result)
+    .catch((error) => {
+      outputChannel && outputChannel.warn("Auth-free Room status unavailable: " + error.message);
+      return undefined;
+    });
+  await workspaceBaseline.capture();
+  if (generation !== dirtyTrackingGeneration) return;
+  const initialStatus = await statusPromise;
+  if (generation !== dirtyTrackingGeneration) return;
+  const status = await runJoshRoom(["status"], root).catch((error) => {
+    outputChannel && outputChannel.warn("Auth-free Room status unavailable: " + error.message);
+    return undefined;
+  });
+  if (generation !== dirtyTrackingGeneration) return;
+  const authoritativeStatus = status || initialStatus;
+  const currentFingerprint = status && (
+    status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
+  );
+  workspaceBindingTrusted = Boolean(authoritativeStatus
+    && authoritativeStatus.ok
+    && authoritativeStatus.path_matches
+    && authoritativeStatus.state === "clean");
+  await workspaceBaseline.capture({
+    savedFingerprint,
+    currentFingerprint: currentFingerprint || savedFingerprint,
+    fingerprintProvider,
+  });
   if (generation !== dirtyTrackingGeneration) return;
   baselineLoading = false;
   for (const uri of pendingWorkspaceEvents.splice(0)) await markWorkspaceChange(uri);
   setRoomDirty(workspaceBaseline.dirty.size > 0 || dirtyBuffers.size > 0);
   refreshRoomStatus();
 };
+
+module.exports.__test__.startDirtyTracking = startDirtyTracking;
 
 async function resetNativeBaseline(result) {
   if (!workspaceBaseline) return;
@@ -1211,9 +1274,11 @@ async function resetNativeBaseline(result) {
   const savedFingerprint = result && result.saved_workspace_fingerprint
     || marker && marker.workspace_fingerprint
     || fingerprint;
+  workspaceBindingTrusted = true;
   await workspaceBaseline.capture({ savedFingerprint, currentFingerprint: fingerprint || savedFingerprint });
   dirtyBuffers.clear();
   setRoomDirty(false);
+  refreshRoomStatus();
 }
 
 function routeItemArgs(args, item) {

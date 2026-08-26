@@ -26,25 +26,20 @@ async function fingerprintFile(filePath) {
     throw error;
   }
   if (stat.isSymbolicLink()) return `link:${await fs.promises.readlink(filePath)}`;
-  if (stat.isDirectory()) return "directory";
+  if (stat.isDirectory()) return `directory:${stat.mode}`;
   if (!stat.isFile()) return `special:${stat.mode}`;
   const digest = crypto.createHash("sha256");
-  digest.update(`${stat.size}:`);
-  if (stat.size <= 4 * 1024 * 1024) {
-    digest.update(await fs.promises.readFile(filePath));
-  } else {
-    const sampleSize = 64 * 1024;
-    const offsets = [0, Math.max(0, Math.floor(stat.size / 2) - sampleSize / 2), Math.max(0, stat.size - sampleSize)];
-    const handle = await fs.promises.open(filePath, "r");
-    try {
-      for (const offset of offsets) {
-        const buffer = Buffer.alloc(Math.min(sampleSize, stat.size - offset));
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
-        digest.update(buffer.subarray(0, bytesRead));
-      }
-    } finally {
-      await handle.close();
+  digest.update(`${stat.size}:${stat.mode}:`);
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(1024 * 1024);
+    while (true) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      digest.update(buffer.subarray(0, bytesRead));
     }
+  } finally {
+    await handle.close();
   }
   return `file:${digest.digest("hex")}`;
 }
@@ -53,11 +48,17 @@ async function scanWorkspace(root) {
   const files = new Map();
   async function visit(directory, prefix = "") {
     const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    if (!prefix && !entries.length) return;
+    if (prefix && !entries.length) {
+      files.set(prefix, await fingerprintFile(directory));
+      return;
+    }
     for (const entry of entries) {
       const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (!shouldMarkDirty(relative)) continue;
       const absolute = path.join(directory, entry.name);
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        files.set(relative, await fingerprintFile(absolute));
         await visit(absolute, relative);
       } else {
         files.set(relative, await fingerprintFile(absolute));
@@ -200,7 +201,7 @@ function isRoomMarker(marker) {
   return Boolean(
     marker && [1, 2].includes(marker.format_version)
     && typeof marker.project_id === "string"
-    && typeof marker.snapshot_id === "string"
+    && (marker.format_version === 1 || typeof marker.snapshot_id === "string")
     && (marker.format_version === 1 || typeof marker.dimension_id === "string"),
   );
 }
