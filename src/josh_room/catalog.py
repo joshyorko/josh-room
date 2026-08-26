@@ -1,16 +1,42 @@
 import fcntl
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .crypto import decrypt, encrypt
 from .local_store import OBJECT_KEY
 
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
 
 class CatalogConflict(RuntimeError):
     pass
+
+
+def _validate_identifier(label: str, value: object) -> None:
+    if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
+        raise ValueError(f"catalog {label} is invalid")
+
+
+def _validate_v2_snapshot(snapshot: dict) -> None:
+    for name in ("snapshot_id", "created_at"):
+        if not isinstance(snapshot.get(name), str) or not snapshot[name]:
+            raise ValueError(f"catalog snapshot {name} is invalid")
+    _validate_identifier("snapshot", snapshot["snapshot_id"])
+    try:
+        datetime.fromisoformat(snapshot["created_at"])
+    except ValueError as error:
+        raise ValueError("catalog snapshot created_at is invalid") from error
+    fingerprint = snapshot.get("workspace_fingerprint")
+    if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise ValueError("catalog snapshot workspace fingerprint is invalid")
+    size = snapshot.get("ciphertext_size")
+    if type(size) is not int or size < 1:
+        raise ValueError("catalog snapshot ciphertext size is invalid")
 
 
 @dataclass(frozen=True)
@@ -18,24 +44,63 @@ class Catalog:
     body: dict
 
     def __post_init__(self):
-        if self.body.get("format_version") != 1 or not isinstance(self.body.get("revision"), int):
+        version = self.body.get("format_version")
+        if version not in {1, 2} or not isinstance(self.body.get("revision"), int):
             raise ValueError("unsupported catalog format")
-        for project in self.body.get("projects", {}).values():
-            for snapshot in project.get("snapshots", {}).values():
-                if not OBJECT_KEY.fullmatch(snapshot.get("object_key", "")):
+        if not isinstance(self.body.get("projects"), dict):
+            raise TypeError("catalog projects are invalid")
+        if version == 2:
+            _validate_identifier("dimension", self.body.get("dimension_id"))
+        for project_id, project in self.body["projects"].items():
+            if version == 2:
+                _validate_identifier("project", project_id)
+            if not isinstance(project, dict) or not isinstance(project.get("snapshots"), dict):
+                raise TypeError("catalog room is invalid")
+            for snapshot_id, snapshot in project["snapshots"].items():
+                if version == 2:
+                    _validate_identifier("snapshot", snapshot_id)
+                if not isinstance(snapshot, dict) or not OBJECT_KEY.fullmatch(snapshot.get("object_key", "")):
                     raise ValueError("catalog contains an invalid object key")
                 if snapshot.get("ciphertext_sha256") != snapshot["object_key"].rsplit("/", 1)[-1]:
                     raise ValueError("catalog object digest mismatch")
+                if version == 2:
+                    _validate_v2_snapshot(snapshot)
 
     @classmethod
-    def empty(cls):
-        return cls({"format_version": 1, "revision": 0, "projects": {}})
+    def empty(cls, dimension_id: str | None = None):
+        if dimension_id is None:
+            return cls({"format_version": 1, "revision": 0, "projects": {}})
+        _validate_identifier("dimension", dimension_id)
+        return cls({"format_version": 2, "dimension_id": dimension_id, "revision": 0, "projects": {}})
+
+    @classmethod
+    def from_body(cls, body: dict, dimension_id: str | None = None):
+        value = json.loads(json.dumps(body))
+        if value.get("format_version") == 1 and dimension_id is not None:
+            _validate_identifier("dimension", dimension_id)
+            value["format_version"] = 2
+            value["dimension_id"] = dimension_id
+            for project in value.get("projects", {}).values():
+                for snapshot in project.get("snapshots", {}).values():
+                    snapshot.setdefault("created_at", "1970-01-01T00:00:00+00:00")
+                    snapshot.setdefault("workspace_fingerprint", "0" * 64)
+        catalog = cls(value)
+        if dimension_id is not None and catalog.dimension_id != dimension_id:
+            raise ValueError("catalog Dimension mismatch")
+        return catalog
+
+    @property
+    def dimension_id(self) -> str | None:
+        return self.body.get("dimension_id")
 
     def add_snapshot(self, project_id: str, display_name: str, snapshot: dict):
         if not OBJECT_KEY.fullmatch(snapshot.get("object_key", "")):
             raise ValueError("catalog contains an invalid object key")
         if snapshot.get("ciphertext_sha256") != snapshot["object_key"].rsplit("/", 1)[-1]:
             raise ValueError("catalog object digest mismatch")
+        if self.body["format_version"] == 2:
+            _validate_identifier("project", project_id)
+            _validate_v2_snapshot(snapshot)
         body = json.loads(json.dumps(self.body))
         project = body["projects"].setdefault(project_id, {"display_name": display_name, "latest": None, "snapshots": {}})
         project["display_name"] = display_name
@@ -61,15 +126,8 @@ class Catalog:
             raise ValueError("room is not present in the encrypted catalog")
         body = json.loads(json.dumps(self.body))
         removed = body["projects"].pop(project_id)
-        referenced = {
-            snapshot["object_key"]
-            for project in body["projects"].values()
-            for snapshot in project["snapshots"].values()
-        }
-        removable = sorted({
-            snapshot["object_key"]
-            for snapshot in removed["snapshots"].values()
-        } - referenced)
+        referenced = {snapshot["object_key"] for project in body["projects"].values() for snapshot in project["snapshots"].values()}
+        removable = sorted({snapshot["object_key"] for snapshot in removed["snapshots"].values()} - referenced)
         body["revision"] += 1
         return Catalog(body), removable, len(removed["snapshots"])
 
@@ -82,11 +140,7 @@ class Catalog:
         body = json.loads(json.dumps(self.body))
         if len(project["snapshots"]) == 1:
             removed = body["projects"].pop(project_id)["snapshots"][snapshot_id]
-            referenced = {
-                candidate["object_key"]
-                for remaining in body["projects"].values()
-                for candidate in remaining["snapshots"].values()
-            }
+            referenced = {candidate["object_key"] for remaining in body["projects"].values() for candidate in remaining["snapshots"].values()}
             removable = [] if removed["object_key"] in referenced else [removed["object_key"]]
             body["revision"] += 1
             return Catalog(body), removable, True
@@ -94,11 +148,7 @@ class Catalog:
         removed = changed["snapshots"].pop(snapshot_id)
         if changed["latest"] == snapshot_id:
             changed["latest"] = next(reversed(changed["snapshots"]))
-        referenced = {
-            snapshot["object_key"]
-            for candidate in body["projects"].values()
-            for snapshot in candidate["snapshots"].values()
-        }
+        referenced = {snapshot["object_key"] for candidate in body["projects"].values() for snapshot in candidate["snapshots"].values()}
         removable = [] if removed["object_key"] in referenced else [removed["object_key"]]
         body["revision"] += 1
         return Catalog(body), removable, False
@@ -106,21 +156,22 @@ class Catalog:
     def update_if_revision(self, expected_revision: int, body: dict):
         if self.body["revision"] != expected_revision:
             raise CatalogConflict("stale catalog revision")
-        return Catalog(body)
+        return Catalog.from_body(body, self.dimension_id)
 
 
 class CatalogFile:
-    def __init__(self, path: Path, identity: Path | None = None):
+    def __init__(self, path: Path, identity: Path | None = None, dimension_id: str | None = None):
         self.path = Path(path)
         self.identity = identity
+        self.dimension_id = dimension_id
         self.lock_path = self.path.with_name(".catalog.jroom.lock")
 
     def read(self) -> Catalog:
         if not self.path.exists():
-            return Catalog.empty()
+            return Catalog.empty(self.dimension_id)
         if not self.identity:
             raise ValueError("catalog identity is required")
-        return Catalog(json.loads(decrypt(self.path, [self.identity])))
+        return Catalog.from_body(json.loads(decrypt(self.path, [self.identity])), self.dimension_id)
 
     def write(self, catalog: Catalog, recipients: list[str]) -> None:
         self._publish(catalog, recipients)
@@ -146,7 +197,4 @@ class CatalogFile:
                 os.fsync(handle.fileno())
             os.replace(temp, self.path)
         finally:
-            try:
-                temp.unlink()
-            except FileNotFoundError:
-                pass
+            temp.unlink(missing_ok=True)

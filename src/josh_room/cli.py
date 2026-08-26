@@ -12,22 +12,26 @@ from pathlib import Path
 from . import r2 as _r2
 from .auth import ensure_runtime_session
 from .catalog import Catalog
-from .config import auth_status, private_config, save_private_config
+from .config import DimensionRegistry, auth_status, private_config, save_private_config
 from .crypto import decrypt
 from .jat import _jat_contract, run_build, run_restore, run_serve
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
+from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
 from .operations import (
     create_snapshot,
     hydrate,
+    link_workspace,
     remove_room,
     remove_snapshot,
+    repair_workspace,
     serve_snapshot,
 )
 from .progress import report_progress
 from .tls import initialize_system_trust
+from .workspace_state import local_status
 
 R2Backend = _r2.R2Backend
 R2Config = _r2.R2Config
@@ -43,29 +47,58 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = commands.add_parser("doctor")
     doctor.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    doctor.add_argument("--dimension")
     doctor.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
     _json_option(doctor)
+    dimensions = commands.add_parser("dimensions")
+    dimension_commands = dimensions.add_subparsers(dest="dimension_command", required=True)
+    dimension_list = dimension_commands.add_parser("list")
+    _json_option(dimension_list)
+    for action in ("add", "update"):
+        dimension_edit = dimension_commands.add_parser(action)
+        dimension_edit.add_argument("dimension")
+        dimension_edit.add_argument("--display-name", required=action == "add")
+        dimension_edit.add_argument("--provider", choices=("r2", "minio"), required=action == "add")
+        dimension_edit.add_argument("--endpoint", required=action == "add")
+        dimension_edit.add_argument("--bucket", required=action == "add")
+        dimension_edit.add_argument("--credential-profile", required=action == "add")
+        dimension_edit.add_argument("--region")
+        dimension_edit.add_argument("--catalog-key")
+        _json_option(dimension_edit)
+    status = commands.add_parser("status")
+    status.add_argument("--workspace", type=Path, default=Path.cwd())
+    _json_option(status)
+    for action in ("link", "repair"):
+        state_command = commands.add_parser(action)
+        state_command.add_argument("--workspace", type=Path, default=Path.cwd())
+        state_command.add_argument("--dimension")
+        state_command.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+        _json_option(state_command)
     projects = commands.add_parser("projects")
     project_commands = projects.add_subparsers(dest="project_command", required=True)
     project_list = project_commands.add_parser("list")
     project_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    project_list.add_argument("--dimension")
     _json_option(project_list)
     rooms = commands.add_parser("rooms")
     room_commands = rooms.add_subparsers(dest="room_command", required=True)
     room_remove = room_commands.add_parser("remove")
     room_remove.add_argument("project")
     room_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    room_remove.add_argument("--dimension")
     _json_option(room_remove)
     snapshots = commands.add_parser("snapshots")
     snapshot_commands = snapshots.add_subparsers(dest="snapshots_command", required=True)
     snapshot_list = snapshot_commands.add_parser("list")
     snapshot_list.add_argument("project")
     snapshot_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_list.add_argument("--dimension")
     _json_option(snapshot_list)
     snapshot_remove = snapshot_commands.add_parser("remove")
     snapshot_remove.add_argument("project")
     snapshot_remove.add_argument("snapshot")
     snapshot_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_remove.add_argument("--dimension")
     _json_option(snapshot_remove)
     snapshot = commands.add_parser("snapshot")
     snapshot_commands = snapshot.add_subparsers(dest="snapshot_command", required=True)
@@ -75,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create.add_argument("--image", dest="images", action="append", default=[])
     snapshot_create.add_argument("--all-images", action="store_true")
     snapshot_create.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_create.add_argument("--dimension")
     _json_option(snapshot_create)
     hydration = commands.add_parser("hydrate")
     hydration.add_argument("project")
@@ -82,17 +116,20 @@ def build_parser() -> argparse.ArgumentParser:
     hydration.add_argument("--destination", type=Path, required=True)
     hydration.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="terminal")
     hydration.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    hydration.add_argument("--dimension")
     _json_option(hydration)
     enter = commands.add_parser("enter")
     enter.add_argument("project", nargs="?")
     enter.add_argument("--snapshot", default="latest")
     enter.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
     enter.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    enter.add_argument("--dimension")
     _json_option(enter)
     serve = commands.add_parser("serve")
     serve.add_argument("project")
     serve.add_argument("--snapshot", default="latest")
     serve.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    serve.add_argument("--dimension")
     _json_option(serve)
     jat = commands.add_parser("jat")
     jat_commands = jat.add_subparsers(dest="jat_command", required=True)
@@ -133,16 +170,54 @@ def main(argv=None):
 
 
 def _requires_oauth(args) -> bool:
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
+    dimension = getattr(args, "dimension", None)
+    if dimension:
+        try:
+            return DimensionRegistry(private_config() or {}).select(dimension).provider == "r2"
+        except ValueError:
+            return False
     return getattr(args, "backend", "r2") == "r2"
 
 
 def dispatch(args, instance: Path) -> dict:
+    if args.command == "dimensions":
+        config = private_config() or {}
+        if args.dimension_command == "list":
+            return {"ok": True, "dimensions": [{"id": key, "display_name": value.display_name, "provider": value.provider, "bucket": value.bucket, "endpoint": value.endpoint} for key, value in DimensionRegistry(config)]}
+        records = dict(config.get("dimensions", {}))
+        current = records.get(args.dimension, {})
+        values = {**current}
+        for field, key in (("display_name", "display_name"), ("provider", "provider"), ("endpoint", "endpoint"), ("bucket", "bucket"), ("credential_profile", "credential_profile"), ("region", "region"), ("catalog_key", "catalog_key")):
+            value = getattr(args, field.replace("-", "_"), None)
+            if value is not None:
+                values[key] = value
+        records[args.dimension] = values
+        DimensionRegistry({"dimensions": records}).get(args.dimension)
+        config["dimensions"] = records
+        save_private_config(config)
+        return {"ok": True, "dimension": args.dimension, "updated": True}
+    if args.command == "status":
+        return {"ok": True, **local_status(args.workspace)}
+    if args.command in {"link", "repair"}:
+        backend = _backend_for_args(args, instance)
+        catalog = load_catalog(instance, backend)
+        from .workspace_state import read_workspace_marker
+        marker = read_workspace_marker(args.workspace)
+        snapshot = catalog.resolve_snapshot(marker["project_id"], marker["snapshot_id"])
+        if backend:
+            backend.get_bytes(snapshot["object_key"], snapshot["ciphertext_sha256"], snapshot["ciphertext_size"])
+        else:
+            ImmutableLocalStore(instance).get(snapshot["object_key"])
+        evidence = {key: snapshot[key] for key in ("snapshot_id", "object_key", "ciphertext_sha256", "ciphertext_size")}
+        evidence["project_id"] = marker["project_id"]
+        operation = link_workspace if args.command == "link" else repair_workspace
+        return operation(args.workspace, catalog, evidence)
     if args.command == "doctor":
         return _doctor(instance, args.backend, args.ide)
     if args.command == "projects":
-        projects = list_projects(instance, _backend(args.backend, instance))
+        projects = list_projects(instance, _backend_for_args(args, instance))
         return {"ok": True, "projects": [{"id": project_id, "display_name": name} for project_id, name in projects]}
     if args.command == "rooms":
         recipients = _recipients()
@@ -153,7 +228,7 @@ def dispatch(args, instance: Path) -> dict:
             raise ValueError("room removal requires an age identity")
         return {
             "ok": True,
-            **remove_room(instance, args.project, Path(identity), recipients, _backend(args.backend, instance)),
+            **remove_room(instance, args.project, Path(identity), recipients, _backend_for_args(args, instance)),
         }
     if args.command == "snapshots":
         if args.snapshots_command == "remove":
@@ -169,10 +244,10 @@ def dispatch(args, instance: Path) -> dict:
                     args.snapshot,
                     Path(identity),
                     recipients,
-                    _backend(args.backend, instance),
+                    _backend_for_args(args, instance),
                 ),
             }
-        catalog = load_catalog(instance, _backend(args.backend, instance))
+        catalog = load_catalog(instance, _backend_for_args(args, instance))
         project = catalog.body["projects"].get(args.project)
         if not project:
             raise ValueError("project is not present in the encrypted catalog")
@@ -191,7 +266,7 @@ def dispatch(args, instance: Path) -> dict:
                 args.source or Path.cwd(),
                 jat_root,
                 recipients,
-                _backend(args.backend, instance),
+                _backend_for_args(args, instance),
                 display_name=display_name,
                 images=args.images,
                 all_images=args.all_images,
@@ -200,7 +275,7 @@ def dispatch(args, instance: Path) -> dict:
     if args.command == "hydrate":
         return hydrate_command(args, instance)
     if args.command == "enter":
-        backend = _backend(args.backend, instance)
+        backend = _backend_for_args(args, instance)
         project = args.project or choose_project(instance, backend)
         destination = _workspace_root() / project
         result = hydrate_command(argparse.Namespace(project=project, snapshot=args.snapshot, destination=destination, ide=args.ide, backend=args.backend), instance, backend)
@@ -224,7 +299,7 @@ def dispatch(args, instance: Path) -> dict:
                 args.snapshot,
                 Path(identity),
                 _jat_root(),
-                _backend(args.backend, instance),
+                _backend_for_args(args, instance),
             ),
         }
     if args.command == "jat":
@@ -285,7 +360,7 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
     if not identity:
         raise ValueError("hydrate requires JOSH_ROOM_IDENTITY and JOSH_ROOM_JAT_ROOT")
     if backend is None:
-        backend = _backend(args.backend, instance)
+        backend = _backend_for_args(args, instance)
     return {
         "ok": True,
         **hydrate(
@@ -300,12 +375,21 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
     }
 
 
-def _backend(name: str, instance: Path):
+def _backend_for_args(args, instance: Path):
+    dimension = getattr(args, "dimension", None)
+    return _backend(args.backend, instance, dimension) if dimension else _backend(args.backend, instance)
+
+
+def _backend(name: str, instance: Path, dimension: str | None = None):
+    config = private_config() or {}
+    if dimension:
+        selected = DimensionRegistry(config).select(dimension)
+        name = selected.provider
     if name == "local":
         return None
     if name == "minio":
-        return MinioBackend(MinioConfig.from_private(private_config()), receipt_dir=instance / "receipts")
-    return R2Backend(R2Config.from_private(private_config()), receipt_dir=instance / "receipts")
+        return MinioBackend(MinioConfig.from_private(config, dimension), receipt_dir=instance / "receipts")
+    return R2Backend(R2Config.from_private(config, dimension), receipt_dir=instance / "receipts")
 
 
 def _configured() -> dict:
@@ -484,7 +568,7 @@ def load_catalog(instance: Path, backend=None) -> Catalog:
         path = Path(handle.name)
         handle.write(encrypted)
     try:
-        catalog = Catalog(json.loads(decrypt(path, [_identity()])))
+        catalog = Catalog.from_body(json.loads(decrypt(path, [_identity()])), getattr(getattr(backend, "config", None), "dimension_id", None))
         report_progress("catalog", "Room catalog is ready")
         return catalog
     finally:

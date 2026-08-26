@@ -14,6 +14,11 @@ from .envelope import build_envelope_file, read_envelope_file
 from .jat import run_build, run_restore, run_serve
 from .local_store import ImmutableLocalStore
 from .progress import report_progress
+from .workspace_state import (
+    read_workspace_marker,
+    workspace_fingerprint,
+    write_workspace_marker,
+)
 
 
 def create_snapshot(
@@ -52,16 +57,21 @@ def create_snapshot(
         if ref.sha256 != ciphertext_digest or ref.size != ciphertext_size:
             raise ValueError("published ciphertext metadata mismatch")
         catalog_path = instance / "catalog.jroom.age"
+        dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) if backend else None
         identity_value = os.environ.get("JOSH_ROOM_IDENTITY")
         report_progress("catalog", "Loading encrypted Room catalog")
         if backend:
-            catalog, catalog_etag = _read_remote_catalog(backend, identity_value, instance)
+            catalog, catalog_etag = _read_remote_catalog(backend, identity_value, instance, getattr(getattr(backend, "config", None), "dimension_id", None))
         else:
-            catalog_file = CatalogFile(catalog_path, Path(identity_value) if identity_value else None)
+            catalog_file = CatalogFile(catalog_path, Path(identity_value) if identity_value else None, dimension_id if "dimension_id" in locals() else None)
             catalog = catalog_file.read()
             catalog_etag = None
         observed_revision = catalog.body["revision"]
-        catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), {"snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]})
+        saved_fingerprint = workspace_fingerprint(source)
+        snapshot_record = {"snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]}
+        if dimension_id:
+            snapshot_record["workspace_fingerprint"] = saved_fingerprint
+        catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), snapshot_record)
         try:
             report_progress("catalog", "Publishing the new latest Room snapshot")
             if backend:
@@ -72,7 +82,7 @@ def create_snapshot(
             if backend:
                 backend.record_orphan(ref)
             raise
-        _write_room_marker(source, project_id, display_name or _display_name(project_id))
+        _write_room_marker(source, project_id, display_name or _display_name(project_id), dimension_id=dimension_id, snapshot_id=manifest["snapshot_id"], workspace_fp=saved_fingerprint)
         report_progress("complete", "Room saved safely")
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
 
@@ -117,7 +127,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
         if len(workspace_roots) != 1 or not workspace_roots[0].is_dir() or workspace_roots[0].is_symlink():
             raise ValueError("JAT restore did not produce an expected workspace root")
         restored_root = workspace_roots[0]
-        _write_room_marker(restored_root, project_id, project["display_name"])
+        _write_room_marker(restored_root, project_id, project["display_name"], dimension_id=catalog.dimension_id, snapshot_id=snapshot["snapshot_id"], workspace_fp=snapshot.get("workspace_fingerprint"))
         backup = None
         if destination.exists():
             backup = destination.parent / f".{destination.name}.josh-room-backup-{operation_id}"
@@ -280,24 +290,24 @@ def _write_receipt(path: Path, body: dict) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _write_room_marker(workspace: Path, project_id: str, display_name: str) -> None:
+def _write_room_marker(workspace: Path, project_id: str, display_name: str, *, dimension_id: str | None = None, snapshot_id: str | None = None, workspace_fp: str | None = None) -> None:
+    if dimension_id and snapshot_id and workspace_fp:
+        write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=display_name, snapshot_id=snapshot_id, workspace_fingerprint=workspace_fp)
+        return
     marker = workspace / ".josh-room.json"
-    marker.write_text(json.dumps({
-        "display_name": display_name,
-        "format_version": 1,
-        "project_id": project_id,
-    }, sort_keys=True) + "\n")
+    marker.write_text(json.dumps({"display_name": display_name, "format_version": 1, "project_id": project_id}, sort_keys=True) + "\n")
 
 
-def _read_remote_catalog(backend, identity_value, instance: Path):
+def _read_remote_catalog(backend, identity_value, instance: Path, dimension_id: str | None = None):
+    dimension_id = dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None)
     encrypted, etag = backend.read_catalog()
     if encrypted is None:
-        return Catalog.empty(), None
+        return Catalog.empty(dimension_id), None
     with tempfile.NamedTemporaryFile(prefix=".catalog-read.", delete=False) as handle:
         path = Path(handle.name)
         handle.write(encrypted)
     try:
-        return Catalog(json.loads(decrypt(path, [Path(identity_value)]))), etag
+        return Catalog.from_body(json.loads(decrypt(path, [Path(identity_value)])), dimension_id), etag
     finally:
         path.unlink(missing_ok=True)
 
@@ -338,3 +348,78 @@ def _file_metadata(path: Path) -> tuple[int, str]:
             size += len(chunk)
             digest.update(chunk)
     return size, digest.hexdigest()
+
+
+
+def _evidence_matches(snapshot: dict, object_evidence: dict | None) -> bool:
+    if not isinstance(object_evidence, dict):
+        return False
+    for field in ("snapshot_id", "object_key", "ciphertext_sha256", "ciphertext_size"):
+        if field in object_evidence and object_evidence[field] != snapshot.get(field):
+            return False
+    return all(field in object_evidence for field in ("snapshot_id", "ciphertext_sha256", "ciphertext_size"))
+
+
+def link_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None) -> dict:
+    marker = read_workspace_marker(workspace)
+    if marker.get("format_version") != 2:
+        raise ValueError("workspace marker v2 is required")
+    if not object_evidence:
+        raise ValueError("object evidence is required")
+    if catalog.dimension_id != marker["dimension_id"]:
+        raise ValueError("catalog Dimension mismatch")
+    snapshot = catalog.resolve_snapshot(marker["project_id"], marker["snapshot_id"])
+    if not _evidence_matches(snapshot, object_evidence):
+        raise ValueError("object evidence does not corroborate catalog")
+    if marker["workspace_fingerprint"] != snapshot.get("workspace_fingerprint"):
+        raise ValueError("workspace fingerprint does not corroborate catalog")
+    from .workspace_state import canonical_workspace_path_sha256
+    if marker["workspace_path_sha256"] != canonical_workspace_path_sha256(workspace):
+        raise ValueError("workspace path does not match marker")
+    if workspace_fingerprint(workspace) != marker["workspace_fingerprint"]:
+        raise ValueError("workspace fingerprint does not match disk")
+    return {"ok": True, "dimension_id": marker["dimension_id"], "project_id": marker["project_id"], "snapshot_id": marker["snapshot_id"], "marker": marker}
+
+
+def repair_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None) -> dict:
+    if not catalog.body.get("projects"):
+        raise ValueError("catalog evidence is required")
+    if not object_evidence:
+        raise ValueError("object evidence is required")
+    marker = read_workspace_marker(workspace) if (Path(workspace) / ".josh-room.json").is_file() else None
+    dimension_id = catalog.dimension_id
+    project_id = object_evidence.get("project_id") or (marker.get("project_id") if marker else None)
+    snapshot_id = object_evidence.get("snapshot_id")
+    if dimension_id != catalog.dimension_id or not project_id or not snapshot_id:
+        raise ValueError("catalog evidence does not identify workspace")
+    snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
+    if not _evidence_matches(snapshot, object_evidence):
+        raise ValueError("object evidence does not corroborate catalog")
+    write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=catalog.body["projects"][project_id]["display_name"], snapshot_id=snapshot_id, workspace_fingerprint=snapshot["workspace_fingerprint"])
+    return {"ok": True, "dimension_id": dimension_id, "project_id": project_id, "snapshot_id": snapshot_id}
+
+
+def copy_snapshot(source_catalog: Catalog, destination_catalog: Catalog, source_store, destination_store, project_id: str, snapshot_id: str = "latest", destination_project_id: str | None = None) -> dict:
+    """Copy verified ciphertext as a new logical JAT without decrypting it."""
+    source = source_catalog.resolve_snapshot(project_id, snapshot_id)
+    payload = source_store.get_bytes(source["object_key"], source["ciphertext_sha256"], source["ciphertext_size"])
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest != source["ciphertext_sha256"] or len(payload) != source["ciphertext_size"]:
+        raise ValueError("source ciphertext evidence mismatch")
+    try:
+        put = destination_store.put_bytes(source["object_key"], payload)
+    except Exception:  # noqa: BLE001 - a failed create-only write is corroborated by a read-back
+        verified = destination_store.get_bytes(source["object_key"], source["ciphertext_sha256"], source["ciphertext_size"])
+        if hashlib.sha256(verified).hexdigest() != source["ciphertext_sha256"] or len(verified) != source["ciphertext_size"]:
+            raise ValueError("destination ciphertext evidence mismatch")
+        put = type("ObjectRef", (), {"key": source["object_key"], "sha256": source["ciphertext_sha256"], "size": source["ciphertext_size"]})()
+    if put.key != source["object_key"] or put.sha256 != source["ciphertext_sha256"] or put.size != source["ciphertext_size"]:
+        raise ValueError("destination ciphertext metadata mismatch")
+    new_snapshot = dict(source)
+    new_snapshot["snapshot_id"] = _snapshot_id()
+    new_snapshot["created_at"] = datetime.now(UTC).isoformat()
+    if destination_catalog.body["format_version"] == 2:
+        new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
+    project = destination_project_id or project_id
+    updated = destination_catalog.add_snapshot(project, source_catalog.body["projects"][project_id]["display_name"], new_snapshot)
+    return {"ok": True, "project_id": project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}

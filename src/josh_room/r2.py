@@ -10,6 +10,7 @@ from pathlib import Path
 
 from botocore.exceptions import ClientError
 
+from .config import DimensionConfig, resolve_dimension
 from .keyring import lookup
 from .local_store import ObjectRef
 from .object_store import ObjectStore
@@ -34,13 +35,26 @@ class R2Config:
     max_bytes: int = 8 * 1024 * 1024 * 1024
     timeout_seconds: int = 60
     max_attempts: int = 4
+    temporary_credentials: bool = True
+    dimension_id: str | None = None
 
     @classmethod
-    def from_private(cls, config: dict) -> "R2Config":
+    def from_dimension(cls, dimension: DimensionConfig) -> "R2Config":
+        if dimension.provider != "r2":
+            raise ValueError("selected Dimension is not an R2 Dimension")
+        return cls(endpoint=dimension.endpoint, bucket=dimension.bucket, credential_profile=dimension.credential_profile, region=dimension.region, catalog_key=dimension.catalog_key, multipart_threshold=dimension.option("multipart_threshold", cls.multipart_threshold), multipart_chunk_size=dimension.option("multipart_chunk_size", cls.multipart_chunk_size), max_bytes=dimension.option("max_bytes", cls.max_bytes), timeout_seconds=dimension.option("timeout_seconds", cls.timeout_seconds), max_attempts=dimension.option("max_attempts", cls.max_attempts), temporary_credentials=dimension.option("temporary_credentials", True), dimension_id=dimension.dimension_id)
+
+    @classmethod
+    def from_private(cls, config: dict | DimensionConfig, dimension_id: str | None = None) -> "R2Config":
+        if isinstance(config, DimensionConfig):
+            return cls.from_dimension(config)
+        if dimension_id:
+            return cls.from_dimension(resolve_dimension(config, dimension_id))
         values = config.get("r2") if config else None
         if not values:
             raise ValueError("private R2 configuration is unavailable")
-        return cls(endpoint=values["endpoint"], bucket=values["bucket"], credential_profile=values["credential_profile"], region=values.get("region", "auto"), catalog_key=values.get("catalog_key", "catalog.jroom.age"))
+        return cls(endpoint=values["endpoint"], bucket=values["bucket"], credential_profile=values["credential_profile"], region=values.get("region", "auto"), catalog_key=values.get("catalog_key", "catalog.jroom.age"), temporary_credentials=values.get("temporary_credentials", True), dimension_id="r2")
+
 
 
 class R2Backend(ObjectStore):

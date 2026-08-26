@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from botocore.config import Config
 
+from .config import DimensionConfig, resolve_dimension
 from .keyring import lookup
 from .object_store import ObjectStore
 from .r2 import R2Backend
@@ -22,14 +23,26 @@ class MinioConfig:
     verify_tls: bool = True
     ca_bundle: str | None = None
     path_style: bool = True
+    dimension_id: str | None = None
 
     @classmethod
-    def from_private(cls, config: dict) -> "MinioConfig":
+    def from_dimension(cls, dimension: DimensionConfig) -> "MinioConfig":
+        if dimension.provider != "minio":
+            raise ValueError("selected Dimension is not a MinIO Dimension")
+        return cls(endpoint=dimension.endpoint, bucket=dimension.bucket, credential_profile=dimension.credential_profile, region=dimension.region, catalog_key=dimension.catalog_key, multipart_threshold=dimension.option("multipart_threshold", cls.multipart_threshold), multipart_chunk_size=dimension.option("multipart_chunk_size", cls.multipart_chunk_size), max_bytes=dimension.option("max_bytes", cls.max_bytes), timeout_seconds=dimension.option("timeout_seconds", cls.timeout_seconds), max_attempts=dimension.option("max_attempts", cls.max_attempts), verify_tls=dimension.option("verify_tls", True), ca_bundle=dimension.option("ca_bundle"), path_style=dimension.option("path_style", True), dimension_id=dimension.dimension_id)
+
+    @classmethod
+    def from_private(cls, config: dict | DimensionConfig, dimension_id: str | None = None) -> "MinioConfig":
+        if isinstance(config, DimensionConfig):
+            return cls.from_dimension(config)
+        if dimension_id:
+            return cls.from_dimension(resolve_dimension(config, dimension_id))
         values = (config or {}).get("minio")
         if not values:
             raise ValueError("private MinIO configuration is unavailable")
         names = ("region", "catalog_key", "multipart_threshold", "multipart_chunk_size", "max_bytes", "timeout_seconds", "max_attempts", "verify_tls", "ca_bundle", "path_style")
-        return cls(values["endpoint"], values["bucket"], values["credential_profile"], **{name: values[name] for name in names if name in values})
+        return cls(values["endpoint"], values["bucket"], values["credential_profile"], **{name: values[name] for name in names if name in values}, dimension_id="minio")
+
 
 
 class MinioBackend(R2Backend, ObjectStore):
