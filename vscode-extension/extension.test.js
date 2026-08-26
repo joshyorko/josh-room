@@ -717,6 +717,28 @@ test("a failed Dimension loader leaves the healthy Dimension usable", async () =
   assert.deepEqual(catalog.projects.map((project) => project.id), ["healthy-room"]);
 });
 
+test("a minimal legacy catalog keeps its top-level Rooms in the native loader", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minimal-catalog-test-"));
+  const { vscode } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimension_id: "archive",
+      dimension_name: "Archive",
+      provider: "r2",
+      projects: [{ id: "legacy-room", display_name: "Legacy Room" }],
+    }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(vscode.window.createStatusBarItem());
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading minimal catalog");
+
+  assert.deepEqual(catalog.projects.map((project) => project.id), ["legacy-room"]);
+  assert.equal(catalog.projects[0].dimension_id, "archive");
+});
+
 test("direct handleDrop parses a CRLF text/uri-list folder drop", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-drop-test-"));
   const source = path.join(root, "folder with spaces");

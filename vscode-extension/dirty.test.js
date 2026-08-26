@@ -1,11 +1,18 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const test = require("node:test");
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { WorkspaceBaseline, fingerprintFile, isRoomMarker, shouldMarkDirty } = require("./dirty");
+const {
+  WorkspaceBaseline,
+  fingerprintFile,
+  fingerprintWorkspace,
+  isRoomMarker,
+  shouldMarkDirty,
+} = require("./dirty");
 
 test("dirty tracking notices workspace content and ignores bookkeeping noise", () => {
   assert.equal(shouldMarkDirty("src/app.py"), true);
@@ -124,4 +131,40 @@ test("authoritative capture fingerprints many entries without retaining the comp
   assert.ok(baseline.files.size <= 32, `retained ${baseline.files.size} workspace entries`);
   assert.match(baseline.currentFingerprint, /^[0-9a-f]{64}$/);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("workspace fingerprint uses Python-compatible UTF-8 byte ordering for Unicode names", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-unicode-fingerprint-test-"));
+  const names = ["\uE000.txt", "\u{10000}.txt"];
+  for (const [index, name] of names.entries()) fs.writeFileSync(path.join(root, name), `${index}\n`);
+
+  const expected = crypto.createHash("sha256");
+  for (const name of [...names].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)))) {
+    const fingerprint = await fingerprintFile(path.join(root, name));
+    expected.update(name);
+    expected.update("\0");
+    expected.update(fingerprint);
+    expected.update("\n");
+  }
+
+  assert.equal(await fingerprintWorkspace(root), expected.digest("hex"));
+  assert.equal(await fingerprintWorkspace(root), await fingerprintWorkspace(root));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("wide-directory fingerprinting does not collect the complete directory with readdir", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-wide-fingerprint-test-"));
+  for (let index = 0; index < 512; index += 1) {
+    fs.writeFileSync(path.join(root, `entry-${String(index).padStart(4, "0")}.txt`), `${index}\n`);
+  }
+  const originalReaddir = fs.promises.readdir;
+  fs.promises.readdir = async () => {
+    throw new Error("fingerprint traversal collected a complete directory");
+  };
+  try {
+    await fingerprintWorkspace(root);
+  } finally {
+    fs.promises.readdir = originalReaddir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

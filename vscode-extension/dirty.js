@@ -1,8 +1,12 @@
 const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const readline = require("readline");
 
 const MAX_PENDING_EVENTS = 128;
+const SORT_RUN_SIZE = 256;
+const SORT_MERGE_FAN_IN = 16;
 
 function shouldMarkDirty(relativePath) {
   const normalized = String(relativePath).replaceAll("\\", "/").replace(/^\.\//, "");
@@ -51,17 +55,182 @@ async function fingerprintFile(filePath) {
 
 async function traverseWorkspace(root, onEntry) {
   async function visit(directory, prefix = "") {
-    const entries = await fs.promises.readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
-    for (const entry of entries) {
-      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    for await (const name of sortedDirectoryNames(directory)) {
+      const relative = prefix ? `${prefix}/${name}` : name;
       if (!shouldMarkDirty(relative)) continue;
-      const absolute = path.join(directory, entry.name);
-      await onEntry(relative, absolute, entry);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) await visit(absolute, relative);
+      const absolute = path.join(directory, name);
+      let stat;
+      try {
+        stat = await fs.promises.lstat(absolute);
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      await onEntry(relative, absolute, stat);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) await visit(absolute, relative);
     }
   }
   await visit(root);
+}
+
+function compareUtf8(left, right) {
+  return Buffer.from(left, "utf8").compare(Buffer.from(right, "utf8"));
+}
+
+async function* readLines(filePath) {
+  const input = fs.createReadStream(filePath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) yield line;
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+}
+
+async function writeRun(directory, names, index) {
+  names.sort(compareUtf8);
+  const runPath = path.join(directory, `run-${index}.jsonl`);
+  const body = names.map((name) => `${JSON.stringify(name)}\n`).join("");
+  await fs.promises.writeFile(runPath, body, { mode: 0o600 });
+  return runPath;
+}
+
+async function* mergeRuns(runPaths) {
+  const readers = runPaths.map((runPath) => readLines(runPath)[Symbol.asyncIterator]());
+  const heap = [];
+  const push = (item) => {
+    heap.push(item);
+    let index = heap.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (compareUtf8(heap[parent].name, heap[index].name) <= 0) break;
+      [heap[parent], heap[index]] = [heap[index], heap[parent]];
+      index = parent;
+    }
+  };
+  const pop = () => {
+    const first = heap[0];
+    const last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      let index = 0;
+      while (true) {
+        const left = index * 2 + 1;
+        const right = left + 1;
+        let smallest = index;
+        if (left < heap.length && compareUtf8(heap[left].name, heap[smallest].name) < 0) smallest = left;
+        if (right < heap.length && compareUtf8(heap[right].name, heap[smallest].name) < 0) smallest = right;
+        if (smallest === index) break;
+        [heap[index], heap[smallest]] = [heap[smallest], heap[index]];
+        index = smallest;
+      }
+    }
+    return first;
+  };
+  try {
+    for (const [index, reader] of readers.entries()) {
+      const next = await reader.next();
+      if (!next.done) push({ name: JSON.parse(next.value), index });
+    }
+    while (heap.length) {
+      const item = pop();
+      yield item.name;
+      const next = await readers[item.index].next();
+      if (!next.done) push({ name: JSON.parse(next.value), index: item.index });
+    }
+  } finally {
+    for (const reader of readers) await reader.return?.();
+  }
+}
+
+async function mergeRunGroup(runPaths, directory, index) {
+  const runPath = path.join(directory, `run-merged-${index}.jsonl`);
+  const handle = await fs.promises.open(runPath, "w", 0o600);
+  try {
+    for await (const name of mergeRuns(runPaths)) await handle.write(`${JSON.stringify(name)}\n`);
+  } finally {
+    await handle.close();
+  }
+  await Promise.all(runPaths.map((runPathToRemove) => fs.promises.rm(runPathToRemove, { force: true })));
+  return runPath;
+}
+
+async function* sortedDirectoryNames(directory) {
+  const sortDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "josh-room-sort-"));
+  await fs.promises.chmod(sortDirectory, 0o700);
+  const manifest = path.join(sortDirectory, "manifest-0.jsonl");
+  let manifestHandle;
+  let runIndex = 0;
+  let runCount = 0;
+  try {
+    manifestHandle = await fs.promises.open(manifest, "w", 0o600);
+    let names = [];
+    const directoryHandle = await fs.promises.opendir(directory);
+    try {
+      for await (const entry of directoryHandle) {
+        names.push(entry.name);
+        if (names.length === SORT_RUN_SIZE) {
+          const runPath = await writeRun(sortDirectory, names, runIndex);
+          await manifestHandle.write(`${JSON.stringify(runPath)}\n`);
+          runIndex += 1;
+          runCount += 1;
+          names = [];
+        }
+      }
+    } finally {
+      try {
+        await directoryHandle.close();
+      } catch (error) {
+        if (error.code !== "ERR_DIR_CLOSED") throw error;
+      }
+    }
+    if (names.length) {
+      const runPath = await writeRun(sortDirectory, names, runIndex);
+      await manifestHandle.write(`${JSON.stringify(runPath)}\n`);
+      runCount += 1;
+    }
+    await manifestHandle.close();
+    manifestHandle = undefined;
+
+    let currentManifest = manifest;
+    let pass = 0;
+    while (runCount > SORT_MERGE_FAN_IN) {
+      const nextManifest = path.join(sortDirectory, `manifest-${pass + 1}.jsonl`);
+      const nextHandle = await fs.promises.open(nextManifest, "w", 0o600);
+      let group = [];
+      let mergedIndex = 0;
+      try {
+        for await (const line of readLines(currentManifest)) {
+          group.push(JSON.parse(line));
+          if (group.length === SORT_MERGE_FAN_IN) {
+            const mergedPath = await mergeRunGroup(group, sortDirectory, `${pass}-${mergedIndex}`);
+            await nextHandle.write(`${JSON.stringify(mergedPath)}\n`);
+            mergedIndex += 1;
+            group = [];
+          }
+        }
+        if (group.length) {
+          const mergedPath = await mergeRunGroup(group, sortDirectory, `${pass}-${mergedIndex}`);
+          await nextHandle.write(`${JSON.stringify(mergedPath)}\n`);
+          mergedIndex += 1;
+        }
+      } finally {
+        await nextHandle.close();
+      }
+      await fs.promises.rm(currentManifest, { force: true });
+      currentManifest = nextManifest;
+      runCount = mergedIndex;
+      pass += 1;
+    }
+
+    const finalRuns = [];
+    for await (const line of readLines(currentManifest)) finalRuns.push(JSON.parse(line));
+    for await (const name of mergeRuns(finalRuns)) yield name;
+  } finally {
+    if (manifestHandle) await manifestHandle.close();
+    await fs.promises.rm(sortDirectory, { recursive: true, force: true });
+  }
 }
 
 async function fingerprintWorkspace(root) {

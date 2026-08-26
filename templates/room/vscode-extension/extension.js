@@ -1600,7 +1600,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
   }
   return Object.assign({}, catalog, {
     dimensions,
-    projects: nativeRegistry.flattenDimensionRooms({ dimensions }),
+    projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions }),
   });
 }
 

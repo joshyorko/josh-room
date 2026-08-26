@@ -4,7 +4,7 @@ import json
 import pytest
 
 from josh_room.catalog import Catalog
-from josh_room.cli import _requires_oauth, build_parser
+from josh_room.cli import _backend_for_args, _requires_oauth, build_parser
 from josh_room.config import DimensionConfig, DimensionRegistry, resolve_dimension
 from josh_room.operations import link_workspace, repair_workspace
 from josh_room.r2 import R2Config
@@ -58,6 +58,28 @@ def test_named_dimension_registry_selects_explicit_dimension_and_preserves_legac
     assert registry.select().dimension_id == "archive"
     assert registry.select("r2").display_name == "Cloudflare R2"
     assert resolve_dimension(config, "r2").provider == "r2"
+
+
+def test_named_r2_dimension_is_not_collapsed_to_legacy_backend(monkeypatch, tmp_path):
+    config = {
+        "default_dimension": "r2",
+        "dimensions": {"r2": _dimension("r2").to_private()},
+        "r2": {
+            "endpoint": "https://legacy.example.invalid",
+            "bucket": "legacy",
+            "credential_profile": "legacy-profile",
+        },
+    }
+    calls = []
+    monkeypatch.setattr("josh_room.cli.private_config", lambda: config)
+    monkeypatch.setattr(
+        "josh_room.cli._backend",
+        lambda name, _instance, dimension=None: calls.append((name, dimension)) or object(),
+    )
+
+    _backend_for_args(build_parser().parse_args(["projects", "list"]), tmp_path)
+
+    assert calls == [("r2", "r2")]
 
 
 def test_dimension_registry_rejects_unknown_dimension():
@@ -373,8 +395,26 @@ def test_copy_snapshot_stream_records_scrubbed_orphan_on_destination_catalog_con
         def conditional_catalog_put(self, _body, _etag):
             raise RuntimeError("catalog conflict")
 
+        config = type("Config", (), {
+            "provider": "r2",
+            "dimension_id": "backup",
+            "endpoint": "https://backup.example.invalid",
+            "bucket": "backup-bucket",
+        })()
+
         def record_orphan(self, ref):
-            orphan_receipts.append({"object_key": ref.key, "sha256": ref.sha256, "size": ref.size})
+            orphan_receipts.append({
+                "status": "uploaded-unreferenced",
+                "destination": {
+                    "provider": self.config.provider,
+                    "dimension_id": self.config.dimension_id,
+                    "endpoint": self.config.endpoint,
+                    "bucket": self.config.bucket,
+                },
+                "object_key": ref.key,
+                "sha256": ref.sha256,
+                "size": ref.size,
+            })
 
     monkeypatch.setattr("josh_room.operations._encrypt_catalog", lambda *_args: b"encrypted-catalog")
     with pytest.raises(RuntimeError, match="catalog conflict"):
@@ -382,7 +422,13 @@ def test_copy_snapshot_stream_records_scrubbed_orphan_on_destination_catalog_con
             tmp_path / "instance", source_catalog, destination_catalog, Store(), Store(),
             "source-room", "restored-room", "latest", ["age1daily", "age1recovery"],
         )
-    assert orphan_receipts and set(orphan_receipts[0]) == {"object_key", "sha256", "size"}
+    assert orphan_receipts and orphan_receipts[0]["destination"] == {
+        "provider": "r2",
+        "dimension_id": "backup",
+        "endpoint": "https://backup.example.invalid",
+        "bucket": "backup-bucket",
+    }
+    assert set(orphan_receipts[0]) == {"status", "destination", "object_key", "sha256", "size"}
     assert "secret" not in json.dumps(orphan_receipts)
 
 
@@ -402,8 +448,26 @@ def test_copy_snapshot_stream_records_orphan_when_destination_catalog_validation
         def put_file(self, key, _path):
             return type("Ref", (), {"key": key, "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)})()
 
+        config = type("Config", (), {
+            "provider": "r2",
+            "dimension_id": "backup",
+            "endpoint": "https://backup.example.invalid",
+            "bucket": "backup-bucket",
+        })()
+
         def record_orphan(self, ref):
-            orphan_receipts.append({"object_key": ref.key, "sha256": ref.sha256, "size": ref.size})
+            orphan_receipts.append({
+                "status": "uploaded-unreferenced",
+                "destination": {
+                    "provider": self.config.provider,
+                    "dimension_id": self.config.dimension_id,
+                    "endpoint": self.config.endpoint,
+                    "bucket": self.config.bucket,
+                },
+                "object_key": ref.key,
+                "sha256": ref.sha256,
+                "size": ref.size,
+            })
 
     class BrokenCatalog:
         def __init__(self):
@@ -417,7 +481,18 @@ def test_copy_snapshot_stream_records_orphan_when_destination_catalog_validation
             tmp_path / "instance", source_catalog, BrokenCatalog(), SourceStore(), DestinationStore(),
             "source-room", "restored-room", "latest", ["age1daily", "age1recovery"],
         )
-    assert orphan_receipts == [{"object_key": source["object_key"], "sha256": source["ciphertext_sha256"], "size": source["ciphertext_size"]}]
+    assert orphan_receipts == [{
+        "status": "uploaded-unreferenced",
+        "destination": {
+            "provider": "r2",
+            "dimension_id": "backup",
+            "endpoint": "https://backup.example.invalid",
+            "bucket": "backup-bucket",
+        },
+        "object_key": source["object_key"],
+        "sha256": source["ciphertext_sha256"],
+        "size": source["ciphertext_size"],
+    }]
 
 
 def test_copy_parser_accepts_source_folder_without_explicit_source_room_or_jat(tmp_path):

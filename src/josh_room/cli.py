@@ -464,10 +464,11 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
 
 def _backend_for_args(args, instance: Path):
     selected = _effective_dimension(args)
-    if not selected or (
-        not getattr(args, "dimension", None)
-        and selected.provider == args.backend == selected.dimension_id
-    ):
+    if not selected:
+        return _backend(args.backend, instance)
+    configured = private_config() or {}
+    named = isinstance(configured.get("dimensions"), dict) and selected.dimension_id in configured["dimensions"]
+    if not named and not getattr(args, "dimension", None) and selected.provider == args.backend == selected.dimension_id:
         return _backend(args.backend, instance)
     return _backend(selected.provider, instance, selected.dimension_id)
 
@@ -598,7 +599,7 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
         selected_dimension = selected.dimension_id if selected else backend_name
         selected_backend = selected.provider if selected else backend_name
         try:
-            if selected and (dimension or selected.dimension_id != selected.provider):
+            if selected:
                 backend = _backend(selected.provider, instance, selected_dimension)
             else:
                 backend = _backend(backend_name, instance)
