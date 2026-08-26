@@ -33,12 +33,13 @@ def create_snapshot(
     all_images: bool = False,
 ) -> dict:
     instance.mkdir(parents=True, exist_ok=True)
+    source_fingerprint = workspace_fingerprint(source)
     with tempfile.TemporaryDirectory(dir=instance) as work:
         haul = Path(work) / "payload.haul.tar.zst"
         report_progress("build", "Building portable Room haul")
         producer = run_build(jat_root, source, haul, images=images, all_images=all_images, rcc_environment="auto")
         payload_size, payload_digest = _file_metadata(haul)
-        manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source)}
+        manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source, source_fingerprint)}
         if isinstance(producer.get("environment_artifact"), dict):
             manifest["environment_artifact"] = producer["environment_artifact"]
         envelope = Path(work) / "snapshot.jroom"
@@ -48,6 +49,8 @@ def create_snapshot(
         report_progress("encrypt", "Encrypting Room with age")
         encrypt_file(envelope, recipients, encrypted)
         ciphertext_size, ciphertext_digest = _file_metadata(encrypted)
+        if workspace_fingerprint(source) != source_fingerprint:
+            raise ValueError("source workspace changed during snapshot capture")
         if backend:
             report_progress("upload", "Uploading encrypted Room to private R2")
             ref = backend.put_file(f"objects/sha256/{ciphertext_digest}", encrypted)
@@ -56,6 +59,10 @@ def create_snapshot(
             ref = ImmutableLocalStore(instance).put_file(encrypted)
         if ref.sha256 != ciphertext_digest or ref.size != ciphertext_size:
             raise ValueError("published ciphertext metadata mismatch")
+        if workspace_fingerprint(source) != source_fingerprint:
+            if backend:
+                backend.record_orphan(ref)
+            raise ValueError("source workspace changed during snapshot capture")
         catalog_path = instance / "catalog.jroom.age"
         dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) if backend else None
         identity_value = os.environ.get("JOSH_ROOM_IDENTITY")
@@ -67,12 +74,19 @@ def create_snapshot(
             catalog = catalog_file.read()
             catalog_etag = None
         observed_revision = catalog.body["revision"]
-        saved_fingerprint = workspace_fingerprint(source)
+        if workspace_fingerprint(source) != source_fingerprint:
+            if backend:
+                backend.record_orphan(ref)
+            raise ValueError("source workspace changed during snapshot capture")
         snapshot_record = {"snapshot_id": manifest["snapshot_id"], "origin_project_id": project_id, "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]}
         if dimension_id:
-            snapshot_record["workspace_fingerprint"] = saved_fingerprint
+            snapshot_record["workspace_fingerprint"] = source_fingerprint
         catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), snapshot_record)
         try:
+            if workspace_fingerprint(source) != source_fingerprint:
+                if backend:
+                    backend.record_orphan(ref)
+                raise ValueError("source workspace changed during snapshot capture")
             report_progress("catalog", "Publishing the new latest Room snapshot")
             if backend:
                 backend.conditional_catalog_put(_encrypt_catalog(catalog, recipients, instance), catalog_etag)
@@ -82,7 +96,9 @@ def create_snapshot(
             if backend:
                 backend.record_orphan(ref)
             raise
-        _write_room_marker(source, project_id, display_name or _display_name(project_id), dimension_id=dimension_id, snapshot_id=manifest["snapshot_id"], workspace_fp=saved_fingerprint)
+        if workspace_fingerprint(source) != source_fingerprint:
+            raise ValueError("source workspace changed during snapshot capture")
+        _write_room_marker(source, project_id, display_name or _display_name(project_id), dimension_id=dimension_id, snapshot_id=manifest["snapshot_id"], workspace_fp=source_fingerprint)
         report_progress("complete", "Room saved safely")
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
 
@@ -336,14 +352,21 @@ def _display_name(project_id: str) -> str:
     return project_id.replace("-", " ").replace("_", " ").title()
 
 
-def _source_metadata(source: Path) -> dict:
+def _source_metadata(source: Path, workspace_fingerprint_value: str | None = None) -> dict:
     commit = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
     if commit.returncode != 0:
-        return {}
+        metadata = {}
+        if workspace_fingerprint_value:
+            metadata["workspace_fingerprint"] = workspace_fingerprint_value
+        return metadata
     status = subprocess.run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=normal"], capture_output=True, text=True, check=False)
     if status.returncode != 0:
-        return {"git_commit": commit.stdout.strip()}
-    return {"git_commit": commit.stdout.strip(), "dirty": bool(status.stdout)}
+        metadata = {"git_commit": commit.stdout.strip()}
+    else:
+        metadata = {"git_commit": commit.stdout.strip(), "dirty": bool(status.stdout)}
+    if workspace_fingerprint_value:
+        metadata["workspace_fingerprint"] = workspace_fingerprint_value
+    return metadata
 
 
 def _file_metadata(path: Path) -> tuple[int, str]:

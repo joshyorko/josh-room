@@ -187,7 +187,9 @@ def _requires_oauth(args) -> bool:
     if getattr(args, "snapshot_command", None) == "copy":
         registry = DimensionRegistry(private_config() or {})
         try:
-            return any(registry.select(dimension).provider == "r2" for dimension in (args.source_dimension, args.destination_dimension))
+            source_dimension = _copy_source_dimension(args)
+            dimensions = [dimension for dimension in (source_dimension, args.destination_dimension) if dimension]
+            return any(registry.select(dimension).provider == "r2" for dimension in dimensions)
         except ValueError:
             return False
     dimension = getattr(args, "dimension", None)
@@ -197,6 +199,16 @@ def _requires_oauth(args) -> bool:
         except ValueError:
             return False
     return getattr(args, "backend", "r2") == "r2"
+
+
+def _copy_source_dimension(args) -> str | None:
+    source_folder = getattr(args, "source_folder", None)
+    if not source_folder:
+        return getattr(args, "source_dimension", None)
+    status = local_status(source_folder)
+    if not status.get("ok") or status.get("state") != "clean" or not status.get("dimension_id"):
+        return None
+    return status["dimension_id"]
 
 
 def dispatch(args, instance: Path) -> dict:
