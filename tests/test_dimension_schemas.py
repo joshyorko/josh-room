@@ -167,3 +167,66 @@ def test_workspace_marker_v2_schema_validates_instances():
     for instance in (invalid_dimension, invalid_path, credential_bearing):
         with pytest.raises(ValidationError):
             validator.validate(instance)
+
+
+def test_private_config_schema_rejects_provider_inapplicable_options_and_bad_endpoints():
+    validator = _validator("private-config.schema.json")
+    record = {
+        "display_name": "Archive",
+        "provider": "r2",
+        "endpoint": "https://example.invalid",
+        "bucket": "archive",
+        "credential_profile": "archive-profile",
+    }
+    invalid_records = [
+        {**record, "verify_tls": True},
+        {**record, "ca_bundle": "synthetic-ca.pem"},
+        {**record, "path_style": True},
+        {**record, "endpoint": "file:///tmp/room"},
+        {**record, "endpoint": "https:///missing-host"},
+        {**record, "endpoint": "https://user:secret@example.invalid"},
+        {
+            **record,
+            "provider": "minio",
+            "temporary_credentials": True,
+        },
+    ]
+
+    for invalid_record in invalid_records:
+        with pytest.raises(ValidationError):
+            validator.validate({"dimensions": {"archive": invalid_record}})
+
+
+def test_dimension_catalog_schema_constrains_project_and_snapshot_identifiers():
+    validator = _validator("dimension-catalog-v2.schema.json")
+    snapshot = {
+        "snapshot_id": "snap-1",
+        "object_key": f"objects/sha256/{'a' * 64}",
+        "ciphertext_sha256": "a" * 64,
+        "ciphertext_size": 1,
+        "created_at": "2026-08-26T00:00:00Z",
+        "workspace_fingerprint": "b" * 64,
+    }
+    catalog = {
+        "format_version": 2,
+        "dimension_id": "archive",
+        "revision": 1,
+        "projects": {
+            "demo": {
+                "display_name": "Demo",
+                "latest": "snap-1",
+                "snapshots": {"snap-1": snapshot},
+            }
+        },
+    }
+
+    invalid_project = copy.deepcopy(catalog)
+    invalid_project["projects"]["../demo"] = invalid_project["projects"].pop("demo")
+    invalid_snapshot = copy.deepcopy(catalog)
+    invalid_snapshot["projects"]["demo"]["snapshots"]["../snap-1"] = (
+        invalid_snapshot["projects"]["demo"]["snapshots"].pop("snap-1")
+    )
+
+    for invalid_catalog in (invalid_project, invalid_snapshot):
+        with pytest.raises(ValidationError):
+            validator.validate(invalid_catalog)

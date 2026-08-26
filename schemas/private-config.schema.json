@@ -8,7 +8,7 @@
       "properties": {
         "display_name": { "type": "string", "minLength": 1 },
         "provider": { "enum": ["r2", "minio"] },
-        "endpoint": { "type": "string", "format": "uri" },
+        "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" },
         "bucket": { "type": "string", "minLength": 1 },
         "region": { "type": "string" },
         "credential_profile": { "type": "string", "minLength": 1 },
@@ -22,7 +22,25 @@
         "verify_tls": { "type": "boolean", "default": true },
         "ca_bundle": { "type": "string" },
         "path_style": { "type": "boolean", "default": true }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "provider": { "const": "r2" } } },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["verify_tls"] },
+                { "required": ["ca_bundle"] },
+                { "required": ["path_style"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": { "properties": { "provider": { "const": "minio" } } },
+          "then": { "not": { "required": ["temporary_credentials"] } }
+        }
+      ]
     }
   },
   "type": "object",
@@ -50,7 +68,7 @@
       "additionalProperties": false,
       "required": ["endpoint", "bucket", "credential_profile"],
       "properties": {
-        "endpoint": { "type": "string", "format": "uri" },
+        "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" },
         "bucket": { "type": "string", "minLength": 1 },
         "region": { "type": "string" },
         "credential_profile": { "type": "string", "minLength": 1 },
@@ -62,7 +80,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["endpoint", "bucket", "credential_profile"],
       "properties": {
-        "endpoint": { "type": "string", "format": "uri" }, "bucket": { "type": "string", "minLength": 1 },
+        "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" }, "bucket": { "type": "string", "minLength": 1 },
         "region": { "type": "string" }, "credential_profile": { "type": "string", "minLength": 1 },
         "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
         "multipart_threshold": { "type": "integer", "minimum": 1 }, "multipart_chunk_size": { "type": "integer", "minimum": 1 },

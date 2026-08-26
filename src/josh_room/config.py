@@ -103,6 +103,8 @@ class DimensionConfig:
             endpoint = urlsplit(self.endpoint)
         except ValueError as error:
             raise ValueError("Dimension endpoint is invalid") from error
+        if endpoint.scheme not in {"http", "https"} or not endpoint.hostname:
+            raise ValueError("Dimension endpoint must use http/https with a hostname")
         if endpoint.username is not None or endpoint.password is not None or "@" in endpoint.netloc:
             raise ValueError("Dimension endpoint must not contain userinfo")
         unsupported = sorted(
@@ -175,9 +177,9 @@ def dimension_configs(config: dict | None) -> dict[str, DimensionConfig]:
             dimensions[provider] = DimensionConfig.from_private(
                 provider,
                 {
+                    **config[provider],
                     "display_name": display_name,
                     "provider": provider,
-                    **config[provider],
                 },
             )
     return dimensions

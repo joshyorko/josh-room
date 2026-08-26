@@ -14,6 +14,7 @@
     "revision": { "type": "integer", "minimum": 0 },
     "projects": {
       "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
       "additionalProperties": { "$ref": "#/$defs/room" }
     }
   },
@@ -30,6 +31,7 @@
         },
         "snapshots": {
           "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
           "additionalProperties": { "$ref": "#/$defs/snapshot" }
         }
       }

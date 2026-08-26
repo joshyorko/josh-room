@@ -40,6 +40,23 @@ def test_legacy_r2_config_is_available_as_a_dimension():
         region="auto",
     )
 
+def test_legacy_dimension_normalization_keeps_concrete_provider_and_display_name():
+    config = {
+        "r2": {
+            "endpoint": "https://synthetic.invalid",
+            "bucket": "legacy-room",
+            "credential_profile": "legacy-profile",
+            "provider": "minio",
+            "display_name": "Untrusted override",
+        }
+    }
+
+    dimension = config_module.dimension_configs(config)["r2"]
+
+    assert dimension.provider == "r2"
+    assert dimension.display_name == "Cloudflare R2"
+
+
 
 def test_dimension_serialization_is_non_secret_and_rejects_inline_credentials():
     assert hasattr(config_module, "DimensionConfig"), (
@@ -107,6 +124,58 @@ def test_dimension_rejects_endpoint_userinfo():
         config_module.DimensionConfig.from_private(
             "archive",
             _dimension_body(endpoint="https://user:secret@example.invalid"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider", "endpoint"),
+    [
+        ("minio", "http://minio.synthetic.invalid:9000"),
+        ("r2", "https://r2.synthetic.invalid"),
+    ],
+)
+def test_dimension_accepts_provider_endpoint_uris(provider, endpoint):
+    dimension = config_module.DimensionConfig.from_private(
+        "archive", _dimension_body(provider=provider, endpoint=endpoint)
+    )
+
+    assert dimension.endpoint == endpoint
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/tmp/room", "file:///tmp/room", "https:///missing-host"],
+)
+def test_dimension_rejects_non_http_endpoint_uris(endpoint):
+    with pytest.raises(ValueError, match="http/https"):
+        config_module.DimensionConfig.from_private(
+            "archive", _dimension_body(endpoint=endpoint)
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider", "option"),
+    [
+        ("r2", "verify_tls"),
+        ("r2", "ca_bundle"),
+        ("r2", "path_style"),
+        ("minio", "temporary_credentials"),
+    ],
+)
+def test_dimension_rejects_provider_inapplicable_options(provider, option):
+    with pytest.raises(ValueError, match="unsupported Dimension setting"):
+        config_module.DimensionConfig.from_private(
+            "archive",
+            _dimension_body(
+                provider=provider,
+                **{
+                    option: (
+                        "synthetic-ca.pem"
+                        if option == "ca_bundle"
+                        else True
+                    )
+                },
+            ),
         )
 
 
