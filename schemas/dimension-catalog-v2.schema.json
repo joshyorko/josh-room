@@ -52,6 +52,10 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
         },
+        "origin_project_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
         "object_key": {
           "type": "string",
           "pattern": "^objects/sha256/[0-9a-f]{64}$"

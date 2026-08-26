@@ -68,7 +68,7 @@ def create_snapshot(
             catalog_etag = None
         observed_revision = catalog.body["revision"]
         saved_fingerprint = workspace_fingerprint(source)
-        snapshot_record = {"snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]}
+        snapshot_record = {"snapshot_id": manifest["snapshot_id"], "origin_project_id": project_id, "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]}
         if dimension_id:
             snapshot_record["workspace_fingerprint"] = saved_fingerprint
         catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), snapshot_record)
@@ -117,7 +117,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
         haul = stage / "payload.haul.tar.zst"
         report_progress("verify", "Verifying the trusted snapshot envelope")
         manifest = read_envelope_file(envelope, haul)
-        if manifest["project_id"] != project_id:
+        if not _manifest_matches_snapshot(manifest, project_id, snapshot):
             raise ValueError("manifest project mismatch")
         workspace_stage = stage / "restore"
         report_progress("restore", "Restoring workspace through JAT and RCC")
@@ -269,7 +269,7 @@ def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: 
         haul = stage / "payload.haul.tar.zst"
         report_progress("verify", "Verifying the trusted snapshot envelope")
         manifest = read_envelope_file(envelope, haul)
-        if manifest["project_id"] != project_id:
+        if not _manifest_matches_snapshot(manifest, project_id, snapshot):
             raise ValueError("manifest project mismatch")
         report_progress("serve", "Starting read-only Hauler registry")
         return run_serve(jat_root, haul)
@@ -463,3 +463,7 @@ def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_ca
                 destination_backend.record_orphan(ref)
             raise
     return {"ok": True, "project_id": destination_project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}
+
+
+def _manifest_matches_snapshot(manifest: dict, project_id: str, snapshot: dict) -> bool:
+    return manifest.get("project_id") == snapshot.get("origin_project_id", project_id)

@@ -34,6 +34,9 @@ def _validate_v2_snapshot(snapshot: dict) -> None:
     fingerprint = snapshot.get("workspace_fingerprint")
     if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
         raise ValueError("catalog snapshot workspace fingerprint is invalid")
+    origin = snapshot.get("origin_project_id")
+    if origin is not None:
+        _validate_identifier("origin project", origin)
     size = snapshot.get("ciphertext_size")
     if type(size) is not int or size < 1:
         raise ValueError("catalog snapshot ciphertext size is invalid")
@@ -102,6 +105,9 @@ class Catalog:
             _validate_identifier("project", project_id)
             _validate_v2_snapshot(snapshot)
         body = json.loads(json.dumps(self.body))
+        if body["format_version"] == 2:
+            snapshot = dict(snapshot)
+            snapshot.setdefault("origin_project_id", project_id)
         project = body["projects"].setdefault(project_id, {"display_name": display_name, "latest": None, "snapshots": {}})
         project["display_name"] = display_name
         project["snapshots"][snapshot["snapshot_id"]] = snapshot

@@ -283,3 +283,29 @@ def test_copy_snapshot_stream_records_scrubbed_orphan_on_destination_catalog_con
         )
     assert orphan_receipts and set(orphan_receipts[0]) == {"object_key", "sha256", "size"}
     assert "secret" not in json.dumps(orphan_receipts)
+
+
+def test_copy_parser_accepts_source_folder_without_explicit_source_room_or_jat(tmp_path):
+    args = build_parser().parse_args([
+        "snapshot", "copy",
+        "--source-folder", str(tmp_path),
+        "--destination-dimension", "backup",
+        "--destination-room", "restored-room",
+    ])
+    assert args.project is None
+    assert args.source_folder == tmp_path
+    assert args.source_dimension is None
+    assert args.snapshot == "latest"
+
+
+def test_v2_snapshot_records_origin_project_for_cross_room_hydration():
+    catalog = Catalog.empty(dimension_id="archive").add_snapshot("source-room", "Source", _snapshot())
+    saved = catalog.resolve_snapshot("source-room", "jat-1")
+    assert saved["origin_project_id"] == "source-room"
+
+
+def test_manifest_binding_uses_origin_project_after_copy():
+    from josh_room.operations import _manifest_matches_snapshot
+
+    assert _manifest_matches_snapshot({"project_id": "source-room"}, "restored-room", {"origin_project_id": "source-room"})
+    assert not _manifest_matches_snapshot({"project_id": "other-room"}, "restored-room", {"origin_project_id": "source-room"})

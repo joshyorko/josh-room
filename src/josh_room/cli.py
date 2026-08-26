@@ -113,8 +113,9 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create.add_argument("--dimension")
     _json_option(snapshot_create)
     snapshot_copy = snapshot_commands.add_parser("copy")
-    snapshot_copy.add_argument("project")
-    snapshot_copy.add_argument("--source-dimension", "--from-dimension", dest="source_dimension", required=True)
+    snapshot_copy.add_argument("project", nargs="?")
+    snapshot_copy.add_argument("--source-folder", type=Path)
+    snapshot_copy.add_argument("--source-dimension", "--from-dimension", dest="source_dimension")
     snapshot_copy.add_argument("--destination-dimension", "--to-dimension", dest="destination_dimension", required=True)
     snapshot_copy.add_argument("--destination-room", "--destination-project", dest="destination_project", required=True)
     snapshot_copy.add_argument("--snapshot", default="latest")
@@ -232,8 +233,10 @@ def dispatch(args, instance: Path) -> dict:
     if args.command == "doctor":
         return _doctor(instance, args.backend, args.ide)
     if args.command == "projects":
-        projects = list_projects(instance, _backend_for_args(args, instance))
-        return {"ok": True, "projects": [{"id": project_id, "display_name": name} for project_id, name in projects]}
+        backend = _backend_for_args(args, instance)
+        projects = list_projects(instance, backend)
+        dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
+        return {"ok": True, "dimension_id": dimension_id, "projects": [{"id": project_id, "display_name": name} for project_id, name in projects]}
     if args.command == "rooms":
         recipients = _recipients()
         if len(recipients) < 2:
@@ -262,20 +265,36 @@ def dispatch(args, instance: Path) -> dict:
                     _backend_for_args(args, instance),
                 ),
             }
-        catalog = load_catalog(instance, _backend_for_args(args, instance))
+        backend = _backend_for_args(args, instance)
+        catalog = load_catalog(instance, backend)
         project = catalog.body["projects"].get(args.project)
         if not project:
             raise ValueError("project is not present in the encrypted catalog")
-        return {"ok": True, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
+        dimension_id = catalog.dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
+        return {"ok": True, "dimension_id": dimension_id, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
         if args.snapshot_command == "copy":
             identity = _identity()
             recipients = _recipients()
-            source_backend = _backend("r2", instance, args.source_dimension)
+            source_project = args.project
+            source_snapshot = args.snapshot
+            source_dimension = args.source_dimension
+            if args.source_folder:
+                if args.project or args.source_dimension or args.snapshot != "latest":
+                    raise ValueError("source-folder cannot be combined with source project or dimension")
+                folder_status = local_status(args.source_folder)
+                if not folder_status.get("ok") or folder_status.get("state") != "clean" or not folder_status.get("dimension_id"):
+                    raise ValueError("source folder must have a clean saved v2 workspace marker")
+                source_project = folder_status["project_id"]
+                source_snapshot = folder_status["snapshot_id"]
+                source_dimension = folder_status["dimension_id"]
+            elif not source_project or not source_dimension:
+                raise ValueError("source project and source dimension are required unless --source-folder is used")
+            source_backend = _backend("r2", instance, source_dimension)
             destination_backend = _backend("r2", instance, args.destination_dimension)
             source_catalog, _source_etag = _read_remote_catalog(source_backend, identity, instance)
             destination_catalog, destination_etag = _read_remote_catalog(destination_backend, identity, instance)
-            return copy_snapshot_stream(instance, source_catalog, destination_catalog, source_backend, destination_backend, args.project, args.destination_project, args.snapshot, recipients, destination_etag=destination_etag)
+            return copy_snapshot_stream(instance, source_catalog, destination_catalog, source_backend, destination_backend, source_project, args.destination_project, source_snapshot, recipients, destination_etag=destination_etag)
         recipients = _recipients()
         jat_root = _jat_root()
         if len(recipients) < 2:
