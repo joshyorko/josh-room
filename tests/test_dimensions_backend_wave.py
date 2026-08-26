@@ -309,3 +309,19 @@ def test_manifest_binding_uses_origin_project_after_copy():
 
     assert _manifest_matches_snapshot({"project_id": "source-room"}, "restored-room", {"origin_project_id": "source-room"})
     assert not _manifest_matches_snapshot({"project_id": "other-room"}, "restored-room", {"origin_project_id": "source-room"})
+
+
+def test_hydrate_stage_marker_binds_final_destination_path(tmp_path):
+    from josh_room.operations import _write_room_marker
+
+    stage = tmp_path / "stage"
+    destination = tmp_path / "final-room"
+    fingerprint = "d" * 64
+    _write_room_marker(
+        stage, "room", "Room", dimension_id="archive", snapshot_id="jat-1",
+        workspace_fp=fingerprint, path_binding=destination,
+    )
+    marker = read_workspace_marker(stage)
+
+    assert marker["workspace_path_sha256"] == canonical_workspace_path_sha256(destination)
+    assert marker["workspace_fingerprint"] == fingerprint

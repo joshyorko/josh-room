@@ -127,7 +127,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
         if len(workspace_roots) != 1 or not workspace_roots[0].is_dir() or workspace_roots[0].is_symlink():
             raise ValueError("JAT restore did not produce an expected workspace root")
         restored_root = workspace_roots[0]
-        _write_room_marker(restored_root, project_id, project["display_name"], dimension_id=catalog.dimension_id, snapshot_id=snapshot["snapshot_id"], workspace_fp=snapshot.get("workspace_fingerprint"))
+        _write_room_marker(restored_root, project_id, project["display_name"], dimension_id=catalog.dimension_id, snapshot_id=snapshot["snapshot_id"], workspace_fp=snapshot.get("workspace_fingerprint"), path_binding=destination)
         backup = None
         if destination.exists():
             backup = destination.parent / f".{destination.name}.josh-room-backup-{operation_id}"
@@ -290,9 +290,9 @@ def _write_receipt(path: Path, body: dict) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _write_room_marker(workspace: Path, project_id: str, display_name: str, *, dimension_id: str | None = None, snapshot_id: str | None = None, workspace_fp: str | None = None) -> None:
+def _write_room_marker(workspace: Path, project_id: str, display_name: str, *, dimension_id: str | None = None, snapshot_id: str | None = None, workspace_fp: str | None = None, path_binding: Path | None = None) -> None:
     if dimension_id and snapshot_id and workspace_fp:
-        write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=display_name, snapshot_id=snapshot_id, workspace_fingerprint=workspace_fp)
+        write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=display_name, snapshot_id=snapshot_id, workspace_fingerprint=workspace_fp, path_binding=path_binding)
         return
     marker = workspace / ".josh-room.json"
     marker.write_text(json.dumps({"display_name": display_name, "format_version": 1, "project_id": project_id}, sort_keys=True) + "\n")

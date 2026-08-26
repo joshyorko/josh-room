@@ -50,6 +50,7 @@ def write_workspace_marker(
     display_name: str,
     snapshot_id: str,
     workspace_fingerprint: str,
+    path_binding: Path | None = None,
 ) -> dict:
     workspace = Path(workspace)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -63,7 +64,7 @@ def write_workspace_marker(
         "display_name": display_name,
         "snapshot_id": snapshot_id,
         "workspace_fingerprint": workspace_fingerprint,
-        "workspace_path_sha256": canonical_workspace_path_sha256(workspace),
+        "workspace_path_sha256": canonical_workspace_path_sha256(path_binding or workspace),
     }
     marker_path = workspace / MARKER_NAME
     fd, temp_name = tempfile.mkstemp(prefix=".josh-room.", dir=workspace)
