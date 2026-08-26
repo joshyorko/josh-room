@@ -198,13 +198,18 @@ module.exports.WorkspaceBaseline = AuthoritativeWorkspaceBaseline;
 module.exports.workspaceFingerprint = workspaceFingerprint;
 
 function isRoomMarker(marker) {
+  const digest = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   return Boolean(
     marker && [1, 2].includes(marker.format_version)
     && typeof marker.project_id === "string"
     && typeof marker.display_name === "string"
     && marker.display_name.length > 0
-    && (marker.format_version === 1 || typeof marker.snapshot_id === "string")
-    && (marker.format_version === 1 || typeof marker.dimension_id === "string"),
+    && (marker.format_version === 1 || (
+      typeof marker.snapshot_id === "string"
+      && typeof marker.dimension_id === "string"
+      && digest(marker.workspace_fingerprint)
+      && digest(marker.workspace_path_sha256)
+    )),
   );
 }
 
