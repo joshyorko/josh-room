@@ -184,6 +184,31 @@ def test_link_recovers_missing_marker_from_explicit_catalog_and_disk_evidence(tm
     assert marker["snapshot_id"] == snapshot["snapshot_id"]
 
 
+def test_link_uses_verified_hydrate_marker_for_legacy_catalog_fingerprint(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("Legacy Room")
+    fingerprint = workspace_fingerprint(workspace)
+    snapshot = _snapshot(fingerprint="0" * 64)
+    catalog = Catalog.empty(dimension_id="archive").add_snapshot(
+        "room", "Legacy Room", snapshot
+    )
+    write_workspace_marker(
+        workspace,
+        dimension_id="archive",
+        project_id="room",
+        display_name="Legacy Room",
+        snapshot_id=snapshot["snapshot_id"],
+        workspace_fingerprint=fingerprint,
+    )
+    evidence = {"project_id": "room", **snapshot}
+
+    result = link_workspace(workspace, catalog, evidence)
+
+    assert result["ok"] is True
+    assert result["marker"]["workspace_fingerprint"] == fingerprint
+
+
 def test_repair_replaces_stale_marker_only_after_disk_and_object_corroboration(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

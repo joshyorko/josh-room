@@ -301,7 +301,7 @@ async function loadCatalog(cwd, title = "Loading your Rooms…") {
 function currentRoom(cwd) {
   try {
     const marker = JSON.parse(fs.readFileSync(path.join(cwd, ".josh-room.json"), "utf8"));
-    return marker.format_version === 1 ? marker : undefined;
+    return isRoomMarker(marker) ? marker : undefined;
   } catch (_error) {
     return undefined;
   }

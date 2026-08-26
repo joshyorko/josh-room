@@ -127,7 +127,13 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
         if len(workspace_roots) != 1 or not workspace_roots[0].is_dir() or workspace_roots[0].is_symlink():
             raise ValueError("JAT restore did not produce an expected workspace root")
         restored_root = workspace_roots[0]
-        _write_room_marker(restored_root, project_id, project["display_name"], dimension_id=catalog.dimension_id, snapshot_id=snapshot["snapshot_id"], workspace_fp=snapshot.get("workspace_fingerprint"), path_binding=destination)
+        marker_fingerprint = snapshot.get("workspace_fingerprint")
+        if marker_fingerprint == "0" * 64:
+            # A v1 catalog has no saved fingerprint. Hydrate is the one point
+            # where trusted ciphertext has just been restored and verified, so
+            # establish the authoritative baseline from those restored bytes.
+            marker_fingerprint = workspace_fingerprint(restored_root)
+        _write_room_marker(restored_root, project_id, project["display_name"], dimension_id=catalog.dimension_id, snapshot_id=snapshot["snapshot_id"], workspace_fp=marker_fingerprint, path_binding=destination)
         backup = None
         if destination.exists():
             backup = destination.parent / f".{destination.name}.josh-room-backup-{operation_id}"
@@ -384,8 +390,17 @@ def _workspace_binding(workspace: Path, catalog: Catalog, object_evidence: dict 
     if not _evidence_matches(snapshot, object_evidence):
         raise ValueError("object evidence does not corroborate catalog")
     expected_fingerprint = snapshot.get("workspace_fingerprint")
+    if expected_fingerprint == "0" * 64:
+        # Legacy catalog migration uses the zero digest only as a sentinel.
+        # A v2 marker written by verified hydrate may supply the real baseline;
+        # without that marker, missing-ledger Repair remains fail-closed.
+        marker_fingerprint = (marker or {}).get("workspace_fingerprint")
+        if (marker or {}).get("format_version") == 2 and marker_fingerprint != "0" * 64:
+            expected_fingerprint = marker_fingerprint
     if not expected_fingerprint:
         raise ValueError("catalog workspace fingerprint is unavailable")
+    if expected_fingerprint == "0" * 64:
+        raise ValueError("legacy catalog workspace fingerprint is unavailable")
     if workspace_fingerprint(workspace) != expected_fingerprint:
         raise ValueError("workspace fingerprint does not corroborate catalog")
     if marker and not explicit:
@@ -398,6 +413,8 @@ def _workspace_binding(workspace: Path, catalog: Catalog, object_evidence: dict 
         from .workspace_state import canonical_workspace_path_sha256
         if marker.get("workspace_path_sha256") != canonical_workspace_path_sha256(workspace):
             raise ValueError("workspace path does not match marker")
+    if snapshot.get("workspace_fingerprint") != expected_fingerprint:
+        snapshot = {**snapshot, "workspace_fingerprint": expected_fingerprint}
     return marker, project_id, snapshot_id, dimension_id, snapshot
 
 
