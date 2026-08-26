@@ -4,7 +4,7 @@ import json
 import pytest
 
 from josh_room.catalog import Catalog
-from josh_room.cli import build_parser
+from josh_room.cli import _requires_oauth, build_parser
 from josh_room.config import DimensionConfig, DimensionRegistry, resolve_dimension
 from josh_room.operations import link_workspace, repair_workspace
 from josh_room.r2 import R2Config
@@ -431,6 +431,56 @@ def test_copy_parser_accepts_source_folder_without_explicit_source_room_or_jat(t
     assert args.source_folder == tmp_path
     assert args.source_dimension is None
     assert args.snapshot == "latest"
+
+
+def test_copy_source_folder_uses_resolved_marker_dimension_for_oauth(tmp_path, monkeypatch):
+    workspace = tmp_path / "source-room"
+    workspace.mkdir()
+    (workspace / "README.md").write_text("Source Room")
+    fingerprint = workspace_fingerprint(workspace)
+    write_workspace_marker(
+        workspace,
+        dimension_id="minio",
+        project_id="source-room",
+        display_name="Source Room",
+        snapshot_id="jat-1",
+        workspace_fingerprint=fingerprint,
+    )
+    config = {
+        "default_dimension": "r2",
+        "dimensions": {
+            "r2": {
+                "display_name": "Cloudflare R2",
+                "provider": "r2",
+                "endpoint": "https://r2.example.invalid",
+                "bucket": "r2-bucket",
+                "credential_profile": "r2-profile",
+            },
+            "minio": {
+                "display_name": "MinIO",
+                "provider": "minio",
+                "endpoint": "https://minio.example.invalid",
+                "bucket": "minio-bucket",
+                "credential_profile": "minio-profile",
+            },
+        },
+    }
+    monkeypatch.setattr("josh_room.cli.private_config", lambda: config)
+    source_folder_args = build_parser().parse_args([
+        "snapshot", "copy",
+        "--source-folder", str(workspace),
+        "--destination-dimension", "minio",
+        "--destination-room", "restored-room",
+    ])
+    destination_r2_args = build_parser().parse_args([
+        "snapshot", "copy",
+        "--source-folder", str(workspace),
+        "--destination-dimension", "r2",
+        "--destination-room", "restored-room",
+    ])
+
+    assert _requires_oauth(source_folder_args) is False
+    assert _requires_oauth(destination_r2_args) is True
 
 
 def test_v2_snapshot_records_origin_project_for_cross_room_hydration():

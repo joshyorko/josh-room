@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 
@@ -34,11 +35,38 @@ def workspace_fingerprint(workspace: Path) -> str:
     if not root.is_dir():
         raise ValueError("workspace must be a directory")
     digest = hashlib.sha256()
-    files = sorted((path for path in root.rglob("*") if path.is_file() and not path.is_symlink() and not _ignored(path, root)), key=lambda item: item.relative_to(root).as_posix())
-    for path in files:
+    entries = sorted(
+        (
+            path
+            for path in root.rglob("*")
+            if not path.is_symlink() and not _ignored(path, root)
+        ),
+        key=lambda item: item.relative_to(root).as_posix(),
+    )
+    for path in entries:
         relative = path.relative_to(root).as_posix().encode()
-        content_digest = hashlib.sha256(path.read_bytes()).hexdigest().encode()
-        digest.update(relative + b"\0" + str(path.stat().st_size).encode() + b"\0" + content_digest + b"\n")
+        metadata = path.stat()
+        mode = str(stat.S_IMODE(metadata.st_mode)).encode()
+        if path.is_dir():
+            digest.update(b"d\0" + relative + b"\0" + mode + b"\n")
+            continue
+        if not path.is_file():
+            continue
+        content_digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                content_digest.update(chunk)
+        digest.update(
+            b"f\0"
+            + relative
+            + b"\0"
+            + mode
+            + b"\0"
+            + str(metadata.st_size).encode()
+            + b"\0"
+            + content_digest.hexdigest().encode()
+            + b"\n"
+        )
     return digest.hexdigest()
 
 
@@ -92,6 +120,8 @@ def read_workspace_marker(workspace: Path) -> dict:
         raise ValueError("workspace marker is invalid") from error
     if marker.get("format_version") == 1:
         _identifier("project_id", marker.get("project_id"))
+        if not isinstance(marker.get("display_name"), str) or not marker["display_name"]:
+            raise ValueError("marker display_name is invalid")
         return marker
     if marker.get("format_version") != 2:
         raise ValueError("unsupported workspace marker format")
