@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const { WorkspaceBaseline, isRoomMarker, shouldMarkDirty } = require("./dirty");
+const { WorkspaceBaseline, fingerprintFile, isRoomMarker, shouldMarkDirty } = require("./dirty");
 
 test("dirty tracking notices workspace content and ignores bookkeeping noise", () => {
   assert.equal(shouldMarkDirty("src/app.py"), true);
@@ -51,6 +51,10 @@ test("room marker validation accepts v2 bindings while retaining readable v1", (
     project_id: "demo",
     snapshot_id: "jat-1",
   }), true);
+  assert.equal(isRoomMarker({
+    format_version: 1,
+    project_id: "demo",
+  }), true);
   assert.equal(isRoomMarker({ format_version: 2, project_id: "demo", snapshot_id: "jat-1" }), false);
 });
 
@@ -74,4 +78,23 @@ test("authoritative status fingerprint clears dirty state after a revert", async
   statusFingerprint = "saved-fingerprint";
   assert.equal(await baseline.check("source.txt"), false);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("large file fingerprints change outside the sampled head, middle, and tail", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fingerprint-test-"));
+  const source = path.join(root, "large.bin");
+  const size = 5 * 1024 * 1024 + 17;
+  const buffer = Buffer.alloc(size, 0x61);
+  fs.writeFileSync(source, buffer);
+  const first = await fingerprintFile(source);
+  const handle = fs.openSync(source, "r+");
+  try {
+    fs.writeSync(handle, Buffer.from([0x62]), 0, 1, 128 * 1024);
+  } finally {
+    fs.closeSync(handle);
+  }
+  const second = await fingerprintFile(source);
+  fs.rmSync(root, { recursive: true, force: true });
+
+  assert.notEqual(second, first);
 });
