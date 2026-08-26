@@ -120,6 +120,10 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter) {
     if (output) {
       try {
         const result = JSON.parse(output);
+        if (args[0] === "status") {
+          outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
+          return result;
+        }
         throw new Error(result.error || "Josh Room operation failed.");
       } catch (parseError) {
         if (parseError instanceof SyntaxError) {
@@ -320,7 +324,11 @@ function roomBindingDimensionId(item) {
 
 function sameRoomBinding(marker, item) {
   const project = roomProject(item);
-  return Boolean(marker && project && marker.project_id === project.id && marker.dimension_id === roomBindingDimensionId(item));
+  const snapshotId = snapshotIdentity(item);
+  return Boolean(marker && project
+    && marker.project_id === project.id
+    && marker.dimension_id === roomBindingDimensionId(item)
+    && (!snapshotId || marker.snapshot_id === snapshotId));
 }
 
 function refreshRoomStatus() {
@@ -430,8 +438,8 @@ async function saveRoom(options = {}) {
     : await vscode.window.showQuickPick([
       { label: "$(add) Create a new Room…", create: true },
       ...projects.map((project) => ({
-        label: project.display_name,
-        description: marker?.project_id === project.id ? "Current Room" : "Save a new latest snapshot",
+        label: roomLabel(project),
+        description: sameRoomBinding(marker, project) ? "Current Room" : "Save a new latest snapshot",
         project,
       })),
     ], { title: "Josh: Save Room", placeHolder: "Create or update a Room", ignoreFocusOut: true });
@@ -499,14 +507,15 @@ async function enterRoom(preferredProject) {
   const catalog = await loadCatalog(cwd);
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const preferred = roomProject(preferredProject);
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
   const selected = preferred
-    ? { label: roomLabel(preferred), projectId: preferred.id, project: preferred }
+    ? { label: roomLabel(preferred), projectId: preferred.id, project: preferred, snapshotId: preferredSnapshotId }
     : await vscode.window.showQuickPick(
       projects.map((project) => ({ label: roomLabel(project), projectId: project.id, project })),
       { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
   );
   if (!selected) return "cancelled";
-  if (sameRoomBinding(currentRoom(cwd), selected.project)) {
+  if (sameRoomBinding(currentRoom(cwd), selected)) {
     await vscode.window.showInformationMessage(`“${selected.label}” is already open.`);
     return "current";
   }
@@ -515,8 +524,8 @@ async function enterRoom(preferredProject) {
     nativeRegistry.dimensionArgs(["snapshots", "list", selected.projectId, "--backend", "r2"], dimensionId(selected.project)),
     cwd,
   );
-  let snapshotId = "latest";
-  if (history.snapshots.length > 1) {
+  let snapshotId = selected.snapshotId || "latest";
+  if (!selected.snapshotId && history.snapshots.length > 1) {
     const snapshot = await vscode.window.showQuickPick(
       history.snapshots
         .map((item) => ({
@@ -532,7 +541,7 @@ async function enterRoom(preferredProject) {
   }
   const root = roomsRoot(cwd);
   const destination = path.join(root, selected.projectId);
-  if (sameRoomBinding(currentRoom(destination), selected.project)) {
+  if (sameRoomBinding(currentRoom(destination), selected)) {
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Opening existing ${selected.label}…`, cancellable: false },
       () => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false),
@@ -579,13 +588,23 @@ async function removeSnapshot(preferredProject) {
       { title: "Josh: Delete Snapshot", placeHolder: "Choose a Room", ignoreFocusOut: true },
     );
   if (!selectedRoom) return "cancelled";
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
+  const marker = currentRoom(cwd);
+  if (preferredSnapshotId && activeSnapshot(marker, selectedRoom.project, preferredSnapshotId)) {
+    await vscode.window.showWarningMessage(
+      "Cannot delete the active JAT while this workspace is linked to it. Enter another recovery point first.",
+    );
+    return "blocked";
+  }
   const history = await runOperation(
     `Loading ${selectedRoom.label} recovery points…`,
     nativeRegistry.dimensionArgs(["snapshots", "list", selectedRoom.project.id, "--backend", "r2"], dimensionId(selectedRoom.project)),
     cwd,
   );
-  const selectedSnapshot = await vscode.window.showQuickPick(
-    history.snapshots
+  const selectedSnapshot = preferredSnapshotId
+    ? { label: "Selected snapshot", snapshot: { snapshot_id: preferredSnapshotId } }
+    : await vscode.window.showQuickPick(
+      history.snapshots
       .map((snapshot) => ({
         label: snapshot.snapshot_id === history.latest ? "$(star-full) Latest snapshot" : "$(history) Previous snapshot",
         description: snapshot.created_at ? new Date(snapshot.created_at).toLocaleString() : "Date unavailable",
@@ -593,13 +612,19 @@ async function removeSnapshot(preferredProject) {
         snapshot,
       }))
       .sort((left) => left.snapshot.snapshot_id === history.latest ? -1 : 1),
-    {
-      title: `Delete a ${selectedRoom.label} snapshot`,
-      placeHolder: "Choose exactly one snapshot",
-      ignoreFocusOut: true,
-    },
-  );
+      {
+        title: `Delete a ${selectedRoom.label} snapshot`,
+        placeHolder: "Choose exactly one snapshot",
+        ignoreFocusOut: true,
+      },
+    );
   if (!selectedSnapshot) return "cancelled";
+  if (activeSnapshot(marker, selectedRoom.project, selectedSnapshot.snapshot.snapshot_id)) {
+    await vscode.window.showWarningMessage(
+      "Cannot delete the active JAT while this workspace is linked to it. Enter another recovery point first.",
+    );
+    return "blocked";
+  }
   const consequence = history.snapshots.length === 1
     ? " This is the final snapshot and also deletes the Room."
     : selectedSnapshot.snapshot.snapshot_id === history.latest
@@ -632,25 +657,19 @@ async function serveRoom(preferredProject) {
   const marker = currentRoom(cwd);
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
-  const preferred = roomProject(preferredProject);
-  let project = preferred || projects.find((item) =>
-    item.id === marker?.project_id
-    && (!marker?.dimension_id || dimensionId(item) === marker.dimension_id));
-  if (!project) {
-    const selected = await vscode.window.showQuickPick(
-      projects.map((item) => ({ label: roomLabel(item), project: item })),
-      { title: "Josh: Serve Room Images", placeHolder: "Choose a Room", ignoreFocusOut: true },
-    );
-    if (!selected) return "cancelled";
-    project = selected.project;
-  }
+  const project = await chooseServeProject(projects, marker, preferredProject);
+  if (!project) return "cancelled";
   const history = await runOperation(
     `Loading ${project.display_name} recovery points…`,
     nativeRegistry.dimensionArgs(["snapshots", "list", project.id, "--backend", "r2"], dimensionId(project)),
     cwd,
   );
-  let snapshotId = history.latest;
-  if (history.snapshots.length > 1) {
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
+  const markerSnapshotId = marker && marker.format_version === 2 && marker.snapshot_id;
+  let snapshotId = preferredSnapshotId || (markerSnapshotId && history.snapshots.some(
+    (item) => item.snapshot_id === markerSnapshotId,
+  ) ? markerSnapshotId : history.latest);
+  if (!preferredSnapshotId && snapshotId === history.latest && history.snapshots.length > 1 && snapshotId !== markerSnapshotId) {
     const selected = await vscode.window.showQuickPick(
       history.snapshots.map((item) => ({
         label: item.snapshot_id === history.latest ? "Latest snapshot" : "Previous snapshot",
@@ -976,6 +995,27 @@ function dimensionId(item) {
     || selectedDimensionId;
 }
 
+function explicitDimensionId(item) {
+  const project = item && item.project && typeof item.project === "object" ? item.project : item;
+  const dimension = (item && item.dimension) || (project && project.dimension);
+  return (dimension && (dimension.id || dimension.dimension_id))
+    || (project && (project.dimension_id || project.dimensionId))
+    || (item && item.dimension_id);
+}
+
+function snapshotIdentity(item) {
+  const snapshot = item && item.snapshot;
+  return (item && (item.snapshot_id || item.snapshotId))
+    || (snapshot && (snapshot.snapshot_id || snapshot.id));
+}
+
+function activeSnapshot(marker, project, snapshotId) {
+  return Boolean(marker && project && snapshotId
+    && marker.project_id === project.id
+    && marker.dimension_id === explicitDimensionId(project)
+    && marker.snapshot_id === snapshotId);
+}
+
 function roomProject(item) {
   const project = item && item.project && typeof item.project === "object" ? item.project : item;
   if (!project) return undefined;
@@ -992,7 +1032,34 @@ function roomProject(item) {
 
 function roomLabel(item) {
   const project = roomProject(item);
-  return project && (project.display_name || project.name || project.id);
+  if (!project) return undefined;
+  const name = project.display_name || project.name || project.id;
+  const dimension = project.dimension || (item && item.dimension);
+  const dimensionName = project.dimension_display_name
+    || (dimension && (dimension.display_name || dimension.name || dimension.id || dimension.dimension_id))
+    || project.dimension_id;
+  return dimensionName ? `${name} · ${dimensionName}` : name;
+}
+
+async function chooseServeProject(projects, marker, preferredProject) {
+  const preferred = roomProject(preferredProject);
+  if (preferred && explicitDimensionId(preferredProject)) {
+    const selected = projects.find((project) => project.id === preferred.id
+      && explicitDimensionId(project) === explicitDimensionId(preferredProject));
+    if (selected) return selected;
+  }
+  if (marker && marker.format_version === 2 && marker.dimension_id && marker.snapshot_id) {
+    const selected = projects.find((project) => project.id === marker.project_id
+      && explicitDimensionId(project) === marker.dimension_id
+      && Array.isArray(project.snapshots)
+      && project.snapshots.some((snapshot) => snapshot.snapshot_id === marker.snapshot_id));
+    if (selected) return selected;
+  }
+  const choice = await vscode.window.showQuickPick(
+    projects.map((project) => ({ label: roomLabel(project), project })),
+    { title: "Josh: Serve Room Images", placeHolder: "Choose a Room", ignoreFocusOut: true },
+  );
+  return choice && choice.project;
 }
 
 async function chooseDimension(catalog, title) {
@@ -1211,6 +1278,10 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     savedFingerprint,
     fingerprintProvider,
   });
+  for (const document of vscode.workspace.textDocuments || []) {
+    const relative = relativeWorkspacePath(document.uri);
+    if (relative && document.isDirty) dirtyBuffers.add(relative);
+  }
   workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
   const compare = (uri) => baselineLoading ? pendingWorkspaceEvents.push(uri) : markWorkspaceChange(uri);
   workspaceWatcher.onDidChange(compare);
@@ -1290,12 +1361,40 @@ async function explicitRoomContext(preferredProject, title) {
   const catalog = await loadCatalog(activeWorkspace(), title);
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const preferred = roomProject(preferredProject);
-  if (preferred) return preferred;
+  const preferredDimensionId = explicitDimensionId(preferredProject);
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
+  if (preferred && preferredDimensionId) {
+    const catalogProject = projects.find((project) => project.id === preferred.id
+      && explicitDimensionId(project) === preferredDimensionId);
+    const catalogSnapshotIds = catalogProject && (catalogProject.snapshots || [])
+      .map((snapshot) => snapshot.snapshot_id || snapshot.id);
+    const snapshotId = preferredSnapshotId || latestSnapshotId(catalogProject);
+    if (catalogProject && snapshotId && (!preferredSnapshotId || catalogSnapshotIds.includes(snapshotId))) {
+      return { ...catalogProject, project_id: catalogProject.id, snapshot_id: snapshotId };
+    }
+  }
+  const choices = projects.flatMap((project) => {
+    const snapshots = Array.isArray(project.snapshots) ? project.snapshots : [];
+    return snapshots.map((snapshot) => ({
+      label: `${roomLabel(project)} · ${snapshot.display_name || snapshot.name || snapshot.snapshot_id}`,
+      description: snapshot.created_at || snapshot.snapshot_id,
+      project,
+      snapshot,
+      snapshotId: snapshot.snapshot_id || snapshot.id,
+    }));
+  });
   const choice = await vscode.window.showQuickPick(
-    projects.map((project) => ({ label: roomLabel(project), project })),
-    { title, placeHolder: "Choose a Room", ignoreFocusOut: true },
+    choices,
+    { title, placeHolder: "Choose a trusted Room recovery point", ignoreFocusOut: true },
   );
-  return choice && choice.project;
+  if (!choice) return undefined;
+  const project = roomProject(choice.project || choice);
+  const dimension = explicitDimensionId(choice) || explicitDimensionId(project);
+  const snapshotId = snapshotIdentity(choice) || latestSnapshotId(project);
+  if (!project?.id || !dimension || !snapshotId) {
+    throw new Error("Choose a trusted Dimension, Room, and JAT recovery point.");
+  }
+  return { ...project, project_id: project.id, dimension_id: dimension, snapshot_id: snapshotId };
 }
 
 function latestSnapshotId(project) {
@@ -1306,20 +1405,9 @@ function latestSnapshotId(project) {
 
 async function linkRoom(preferredProject) {
   const cwd = activeWorkspace();
-  const marker = currentRoom(cwd);
-  let context = marker;
-  let args = ["link"];
-  if (!marker) {
-    context = await explicitRoomContext(preferredProject, "Josh: Link Room");
-    if (!context) return "cancelled";
-    const snapshotId = latestSnapshotId(context);
-    if (!context.id || !snapshotId) throw new Error("Selected Room has no saved snapshot to link.");
-    context = { ...context, project_id: context.project_id || context.id, snapshot_id: snapshotId };
-    args = ["link", "--project", context.id, "--snapshot", snapshotId];
-  }
-  if (!context.project_id || !context.snapshot_id) {
-    throw new Error("This workspace has no complete Room marker to link.");
-  }
+  const context = await explicitRoomContext(preferredProject, "Josh: Link Room");
+  if (!context) return "cancelled";
+  const args = ["link", "--project", context.project_id, "--snapshot", context.snapshot_id];
   const result = await runOperation("Linking saved Room...", routeItemArgs(args, context), cwd);
   await resetNativeBaseline(result);
   if (roomsProvider) await roomsProvider.refresh();
@@ -1328,20 +1416,9 @@ async function linkRoom(preferredProject) {
 
 async function repairRoom(preferredProject) {
   const cwd = activeWorkspace();
-  const marker = currentRoom(cwd);
-  let context = marker;
-  let args = ["repair"];
-  if (!marker) {
-    context = await explicitRoomContext(preferredProject, "Josh: Repair Room Ledger");
-    if (!context) return "cancelled";
-    const snapshotId = latestSnapshotId(context);
-    if (!context.id || !snapshotId) throw new Error("Selected Room has no saved snapshot to repair.");
-    context = { ...context, project_id: context.project_id || context.id, snapshot_id: snapshotId };
-    args = ["repair", "--project", context.id, "--snapshot", snapshotId];
-  }
-  if (!context.project_id || !context.snapshot_id) {
-    throw new Error("This workspace has no complete Room marker to repair.");
-  }
+  const context = await explicitRoomContext(preferredProject, "Josh: Repair Room Ledger");
+  if (!context) return "cancelled";
+  const args = ["repair", "--project", context.project_id, "--snapshot", context.snapshot_id];
   const result = await runOperation("Repairing Room ledger...", routeItemArgs(args, context), cwd);
   await resetNativeBaseline(result);
   if (roomsProvider) await roomsProvider.refresh();
@@ -1383,9 +1460,16 @@ class RoomDragAndDropController {
     } else {
       const uri = dataTransfer.get("text/uri-list");
       if (!uri) return;
-      const first = (await uri.asString()).split(/\\r?\\n/).find(Boolean);
+      const first = (await uri.asString()).split(/\r?\n/).find((line) => line.trim() && !line.trim().startsWith("#"));
       if (!first) return;
-      source = { kind: "folder", path: decodeURIComponent(first.replace(/^file:\/\//, "")) };
+      const value = first.trim();
+      let sourcePath;
+      try {
+        sourcePath = decodeURIComponent(new URL(value).pathname);
+      } catch (_error) {
+        sourcePath = decodeURIComponent(value.replace(/^file:\/\//, ""));
+      }
+      source = { kind: "folder", path: sourcePath };
     }
     let destination = target || await chooseDimension(
       await loadCatalog(activeWorkspace()), "Copy JAT to Dimension",
@@ -1473,31 +1557,45 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
   const dimensions = dimensionList(catalog);
   for (const dimension of dimensions) {
     const id = dimension.id || dimension.dimension_id;
-    if (!id) throw new Error("Dimension listing returned a record without dimension_id.");
+    if (!id) {
+      outputChannel && outputChannel.warn("Skipping a Dimension without dimension_id.");
+      dimension.projects = [];
+      continue;
+    }
     let projects = dimension.projects || dimension.rooms;
-    if (projects && !Array.isArray(projects)) {
-      projects = Object.entries(projects).map(([projectId, value]) =>
-        Object.assign({}, value || {}, { id: (value && (value.id || value.project_id)) || projectId }));
-    }
-    if (!Array.isArray(projects)) {
-      const listed = await runOperation(title || "Loading your Rooms...",
-        nativeRegistry.dimensionArgs(["projects", "list"], id), cwd);
-      if (listed.dimension_id && listed.dimension_id !== id) {
-        throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
+    try {
+      if (projects && !Array.isArray(projects)) {
+        projects = Object.entries(projects).map(([projectId, value]) =>
+          Object.assign({}, value || {}, { id: (value && (value.id || value.project_id)) || projectId }));
       }
-      projects = listed.projects || [];
+      if (!Array.isArray(projects)) {
+        const listed = await runOperation(title || "Loading your Rooms...",
+          nativeRegistry.dimensionArgs(["projects", "list"], id), cwd);
+        if (listed.dimension_id && listed.dimension_id !== id) {
+          throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
+        }
+        projects = listed.projects || [];
+      }
+    } catch (error) {
+      outputChannel && outputChannel.warn("Unable to load Rooms for Dimension " + id + ": " + error.message);
+      projects = [];
     }
-    dimension.projects = projects;
-    for (const project of projects) {
+    dimension.projects = Array.isArray(projects) ? projects : [];
+    for (const project of dimension.projects) {
       const projectId = project.id || project.project_id;
       if (!projectId) continue;
-      const listed = await runOperation(title || "Loading your Rooms...",
-        nativeRegistry.dimensionArgs(["snapshots", "list", projectId], id), cwd);
-      if (listed.dimension_id && listed.dimension_id !== id) {
-        throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
+      try {
+        const listed = await runOperation(title || "Loading your Rooms...",
+          nativeRegistry.dimensionArgs(["snapshots", "list", projectId], id), cwd);
+        if (listed.dimension_id && listed.dimension_id !== id) {
+          throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
+        }
+        project.snapshots = listed.snapshots || [];
+        project.latest = listed.latest;
+      } catch (error) {
+        outputChannel && outputChannel.warn("Unable to load JATs for Room " + projectId + " in Dimension " + id + ": " + error.message);
+        project.snapshots = Array.isArray(project.snapshots) ? project.snapshots : [];
       }
-      project.snapshots = listed.snapshots || [];
-      project.latest = listed.latest;
     }
   }
   return Object.assign({}, catalog, {
@@ -1552,3 +1650,14 @@ openDimension = async function editOrOpenDimension(item) {
   if (roomsProvider) await roomsProvider.refresh();
   return action.edit ? "updated" : "opened";
 };
+
+Object.assign(module.exports.__test__, {
+  chooseServeProject,
+  linkRoom,
+  loadCatalog,
+  repairRoom,
+  removeSnapshot,
+  RoomDragAndDropController,
+  roomLabel,
+  runJoshRoom,
+});

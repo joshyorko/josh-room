@@ -29,7 +29,7 @@ assert ssl.SSLContext is original
 def test_r2_command_initializes_system_trust_before_auth_and_dispatch(monkeypatch, capsys):
     events = []
     monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: events.append("tls"))
-    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda: events.append("auth"))
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda **_kwargs: events.append("auth"))
     monkeypatch.setattr(
         "josh_room.cli.dispatch",
         lambda *_args: events.append("dispatch") or {"ok": True, "projects": []},
@@ -207,7 +207,7 @@ def test_human_enter_uses_terminal_picker(monkeypatch, capsys):
 
 def test_documented_argv_forms_have_stable_json_exit_contract(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("JOSH_ROOM_INSTANCE", str(tmp_path / "instance"))
-    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda: None)
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda **_kwargs: None)
     cases = [
         (["doctor", "--json"], 2),
         (["projects", "list", "--json"], 2),

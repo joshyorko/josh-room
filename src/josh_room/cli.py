@@ -171,12 +171,15 @@ def main(argv=None):
     instance = _instance_root()
     try:
         if _requires_oauth(args):
-            ensure_runtime_session()
+            selected = None if getattr(args, "snapshot_command", None) == "copy" else _effective_dimension(args)
+            ensure_runtime_session(dimension_id=selected.dimension_id if selected else None)
         identity_context = nullcontext() if args.command in {"setup", "status"} else _identity_environment()
         with identity_context:
             result = dispatch(args, instance)
     except (OSError, RuntimeError, ValueError) as error:
         result = {"ok": False, "error": str(error)}
+        if isinstance(getattr(error, "result", None), dict):
+            result.update(error.result)
     emit(result, getattr(args, "json", False))
     return 0 if result["ok"] else 2
 
@@ -198,6 +201,12 @@ def _requires_oauth(args) -> bool:
             return DimensionRegistry(private_config() or {}).select(dimension).provider == "r2"
         except ValueError:
             return False
+    try:
+        selected = _effective_dimension(args)
+    except ValueError:
+        selected = None
+    if selected is not None:
+        return selected.provider == "r2"
     return getattr(args, "backend", "r2") == "r2"
 
 
@@ -242,7 +251,8 @@ def dispatch(args, instance: Path) -> dict:
             except ValueError:
                 if not all((args.project, args.snapshot, args.dimension)):
                     raise
-        selected_dimension = args.dimension or (marker or {}).get("dimension_id")
+        selected = _effective_dimension(args)
+        selected_dimension = args.dimension or (marker or {}).get("dimension_id") or (selected.dimension_id if selected else None)
         backend = _backend(args.backend, instance, selected_dimension)
         catalog = load_catalog(instance, backend)
         project_id = args.project or (marker or {}).get("project_id")
@@ -259,13 +269,14 @@ def dispatch(args, instance: Path) -> dict:
             "ciphertext_size": snapshot["ciphertext_size"],
         }
         if backend:
-            backend.get_bytes(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
+            backend.verify_object(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
         else:
-            ImmutableLocalStore(instance).get(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
+            ImmutableLocalStore(instance).verify(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
         operation = link_workspace if args.command == "link" else repair_workspace
         return operation(args.workspace, catalog, object_evidence, project_id=project_id, snapshot_id=snapshot_id, dimension_id=dimension_id)
     if args.command == "doctor":
-        return _doctor(instance, args.backend, args.ide)
+        selected = _effective_dimension(args)
+        return _doctor(instance, args.backend, args.ide, dimension=selected.dimension_id if selected else None)
     if args.command == "projects":
         backend = _backend_for_args(args, instance)
         projects = list_projects(instance, backend)
@@ -452,8 +463,29 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
 
 
 def _backend_for_args(args, instance: Path):
-    dimension = getattr(args, "dimension", None)
-    return _backend(args.backend, instance, dimension) if dimension else _backend(args.backend, instance)
+    selected = _effective_dimension(args)
+    if not selected or (
+        not getattr(args, "dimension", None)
+        and selected.provider == args.backend == selected.dimension_id
+    ):
+        return _backend(args.backend, instance)
+    return _backend(selected.provider, instance, selected.dimension_id)
+
+
+def _effective_dimension(args):
+    config = private_config() or {}
+    requested = getattr(args, "dimension", None)
+    backend = getattr(args, "backend", "r2")
+    registry = DimensionRegistry(config)
+    if requested:
+        return registry.select(requested)
+    if backend == "local":
+        return None
+    if backend != "r2":
+        return registry.select(backend)
+    if config.get("default_dimension") or config.get("dimensions") or config.get("r2"):
+        return registry.select()
+    return None
 
 
 def _backend(name: str, instance: Path, dimension: str | None = None):
@@ -528,7 +560,7 @@ def _identity_environment():
         path.unlink(missing_ok=True)
 
 
-def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
+def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None = None) -> dict:
     checks = []
 
     def record(name, ok, remediation, detail=None):
@@ -555,10 +587,21 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
     record("identity", identity_ok, "Run josh-room setup to store Josh's daily age identity in the OS keyring.")
 
     catalog_ok = False
+    selected_dimension = None
+    selected_backend = backend_name
     if backend_name in {"r2", "minio"}:
         r2_ok = False
         try:
-            backend = _backend(backend_name, instance)
+            selected = _effective_dimension(argparse.Namespace(backend=backend_name, dimension=dimension))
+        except ValueError:
+            selected = None
+        selected_dimension = selected.dimension_id if selected else backend_name
+        selected_backend = selected.provider if selected else backend_name
+        try:
+            if selected and (dimension or selected.dimension_id != selected.provider):
+                backend = _backend(selected.provider, instance, selected_dimension)
+            else:
+                backend = _backend(backend_name, instance)
             encrypted, _etag = backend.read_catalog()
             r2_ok = True
             if encrypted is not None and identity_ok:
@@ -567,8 +610,8 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
         except (OSError, RuntimeError, ValueError):
             r2_ok = False
         remediation = ("Run josh-room setup, unlock the host keyring, and verify the private R2 endpoint and bucket."
-                       if backend_name == "r2" else "Configure the private object-store endpoint, bucket, and OS keyring profile.")
-        record(backend_name, r2_ok, remediation, detail=f"private {backend_name} reachable" if r2_ok else None)
+                       if selected_backend == "r2" else "Configure the private object-store endpoint, bucket, and OS keyring profile.")
+        record(selected_backend, r2_ok, remediation, detail=f"private {selected_backend} reachable" if r2_ok else None)
     else:
         record("r2", True, "Select --backend local for offline use.", detail="local backend selected")
         if identity_ok:
@@ -584,7 +627,8 @@ def _doctor(instance: Path, backend_name: str, ide: str) -> dict:
         "ok": all(check["ok"] for check in checks),
         "product": "josh-room",
         "format_version": 1,
-        "selected_backend": backend_name,
+        "selected_backend": selected_backend,
+        "selected_dimension": selected_dimension,
         "selected_ide": ide,
         "checks": checks,
         "r2_auth": auth_status(),

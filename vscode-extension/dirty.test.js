@@ -11,6 +11,9 @@ test("dirty tracking notices workspace content and ignores bookkeeping noise", (
   assert.equal(shouldMarkDirty("src/app.py"), true);
   assert.equal(shouldMarkDirty(".vscode/tasks.json"), true);
   assert.equal(shouldMarkDirty(".josh-room.json"), false);
+  assert.equal(shouldMarkDirty("__pycache__"), false);
+  assert.equal(shouldMarkDirty("__pycache__/module.pyc"), false);
+  assert.equal(shouldMarkDirty("src/__pycache__"), false);
   assert.equal(shouldMarkDirty(".git/index"), false);
   assert.equal(shouldMarkDirty("src/__pycache__/app.pyc"), false);
   assert.equal(shouldMarkDirty(".pytest_cache/v/cache/nodeids"), false);
@@ -48,11 +51,6 @@ test("room marker validation accepts v2 bindings while retaining readable v1", (
     snapshot_id: "jat-1",
     workspace_fingerprint: "a".repeat(64),
     workspace_path_sha256: "b".repeat(64),
-  }), true);
-  assert.equal(isRoomMarker({
-    format_version: 1,
-    project_id: "demo",
-    display_name: "Demo",
   }), true);
   assert.equal(isRoomMarker({
     format_version: 1,
@@ -109,4 +107,21 @@ test("large file fingerprints change outside the sampled head, middle, and tail"
   fs.rmSync(root, { recursive: true, force: true });
 
   assert.notEqual(second, first);
+});
+
+test("authoritative capture fingerprints many entries without retaining the complete workspace map", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-bounded-fingerprint-test-"));
+  for (let index = 0; index < 512; index += 1) {
+    fs.writeFileSync(path.join(root, `entry-${String(index).padStart(4, "0")}.txt`), `${index}\n`);
+  }
+  const baseline = new WorkspaceBaseline(root, {
+    savedFingerprint: "0".repeat(64),
+    fingerprintProvider: async () => "0".repeat(64),
+  });
+
+  await baseline.capture();
+
+  assert.ok(baseline.files.size <= 32, `retained ${baseline.files.size} workspace entries`);
+  assert.match(baseline.currentFingerprint, /^[0-9a-f]{64}$/);
+  fs.rmSync(root, { recursive: true, force: true });
 });

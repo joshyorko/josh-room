@@ -118,6 +118,12 @@ function providerLabel(value) {
   return PROVIDER_LABELS[key] || String(value || key).trim() || "Storage Provider";
 }
 
+function dimensionDisplayName(dimension, counts) {
+  const id = dimension && (dimension.id || dimension.dimension_id);
+  const name = dimension && (dimension.display_name || dimension.name || id);
+  return counts.get(name) > 1 ? `${name} (${id})` : name;
+}
+
 function records(value, idField = "id") {
   if (Array.isArray(value)) return value.map((item) => ({ ...item }));
   if (!value || typeof value !== "object") return [];
@@ -139,13 +145,20 @@ function snapshotRecords(project) {
 function buildProviderTree(catalog = {}) {
   const dimensions = records(catalog.dimensions);
   const fallbackProjects = records(catalog.projects, "id");
-  const grouped = new Map();
-  for (const dimension of dimensions.length ? dimensions : [{
+  const sourceDimensions = dimensions.length ? dimensions : [{
     id: catalog.dimension_id || "default",
     display_name: catalog.dimension_name || "Default",
     provider: catalog.provider || "r2",
     projects: fallbackProjects,
-  }]) {
+  }];
+  const dimensionNames = new Map();
+  for (const dimension of sourceDimensions) {
+    const name = dimension.display_name || dimension.name || dimension.id || dimension.dimension_id;
+    dimensionNames.set(name, (dimensionNames.get(name) || 0) + 1);
+  }
+  const grouped = new Map();
+  for (const dimension of sourceDimensions) {
+    const displayName = dimensionDisplayName(dimension, dimensionNames);
     const providerId = providerKey(dimension.provider || dimension.provider_id || dimension.kind);
     if (!grouped.has(providerId)) {
       grouped.set(providerId, {
@@ -167,7 +180,7 @@ function buildProviderTree(catalog = {}) {
     const roomNodes = projects.map((project) => ({
       kind: "room",
       id: project.id || project.project_id,
-      label: project.display_name || project.name || project.id || project.project_id,
+      label: `${project.display_name || project.name || project.id || project.project_id} · ${displayName}`,
       project,
       dimension,
       children: snapshotRecords(project).map((snapshot) => ({
@@ -185,7 +198,7 @@ function buildProviderTree(catalog = {}) {
     grouped.get(providerId).children.push({
       kind: "dimension",
       id: dimension.id || dimension.dimension_id,
-      label: dimension.display_name || dimension.name || dimension.id || dimension.dimension_id,
+      label: displayName,
       description: publicParts.join(" � "),
       provider: providerId,
       dimension,
@@ -322,21 +335,28 @@ function flattenDimensionRooms(catalog = {}) {
       : undefined;
     return records(catalog.projects, "id").map((project) => decorateRoom(project, dimension));
   }
+  const dimensionNames = new Map();
+  for (const dimension of dimensions) {
+    const name = dimension.display_name || dimension.name || dimension.id || dimension.dimension_id;
+    dimensionNames.set(name, (dimensionNames.get(name) || 0) + 1);
+  }
   return dimensions.flatMap((dimension) => {
+    const displayName = dimensionDisplayName(dimension, dimensionNames);
     const source = Object.prototype.hasOwnProperty.call(dimension, "projects")
       ? dimension.projects
       : dimension.rooms;
-    return records(source, "id").map((project) => decorateRoom(project, dimension));
+    return records(source, "id").map((project) => decorateRoom(project, dimension, displayName));
   });
 }
 
-function decorateRoom(project, dimension) {
+function decorateRoom(project, dimension, dimensionDisplayNameValue) {
   const id = project.id || project.project_id;
   return {
     ...project,
     id,
     project_id: project.project_id || id,
     dimension_id: dimension && (dimension.id || dimension.dimension_id),
+    dimension_display_name: dimensionDisplayNameValue,
     dimension,
   };
 }

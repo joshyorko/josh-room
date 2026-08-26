@@ -19,8 +19,15 @@ from .progress import report_progress
 OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
 
 
-class R2Conflict(RuntimeError):
-    pass
+class R2PublicationError(RuntimeError):
+    def __init__(self, message: str, *, published: bool):
+        self.published = published
+        super().__init__(message)
+
+
+class R2Conflict(R2PublicationError):
+    def __init__(self, message: str):
+        super().__init__(message, published=False)
 
 
 @dataclass(frozen=True)
@@ -203,6 +210,11 @@ class R2Backend(ObjectStore):
         if total != size or observed.hexdigest() != digest:
             raise ValueError("remote object digest mismatch")
 
+    def verify_object(self, key: str, expected_digest: str, expected_size: int) -> ObjectRef:
+        self._validate_object_key(key, expected_digest)
+        self._verify_remote(key, expected_digest, expected_size)
+        return ObjectRef(key, expected_digest, expected_size)
+
     def read_catalog(self) -> tuple[bytes | None, str | None]:
         try:
             head = self.client.head_object(Bucket=self.config.bucket, Key=self.config.catalog_key)
@@ -227,19 +239,28 @@ class R2Backend(ObjectStore):
         except ClientError as error:
             if _is_precondition(error):
                 raise R2Conflict("stale catalog revision or existing catalog") from error
-            raise
-        head = self.client.head_object(Bucket=self.config.bucket, Key=self.config.catalog_key)
-        verified, _etag = self.read_catalog()
-        if verified != body:
-            raise ValueError("catalog read-back mismatch")
-        return head.get("ETag", "")
+            raise R2PublicationError("catalog publication outcome is unknown", published=True) from error
+        try:
+            head = self.client.head_object(Bucket=self.config.bucket, Key=self.config.catalog_key)
+            verified, _etag = self.read_catalog()
+            if verified != body:
+                raise ValueError("catalog read-back mismatch")
+            return head.get("ETag", "")
+        except BaseException as error:
+            raise R2PublicationError("catalog publication verification failed", published=True) from error
 
     def record_orphan(self, ref: ObjectRef) -> Path | None:
         if not self.receipt_dir:
             return None
         self.receipt_dir.mkdir(parents=True, exist_ok=True)
         path = self.receipt_dir / f"orphan-{uuid.uuid4().hex}.json"
-        path.write_text(json.dumps({"status": "uploaded-unreferenced", "object_key": ref.key, "sha256": ref.sha256, "size": ref.size}, sort_keys=True))
+        provider = "minio" if self.__class__.__module__.endswith("minio") else "r2"
+        destination = {"provider": provider}
+        for name in ("dimension_id", "endpoint", "bucket"):
+            value = getattr(self.config, name, None)
+            if isinstance(value, str) and value:
+                destination[name] = value
+        path.write_text(json.dumps({"status": "uploaded-unreferenced", "destination": destination, "object_key": ref.key, "sha256": ref.sha256, "size": ref.size}, sort_keys=True))
         return path
 
     def delete_object(self, key: str) -> None:

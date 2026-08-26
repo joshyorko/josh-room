@@ -21,6 +21,27 @@ from .workspace_state import (
 )
 
 
+class CopyPublicationError(RuntimeError, ValueError):
+    def __init__(self, cause: BaseException, receipt: Path):
+        self.result = {
+            "ok": False,
+            "error_type": type(cause).__name__,
+            "orphan_receipt": str(receipt),
+        }
+        super().__init__(f"{cause}; orphan receipt: {receipt}")
+
+
+class SavePublicationError(RuntimeError):
+    def __init__(self, cause: BaseException, marker: Path):
+        self.result = {
+            "ok": False,
+            "publication_state": "published_verification_unknown",
+            "marker_state": "committed",
+            "marker": str(marker),
+        }
+        super().__init__(f"{cause}; catalog publication may be visible; marker committed: {marker}")
+
+
 def create_snapshot(
     instance: Path,
     project_id: str,
@@ -59,46 +80,50 @@ def create_snapshot(
             ref = ImmutableLocalStore(instance).put_file(encrypted)
         if ref.sha256 != ciphertext_digest or ref.size != ciphertext_size:
             raise ValueError("published ciphertext metadata mismatch")
-        if workspace_fingerprint(source) != source_fingerprint:
-            if backend:
-                backend.record_orphan(ref)
-            raise ValueError("source workspace changed during snapshot capture")
         catalog_path = instance / "catalog.jroom.age"
         dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) if backend else None
         identity_value = os.environ.get("JOSH_ROOM_IDENTITY")
-        report_progress("catalog", "Loading encrypted Room catalog")
-        if backend:
-            catalog, catalog_etag = _read_remote_catalog(backend, identity_value, instance, getattr(getattr(backend, "config", None), "dimension_id", None))
-        else:
-            catalog_file = CatalogFile(catalog_path, Path(identity_value) if identity_value else None, dimension_id if "dimension_id" in locals() else None)
-            catalog = catalog_file.read()
-            catalog_etag = None
-        observed_revision = catalog.body["revision"]
-        if workspace_fingerprint(source) != source_fingerprint:
-            if backend:
-                backend.record_orphan(ref)
-            raise ValueError("source workspace changed during snapshot capture")
-        snapshot_record = {"snapshot_id": manifest["snapshot_id"], "origin_project_id": project_id, "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]}
-        if dimension_id:
-            snapshot_record["workspace_fingerprint"] = source_fingerprint
-        catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), snapshot_record)
+        marker_path = source / ".josh-room.json"
+        previous_marker = None
+        marker_written = False
         try:
+            if marker_path.is_file():
+                with marker_path.open("rb") as marker_file:
+                    previous_marker = marker_file.read()
             if workspace_fingerprint(source) != source_fingerprint:
-                if backend:
-                    backend.record_orphan(ref)
                 raise ValueError("source workspace changed during snapshot capture")
+            report_progress("catalog", "Loading encrypted Room catalog")
+            if backend:
+                catalog, catalog_etag = _read_remote_catalog(backend, identity_value, instance, getattr(getattr(backend, "config", None), "dimension_id", None))
+            else:
+                catalog_file = CatalogFile(catalog_path, Path(identity_value) if identity_value else None, dimension_id)
+                catalog = catalog_file.read()
+                catalog_etag = None
+            observed_revision = catalog.body["revision"]
+            if workspace_fingerprint(source) != source_fingerprint:
+                raise ValueError("source workspace changed during snapshot capture")
+            snapshot_record = {"snapshot_id": manifest["snapshot_id"], "origin_project_id": project_id, "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "created_at": manifest["created_at"]}
+            if dimension_id:
+                snapshot_record["workspace_fingerprint"] = source_fingerprint
+            catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), snapshot_record)
+            if workspace_fingerprint(source) != source_fingerprint:
+                raise ValueError("source workspace changed during snapshot capture")
+            _write_room_marker(source, project_id, display_name or _display_name(project_id), dimension_id=dimension_id, snapshot_id=manifest["snapshot_id"], workspace_fp=source_fingerprint)
+            marker_written = True
             report_progress("catalog", "Publishing the new latest Room snapshot")
             if backend:
                 backend.conditional_catalog_put(_encrypt_catalog(catalog, recipients, instance), catalog_etag)
             else:
                 catalog_file.update_if_revision(observed_revision, catalog, recipients)
-        except BaseException:
-            if backend:
+        except BaseException as error:
+            published = bool(getattr(error, "published", False))
+            if marker_written and not published:
+                _restore_marker(marker_path, previous_marker)
+            if backend and not published:
                 backend.record_orphan(ref)
+            if published:
+                raise SavePublicationError(error, marker_path) from error
             raise
-        if workspace_fingerprint(source) != source_fingerprint:
-            raise ValueError("source workspace changed during snapshot capture")
-        _write_room_marker(source, project_id, display_name or _display_name(project_id), dimension_id=dimension_id, snapshot_id=manifest["snapshot_id"], workspace_fp=source_fingerprint)
         report_progress("complete", "Room saved safely")
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
 
@@ -320,6 +345,13 @@ def _write_room_marker(workspace: Path, project_id: str, display_name: str, *, d
     marker.write_text(json.dumps({"display_name": display_name, "format_version": 1, "project_id": project_id}, sort_keys=True) + "\n")
 
 
+def _restore_marker(path: Path, previous: bytes | None) -> None:
+    if previous is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_bytes(previous)
+
+
 def _read_remote_catalog(backend, identity_value, instance: Path, dimension_id: str | None = None):
     dimension_id = dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None)
     encrypted, etag = backend.read_catalog()
@@ -456,9 +488,39 @@ def repair_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | 
     return {"ok": True, "dimension_id": dimension_id, "project_id": project_id, "snapshot_id": snapshot_id}
 
 
-def _record_orphan(store, ref) -> None:
+def _record_orphan(store, ref):
     if ref is not None and hasattr(store, "record_orphan"):
-        store.record_orphan(ref)
+        return store.record_orphan(ref)
+    return None
+
+
+def _destination_identity(store) -> dict:
+    config = getattr(store, "config", None)
+    if config is None:
+        return {"provider": "local"}
+    provider = getattr(config, "provider", None)
+    if provider is None:
+        provider = "minio" if store.__class__.__module__.endswith("minio") else "r2"
+    identity = {"provider": provider}
+    for name in ("dimension_id", "endpoint", "bucket"):
+        value = getattr(config, name, None)
+        if isinstance(value, str) and value:
+            identity[name] = value
+    return identity
+
+
+def _write_copy_orphan_receipt(instance: Path, ref, store, error: BaseException) -> Path:
+    path = Path(instance) / "receipts" / f"orphan-copy-{uuid.uuid4().hex}.json"
+    _write_receipt(path, {
+        "operation": "copy",
+        "status": "uploaded-unreferenced",
+        "error_type": type(error).__name__,
+        "destination": _destination_identity(store),
+        "object_key": ref.key,
+        "sha256": ref.sha256,
+        "size": ref.size,
+    })
+    return path
 
 
 def copy_snapshot(source_catalog: Catalog, destination_catalog: Catalog, source_store, destination_store, project_id: str, snapshot_id: str = "latest", destination_project_id: str | None = None) -> dict:
@@ -482,6 +544,7 @@ def copy_snapshot(source_catalog: Catalog, destination_catalog: Catalog, source_
         new_snapshot = dict(source)
         new_snapshot["snapshot_id"] = _snapshot_id()
         new_snapshot["created_at"] = datetime.now(UTC).isoformat()
+        new_snapshot["origin_project_id"] = source.get("origin_project_id", project_id)
         if destination_catalog.body["format_version"] == 2:
             new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
         project = destination_project_id or project_id
@@ -518,6 +581,7 @@ def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_ca
             new_snapshot = dict(source)
             new_snapshot["snapshot_id"] = _snapshot_id()
             new_snapshot["created_at"] = datetime.now(UTC).isoformat()
+            new_snapshot["origin_project_id"] = source.get("origin_project_id", source_project)
             if destination_catalog.body["format_version"] == 2:
                 new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
             updated = destination_catalog.add_snapshot(destination_project, source_catalog.body["projects"][source_project]["display_name"], new_snapshot)
@@ -526,9 +590,12 @@ def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_ca
                 destination_backend.conditional_catalog_put(body, destination_etag)
             elif destination_backend is None:
                 CatalogFile(instance / "catalog.jroom.age", Path(os.environ["JOSH_ROOM_IDENTITY"]), destination_catalog.dimension_id).update_if_revision(destination_catalog.body["revision"], updated, recipients)
-        except BaseException:
+        except BaseException as error:
             _record_orphan(destination_backend, ref)
-            raise
+            if ref is None:
+                raise
+            receipt = _write_copy_orphan_receipt(instance, ref, destination_backend, error)
+            raise CopyPublicationError(error, receipt) from error
     return {"ok": True, "project_id": destination_project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}
 
 

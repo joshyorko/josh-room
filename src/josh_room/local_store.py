@@ -112,6 +112,30 @@ class ImmutableLocalStore:
             raise ValueError("local object digest mismatch")
         return body
 
+    def verify(self, key: str, expected_digest: str, expected_size: int) -> ObjectRef:
+        match = OBJECT_KEY.fullmatch(key)
+        if not match or match.group(1) != expected_digest:
+            raise ValueError("invalid object key")
+        path = self.root / key
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("local object is unavailable")
+        if path.stat().st_size != expected_size:
+            raise ValueError("local object size mismatch")
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as source:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_OBJECT_SIZE:
+                    raise ValueError("object exceeds maximum size")
+                digest.update(chunk)
+        if size != expected_size or digest.hexdigest() != expected_digest:
+            raise ValueError("local object digest mismatch")
+        return ObjectRef(key, digest.hexdigest(), size)
+
     def delete(self, key: str) -> None:
         if not OBJECT_KEY.fullmatch(key):
             raise ValueError("invalid object key")

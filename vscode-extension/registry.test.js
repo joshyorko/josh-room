@@ -101,7 +101,7 @@ test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
   assert.equal(tree[0].children[0].kind, "dimension");
   assert.equal(tree[0].children[0].label, "Archive");
   assert.equal(tree[0].children[0].children[0].kind, "room");
-  assert.equal(tree[0].children[0].children[0].label, "Demo Room");
+  assert.equal(tree[0].children[0].children[0].label, "Demo Room · Archive");
   assert.deepEqual(
     tree[0].children[0].children[0].children.map((item) => [item.kind, item.id]),
     [["jat", "jat-002"], ["jat", "jat-001"]],
@@ -185,4 +185,16 @@ test("flattenDimensionRooms decorates command-palette Rooms with their Dimension
     dimension_id: "archive",
     dimension: "Archive",
   }]);
+});
+
+test("duplicate Room IDs and names remain Dimension-qualified in the hierarchy", () => {
+  const tree = buildProviderTree({
+    dimensions: [
+      { id: "archive", display_name: "Archive", provider: "r2", projects: [{ id: "same-room", display_name: "Same Room" }] },
+      { id: "backup", display_name: "Backup", provider: "minio", projects: [{ id: "same-room", display_name: "Same Room" }] },
+    ],
+  });
+  const rooms = tree.flatMap((provider) => provider.children.flatMap((dimension) => dimension.children));
+  assert.deepEqual(rooms.map((room) => room.label), ["Same Room · Archive", "Same Room · Backup"]);
+  assert.deepEqual(rooms.map((room) => room.dimension.id), ["archive", "backup"]);
 });

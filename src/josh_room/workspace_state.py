@@ -27,7 +27,11 @@ def canonical_workspace_path_sha256(workspace: Path) -> str:
 
 def _ignored(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
-    return any(part in {".git", ".josh-room", ".venv", "__pycache__"} for part in relative.parts) or path.name == MARKER_NAME
+    if path.name in {MARKER_NAME, ".DS_Store", ".git", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules", "__pycache__"}:
+        return True
+    return any(part in {".git", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules"} for part in relative.parts) or any(
+        part == "__pycache__" for part in relative.parts[:-1]
+    )
 
 
 def workspace_fingerprint(workspace: Path) -> str:
@@ -35,41 +39,33 @@ def workspace_fingerprint(workspace: Path) -> str:
     if not root.is_dir():
         raise ValueError("workspace must be a directory")
     digest = hashlib.sha256()
-    entries = sorted(
-        (path for path in root.rglob("*") if not _ignored(path, root)),
-        key=lambda item: item.relative_to(root).as_posix(),
-    )
-    for path in entries:
-        relative = path.relative_to(root).as_posix().encode()
-        metadata = path.lstat()
-        mode = str(stat.S_IMODE(metadata.st_mode)).encode()
-        if path.is_symlink():
-            target = os.readlink(path).encode()
-            digest.update(b"l\0" + relative + b"\0" + mode + b"\0" + target + b"\n")
-            continue
-        if path.is_dir():
-            digest.update(b"d\0" + relative + b"\0" + mode + b"\n")
-            continue
-        if not path.is_file():
-            digest.update(
-                b"s\0" + relative + b"\0" + str(stat.S_IFMT(metadata.st_mode)).encode() + b"\0" + mode + b"\n"
-            )
-            continue
-        content_digest = hashlib.sha256()
-        with path.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                content_digest.update(chunk)
-        digest.update(
-            b"f\0"
-            + relative
-            + b"\0"
-            + mode
-            + b"\0"
-            + str(metadata.st_size).encode()
-            + b"\0"
-            + content_digest.hexdigest().encode()
-            + b"\n"
-        )
+    def visit(directory: Path) -> None:
+        entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        for entry in entries:
+            path = Path(entry.path)
+            if _ignored(path, root):
+                continue
+            relative = path.relative_to(root).as_posix().encode()
+            metadata = entry.stat(follow_symlinks=False)
+            mode = str(metadata.st_mode).encode()
+            if stat.S_ISLNK(metadata.st_mode):
+                target = os.readlink(path).encode()
+                fingerprint = b"link:" + mode + b":" + target
+            elif stat.S_ISDIR(metadata.st_mode):
+                fingerprint = b"directory:" + mode
+                visit(path)
+            elif stat.S_ISREG(metadata.st_mode):
+                content_digest = hashlib.sha256()
+                content_digest.update(str(metadata.st_size).encode() + b":" + mode + b":")
+                with path.open("rb") as source:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                        content_digest.update(chunk)
+                fingerprint = b"file:" + content_digest.hexdigest().encode()
+            else:
+                fingerprint = b"special:" + mode
+            digest.update(relative + b"\0" + fingerprint + b"\n")
+
+    visit(root)
     return digest.hexdigest()
 
 

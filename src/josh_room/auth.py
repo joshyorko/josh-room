@@ -5,12 +5,13 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+from .config import config_dir
 from .progress import report_progress
 
 WORKER_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
 
 
-def ensure_runtime_session(timeout: int = 600) -> None:
+def ensure_runtime_session(timeout: int = 600, dimension_id: str | None = None) -> None:
     if all(os.environ.get(name) and Path(os.environ[name]).is_file() for name in (
         "JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"
     )):
@@ -32,7 +33,7 @@ def ensure_runtime_session(timeout: int = 600) -> None:
             continue
         if status != "authorized":
             raise RuntimeError(f"Cloudflare authorization {status or 'failed'}")
-        _write_runtime(session)
+        _write_runtime(session, dimension_id=dimension_id)
         report_progress("auth", "Cloudflare session authorized")
         return
     raise RuntimeError("Cloudflare authorization timed out")
@@ -48,7 +49,7 @@ def _request(path: str, method: str = "GET") -> dict:
         return json.load(response)
 
 
-def _write_runtime(session: dict) -> None:
+def _write_runtime(session: dict, dimension_id: str | None = None) -> None:
     root = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "josh-room" / "session"
     root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)
@@ -62,19 +63,35 @@ def _write_runtime(session: dict) -> None:
         "session-token": session["sessionToken"],
     }))
     identity.write_text(session["ageIdentity"].rstrip("\n") + "\n")
-    config.write_text(json.dumps({
-        "default_backend": "r2",
-        "default_ide": "vscode-insiders",
-        "age_recipients": session["ageRecipients"],
-        "r2": {
-            "endpoint": session["endpoint"],
-            "bucket": session["bucket"],
-            "region": "auto",
-            "credential_profile": "oauth-runtime",
-            "catalog_key": "catalog.jroom.age",
-            "temporary_credentials": True,
-        },
-    }))
+    persisted_path = config_dir() / "config.json"
+    try:
+        persisted = json.loads(persisted_path.read_text()) if persisted_path.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        persisted = {}
+    runtime_config = json.loads(json.dumps(persisted))
+    runtime_config.setdefault("default_backend", "r2")
+    runtime_config.setdefault("default_ide", "vscode-insiders")
+    runtime_config["age_recipients"] = session["ageRecipients"]
+    runtime_r2 = {
+        "endpoint": session["endpoint"],
+        "bucket": session["bucket"],
+        "region": "auto",
+        "credential_profile": "oauth-runtime",
+        "catalog_key": "catalog.jroom.age",
+        "temporary_credentials": True,
+    }
+    runtime_config["r2"] = {**runtime_config.get("r2", {}), **runtime_r2}
+    dimensions = runtime_config.setdefault("dimensions", {})
+    target = dimension_id or "r2"
+    if target == "r2" or target not in dimensions:
+        dimensions["r2"] = {
+            "display_name": "Cloudflare R2",
+            "provider": "r2",
+            **runtime_r2,
+        }
+    elif dimensions[target].get("provider") == "r2":
+        dimensions[target] = {**dimensions[target], **runtime_r2}
+    config.write_text(json.dumps(runtime_config))
     metadata.write_text(json.dumps({"expires_at": time.time() + int(session["expiresIn"])}))
     for path in (credentials, identity, config, metadata):
         path.chmod(0o600)

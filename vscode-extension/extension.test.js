@@ -6,6 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { EventEmitter } = require("node:events");
 const Module = require("node:module");
+const { flattenDimensionRooms } = require("./registry");
 
 function sha256Hex(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -53,7 +54,7 @@ function createSpawnHarness(respond) {
   return { calls, spawn };
 }
 
-function createVscodeMock(workspaceFolder) {
+function createVscodeMock(workspaceFolder, textDocuments = []) {
   const quickPickCalls = [];
   const openDialogCalls = [];
   const inputBoxCalls = [];
@@ -119,6 +120,7 @@ function createVscodeMock(workspaceFolder) {
       env: { clipboard: { writeText: async () => {} } },
       workspace: {
         workspaceFolders: workspaceFolder ? [{ uri: { fsPath: workspaceFolder } }] : [],
+        textDocuments,
         createFileSystemWatcher() {
           const watcher = {
             didChange: undefined,
@@ -431,4 +433,337 @@ test("startup queues workspace changes that happen before the first authoritativ
 
   assert.match(statusItem.text, /Save/);
   assert.doesNotMatch(statusItem.text, /Saved/);
+});
+
+function catalogResponse() {
+  return {
+    stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{
+        id: "trusted-dimension",
+        display_name: "Trusted Dimension",
+        provider: "r2",
+        projects: [{
+          id: "trusted-room",
+          display_name: "Trusted Room",
+        }],
+      }],
+    }),
+  };
+}
+
+function snapshotResponse() {
+  return {
+    stdout: JSON.stringify({
+      ok: true,
+      latest: "new-snapshot",
+      snapshots: [
+        { snapshot_id: "new-snapshot", created_at: "2026-08-26T12:00:00Z" },
+        { snapshot_id: "old-snapshot", created_at: "2026-08-25T12:00:00Z" },
+      ],
+    }),
+  };
+}
+
+test("Link and Repair use an explicit trusted Dimension, Room, and JAT instead of a stale v2 marker", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-trusted-link-test-"));
+  writeMarker(root, {
+    dimension_id: "stale-dimension",
+    project_id: "stale-room",
+    snapshot_id: "stale-snapshot",
+    display_name: "Stale Room",
+  });
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return catalogResponse();
+    if (args[0] === "snapshots") return snapshotResponse();
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({
+    project: { id: "trusted-room", display_name: "Trusted Room", dimension_id: "trusted-dimension" },
+    snapshot: { snapshot_id: "old-snapshot" },
+    snapshotId: "old-snapshot",
+    dimension_id: "trusted-dimension",
+  });
+  await extension.__test__.linkRoom();
+  vscode.quickPickResponses.push({
+    project: { id: "trusted-room", display_name: "Trusted Room", dimension_id: "trusted-dimension" },
+    snapshot: { snapshot_id: "new-snapshot" },
+    snapshotId: "new-snapshot",
+    dimension_id: "trusted-dimension",
+  });
+  await extension.__test__.repairRoom();
+
+  const operations = spawnHarness.calls.filter((entry) => ["link", "repair"].includes(entry.args[0]));
+  assert.equal(operations.length, 2);
+  for (const operation of operations) {
+    assert.deepEqual(
+      [operation.args[operation.args.indexOf("--dimension") + 1], operation.args[operation.args.indexOf("--project") + 1]],
+      ["trusted-dimension", "trusted-room"],
+    );
+    assert.notEqual(operation.args[operation.args.indexOf("--snapshot") + 1], "stale-snapshot");
+  }
+});
+
+test("clicking a historical JAT and pressing Enter hydrates that exact old snapshot", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-historical-jat-test-"));
+  writeMarker(root, { snapshot_id: "new-snapshot" });
+  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return catalogResponse();
+    if (args[0] === "snapshots") return snapshotResponse();
+    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  await extension.__test__.enterRoom({
+    kind: "jat",
+    id: "old-snapshot",
+    snapshot: { snapshot_id: "old-snapshot" },
+    project: { id: "trusted-room", display_name: "Trusted Room" },
+    dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+  });
+
+  const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+  assert.ok(hydrate);
+  assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
+  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
+});
+
+test("historical JAT Enter does not treat the same Room's newer snapshot as already open", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-same-room-historical-jat-test-"));
+  writeMarker(root, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+  });
+  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return catalogResponse();
+    if (args[0] === "snapshots") return snapshotResponse();
+    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  await extension.__test__.enterRoom({
+    kind: "jat",
+    id: "old-snapshot",
+    snapshot_id: "old-snapshot",
+    snapshot: { snapshot_id: "old-snapshot" },
+    project: { id: "trusted-room", display_name: "Trusted Room" },
+    dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+  });
+
+  const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+  assert.ok(hydrate);
+  assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
+  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
+});
+
+test("historical JAT Enter rejects a destination linked to a newer snapshot", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-destination-historical-jat-test-"));
+  const destination = path.join(root, "trusted-room");
+  fs.mkdirSync(destination);
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+  });
+  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return catalogResponse();
+    if (args[0] === "snapshots") return snapshotResponse();
+    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  await assert.rejects(
+    extension.__test__.enterRoom({
+      kind: "jat",
+      id: "old-snapshot",
+      snapshot_id: "old-snapshot",
+      snapshot: { snapshot_id: "old-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    }),
+    /unexplained existing folder/,
+  );
+  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), false);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "hydrate"), false);
+});
+
+test("a v1 marker requires explicit selection for Serve instead of guessing a Dimension", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-v1-serve-test-"));
+  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify({
+    format_version: 1,
+    project_id: "same-room",
+    display_name: "Legacy Room",
+  }));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") {
+      return { stdout: JSON.stringify({ dimensions: [
+        { id: "archive", display_name: "Archive", provider: "r2", projects: [{ id: "same-room", display_name: "Legacy Room" }] },
+        { id: "backup", display_name: "Backup", provider: "minio", projects: [{ id: "same-room", display_name: "Legacy Room" }] },
+      ] }) };
+    }
+    if (args[0] === "snapshots") return snapshotResponse();
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  assert.equal(extension.__test__.roomLabel({
+    id: "same-room", display_name: "Legacy Room", dimension_id: "archive",
+  }), "Legacy Room · archive");
+  const projects = [
+    { id: "same-room", display_name: "Legacy Room", dimension_id: "archive" },
+    { id: "same-room", display_name: "Legacy Room", dimension_id: "backup" },
+  ];
+  vscode.quickPickResponses.push({ project: projects[1] });
+  const selected = await extension.__test__.chooseServeProject(projects, {
+    format_version: 1,
+    project_id: "same-room",
+    display_name: "Legacy Room",
+  });
+  assert.equal(selected.dimension_id, "backup");
+});
+
+test("same-named Dimensions produce stable command-palette Room labels", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-same-named-dimensions-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const extension = loadExtension(vscode, createSpawnHarness(() => ({
+    stdout: JSON.stringify({ ok: true }),
+  })).spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const rooms = flattenDimensionRooms({
+    dimensions: [
+      { id: "archive", display_name: "Shared", projects: [{ id: "same-room", display_name: "Same Room" }] },
+      { id: "backup", display_name: "Shared", projects: [{ id: "same-room", display_name: "Same Room" }] },
+    ],
+  });
+  const labels = rooms.map((room) => extension.__test__.roomLabel(room));
+  assert.deepEqual(labels, ["Same Room · Shared (archive)", "Same Room · Shared (backup)"]);
+});
+
+test("status JSON remains consumable when the status child exits with code 2", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-status-exit-test-"));
+  const { vscode } = createVscodeMock(root);
+  const payload = {
+    ok: false,
+    state: "changed",
+    path_matches: true,
+    fingerprint_matches: false,
+  };
+  const extension = loadExtension(vscode, createSpawnHarness(() => ({
+    stdout: JSON.stringify(payload),
+    code: 2,
+  })).spawn);
+  assert.deepEqual(await extension.__test__.runJoshRoom(["status"], root), payload);
+});
+
+test("startup seeds dirtyBuffers from an already-open dirty editor", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-open-editor-test-"));
+  const changed = path.join(root, "already-open.txt");
+  fs.writeFileSync(changed, "saved\n");
+  writeMarker(root);
+  const { vscode, statusItem } = createVscodeMock(root, [{
+    uri: { fsPath: changed },
+    isDirty: true,
+  }]);
+  const extension = loadExtension(vscode, createSpawnHarness(({ args }) => {
+    if (args[0] === "status") {
+      return { stdout: JSON.stringify({
+        ok: true,
+        path_matches: true,
+        fingerprint_matches: true,
+        state: "clean",
+        current_workspace_fingerprint: "a".repeat(64),
+        saved_workspace_fingerprint: "a".repeat(64),
+      }) };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  }).spawn);
+  extension.__test__.setStatusItem(statusItem);
+  await extension.__test__.startDirtyTracking({ subscriptions: [] });
+  assert.match(statusItem.text, /Save/);
+});
+
+test("a failed Dimension loader leaves the healthy Dimension usable", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-dimension-loader-test-"));
+  const { vscode } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [
+      { id: "unavailable", display_name: "Unavailable", provider: "r2" },
+      { id: "healthy", display_name: "Healthy", provider: "minio" },
+    ] }) };
+    if (args[0] === "projects" && args.includes("unavailable")) return { stderr: "unavailable", code: 1 };
+    if (args[0] === "projects") return { stdout: JSON.stringify({ ok: true,
+      dimension_id: "healthy",
+      projects: [{ id: "healthy-room", display_name: "Healthy Room" }],
+    }) };
+    if (args[0] === "snapshots") return { stdout: JSON.stringify({ ok: true, latest: "healthy-jat", snapshots: [{ snapshot_id: "healthy-jat" }] }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(vscode.window.createStatusBarItem());
+  const catalog = await extension.__test__.loadCatalog(root, "Loading test catalog");
+  assert.deepEqual(catalog.dimensions.map((dimension) => dimension.id), ["unavailable", "healthy"]);
+  assert.deepEqual(catalog.projects.map((project) => project.id), ["healthy-room"]);
+});
+
+test("direct handleDrop parses a CRLF text/uri-list folder drop", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-drop-test-"));
+  const source = path.join(root, "folder with spaces");
+  fs.mkdirSync(source);
+  const { vscode } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "snapshot") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(vscode.window.createStatusBarItem());
+  vscode.inputBoxResponses.push("destination-room");
+  const drop = new extension.__test__.RoomDragAndDropController();
+  await drop.handleDrop(
+    { kind: "dimension", id: "archive", dimension: { id: "archive" } },
+    { get(type) {
+      return type === "text/uri-list"
+        ? { asString: async () => `file://${encodeURI(source)}\r\n\r\n` }
+        : undefined;
+    } },
+  );
+  const copy = spawnHarness.calls.find((entry) => entry.args[0] === "snapshot");
+  assert.ok(copy);
+  assert.equal(copy.args[copy.args.indexOf("--source-folder") + 1], source);
+});
+
+test("deleting the active JAT is blocked so its marker cannot remain Saved", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-active-delete-test-"));
+  writeMarker(root, { dimension_id: "archive", project_id: "room", snapshot_id: "active" });
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{
+      id: "archive", display_name: "Archive", projects: [{ id: "room", display_name: "Room" }],
+    }] }) };
+    if (args[0] === "snapshots") return { stdout: JSON.stringify({ latest: "active", snapshots: [{ snapshot_id: "active" }] }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const result = await extension.__test__.removeSnapshot({
+    kind: "jat",
+    id: "active",
+    project: { id: "room", display_name: "Room" },
+    dimension: { id: "archive", display_name: "Archive" },
+    snapshot: { snapshot_id: "active" },
+  });
+  assert.equal(result, "blocked");
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "snapshots" && entry.args[1] === "remove"), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".josh-room.json"))).snapshot_id, "active");
 });
