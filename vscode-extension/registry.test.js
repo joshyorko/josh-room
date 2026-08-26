@@ -60,7 +60,7 @@ test("followLogFile ignores stale output and streams replacement lines", async (
 
   assert.deepEqual(lines, ["starting registry on port [5000]", "listening on [::]:5000"]);
 });
-const { buildProviderTree, dimensionArgs } = require("./registry");
+const { buildProviderTree, dimensionArgs, snapshotCopyArgs } = require("./registry");
 
 test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
   const tree = buildProviderTree({
@@ -103,11 +103,51 @@ test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
 test("dimensionArgs routes storage operations through the selected Dimension", () => {
   assert.deepEqual(
     dimensionArgs(["snapshot", "create", "demo-room", "--backend", "r2"], "archive"),
-    ["snapshot", "create", "demo-room", "--backend", "r2", "--dimension", "archive"],
+    ["snapshot", "create", "demo-room", "--dimension", "archive"],
   );
   assert.deepEqual(
     dimensionArgs(["snapshots", "list", "demo-room", "--dimension", "old"], "archive"),
     ["snapshots", "list", "demo-room", "--dimension", "archive"],
   );
   assert.deepEqual(dimensionArgs(["doctor", "--ide", "terminal"], undefined), ["doctor", "--ide", "terminal"]);
+});
+
+test("buildProviderTree reads v2 dimension catalogs and populates JAT children", () => {
+  const tree = buildProviderTree({
+    dimensions: {
+      archive: {
+        dimension_id: "archive",
+        display_name: "Archive",
+        provider: "r2",
+        bucket: "private-room",
+        projects: {
+          "demo-room": {
+            display_name: "Demo Room",
+            snapshots: {
+              "jat-002": { snapshot_id: "jat-002", created_at: "2026-08-26T12:00:00Z" },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(tree[0].children[0].id, "archive");
+  assert.equal(tree[0].children[0].children[0].id, "demo-room");
+  assert.deepEqual(tree[0].children[0].children[0].children.map((item) => item.id), ["jat-002"]);
+});
+
+test("snapshotCopyArgs matches the native copy contract", () => {
+  assert.deepEqual(snapshotCopyArgs({
+    kind: "jat", project: { id: "room" }, id: "jat-7", dimension: { id: "source" },
+  }, { kind: "room", id: "destination", dimension: { id: "target" } }), [
+    "snapshot", "copy", "room", "--snapshot", "jat-7",
+    "--source-dimension", "source", "--destination-dimension", "target",
+    "--destination-room", "destination",
+  ]);
+  assert.deepEqual(snapshotCopyArgs({
+    kind: "folder", path: "/tmp/workspace", dimension_id: "source",
+  }, { destination_room: "destination", id: "target" }), [
+    "snapshot", "copy", "--source-folder", "/tmp/workspace",
+    "--destination-dimension", "target", "--destination-room", "destination",
+  ]);
 });

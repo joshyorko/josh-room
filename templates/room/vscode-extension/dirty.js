@@ -195,3 +195,14 @@ class AuthoritativeWorkspaceBaseline {
 
 module.exports.WorkspaceBaseline = AuthoritativeWorkspaceBaseline;
 module.exports.workspaceFingerprint = workspaceFingerprint;
+
+function isRoomMarker(marker) {
+  return Boolean(
+    marker && [1, 2].includes(marker.format_version)
+    && typeof marker.project_id === "string"
+    && typeof marker.snapshot_id === "string"
+    && (marker.format_version === 1 || typeof marker.dimension_id === "string"),
+  );
+}
+
+module.exports.isRoomMarker = isRoomMarker;

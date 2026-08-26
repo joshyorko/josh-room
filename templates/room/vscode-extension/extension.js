@@ -3,7 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
-const { WorkspaceBaseline, shouldMarkDirty } = require("./dirty");
+const { WorkspaceBaseline, isRoomMarker, shouldMarkDirty } = require("./dirty");
 const {
   createProgressTracker,
   followProgressFile,
@@ -978,7 +978,7 @@ async function addDimension() {
   const id = name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!id) throw new Error("Dimension name must contain letters or numbers.");
   await runOperation("Adding " + name.trim() + "...", [
-    "dimensions", "add", id, "--name", name.trim(), "--provider", providerChoice.provider,
+    "dimensions", "add", id, "--display-name", name.trim(), "--provider", providerChoice.provider,
     "--endpoint", endpoint.trim(), "--bucket", bucket.trim(),
     "--credential-profile", profile.trim(),
   ], cwd);
@@ -1109,7 +1109,7 @@ currentRoom = function nativeCurrentRoom(cwd) {
   if (marker) return marker;
   try {
     const value = JSON.parse(fs.readFileSync(path.join(cwd, ".josh-room.json"), "utf8"));
-    return value && [1, 2].includes(value.format_version) ? value : undefined;
+    return isRoomMarker(value) ? value : undefined;
   } catch (_error) {
     return undefined;
   }
@@ -1174,8 +1174,7 @@ async function linkRoom() {
   const cwd = activeWorkspace();
   const marker = currentRoom(cwd);
   if (!marker || !marker.project_id || !marker.snapshot_id) throw new Error("This workspace has no complete Room marker to link.");
-  const result = await runOperation("Linking saved Room...", routeItemArgs(
-    ["link", marker.project_id, "--snapshot", marker.snapshot_id], marker), cwd);
+  const result = await runOperation("Linking saved Room...", routeItemArgs(["link"], marker), cwd);
   await resetNativeBaseline(result);
   if (roomsProvider) await roomsProvider.refresh();
   return "linked";
@@ -1185,8 +1184,7 @@ async function repairRoom() {
   const cwd = activeWorkspace();
   const marker = currentRoom(cwd);
   if (!marker || !marker.project_id || !marker.snapshot_id) throw new Error("This workspace has no complete Room marker to repair.");
-  const result = await runOperation("Repairing Room ledger...", routeItemArgs(
-    ["repair", marker.project_id, "--snapshot", marker.snapshot_id], marker), cwd);
+  const result = await runOperation("Repairing Room ledger...", routeItemArgs(["repair"], marker), cwd);
   await resetNativeBaseline(result);
   if (roomsProvider) await roomsProvider.refresh();
   return "repaired";
@@ -1231,10 +1229,20 @@ class RoomDragAndDropController {
       if (!first) return;
       source = { kind: "folder", path: decodeURIComponent(first.replace(/^file:\/\//, "")) };
     }
-    const destination = target || await chooseDimension(
+    let destination = target || await chooseDimension(
       await loadCatalog(activeWorkspace()), "Copy JAT to Dimension",
     );
     if (!destination) return "cancelled";
+    if (!target || target.kind === "dimension") {
+      const roomName = await vscode.window.showInputBox({
+        title: "Copy JAT to Room",
+        prompt: "Destination Room id or name",
+        placeHolder: "room-name",
+        validateInput: (value) => value.trim() ? undefined : "Enter a Room id or name.",
+      });
+      if (!roomName) return "cancelled";
+      destination = Object.assign({}, destination, { destination_room: roomName.trim() });
+    }
     const result = await runOperation("Copying saved JAT...", snapshotCopyArgs(source, destination), activeWorkspace());
     if (roomsProvider) await roomsProvider.refresh();
     await vscode.window.showInformationMessage("Copied " + (source.label || source.path) + " as a new JAT.");
@@ -1243,6 +1251,7 @@ class RoomDragAndDropController {
 }
 
 module.exports.snapshotCopyArgs = snapshotCopyArgs;
+snapshotCopyArgs = nativeRegistry.snapshotCopyArgs;
 
 function activateNative(context) {
   extensionContext = context;
@@ -1300,3 +1309,85 @@ function activateNative(context) {
 }
 
 module.exports.activate = activateNative;
+
+async function loadNativeCatalogWithSnapshots(cwd, title) {
+  const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd);
+  const dimensions = dimensionList(catalog);
+  for (const dimension of dimensions) {
+    const id = dimension.id || dimension.dimension_id;
+    if (!id) throw new Error("Dimension listing returned a record without dimension_id.");
+    let projects = dimension.projects || dimension.rooms;
+    if (projects && !Array.isArray(projects)) {
+      projects = Object.entries(projects).map(([projectId, value]) =>
+        Object.assign({}, value || {}, { id: (value && (value.id || value.project_id)) || projectId }));
+    }
+    if (!Array.isArray(projects)) {
+      const listed = await runOperation(title || "Loading your Rooms...",
+        nativeRegistry.dimensionArgs(["projects", "list"], id), cwd);
+      if (listed.dimension_id && listed.dimension_id !== id) {
+        throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
+      }
+      projects = listed.projects || [];
+    }
+    dimension.projects = projects;
+    for (const project of projects) {
+      const projectId = project.id || project.project_id;
+      if (!projectId) continue;
+      const listed = await runOperation(title || "Loading your Rooms...",
+        nativeRegistry.dimensionArgs(["snapshots", "list", projectId], id), cwd);
+      if (listed.dimension_id && listed.dimension_id !== id) {
+        throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
+      }
+      project.snapshots = listed.snapshots || [];
+      project.latest = listed.latest;
+    }
+  }
+  return Object.assign({}, catalog, { dimensions });
+}
+
+loadNativeCatalog = loadNativeCatalogWithSnapshots;
+loadCatalog = loadNativeCatalogWithSnapshots;
+
+openDimension = async function editOrOpenDimension(item) {
+  const catalog = await loadCatalog(activeWorkspace(), "Loading Dimensions...");
+  const selected = item && item.dimension ? item.dimension : item;
+  const dimension = selected || await chooseDimension(catalog, "Josh: Open Dimension");
+  if (!dimension) return "cancelled";
+  const action = await vscode.window.showQuickPick(
+    [{ label: "Use Dimension", edit: false }, { label: "Edit non-secret settings", edit: true }],
+    { title: "Josh: Open Dimension", placeHolder: "Use or edit this Dimension" },
+  );
+  if (!action) return "cancelled";
+  selectedDimensionId = dimension.id || dimension.dimension_id;
+  if (action.edit) {
+    const displayName = await vscode.window.showInputBox({
+      title: "Edit Dimension", prompt: "Display name", value: dimension.display_name || dimension.name || "",
+    });
+    if (!displayName) return "cancelled";
+    const endpoint = await vscode.window.showInputBox({
+      title: "Edit Dimension", prompt: "Endpoint URL", value: dimension.endpoint || "",
+    });
+    if (!endpoint) return "cancelled";
+    const bucket = await vscode.window.showInputBox({
+      title: "Edit Dimension", prompt: "Bucket", value: dimension.bucket || "",
+    });
+    if (!bucket) return "cancelled";
+    const region = await vscode.window.showInputBox({
+      title: "Edit Dimension", prompt: "Region", value: dimension.region || "",
+    });
+    if (!region) return "cancelled";
+    const profile = await vscode.window.showInputBox({
+      title: "Edit Dimension", prompt: "Existing host keyring credential profile (name only)",
+      value: dimension.credential_profile || dimension.credentialProfile || "",
+    });
+    if (!profile) return "cancelled";
+    await runOperation("Updating Dimension...", [
+      "dimensions", "update", selectedDimensionId,
+      "--display-name", displayName.trim(), "--endpoint", endpoint.trim(),
+      "--bucket", bucket.trim(), "--region", region.trim(),
+      "--credential-profile", profile.trim(),
+    ], activeWorkspace());
+  }
+  if (roomsProvider) await roomsProvider.refresh();
+  return action.edit ? "updated" : "opened";
+};

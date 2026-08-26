@@ -219,3 +219,89 @@ Object.assign(module.exports, {
   providerKey,
   providerLabel,
 });
+
+function routedDimensionArgs(args, dimension) {
+  const original = [...args];
+  const routed = [];
+  let found = false;
+  for (let index = 0; index < original.length; index += 1) {
+    const arg = original[index];
+    if (arg === "--backend") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--backend=")) continue;
+    if (arg === "--dimension") {
+      found = true;
+      index += 1;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    if (arg.startsWith("--dimension=")) {
+      found = true;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    routed.push(arg);
+  }
+  if (dimension && !found) routed.push("--dimension", String(dimension));
+  return routed;
+}
+
+function snapshotCopyArgs(source, target) {
+  const sourceDimension = source && (source.dimension_id || source.source_dimension || source.dimension);
+  const destinationDimension = target && (target.dimension_id || target.destination_dimension || target.id || target.dimension);
+  const destinationRoom = target && (target.destination_room || target.room_id || (target.kind === "room" ? target.id : undefined));
+  if (source && source.kind === "jat") {
+    return [
+      "snapshot", "copy", source.project && (source.project.id || source.project.project_id),
+      "--snapshot", source.id || (source.snapshot && source.snapshot.snapshot_id),
+      "--source-dimension", sourceDimension,
+      "--destination-dimension", destinationDimension,
+      "--destination-room", destinationRoom,
+    ];
+  }
+  return [
+    "snapshot", "copy", "--source-folder", source && source.path,
+    "--destination-dimension", destinationDimension,
+    "--destination-room", destinationRoom,
+  ];
+}
+
+module.exports.dimensionArgs = routedDimensionArgs;
+module.exports.snapshotCopyArgs = snapshotCopyArgs;
+
+function identityValue(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return undefined;
+  return value.id || value.dimension_id || value.project_id;
+}
+
+function exactSnapshotCopyArgs(source, target) {
+  const sourceDimension = identityValue(
+    source && (source.source_dimension || source.dimension_id || source.dimension),
+  );
+  const targetDimension = identityValue(
+    target && (target.destination_dimension || target.dimension_id
+      || (target.destination_room ? target : undefined)
+      || (target.kind === "dimension" ? target : target.dimension)),
+  );
+  const destinationRoom = target && (
+    target.destination_room || target.room_id || (target.kind === "room" ? target.id : undefined)
+  );
+  if (source && source.kind === "jat") {
+    return [
+      "snapshot", "copy", identityValue(source.project),
+      "--snapshot", source.id || source.snapshot && source.snapshot.snapshot_id,
+      "--source-dimension", sourceDimension,
+      "--destination-dimension", targetDimension,
+      "--destination-room", destinationRoom,
+    ];
+  }
+  return [
+    "snapshot", "copy", "--source-folder", source && source.path,
+    "--destination-dimension", targetDimension, "--destination-room", destinationRoom,
+  ];
+}
+
+module.exports.snapshotCopyArgs = exactSnapshotCopyArgs;
