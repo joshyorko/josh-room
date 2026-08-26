@@ -46,6 +46,8 @@ test("room marker validation accepts v2 bindings while retaining readable v1", (
     project_id: "demo",
     display_name: "Demo",
     snapshot_id: "jat-1",
+    workspace_fingerprint: "a".repeat(64),
+    workspace_path_sha256: "b".repeat(64),
   }), true);
   assert.equal(isRoomMarker({
     format_version: 1,
@@ -59,6 +61,13 @@ test("room marker validation accepts v2 bindings while retaining readable v1", (
   }), true);
   assert.equal(isRoomMarker({ format_version: 1, project_id: "demo" }), false);
   assert.equal(isRoomMarker({ format_version: 2, project_id: "demo", snapshot_id: "jat-1" }), false);
+  assert.equal(isRoomMarker({
+    format_version: 2,
+    dimension_id: "archive",
+    project_id: "demo",
+    display_name: "Demo",
+    snapshot_id: "jat-1",
+  }), false);
 });
 
 
