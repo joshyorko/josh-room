@@ -10,4 +10,5 @@
 env.json
 .venv/
 uv.lock
+dist/
 __pycache__/
