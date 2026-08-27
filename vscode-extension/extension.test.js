@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -1470,6 +1471,46 @@ test("MinIO Add Storage asks for concrete settings without invoking Cloudflare O
   const addCall = spawnHarness.calls.find((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add");
   assert.ok(addCall);
   assert.equal(addCall.args[addCall.args.indexOf("--connection") + 1], "home");
+});
+
+test("root extension storage commands parse through the actual Python CLI contract", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-extension-cli-contract-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [] }) };
+    }
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "create") {
+      return { stdout: JSON.stringify({ ok: true, connection: { id: "synthetic-minio", provider: "minio" } }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, buckets: ["synthetic-room"] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") {
+      return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    }
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.inputBoxResponses.push("https://minio.example.invalid:9000", "synthetic-access", "synthetic-secret");
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  const vectors = spawnHarness.calls.map((entry) => entry.args);
+  const python = path.join(__dirname, "..", ".venv", "bin", "python");
+  const parser = spawnSync(fs.existsSync(python) ? python : "python3", ["-c", [
+    "import json, sys",
+    "from josh_room.cli import build_parser",
+    "for argv in json.load(sys.stdin): build_parser().parse_args(argv)",
+  ].join("\n")], {
+    cwd: path.join(__dirname, ".."),
+    env: { ...process.env, PYTHONPATH: path.join(__dirname, "..", "src") },
+    input: JSON.stringify(vectors),
+    encoding: "utf8",
+  });
+  assert.equal(parser.status, 0, `Python CLI rejected root extension vectors: ${parser.stderr}`);
 });
 
 test("native storage commands are understandable, distinct, and omit Use Dimension", () => {
