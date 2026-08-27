@@ -29,6 +29,9 @@ fresh-state hydration. At this checkpoint that live gate passed against the
 separately provisioned private Josh Room bucket using the authorized bootstrap
 credential. The current production path uses OAuth for human authorization and
 Cloudflare temporary credentials for the S3-compatible large-object data plane.
+The official hosted Josh Room authority is used by default; set
+`JOSH_ROOM_AUTH_URL` only when overriding it for a self-hosted or custom
+deployment.
 
 Current source references:
 
