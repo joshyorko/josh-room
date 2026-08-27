@@ -140,6 +140,7 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
     assert command[7:9] == ["--", "--json-input"]
     assert seen["kwargs"]["env"]["ROBOCORP_HOME"] == "/private/runtime/robocorp"
     assert seen["kwargs"]["env"]["RCC_HOLOTREE_MODE"] == "private"
+    assert seen["kwargs"]["env"]["JAT_RUN_DIR"] == str(tmp_path / "output")
     assert seen["kwargs"]["cwd"] == tmp_path
     assert result["version"] == "b" * 40
 

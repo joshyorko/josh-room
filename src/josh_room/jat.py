@@ -95,6 +95,7 @@ def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
             "RCC_HOLOTREE_MODE": "private",
             "JOSH_ROOM_JAT_ROOT": str(jat_root),
             "ROBOT_ARTIFACTS": str(jat_root / "output"),
+            "JAT_RUN_DIR": str(jat_root / "output"),
         }
     )
     python_path = [str(jat_root / "src"), str(jat_root)]
