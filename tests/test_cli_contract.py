@@ -182,6 +182,11 @@ def test_runtime_default_r2_is_oauth_routed_before_dimension_resolution(tmp_path
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
     args = build_parser().parse_args(["snapshot", "create", "demo", "--dimension", "r2"])
     assert _requires_oauth(args) is True
+    copy_args = build_parser().parse_args([
+        "snapshot", "copy", "source", "--source-dimension", "r2",
+        "--destination-dimension", "r2", "--destination-room", "destination",
+    ])
+    assert _requires_oauth(copy_args) is True
 
     events = []
     runtime_config = tmp_path / "runtime-config.json"
