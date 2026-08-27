@@ -98,3 +98,54 @@ def test_jat_rejects_inconsistent_receipt_exit_status(tmp_path, monkeypatch):
     monkeypatch.setattr("josh_room.jat._run", write_inconsistent)
     with pytest.raises(JATError, match="exit status"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
+
+
+def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monkeypatch):
+    result_path = tmp_path / "output" / "result.json"
+    result_path.parent.mkdir()
+    result_path.write_text('{"operation":"build","success":true,"exit_status":0}')
+    seen = {}
+
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", "/private/runtime/rcc")
+    monkeypatch.setenv("JOSH_ROOM_RCC_HOME", "/private/runtime/robocorp")
+    monkeypatch.setenv("JOSH_ROOM_JAT_ARTIFACT", "sha256:" + "a" * 64)
+    monkeypatch.setenv("JOSH_ROOM_JAT_SHA", "b" * 40)
+
+    def fake_run(argv, timeout, **kwargs):
+        seen.update(argv=argv, timeout=timeout, kwargs=kwargs)
+        result_path.write_text('{"operation":"build","success":true,"exit_status":0}')
+        return 0, "managed RCC output"
+
+    monkeypatch.setattr("josh_room.jat._run", fake_run)
+    result = __import__("josh_room.jat", fromlist=["run_build"]).run_build(
+        tmp_path, tmp_path / "source", tmp_path / "haul"
+    )
+
+    assert seen["argv"][:5] == [
+        "/private/runtime/rcc",
+        "env",
+        "exec",
+        "--artifact",
+        "sha256:" + "a" * 64,
+    ]
+    assert "--permissive-local" in seen["argv"]
+    assert "--json" in seen["argv"]
+    assert seen["argv"][-3:-1] == ["bash", "-lc"]
+    assert "-t Build" in seen["argv"][-1]
+    assert seen["kwargs"]["env"]["ROBOCORP_HOME"] == "/private/runtime/robocorp"
+    assert seen["kwargs"]["env"]["RCC_HOLOTREE_MODE"] == "private"
+    assert seen["kwargs"]["cwd"] == tmp_path
+    assert result["version"] == "b" * 40
+
+
+def test_extension_jat_rejects_missing_managed_runtime_instead_of_using_path_rcc(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.delenv("JOSH_ROOM_RCC_EXE", raising=False)
+    monkeypatch.delenv("JOSH_ROOM_RCC_HOME", raising=False)
+    monkeypatch.delenv("JOSH_ROOM_JAT_ARTIFACT", raising=False)
+
+    with pytest.raises(JATError, match="managed Josh Room runtime is incomplete"):
+        __import__("josh_room.jat", fromlist=["run_build"]).run_build(
+            tmp_path, tmp_path / "source", tmp_path / "haul"
+        )

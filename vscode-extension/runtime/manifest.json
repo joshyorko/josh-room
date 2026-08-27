@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "extension_version": "0.1.1",
+  "rcc": {
+    "version": "v18.19.2",
+    "platforms": {
+      "linux-x64": {
+        "asset": "rcc-linux64",
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-linux64",
+        "sha256": "3a90a331325feb5b75b3ebc7492303a964438ce017347f451aeee3ed7d578b3d"
+      }
+    }
+  },
+  "controller": {
+    "robot": "runtime/controller/robot.yaml"
+  },
+  "jat": {
+    "git_sha": "1f4aaa1b89aabb50d6ca6b6fc82e3b7cc52a8a7b",
+    "source_archive": {
+      "asset": "josh-all-the-things-1f4aaa1b89aabb50d6ca6b6fc82e3b7cc52a8a7b.tar.gz",
+      "url": "https://github.com/joshyorko/josh-all-the-things/archive/1f4aaa1b89aabb50d6ca6b6fc82e3b7cc52a8a7b.tar.gz",
+      "sha256": "d4a1ec6993591c6195d156148b7997344565267e60304e3299b5d026f671fc03"
+    },
+    "environment_artifact": {
+      "digest": "sha256:e254b6b394f1f2f33cdad83eb831fb293822a6bad9948a6ebcb195275d578942",
+      "archive": {
+        "asset": "jat-runtime.rcca",
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.1-jat-runtime/jat-runtime.rcca",
+        "sha256": "090f31dbf74ba208bf7f6ffad407e2e045adaea4b13eaf887d484b1a6fcc7231",
+        "size": 169752369
+      }
+    }
+  }
+}

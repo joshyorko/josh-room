@@ -5,6 +5,7 @@ const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
 const { WorkspaceBaseline, isRoomMarker, shouldMarkDirty } = require("./dirty");
+const managedRuntime = require("./runtime");
 const {
   createProgressTracker,
   followProgressFile,
@@ -25,6 +26,9 @@ let workspaceWatcher;
 let dirtyTrackingGeneration = 0;
 const dirtyBuffers = new Set();
 let activeAuthAttempt;
+let managedRuntimePromise;
+let testRuntime;
+const CREDENTIALS_SECRET = "josh-room.credentials.v1";
 
 function setStatus(text, tooltip = "Open Josh Room") {
   if (!statusItem) return;
@@ -326,15 +330,128 @@ function createCancellationController(parentToken) {
   return controller;
 }
 
-function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
+async function initializeManagedRuntime(context) {
+  const manifest = managedRuntime.readManifest();
+  setStatus("$(sync~spin) Josh Room", "Preparing managed runtime…");
+  const rcc = await managedRuntime.ensureManagedRcc(context, manifest);
+  const jat = await managedRuntime.ensureJatRuntime(context, manifest, rcc);
+  const controllerRobot = manifest.controller?.robot;
+  if (typeof controllerRobot !== "string" || path.isAbsolute(controllerRobot)
+    || controllerRobot.split(/[\\/]+/).includes("..")) {
+    throw new Error("Josh Room runtime manifest has an unsafe controller recipe path");
+  }
+  const extensionRoot = path.resolve(context.extensionPath);
+  const controllerPath = path.resolve(extensionRoot, controllerRobot);
+  const relativeController = path.relative(extensionRoot, controllerPath);
+  if (!relativeController || relativeController.startsWith("..") || path.isAbsolute(relativeController)) {
+    throw new Error("Josh Room controller recipe escapes the VSIX");
+  }
+  return {
+    manifest,
+    rcc,
+    jat,
+    controllerRoot: path.dirname(controllerPath),
+  };
+}
+
+async function runtimeFor(cwd) {
+  if (testRuntime) return testRuntime;
+  if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
+  if (!managedRuntimePromise) {
+    managedRuntimePromise = initializeManagedRuntime(extensionContext).catch((error) => {
+      managedRuntimePromise = undefined;
+      throw error;
+    });
+  }
+  const state = await managedRuntimePromise;
+  return {
+    command: state.rcc.executable,
+    args: (args) => [
+      "run", "--silent", "-r", path.join(state.controllerRoot, "robot.yaml"),
+      "-t", "Josh Room", "--", ...args, "--json",
+    ],
+    env: managedRuntime.runtimeEnvironment(extensionContext, {
+      rccExecutable: state.rcc.executable,
+      controllerRoot: state.controllerRoot,
+      jatRoot: state.jat.jatRoot,
+      jatArtifact: state.jat.artifact,
+      jatSourceSha: state.jat.sourceSha,
+    }, cwd),
+    jatRoot: state.jat.jatRoot,
+  };
+}
+
+async function writeRuntimeCredentials(environment) {
+  if (!extensionContext?.secrets?.get) return () => {};
+  const serialized = await extensionContext.secrets.get(CREDENTIALS_SECRET);
+  if (!serialized) return () => {};
+  let value;
+  try {
+    value = JSON.parse(serialized);
+  } catch (error) {
+    throw new Error(`stored Josh Room credentials are invalid: ${error.message}`);
+  }
+  if (!value || typeof value !== "object" || !value.profiles || typeof value.profiles !== "object") {
+    throw new Error("stored Josh Room credentials are invalid");
+  }
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-credentials-"));
+  fs.chmodSync(directory, 0o700);
+  const filename = path.join(directory, "credentials.json");
+  fs.writeFileSync(filename, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+  fs.chmodSync(filename, 0o600);
+  environment.JOSH_ROOM_RUNTIME_CREDENTIALS = filename;
+  environment.JOSH_ROOM_EXTENSION_MODE = "1";
+  return () => fs.rmSync(directory, { recursive: true, force: true });
+}
+
+async function rememberExtensionCredentials(profile, credentials) {
+  if (!extensionContext?.secrets?.get || !extensionContext?.secrets?.store || !profile || !credentials) return;
+  let value = { profiles: {} };
+  const serialized = await extensionContext.secrets.get(CREDENTIALS_SECRET);
+  if (serialized) {
+    try {
+      const decoded = JSON.parse(serialized);
+      if (decoded && typeof decoded === "object" && decoded.profiles && typeof decoded.profiles === "object") {
+        value = { profiles: { ...decoded.profiles } };
+      }
+    } catch (_error) {
+      // Replace only malformed extension-owned storage after a successful new credential handoff.
+    }
+  }
+  value.profiles[profile] = {
+    "access-key-id": credentials["access-key-id"],
+    "secret-access-key": credentials["secret-access-key"],
+    ...(credentials["session-token"] ? { "session-token": credentials["session-token"] } : {}),
+  };
+  await extensionContext.secrets.store(CREDENTIALS_SECRET, JSON.stringify(value));
+}
+
+function parseControllerOutput(output) {
+  try {
+    return JSON.parse(output);
+  } catch (_error) {
+    const start = output.indexOf("{");
+    const end = output.lastIndexOf("}");
+    if (start < 0 || end < start) throw new Error("Josh Room controller returned no JSON result");
+    return JSON.parse(output.slice(start, end + 1));
+  }
+}
+
+async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
+  const runtime = await runtimeFor(cwd);
+  const environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: "" };
+  const credentialsCleanup = await writeRuntimeCredentials(environment);
   return new Promise((resolve, reject) => {
     const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
     fs.chmodSync(progressDirectory, 0o700);
     const progressPath = path.join(progressDirectory, "events.jsonl");
+    const resultPath = path.join(progressDirectory, "result.json");
     fs.writeFileSync(progressPath, "", { mode: 0o600 });
+    environment.JOSH_ROOM_PROGRESS_FILE = progressPath;
+    environment.JOSH_ROOM_RESULT_FILE = resultPath;
     const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(event))];
     if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
-      const jatRoot = process.env.JOSH_ROOM_JAT_ROOT || path.join(os.homedir(), ".local", "share", "josh-room", "josh-all-the-things");
+      const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
       const streamJat = (line, severity = "info") => {
         outputChannel?.[severity](line);
         const stage = stageForLog(line);
@@ -348,10 +465,11 @@ function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPa
     const cleanup = () => {
       for (const follower of followers) follower.dispose();
       fs.rmSync(progressDirectory, { recursive: true, force: true });
+      credentialsCleanup();
     };
-    const child = childProcess.spawn("josh-room", [...args, "--json"], {
+    const child = childProcess.spawn(runtime.command, runtime.args(args), {
       cwd,
-      env: { ...process.env, JOSH_ROOM_PROGRESS_FILE: progressPath },
+      env: environment,
       detached: true,
       stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
@@ -377,9 +495,19 @@ function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPa
     });
     child.on("close", (code) => {
       cancellation?.dispose();
+      let result;
+      try {
+        if (fs.existsSync(resultPath)) result = parseControllerOutput(fs.readFileSync(resultPath, "utf8"));
+      } catch (error) {
+        outputChannel?.warn(`Unable to read controller result receipt: ${error.message}`);
+      }
       cleanup();
       if (cancelled || cancellationToken?.isCancellationRequested) {
         reject(cancellationError());
+        return;
+      }
+      if (result) {
+        resolve({ stdout: JSON.stringify(result), stderr });
         return;
       }
       if (code === 0) {
@@ -395,10 +523,10 @@ function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPa
 }
 
 async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
-  outputChannel?.info(`START · josh-room ${args.join(" ")}`);
+  outputChannel?.info(`START · controller ${args.join(" ")}`);
   try {
     const { stdout } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload);
-    const result = JSON.parse(stdout);
+    const result = parseControllerOutput(stdout);
     // `status` deliberately returns ok=false for a changed or unlinked
     // workspace. That is authoritative state, not an operation failure.
     if (!result.ok && args[0] !== "status") {
@@ -415,7 +543,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
     const output = error.stdout || error.stderr;
     if (output) {
       try {
-        const result = JSON.parse(output);
+        const result = parseControllerOutput(output);
         if (args[0] === "status") {
           outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
           return result;
@@ -1026,13 +1154,17 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
     cwd,
     title: `Serving ${project.display_name}`,
     terminalName: `Images: ${project.display_name}`,
-    command: `josh-room serve ${project.id} --snapshot ${snapshotId} --backend ${provider} --dimension ${dimension}`,
+    args: ["serve", project.id, "--snapshot", snapshotId, "--backend", provider, "--dimension", dimension],
     retry: () => vscode.commands.executeCommand("joshRoom.serve", project),
   });
 }
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+function shellJoin(values) {
+  return values.map(shellQuote).join(" ");
 }
 
 async function jatBuild() {
@@ -1127,13 +1259,20 @@ async function jatServe() {
     cwd,
     title: `Serving ${path.basename(haul)}`,
     terminalName: "JAT Hauler Registry",
-    command: `josh-room jat serve --haul ${shellQuote(haul)}`,
+    args: ["jat", "serve", "--haul", haul],
     retry: () => vscode.commands.executeCommand("joshRoom.jatServe"),
   });
 }
 
-async function startRegistryTerminal({ cwd, title, terminalName, command, retry }) {
-  const jatRoot = process.env.JOSH_ROOM_JAT_ROOT || path.join(os.homedir(), ".local", "share", "josh-room", "josh-all-the-things");
+async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) {
+  const runtime = await runtimeFor(cwd);
+  const environment = { ...runtime.env };
+  const credentialsCleanup = await writeRuntimeCredentials(environment);
+  const command = `${Object.entries(environment)
+    .filter(([key]) => key !== "PATH" && key !== "HOME")
+    .map(([key, value]) => `${key}=${shellQuote(value)}`)
+    .join(" ")} ${shellJoin([runtime.command, ...runtime.args(args)])}`;
+  const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
   fs.chmodSync(progressDirectory, 0o700);
   const progressPath = path.join(progressDirectory, "events.jsonl");
@@ -1160,6 +1299,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, command, retry 
   const stopFollowing = () => {
     for (const follower of followers) follower.dispose();
     progressReporter?.dispose();
+    credentialsCleanup();
     fs.rmSync(progressDirectory, { recursive: true, force: true });
   };
   const terminalClosed = vscode.window.onDidCloseTerminal((closed) => {
@@ -1554,6 +1694,13 @@ async function addStorage() {
     }), cwd, { stdin: credentials });
     const connection = created.connection || created;
     returnedConnectionId = typeof connection === "string" ? connection : connection.id || connection.connection_id;
+    if (credentials) {
+      const parsedCredentials = JSON.parse(credentials);
+      const profile = typeof connection === "object" && connection.credential_profile
+        ? connection.credential_profile
+        : `josh-room-${returnedConnectionId}`;
+      await rememberExtensionCredentials(profile, parsedCredentials);
+    }
   }
   if (!returnedConnectionId) throw new Error("MinIO connection did not return a connection id.");
   let bucketResult;
@@ -1648,6 +1795,10 @@ async function editConnection(item, { reconnect = false } = {}) {
       provider: "minio", connectionId, endpoint: endpoint.trim(),
     }),
   ], activeWorkspace(), { stdin: JSON.stringify({ "access-key-id": accessKey, "secret-access-key": secretKey }) });
+  await rememberExtensionCredentials(
+    connection.credential_profile || `josh-room-${connectionId}`,
+    { "access-key-id": accessKey, "secret-access-key": secretKey },
+  );
   if (roomsProvider) await roomsProvider.refresh();
   return reconnect ? "connected" : "updated";
 }
@@ -2367,6 +2518,9 @@ Object.assign(module.exports.__test__, {
   runJoshRoom,
   serveRoom,
   selectDimension,
+  setRuntimeForTests(value) {
+    testRuntime = value;
+  },
   setRoomsProvider(value) {
     roomsProvider = value;
   },

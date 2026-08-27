@@ -125,6 +125,29 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "Pack Folder into Haul" in extension and "Restore JAT Haul" in extension and "Serve Hauler Haul" in extension
     assert "Use Dimension" not in extension
     assert "Open Dimension" not in extension
+
+
+def test_vsix_owns_the_runtime_bootstrap_contract():
+    package = json.loads((ROOT / "vscode-extension/package.json").read_text())
+    runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
+    extension = (ROOT / "vscode-extension/extension.js").read_text()
+
+    assert package["version"] == "0.1.1"
+    assert package["scripts"]["package"]
+    assert (ROOT / "vscode-extension/.vscodeignore").is_file()
+    assert runtime["extension_version"] == package["version"]
+    assert runtime["rcc"]["version"] == "v18.19.2"
+    assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
+    assert runtime["jat"]["environment_artifact"]["digest"].startswith("sha256:")
+    assert "ensureManagedRcc" in extension and "ensureJatRuntime" in extension
+    assert 'childProcess.spawn("josh-room"' not in extension
+    assert "runtime.command" in extension and "runtime.args(args)" in extension
+
+
+def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
+    recipe = (ROOT / "vscode-extension/runtime/controller/robot.yaml").read_text()
+    assert "shell: python -m josh_room\n" in recipe
+    assert "python -m josh_room.cli" not in recipe
     remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
@@ -136,7 +159,11 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
 
 
 def test_vscode_extension_root_and_template_copies_are_byte_identical():
-    for name in ("extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "media/room.svg"):
+    for name in (
+        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "runtime.js",
+        "runtime/manifest.json", "runtime/controller/robot.yaml", "runtime/controller/conda.yaml",
+        "runtime/controller/environment_linux_amd64_freeze.yaml", "media/room.svg",
+    ):
         assert (ROOT / "vscode-extension" / name).read_bytes() == (
             ROOT / "templates/room/vscode-extension" / name
         ).read_bytes()

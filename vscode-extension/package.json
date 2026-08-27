@@ -2,8 +2,12 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "joshyorko",
+  "scripts": {
+    "test": "node --test *.test.js",
+    "package": "npx --yes @vscode/vsce package --no-dependencies"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },

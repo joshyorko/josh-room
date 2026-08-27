@@ -1,0 +1,1 @@
+"""Josh Room snapshot primitives."""

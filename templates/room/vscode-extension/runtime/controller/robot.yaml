@@ -1,0 +1,14 @@
+tasks:
+  "Josh Room":
+    shell: python -m josh_room
+
+environmentConfigs:
+  - environment_linux_amd64_freeze.yaml
+  - conda.yaml
+
+PATH:
+  - .
+PYTHONPATH:
+  - .
+
+artifactsDir: output
