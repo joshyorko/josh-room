@@ -96,7 +96,8 @@ each Dimension is one bucket-backed encrypted catalog, containing Rooms and
 their immutable JAT history. R2 and VS Code Insiders are the defaults. `doctor` fails with remediation when
 age, Hauler, RCC, JAT, the daily identity, R2, the encrypted catalog, or the IDE
 is unavailable. `enter` discovers logical project names from the encrypted R2
-catalog, hydrates safely, then launches VS Code Insiders.
+or MinIO catalog selected for the Room, hydrates safely, then launches VS Code
+Insiders.
 
 The bundled extension provides a native Rooms TreeView, toolbar actions,
 per-Room Enter/Serve/Delete actions, Docker-style operation progress, and a
@@ -123,7 +124,7 @@ Images` decrypts the chosen snapshot only into private runtime staging and runs
 JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
 removes the temporary haul and registry store.
 
-A separate `JAT Tools` view preserves one-off automation outside the Room/R2
+A separate `JAT Tools` view preserves one-off automation outside the Room/storage
 workflow: pack any folder into a portable haul, restore a JAT-compatible haul
 into a new destination, or serve any Hauler haul as a foreground registry. These
 commands use the same typed RCC Build/Restore/Serve tasks but require no Room,
