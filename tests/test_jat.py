@@ -122,8 +122,9 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
         tmp_path, tmp_path / "source", tmp_path / "haul"
     )
 
-    assert seen["argv"][:5] == [
+    assert seen["argv"][:6] == [
         "/private/runtime/rcc",
+        "--no-build",
         "env",
         "exec",
         "--artifact",
@@ -131,8 +132,12 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
     ]
     assert "--permissive-local" in seen["argv"]
     assert "--json" in seen["argv"]
-    assert seen["argv"][-3:-1] == ["bash", "-lc"]
-    assert "-t Build" in seen["argv"][-1]
+    command = seen["argv"][seen["argv"].index("--") + 1:]
+    assert command[:6] == [
+        "python", "-m", "jat.task_runner", "run", str(tmp_path / "tasks.py"), "-t",
+    ]
+    assert command[6] == "Build"
+    assert command[7:9] == ["--", "--json-input"]
     assert seen["kwargs"]["env"]["ROBOCORP_HOME"] == "/private/runtime/robocorp"
     assert seen["kwargs"]["env"]["RCC_HOLOTREE_MODE"] == "private"
     assert seen["kwargs"]["cwd"] == tmp_path

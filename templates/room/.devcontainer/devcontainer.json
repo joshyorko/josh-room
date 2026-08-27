@@ -4,11 +4,7 @@
   "remoteUser": "vscode",
   "workspaceFolder": "/workspaces/room",
   "remoteEnv": {
-    "JOSH_ROOM_INSTANCE": "/home/vscode/.local/state/josh-room",
-    "JOSH_ROOM_JAT_ROOT": "/home/vscode/.local/share/josh-room/josh-all-the-things",
-    "ROBOCORP_HOME": "/home/vscode/.local/share/josh-room/robocorp",
-    "RCC_HOLOTREE_MODE": "private",
-    "PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"
+    "JOSH_ROOM_INSTANCE": "/home/vscode/.local/state/josh-room"
   },
   "onCreateCommand": "bash /workspaces/room/.devcontainer/prepare-workspace.sh /workspaces/room",
   "postCreateCommand": "bash /home/vscode/.local/share/josh-room/controller/.devcontainer/bootstrap.sh"

@@ -1,6 +1,5 @@
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -57,21 +56,15 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     bootstrap = ROOT / "templates/room/.devcontainer/bootstrap.sh"
     assert bootstrap.is_file()
     body = bootstrap.read_text()
-    assert "git -C \"$jat_root\" fetch" in body
-    assert "bootstrap-jat-environment.sh" in body
-    assert 'sudo "$(command -v rcc)" ht shared --enable --once' not in body
-    assert "rcc ht init" not in body
-    assert 'for task in Build Restore Serve JAT' in body
-    assert 'python -m jat.cli' in body
-    assert "brew install age uv libsecret" in body
-    assert "brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server" in body
-    assert 'export RCC_HOLOTREE_MODE="${RCC_HOLOTREE_MODE:-private}"' in body
-    assert 'export ROBOCORP_HOME="${ROBOCORP_HOME:-$HOME/.local/share/josh-room/robocorp}"' in body
-    assert body.index('test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"') < body.index(
-        'bootstrap-jat-environment.sh'
-    )
-    assert "scripts/install_dependencies.sh" in body
-    assert "CONDA_PREFIX=" in body
+    assert "Optional golden-host extension copy complete" in body
+    assert "joshyorko.josh-room-0.1.1" in body
+    assert "Room of Requirement" not in body
+    assert "brew" not in body.lower()
+    assert "action-server" not in body
+    assert "uv tool install" not in body
+    assert "bootstrap-jat-environment" not in body
+    assert "install_dependencies" not in body
+    assert "JOSH_ROOM_GIT_SHA" not in body
     assert "dnf " not in body
     assert "apt " not in body
     assert "rpm-ostree" not in body
@@ -153,7 +146,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
-    assert ".vscode-server-insiders/extensions/joshyorko.josh-room-0.1.0" in bootstrap
+    assert "joshyorko.josh-room-0.1.1" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
     assert template_package["contributes"] == package["contributes"]
     assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
@@ -191,27 +184,13 @@ def test_root_devcontainer_is_the_personal_room_and_matches_template():
     assert not (ROOT / "templates/room/.vscode/tasks.json").exists()
 
 
-def test_devcontainer_persists_rcc_lifecycle_for_new_processes():
+def test_devcontainer_does_not_publish_host_runtime_paths():
     root_config = json.loads((ROOT / ".devcontainer/devcontainer.json").read_text())
     template_config = json.loads((ROOT / "templates/room/.devcontainer/devcontainer.json").read_text())
-    expected = {
-        "ROBOCORP_HOME": "/home/vscode/.local/share/josh-room/robocorp",
-        "RCC_HOLOTREE_MODE": "private",
-    }
     for config in (root_config, template_config):
-        assert {name: config["remoteEnv"][name] for name in expected} == expected
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import os; print(os.environ['ROBOCORP_HOME'] + '|' + os.environ['RCC_HOLOTREE_MODE'], end='')",
-            ],
-            env={name: config["remoteEnv"][name] for name in expected},
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        assert completed.stdout == f"{expected['ROBOCORP_HOME']}|{expected['RCC_HOLOTREE_MODE']}"
+        assert config["remoteEnv"] == {"JOSH_ROOM_INSTANCE": "/home/vscode/.local/state/josh-room"}
+        assert "ROBOCORP_HOME" not in config["remoteEnv"]
+        assert "JOSH_ROOM_JAT_ROOT" not in config["remoteEnv"]
 
 
 def test_devcontainer_opens_clean_room_not_controller_source():
@@ -294,79 +273,31 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
 def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
     assert lock["format_version"] == 1
-    assert lock["candidate_version"] == "0.1.0"
-    assert lock["room_of_requirement"]["image"].endswith("@" + lock["room_of_requirement"]["digest"])
+    assert lock["candidate_version"] == "0.1.1"
+    assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
-    assert lock["josh_room"]["git_sha"] == "e75edfaf3ecda295fd9321611e441926f4d949f5"
+    assert lock["josh_room"]["git_sha"] == "c7695a9b48f525537abe3e13644ba2f4785d5c1d"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
-    assert artifact["reference"].endswith("@" + artifact["manifest_digest"])
+    assert artifact["archive_url"].endswith("/jat-runtime.rcca")
+    assert artifact["release_tag"] == "v0.1.3-jat-runtime"
     assert len(artifact["archive_sha256"]) == 64
     assert artifact["archive_size"] > 0
+    assert artifact["rcc_artifact_digest"].startswith("sha256:")
     assert artifact["rcc_version"] == "v18.19.2"
     assert lock["rcc"]["version"] == "v18.19.2"
     assert lock["rcc"]["source_sha"] == "43aa8c3f834fc84606fd1e442443fbb224324c40"
-    assert lock["rcc"]["homebrew_cask"] == "joshyorko/tools/rcc"
+    assert lock["rcc"]["managed_asset"] == "rcc-linux64"
+    assert len(lock["rcc"]["managed_asset_sha256"]) == 64
     for config_path in (
         ROOT / ".devcontainer/devcontainer.json",
         ROOT / "templates/room/.devcontainer/devcontainer.json",
     ):
-        assert json.loads(config_path.read_text())["image"] == lock["room_of_requirement"]["image"]
+        assert json.loads(config_path.read_text())["image"] == lock["optional_golden_host"]["image"]
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
-    assert lock["josh_room"]["git_sha"] in bootstrap
-    assert lock["jat"]["git_sha"] in bootstrap
-    assert lock["rcc"]["version"] in bootstrap
+    assert "Optional golden-host extension copy complete" in bootstrap
+    assert "brew" not in bootstrap.lower()
+    assert "action-server" not in bootstrap
     assert "josh-room.git@main" not in bootstrap
-    assert "brew install age uv libsecret jq oras" in bootstrap
-    assert "bootstrap-jat-environment.sh" in bootstrap
-    helper = (ROOT / ".devcontainer/bootstrap-jat-environment.sh").read_text()
-    assert "oras pull" in helper
-    assert "rcc env acquire" in helper
-    assert "rcc --no-build ht vars" in helper
-    assert "Falling back to normal RCC environment build" in helper
-    assert (ROOT / ".devcontainer/bootstrap-jat-environment.sh").read_bytes() == (
-        ROOT / "templates/room/.devcontainer/bootstrap-jat-environment.sh"
-    ).read_bytes()
-    assert "git clone --depth 1" not in bootstrap
     manifest = json.loads((ROOT / "templates/room/devcontainer-template.json").read_text())
     assert manifest["version"] == lock["template"]["version"]
-
-
-def test_environment_bootstrap_falls_back_to_normal_rcc_build(tmp_path):
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    log = tmp_path / "rcc.log"
-    oras = fake_bin / "oras"
-    oras.write_text("#!/usr/bin/env bash\nexit 1\n")
-    oras.chmod(0o755)
-    rcc = fake_bin / "rcc"
-    rcc.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$RCC_LOG"\n')
-    rcc.chmod(0o755)
-    robot = tmp_path / "robot.yaml"
-    robot.write_text("tasks: {}\n")
-    environment = {
-        "PATH": f"{fake_bin}:/usr/bin:/bin",
-        "RCC_LOG": str(log),
-        "JAT_ENVIRONMENT_ARTIFACT_REFERENCE": "ghcr.io/example/jat-runtime@sha256:" + "a" * 64,
-        "JAT_ENVIRONMENT_ARTIFACT_MANIFEST_DIGEST": "sha256:" + "a" * 64,
-        "JAT_ENVIRONMENT_ARTIFACT_ARCHIVE_SHA256": "b" * 64,
-        "JAT_ENVIRONMENT_ARTIFACT_ARCHIVE_SIZE": "1",
-        "JAT_ENVIRONMENT_ARTIFACT_DIGEST": "sha256:" + "c" * 64,
-        "JAT_ENVIRONMENT_ARTIFACT_SPECIFICATION_DIGEST": "sha256:" + "d" * 64,
-        "JAT_ENVIRONMENT_ARTIFACT_LEGACY_BLUEPRINT_KEY": "legacy",
-        "JAT_ENVIRONMENT_ARTIFACT_RCC_VERSION": "v18.19.2",
-        "JAT_ENVIRONMENT_ARTIFACT_PLATFORM": "linux_amd64",
-        "JAT_GIT_SHA": "c" * 40,
-        "EXPECTED_RCC_VERSION": "v18.19.2",
-    }
-
-    completed = subprocess.run(
-        ["bash", str(ROOT / ".devcontainer/bootstrap-jat-environment.sh"), str(robot)],
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    assert "Falling back to normal RCC environment build" in completed.stderr
-    assert log.read_text().strip() == f"ht vars --robot {robot} --json"

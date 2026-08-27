@@ -1,4 +1,9 @@
-# Josh Room bootstrap performance evidence
+# Historical Josh Room bootstrap performance evidence
+
+This document describes the superseded pre-VSIX host bootstrap and is retained
+only as historical evidence. It is not the current runtime contract and must
+not be used as standalone acceptance evidence. The current path is the
+packaged VSIX acquiring managed RCC and the pinned JAT artifact.
 
 Date: 2026-08-27
 
@@ -108,6 +113,7 @@ fresh-home control that included non-sudo `rcc ht shared --enable --once` and
 the pinned JAT Environment Artifact path. The exact sudo form was not claimed
 as run because sudo is password-gated on the measurement host.
 
-The remaining fallback in `bootstrap-jat-environment.sh` is unchanged and is
-still used only when artifact acquisition or its verification/acquire/no-build
-chain fails.
+The former fallback in `bootstrap-jat-environment.sh` was part of the
+superseded host bootstrap and is no longer present. The current extension path
+fails closed on a missing or invalid pinned artifact; it does not fall back to
+a host environment build.

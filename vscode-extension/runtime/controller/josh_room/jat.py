@@ -1,6 +1,5 @@
 import json
 import os
-import shlex
 import signal
 import subprocess
 import tempfile
@@ -105,13 +104,6 @@ def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
     return executable, artifact, environment
 
 
-def _managed_command(jat_root: Path, task: str, request_path: Path | None) -> str:
-    command = ["python", "-m", "jat.task_runner", "run", "tasks.py", "-t", task]
-    if request_path is not None:
-        command.extend(("--", "--json-input", str(request_path)))
-    return f"cd -- {shlex.quote(str(jat_root))} && exec {shlex.join(command)}"
-
-
 def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bool = False) -> dict:
     jat_root.mkdir(parents=True, exist_ok=True)
     (jat_root / "output").mkdir(parents=True, exist_ok=True)
@@ -128,6 +120,7 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
         executable, artifact, environment = managed
         argv = [
             executable,
+            "--no-build",
             "env",
             "exec",
             "--artifact",
@@ -135,10 +128,16 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
             "--permissive-local",
             "--json",
             "--",
-            "bash",
-            "-lc",
-            _managed_command(jat_root, task, request_path),
+            "python",
+            "-m",
+            "jat.task_runner",
+            "run",
+            str(jat_root / "tasks.py"),
+            "-t",
+            task,
         ]
+        if request_path is not None:
+            argv.extend(("--", "--json-input", str(request_path)))
         run_kwargs = {"cwd": jat_root, "env": environment}
     try:
         report_progress("jat", f"Running JAT {task} through RCC")
