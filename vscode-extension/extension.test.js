@@ -418,7 +418,7 @@ test("real extension process uses an already resolved managed runtime", {
     rccExecutable: rcc,
     controllerRoot: path.join(__dirname, "runtime/controller"),
     jatRoot,
-    jatArtifact: "sha256:e254b6b394f1f2f33cdad83eb831fb293822a6bad9948a6ebcb195275d578942",
+    jatArtifact: "sha256:7c6123feb2ef1c3724ad6acaa3d304b9ebfc7b744953dcbe4f0cfde175595619",
     jatSourceSha: "1f4aaa1b89aabb50d6ca6b6fc82e3b7cc52a8a7b",
   }, root);
   extension.__test__.setStatusItem(statusItem);

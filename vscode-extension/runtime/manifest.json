@@ -25,9 +25,9 @@
       "digest": "sha256:e254b6b394f1f2f33cdad83eb831fb293822a6bad9948a6ebcb195275d578942",
       "archive": {
         "asset": "jat-runtime.rcca",
-        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.1-jat-runtime/jat-runtime.rcca",
-        "sha256": "090f31dbf74ba208bf7f6ffad407e2e045adaea4b13eaf887d484b1a6fcc7231",
-        "size": 169752369
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.2-jat-runtime/jat-runtime.rcca",
+        "sha256": "370dab0067732b83e7e543d4b718b1e03aacd3c4e437ec6fe7b74e7fd9d248da",
+        "size": 169750829
       }
     }
   }
