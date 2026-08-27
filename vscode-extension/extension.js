@@ -193,11 +193,23 @@ function rebindHydratedMarker(workspace, dimensionIdValue, projectId, snapshotId
   const temporary = path.join(workspace, `.josh-room-marker.${process.pid}.${Date.now()}`);
   fs.writeFileSync(temporary, `${JSON.stringify({
     ...marker,
+    dimension_id: dimensionIdValue,
+    project_id: projectId,
+    snapshot_id: snapshotId,
     workspace_path_sha256: canonicalWorkspacePathSha256(workspace),
   })}\n`, { mode: 0o600 });
   fs.chmodSync(temporary, 0o600);
   fs.renameSync(temporary, markerPath);
-  return { path: path.resolve(workspace), marker: { ...marker, workspace_path_sha256: canonicalWorkspacePathSha256(workspace) } };
+  return {
+    path: path.resolve(workspace),
+    marker: {
+      ...marker,
+      dimension_id: dimensionIdValue,
+      project_id: projectId,
+      snapshot_id: snapshotId,
+      workspace_path_sha256: canonicalWorkspacePathSha256(workspace),
+    },
+  };
 }
 
 async function switchMaterialization(cwd, selected, existing, provider) {
@@ -243,13 +255,21 @@ async function switchMaterialization(cwd, selected, existing, provider) {
       ], selected.dimensionId),
       cwd,
     );
-    const restored = rebindHydratedMarker(stage, selected.dimensionId, selected.projectId, selected.snapshotId);
+    const finalDimensionId = selected.dimensionId
+      || selected.project?.dimension_id
+      || selected.project?.dimension?.id
+      || selected.project?.dimension?.dimension_id;
+    const finalProjectId = selected.projectId || selected.project?.id || selected.project?.project_id;
+    const finalSnapshotId = selected.snapshotId || selected.snapshot_id || selected.snapshot?.snapshot_id;
+    let restored;
     fs.renameSync(existing.path, backup);
     try {
       fs.renameSync(stage, existing.path);
+      restored = rebindHydratedMarker(existing.path, finalDimensionId, finalProjectId, finalSnapshotId);
       promoted = true;
     } catch (error) {
-      if (!fs.existsSync(existing.path) && fs.existsSync(backup)) fs.renameSync(backup, existing.path);
+      fs.rmSync(existing.path, { recursive: true, force: true });
+      if (fs.existsSync(backup)) fs.renameSync(backup, existing.path);
       throw error;
     }
     fs.rmSync(backup, { recursive: true, force: true });
@@ -1499,16 +1519,14 @@ async function addStorage() {
   } catch (_error) {
     existingConnections = [];
   }
-  const reuseChoice = existingConnections.length === 1
-    ? existingConnections[0]
-    : existingConnections.length > 1
-      ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
-        label: connection.display_name || connection.name || connection.id,
-        connection,
-      })).concat([{ label: "$(add) New MinIO Connection…", create: true }]), {
-        title: "Josh: Choose a MinIO Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
-      })
-      : undefined;
+  const reuseChoice = existingConnections.length > 0
+    ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
+      label: connection.display_name || connection.name || connection.id,
+      connection,
+    })).concat([{ label: "$(add) New MinIO Connection…", create: true }]), {
+      title: "Josh: Choose a MinIO Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
+    })
+    : undefined;
   if (reuseChoice && !reuseChoice.create) {
     const connection = reuseChoice.connection || reuseChoice;
     endpoint = connection.endpoint;
@@ -1544,8 +1562,13 @@ async function addStorage() {
       connectionId: returnedConnectionId,
     }), cwd, credentials === undefined ? {} : { stdin: credentials });
   } catch (error) {
-    outputChannel?.warn(`MinIO bucket listing unavailable: ${error.message}`);
-    bucketResult = { ok: false, forbidden: true };
+    if (error.result?.error_code === "bucket-list-forbidden") {
+      outputChannel?.warn(`MinIO bucket listing unavailable: ${error.message}`);
+      bucketResult = { ok: false, ...error.result, forbidden: true };
+    } else {
+      outputChannel?.error(`MinIO bucket listing unavailable: ${error.message}`);
+      throw error;
+    }
   }
   const listedBuckets = providerTools.bucketChoices(bucketResult || {})
     .filter((choice) => choice.bucket).map((choice) => choice.bucket);
@@ -1728,15 +1751,17 @@ class HierarchyRoomsProvider {
     treeItem.iconPath = new vscode.ThemeIcon(
       item.kind === "provider" ? "cloud"
         : item.kind === "dimension" ? "database"
-          : item.kind === "connection" ? item.state === "connected" ? "pass-filled" : item.state === "expired" ? "warning" : "plug"
+          : item.kind === "connection" ? item.state === "connected" ? "pass-filled" : item.state === "expired" || item.state === "disconnected" ? "warning" : "plug"
             : item.kind === "room" ? "archive" : "history",
     );
     if (item.kind === "dimension") {
       treeItem.command = { command: "joshRoom.selectDimension", title: "Select Storage", arguments: [item] };
     }
     if (item.kind === "connection") {
-      const command = item.state === "expired" ? "joshRoom.reconnectStorage" : "joshRoom.connectStorage";
-      const title = item.state === "expired" ? "Reconnect" : "Connect";
+      const command = item.state === "expired" || item.state === "disconnected"
+        ? "joshRoom.reconnectStorage"
+        : "joshRoom.connectStorage";
+      const title = item.state === "expired" || item.state === "disconnected" ? "Reconnect" : "Connect";
       treeItem.command = { command, title, arguments: [item] };
     }
     if (item.kind === "room") {
@@ -2251,6 +2276,14 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
       connection_state: authState.state || "missing",
     });
   }
+  const connectionStates = new Map(providerTools.connectionRecords({ connections }).map((connection) => [
+    connection.id || connection.connection_id,
+    connection.auth_state === "disconnected" || connection.connection_state === "disconnected"
+      ? "disconnected"
+      : connection.auth_state === "expired" || connection.connection_state === "expired"
+        ? "expired"
+        : undefined,
+  ]));
   const loaded = [];
   for (const original of dimensions) {
     const id = original.id || original.dimension_id;
@@ -2260,6 +2293,12 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
     }
     const dimension = Object.assign({}, original);
     const provider = nativeRegistry.providerKey(dimension.provider);
+    const connectionState = connectionStates.get(dimension.connection_id || dimension.connectionId);
+    if (connectionState) dimension.connection_state = connectionState;
+    if (dimension.connection_state && dimension.connection_state !== "connected") {
+      loaded.push(dimension);
+      continue;
+    }
     if (provider === "r2") {
       dimension.connection_state = authState.state || dimension.connection_state || "connected";
       if (dimension.connection_state !== "connected") {
@@ -2302,7 +2341,12 @@ async function editStorageSettings(item) {
     );
     return "cancelled";
   }
-  return editConnection({ connection: dimension, provider: dimension.provider });
+  let connection = item?.connection || dimension.connection;
+  if (!connection && dimension.connection_id) {
+    const resolvedCatalog = catalog || await loadCatalog(activeWorkspace(), "Loading storage...");
+    connection = providerTools.dimensionConnection(dimension, providerTools.connectionRecords(resolvedCatalog));
+  }
+  return editConnection({ connection: connection || dimension, provider: (connection || dimension).provider });
 }
 
 Object.assign(module.exports.__test__, {

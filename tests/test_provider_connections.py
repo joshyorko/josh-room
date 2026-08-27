@@ -145,6 +145,19 @@ def test_minio_profile_never_consumes_unrelated_r2_runtime_credentials(tmp_path,
     }
 
 
+def test_disconnected_minio_bucket_connection_fails_closed_before_keyring(monkeypatch):
+    connection = config_module.ConnectionConfig.from_private(
+        "home-minio",
+        {**_connection(), "auth_state": "disconnected"},
+    )
+    monkeypatch.setattr(minio, "lookup", lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("disconnected connection must not read credentials")
+    ))
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        minio.client_for_connection(connection)
+
+
 def test_bucket_list_success_returns_accessible_names():
     class Client:
         def list_buckets(self):
@@ -234,6 +247,49 @@ def test_bucket_cli_uses_connection_and_returns_recoverable_forbidden(monkeypatc
     report = json.loads(capsys.readouterr().out)
     assert report["error_code"] == "bucket-list-forbidden"
     assert report["recoverable"] is True
+
+
+def test_minio_disconnect_reconnect_transition_blocks_then_restores_operations(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.json").write_text(json.dumps({
+        "connections": {"home-minio": _connection()},
+    }))
+
+    assert cli.main([
+        "provider", "connection", "disconnect", "--connection", "home-minio", "--json",
+    ]) == 0
+    capsys.readouterr()
+    saved = json.loads((tmp_path / "config.json").read_text())
+    assert saved["connections"]["home-minio"]["auth_state"] == "disconnected"
+
+    assert cli.main([
+        "provider", "bucket", "list", "--connection", "home-minio", "--json",
+    ]) == 2
+    blocked = json.loads(capsys.readouterr().out)
+    assert "disconnected" in blocked["error"]
+
+    stored = []
+    monkeypatch.setattr(cli, "store_keyring", lambda profile, values: stored.append((profile, values)))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "access-key-id": "synthetic-access",
+        "secret-access-key": "synthetic-secret",
+    })))
+    assert cli.main([
+        "provider", "connection", "reconnect", "--connection", "home-minio",
+        "--json",
+    ]) == 0
+    capsys.readouterr()
+    assert stored
+    saved = json.loads((tmp_path / "config.json").read_text())
+    assert saved["connections"]["home-minio"]["auth_state"] == "configured"
+
+    monkeypatch.setattr(cli, "list_minio_buckets", lambda _connection: ["room-a"])
+    assert cli.main([
+        "provider", "bucket", "list", "--connection", "home-minio", "--json",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["buckets"] == ["room-a"]
 
 
 def test_durable_dimension_mutation_does_not_promote_runtime_overlay(tmp_path, monkeypatch, capsys):

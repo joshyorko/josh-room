@@ -18,7 +18,7 @@ _PROVIDER_CONNECTION_OPTIONS = {
     "r2": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "temporary_credentials", "timeout_seconds"},
     "minio": {"ca_bundle", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds", "verify_tls"},
 }
-_COMMON_DIMENSION_FIELDS = {"bucket", "catalog_key", "connection", "connection_id", "credential_profile", "display_name", "endpoint", "provider", "region"}
+_COMMON_DIMENSION_FIELDS = {"auth_state", "bucket", "catalog_key", "connection", "connection_id", "credential_profile", "display_name", "endpoint", "provider", "region"}
 _PROVIDER_DIMENSION_OPTIONS = _PROVIDER_CONNECTION_OPTIONS
 _LEGACY_DIMENSION_NAMES = {"r2": "Cloudflare R2", "minio": "MinIO"}
 _BOOLEAN_DIMENSION_OPTIONS = {"path_style", "temporary_credentials", "verify_tls"}
@@ -148,6 +148,7 @@ class DimensionConfig:
     region: str = "auto"
     options: tuple[tuple[str, object], ...] = field(default_factory=tuple, repr=False)
     connection_id: str | None = None
+    auth_state: str = "configured"
 
     def __post_init__(self):
         if self.provider not in _PROVIDER_DIMENSION_OPTIONS:
@@ -161,6 +162,8 @@ class DimensionConfig:
             _validate_identifier("connection id", self.connection_id)
         if not isinstance(self.region, str):
             raise TypeError("Dimension region must be a string")
+        if not isinstance(self.auth_state, str) or not self.auth_state:
+            raise ValueError("Dimension auth state must be a non-empty string")
         if any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F for character in self.endpoint):
             raise ValueError("Dimension endpoint must not contain whitespace or control characters")
         try:
@@ -204,7 +207,7 @@ class DimensionConfig:
         if connection:
             if provider != connection.provider:
                 raise ValueError("Dimension provider does not match connection")
-            forbidden_overrides = {"endpoint", "credential_profile", "region"} & set(body)
+            forbidden_overrides = {"auth_state", "endpoint", "credential_profile", "region"} & set(body)
             if forbidden_overrides:
                 raise ValueError(f"Dimension cannot override connection setting: {min(forbidden_overrides)}")
             endpoint = connection.endpoint
@@ -228,6 +231,7 @@ class DimensionConfig:
             region=region,
             options=options,
             connection_id=connection_id,
+            auth_state=connection.auth_state if connection else body.get("auth_state", "configured"),
         )
 
     def to_private(self) -> dict:

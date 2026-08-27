@@ -218,6 +218,31 @@ test("buildProviderTree renders Provider to reusable Provider Connection to buck
   ]);
 });
 
+test("buildProviderTree renders a disconnected connection as unavailable", () => {
+  const tree = buildProviderTree({
+    connections: [{
+      id: "home-minio",
+      display_name: "Home MinIO",
+      provider: "minio",
+      auth_state: "disconnected",
+    }],
+    dimensions: [{
+      id: "rooms",
+      display_name: "Rooms",
+      provider: "minio",
+      connection_id: "home-minio",
+      bucket: "rooms",
+      projects: [{ id: "room", display_name: "Room" }],
+    }],
+  });
+
+  const connection = tree[0].children[0];
+  assert.equal(connection.state, "disconnected");
+  assert.equal(connection.label, "⚠ Disconnected");
+  assert.equal(connection.description, "Reconnect");
+  assert.deepEqual(connection.children[0].children, []);
+});
+
 test("buildProviderTree accepts worker connection and bucket records without exposing credentials", () => {
   const tree = buildProviderTree({
     providers: [{

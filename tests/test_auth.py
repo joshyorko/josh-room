@@ -59,6 +59,28 @@ def test_worker_request_uses_explicit_auth_authority(monkeypatch):
     assert captured[0][0].full_url == "https://auth.example.invalid/session/synthetic"
 
 
+def test_worker_request_uses_official_authority_without_override(monkeypatch):
+    captured = []
+
+    class Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    def open_request(request, timeout):
+        captured.append((request, timeout))
+        return Response(b'{"status":"pending"}')
+
+    monkeypatch.delenv("JOSH_ROOM_AUTH_URL", raising=False)
+    monkeypatch.setattr("josh_room.auth.urllib.request.urlopen", open_request)
+
+    auth._request("/session/synthetic")
+
+    assert captured[0][0].full_url == "https://josh-room-auth.joshua-yorko.workers.dev/session/synthetic"
+
+
 def test_cancel_oauth_session_invalidates_worker_transaction(monkeypatch):
     captured = []
 
@@ -260,6 +282,7 @@ def test_oauth_runtime_overlay_updates_referenced_connection_without_corrupting_
             "provider": "r2",
             "endpoint": "https://old.example.invalid",
             "credential_profile": "old-profile",
+            "auth_state": "disconnected",
         }},
         "dimensions": {"archive": {
             "display_name": "Archive",
@@ -285,6 +308,7 @@ def test_oauth_runtime_overlay_updates_referenced_connection_without_corrupting_
     }, dimension_id="archive")
 
     runtime_config = json.loads((tmp_path / "runtime" / "josh-room" / "session" / "config.json").read_text())
+    assert runtime_config["connections"]["cloud-r2"]["auth_state"] == "configured"
     assert runtime_config["dimensions"]["archive"] == {
         "display_name": "Archive",
         "connection_id": "cloud-r2",

@@ -19,7 +19,7 @@ def _private_endpoint_patterns() -> dict[str, re.Pattern[str]]:
             r"(?i)https?://[^\s/\"'<>]+(?:\.home\.arpa|\.lan|\.local)(?:[/\s\"'<>]|$)"
         ),
         "personal deployment endpoint": re.compile(
-            r"(?i)https?://(?!\$\{)[^\s/\"'<>]+(?:\.workers\.dev|\.r2\.cloudflarestorage\.com)(?:[/\s\"'<>]|$)"
+            r"(?i)https?://(?!(?:josh-room-auth\.joshua-yorko\.workers\.dev)(?:[/\s\"'<>]|$))(?!\$\{)[^\s/\"'<>]+(?:\.workers\.dev|\.r2\.cloudflarestorage\.com)(?:[/\s\"'<>]|$)"
         ),
     }
 
@@ -103,3 +103,9 @@ def test_public_artifacts_exclude_dogfood_storage_and_credentials():
         "Use synthetic example.invalid fixtures and host-provided credentials instead.\n"
         + "\n".join(violations)
     )
+
+
+def test_public_safety_allows_only_the_official_auth_authority():
+    endpoint_pattern = _private_endpoint_patterns()["personal deployment endpoint"]
+    assert not endpoint_pattern.search("https://josh-room-auth.joshua-yorko.workers.dev/session/start")
+    assert endpoint_pattern.search("http://someone-else.workers.dev/session/start")

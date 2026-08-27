@@ -36,6 +36,7 @@
       "additionalProperties": false,
       "required": ["display_name", "provider", "endpoint", "bucket", "credential_profile"],
       "properties": {
+        "auth_state": { "type": "string", "minLength": 1 },
         "display_name": { "type": "string", "minLength": 1 },
         "provider": { "enum": ["r2", "minio"] },
         "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" },
@@ -129,7 +130,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["endpoint", "bucket", "credential_profile"],
       "properties": {
-        "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" }, "bucket": { "type": "string", "minLength": 1 },
+        "auth_state": { "type": "string", "minLength": 1 }, "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" }, "bucket": { "type": "string", "minLength": 1 },
         "region": { "type": "string" }, "credential_profile": { "type": "string", "minLength": 1 },
         "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
         "multipart_threshold": { "type": "integer", "minimum": 1 }, "multipart_chunk_size": { "type": "integer", "minimum": 1 },

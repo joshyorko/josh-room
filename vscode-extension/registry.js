@@ -122,6 +122,7 @@ function providerLabel(value) {
 function connectionLabel(state) {
   if (state === "connected") return "✓ Connected";
   if (state === "expired") return "⚠ Session expired";
+  if (state === "disconnected") return "⚠ Disconnected";
   return "⚠ Not connected";
 }
 
@@ -206,8 +207,10 @@ function buildProviderTree(catalog = {}) {
     const connection = dimensionConnection(dimension, connections);
     const connectionId = connection.id || connection.connection_id;
     const connectionState = dimension.connection_state || connection.connection_state
+      || (connection.auth_state === "disconnected" ? "disconnected" : connection.auth_state === "expired" ? "expired" : undefined)
       || (providerId === "r2" && !dimensions.length ? catalog.auth_state : undefined)
       || "connected";
+    dimension.connection = connection;
     const loadError = dimension.load_error || dimension.error;
     const dimensionNode = {
       kind: "dimension",
@@ -234,10 +237,12 @@ function buildProviderTree(catalog = {}) {
         id: connectionId,
         label: providerId === "r2"
           ? connectionLabel(connectionState)
-          : connection.display_name || connection.name || connection.label || connection.endpoint || connectionId,
+          : connectionState === "connected"
+            ? connection.display_name || connection.name || connection.label || connection.endpoint || connectionId
+            : connectionLabel(connectionState),
         description: providerId === "r2"
           ? connectionState === "expired" ? "Reconnect Cloudflare" : connectionState === "connected" ? "Connected" : "Connect Cloudflare"
-          : connectionState === "expired" ? "Reconnect" : connectionState === "connected" ? "Connected" : "Connect",
+          : connectionState === "expired" || connectionState === "disconnected" ? "Reconnect" : connectionState === "connected" ? "Connected" : "Connect",
         state: connectionState,
         provider: providerId,
         connection,

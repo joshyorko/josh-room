@@ -824,6 +824,92 @@ test("clean historical JAT Enter switches the same canonical Room directory atom
   }
 });
 
+test("clean historical JAT Enter rewrites the promoted marker hash and reuses the final path without rehydrating", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-rebind-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-rebind-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  const stateRoot = path.join(workspaceRoot, "state");
+  fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "before.txt"), "before\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = stateRoot;
+  try {
+    const first = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "status") {
+        return { stdout: JSON.stringify({
+          ok: true,
+          state: "clean",
+          path_matches: true,
+          fingerprint_matches: true,
+        }) };
+      }
+      if (args[0] === "hydrate") {
+        const restored = args[args.indexOf("--destination") + 1];
+        fs.mkdirSync(restored, { recursive: true });
+        fs.writeFileSync(path.join(restored, "after.txt"), "after\n");
+        writeMarker(restored, {
+          dimension_id: "trusted-dimension",
+          project_id: "trusted-room",
+          snapshot_id: "old-snapshot",
+          workspace_path_sha256: sha256Hex(restored),
+        });
+        return { stdout: JSON.stringify({ ok: true, destination: restored, snapshot_id: "old-snapshot" }) };
+      }
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(first.vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(first.statusItem);
+    first.warningResponses.push("Switch Recovery Point");
+
+    const selected = {
+      kind: "jat",
+      id: "old-snapshot",
+      snapshot_id: "old-snapshot",
+      snapshot: { snapshot_id: "old-snapshot" },
+      project: {
+        id: "trusted-room",
+        display_name: "Trusted Room",
+        dimension_id: "trusted-dimension",
+        dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+      },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    };
+    await extension.__test__.enterRoom(selected);
+
+    const marker = JSON.parse(fs.readFileSync(path.join(destination, ".josh-room.json"), "utf8"));
+    const locator = JSON.parse(fs.readFileSync(path.join(stateRoot, "materializations.json"), "utf8"));
+    const statusCall = spawnHarness.calls.find((entry) => entry.args[0] === "status");
+
+    assert.equal(marker.workspace_path_sha256, sha256Hex(destination));
+    assert.equal(marker.snapshot_id, "old-snapshot");
+    assert.equal(locator.materializations[JSON.stringify(["trusted-dimension", "trusted-room"])], destination);
+    assert.equal(statusCall.args[statusCall.args.indexOf("--workspace") + 1], destination);
+
+    const reopened = createVscodeMock(destination);
+    const reopenedExtension = loadExtension(reopened.vscode, spawnHarness.spawn);
+    reopenedExtension.__test__.setStatusItem(reopened.statusItem);
+    const before = spawnHarness.calls.length;
+    const reopenedSelected = { ...selected, snapshotId: "old-snapshot" };
+    assert.equal(await reopenedExtension.__test__.enterRoom(reopenedSelected), "current");
+    assert.equal(spawnHarness.calls.length, before);
+    assert.equal(reopened.executeCalls.some(([name]) => name === "vscode.openFolder"), false);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
 test("dirty historical JAT Enter offers safe actions without replacing local content", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dirty-cwd-test-"));
   const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dirty-root-test-"));
@@ -1284,6 +1370,62 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
 
+test("disconnected MinIO storage stays disconnected and does not load hierarchy until reconnect", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-disconnected-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) {
+      throw new Error("disconnected MinIO must not load hierarchy");
+    }
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{
+        id: "rooms-a",
+        display_name: "Rooms A",
+        provider: "minio",
+        connection_id: "home-minio",
+        connection_state: "connected",
+        bucket: "rooms-a",
+      }],
+      connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+        auth_state: "disconnected",
+      }],
+    }) };
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") return { stdout: JSON.stringify({
+      ok: true,
+      connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+        auth_state: "disconnected",
+      }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const tree = buildProviderTree(catalog);
+  const minioProvider = tree.find((provider) => provider.provider === "minio");
+  const connection = minioProvider.children[0];
+  const dimension = connection.children[0];
+  const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(connection);
+
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "dimensions" && entry.args.includes("--with-hierarchy")), false);
+  assert.equal(connection.label, "⚠ Disconnected");
+  assert.equal(connection.description, "Reconnect");
+  assert.equal(connection.state, "disconnected");
+  assert.equal(treeItem.command.command, "joshRoom.reconnectStorage");
+  assert.equal(dimension.children.length, 0);
+});
+
 test("Add Storage sends Cloudflare directly to OAuth without R2 questionnaires", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-r2-test-"));
   const { vscode, statusItem, inputBoxCalls, openExternalCalls } = createVscodeMock(root);
@@ -1473,6 +1615,50 @@ test("MinIO Add Storage asks for concrete settings without invoking Cloudflare O
   assert.equal(addCall.args[addCall.args.indexOf("--connection") + 1], "home");
 });
 
+test("MinIO Add Storage offers an existing connection and a new connection when one reusable connection exists", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-minio-reuse-test-"));
+  const { vscode, statusItem, quickPickCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+      }] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, buckets: ["rooms"] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") {
+      return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    }
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push(
+    { label: "MinIO", provider: "minio" },
+    {
+      label: "Home MinIO",
+      connection: {
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+      },
+    },
+  );
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  assert.equal(quickPickCalls.length, 2);
+  assert.deepEqual(quickPickCalls[1].items.map((item) => item.label), [
+    "Home MinIO",
+    "$(add) New MinIO Connection…",
+  ]);
+});
+
 test("root extension storage commands parse through the actual Python CLI contract", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-extension-cli-contract-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
@@ -1555,6 +1741,79 @@ test("synthetic Default Cloudflare storage does not expose editable settings", a
   assert.equal(await extension.__test__.editStorageSettings(dimension), "cancelled");
   assert.equal(inputBoxCalls.length, 0);
   assert.match(infoCalls[0][0], /managed by OAuth/);
+});
+
+test("editStorageSettings uses the actual reusable connection instead of the Dimension id", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-edit-storage-settings-test-"));
+  const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "update") {
+      return { stdout: JSON.stringify({ ok: true, connection: { id: "home-minio", provider: "minio" } }) };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const tree = buildProviderTree({
+    connections: [{
+      id: "home-minio",
+      display_name: "Home MinIO",
+      provider: "minio",
+      endpoint: "https://minio.example.invalid:9000",
+    }],
+    dimensions: [{
+      id: "rooms-a",
+      display_name: "Rooms A",
+      provider: "minio",
+      connection_id: "home-minio",
+      endpoint: "https://wrong.example.invalid:9000",
+      bucket: "rooms-a",
+      projects: [],
+    }],
+  });
+  const dimension = tree[0].children[0].children[0];
+  vscode.inputBoxResponses.push("https://minio.example.invalid:9000", "access-synthetic", "secret-synthetic");
+
+  assert.equal(await extension.__test__.editStorageSettings(dimension), "updated");
+  assert.equal(inputBoxCalls[0].value, "https://minio.example.invalid:9000");
+  const updateCall = spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[1] === "connection" && entry.args[2] === "update");
+  assert.ok(updateCall);
+  assert.equal(updateCall.args[updateCall.args.indexOf("--connection") + 1], "home-minio");
+});
+
+test("generic MinIO bucket-list failures surface instead of falling back to manual entry", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-bucket-list-error-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+      }] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") {
+      throw new Error("backend unavailable");
+    }
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.quickPickResponses.push({
+    label: "Home MinIO",
+    connection: {
+      id: "home-minio",
+      display_name: "Home MinIO",
+      provider: "minio",
+      endpoint: "https://minio.example.invalid:9000",
+    },
+  });
+
+  await assert.rejects(extension.__test__.addStorage(), /backend unavailable/);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "provider" && entry.args[1] === "bucket" && entry.args[2] === "check"), false);
 });
 
 test("cancelling Cloudflare OAuth stops its child and a later Connect starts cleanly", async () => {

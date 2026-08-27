@@ -10,6 +10,7 @@ from .config import config_dir
 from .progress import report_progress
 
 _RUNTIME_FILES = ("r2.json", "age.identity", "config.json", "session.json")
+DEFAULT_AUTH_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
 
 
 def _runtime_paths() -> tuple[Path, ...]:
@@ -120,7 +121,7 @@ def ensure_runtime_session(timeout: int = 600, dimension_id: str | None = None) 
 
 
 def _worker_url() -> str:
-    value = os.environ.get("JOSH_ROOM_AUTH_URL", "").strip().rstrip("/")
+    value = os.environ.get("JOSH_ROOM_AUTH_URL", DEFAULT_AUTH_URL).strip().rstrip("/")
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
         raise RuntimeError("Cloudflare auth authority is not configured; set JOSH_ROOM_AUTH_URL to an http(s) URL")
@@ -182,6 +183,7 @@ def _write_runtime(session: dict, dimension_id: str | None = None) -> None:
             "credential_profile": "oauth-runtime",
             "region": "auto",
             "temporary_credentials": True,
+            "auth_state": "configured",
         }
     elif target == "r2" or target not in dimensions:
         dimensions["r2"] = {

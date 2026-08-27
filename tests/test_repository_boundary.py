@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -160,6 +161,29 @@ def test_root_devcontainer_is_the_personal_room_and_matches_template():
     ).read_bytes()
     assert not (ROOT / ".vscode/tasks.json").exists()
     assert not (ROOT / "templates/room/.vscode/tasks.json").exists()
+
+
+def test_devcontainer_persists_rcc_lifecycle_for_new_processes():
+    root_config = json.loads((ROOT / ".devcontainer/devcontainer.json").read_text())
+    template_config = json.loads((ROOT / "templates/room/.devcontainer/devcontainer.json").read_text())
+    expected = {
+        "ROBOCORP_HOME": "/home/vscode/.local/share/josh-room/robocorp",
+        "RCC_HOLOTREE_MODE": "private",
+    }
+    for config in (root_config, template_config):
+        assert {name: config["remoteEnv"][name] for name in expected} == expected
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import os; print(os.environ['ROBOCORP_HOME'] + '|' + os.environ['RCC_HOLOTREE_MODE'], end='')",
+            ],
+            env={name: config["remoteEnv"][name] for name in expected},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert completed.stdout == f"{expected['ROBOCORP_HOME']}|{expected['RCC_HOLOTREE_MODE']}"
 
 
 def test_devcontainer_opens_clean_room_not_controller_source():
