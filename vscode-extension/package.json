@@ -12,8 +12,7 @@
     "onStartupFinished",
     "onCommand:joshRoom.save",
     "onCommand:joshRoom.new",
-    "onCommand:joshRoom.addDimension",
-    "onCommand:joshRoom.openDimension",
+    "onCommand:joshRoom.addStorage",
     "onCommand:joshRoom.link",
     "onCommand:joshRoom.repair",
     "onCommand:joshRoom.enter",
@@ -34,14 +33,9 @@
         "icon": "$(add)"
       },
       {
-        "command": "joshRoom.addDimension",
-        "title": "Josh: Add Dimension",
-        "icon": "$(database)"
-      },
-      {
-        "command": "joshRoom.openDimension",
-        "title": "Josh: Open Dimension",
-        "icon": "$(database)"
+        "command": "joshRoom.addStorage",
+        "title": "Josh: Connect Storage",
+        "icon": "$(cloud)"
       },
       {
         "command": "joshRoom.link",
@@ -128,8 +122,7 @@
     "menus": {
       "view/title": [
         { "command": "joshRoom.new", "when": "view == joshRoom.rooms", "group": "navigation@1" },
-        { "command": "joshRoom.addDimension", "when": "view == joshRoom.rooms", "group": "navigation@2" },
-        { "command": "joshRoom.openDimension", "when": "view == joshRoom.rooms", "group": "navigation@3" },
+        { "command": "joshRoom.addStorage", "when": "view == joshRoom.rooms", "group": "navigation@2" },
         { "command": "joshRoom.save", "when": "view == joshRoom.rooms", "group": "navigation@2" },
         { "command": "joshRoom.refresh", "when": "view == joshRoom.rooms", "group": "navigation@3" }
       ],
