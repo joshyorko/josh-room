@@ -6,7 +6,7 @@ export ROBOCORP_HOME="${ROBOCORP_HOME:-$HOME/.local/share/josh-room/robocorp}"
 export RCC_HOLOTREE_MODE="${RCC_HOLOTREE_MODE:-private}"
 mkdir -p "$ROBOCORP_HOME"
 
-readonly JOSH_ROOM_GIT_SHA="89822d84a2ec98e49615764b7ed8e81527b1605d"
+readonly JOSH_ROOM_GIT_SHA="e75edfaf3ecda295fd9321611e441926f4d949f5"
 readonly JAT_GIT_SHA="0d08869f1e0d267bed72c2a76ff32b376b8e10a1"
 readonly EXPECTED_RCC_VERSION="v18.19.2"
 readonly JAT_ENVIRONMENT_ARTIFACT_REFERENCE="ghcr.io/joshyorko/josh-all-the-things-jat-runtime@sha256:173cd4fe996af650257651152dac76abd96e9d90ea36b68d0cf7b17b09e02d50"
