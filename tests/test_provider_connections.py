@@ -6,9 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from josh_room import cli, minio
+from josh_room import cli, keyring, minio
 from josh_room import config as config_module
-from josh_room import keyring
 from josh_room.catalog import Catalog
 
 

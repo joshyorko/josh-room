@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import josh_room.auth as auth
+from josh_room import auth
 from josh_room.auth import (
     _request,
     ensure_runtime_session,
