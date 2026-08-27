@@ -79,6 +79,10 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
     assert commands == {
+        "joshRoom.addDimension",
+        "joshRoom.openDimension",
+        "joshRoom.link",
+        "joshRoom.repair",
         "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
         "joshRoom.jatBuild", "joshRoom.jatRestore", "joshRoom.jatServe",
     }
@@ -225,7 +229,7 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["candidate_version"] == "0.1.0"
     assert lock["room_of_requirement"]["image"].endswith("@" + lock["room_of_requirement"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
-    assert lock["josh_room"]["git_sha"] == "edf7fa946e924569a76f0ac6a31eb015b6910a83"
+    assert lock["josh_room"]["git_sha"] == "9bdecf230e3a54ff65680fc781e4c853d94d829d"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["reference"].endswith("@" + artifact["manifest_digest"])

@@ -100,14 +100,41 @@ class ImmutableLocalStore:
         finally:
             temp.unlink(missing_ok=True)
 
-    def get(self, key: str) -> bytes:
+    def get(self, key: str, expected_digest: str | None = None, expected_size: int | None = None) -> bytes:
         if not OBJECT_KEY.fullmatch(key):
             raise ValueError("invalid object key")
         path = self.root / key
         size = path.stat().st_size
-        if size > MAX_OBJECT_SIZE:
-            raise ValueError("object exceeds maximum size")
-        return path.read_bytes()
+        if size > MAX_OBJECT_SIZE or expected_size is not None and size != expected_size:
+            raise ValueError("local object size mismatch")
+        body = path.read_bytes()
+        if expected_digest is not None and hashlib.sha256(body).hexdigest() != expected_digest:
+            raise ValueError("local object digest mismatch")
+        return body
+
+    def verify(self, key: str, expected_digest: str, expected_size: int) -> ObjectRef:
+        match = OBJECT_KEY.fullmatch(key)
+        if not match or match.group(1) != expected_digest:
+            raise ValueError("invalid object key")
+        path = self.root / key
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("local object is unavailable")
+        if path.stat().st_size != expected_size:
+            raise ValueError("local object size mismatch")
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as source:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_OBJECT_SIZE:
+                    raise ValueError("object exceeds maximum size")
+                digest.update(chunk)
+        if size != expected_size or digest.hexdigest() != expected_digest:
+            raise ValueError("local object digest mismatch")
+        return ObjectRef(key, digest.hexdigest(), size)
 
     def delete(self, key: str) -> None:
         if not OBJECT_KEY.fullmatch(key):

@@ -144,6 +144,28 @@ def test_catalog_conflict_is_explicit(tmp_path):
         store.conditional_catalog_put(b"catalog", expected_etag='"wrong"')
 
 
+def test_verify_object_rejects_unsafe_key_before_remote_reads(tmp_path):
+    fake = FakeS3()
+    store = backend(fake, tmp_path)
+    with pytest.raises(ValueError, match="invalid opaque object key"):
+        store.verify_object("objects/../catalog.jroom.age", "a" * 64, 1)
+    assert [name for name, _kwargs in fake.calls if name in {"head_object", "get_object"}] == []
+
+
+def test_non_precondition_catalog_put_error_is_published_uncertain(tmp_path):
+    fake = FakeS3()
+
+    def fail(**kwargs):
+        fake.calls.append(("put_object", kwargs))
+        raise error("InternalError")
+
+    fake.put_object = fail
+    with pytest.raises(RuntimeError) as failure:
+        backend(fake, tmp_path).conditional_catalog_put(b"catalog", expected_etag=None)
+    assert failure.value.__class__.__name__ == "R2PublicationError"
+    assert failure.value.published is True
+
+
 def test_catalog_create_only_and_conditional_update_read_back(tmp_path):
     fake = FakeS3()
     store = backend(fake, tmp_path)

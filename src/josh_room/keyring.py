@@ -22,10 +22,15 @@ def lookup(profile: str) -> dict[str, str]:
         values = json.loads(path.read_text())
         if not isinstance(values, dict) or not all(
             isinstance(values.get(field), str) and values[field]
-            for field in ("access-key-id", "secret-access-key", "session-token")
+            for field in ("access-key-id", "secret-access-key")
         ):
             raise RuntimeError("runtime credential source is incomplete")
-        return {field: values[field] for field in ("access-key-id", "secret-access-key", "session-token")}
+        credentials = {
+            field: values[field] for field in ("access-key-id", "secret-access-key")
+        }
+        if isinstance(values.get("session-token"), str) and values["session-token"]:
+            credentials["session-token"] = values["session-token"]
+        return credentials
     if not available():
         raise RuntimeError("OS Secret Service is unavailable")
     values = {}

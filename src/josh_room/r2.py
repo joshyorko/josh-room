@@ -10,6 +10,7 @@ from pathlib import Path
 
 from botocore.exceptions import ClientError
 
+from .config import DimensionConfig, resolve_dimension
 from .keyring import lookup
 from .local_store import ObjectRef
 from .object_store import ObjectStore
@@ -18,8 +19,15 @@ from .progress import report_progress
 OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
 
 
-class R2Conflict(RuntimeError):
-    pass
+class R2PublicationError(RuntimeError):
+    def __init__(self, message: str, *, published: bool):
+        self.published = published
+        super().__init__(message)
+
+
+class R2Conflict(R2PublicationError):
+    def __init__(self, message: str):
+        super().__init__(message, published=False)
 
 
 @dataclass(frozen=True)
@@ -34,13 +42,26 @@ class R2Config:
     max_bytes: int = 8 * 1024 * 1024 * 1024
     timeout_seconds: int = 60
     max_attempts: int = 4
+    temporary_credentials: bool = True
+    dimension_id: str | None = None
 
     @classmethod
-    def from_private(cls, config: dict) -> "R2Config":
+    def from_dimension(cls, dimension: DimensionConfig) -> "R2Config":
+        if dimension.provider != "r2":
+            raise ValueError("selected Dimension is not an R2 Dimension")
+        return cls(endpoint=dimension.endpoint, bucket=dimension.bucket, credential_profile=dimension.credential_profile, region=dimension.region, catalog_key=dimension.catalog_key, multipart_threshold=dimension.option("multipart_threshold", cls.multipart_threshold), multipart_chunk_size=dimension.option("multipart_chunk_size", cls.multipart_chunk_size), max_bytes=dimension.option("max_bytes", cls.max_bytes), timeout_seconds=dimension.option("timeout_seconds", cls.timeout_seconds), max_attempts=dimension.option("max_attempts", cls.max_attempts), temporary_credentials=dimension.option("temporary_credentials", True), dimension_id=dimension.dimension_id)
+
+    @classmethod
+    def from_private(cls, config: dict | DimensionConfig, dimension_id: str | None = None) -> "R2Config":
+        if isinstance(config, DimensionConfig):
+            return cls.from_dimension(config)
+        if dimension_id:
+            return cls.from_dimension(resolve_dimension(config, dimension_id))
         values = config.get("r2") if config else None
         if not values:
             raise ValueError("private R2 configuration is unavailable")
-        return cls(endpoint=values["endpoint"], bucket=values["bucket"], credential_profile=values["credential_profile"], region=values.get("region", "auto"), catalog_key=values.get("catalog_key", "catalog.jroom.age"))
+        return cls(endpoint=values["endpoint"], bucket=values["bucket"], credential_profile=values["credential_profile"], region=values.get("region", "auto"), catalog_key=values.get("catalog_key", "catalog.jroom.age"), temporary_credentials=values.get("temporary_credentials", True), dimension_id="r2")
+
 
 
 class R2Backend(ObjectStore):
@@ -189,6 +210,11 @@ class R2Backend(ObjectStore):
         if total != size or observed.hexdigest() != digest:
             raise ValueError("remote object digest mismatch")
 
+    def verify_object(self, key: str, expected_digest: str, expected_size: int) -> ObjectRef:
+        self._validate_object_key(key, expected_digest)
+        self._verify_remote(key, expected_digest, expected_size)
+        return ObjectRef(key, expected_digest, expected_size)
+
     def read_catalog(self) -> tuple[bytes | None, str | None]:
         try:
             head = self.client.head_object(Bucket=self.config.bucket, Key=self.config.catalog_key)
@@ -213,19 +239,28 @@ class R2Backend(ObjectStore):
         except ClientError as error:
             if _is_precondition(error):
                 raise R2Conflict("stale catalog revision or existing catalog") from error
-            raise
-        head = self.client.head_object(Bucket=self.config.bucket, Key=self.config.catalog_key)
-        verified, _etag = self.read_catalog()
-        if verified != body:
-            raise ValueError("catalog read-back mismatch")
-        return head.get("ETag", "")
+            raise R2PublicationError("catalog publication outcome is unknown", published=True) from error
+        try:
+            head = self.client.head_object(Bucket=self.config.bucket, Key=self.config.catalog_key)
+            verified, _etag = self.read_catalog()
+            if verified != body:
+                raise ValueError("catalog read-back mismatch")
+            return head.get("ETag", "")
+        except BaseException as error:
+            raise R2PublicationError("catalog publication verification failed", published=True) from error
 
     def record_orphan(self, ref: ObjectRef) -> Path | None:
         if not self.receipt_dir:
             return None
         self.receipt_dir.mkdir(parents=True, exist_ok=True)
         path = self.receipt_dir / f"orphan-{uuid.uuid4().hex}.json"
-        path.write_text(json.dumps({"status": "uploaded-unreferenced", "object_key": ref.key, "sha256": ref.sha256, "size": ref.size}, sort_keys=True))
+        provider = "minio" if self.__class__.__module__.endswith("minio") else "r2"
+        destination = {"provider": provider}
+        for name in ("dimension_id", "endpoint", "bucket"):
+            value = getattr(self.config, name, None)
+            if isinstance(value, str) and value:
+                destination[name] = value
+        path.write_text(json.dumps({"status": "uploaded-unreferenced", "destination": destination, "object_key": ref.key, "sha256": ref.sha256, "size": ref.size}, sort_keys=True))
         return path
 
     def delete_object(self, key: str) -> None:

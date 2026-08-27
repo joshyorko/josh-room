@@ -179,3 +179,21 @@ module.exports = {
   renderProgressBar,
   renderStatusBar,
 };
+
+Object.assign(PROFILES, {
+  dimension: { auth: 8, catalog: 35, configure: 72, complete: 100 },
+  link: { status: 18, catalog: 48, verify: 82, complete: 100 },
+  repair: { status: 18, catalog: 48, verify: 82, repair: 94, complete: 100 },
+  copy: { auth: 8, catalog: 22, download: [25, 70], verify: 84, upload: [85, 96], complete: 100 },
+});
+
+const baseOperationKind = operationKind;
+function nativeOperationKind(args) {
+  if (args[0] === "dimensions") return "dimension";
+  if (args[0] === "status" || args[0] === "link") return args[0] === "link" ? "link" : "catalog";
+  if (args[0] === "repair") return "repair";
+  if (args[0] === "snapshot" && args[1] === "copy") return "copy";
+  return baseOperationKind(args);
+}
+
+module.exports.operationKind = nativeOperationKind;

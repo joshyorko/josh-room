@@ -98,3 +98,265 @@ function followLogFile(logPath, onLine, { intervalMs = 100 } = {}) {
 }
 
 module.exports = { REGISTRY_URL, cleanLogLine, followLogFile, probeRegistry, stageForLog, waitForRegistry };
+
+const PROVIDER_LABELS = {
+  r2: "Cloudflare R2",
+  minio: "MinIO",
+  local: "Local Object Store",
+};
+
+function providerKey(value) {
+  const normalized = String(value || "r2").trim().toLowerCase();
+  if (normalized.includes("cloudflare") || normalized === "s3") return "r2";
+  if (normalized.includes("minio")) return "minio";
+  if (normalized.includes("local")) return "local";
+  return normalized || "r2";
+}
+
+function providerLabel(value) {
+  const key = providerKey(value);
+  return PROVIDER_LABELS[key] || String(value || key).trim() || "Storage Provider";
+}
+
+function dimensionDisplayName(dimension, counts) {
+  const id = dimension && (dimension.id || dimension.dimension_id);
+  const name = dimension && (dimension.display_name || dimension.name || id);
+  return counts.get(name) > 1 ? `${name} (${id})` : name;
+}
+
+function records(value, idField = "id") {
+  if (Array.isArray(value)) return value.map((item) => ({ ...item }));
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).map(([id, item]) => ({
+    ...(item && typeof item === "object" ? item : {}),
+    [idField]: item?.[idField] || id,
+  }));
+}
+
+function snapshotRecords(project) {
+  const source = project?.snapshots || project?.jats || [];
+  return records(source, "snapshot_id").map((snapshot) => ({
+    ...snapshot,
+    id: snapshot.snapshot_id || snapshot.id,
+    display_name: snapshot.display_name || snapshot.name || snapshot.snapshot_id || snapshot.id,
+  }));
+}
+
+function buildProviderTree(catalog = {}) {
+  const dimensions = records(catalog.dimensions);
+  const fallbackProjects = records(catalog.projects, "id");
+  const sourceDimensions = dimensions.length ? dimensions : [{
+    id: catalog.dimension_id || "default",
+    display_name: catalog.dimension_name || "Default",
+    provider: catalog.provider || "r2",
+    projects: fallbackProjects,
+  }];
+  const dimensionNames = new Map();
+  for (const dimension of sourceDimensions) {
+    const name = dimension.display_name || dimension.name || dimension.id || dimension.dimension_id;
+    dimensionNames.set(name, (dimensionNames.get(name) || 0) + 1);
+  }
+  const grouped = new Map();
+  for (const dimension of sourceDimensions) {
+    const displayName = dimensionDisplayName(dimension, dimensionNames);
+    const providerId = providerKey(dimension.provider || dimension.provider_id || dimension.kind);
+    if (!grouped.has(providerId)) {
+      grouped.set(providerId, {
+        kind: "provider",
+        id: providerId,
+        label: providerLabel(dimension.provider || providerId),
+        provider: providerId,
+        children: [],
+      });
+    }
+    const projects = records(
+      Object.prototype.hasOwnProperty.call(dimension, "projects")
+        ? dimension.projects
+        : Object.prototype.hasOwnProperty.call(dimension, "rooms")
+          ? dimension.rooms
+          : dimensions.length ? [] : fallbackProjects,
+      "id",
+    );
+    const roomNodes = projects.map((project) => ({
+      kind: "room",
+      id: project.id || project.project_id,
+      label: `${project.display_name || project.name || project.id || project.project_id} · ${displayName}`,
+      project,
+      dimension,
+      children: snapshotRecords(project).map((snapshot) => ({
+        kind: "jat",
+        id: snapshot.id,
+        label: snapshot.display_name,
+        snapshot,
+        project,
+        dimension,
+      })),
+    }));
+    const publicParts = [dimension.provider || providerId, dimension.endpoint, dimension.bucket, dimension.region]
+      .filter((part) => part !== undefined && part !== null && String(part).trim() !== "")
+      .map(String);
+    grouped.get(providerId).children.push({
+      kind: "dimension",
+      id: dimension.id || dimension.dimension_id,
+      label: displayName,
+      description: publicParts.join(" � "),
+      provider: providerId,
+      dimension,
+      children: roomNodes,
+    });
+  }
+  return [...grouped.values()];
+}
+
+function dimensionArgs(args, dimension) {
+  const original = [...args];
+  if (!dimension) return original;
+  const routed = [];
+  let found = false;
+  for (let index = 0; index < original.length; index += 1) {
+    const arg = original[index];
+    if (arg === "--dimension") {
+      found = true;
+      index += 1;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    if (arg.startsWith("--dimension=")) {
+      found = true;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    routed.push(arg);
+  }
+  if (!found) routed.push("--dimension", String(dimension));
+  return routed;
+}
+
+Object.assign(module.exports, {
+  buildProviderTree,
+  dimensionArgs,
+  flattenDimensionRooms,
+  dimensionLabel: providerLabel,
+  providerKey,
+  providerLabel,
+});
+
+function routedDimensionArgs(args, dimension) {
+  const original = [...args];
+  const routed = [];
+  let found = false;
+  for (let index = 0; index < original.length; index += 1) {
+    const arg = original[index];
+    if (arg === "--backend") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--backend=")) continue;
+    if (arg === "--dimension") {
+      found = true;
+      index += 1;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    if (arg.startsWith("--dimension=")) {
+      found = true;
+      routed.push("--dimension", String(dimension));
+      continue;
+    }
+    routed.push(arg);
+  }
+  if (dimension && !found) routed.push("--dimension", String(dimension));
+  return routed;
+}
+
+function snapshotCopyArgs(source, target) {
+  const sourceDimension = source && (source.dimension_id || source.source_dimension || source.dimension);
+  const destinationDimension = target && (target.dimension_id || target.destination_dimension || target.id || target.dimension);
+  const destinationRoom = target && (target.destination_room || target.room_id || (target.kind === "room" ? target.id : undefined));
+  if (source && source.kind === "jat") {
+    return [
+      "snapshot", "copy", source.project && (source.project.id || source.project.project_id),
+      "--snapshot", source.id || (source.snapshot && source.snapshot.snapshot_id),
+      "--source-dimension", sourceDimension,
+      "--destination-dimension", destinationDimension,
+      "--destination-room", destinationRoom,
+    ];
+  }
+  return [
+    "snapshot", "copy", "--source-folder", source && source.path,
+    "--destination-dimension", destinationDimension,
+    "--destination-room", destinationRoom,
+  ];
+}
+
+module.exports.dimensionArgs = routedDimensionArgs;
+module.exports.snapshotCopyArgs = snapshotCopyArgs;
+
+function identityValue(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return undefined;
+  return value.id || value.dimension_id || value.project_id;
+}
+
+function exactSnapshotCopyArgs(source, target) {
+  const sourceDimension = identityValue(
+    source && (source.source_dimension || source.dimension_id || source.dimension),
+  );
+  const targetDimension = identityValue(
+    target && (target.destination_dimension || target.dimension_id
+      || (target.destination_room ? target : undefined)
+      || (target.kind === "dimension" ? target : target.dimension)),
+  );
+  const destinationRoom = target && (
+    target.destination_room || target.room_id || (target.kind === "room" ? target.id : undefined)
+  );
+  if (source && source.kind === "jat") {
+    return [
+      "snapshot", "copy", identityValue(source.project),
+      "--snapshot", source.id || source.snapshot && source.snapshot.snapshot_id,
+      "--source-dimension", sourceDimension,
+      "--destination-dimension", targetDimension,
+      "--destination-room", destinationRoom,
+    ];
+  }
+  return [
+    "snapshot", "copy", "--source-folder", source && source.path,
+    "--destination-dimension", targetDimension, "--destination-room", destinationRoom,
+  ];
+}
+
+module.exports.snapshotCopyArgs = exactSnapshotCopyArgs;
+
+function flattenDimensionRooms(catalog = {}) {
+  const dimensions = records(catalog.dimensions);
+  if (!dimensions.length) {
+    const dimension = catalog.dimension_id
+      ? { id: catalog.dimension_id, display_name: catalog.dimension_name, provider: catalog.provider }
+      : undefined;
+    return records(catalog.projects, "id").map((project) => decorateRoom(project, dimension));
+  }
+  const dimensionNames = new Map();
+  for (const dimension of dimensions) {
+    const name = dimension.display_name || dimension.name || dimension.id || dimension.dimension_id;
+    dimensionNames.set(name, (dimensionNames.get(name) || 0) + 1);
+  }
+  return dimensions.flatMap((dimension) => {
+    const displayName = dimensionDisplayName(dimension, dimensionNames);
+    const source = Object.prototype.hasOwnProperty.call(dimension, "projects")
+      ? dimension.projects
+      : dimension.rooms;
+    return records(source, "id").map((project) => decorateRoom(project, dimension, displayName));
+  });
+}
+
+function decorateRoom(project, dimension, dimensionDisplayNameValue) {
+  const id = project.id || project.project_id;
+  return {
+    ...project,
+    id,
+    project_id: project.project_id || id,
+    dimension_id: dimension && (dimension.id || dimension.dimension_id),
+    dimension_display_name: dimensionDisplayNameValue,
+    dimension,
+  };
+}

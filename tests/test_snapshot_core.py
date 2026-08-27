@@ -1,5 +1,7 @@
 import hashlib
 import io
+import json
+import resource
 import tarfile
 import threading
 from pathlib import Path
@@ -17,7 +19,13 @@ from josh_room.envelope import (
 )
 from josh_room.keyring import lookup
 from josh_room.local_store import ImmutableLocalStore
-from josh_room.operations import _display_name, _snapshot_id, _source_metadata
+from josh_room.operations import (
+    _display_name,
+    _snapshot_id,
+    _source_metadata,
+    create_snapshot,
+)
+from josh_room.workspace_state import read_workspace_marker, workspace_fingerprint
 
 
 def test_environment_artifact_receipt_shape_is_accepted():
@@ -138,6 +146,20 @@ def test_runtime_secret_file_is_ephemeral_keyring_source(tmp_path, monkeypatch):
     }
 
 
+def test_runtime_secret_file_allows_static_minio_credentials(tmp_path, monkeypatch):
+    runtime = tmp_path / "minio.json"
+    runtime.write_text(
+        '{"access-key-id":"temporary","secret-access-key":"temporary-secret"}'
+    )
+    runtime.chmod(0o600)
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_CREDENTIALS", str(runtime))
+    monkeypatch.setattr("josh_room.keyring.available", lambda: False)
+    assert lookup("ignored") == {
+        "access-key-id": "temporary",
+        "secret-access-key": "temporary-secret",
+    }
+
+
 def test_local_store_is_immutable_and_content_addressed(tmp_path):
     store = ImmutableLocalStore(tmp_path)
     first = store.put(b"ciphertext")
@@ -191,6 +213,85 @@ def test_local_store_create_only_race_leaves_one_complete_object(tmp_path):
     ref = next(result for result in results if result != "exists")
     assert store.get(ref.key) == b"same"
     assert not list(tmp_path.rglob("*.partial"))
+
+
+def test_workspace_fingerprint_includes_mode_changes_and_empty_directories(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "nested").mkdir()
+    payload = root / "nested" / "file.txt"
+    payload.write_text("one")
+    baseline = workspace_fingerprint(root)
+
+    payload.chmod(payload.stat().st_mode ^ 0o111)
+    assert workspace_fingerprint(root) != baseline
+
+    payload.chmod(payload.stat().st_mode ^ 0o111)
+    (root / "empty").mkdir()
+    assert workspace_fingerprint(root) != baseline
+
+
+def test_workspace_fingerprint_streams_large_files_with_bounded_memory(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    payload = root / "large.bin"
+    size = 64 * 1024 * 1024 + 1
+    with payload.open("wb") as handle:
+        handle.truncate(size)
+        handle.seek(size - 1)
+        handle.write(b"x")
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    fingerprint = workspace_fingerprint(root)
+    after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    assert len(fingerprint) == 64
+    assert after - before < 16 * 1024
+
+
+def test_workspace_marker_v1_accepts_legacy_display_name_without_snapshot_id(tmp_path):
+    marker = {"format_version": 1, "project_id": "demo", "display_name": "Demo"}
+    (tmp_path / ".josh-room.json").write_text(json.dumps(marker))
+    assert read_workspace_marker(tmp_path) == marker
+
+
+def test_create_snapshot_rejects_source_mutation_during_build(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "file.txt").write_text("original")
+    instance = tmp_path / "instance"
+
+    class Backend:
+        def __init__(self):
+            self.config = type("Config", (), {"dimension_id": "archive"})()
+            self.calls = []
+
+        def put_file(self, *args, **kwargs):
+            self.calls.append("put_file")
+            raise AssertionError("publish should not happen")
+
+        def conditional_catalog_put(self, *args, **kwargs):
+            self.calls.append("catalog_put")
+            raise AssertionError("publish should not happen")
+
+        def record_orphan(self, ref):
+            self.calls.append(("orphan", ref.key))
+
+    backend = Backend()
+
+    def fake_run_build(_jat_root, source_root, haul, **_kwargs):
+        (source_root / "file.txt").write_text("mutated")
+        haul.write_bytes(b"haul")
+        return {"version": "synthetic"}
+
+    monkeypatch.setattr("josh_room.operations.run_build", fake_run_build)
+    monkeypatch.setattr("josh_room.operations.build_envelope_file", lambda manifest, haul, envelope: envelope.write_bytes(b"envelope"))
+    monkeypatch.setattr("josh_room.operations.encrypt_file", lambda envelope, recipients, encrypted: encrypted.write_bytes(b"ciphertext"))
+    monkeypatch.setattr("josh_room.operations._read_remote_catalog", lambda *_args, **_kwargs: (Catalog.empty(dimension_id="archive"), None))
+
+    with pytest.raises(ValueError, match="source workspace changed during snapshot capture"):
+        create_snapshot(instance, "room", source, tmp_path / "jat", ["age1daily", "age1recovery"], backend, display_name="Room")
+
+    assert backend.calls == []
+    assert not (source / ".josh-room.json").exists()
 
 
 def test_catalog_file_rejects_stale_revision_and_preserves_old_on_interruption(tmp_path, monkeypatch):
