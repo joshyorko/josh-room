@@ -188,8 +188,15 @@ def main(argv=None):
     instance = _instance_root()
     try:
         if _requires_oauth(args):
-            selected = None if getattr(args, "snapshot_command", None) == "copy" else _effective_dimension(args)
-            ensure_runtime_session(dimension_id=selected.dimension_id if selected else None)
+            requested_dimension = getattr(args, "dimension", None)
+            selected = None
+            if getattr(args, "snapshot_command", None) != "copy":
+                try:
+                    selected = _effective_dimension(args)
+                except ValueError:
+                    if requested_dimension != "r2":
+                        raise
+            ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
         identity_context = nullcontext() if args.command in {"auth", "setup", "status"} else _identity_environment()
         with identity_context:
             result = dispatch(args, instance)
@@ -205,19 +212,19 @@ def _requires_oauth(args) -> bool:
     if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
-        registry = DimensionRegistry(private_config() or {})
+        source_dimension = _copy_source_dimension(args)
+        dimensions = [dimension for dimension in (source_dimension, args.destination_dimension) if dimension]
         try:
-            source_dimension = _copy_source_dimension(args)
-            dimensions = [dimension for dimension in (source_dimension, args.destination_dimension) if dimension]
+            registry = DimensionRegistry(private_config() or {})
             return any(registry.select(dimension).provider == "r2" for dimension in dimensions)
         except ValueError:
-            return False
+            return "r2" in dimensions
     dimension = getattr(args, "dimension", None)
     if dimension:
         try:
             return DimensionRegistry(private_config() or {}).select(dimension).provider == "r2"
         except ValueError:
-            return False
+            return dimension == "r2"
     try:
         selected = _effective_dimension(args)
     except ValueError:

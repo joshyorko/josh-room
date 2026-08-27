@@ -156,6 +156,7 @@ function buildProviderTree(catalog = {}) {
     id: catalog.dimension_id || "r2",
     display_name: catalog.dimension_name || "Default",
     provider: catalog.provider || "r2",
+    synthetic: !catalog.dimension_id,
     projects: fallbackProjects,
   }];
   const dimensionNames = new Map();

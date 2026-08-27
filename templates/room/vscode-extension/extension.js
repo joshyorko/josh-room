@@ -1238,10 +1238,11 @@ class HierarchyRoomsProvider {
       : vscode.TreeItemCollapsibleState.None;
     const treeItem = new vscode.TreeItem(item.label || item.id, state);
     treeItem.id = [item.kind, dimensionId(item), item.id].filter(Boolean).join(":");
+    const syntheticDimension = item.kind === "dimension" && item.dimension?.synthetic;
     treeItem.contextValue = item.kind === "connection"
       ? item.state === "expired" ? "r2-connection-expired"
         : item.state === "connected" ? "r2-connection-connected" : "r2-connection"
-      : item.kind;
+      : syntheticDimension ? "dimension-synthetic" : item.kind;
     treeItem.description = item.description || "";
     treeItem.iconPath = new vscode.ThemeIcon(
       item.kind === "provider" ? "cloud"
@@ -1630,6 +1631,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
       id: "r2",
       display_name: "Default",
       provider: "r2",
+      synthetic: true,
       connection_state: authState.state || "missing",
       projects: [],
     };
@@ -1710,6 +1712,12 @@ async function editStorageSettings(item) {
   const catalog = selected ? undefined : await loadCatalog(activeWorkspace(), "Loading storage...");
   const dimension = selected || await chooseDimension(catalog, "Edit Settings");
   if (!dimension) return "cancelled";
+  if (dimension.synthetic && nativeRegistry.providerKey(dimension.provider) === "r2") {
+    await vscode.window.showInformationMessage(
+      "Default Cloudflare storage is managed by OAuth. Use Connect Cloudflare instead.",
+    );
+    return "cancelled";
+  }
   selectedDimensionId = dimension.id || dimension.dimension_id;
   const displayName = await vscode.window.showInputBox({
     title: "Edit Settings", prompt: "Storage name", value: dimension.display_name || dimension.name || "",

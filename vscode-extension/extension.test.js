@@ -1007,3 +1007,30 @@ test("native storage commands are understandable, distinct, and omit Use Dimensi
   assert.match(extension, /vscode\.env\.openExternal\(vscode\.Uri\.parse\(authorizationUrl\)\)/);
   assert.doesNotMatch(extension, /webbrowser\.open/);
 });
+
+test("synthetic Default Cloudflare storage does not expose editable settings", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-synthetic-settings-test-"));
+  const { vscode, statusItem, inputBoxCalls, infoCalls } = createVscodeMock(root);
+  const extension = loadExtension(vscode, createSpawnHarness(() => ({
+    stdout: JSON.stringify({ ok: true }),
+  })).spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = buildProviderTree({
+    dimensions: [{
+      id: "r2",
+      display_name: "Default",
+      provider: "r2",
+      synthetic: true,
+      connection_state: "missing",
+      projects: [],
+    }],
+  });
+  const dimension = catalog[0].children[0];
+  const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(dimension);
+
+  assert.equal(treeItem.contextValue, "dimension-synthetic");
+  assert.equal(await extension.__test__.editStorageSettings(dimension), "cancelled");
+  assert.equal(inputBoxCalls.length, 0);
+  assert.match(infoCalls[0][0], /managed by OAuth/);
+});
