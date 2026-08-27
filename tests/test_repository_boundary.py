@@ -128,6 +128,9 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     assert package["version"] == "0.1.1"
     assert package["scripts"]["package"]
     assert (ROOT / "vscode-extension/.vscodeignore").is_file()
+    vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
+    assert "runtime/controller/**/__pycache__/**" in vscodeignore
+    assert "runtime/controller/**/*.pyc" in vscodeignore
     assert runtime["extension_version"] == package["version"]
     assert runtime["rcc"]["version"] == "v18.19.2"
     assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
@@ -276,11 +279,11 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["candidate_version"] == "0.1.1"
     assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
-    assert lock["josh_room"]["git_sha"] == "c7695a9b48f525537abe3e13644ba2f4785d5c1d"
+    assert lock["josh_room"]["git_sha"] == "88d211b2ea9df54d888e07850d89909781edbabb"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime.rcca")
-    assert artifact["release_tag"] == "v0.1.3-jat-runtime"
+    assert artifact["release_tag"] == "v0.1.4-jat-runtime"
     assert len(artifact["archive_sha256"]) == 64
     assert artifact["archive_size"] > 0
     assert artifact["rcc_artifact_digest"].startswith("sha256:")

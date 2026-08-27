@@ -413,13 +413,13 @@ test("real extension process uses an already resolved managed runtime", {
   const { vscode, statusItem } = createVscodeMock(root);
   const extension = loadExtensionWithRealProcesses(vscode);
   const rcc = path.join(storage, "runtime/rcc/v18.19.2/linux-x64/rcc");
-  const jatRoot = path.join(storage, "runtime/jat/2fea7ddad8d0a2ce9f4299b25779574befb39904");
+  const jatRoot = path.join(storage, "runtime/jat/9630f57e6b207fd5b948d0de11f485d8a166c409");
   const environment = managedRuntime.runtimeEnvironment({ globalStorageUri: { fsPath: storage } }, {
     rccExecutable: rcc,
     controllerRoot: path.join(__dirname, "runtime/controller"),
     jatRoot,
-    jatArtifact: "sha256:7c6123feb2ef1c3724ad6acaa3d304b9ebfc7b744953dcbe4f0cfde175595619",
-    jatSourceSha: "2fea7ddad8d0a2ce9f4299b25779574befb39904",
+    jatArtifact: "sha256:13abd8523920cc81464a5b38a25dd1d2a068bc8802683d1a453bd4514dd832a4",
+    jatSourceSha: "9630f57e6b207fd5b948d0de11f485d8a166c409",
   }, root);
   extension.__test__.setStatusItem(statusItem);
   extension.__test__.setRuntimeForTests({

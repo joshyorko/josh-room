@@ -4,6 +4,10 @@
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
   "version": "0.1.1",
   "publisher": "joshyorko",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joshyorko/josh-room.git"
+  },
   "scripts": {
     "test": "node --test *.test.js",
     "package": "npx --yes @vscode/vsce package --no-dependencies"
