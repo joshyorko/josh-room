@@ -21,7 +21,7 @@ def test_minio_backend_is_provider_neutral_store():
 
 def test_minio_client_uses_custom_ca_and_path_style(monkeypatch):
     captured = {}
-    monkeypatch.setattr("josh_room.minio.lookup", lambda _: {"access-key-id": "id", "secret-access-key": "secret"})
+    monkeypatch.setattr("josh_room.minio.lookup", lambda _profile, **_kwargs: {"access-key-id": "id", "secret-access-key": "secret"})
     monkeypatch.setattr("boto3.client", lambda *args, **kwargs: captured.update(kwargs) or object())
     MinioBackend(MinioConfig("https://minio.invalid", "synthetic", "fixture", verify_tls=False, ca_bundle="/tmp/ca.pem", path_style=True))
     assert captured["verify"] == "/tmp/ca.pem"

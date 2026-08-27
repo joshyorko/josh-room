@@ -11,6 +11,7 @@ const {
   operationKind,
 } = require("./progress");
 const { REGISTRY_URL, followLogFile, stageForLog, waitForRegistry } = require("./registry");
+const providerTools = require("./provider");
 
 let outputChannel;
 let roomsProvider;
@@ -22,6 +23,7 @@ let workspaceBaseline;
 let workspaceWatcher;
 let dirtyTrackingGeneration = 0;
 const dirtyBuffers = new Set();
+let activeAuthAttempt;
 
 function setStatus(text, tooltip = "Open Josh Room") {
   if (!statusItem) return;
@@ -42,7 +44,52 @@ function roomsRoot(workspace) {
   return path.basename(parent) === "workspaces" ? parent : workspace;
 }
 
-function executeJoshRoom(args, cwd, cancellationToken, progressReporter) {
+function cancellationError() {
+  const error = new Error("Josh Room operation cancelled");
+  error.code = "ABORT_ERR";
+  return error;
+}
+
+function isCancellationError(error) {
+  return error?.code === "ABORT_ERR" || error?.name === "AbortError";
+}
+
+function userFacingError(error) {
+  const message = error?.message || String(error);
+  if (/fingerprint|workspace path|path binding/i.test(message)) {
+    return "This folder no longer matches the selected Room. Use Link Existing Folder, Enter to restore, or Save as New.";
+  }
+  return message;
+}
+
+function createCancellationController(parentToken) {
+  let cancelled = Boolean(parentToken?.isCancellationRequested);
+  const listeners = new Set();
+  const subscription = parentToken?.onCancellationRequested(() => controller.cancel());
+  const controller = {
+    token: {
+      get isCancellationRequested() { return cancelled; },
+      onCancellationRequested(callback) {
+        if (cancelled) callback();
+        else listeners.add(callback);
+        return { dispose: () => listeners.delete(callback) };
+      },
+    },
+    cancel() {
+      if (cancelled) return;
+      cancelled = true;
+      for (const callback of [...listeners]) callback();
+      listeners.clear();
+    },
+    dispose() {
+      subscription?.dispose();
+      listeners.clear();
+    },
+  };
+  return controller;
+}
+
+function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
   return new Promise((resolve, reject) => {
     const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
     fs.chmodSync(progressDirectory, 0o700);
@@ -69,14 +116,17 @@ function executeJoshRoom(args, cwd, cancellationToken, progressReporter) {
       cwd,
       env: { ...process.env, JOSH_ROOM_PROGRESS_FILE: progressPath },
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
+    if (stdinPayload !== undefined) child.stdin.end(stdinPayload);
     let stdout = "";
     let stderr = "";
+    let cancelled = Boolean(cancellationToken?.isCancellationRequested);
     const append = (current, chunk) => (current + chunk.toString()).slice(-1024 * 1024);
     child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); });
     child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); });
     const cancellation = cancellationToken?.onCancellationRequested(() => {
+      cancelled = true;
       try {
         process.kill(-child.pid, "SIGTERM");
       } catch (_error) {
@@ -86,11 +136,15 @@ function executeJoshRoom(args, cwd, cancellationToken, progressReporter) {
     child.on("error", (error) => {
       cancellation?.dispose();
       cleanup();
-      reject(error);
+      reject(cancelled ? cancellationError() : error);
     });
     child.on("close", (code) => {
       cancellation?.dispose();
       cleanup();
+      if (cancelled || cancellationToken?.isCancellationRequested) {
+        reject(cancellationError());
+        return;
+      }
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
@@ -103,19 +157,24 @@ function executeJoshRoom(args, cwd, cancellationToken, progressReporter) {
   });
 }
 
-async function runJoshRoom(args, cwd, cancellationToken, progressReporter) {
+async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
   outputChannel?.info(`START · josh-room ${args.join(" ")}`);
   try {
-    const { stdout } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter);
+    const { stdout } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload);
     const result = JSON.parse(stdout);
     // `status` deliberately returns ok=false for a changed or unlinked
     // workspace. That is authoritative state, not an operation failure.
     if (!result.ok && args[0] !== "status") {
-      throw new Error(result.error || "Josh Room operation failed.");
+      const failure = new Error(result.error || "Josh Room operation failed.");
+      failure.result = result;
+      throw failure;
     }
     outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
     return result;
   } catch (error) {
+    if (cancellationToken?.isCancellationRequested || isCancellationError(error)) {
+      throw cancellationError();
+    }
     const output = error.stdout || error.stderr;
     if (output) {
       try {
@@ -124,7 +183,9 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter) {
           outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
           return result;
         }
-        throw new Error(result.error || "Josh Room operation failed.");
+        const failure = new Error(result.error || "Josh Room operation failed.");
+        failure.result = result;
+        throw failure;
       } catch (parseError) {
         if (parseError instanceof SyntaxError) {
           outputChannel?.error(error.message || String(error));
@@ -140,7 +201,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter) {
   }
 }
 
-function runOperation(title, args, cwd, { cancellable = true } = {}) {
+function runOperation(title, args, cwd, { cancellable = true, stdin } = {}) {
   const operationId = ++activeOperationId;
   const displayTitle = title.replace(/…$/, "");
   return vscode.window.withProgress(
@@ -148,7 +209,7 @@ function runOperation(title, args, cwd, { cancellable = true } = {}) {
     async (progress, token) => {
       const reporter = createVisualReporter(displayTitle, operationKind(args), progress, operationId);
       try {
-        const result = await runJoshRoom(args, cwd, token, reporter);
+        const result = await runJoshRoom(args, cwd, token, reporter, stdin);
         reporter.finish();
         return result;
       } catch (error) {
@@ -207,8 +268,9 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
     },
     fail: (error) => {
       stopAnimation();
-      const message = error?.message || String(error);
-      outputChannel?.error(`FAILED · ${title} · ${message}`);
+      const rawMessage = error?.message || String(error);
+      const message = userFacingError(error);
+      outputChannel?.error(`FAILED · ${title} · ${rawMessage}`);
       if (activeOperationId === operationId) setStatus(`$(error) ${title} failed`, message);
     },
     dispose: stopAnimation,
@@ -659,20 +721,28 @@ async function removeSnapshot(preferredProject) {
   return "removed";
 }
 
-async function serveRoom(preferredProject) {
+async function serveRoom(preferredProject, { startRegistry = startRegistryTerminal } = {}) {
   const cwd = activeWorkspace();
   const marker = currentRoom(cwd);
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const project = await chooseServeProject(projects, marker, preferredProject);
   if (!project) return "cancelled";
+  const dimension = dimensionId(project);
+  const provider = nativeRegistry.providerKey(project.provider || project.dimension?.provider);
+  if (!project.id || !dimension || !["local", "r2", "minio"].includes(provider)) {
+    throw new Error("Choose a trusted Provider, Dimension, Room, and JAT recovery point.");
+  }
   const history = await runOperation(
     `Loading ${project.display_name} recovery points…`,
-    nativeRegistry.dimensionArgs(["snapshots", "list", project.id, "--backend", "r2"], dimensionId(project)),
+    nativeRegistry.dimensionArgs(["snapshots", "list", project.id], dimension),
     cwd,
   );
   const preferredSnapshotId = snapshotIdentity(preferredProject);
   const markerSnapshotId = marker && marker.format_version === 2 && marker.snapshot_id;
+  if (preferredSnapshotId && !history.snapshots.some((item) => item.snapshot_id === preferredSnapshotId)) {
+    throw new Error("The selected JAT is not available in the selected Room.");
+  }
   let snapshotId = preferredSnapshotId || (markerSnapshotId && history.snapshots.some(
     (item) => item.snapshot_id === markerSnapshotId,
   ) ? markerSnapshotId : history.latest);
@@ -688,14 +758,15 @@ async function serveRoom(preferredProject) {
     if (!selected) return "cancelled";
     snapshotId = selected.snapshotId;
   }
-  if (!/^[a-z0-9-]+$/.test(project.id) || !/^[a-z0-9-]+$/.test(snapshotId)) {
-    throw new Error("Room or snapshot identity is unsafe for terminal execution.");
+  if (!/^[a-z0-9-]+$/.test(project.id) || !/^[a-z0-9-]+$/.test(snapshotId)
+    || !/^[a-z0-9][a-z0-9._-]*$/.test(dimension)) {
+    throw new Error("Provider, Dimension, Room, or snapshot identity is unsafe for terminal execution.");
   }
-  return startRegistryTerminal({
+  return startRegistry({
     cwd,
     title: `Serving ${project.display_name}`,
     terminalName: `Images: ${project.display_name}`,
-    command: `josh-room serve ${project.id} --snapshot ${snapshotId} --backend r2 --dimension ${dimensionId(project) || selectedDimensionId}`,
+    command: `josh-room serve ${project.id} --snapshot ${snapshotId} --backend ${provider} --dimension ${dimension}`,
     retry: () => vscode.commands.executeCommand("joshRoom.serve", project),
   });
 }
@@ -1092,7 +1163,7 @@ async function chooseDimension(catalog, title) {
   return choice.dimension;
 }
 
-async function connectCloudflare(item, { pollIntervalMs = 2000, timeoutMs = 600000 } = {}) {
+async function connectCloudflare(item, { timeoutMs = 600000 } = {}) {
   const cwd = activeWorkspace();
   let dimension = item && item.dimension ? item.dimension : item;
   if (!dimension) {
@@ -1101,35 +1172,72 @@ async function connectCloudflare(item, { pollIntervalMs = 2000, timeoutMs = 6000
   }
   const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || "r2";
   selectedDimensionId = targetDimensionId;
-  const started = await runOperation(
-    "Connecting Cloudflare...",
-    ["auth", "start", "--dimension", targetDimensionId],
-    cwd,
-    { cancellable: false },
-  );
-  const authorizationUrl = started.authorization_url || started.authorizationUrl;
-  const sessionId = started.session_id || started.sessionId;
-  if (!authorizationUrl || !sessionId) throw new Error("Cloudflare connection did not return an authorization session.");
-  const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
-  if (opened === false) throw new Error("Could not open Cloudflare authorization in your local browser.");
+  activeAuthAttempt?.cancel();
+  const attempt = {
+    controller: undefined,
+    cancel() {
+      this.controller?.cancel();
+    },
+  };
+  activeAuthAttempt = attempt;
+  try {
+    return await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Connecting Cloudflare...", cancellable: true },
+      async (progress, parentToken) => {
+        const controller = createCancellationController(parentToken);
+        attempt.controller = controller;
+        const reporter = createVisualReporter("Connecting Cloudflare", operationKind(["auth", "start"]), progress);
+        let sessionId;
+        try {
+          const started = await runJoshRoom(
+            ["auth", "start", "--dimension", targetDimensionId], cwd, controller.token, reporter,
+          );
+          if (controller.token.isCancellationRequested) return "cancelled";
+          const authorizationUrl = started.authorization_url || started.authorizationUrl;
+          sessionId = started.session_id || started.sessionId;
+          if (!authorizationUrl || !sessionId) {
+            throw new Error("Cloudflare connection did not return an authorization session.");
+          }
+          const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
+          if (opened === false) throw new Error("Could not open Cloudflare authorization in your local browser.");
 
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const result = await runOperation(
-      "Waiting for Cloudflare approval...",
-      ["auth", "poll", sessionId, "--dimension", targetDimensionId],
-      cwd,
-      { cancellable: false },
+          if (controller.token.isCancellationRequested) return "cancelled";
+          const result = await runJoshRoom(
+            ["auth", "wait", sessionId, "--dimension", targetDimensionId,
+              "--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000)))],
+            cwd, controller.token, reporter,
+          );
+          if (controller.token.isCancellationRequested) return "cancelled";
+          if (result.status === "authorized") {
+            if (roomsProvider) await roomsProvider.refresh();
+            await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
+            reporter.finish();
+            return "connected";
+          }
+          throw new Error(`Cloudflare authorization ${result.status || "failed"}`);
+        } catch (error) {
+          if (controller.token.isCancellationRequested || isCancellationError(error)) {
+            outputChannel?.info("Cloudflare authorization cancelled; stale attempt invalidated.");
+            if (sessionId) {
+              await runJoshRoom(["auth", "cancel", sessionId], cwd)
+                .catch((cancelError) => outputChannel?.warn(`Unable to invalidate cancelled Cloudflare authorization: ${cancelError.message}`));
+            }
+            await runJoshRoom(
+              ["auth", "status", "--dimension", targetDimensionId], cwd,
+            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled Cloudflare authorization: ${statusError.message}`));
+            return "cancelled";
+          }
+          reporter.fail(error);
+          throw error;
+        } finally {
+          reporter.dispose();
+          controller.dispose();
+        }
+      },
     );
-    if (result.status === "authorized") {
-      if (roomsProvider) await roomsProvider.refresh();
-      await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
-      return "connected";
-    }
-    if (result.status !== "pending") throw new Error(`Cloudflare authorization ${result.status || "failed"}`);
-    if (pollIntervalMs > 0) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  } finally {
+    if (activeAuthAttempt === attempt) activeAuthAttempt = undefined;
   }
-  throw new Error("Cloudflare authorization timed out");
 }
 
 async function addStorage() {
@@ -1140,43 +1248,157 @@ async function addStorage() {
   ], { title: "Josh: Add Storage", placeHolder: "Choose a storage provider", ignoreFocusOut: true });
   if (!providerChoice) return "cancelled";
   if (providerChoice.provider === "r2") return connectCloudflare();
-
-  const name = await vscode.window.showInputBox({
-    title: "Josh: Add Storage",
-    prompt: "Friendly Dimension name",
-    ignoreFocusOut: true,
-    validateInput: (value) => value.trim() ? undefined : "Enter a Dimension name.",
-  });
-  if (!name) return "cancelled";
-  const endpoint = await vscode.window.showInputBox({
-    title: "Josh: Add MinIO Storage", prompt: "Endpoint URL", placeHolder: "https://...", ignoreFocusOut: true,
-    validateInput: (value) => value.trim().startsWith("http://")
-      || value.trim().startsWith("https://") ? undefined : "Enter an http(s) endpoint.",
-  });
-  if (!endpoint) return "cancelled";
-  const bucket = await vscode.window.showInputBox({
-    title: "Josh: Add MinIO Storage", prompt: "Bucket or object-store namespace", ignoreFocusOut: true,
-    validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
-  });
-  if (!bucket) return "cancelled";
-  const profile = await vscode.window.showInputBox({
-    title: "Josh: Add MinIO Storage", prompt: "Existing host keyring credential profile (name only)", ignoreFocusOut: true,
-    validateInput: (value) => value.trim() ? undefined : "Enter the keyring profile name.",
-  });
-  if (!profile) return "cancelled";
-  const id = name.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!id) throw new Error("Dimension name must contain letters or numbers.");
-  await runOperation("Adding " + name.trim() + "...", [
-    "dimensions", "add", id, "--display-name", name.trim(), "--provider", providerChoice.provider,
-    "--endpoint", endpoint.trim(), "--bucket", bucket.trim(),
-    "--credential-profile", profile.trim(),
-  ], cwd);
-  selectedDimensionId = id;
+  let endpoint;
+  let credentials;
+  let returnedConnectionId;
+  let existingConnections = [];
+  try {
+      existingConnections = providerTools.connectionRecords(
+      await runOperation("Loading storage connections...", providerTools.connectionCommand("list"), cwd),
+    ).filter((connection) => nativeRegistry.providerKey(connection.provider) === "minio");
+  } catch (_error) {
+    existingConnections = [];
+  }
+  const reuseChoice = existingConnections.length === 1
+    ? existingConnections[0]
+    : existingConnections.length > 1
+      ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
+        label: connection.display_name || connection.name || connection.id,
+        connection,
+      })).concat([{ label: "$(add) New MinIO Connection…", create: true }]), {
+        title: "Josh: Choose a MinIO Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
+      })
+      : undefined;
+  if (reuseChoice && !reuseChoice.create) {
+    const connection = reuseChoice.connection || reuseChoice;
+    endpoint = connection.endpoint;
+    returnedConnectionId = connection.id || connection.connection_id;
+  } else {
+    endpoint = await vscode.window.showInputBox({
+      title: "Josh: Add MinIO Storage", prompt: "Endpoint URL", placeHolder: "https://...", ignoreFocusOut: true,
+      validateInput: (value) => value.trim().startsWith("http://")
+        || value.trim().startsWith("https://") ? undefined : "Enter an http(s) endpoint.",
+    });
+    if (!endpoint) return "cancelled";
+    const accessKey = await vscode.window.showInputBox({
+      title: "Josh: Add MinIO Storage", prompt: "Access key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an access key.",
+    });
+    if (!accessKey) return "cancelled";
+    const secretKey = await vscode.window.showInputBox({
+      title: "Josh: Add MinIO Storage", prompt: "Secret key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a secret key.",
+    });
+    if (!secretKey) return "cancelled";
+    credentials = JSON.stringify({ "access-key-id": accessKey, "secret-access-key": secretKey });
+    const created = await runOperation("Connecting MinIO...", providerTools.connectionCommand("create", {
+      provider: "minio", endpoint: endpoint.trim(),
+    }), cwd, { stdin: credentials });
+    const connection = created.connection || created;
+    returnedConnectionId = typeof connection === "string" ? connection : connection.id || connection.connection_id;
+  }
+  if (!returnedConnectionId) throw new Error("MinIO connection did not return a connection id.");
+  let bucketResult;
+  try {
+    bucketResult = await runOperation("Loading MinIO buckets...", providerTools.connectionCommand("list-buckets", {
+      connectionId: returnedConnectionId,
+    }), cwd, credentials === undefined ? {} : { stdin: credentials });
+  } catch (error) {
+    outputChannel?.warn(`MinIO bucket listing unavailable: ${error.message}`);
+    bucketResult = { ok: false, forbidden: true };
+  }
+  const listedBuckets = providerTools.bucketChoices(bucketResult || {})
+    .filter((choice) => choice.bucket).map((choice) => choice.bucket);
+  let bucketChoice;
+  if (listedBuckets.length === 1) {
+    bucketChoice = { bucket: listedBuckets[0] };
+  } else {
+    bucketChoice = await vscode.window.showQuickPick(providerTools.bucketChoices(bucketResult), {
+      title: "Josh: Choose a MinIO Bucket", placeHolder: "Use an existing bucket or create one", ignoreFocusOut: true,
+    });
+  }
+  if (!bucketChoice) return "cancelled";
+  let bucket = bucketChoice.bucket;
+  if (bucketChoice.create) {
+    bucket = await vscode.window.showInputBox({
+      title: "Josh: Create MinIO Bucket", prompt: "Bucket name", ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
+    });
+    if (!bucket) return "cancelled";
+    await runOperation("Creating MinIO bucket...", providerTools.connectionCommand("create-bucket", {
+      connectionId: returnedConnectionId, bucket: bucket.trim(),
+    }), cwd, credentials === undefined ? {} : { stdin: credentials });
+  }
+  if (bucketChoice.manual) {
+    bucket = await vscode.window.showInputBox({
+      title: "Josh: Add MinIO Storage", prompt: "Bucket name", ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
+    });
+    if (!bucket) return "cancelled";
+  }
+  await runOperation("Checking MinIO bucket access...", providerTools.connectionCommand("check-bucket", {
+    connectionId: returnedConnectionId, bucket: bucket.trim(),
+  }), cwd, credentials === undefined ? {} : { stdin: credentials });
+  const dimensionIdValue = `${providerChoice.provider}-${returnedConnectionId}-${bucket}`
+    .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  await runOperation("Adding MinIO Dimension...", [
+    "dimensions", "add", dimensionIdValue, "--display-name", bucket.trim(),
+    "--bucket", bucket.trim(), "--connection", returnedConnectionId,
+  ], cwd, { stdin: credentials });
+  selectedDimensionId = dimensionIdValue;
   if (roomsProvider) await roomsProvider.refresh();
   await vscode.window.showInformationMessage(
-    "Added MinIO storage " + name.trim() + ". Credentials remain in the host keyring.",
+    "Connected MinIO bucket " + bucket.trim() + ". Credentials were handed to the secure backend.",
   );
   return "added";
+}
+
+async function connectStorage(item) {
+  const connection = item?.connection || item;
+  if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
+    return connectCloudflare(item);
+  }
+  if (!connection?.id && !connection?.connection_id) return addStorage();
+  return editConnection(item, { reconnect: true });
+}
+
+async function editConnection(item, { reconnect = false } = {}) {
+  const connection = item?.connection || item;
+  if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
+    return connectCloudflare(item);
+  }
+  const connectionId = connection?.id || connection?.connection_id;
+  if (!connectionId) return addStorage();
+  const endpoint = await vscode.window.showInputBox({
+    title: reconnect ? "Josh: Reconnect MinIO" : "Josh: Edit Connection",
+    prompt: "Endpoint URL", value: connection.endpoint || "", ignoreFocusOut: true,
+    validateInput: (value) => value.trim().startsWith("http://") || value.trim().startsWith("https://")
+      ? undefined : "Enter an http(s) endpoint.",
+  });
+  if (!endpoint) return "cancelled";
+  const accessKey = await vscode.window.showInputBox({ title: "Josh: MinIO Connection", prompt: "Access key", password: true, ignoreFocusOut: true });
+  if (!accessKey) return "cancelled";
+  const secretKey = await vscode.window.showInputBox({ title: "Josh: MinIO Connection", prompt: "Secret key", password: true, ignoreFocusOut: true });
+  if (!secretKey) return "cancelled";
+  await runOperation(reconnect ? "Reconnecting MinIO..." : "Updating MinIO connection...", [
+    ...providerTools.connectionCommand(reconnect ? "reconnect" : "update", {
+      provider: "minio", connectionId, endpoint: endpoint.trim(),
+    }),
+  ], activeWorkspace(), { stdin: JSON.stringify({ "access-key-id": accessKey, "secret-access-key": secretKey }) });
+  if (roomsProvider) await roomsProvider.refresh();
+  return reconnect ? "connected" : "updated";
+}
+
+async function disconnectStorage(item) {
+  const connection = item?.connection || item;
+  const connectionId = connection?.id || connection?.connection_id;
+  selectedDimensionId = undefined;
+  if (connectionId) {
+    await runOperation("Disconnecting locally...", providerTools.connectionCommand("disconnect", { connectionId }), activeWorkspace());
+  }
+  if (roomsProvider) await roomsProvider.refresh();
+  await vscode.window.showInformationMessage("Disconnected locally. Remote buckets and JAT history were not changed.");
+  return "disconnected";
 }
 
 function selectDimension(item) {
@@ -1218,6 +1440,25 @@ class HierarchyRoomsProvider {
 
   getTreeItem(item) {
     const emptyKind = ["load", "loading", "empty", "error"].includes(item.kind);
+    if (item.kind === "dimension-error") {
+      const treeItem = new vscode.TreeItem(
+        item.label || "Could not load bucket — Retry",
+        vscode.TreeItemCollapsibleState.None,
+      );
+      treeItem.description = item.description || "";
+      treeItem.contextValue = "dimension-error";
+      treeItem.iconPath = new vscode.ThemeIcon("error");
+      const action = item.error?.action;
+      const command = action === "edit"
+        ? "joshRoom.editConnection"
+        : action === "reconnect" ? "joshRoom.reconnectStorage" : "joshRoom.refresh";
+      treeItem.command = {
+        command,
+        title: item.label || "Retry",
+        ...(command === "joshRoom.refresh" ? {} : { arguments: [item.connection || item.dimension] }),
+      };
+      return treeItem;
+    }
     if (emptyKind) {
       const labels = {
         load: "Load Storage",
@@ -1240,8 +1481,8 @@ class HierarchyRoomsProvider {
     treeItem.id = [item.kind, dimensionId(item), item.id].filter(Boolean).join(":");
     const syntheticDimension = item.kind === "dimension" && item.dimension?.synthetic;
     treeItem.contextValue = item.kind === "connection"
-      ? item.state === "expired" ? "r2-connection-expired"
-        : item.state === "connected" ? "r2-connection-connected" : "r2-connection"
+      ? item.state === "expired" ? "provider-connection-expired"
+        : item.state === "connected" ? "provider-connection-connected" : "provider-connection"
       : syntheticDimension ? "dimension-synthetic" : item.kind;
     treeItem.description = item.description || "";
     treeItem.iconPath = new vscode.ThemeIcon(
@@ -1253,9 +1494,9 @@ class HierarchyRoomsProvider {
     if (item.kind === "dimension") {
       treeItem.command = { command: "joshRoom.selectDimension", title: "Select Storage", arguments: [item] };
     }
-    if (item.kind === "connection" && item.state !== "connected") {
-      const command = item.state === "expired" ? "joshRoom.reconnectCloudflare" : "joshRoom.connectCloudflare";
-      const title = item.state === "expired" ? "Reconnect Cloudflare" : "Connect Cloudflare";
+    if (item.kind === "connection") {
+      const command = item.state === "expired" ? "joshRoom.reconnectStorage" : "joshRoom.connectStorage";
+      const title = item.state === "expired" ? "Reconnect" : "Connect";
       treeItem.command = { command, title, arguments: [item] };
     }
     if (item.kind === "room") {
@@ -1423,7 +1664,7 @@ async function explicitRoomContext(preferredProject, title) {
   if (preferred && preferredDimensionId) {
     const catalogProject = projects.find((project) => project.id === preferred.id
       && explicitDimensionId(project) === preferredDimensionId);
-    const catalogSnapshotIds = catalogProject && (catalogProject.snapshots || [])
+    const catalogSnapshotIds = catalogProject && (catalogProject.snapshots || catalogProject.jats || [])
       .map((snapshot) => snapshot.snapshot_id || snapshot.id);
     const snapshotId = preferredSnapshotId || latestSnapshotId(catalogProject);
     if (catalogProject && snapshotId && (!preferredSnapshotId || catalogSnapshotIds.includes(snapshotId))) {
@@ -1431,7 +1672,8 @@ async function explicitRoomContext(preferredProject, title) {
     }
   }
   const choices = projects.flatMap((project) => {
-    const snapshots = Array.isArray(project.snapshots) ? project.snapshots : [];
+    const snapshots = Array.isArray(project.snapshots) ? project.snapshots
+      : Array.isArray(project.jats) ? project.jats : [];
     return snapshots.map((snapshot) => ({
       label: `${roomLabel(project)} · ${snapshot.display_name || snapshot.name || snapshot.snapshot_id}`,
       description: snapshot.created_at || snapshot.snapshot_id,
@@ -1456,15 +1698,73 @@ async function explicitRoomContext(preferredProject, title) {
 
 function latestSnapshotId(project) {
   if (project.latest) return project.latest;
-  const snapshots = Array.isArray(project.snapshots) ? project.snapshots : [];
+  const snapshots = Array.isArray(project.snapshots) ? project.snapshots
+    : Array.isArray(project.jats) ? project.jats : [];
   return snapshots[0] && (snapshots[0].snapshot_id || snapshots[0].id);
+}
+
+function contextSnapshot(context) {
+  const snapshots = Array.isArray(context?.snapshots) ? context.snapshots
+    : Array.isArray(context?.jats) ? context.jats : [];
+  return snapshots.find((snapshot) => (snapshot.snapshot_id || snapshot.id) === context.snapshot_id);
+}
+
+function requiresLegacyLinkVerification(context, marker) {
+  const snapshot = contextSnapshot(context);
+  const fingerprint = snapshot && snapshot.workspace_fingerprint;
+  return marker?.format_version === 1
+    || !fingerprint
+    || !/^[0-9a-f]{64}$/.test(fingerprint)
+    || fingerprint === "0".repeat(64);
+}
+
+async function verifyLegacyLink(cwd, context) {
+  const verificationRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-link-verify-"));
+  try {
+    await runOperation("Verifying saved JAT...", nativeRegistry.dimensionArgs([
+      "hydrate", context.project_id, "--snapshot", context.snapshot_id,
+      "--destination", verificationRoot, "--ide", "terminal",
+    ], context.dimension_id), cwd);
+    const [trusted, current] = await Promise.all([
+      runJoshRoom(["status", "--workspace", verificationRoot], cwd),
+      runJoshRoom(["status", "--workspace", cwd], cwd),
+    ]);
+    const trustedFingerprint = trusted.current_workspace_fingerprint
+      || trusted.current_fingerprint || trusted.workspace_fingerprint;
+    const currentFingerprint = current.current_workspace_fingerprint
+      || current.current_fingerprint || current.workspace_fingerprint;
+    if (!trustedFingerprint || !currentFingerprint || trustedFingerprint !== currentFingerprint) {
+      await vscode.window.showWarningMessage(
+        "This folder does not match that saved Room. Enter the Room instead, or save this folder as a new Room.",
+        "Enter", "Save as New",
+      );
+      return { ok: false, mismatch: true };
+    }
+    return { ok: true, fingerprint: trustedFingerprint };
+  } catch (error) {
+    outputChannel?.warn("Legacy Link verification failed: " + error.message);
+    await vscode.window.showErrorMessage(
+      "Josh Room could not verify that saved JAT. Enter the Room instead, or save this folder as a new Room.",
+    );
+    return { ok: false, failed: true };
+  } finally {
+    fs.rmSync(verificationRoot, { recursive: true, force: true });
+  }
 }
 
 async function linkRoom(preferredProject) {
   const cwd = activeWorkspace();
-  const context = await explicitRoomContext(preferredProject, "Josh: Link Room");
+  const context = await explicitRoomContext(preferredProject, "Josh: Link Existing Folder");
   if (!context) return "cancelled";
+  const marker = currentRoom(cwd);
+  let verifiedFingerprint;
+  if (requiresLegacyLinkVerification(context, marker)) {
+    const verification = await verifyLegacyLink(cwd, context);
+    if (!verification.ok) return verification.mismatch ? "mismatch" : "verification-failed";
+    verifiedFingerprint = verification.fingerprint;
+  }
   const args = ["link", "--project", context.project_id, "--snapshot", context.snapshot_id];
+  if (verifiedFingerprint) args.push("--workspace-fingerprint", verifiedFingerprint);
   const result = await runOperation("Linking saved Room...", routeItemArgs(args, context), cwd);
   await resetNativeBaseline(result);
   if (roomsProvider) await roomsProvider.refresh();
@@ -1592,6 +1892,10 @@ function activateNative(context) {
   register(context, "joshRoom.addStorage", addStorage);
   register(context, "joshRoom.connectCloudflare", connectCloudflare);
   register(context, "joshRoom.reconnectCloudflare", connectCloudflare);
+  register(context, "joshRoom.connectStorage", connectStorage);
+  register(context, "joshRoom.reconnectStorage", (item) => connectStorage(item));
+  register(context, "joshRoom.editConnection", editConnection);
+  register(context, "joshRoom.disconnectStorage", disconnectStorage);
   register(context, "joshRoom.selectDimension", selectDimension);
   register(context, "joshRoom.editStorageSettings", editStorageSettings);
   register(context, "joshRoom.enter", enterRoom);
@@ -1612,95 +1916,135 @@ function activateNative(context) {
 
 module.exports.activate = activateNative;
 
+function dimensionLoadFailure(error) {
+  const result = error && error.result || {};
+  const diagnostic = result.error || error?.message || "unknown storage error";
+  const code = result.error_code || "dimension-load-failed";
+  if (/bucket|accessdenied|forbidden/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Bucket access denied — Edit connection",
+      description: "Edit the provider connection or choose another bucket.",
+      action: "edit",
+    };
+  }
+  if (/auth|credential|unauthoriz|expired/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Authentication failed — Reconnect",
+      description: "Reconnect this provider connection to load the bucket.",
+      action: "reconnect",
+    };
+  }
+  if (/catalog|decrypt|age|fingerprint/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Catalog unavailable — Details",
+      description: "The bucket is reachable, but its Room catalog could not be verified.",
+      action: "details",
+    };
+  }
+  if (/network|unavailable|timeout|endpoint|connection|refused/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Server unavailable — Retry",
+      description: "The provider endpoint could not be reached.",
+      action: "retry",
+    };
+  }
+  return {
+    code,
+    label: "Could not load bucket — Retry",
+    description: "Refresh this storage or edit its provider connection.",
+    action: "retry",
+  };
+}
+
+async function loadDimensionHierarchy(cwd, dimension, title) {
+  const id = dimension.id || dimension.dimension_id;
+  const listed = await runOperation(
+    title || "Loading your Rooms...",
+    nativeRegistry.dimensionArgs(["dimensions", "list", "--with-hierarchy"], id),
+    cwd,
+  );
+  const records = dimensionList(listed);
+  const hierarchy = records.find((candidate) => (candidate.id || candidate.dimension_id) === id) || records[0];
+  if (!hierarchy || (!Object.prototype.hasOwnProperty.call(hierarchy, "rooms")
+    && !Object.prototype.hasOwnProperty.call(hierarchy, "projects"))) {
+    throw new Error("complete Dimension hierarchy was not returned");
+  }
+  return Object.assign({}, dimension, hierarchy, { catalog_complete: true });
+}
+
 async function loadNativeCatalogWithSnapshots(cwd, title) {
   const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd);
-  const authState = await runOperation(
+  const dimensions = dimensionList(catalog);
+  let connections = catalog.connections;
+  if (dimensions.some((dimension) => dimension.connection_id || dimension.connectionId)) {
+    try {
+      const listedConnections = await runOperation(title || "Loading your Rooms...", providerTools.connectionCommand("list"), cwd);
+      connections = listedConnections.connections || connections;
+    } catch (error) {
+      outputChannel && outputChannel.warn("Unable to load provider connections: " + error.message);
+    }
+  }
+  const r2Dimension = dimensions.find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
+  const legacyCatalog = !dimensions.length && (catalog.dimension_id || Array.isArray(catalog.projects));
+  const authDimensionId = r2Dimension && (r2Dimension.id || r2Dimension.dimension_id)
+    || (!legacyCatalog ? "r2" : undefined);
+  const authState = authDimensionId ? await runOperation(
     title || "Loading your Rooms...",
-    ["auth", "status"],
+    ["auth", "status", "--dimension", authDimensionId],
     cwd,
     { cancellable: false },
   ).catch((error) => {
     outputChannel && outputChannel.warn("Cloudflare connection state unavailable: " + error.message);
     return { state: "missing" };
-  });
-  const dimensions = dimensionList(catalog);
+  }) : { state: "missing" };
   const hasR2 = dimensions.some((dimension) => nativeRegistry.providerKey(dimension.provider) === "r2");
-  const legacyCatalog = !dimensions.length && (catalog.dimension_id || Array.isArray(catalog.projects));
   if (!hasR2 && !legacyCatalog) {
-    const r2 = {
+    dimensions.push({
       id: "r2",
       display_name: "Default",
       provider: "r2",
       synthetic: true,
       connection_state: authState.state || "missing",
-      projects: [],
-    };
-    if (r2.connection_state === "connected") {
-      try {
-        const listed = await runOperation(title || "Loading your Rooms...", ["projects", "list", "--backend", "r2"], cwd);
-        r2.id = listed.dimension_id || r2.id;
-        r2.projects = listed.projects || [];
-      } catch (error) {
-        outputChannel && outputChannel.warn("Unable to load Rooms for Cloudflare R2: " + error.message);
-      }
-    }
-    dimensions.push(r2);
+    });
   }
-  for (const dimension of dimensions) {
-    const id = dimension.id || dimension.dimension_id;
+  const loaded = [];
+  for (const original of dimensions) {
+    const id = original.id || original.dimension_id;
     if (!id) {
       outputChannel && outputChannel.warn("Skipping a Dimension without dimension_id.");
-      dimension.projects = [];
       continue;
     }
+    const dimension = Object.assign({}, original);
     const provider = nativeRegistry.providerKey(dimension.provider);
     if (provider === "r2") {
       dimension.connection_state = authState.state || dimension.connection_state || "connected";
       if (dimension.connection_state !== "connected") {
-        dimension.projects = [];
+        loaded.push(dimension);
         continue;
       }
     }
-    let projects = dimension.projects || dimension.rooms;
-    try {
-      if (projects && !Array.isArray(projects)) {
-        projects = Object.entries(projects).map(([projectId, value]) =>
-          Object.assign({}, value || {}, { id: (value && (value.id || value.project_id)) || projectId }));
-      }
-      if (!Array.isArray(projects)) {
-        const listed = await runOperation(title || "Loading your Rooms...",
-          nativeRegistry.dimensionArgs(["projects", "list"], id), cwd);
-        if (listed.dimension_id && listed.dimension_id !== id) {
-          throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
-        }
-        projects = listed.projects || [];
-      }
-    } catch (error) {
-      outputChannel && outputChannel.warn("Unable to load Rooms for Dimension " + id + ": " + error.message);
-      projects = [];
+    if (Object.prototype.hasOwnProperty.call(dimension, "rooms")
+      || Object.prototype.hasOwnProperty.call(dimension, "projects")) {
+      loaded.push(dimension);
+      continue;
     }
-    dimension.projects = Array.isArray(projects) ? projects : [];
-    for (const project of dimension.projects) {
-      const projectId = project.id || project.project_id;
-      if (!projectId) continue;
-      try {
-        const listed = await runOperation(title || "Loading your Rooms...",
-          nativeRegistry.dimensionArgs(["snapshots", "list", projectId], id), cwd);
-        if (listed.dimension_id && listed.dimension_id !== id) {
-          throw new Error("Dimension response mismatch: expected " + id + ", received " + listed.dimension_id + ".");
-        }
-        project.snapshots = listed.snapshots || [];
-        project.latest = listed.latest;
-      } catch (error) {
-        outputChannel && outputChannel.warn("Unable to load JATs for Room " + projectId + " in Dimension " + id + ": " + error.message);
-        project.snapshots = Array.isArray(project.snapshots) ? project.snapshots : [];
-      }
+    try {
+      loaded.push(await loadDimensionHierarchy(cwd, dimension, title));
+    } catch (error) {
+      const failure = dimensionLoadFailure(error);
+      outputChannel && outputChannel.warn("Unable to load Dimension " + id + ": " + (error.result?.error || error.message));
+      loaded.push(Object.assign(dimension, { state: "error", load_error: failure }));
     }
   }
   return Object.assign({}, catalog, {
-    dimensions,
+    dimensions: loaded,
+    ...(connections ? { connections } : {}),
     auth_state: authState.state,
-    projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions }),
+    projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions: loaded }),
   });
 }
 
@@ -1718,48 +2062,17 @@ async function editStorageSettings(item) {
     );
     return "cancelled";
   }
-  selectedDimensionId = dimension.id || dimension.dimension_id;
-  const displayName = await vscode.window.showInputBox({
-    title: "Edit Settings", prompt: "Storage name", value: dimension.display_name || dimension.name || "",
-  });
-  if (!displayName) return "cancelled";
-  const args = [
-    "dimensions", "update", selectedDimensionId,
-    "--display-name", displayName.trim(),
-  ];
-  if (nativeRegistry.providerKey(dimension.provider) === "minio") {
-    const endpoint = await vscode.window.showInputBox({
-      title: "Edit MinIO Settings", prompt: "Endpoint URL", value: dimension.endpoint || "",
-    });
-    if (!endpoint) return "cancelled";
-    const bucket = await vscode.window.showInputBox({
-      title: "Edit MinIO Settings", prompt: "Bucket", value: dimension.bucket || "",
-    });
-    if (!bucket) return "cancelled";
-    const region = await vscode.window.showInputBox({
-      title: "Edit MinIO Settings", prompt: "Region", value: dimension.region || "",
-    });
-    if (!region) return "cancelled";
-    const profile = await vscode.window.showInputBox({
-      title: "Edit MinIO Settings", prompt: "Existing host keyring credential profile (name only)",
-      value: dimension.credential_profile || dimension.credentialProfile || "",
-    });
-    if (!profile) return "cancelled";
-    args.push(
-      "--endpoint", endpoint.trim(), "--bucket", bucket.trim(), "--region", region.trim(),
-      "--credential-profile", profile.trim(),
-    );
-  }
-  await runOperation("Updating storage...", args, activeWorkspace());
-  if (roomsProvider) await roomsProvider.refresh();
-  return "updated";
+  return editConnection({ connection: dimension, provider: dimension.provider });
 }
 
 Object.assign(module.exports.__test__, {
   chooseServeProject,
   addStorage,
   connectCloudflare,
+  connectStorage,
+  disconnectStorage,
   editStorageSettings,
+  editConnection,
   HierarchyRoomsProvider,
   linkRoom,
   loadCatalog,
@@ -1768,6 +2081,7 @@ Object.assign(module.exports.__test__, {
   RoomDragAndDropController,
   roomLabel,
   runJoshRoom,
+  serveRoom,
   selectDimension,
   setRoomsProvider(value) {
     roomsProvider = value;

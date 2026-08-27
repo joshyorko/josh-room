@@ -169,5 +169,9 @@ receipt metadata. RCC/JAT retain ownership of acquisition and production
 details. Actions Runtime, Hive projections, OpenAI uploads, periodic capture,
 and garbage collection remain deliberately deferred.
 
+Cloudflare OAuth uses an explicitly configured `JOSH_ROOM_AUTH_URL` authority;
+the public repository contains no deployment-specific Worker URL or account
+configuration.
+
 See [architecture](docs/architecture.md), [ADRs](docs/adr), and
 [deferred integrations](docs/DEFERRED-INTEGRATIONS.md).

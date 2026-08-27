@@ -104,6 +104,7 @@ const PROVIDER_LABELS = {
   minio: "MinIO",
   local: "Local Object Store",
 };
+const { connectionRecords, dimensionConnection } = require("./provider");
 
 function providerKey(value) {
   const normalized = String(value || "r2").trim().toLowerCase();
@@ -151,6 +152,7 @@ function snapshotRecords(project) {
 
 function buildProviderTree(catalog = {}) {
   const dimensions = records(catalog.dimensions);
+  const connections = connectionRecords(catalog);
   const fallbackProjects = records(catalog.projects, "id");
   const sourceDimensions = dimensions.length ? dimensions : [{
     id: catalog.dimension_id || "r2",
@@ -165,6 +167,7 @@ function buildProviderTree(catalog = {}) {
     dimensionNames.set(name, (dimensionNames.get(name) || 0) + 1);
   }
   const grouped = new Map();
+  const connectionNodes = new Map();
   for (const dimension of sourceDimensions) {
     const displayName = dimensionDisplayName(dimension, dimensionNames);
     const providerId = providerKey(dimension.provider || dimension.provider_id || dimension.kind);
@@ -200,30 +203,51 @@ function buildProviderTree(catalog = {}) {
         dimension,
       })),
     }));
-    const connectionState = providerId === "r2"
-      ? dimension.connection_state || (!dimensions.length ? catalog.auth_state : undefined)
-      : undefined;
-    const dimensionChildren = connectionState
-      ? [{
-        kind: "connection",
-        id: "connection",
-        label: connectionLabel(connectionState),
-        description: connectionState === "expired" ? "Reconnect Cloudflare" : "Connect Cloudflare",
-        state: connectionState,
-        provider: providerId,
-        dimension,
-        children: connectionState === "connected" ? roomNodes : [],
-      }]
-      : roomNodes;
-    grouped.get(providerId).children.push({
+    const connection = dimensionConnection(dimension, connections);
+    const connectionId = connection.id || connection.connection_id;
+    const connectionState = dimension.connection_state || connection.connection_state
+      || (providerId === "r2" && !dimensions.length ? catalog.auth_state : undefined)
+      || "connected";
+    const loadError = dimension.load_error || dimension.error;
+    const dimensionNode = {
       kind: "dimension",
       id: dimension.id || dimension.dimension_id,
       label: displayName,
-      description: "",
+      description: loadError?.description || "",
       provider: providerId,
+      state: loadError ? "error" : connectionState,
       dimension,
-      children: dimensionChildren,
-    });
+      children: loadError ? [{
+        kind: "dimension-error",
+        id: "error",
+        label: loadError.label || "Could not load bucket — Retry",
+        description: loadError.description || "Refresh this storage or edit its provider connection.",
+        error: loadError,
+        dimension,
+        connection,
+      }] : connectionState === "connected" ? roomNodes : [],
+    };
+    let connectionNode = connectionNodes.get(`${providerId}:${connectionId}`);
+    if (!connectionNode) {
+      connectionNode = {
+        kind: "connection",
+        id: connectionId,
+        label: providerId === "r2"
+          ? connectionLabel(connectionState)
+          : connection.display_name || connection.name || connection.label || connection.endpoint || connectionId,
+        description: providerId === "r2"
+          ? connectionState === "expired" ? "Reconnect Cloudflare" : connectionState === "connected" ? "Connected" : "Connect Cloudflare"
+          : connectionState === "expired" ? "Reconnect" : connectionState === "connected" ? "Connected" : "Connect",
+        state: connectionState,
+        provider: providerId,
+        connection,
+        dimension,
+        children: [],
+      };
+      connectionNodes.set(`${providerId}:${connectionId}`, connectionNode);
+      grouped.get(providerId).children.push(connectionNode);
+    }
+    connectionNode.children.push(dimensionNode);
   }
   return [...grouped.values()];
 }
@@ -376,6 +400,7 @@ function decorateRoom(project, dimension, dimensionDisplayNameValue) {
     ...project,
     id,
     project_id: project.project_id || id,
+    ...(project.snapshots ? {} : project.jats ? { snapshots: project.jats } : {}),
     dimension_id: dimension && (dimension.id || dimension.dimension_id),
     dimension_display_name: dimensionDisplayNameValue,
     dimension,

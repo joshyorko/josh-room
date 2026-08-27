@@ -2,6 +2,9 @@
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:$PATH"
+export ROBOCORP_HOME="${ROBOCORP_HOME:-$HOME/.local/share/josh-room/robocorp}"
+export RCC_HOLOTREE_MODE="${RCC_HOLOTREE_MODE:-private}"
+mkdir -p "$ROBOCORP_HOME"
 
 readonly JOSH_ROOM_GIT_SHA="89822d84a2ec98e49615764b7ed8e81527b1605d"
 readonly JAT_GIT_SHA="0d08869f1e0d267bed72c2a76ff32b376b8e10a1"
@@ -29,9 +32,6 @@ brew install age uv libsecret jq oras
 brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server
 hash -r
 test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"
-
-sudo "$(command -v rcc)" ht shared --enable --once
-rcc ht init
 
 uv tool install --force "git+https://github.com/joshyorko/josh-room.git@${JOSH_ROOM_GIT_SHA}"
 

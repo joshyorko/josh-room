@@ -27,7 +27,10 @@ def test_private_config_schema_defines_non_secret_dimensions():
     record = schema["$defs"]["dimension"]
 
     assert dimensions["type"] == "object"
-    assert dimensions["additionalProperties"] == {"$ref": "#/$defs/dimension"}
+    assert dimensions["additionalProperties"]["anyOf"] == [
+        {"$ref": "#/$defs/dimension"},
+        {"$ref": "#/$defs/dimension-reference"},
+    ]
     assert set(record["required"]) == {
         "display_name",
         "provider",
@@ -39,6 +42,41 @@ def test_private_config_schema_defines_non_secret_dimensions():
     assert record["additionalProperties"] is False
     assert not SECRET_FIELDS & record["properties"].keys()
     assert {"r2", "minio"} <= schema["properties"].keys()
+
+
+def test_private_config_schema_supports_reusable_connections_and_dimension_references():
+    schema = _schema("private-config.schema.json")
+    assert "connections" in schema["properties"]
+    connection = schema["$defs"]["connection"]
+    assert connection["additionalProperties"] is False
+    assert not SECRET_FIELDS & connection["properties"].keys()
+
+    validator = _validator("private-config.schema.json")
+    validator.validate({
+        "connections": {
+            "home-minio": {
+                "display_name": "Home MinIO",
+                "provider": "minio",
+                "endpoint": "http://minio.home.arpa:9000",
+                "credential_profile": "home-profile",
+            }
+        },
+        "dimensions": {
+            "room": {
+                "display_name": "Room",
+                "connection_id": "home-minio",
+                "bucket": "room",
+                "catalog_key": "room.jroom.age",
+            }
+        },
+    })
+    with pytest.raises(ValidationError):
+        validator.validate({"connections": {"home": {
+            "provider": "minio",
+            "endpoint": "http://minio.home.arpa:9000",
+            "credential_profile": "home",
+            "secret_access_key": "must-not-be-here",
+        }}})
 
 
 def test_dimension_catalog_v2_schema_binds_rooms_and_saved_fingerprints():

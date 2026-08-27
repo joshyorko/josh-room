@@ -11,13 +11,22 @@ from pathlib import Path
 
 from . import r2 as _r2
 from .auth import (
+    cancel_oauth_session,
     ensure_runtime_session,
     poll_oauth_session,
     runtime_session_state,
     start_oauth_session,
+    wait_oauth_session,
 )
 from .catalog import Catalog
-from .config import DimensionRegistry, auth_status, private_config, save_private_config
+from .config import (
+    DimensionRegistry,
+    auth_status,
+    connection_configs,
+    persisted_config,
+    private_config,
+    save_private_config,
+)
 from .crypto import decrypt
 from .jat import _jat_contract, run_build, run_restore, run_serve
 from .keyring import lookup_value as lookup_keyring_value
@@ -25,6 +34,9 @@ from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
+from .minio import check_bucket_access as check_minio_bucket
+from .minio import create_bucket as create_minio_bucket
+from .minio import list_buckets as list_minio_buckets
 from .operations import (
     _read_remote_catalog,
     copy_snapshot_stream,
@@ -57,18 +69,77 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--dimension")
     doctor.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
     _json_option(doctor)
+    connections = commands.add_parser("connections", help="legacy compatibility alias for provider connection")
+    connection_commands = connections.add_subparsers(dest="connection_command", required=True)
+    connection_list = connection_commands.add_parser("list")
+    _json_option(connection_list)
+    connection_setup = connection_commands.add_parser("setup")
+    connection_setup.add_argument("provider", nargs="?", choices=("minio", "r2"))
+    connection_setup.add_argument("--provider", dest="provider_option", choices=("minio", "r2"))
+    connection_setup.add_argument("--connection", "--id", dest="connection_id")
+    connection_setup.add_argument("--display-name")
+    connection_setup.add_argument("--credential-profile", "--profile", dest="credential_profile")
+    _json_option(connection_setup)
+    buckets = commands.add_parser("buckets", help="legacy compatibility alias for provider bucket")
+    bucket_commands = buckets.add_subparsers(dest="bucket_command", required=True)
+    bucket_list = bucket_commands.add_parser("list")
+    bucket_list.add_argument("--connection", required=True)
+    _json_option(bucket_list)
+    bucket_create = bucket_commands.add_parser("create")
+    bucket_create.add_argument("--connection", required=True)
+    bucket_create.add_argument("--bucket", required=True)
+    _json_option(bucket_create)
+    bucket_check = bucket_commands.add_parser("check")
+    bucket_check.add_argument("--connection", required=True)
+    bucket_check.add_argument("--bucket", required=True)
+    _json_option(bucket_check)
+    provider = commands.add_parser("provider", help="canonical provider-connection and bucket boundary")
+    provider_commands = provider.add_subparsers(dest="provider_command", required=True)
+    provider_connection = provider_commands.add_parser("connection")
+    provider_connection_commands = provider_connection.add_subparsers(dest="provider_connection_command", required=True)
+    provider_connection_create = provider_connection_commands.add_parser("create")
+    provider_connection_create.add_argument("--provider", required=True, choices=("minio", "r2"))
+    provider_connection_create.add_argument("--endpoint", required=True)
+    provider_connection_create.add_argument("--connection", "--id", dest="connection_id")
+    provider_connection_create.add_argument("--credential-profile", "--profile", dest="credential_profile")
+    _json_option(provider_connection_create)
+    provider_connection_list = provider_connection_commands.add_parser("list")
+    _json_option(provider_connection_list)
+    for action in ("update", "reconnect", "disconnect"):
+        provider_connection_edit = provider_connection_commands.add_parser(action, help="stdin carries credentials; legacy alias is also supported")
+        provider_connection_edit.add_argument("--connection", required=True)
+        provider_connection_edit.add_argument("--endpoint")
+        provider_connection_edit.add_argument("--credential-profile", "--profile", dest="credential_profile")
+        _json_option(provider_connection_edit)
+    provider_bucket = provider_commands.add_parser("bucket")
+    provider_bucket_commands = provider_bucket.add_subparsers(dest="provider_bucket_command", required=True)
+    provider_bucket_list = provider_bucket_commands.add_parser("list")
+    provider_bucket_list.add_argument("--connection", required=True)
+    _json_option(provider_bucket_list)
+    provider_bucket_create = provider_bucket_commands.add_parser("create")
+    provider_bucket_create.add_argument("--connection", required=True)
+    provider_bucket_create.add_argument("--bucket", required=True)
+    _json_option(provider_bucket_create)
+    provider_bucket_check = provider_bucket_commands.add_parser("check")
+    provider_bucket_check.add_argument("--connection", required=True)
+    provider_bucket_check.add_argument("--bucket", required=True)
+    _json_option(provider_bucket_check)
     dimensions = commands.add_parser("dimensions")
     dimension_commands = dimensions.add_subparsers(dest="dimension_command", required=True)
     dimension_list = dimension_commands.add_parser("list")
+    dimension_list.add_argument("--dimension")
+    dimension_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    dimension_list.add_argument("--with-hierarchy", action="store_true", help="read Rooms and JATs from each selected Dimension catalog")
     _json_option(dimension_list)
     for action in ("add", "update"):
         dimension_edit = dimension_commands.add_parser(action)
         dimension_edit.add_argument("dimension")
-        dimension_edit.add_argument("--display-name", required=action == "add")
-        dimension_edit.add_argument("--provider", choices=("r2", "minio"), required=action == "add")
-        dimension_edit.add_argument("--endpoint", required=action == "add")
-        dimension_edit.add_argument("--bucket", required=action == "add")
-        dimension_edit.add_argument("--credential-profile", required=action == "add")
+        dimension_edit.add_argument("--display-name")
+        dimension_edit.add_argument("--provider", choices=("r2", "minio"))
+        dimension_edit.add_argument("--connection", "--connection-id", dest="connection_id")
+        dimension_edit.add_argument("--endpoint")
+        dimension_edit.add_argument("--bucket")
+        dimension_edit.add_argument("--credential-profile")
         dimension_edit.add_argument("--region")
         dimension_edit.add_argument("--catalog-key")
         _json_option(dimension_edit)
@@ -81,6 +152,15 @@ def build_parser() -> argparse.ArgumentParser:
     auth_poll.add_argument("session_id")
     auth_poll.add_argument("--dimension")
     _json_option(auth_poll)
+    auth_wait = auth_commands.add_parser("wait", help="wait for one OAuth session in this process")
+    auth_wait.add_argument("session_id")
+    auth_wait.add_argument("--dimension")
+    auth_wait.add_argument("--timeout", type=int, default=600)
+    auth_wait.add_argument("--poll-interval", type=int, default=2)
+    _json_option(auth_wait)
+    auth_cancel = auth_commands.add_parser("cancel", help="invalidate one pending OAuth session")
+    auth_cancel.add_argument("session_id")
+    _json_option(auth_cancel)
     auth_status = auth_commands.add_parser("status")
     auth_status.add_argument("--dimension")
     _json_option(auth_status)
@@ -93,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
         state_command.add_argument("--dimension")
         state_command.add_argument("--project")
         state_command.add_argument("--snapshot")
+        state_command.add_argument("--workspace-fingerprint")
         state_command.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
         _json_option(state_command)
     projects = commands.add_parser("projects")
@@ -200,7 +281,7 @@ def main(argv=None):
         identity_context = nullcontext() if args.command in {"auth", "setup", "status"} else _identity_environment()
         with identity_context:
             result = dispatch(args, instance)
-    except (OSError, RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
         result = {"ok": False, "error": str(error)}
         if isinstance(getattr(error, "result", None), dict):
             result.update(error.result)
@@ -209,6 +290,16 @@ def main(argv=None):
 
 
 def _requires_oauth(args) -> bool:
+    if args.command == "dimensions":
+        if not getattr(args, "with_hierarchy", False):
+            return False
+        try:
+            registry = DimensionRegistry(private_config() or {})
+            if getattr(args, "dimension", None):
+                return registry.select(args.dimension).provider == "r2"
+            return any(dimension.provider == "r2" for dimension in registry.dimensions.values())
+        except ValueError:
+            return getattr(args, "backend", "r2") == "r2"
     if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
@@ -250,22 +341,181 @@ def dispatch(args, instance: Path) -> dict:
             return {"ok": True, **start_oauth_session()}
         if args.auth_command == "poll":
             return {"ok": True, **poll_oauth_session(args.session_id, dimension_id=args.dimension)}
+        if args.auth_command == "wait":
+            return {"ok": True, **wait_oauth_session(args.session_id, timeout=args.timeout, poll_interval=args.poll_interval, dimension_id=args.dimension)}
+        if args.auth_command == "cancel":
+            return {"ok": True, **cancel_oauth_session(args.session_id)}
         return {"ok": True, "state": runtime_session_state(), "dimension_id": args.dimension}
+    if args.command == "provider":
+        config = private_config() or {}
+        if args.provider_command == "connection":
+            action = args.provider_connection_command
+            if action == "list":
+                return {"ok": True, "connections": [_connection_metadata(key, value) for key, value in connection_configs(config).items()]}
+            config = persisted_config() or {}
+            if action == "create":
+                payload = json.load(sys.stdin)
+                if not isinstance(payload, dict) or args.provider != "minio":
+                    raise ValueError("provider connection create supports MinIO JSON credentials only")
+                endpoint = args.endpoint
+                connection_id = args.connection_id or _minio_connection_id(endpoint)
+                profile = args.credential_profile or f"josh-room-{connection_id}"
+                credentials = _connection_credentials(payload)
+                records = dict(config.get("connections", {}))
+                connection = {
+                    "display_name": payload.get("display_name", "MinIO"),
+                    "provider": "minio",
+                    "endpoint": endpoint,
+                    "credential_profile": profile,
+                    "region": payload.get("region", "us-east-1"),
+                }
+                connection_configs({"connections": {connection_id: connection}})
+                store_keyring(profile, credentials)
+                config["connections"] = {**records, connection_id: connection}
+                save_private_config(config)
+                return {"ok": True, "connection": {"id": connection_id, **connection}, "stored": True}
+            connection = connection_configs(config).get(args.connection)
+            if connection is None:
+                raise ValueError(f"connection {args.connection} is missing")
+            if action == "disconnect":
+                records = dict(config.get("connections", {}))
+                records[connection.connection_id] = {**connection.to_private(), "auth_state": "disconnected"}
+                config["connections"] = records
+                save_private_config(config)
+                return {"ok": True, "connection": connection.connection_id, "disconnected": True}
+            payload = json.load(sys.stdin)
+            credentials = _connection_credentials(payload)
+            endpoint = args.endpoint or connection.endpoint
+            profile = args.credential_profile or connection.credential_profile
+            updated = {
+                **connection.to_private(),
+                "endpoint": endpoint,
+                "credential_profile": profile,
+                "auth_state": "configured",
+            }
+            connection_configs({"connections": {connection.connection_id: updated}})
+            store_keyring(profile, credentials)
+            records = dict(config.get("connections", {}))
+            records[connection.connection_id] = updated
+            config["connections"] = records
+            save_private_config(config)
+            return {"ok": True, "connection": connection.connection_id, "reconnected": action == "reconnect", "updated": action == "update"}
+        if args.provider_bucket_command == "list":
+            connection = connection_configs(config).get(args.connection)
+            if connection is None:
+                raise ValueError(f"connection {args.connection} is missing")
+            return {"ok": True, "connection_id": connection.connection_id, "buckets": list_minio_buckets(connection)}
+        connection = connection_configs(config).get(args.connection)
+        if connection is None:
+            raise ValueError(f"connection {args.connection} is missing")
+        if args.provider_bucket_command == "check":
+            return {
+                "ok": True,
+                "connection_id": connection.connection_id,
+                "bucket": check_minio_bucket(connection, args.bucket),
+                "accessible": True,
+            }
+        return {
+            "ok": True,
+            "connection_id": connection.connection_id,
+            "bucket": create_minio_bucket(connection, args.bucket),
+            "created": True,
+        }
+    if args.command == "connections":
+        config = private_config() or {}
+        if args.connection_command == "list":
+            return {
+                "ok": True,
+                "connections": [
+                    {
+                        "id": key,
+                        "display_name": value.display_name,
+                        "provider": value.provider,
+                        "endpoint": value.endpoint,
+                        "credential_profile": value.credential_profile,
+                        "auth_state": value.auth_state,
+                    }
+                    for key, value in connection_configs(config).items()
+                ],
+            }
+        config = persisted_config() or {}
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("connection setup input must be an object")
+        provider = args.provider_option or args.provider or payload.get("provider")
+        if provider != "minio":
+            raise ValueError("connections setup currently supports MinIO only")
+        connection_id = args.connection_id or payload.get("connection_id") or payload.get("id")
+        profile = args.credential_profile or payload.get("credential_profile") or payload.get("profile")
+        endpoint = payload.get("endpoint")
+        access_key = payload.get("access-key-id", payload.get("access_key_id"))
+        secret_key = payload.get("secret-access-key", payload.get("secret_access_key"))
+        if not all(isinstance(value, str) and value for value in (connection_id, profile, endpoint, access_key, secret_key)):
+            raise ValueError("MinIO connection setup requires id, credential profile, endpoint, access key, and secret key")
+        records = dict(config.get("connections", {}))
+        if connection_id in records:
+            raise ValueError(f"connection {connection_id} already exists")
+        connection = {
+            "display_name": args.display_name or payload.get("display_name") or "MinIO",
+            "provider": "minio",
+            "endpoint": endpoint,
+            "credential_profile": profile,
+            "region": payload.get("region", "us-east-1"),
+        }
+        connection_configs({"connections": {connection_id: connection}})
+        store_keyring(profile, {"access-key-id": access_key, "secret-access-key": secret_key})
+        config["connections"] = {**records, connection_id: connection}
+        save_private_config(config)
+        return {"ok": True, "connection": connection_id, "stored": True}
+    if args.command == "buckets":
+        connection = connection_configs(private_config() or {}).get(args.connection)
+        if connection is None:
+            raise ValueError(f"connection {args.connection} is missing")
+        if connection.provider != "minio":
+            raise ValueError("bucket operations currently support MinIO connections only")
+        if args.bucket_command == "list":
+            return {"ok": True, "connection_id": connection.connection_id, "buckets": list_minio_buckets(connection)}
+        if args.bucket_command == "check":
+            return {
+                "ok": True,
+                "connection_id": connection.connection_id,
+                "bucket": check_minio_bucket(connection, args.bucket),
+                "accessible": True,
+            }
+        return {
+            "ok": True,
+            "connection_id": connection.connection_id,
+            "bucket": create_minio_bucket(connection, args.bucket),
+            "created": True,
+        }
     if args.command == "dimensions":
         config = private_config() or {}
         if args.dimension_command == "list":
-            return {"ok": True, "dimensions": [{"id": key, "display_name": value.display_name, "provider": value.provider, "bucket": value.bucket, "endpoint": value.endpoint} for key, value in DimensionRegistry(config)]}
+            registry = DimensionRegistry(config)
+            dimensions = list(registry)
+            if args.with_hierarchy:
+                if args.dimension:
+                    dimensions = [(args.dimension, registry.select(args.dimension))]
+                return {
+                    "ok": True,
+                    "dimensions": [
+                        _dimension_hierarchy(instance, dimension, _backend(dimension.provider, instance, dimension_id))
+                        for dimension_id, dimension in dimensions
+                    ],
+                }
+            return {"ok": True, "dimensions": [_dimension_metadata(key, value) for key, value in dimensions]}
+        config = persisted_config() or {}
         records = dict(config.get("dimensions", {}))
         if args.dimension_command == "add" and args.dimension in records:
             raise ValueError(f"Dimension {args.dimension} already exists")
         current = records.get(args.dimension, {})
         values = {**current}
-        for field, key in (("display_name", "display_name"), ("provider", "provider"), ("endpoint", "endpoint"), ("bucket", "bucket"), ("credential_profile", "credential_profile"), ("region", "region"), ("catalog_key", "catalog_key")):
+        for field, key in (("display_name", "display_name"), ("provider", "provider"), ("connection_id", "connection_id"), ("endpoint", "endpoint"), ("bucket", "bucket"), ("credential_profile", "credential_profile"), ("region", "region"), ("catalog_key", "catalog_key")):
             value = getattr(args, field.replace("-", "_"), None)
             if value is not None:
                 values[key] = value
         records[args.dimension] = values
-        DimensionRegistry({"dimensions": records}).get(args.dimension)
+        DimensionRegistry({**config, "dimensions": records}).get(args.dimension)
         config["dimensions"] = records
         save_private_config(config)
         return {"ok": True, "dimension": args.dimension, "updated": True}
@@ -302,8 +552,24 @@ def dispatch(args, instance: Path) -> dict:
             backend.verify_object(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
         else:
             ImmutableLocalStore(instance).verify(object_evidence["object_key"], object_evidence["ciphertext_sha256"], object_evidence["ciphertext_size"])
-        operation = link_workspace if args.command == "link" else repair_workspace
-        return operation(args.workspace, catalog, object_evidence, project_id=project_id, snapshot_id=snapshot_id, dimension_id=dimension_id)
+        if args.command == "link":
+            return link_workspace(
+                args.workspace,
+                catalog,
+                object_evidence,
+                project_id=project_id,
+                snapshot_id=snapshot_id,
+                dimension_id=dimension_id,
+                verified_workspace_fingerprint=args.workspace_fingerprint,
+            )
+        return repair_workspace(
+            args.workspace,
+            catalog,
+            object_evidence,
+            project_id=project_id,
+            snapshot_id=snapshot_id,
+            dimension_id=dimension_id,
+        )
     if args.command == "doctor":
         selected = _effective_dimension(args)
         return _doctor(instance, args.backend, args.ide, dimension=selected.dimension_id if selected else None)
@@ -469,6 +735,58 @@ def dispatch(args, instance: Path) -> dict:
         save_private_config(config)
         return {"ok": True, "profile": args.profile, "age_profile": args.age_profile, "stored": True}
     raise ValueError("unsupported command")
+
+
+def _connection_metadata(connection_id, connection):
+    return {
+        "id": connection_id,
+        "display_name": connection.display_name,
+        "provider": connection.provider,
+        "endpoint": connection.endpoint,
+        "credential_profile": connection.credential_profile,
+        "auth_state": connection.auth_state,
+    }
+
+
+def _dimension_metadata(dimension_id, dimension):
+    return {
+        "id": dimension_id,
+        "display_name": dimension.display_name,
+        "provider": dimension.provider,
+        "connection_id": dimension.connection_id,
+        "bucket": dimension.bucket,
+        "endpoint": dimension.endpoint,
+    }
+
+
+def _dimension_hierarchy(instance, dimension, backend):
+    catalog = load_catalog(instance, backend)
+    if catalog.dimension_id is not None and catalog.dimension_id != dimension.dimension_id:
+        raise ValueError(f"catalog Dimension mismatch: expected {dimension.dimension_id}, received {catalog.dimension_id}")
+    rooms = []
+    for project_id, project in catalog.body["projects"].items():
+        rooms.append({
+            "id": project_id,
+            "display_name": project["display_name"],
+            "latest": project["latest"],
+            "jats": list(project["snapshots"].values()),
+        })
+    return {**_dimension_metadata(dimension.dimension_id, dimension), "rooms": rooms}
+
+
+def _connection_credentials(payload):
+    if not isinstance(payload, dict):
+        raise TypeError("connection credentials input must be an object")
+    access_key = payload.get("access-key-id", payload.get("access_key_id"))
+    secret_key = payload.get("secret-access-key", payload.get("secret_access_key"))
+    if not all(isinstance(value, str) and value for value in (access_key, secret_key)):
+        raise ValueError("connection input requires access key and secret key")
+    return {"access-key-id": access_key, "secret-access-key": secret_key}
+
+
+def _minio_connection_id(endpoint):
+    slug = re.sub(r"[^a-z0-9]+", "-", re.sub(r"^https?://", "", endpoint.lower())).strip("-")
+    return f"minio-{slug or 'connection'}"
 
 
 def hydrate_command(args, instance: Path, backend=None) -> dict:

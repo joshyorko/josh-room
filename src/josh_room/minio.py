@@ -1,11 +1,108 @@
+import re
 from dataclasses import dataclass
 
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
-from .config import DimensionConfig, resolve_dimension
+from .config import ConnectionConfig, DimensionConfig, resolve_dimension
 from .keyring import lookup
 from .object_store import ObjectStore
 from .r2 import R2Backend
+
+_BUCKET_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$")
+
+
+class BucketListForbidden(PermissionError):
+    def __init__(self, message: str, connection: ConnectionConfig | None = None):
+        self.result = {
+            "error_code": "bucket-list-forbidden",
+            "recoverable": True,
+        }
+        if connection is not None:
+            self.result.update({"connection_id": connection.connection_id, "provider": connection.provider})
+        super().__init__(message)
+
+
+class BucketAccessDenied(PermissionError):
+    def __init__(self, message: str, connection: ConnectionConfig | None = None):
+        self.result = {
+            "error_code": "bucket-access-denied",
+            "recoverable": True,
+        }
+        if connection is not None:
+            self.result.update({"connection_id": connection.connection_id, "provider": connection.provider})
+        super().__init__(message)
+
+
+def validate_bucket_name(bucket: str) -> str:
+    if not isinstance(bucket, str) or not _BUCKET_NAME.fullmatch(bucket):
+        raise ValueError("bucket name must be 3-63 lowercase letters, numbers, dots, or hyphens")
+    if ".." in bucket or ".-" in bucket or "-." in bucket:
+        raise ValueError("bucket name contains an invalid separator")
+    return bucket
+
+
+def client_for_connection(connection: ConnectionConfig):
+    if connection.provider != "minio":
+        raise ValueError("bucket operations require a MinIO connection")
+    import boto3
+
+    credentials = lookup(connection.credential_profile, allow_runtime=False)
+    verify = connection.option("ca_bundle") or connection.option("verify_tls", True)
+    return boto3.client(
+        "s3",
+        endpoint_url=connection.endpoint,
+        region_name=connection.region,
+        aws_access_key_id=credentials["access-key-id"],
+        aws_secret_access_key=credentials["secret-access-key"],
+        aws_session_token=credentials.get("session-token"),
+        verify=verify,
+        config=Config(
+            connect_timeout=connection.option("timeout_seconds", 60),
+            read_timeout=connection.option("timeout_seconds", 60),
+            retries={"max_attempts": connection.option("max_attempts", 4), "mode": "standard"},
+            s3={"addressing_style": "path" if connection.option("path_style", True) else "virtual"},
+        ),
+    )
+
+
+def list_buckets(connection: ConnectionConfig, client=None) -> list[str]:
+    client = client or client_for_connection(connection)
+    try:
+        response = client.list_buckets()
+    except ClientError as error:
+        details = error.response.get("Error", {})
+        code = str(details.get("Code", ""))
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if code.lower() in {"accessdenied", "forbidden", "unauthorized"} or status == 403:
+            raise BucketListForbidden("MinIO bucket listing is forbidden", connection) from error
+        raise
+    return sorted(bucket["Name"] for bucket in response.get("Buckets", []) if isinstance(bucket, dict) and bucket.get("Name"))
+
+
+def create_bucket(connection: ConnectionConfig, bucket: str, client=None) -> str:
+    bucket = validate_bucket_name(bucket)
+    client = client or client_for_connection(connection)
+    kwargs = {"Bucket": bucket}
+    if connection.region != "us-east-1":
+        kwargs["CreateBucketConfiguration"] = {"LocationConstraint": connection.region}
+    client.create_bucket(**kwargs)
+    return bucket
+
+
+def check_bucket_access(connection: ConnectionConfig, bucket: str, client=None) -> str:
+    bucket = validate_bucket_name(bucket)
+    client = client or client_for_connection(connection)
+    try:
+        client.head_bucket(Bucket=bucket)
+    except ClientError as error:
+        details = error.response.get("Error", {})
+        code = str(details.get("Code", ""))
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if code.lower() in {"accessdenied", "forbidden", "unauthorized", "nosuchbucket"} or status in {403, 404}:
+            raise BucketAccessDenied("MinIO bucket is unavailable or access is denied", connection) from error
+        raise
+    return bucket
 
 
 @dataclass(frozen=True)
@@ -48,7 +145,8 @@ class MinioConfig:
 class MinioBackend(R2Backend, ObjectStore):
     def _client_from_keyring(self):
         import boto3
-        credentials = lookup(self.config.credential_profile)
+
+        credentials = lookup(self.config.credential_profile, allow_runtime=False)
         verify = self.config.ca_bundle if self.config.ca_bundle else self.config.verify_tls
         return boto3.client("s3", endpoint_url=self.config.endpoint, region_name=self.config.region,
             aws_access_key_id=credentials["access-key-id"], aws_secret_access_key=credentials["secret-access-key"],

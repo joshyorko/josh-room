@@ -19,14 +19,31 @@ export default {
       const verifier = random();
       const challenge = b64(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(verifier))));
       await env.OAUTH_SESSIONS.put(`state:${state}`, JSON.stringify({ id, verifier }), { expirationTtl: 600 });
-      await env.OAUTH_SESSIONS.put(`session:${id}`, JSON.stringify({ status: "pending" }), { expirationTtl: 600 });
+      await env.OAUTH_SESSIONS.put(`session:${id}`, JSON.stringify({ status: "pending", state }), { expirationTtl: 600 });
       const auth = new URL("https://dash.cloudflare.com/oauth2/auth");
       for (const [k, v] of Object.entries({ response_type: "code", client_id: env.OAUTH_CLIENT_ID, redirect_uri: env.OAUTH_REDIRECT_URI, scope: "workers-r2.read workers-r2.write", state, code_challenge: challenge, code_challenge_method: "S256" })) auth.searchParams.set(k, v);
       return Response.json({ sessionId: id, authorizationUrl: auth.toString(), expiresIn: 600 });
     }
+    const cancelMatch = url.pathname.match(/^\/session\/([^/]+)\/cancel$/);
+    if (cancelMatch && request.method === "POST") {
+      const key = `session:${cancelMatch[1]}`;
+      const session = await env.OAUTH_SESSIONS.get(key, "json");
+      if (!session) return Response.json({ status: "expired" }, { status: 404 });
+      if (session.status === "authorized") return Response.json({ status: "authorized" }, { status: 409 });
+      if (session.status === "canceled") return Response.json({ status: "canceled" });
+      if (session.status !== "pending") return Response.json({ status: session.status || "expired" }, { status: 409 });
+      await env.OAUTH_SESSIONS.put(key, JSON.stringify({ status: "canceled" }), { expirationTtl: 120 });
+      if (typeof session.state === "string" && session.state) await env.OAUTH_SESSIONS.delete(`state:${session.state}`);
+      return Response.json({ status: "canceled" });
+    }
     if (url.pathname === "/oauth/callback") {
-      const saved = await env.OAUTH_SESSIONS.get(`state:${url.searchParams.get("state")}`, "json");
+      const state = url.searchParams.get("state");
+      const saved = await env.OAUTH_SESSIONS.get(`state:${state}`, "json");
       if (!saved || !url.searchParams.get("code")) return new Response("Invalid or expired login.", { status: 400 });
+      const sessionKey = `session:${saved.id}`;
+      const session = await env.OAUTH_SESSIONS.get(sessionKey, "json");
+      if (!session || session.status !== "pending") return new Response("Invalid or expired login.", { status: 400 });
+      await env.OAUTH_SESSIONS.delete(`state:${state}`);
       const body = new URLSearchParams({ grant_type: "authorization_code", client_id: env.OAUTH_CLIENT_ID, code: url.searchParams.get("code"), redirect_uri: env.OAUTH_REDIRECT_URI, code_verifier: saved.verifier });
       const token = await fetch("https://dash.cloudflare.com/oauth2/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
       const result = await token.json();
@@ -47,7 +64,9 @@ export default {
       });
       const temporaryResult = await temporary.json();
       if (!temporary.ok || !temporaryResult.success) return new Response("Temporary R2 authorization failed.", { status: 502 });
-      await env.OAUTH_SESSIONS.put(`session:${saved.id}`, JSON.stringify({
+      const current = await env.OAUTH_SESSIONS.get(sessionKey, "json");
+      if (!current || current.status !== "pending") return new Response("Invalid or expired login.", { status: 400 });
+      await env.OAUTH_SESSIONS.put(sessionKey, JSON.stringify({
         status: "authorized",
         accessKeyId: temporaryResult.result.accessKeyId,
         secretAccessKey: temporaryResult.result.secretAccessKey,
@@ -65,7 +84,7 @@ export default {
       const session = await env.OAUTH_SESSIONS.get(key, "json");
       if (!session) return Response.json({ status: "expired" }, { status: 404 });
       if (session.status === "authorized") await env.OAUTH_SESSIONS.delete(key);
-      return Response.json(session);
+      return Response.json(session.status === "authorized" ? session : { status: session.status || "expired" });
     }
     return new Response("Not found", { status: 404 });
   }

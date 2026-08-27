@@ -87,6 +87,18 @@ def test_dimension_registry_rejects_unknown_dimension():
         DimensionRegistry({}).select("missing")
 
 
+def test_dimension_registry_rejects_implicit_destination_when_multiple_dimensions_exist():
+    config = {
+        "dimensions": {
+            "archive": _dimension("archive").to_private(),
+            "experiments": _dimension("experiments").to_private(),
+        }
+    }
+
+    with pytest.raises(ValueError, match="multiple Dimensions.*explicit"):
+        DimensionRegistry(config).select()
+
+
 def test_dimension_rejects_endpoint_whitespace_and_control_characters():
     with pytest.raises(ValueError, match="endpoint"):
         DimensionConfig.from_private(
@@ -228,6 +240,30 @@ def test_link_uses_verified_hydrate_marker_for_legacy_catalog_fingerprint(tmp_pa
     result = link_workspace(workspace, catalog, evidence)
 
     assert result["ok"] is True
+    assert result["marker"]["workspace_fingerprint"] == fingerprint
+
+
+def test_link_accepts_only_an_explicitly_verified_legacy_fingerprint(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    fingerprint = "b" * 64
+    snapshot = _snapshot(fingerprint="0" * 64)
+    catalog = Catalog.empty(dimension_id="archive").add_snapshot("room", "Room", snapshot)
+    evidence = {"project_id": "room", **snapshot}
+    monkeypatch.setattr("josh_room.operations.workspace_fingerprint", lambda _path: fingerprint)
+
+    result = link_workspace(
+        workspace,
+        catalog,
+        evidence,
+        project_id="room",
+        snapshot_id="jat-1",
+        dimension_id="archive",
+        verified_workspace_fingerprint=fingerprint,
+    )
+
+    assert result["ok"] is True
+    assert result["marker"]["format_version"] == 2
     assert result["marker"]["workspace_fingerprint"] == fingerprint
 
 

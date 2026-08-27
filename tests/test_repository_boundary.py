@@ -58,15 +58,16 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     body = bootstrap.read_text()
     assert "git -C \"$jat_root\" fetch" in body
     assert "bootstrap-jat-environment.sh" in body
-    assert 'sudo "$(command -v rcc)" ht shared --enable --once' in body
-    assert "rcc ht init" in body
-    assert body.index("rcc ht init") < body.index("bootstrap-jat-environment.sh")
+    assert 'sudo "$(command -v rcc)" ht shared --enable --once' not in body
+    assert "rcc ht init" not in body
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
     assert "brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server" in body
+    assert 'export RCC_HOLOTREE_MODE="${RCC_HOLOTREE_MODE:-private}"' in body
+    assert 'export ROBOCORP_HOME="${ROBOCORP_HOME:-$HOME/.local/share/josh-room/robocorp}"' in body
     assert body.index('test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"') < body.index(
-        'sudo "$(command -v rcc)" ht shared --enable --once'
+        'bootstrap-jat-environment.sh'
     )
     assert "scripts/install_dependencies.sh" in body
     assert "CONDA_PREFIX=" in body
@@ -82,6 +83,10 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.addStorage",
         "joshRoom.connectCloudflare",
         "joshRoom.reconnectCloudflare",
+        "joshRoom.connectStorage",
+        "joshRoom.reconnectStorage",
+        "joshRoom.editConnection",
+        "joshRoom.disconnectStorage",
         "joshRoom.editStorageSettings",
         "joshRoom.link",
         "joshRoom.repair",
