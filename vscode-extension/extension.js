@@ -1,4 +1,5 @@
 const childProcess = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -42,6 +43,222 @@ function activeWorkspace() {
 function roomsRoot(workspace) {
   const parent = path.dirname(workspace);
   return path.basename(parent) === "workspaces" ? parent : workspace;
+}
+
+function configuredWorkspaceRoot(cwd) {
+  const configured = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  if (configured && configured.trim()) return path.resolve(configured);
+  const configDirectory = process.env.JOSH_ROOM_CONFIG_DIR
+    || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "josh-room");
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(configDirectory, "config.json"), "utf8"));
+    if (typeof config.workspace_root === "string" && config.workspace_root.trim()) {
+      return path.resolve(config.workspace_root);
+    }
+  } catch (_error) {
+    // A missing or unreadable optional config only means the fallback is used.
+  }
+  return roomsRoot(cwd);
+}
+
+function materializationIndexPath() {
+  const stateHome = process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  const instance = process.env.JOSH_ROOM_INSTANCE || path.join(stateHome, "josh-room");
+  return path.join(instance, "materializations.json");
+}
+
+function materializationKey(dimensionIdValue, projectId) {
+  return JSON.stringify([dimensionIdValue, projectId]);
+}
+
+function readMaterializationIndex() {
+  try {
+    const value = JSON.parse(fs.readFileSync(materializationIndexPath(), "utf8"));
+    if (value && value.materializations && typeof value.materializations === "object"
+      && !Array.isArray(value.materializations)) return { ...value.materializations };
+  } catch (_error) {
+    // A stale or corrupt convenience index is ignored and rebuilt from markers.
+  }
+  return {};
+}
+
+function writeMaterializationIndex(materializations) {
+  try {
+    const indexPath = materializationIndexPath();
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true, mode: 0o700 });
+    const temporary = path.join(
+      path.dirname(indexPath),
+      `.materializations.${process.pid}.${Date.now()}`,
+    );
+    fs.writeFileSync(temporary, `${JSON.stringify({ format_version: 1, materializations }, null, 2)}\n`, { mode: 0o600 });
+    fs.chmodSync(temporary, 0o600);
+    fs.renameSync(temporary, indexPath);
+  } catch (error) {
+    outputChannel?.warn(`Unable to update the local Room locator: ${error.message}`);
+  }
+}
+
+function canonicalWorkspacePathSha256(workspace) {
+  return crypto.createHash("sha256").update(path.resolve(workspace)).digest("hex");
+}
+
+function corroboratedMaterialization(candidate, dimensionIdValue, projectId) {
+  try {
+    const stat = fs.lstatSync(candidate);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return undefined;
+    const marker = currentRoom(candidate);
+    if (!marker || marker.format_version !== 2
+      || marker.dimension_id !== dimensionIdValue
+      || marker.project_id !== projectId
+      || marker.workspace_path_sha256 !== canonicalWorkspacePathSha256(candidate)) return undefined;
+    return { path: path.resolve(candidate), marker };
+  } catch (_error) {
+    return undefined;
+  }
+}
+
+function findMaterialization(cwd, dimensionIdValue, projectId) {
+  const key = materializationKey(dimensionIdValue, projectId);
+  const index = readMaterializationIndex();
+  const candidates = [];
+  if (typeof index[key] === "string") candidates.push(index[key]);
+  candidates.push(cwd);
+  const root = configuredWorkspaceRoot(cwd);
+  try {
+    const stat = fs.lstatSync(root);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.isSymbolicLink()) candidates.push(path.join(root, entry.name));
+      }
+    }
+  } catch (_error) {
+    // An absent configured root simply has no materializations to scan.
+  }
+  candidates.push(path.join(roomsRoot(cwd), projectId));
+  const seen = new Set();
+  let staleIndex = false;
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    const found = corroboratedMaterialization(resolved, dimensionIdValue, projectId);
+    if (found) {
+      if (index[key] !== found.path) {
+        index[key] = found.path;
+        writeMaterializationIndex(index);
+      }
+      return found;
+    }
+    if (index[key] === resolved) staleIndex = true;
+  }
+  if (staleIndex) {
+    delete index[key];
+    writeMaterializationIndex(index);
+  }
+  return undefined;
+}
+
+function rememberMaterialization(materialization) {
+  const dimensionIdValue = materialization.marker.dimension_id;
+  const projectId = materialization.marker.project_id;
+  const index = readMaterializationIndex();
+  index[materializationKey(dimensionIdValue, projectId)] = path.resolve(materialization.path);
+  writeMaterializationIndex(index);
+}
+
+function newMaterializationDestination(cwd, dimensionIdValue, projectId) {
+  const root = configuredWorkspaceRoot(cwd);
+  const preferred = path.join(root, projectId);
+  if (!fs.existsSync(preferred)) return preferred;
+  const marker = currentRoom(preferred);
+  if (marker && marker.format_version === 2
+    && marker.project_id === projectId
+    && marker.dimension_id !== dimensionIdValue) {
+    return path.join(root, `${dimensionIdValue}--${projectId}`);
+  }
+  return preferred;
+}
+
+function rebindHydratedMarker(workspace, dimensionIdValue, projectId, snapshotId) {
+  const markerPath = path.join(workspace, ".josh-room.json");
+  const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+  if (marker.format_version !== 2
+    || marker.dimension_id !== dimensionIdValue
+    || marker.project_id !== projectId
+    || marker.snapshot_id !== snapshotId
+    || !/^[0-9a-f]{64}$/.test(marker.workspace_fingerprint)) {
+    throw new Error("Restored Room marker could not be corroborated for this Dimension.");
+  }
+  const temporary = path.join(workspace, `.josh-room-marker.${process.pid}.${Date.now()}`);
+  fs.writeFileSync(temporary, `${JSON.stringify({
+    ...marker,
+    workspace_path_sha256: canonicalWorkspacePathSha256(workspace),
+  })}\n`, { mode: 0o600 });
+  fs.chmodSync(temporary, 0o600);
+  fs.renameSync(temporary, markerPath);
+  return { path: path.resolve(workspace), marker: { ...marker, workspace_path_sha256: canonicalWorkspacePathSha256(workspace) } };
+}
+
+async function switchMaterialization(cwd, selected, existing, provider) {
+  const status = await runJoshRoom(["status", "--workspace", existing.path], cwd);
+  const clean = status.state === "clean" && status.path_matches !== false && status.fingerprint_matches !== false;
+  if (clean) {
+    const action = await vscode.window.showWarningMessage(
+      `Switch this Room to recovery point ${selected.snapshotId}?`,
+      { modal: true },
+      "Switch Recovery Point",
+    );
+    if (action !== "Switch Recovery Point") return "cancelled";
+  } else {
+    const action = await vscode.window.showWarningMessage(
+      "This Room has local changes. Save Current First, Discard Changes & Switch, or Cancel.",
+      { modal: true },
+      "Save Current First",
+      "Discard Changes & Switch",
+      "Cancel",
+    );
+    if (action === "Save Current First") {
+      await vscode.window.showInformationMessage("Save the current Room first, then choose the historical JAT again.");
+      return "save-first";
+    }
+    if (action !== "Discard Changes & Switch") return "cancelled";
+  }
+  const parent = path.dirname(existing.path);
+  const stage = fs.mkdtempSync(path.join(parent, `.${selected.projectId}.josh-room-switch-`));
+  const backup = path.join(
+    parent,
+    `.${selected.projectId}.josh-room-backup-${process.pid}-${Date.now()}`,
+  );
+  let promoted = false;
+  try {
+    await runOperation(
+      `Restoring ${selected.label}…`,
+      nativeRegistry.dimensionArgs([
+        "hydrate", selected.projectId,
+        "--snapshot", selected.snapshotId,
+        "--destination", stage,
+        "--backend", provider,
+        "--ide", "terminal",
+      ], selected.dimensionId),
+      cwd,
+    );
+    const restored = rebindHydratedMarker(stage, selected.dimensionId, selected.projectId, selected.snapshotId);
+    fs.renameSync(existing.path, backup);
+    try {
+      fs.renameSync(stage, existing.path);
+      promoted = true;
+    } catch (error) {
+      if (!fs.existsSync(existing.path) && fs.existsSync(backup)) fs.renameSync(backup, existing.path);
+      throw error;
+    }
+    fs.rmSync(backup, { recursive: true, force: true });
+    rememberMaterialization(restored);
+  } finally {
+    if (!promoted && fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true });
+    if (promoted && fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
+  }
+  return "switched";
 }
 
 function cancellationError() {
@@ -573,54 +790,75 @@ async function saveRoom(options = {}) {
 
 async function enterRoom(preferredProject) {
   const cwd = activeWorkspace();
-  const catalog = await loadCatalog(cwd);
-  const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const preferred = roomProject(preferredProject);
   const preferredSnapshotId = snapshotIdentity(preferredProject);
   const selected = preferred
     ? { label: roomLabel(preferred), projectId: preferred.id, project: preferred, snapshotId: preferredSnapshotId }
-    : await vscode.window.showQuickPick(
-      projects.map((project) => ({ label: roomLabel(project), projectId: project.id, project })),
-      { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
-  );
+    : await (async () => {
+      const catalog = await loadCatalog(cwd);
+      const projects = nativeRegistry.flattenDimensionRooms(catalog);
+      return vscode.window.showQuickPick(
+        projects.map((project) => ({ label: roomLabel(project), projectId: project.id, project })),
+        { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
+      );
+    })();
   if (!selected) return "cancelled";
-  if (sameRoomBinding(currentRoom(cwd), selected)) {
-    await vscode.window.showInformationMessage(`“${selected.label}” is already open.`);
-    return "current";
+  const selectedDimensionId = dimensionId(selected.project);
+  const provider = nativeRegistry.providerKey(selected.project.provider || selected.project.dimension?.provider);
+  if (!selected.projectId || !selectedDimensionId || !["local", "r2", "minio"].includes(provider)) {
+    throw new Error("Choose a trusted Provider, Dimension, Room, and JAT recovery point.");
   }
-  const history = await runOperation(
-    `Loading ${selected.label} recovery points…`,
-    nativeRegistry.dimensionArgs(["snapshots", "list", selected.projectId, "--backend", "r2"], dimensionId(selected.project)),
-    cwd,
-  );
-  let snapshotId = selected.snapshotId || "latest";
-  if (!selected.snapshotId && history.snapshots.length > 1) {
-    const snapshot = await vscode.window.showQuickPick(
-      history.snapshots
-        .map((item) => ({
-          label: item.snapshot_id === history.latest ? "Latest snapshot" : "Previous snapshot",
-          description: item.created_at || item.snapshot_id,
-          snapshotId: item.snapshot_id,
-        }))
-        .sort((left) => left.snapshotId === history.latest ? -1 : 1),
-      { title: `Josh: Enter ${selected.label}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
-    );
-    if (!snapshot) return "cancelled";
-    snapshotId = snapshot.snapshotId;
+  if (!/^[a-z0-9-]+$/.test(selected.projectId) || !/^[a-z0-9][a-z0-9._-]*$/.test(selectedDimensionId)) {
+    throw new Error("Provider, Dimension, or Room identity is unsafe for workspace materialization.");
   }
-  const root = roomsRoot(cwd);
-  const destination = path.join(root, selected.projectId);
-  if (sameRoomBinding(currentRoom(destination), selected)) {
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `Opening existing ${selected.label}…`, cancellable: false },
-      () => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false),
-    );
+  selected.dimensionId = selectedDimensionId;
+  const existing = findMaterialization(cwd, selectedDimensionId, selected.projectId);
+  if (existing) {
+    rememberMaterialization(existing);
+    if (!selected.snapshotId || existing.marker.snapshot_id === selected.snapshotId) {
+      if (path.resolve(existing.path) === path.resolve(cwd)) {
+        await vscode.window.showInformationMessage(`“${selected.label}” is already open.`);
+        return "current";
+      }
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Opening existing ${selected.label}…`, cancellable: false },
+        () => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(existing.path), false),
+      );
+      return "opened";
+    }
+    const switched = await switchMaterialization(cwd, selected, existing, provider);
+    if (switched !== "switched") return switched;
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(existing.path), false);
     return "opened";
   }
+  let history;
+  let snapshotId = selected.snapshotId || "latest";
+  if (!selected.snapshotId) {
+    history = await runOperation(
+      `Loading ${selected.label} recovery points…`,
+      nativeRegistry.dimensionArgs(["snapshots", "list", selected.projectId, "--backend", provider], selectedDimensionId),
+      cwd,
+    );
+    snapshotId = "latest";
+    if (history.snapshots.length > 1) {
+      const snapshot = await vscode.window.showQuickPick(
+        history.snapshots
+          .map((item) => ({
+            label: item.snapshot_id === history.latest ? "Latest snapshot" : "Previous snapshot",
+            description: item.created_at || item.snapshot_id,
+            snapshotId: item.snapshot_id,
+          }))
+          .sort((left, right) => left.snapshotId === history.latest ? -1 : right.snapshotId === history.latest ? 1 : 0),
+        { title: `Josh: Enter ${selected.label}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
+      );
+      if (!snapshot) return "cancelled";
+      snapshotId = snapshot.snapshotId;
+    }
+  }
+  const destination = newMaterializationDestination(cwd, selectedDimensionId, selected.projectId);
   if (fs.existsSync(destination)) {
     throw new Error(`Refusing to replace an unexplained existing folder: ${destination}`);
   }
-  const hydrateDimensionId = dimensionId(selected.project) || selectedDimensionId;
   await runOperation(
     `Restoring ${selected.label}…`,
     nativeRegistry.dimensionArgs([
@@ -631,12 +869,14 @@ async function enterRoom(preferredProject) {
       "--destination",
       destination,
       "--backend",
-      "r2",
+      provider,
       "--ide",
       "terminal",
-    ], hydrateDimensionId),
+    ], selectedDimensionId),
     cwd,
   );
+  const materialization = corroboratedMaterialization(destination, selectedDimensionId, selected.projectId);
+  if (materialization) rememberMaterialization(materialization);
   await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
   return "opened";
 }

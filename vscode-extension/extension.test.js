@@ -669,92 +669,323 @@ test("legacy Link Existing Folder rejects a mismatch without touching the folder
 test("clicking a historical JAT and pressing Enter hydrates that exact old snapshot", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-historical-jat-test-"));
   writeMarker(root, { snapshot_id: "new-snapshot" });
-  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "dimensions") return catalogResponse();
-    if (args[0] === "snapshots") return snapshotResponse();
-    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
-    return { stdout: JSON.stringify({ ok: true }) };
-  });
-  const extension = loadExtension(vscode, spawnHarness.spawn);
-  extension.__test__.setStatusItem(statusItem);
-  await extension.__test__.enterRoom({
-    kind: "jat",
-    id: "old-snapshot",
-    snapshot: { snapshot_id: "old-snapshot" },
-    project: { id: "trusted-room", display_name: "Trusted Room" },
-    dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
-  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = root;
+  process.env.JOSH_ROOM_INSTANCE = path.join(root, "state");
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(root);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "dimensions") return catalogResponse();
+      if (args[0] === "snapshots") return snapshotResponse();
+      if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "old-snapshot",
+      snapshot: { snapshot_id: "old-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    });
 
-  const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
-  assert.ok(hydrate);
-  assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
-  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
+    const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+    assert.ok(hydrate);
+    assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
+    assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
 });
 
-test("historical JAT Enter does not treat the same Room's newer snapshot as already open", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-same-room-historical-jat-test-"));
-  writeMarker(root, {
-    dimension_id: "trusted-dimension",
-    project_id: "trusted-room",
-    snapshot_id: "new-snapshot",
-  });
-  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "dimensions") return catalogResponse();
-    if (args[0] === "snapshots") return snapshotResponse();
-    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
-    return { stdout: JSON.stringify({ ok: true }) };
-  });
-  const extension = loadExtension(vscode, spawnHarness.spawn);
-  extension.__test__.setStatusItem(statusItem);
-  await extension.__test__.enterRoom({
-    kind: "jat",
-    id: "old-snapshot",
-    snapshot_id: "old-snapshot",
-    snapshot: { snapshot_id: "old-snapshot" },
-    project: { id: "trusted-room", display_name: "Trusted Room" },
-    dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
-  });
-
-  const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
-  assert.ok(hydrate);
-  assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
-  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
-});
-
-test("historical JAT Enter rejects a destination linked to a newer snapshot", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-destination-historical-jat-test-"));
-  const destination = path.join(root, "trusted-room");
+test("Enter reopens a canonical Room from an unrelated CWD without provider or restore work", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-unrelated-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-canonical-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
   fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "keep.txt"), "keep this materialization\n");
   writeMarker(destination, {
     dimension_id: "trusted-dimension",
     project_id: "trusted-room",
     snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
   });
-  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "dimensions") return catalogResponse();
-    if (args[0] === "snapshots") return snapshotResponse();
-    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
-    return { stdout: JSON.stringify({ ok: true }) };
-  });
-  const extension = loadExtension(vscode, spawnHarness.spawn);
-  extension.__test__.setStatusItem(statusItem);
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "dimensions") return catalogResponse();
+      if (args[0] === "snapshots") return snapshotResponse();
+      if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
 
-  await assert.rejects(
-    extension.__test__.enterRoom({
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "new-snapshot",
+      snapshot_id: "new-snapshot",
+      snapshot: { snapshot_id: "new-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    });
+
+    assert.deepEqual(spawnHarness.calls, []);
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("clean historical JAT Enter switches the same canonical Room directory atomically", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "before.txt"), "before\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, warningResponses, warningCalls, executeCalls } = createVscodeMock(cwd);
+    warningResponses.push("Switch Recovery Point");
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "status") return { stdout: JSON.stringify({
+        ok: true,
+        state: "clean",
+        path_matches: true,
+        fingerprint_matches: true,
+      }) };
+      if (args[0] === "hydrate") {
+        const restored = args[args.indexOf("--destination") + 1];
+        fs.mkdirSync(restored, { recursive: true });
+        fs.writeFileSync(path.join(restored, "after.txt"), "after\n");
+        writeMarker(restored, {
+          dimension_id: "trusted-dimension",
+          project_id: "trusted-room",
+          snapshot_id: "old-snapshot",
+          workspace_path_sha256: sha256Hex(restored),
+        });
+        return { stdout: JSON.stringify({ ok: true, destination: restored, snapshot_id: "old-snapshot" }) };
+      }
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    await extension.__test__.enterRoom({
       kind: "jat",
       id: "old-snapshot",
       snapshot_id: "old-snapshot",
       snapshot: { snapshot_id: "old-snapshot" },
       project: { id: "trusted-room", display_name: "Trusted Room" },
       dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
-    }),
-    /unexplained existing folder/,
-  );
-  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), false);
-  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "hydrate"), false);
+    });
+
+    const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+    assert.ok(hydrate);
+    assert.notEqual(hydrate.args[hydrate.args.indexOf("--destination") + 1], destination);
+    assert.equal(fs.existsSync(path.join(destination, "after.txt")), true);
+    assert.equal(fs.existsSync(path.join(destination, "before.txt")), false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(destination, ".josh-room.json"))).snapshot_id, "old-snapshot");
+    assert.equal(fs.existsSync(`${destination}.josh-room-backup`), false);
+    assert.match(warningCalls[0][0], /Switch this Room to.*old-snapshot/);
+    assert.deepEqual(warningCalls[0].slice(-2), [{ modal: true }, "Switch Recovery Point"]);
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("dirty historical JAT Enter offers safe actions without replacing local content", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dirty-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dirty-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  fs.mkdirSync(destination);
+  const content = path.join(destination, "unsaved.txt");
+  fs.writeFileSync(content, "do not clobber\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, warningResponses, warningCalls } = createVscodeMock(cwd);
+    warningResponses.push("Cancel");
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "status") return { stdout: JSON.stringify({
+        ok: false,
+        state: "changed",
+        path_matches: true,
+        fingerprint_matches: false,
+      }) };
+      if (args[0] === "hydrate") throw new Error("dirty Room must not hydrate");
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    assert.equal(await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "old-snapshot",
+      snapshot_id: "old-snapshot",
+      snapshot: { snapshot_id: "old-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    }), "cancelled");
+    assert.deepEqual(spawnHarness.calls.map((entry) => entry.args[0]), ["status"]);
+    assert.equal(fs.readFileSync(content, "utf8"), "do not clobber\n");
+    assert.match(warningCalls[0][0], /Save Current First.*Discard Changes \& Switch.*Cancel/);
+    assert.deepEqual(warningCalls[0].slice(-4), [
+      { modal: true }, "Save Current First", "Discard Changes & Switch", "Cancel",
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("stale local Room locator entries are repaired from corroborated markers", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-stale-index-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-stale-index-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  const stateRoot = path.join(workspaceRoot, "state");
+  fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "keep.txt"), "keep\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  fs.mkdirSync(stateRoot);
+  fs.writeFileSync(path.join(stateRoot, "materializations.json"), JSON.stringify({
+    format_version: 1,
+    materializations: { [JSON.stringify(["trusted-dimension", "trusted-room"])]: path.join(workspaceRoot, "removed-room") },
+  }));
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = stateRoot;
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "new-snapshot",
+      snapshot_id: "new-snapshot",
+      snapshot: { snapshot_id: "new-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    });
+
+    assert.deepEqual(spawnHarness.calls, []);
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+    const repaired = JSON.parse(fs.readFileSync(path.join(stateRoot, "materializations.json")));
+    assert.equal(repaired.materializations[JSON.stringify(["trusted-dimension", "trusted-room"])], destination);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("identical Room IDs in different Dimensions cannot collide on first materialization", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dimension-collision-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dimension-collision-root-test-"));
+  const existing = path.join(workspaceRoot, "same-room");
+  fs.mkdirSync(existing);
+  writeMarker(existing, {
+    dimension_id: "archive",
+    project_id: "same-room",
+    snapshot_id: "archive-jat",
+    workspace_path_sha256: sha256Hex(existing),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "hydrate") {
+        const destination = args[args.indexOf("--destination") + 1];
+        fs.mkdirSync(destination, { recursive: true });
+        writeMarker(destination, {
+          dimension_id: "backup",
+          project_id: "same-room",
+          snapshot_id: "backup-jat",
+          workspace_path_sha256: sha256Hex(destination),
+        });
+      }
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "backup-jat",
+      snapshot_id: "backup-jat",
+      snapshot: { snapshot_id: "backup-jat" },
+      project: { id: "same-room", display_name: "Same Room" },
+      dimension: { id: "backup", display_name: "Backup", provider: "minio" },
+    });
+
+    const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+    assert.ok(hydrate);
+    const destination = hydrate.args[hydrate.args.indexOf("--destination") + 1];
+    assert.equal(destination, path.join(workspaceRoot, "backup--same-room"));
+    assert.equal(fs.existsSync(existing), true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(existing, ".josh-room.json"))).dimension_id, "archive");
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
 });
 
 test("a v1 marker requires explicit selection for Serve instead of guessing a Dimension", async () => {
