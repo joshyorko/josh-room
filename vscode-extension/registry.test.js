@@ -106,7 +106,7 @@ test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
     tree[0].children[0].children[0].children.map((item) => [item.kind, item.id]),
     [["jat", "jat-002"], ["jat", "jat-001"]],
   );
-  assert.match(tree[0].children[0].description, /private-room/);
+  assert.equal(tree[0].children[0].description, "");
   assert.doesNotMatch(tree[0].children[0].description, /secret|access.key|identity/i);
 });
 

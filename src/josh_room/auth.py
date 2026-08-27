@@ -11,29 +11,63 @@ from .progress import report_progress
 WORKER_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
 
 
+def start_oauth_session() -> dict:
+    started = _request("/session/start", method="POST")
+    return {
+        "session_id": started["sessionId"],
+        "authorization_url": started["authorizationUrl"],
+        "expires_in": int(started.get("expiresIn", 600)),
+    }
+
+
+def poll_oauth_session(session_id: str, dimension_id: str | None = None) -> dict:
+    session = _request(f"/session/{session_id}")
+    status = session.get("status")
+    if status == "pending":
+        return {"status": "pending"}
+    if status != "authorized":
+        raise RuntimeError(f"Cloudflare authorization {status or 'failed'}")
+    _write_runtime(session, dimension_id=dimension_id)
+    return {"status": "authorized"}
+
+
+def runtime_session_state() -> str:
+    root = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "josh-room" / "session"
+    metadata = root / "session.json"
+    runtime_files = tuple(
+        root / name for name in ("r2.json", "age.identity", "config.json")
+    )
+    if not metadata.is_file():
+        return "missing"
+    try:
+        expires_at = float(json.loads(metadata.read_text())["expires_at"])
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return "missing"
+    if expires_at <= time.time() + 60:
+        return "expired"
+    return "connected" if all(path.is_file() for path in runtime_files) else "missing"
+
+
 def ensure_runtime_session(timeout: int = 600, dimension_id: str | None = None) -> None:
-    if all(os.environ.get(name) and Path(os.environ[name]).is_file() for name in (
+    runtime_files_ready = all(os.environ.get(name) and Path(os.environ[name]).is_file() for name in (
         "JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"
-    )):
+    ))
+    if runtime_session_state() == "connected" and runtime_files_ready:
         report_progress("auth", "Cloudflare session is ready")
         return
     if _load_runtime():
         report_progress("auth", "Reusing this Room's Cloudflare session")
         return
     report_progress("auth", "Opening Cloudflare sign-in")
-    started = _request("/session/start", method="POST")
-    webbrowser.open(started["authorizationUrl"])
+    started = start_oauth_session()
+    webbrowser.open(started["authorization_url"])
     report_progress("auth", "Waiting for Cloudflare approval in your browser")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        session = _request(f"/session/{started['sessionId']}")
-        status = session.get("status")
-        if status == "pending":
+        result = poll_oauth_session(started["session_id"], dimension_id=dimension_id)
+        if result["status"] == "pending":
             time.sleep(2)
             continue
-        if status != "authorized":
-            raise RuntimeError(f"Cloudflare authorization {status or 'failed'}")
-        _write_runtime(session, dimension_id=dimension_id)
         report_progress("auth", "Cloudflare session authorized")
         return
     raise RuntimeError("Cloudflare authorization timed out")

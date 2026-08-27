@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const { EventEmitter } = require("node:events");
 const Module = require("node:module");
-const { flattenDimensionRooms } = require("./registry");
+const { buildProviderTree, flattenDimensionRooms } = require("./registry");
 
 function sha256Hex(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -60,6 +60,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   const inputBoxCalls = [];
   const infoCalls = [];
   const warningCalls = [];
+  const openExternalCalls = [];
   const executeCalls = [];
   const commandCallbacks = new Map();
   const watcherCallbacks = [];
@@ -84,7 +85,10 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   };
   return {
     vscode: {
-      Uri: { file: (fsPath) => ({ fsPath }) },
+      Uri: {
+        file: (fsPath) => ({ fsPath }),
+        parse: (value) => ({ value }),
+      },
       StatusBarAlignment: { Left: 0 },
       ProgressLocation: { Notification: 0 },
       RelativePattern: class RelativePattern {
@@ -117,7 +121,25 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
           return this.value;
         }
       },
-      env: { clipboard: { writeText: async () => {} } },
+      EventEmitter: class VscodeEventEmitter {
+        constructor() {
+          this.listeners = [];
+          this.event = (listener) => {
+            this.listeners.push(listener);
+            return { dispose: () => { this.listeners = this.listeners.filter((entry) => entry !== listener); } };
+          };
+        }
+        fire(value) {
+          for (const listener of this.listeners) listener(value);
+        }
+      },
+      env: {
+        clipboard: { writeText: async () => {} },
+        openExternal: async (uri) => {
+          openExternalCalls.push(uri);
+          return true;
+        },
+      },
       workspace: {
         workspaceFolders: workspaceFolder ? [{ uri: { fsPath: workspaceFolder } }] : [],
         textDocuments,
@@ -191,6 +213,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     inputBoxCalls,
     infoCalls,
     warningCalls,
+    openExternalCalls,
     executeCalls,
     commandCallbacks,
     watcherCallbacks,
@@ -331,7 +354,7 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
 test("startup refuses to mark a copied workspace as Saved when path binding is stale", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-path-test-"));
   writeMarker(root, { dimension_id: "archive", project_id: "demo-room", display_name: "Demo Room" });
-  const { vscode, statusItem } = createVscodeMock(root);
+  const { vscode, statusItem, inputBoxCalls, openExternalCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
     if (args[0] === "status") {
       return {
@@ -788,4 +811,199 @@ test("deleting the active JAT is blocked so its marker cannot remain Saved", asy
   assert.equal(result, "blocked");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "snapshots" && entry.args[1] === "remove"), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".josh-room.json"))).snapshot_id, "active");
+});
+
+test("fresh configured R2 shows Connect Cloudflare without probing an empty catalog", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-connect-state-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({
+      ok: true, state: "missing",
+    }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const tree = buildProviderTree(catalog);
+  const dimension = tree[0].children[0];
+  const connection = dimension.children[0];
+  const treeProvider = new extension.__test__.HierarchyRoomsProvider();
+  const connectionItem = treeProvider.getTreeItem(connection);
+
+  assert.equal(tree[0].label, "Cloudflare R2");
+  assert.equal(dimension.label, "Default");
+  assert.equal(connection.label, "⚠ Not connected");
+  assert.equal(connection.description, "Connect Cloudflare");
+  assert.equal(connectionItem.command.command, "joshRoom.connectCloudflare");
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
+});
+
+test("Add Storage sends Cloudflare directly to OAuth without R2 questionnaires", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-r2-test-"));
+  const { vscode, statusItem, inputBoxCalls, openExternalCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    if (args[0] === "auth" && args[1] === "start") return { stdout: JSON.stringify({
+      ok: true,
+      session_id: "session-1",
+      authorization_url: "https://dash.cloudflare.example/oauth",
+    }) };
+    if (args[0] === "auth" && args[1] === "poll") return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ label: "Cloudflare R2", provider: "r2" });
+
+  assert.equal(await extension.__test__.addStorage(), "connected");
+  assert.equal(inputBoxCalls.length, 0);
+  assert.deepEqual(openExternalCalls.map((uri) => uri.value), ["https://dash.cloudflare.example/oauth"]);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add"), false);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth" && entry.args[1] === "start"), true);
+});
+
+test("Cloudflare authorization refreshes the hierarchy and loads Rooms and JATs", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-authorized-test-"));
+  const { vscode, statusItem, openExternalCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "auth" && args[1] === "start") return { stdout: JSON.stringify({
+      ok: true,
+      session_id: "session-2",
+      authorization_url: "https://dash.cloudflare.example/oauth-2",
+    }) };
+    if (args[0] === "auth" && args[1] === "poll") return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
+    if (args[0] === "projects") return { stdout: JSON.stringify({
+      ok: true,
+      dimension_id: "r2",
+      projects: [{ id: "room-a", display_name: "Room A" }],
+    }) };
+    if (args[0] === "snapshots") return { stdout: JSON.stringify({
+      ok: true,
+      dimension_id: "r2",
+      latest: "jat-a",
+      snapshots: [{ snapshot_id: "jat-a", display_name: "JAT A" }],
+    }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(provider);
+
+  assert.equal(await extension.__test__.connectCloudflare(
+    { kind: "connection", state: "missing", dimension: { id: "r2", provider: "r2" } },
+    { pollIntervalMs: 0 },
+  ), "connected");
+  const connection = provider.roots[0].children[0].children[0];
+
+  assert.equal(connection.label, "✓ Connected");
+  assert.equal(connection.children[0].label, "Room A · Default");
+  assert.equal(connection.children[0].children[0].label, "JAT A");
+  assert.equal(openExternalCalls[0].value, "https://dash.cloudflare.example/oauth-2");
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), true);
+});
+
+test("expired Cloudflare authority offers Reconnect Cloudflare instead of an empty Room", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-expired-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "expired" }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const connection = buildProviderTree(catalog)[0].children[0].children[0];
+  const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(connection);
+
+  assert.equal(connection.label, "⚠ Session expired");
+  assert.equal(connection.description, "Reconnect Cloudflare");
+  assert.equal(treeItem.command.command, "joshRoom.reconnectCloudflare");
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
+});
+
+test("unavailable Cloudflare authority status fails closed without probing R2", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-status-error-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return {
+      stdout: JSON.stringify({ ok: false, error: "auth status unavailable" }),
+      code: 1,
+    };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const connection = buildProviderTree(catalog)[0].children[0].children[0];
+
+  assert.equal(connection.label, "⚠ Not connected");
+  assert.equal(connection.description, "Connect Cloudflare");
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
+});
+
+test("MinIO Add Storage asks for concrete settings without invoking Cloudflare OAuth", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-minio-test-"));
+  const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.inputBoxResponses.push("Homelab", "https://minio.example", "rooms", "homelab-profile");
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  assert.deepEqual(inputBoxCalls.map((options) => options.prompt), [
+    "Friendly Dimension name",
+    "Endpoint URL",
+    "Bucket or object-store namespace",
+    "Existing host keyring credential profile (name only)",
+  ]);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth"), false);
+  const addCall = spawnHarness.calls.find((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add");
+  assert.ok(addCall);
+  assert.equal(addCall.args[addCall.args.indexOf("--provider") + 1], "minio");
+});
+
+test("native storage commands are understandable, distinct, and omit Use Dimension", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+  const commands = packageJson.contributes.commands;
+  const byId = new Map(commands.map((command) => [command.command, command]));
+  assert.equal(byId.has("joshRoom.addDimension"), false);
+  assert.equal(byId.has("joshRoom.openDimension"), false);
+  assert.equal(byId.get("joshRoom.addStorage").title, "Josh: Connect Storage");
+  assert.equal(byId.get("joshRoom.addStorage").icon, "$(cloud)");
+  assert.equal(byId.get("joshRoom.save").icon, "$(save-as)");
+  assert.equal(byId.get("joshRoom.refresh").icon, "$(refresh)");
+  assert.equal(new Set([byId.get("joshRoom.addStorage").icon, byId.get("joshRoom.save").icon, byId.get("joshRoom.refresh").icon]).size, 3);
+  const extension = fs.readFileSync(path.join(__dirname, "extension.js"), "utf8");
+  assert.doesNotMatch(extension, /Use Dimension|Open Dimension|Add Dimension|Edit non-secret/);
+  assert.match(extension, /vscode\.env\.openExternal\(vscode\.Uri\.parse\(authorizationUrl\)\)/);
+  assert.doesNotMatch(extension, /webbrowser\.open/);
 });

@@ -118,9 +118,16 @@ function providerLabel(value) {
   return PROVIDER_LABELS[key] || String(value || key).trim() || "Storage Provider";
 }
 
+function connectionLabel(state) {
+  if (state === "connected") return "✓ Connected";
+  if (state === "expired") return "⚠ Session expired";
+  return "⚠ Not connected";
+}
+
 function dimensionDisplayName(dimension, counts) {
   const id = dimension && (dimension.id || dimension.dimension_id);
-  const name = dimension && (dimension.display_name || dimension.name || id);
+  const configuredName = dimension && (dimension.display_name || dimension.name || id);
+  const name = id === "r2" && configuredName === "Cloudflare R2" ? "Default" : configuredName;
   return counts.get(name) > 1 ? `${name} (${id})` : name;
 }
 
@@ -146,7 +153,7 @@ function buildProviderTree(catalog = {}) {
   const dimensions = records(catalog.dimensions);
   const fallbackProjects = records(catalog.projects, "id");
   const sourceDimensions = dimensions.length ? dimensions : [{
-    id: catalog.dimension_id || "default",
+    id: catalog.dimension_id || "r2",
     display_name: catalog.dimension_name || "Default",
     provider: catalog.provider || "r2",
     projects: fallbackProjects,
@@ -192,17 +199,29 @@ function buildProviderTree(catalog = {}) {
         dimension,
       })),
     }));
-    const publicParts = [dimension.provider || providerId, dimension.endpoint, dimension.bucket, dimension.region]
-      .filter((part) => part !== undefined && part !== null && String(part).trim() !== "")
-      .map(String);
+    const connectionState = providerId === "r2"
+      ? dimension.connection_state || (!dimensions.length ? catalog.auth_state : undefined)
+      : undefined;
+    const dimensionChildren = connectionState
+      ? [{
+        kind: "connection",
+        id: "connection",
+        label: connectionLabel(connectionState),
+        description: connectionState === "expired" ? "Reconnect Cloudflare" : "Connect Cloudflare",
+        state: connectionState,
+        provider: providerId,
+        dimension,
+        children: connectionState === "connected" ? roomNodes : [],
+      }]
+      : roomNodes;
     grouped.get(providerId).children.push({
       kind: "dimension",
       id: dimension.id || dimension.dimension_id,
       label: displayName,
-      description: publicParts.join(" � "),
+      description: "",
       provider: providerId,
       dimension,
-      children: roomNodes,
+      children: dimensionChildren,
     });
   }
   return [...grouped.values()];
@@ -237,6 +256,7 @@ Object.assign(module.exports, {
   dimensionArgs,
   flattenDimensionRooms,
   dimensionLabel: providerLabel,
+  connectionLabel,
   providerKey,
   providerLabel,
 });

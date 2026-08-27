@@ -130,6 +130,10 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     assert args.ide == "terminal"
     args = parser.parse_args(["projects", "list", "--backend", "r2", "--json"])
     assert args.backend == "r2"
+    args = parser.parse_args(["auth", "start", "--dimension", "archive", "--json"])
+    assert args.command == "auth" and args.auth_command == "start" and args.dimension == "archive"
+    args = parser.parse_args(["auth", "poll", "session-one", "--dimension", "archive", "--json"])
+    assert args.command == "auth" and args.auth_command == "poll" and args.session_id == "session-one"
     args = parser.parse_args(["rooms", "remove", "demo", "--backend", "r2", "--json"])
     assert args.command == "rooms" and args.room_command == "remove" and args.project == "demo"
     args = parser.parse_args(["snapshots", "remove", "demo", "snapshot-one", "--backend", "r2", "--json"])
@@ -148,6 +152,29 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     image_args = parser.parse_args(["snapshot", "create", "demo", "--image", "example/image:tag"])
     assert image_args.images == ["example/image:tag"] and image_args.all_images is False
     assert parser.parse_args(["snapshot", "create", "demo", "--all-images"]).all_images is True
+
+
+def test_native_auth_commands_delegate_to_existing_worker_session_helpers(tmp_path, monkeypatch):
+    module = __import__("josh_room.cli", fromlist=["dispatch"])
+    monkeypatch.setattr(module, "start_oauth_session", lambda: {
+        "session_id": "session-one",
+        "authorization_url": "https://example.invalid/auth",
+        "expires_in": 600,
+    })
+    monkeypatch.setattr(module, "poll_oauth_session", lambda session_id, dimension_id=None: {
+        "status": "authorized", "session_id": session_id, "dimension_id": dimension_id,
+    })
+
+    start = module.dispatch(build_parser().parse_args(["auth", "start", "--dimension", "archive"]), tmp_path)
+    poll = module.dispatch(build_parser().parse_args(["auth", "poll", "session-one", "--dimension", "archive"]), tmp_path)
+
+    assert start["authorization_url"] == "https://example.invalid/auth"
+    assert poll == {
+        "ok": True,
+        "status": "authorized",
+        "session_id": "session-one",
+        "dimension_id": "archive",
+    }
 
 
 def test_one_off_jat_commands_use_typed_service_without_room_backend(tmp_path, monkeypatch):

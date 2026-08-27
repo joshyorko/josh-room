@@ -79,8 +79,10 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
     assert commands == {
-        "joshRoom.addDimension",
-        "joshRoom.openDimension",
+        "joshRoom.addStorage",
+        "joshRoom.connectCloudflare",
+        "joshRoom.reconnectCloudflare",
+        "joshRoom.editStorageSettings",
         "joshRoom.link",
         "joshRoom.repair",
         "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
@@ -115,6 +117,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert package["contributes"]["viewsWelcome"][0]["view"] == "joshRoom.rooms"
     assert {view["id"] for view in package["contributes"]["views"]["josh-room"]} == {"joshRoom.rooms", "joshRoom.jatTools"}
     assert "Pack Folder into Haul" in extension and "Restore JAT Haul" in extension and "Serve Hauler Haul" in extension
+    assert "Use Dimension" not in extension
+    assert "Open Dimension" not in extension
     remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
@@ -123,6 +127,13 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
     assert template_package["contributes"] == package["contributes"]
     assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
+
+
+def test_vscode_extension_root_and_template_copies_are_byte_identical():
+    for name in ("extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "media/room.svg"):
+        assert (ROOT / "vscode-extension" / name).read_bytes() == (
+            ROOT / "templates/room/vscode-extension" / name
+        ).read_bytes()
 
 
 def test_oauth_room_requires_no_host_setup_mount():

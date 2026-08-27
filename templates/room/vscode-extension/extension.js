@@ -445,6 +445,7 @@ async function saveRoom(options = {}) {
     ], { title: "Josh: Save Room", placeHolder: "Create or update a Room", ignoreFocusOut: true });
   if (!selected) return "cancelled";
   let name = selected.project?.display_name;
+  let targetDimension;
   if (selected.create) {
     name = await vscode.window.showInputBox({
       title: "Josh: Save Room",
@@ -456,9 +457,9 @@ async function saveRoom(options = {}) {
   if (!name) return "cancelled";
   let targetDimensionId = dimensionId(selected.project);
   if (selected.create) {
-    const selectedDimension = await chooseDimension(catalog, "Josh: Save Room");
-    if (!selectedDimension) return "cancelled";
-    targetDimensionId = dimensionId(selectedDimension);
+    targetDimension = await chooseDimension(catalog, "Where should this Room be saved?");
+    if (!targetDimension) return "cancelled";
+    targetDimensionId = dimensionId(targetDimension);
   }
   if (targetDimensionId) selectedDimensionId = targetDimensionId;
   if (selected.project) {
@@ -481,6 +482,12 @@ async function saveRoom(options = {}) {
       );
       if (confirmed !== "Replace Latest") return "cancelled";
     }
+  }
+  if (targetDimension
+    && nativeRegistry.providerKey(targetDimension.provider) === "r2"
+    && catalog.auth_state
+    && catalog.auth_state !== "connected") {
+    await connectCloudflare({ dimension: targetDimension });
   }
   const imageChoice = await vscode.window.showQuickPick([
     { label: "Workspace only", allImages: false },
@@ -1064,7 +1071,7 @@ async function chooseServeProject(projects, marker, preferredProject) {
 
 async function chooseDimension(catalog, title) {
   const dimensions = dimensionList(catalog);
-  if (!dimensions.length) throw new Error("No Dimensions are configured. Add a Dimension first.");
+  if (!dimensions.length) throw new Error("No storage is configured. Add Storage first.");
   const preferred = selectedDimensionId
     && dimensions.find((item) => (item.id || item.dimension_id) === selectedDimensionId);
   if (preferred || dimensions.length === 1) {
@@ -1075,43 +1082,85 @@ async function chooseDimension(catalog, title) {
   const choice = await vscode.window.showQuickPick(
     dimensions.map((dimension) => ({
       label: dimension.display_name || dimension.name || dimension.id || dimension.dimension_id,
-      description: [dimension.provider, dimension.bucket, dimension.endpoint].filter(Boolean).join(" / "),
+      description: nativeRegistry.providerLabel(dimension.provider),
       dimension,
     })),
-    { title: title || "Choose a Dimension", placeHolder: "Select a storage Dimension", ignoreFocusOut: true },
+    { title: title || "Where should this Room be saved?", placeHolder: "Choose a storage destination", ignoreFocusOut: true },
   );
   if (!choice) return undefined;
   selectedDimensionId = choice.dimension.id || choice.dimension.dimension_id;
   return choice.dimension;
 }
 
-async function addDimension() {
+async function connectCloudflare(item, { pollIntervalMs = 2000, timeoutMs = 600000 } = {}) {
   const cwd = activeWorkspace();
+  let dimension = item && item.dimension ? item.dimension : item;
+  if (!dimension) {
+    const catalog = await loadCatalog(cwd, "Loading storage...");
+    dimension = dimensionList(catalog).find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
+  }
+  const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || "r2";
+  selectedDimensionId = targetDimensionId;
+  const started = await runOperation(
+    "Connecting Cloudflare...",
+    ["auth", "start", "--dimension", targetDimensionId],
+    cwd,
+    { cancellable: false },
+  );
+  const authorizationUrl = started.authorization_url || started.authorizationUrl;
+  const sessionId = started.session_id || started.sessionId;
+  if (!authorizationUrl || !sessionId) throw new Error("Cloudflare connection did not return an authorization session.");
+  const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
+  if (opened === false) throw new Error("Could not open Cloudflare authorization in your local browser.");
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await runOperation(
+      "Waiting for Cloudflare approval...",
+      ["auth", "poll", sessionId, "--dimension", targetDimensionId],
+      cwd,
+      { cancellable: false },
+    );
+    if (result.status === "authorized") {
+      if (roomsProvider) await roomsProvider.refresh();
+      await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
+      return "connected";
+    }
+    if (result.status !== "pending") throw new Error(`Cloudflare authorization ${result.status || "failed"}`);
+    if (pollIntervalMs > 0) await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  throw new Error("Cloudflare authorization timed out");
+}
+
+async function addStorage() {
+  const cwd = activeWorkspace();
+  const providerChoice = await vscode.window.showQuickPick([
+    { label: "Cloudflare R2", provider: "r2" },
+    { label: "MinIO", provider: "minio" },
+  ], { title: "Josh: Add Storage", placeHolder: "Choose a storage provider", ignoreFocusOut: true });
+  if (!providerChoice) return "cancelled";
+  if (providerChoice.provider === "r2") return connectCloudflare();
+
   const name = await vscode.window.showInputBox({
-    title: "Josh: Add Dimension",
+    title: "Josh: Add Storage",
     prompt: "Friendly Dimension name",
     ignoreFocusOut: true,
     validateInput: (value) => value.trim() ? undefined : "Enter a Dimension name.",
   });
   if (!name) return "cancelled";
-  const providerChoice = await vscode.window.showQuickPick([
-    { label: "Cloudflare R2", provider: "r2" },
-    { label: "MinIO", provider: "minio" },
-  ], { title: "Josh: Add Dimension", placeHolder: "Choose a storage Provider", ignoreFocusOut: true });
-  if (!providerChoice) return "cancelled";
   const endpoint = await vscode.window.showInputBox({
-    title: "Josh: Add Dimension", prompt: "Endpoint URL", placeHolder: "https://...", ignoreFocusOut: true,
+    title: "Josh: Add MinIO Storage", prompt: "Endpoint URL", placeHolder: "https://...", ignoreFocusOut: true,
     validateInput: (value) => value.trim().startsWith("http://")
       || value.trim().startsWith("https://") ? undefined : "Enter an http(s) endpoint.",
   });
   if (!endpoint) return "cancelled";
   const bucket = await vscode.window.showInputBox({
-    title: "Josh: Add Dimension", prompt: "Bucket or object-store namespace", ignoreFocusOut: true,
+    title: "Josh: Add MinIO Storage", prompt: "Bucket or object-store namespace", ignoreFocusOut: true,
     validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
   });
   if (!bucket) return "cancelled";
   const profile = await vscode.window.showInputBox({
-    title: "Josh: Add Dimension", prompt: "Existing host keyring credential profile (name only)", ignoreFocusOut: true,
+    title: "Josh: Add MinIO Storage", prompt: "Existing host keyring credential profile (name only)", ignoreFocusOut: true,
     validateInput: (value) => value.trim() ? undefined : "Enter the keyring profile name.",
   });
   if (!profile) return "cancelled";
@@ -1125,22 +1174,16 @@ async function addDimension() {
   selectedDimensionId = id;
   if (roomsProvider) await roomsProvider.refresh();
   await vscode.window.showInformationMessage(
-    "Added Dimension " + name.trim() + ". Credentials remain in the host keyring.",
+    "Added MinIO storage " + name.trim() + ". Credentials remain in the host keyring.",
   );
   return "added";
 }
 
-async function openDimension(item) {
-  const catalog = await loadCatalog(activeWorkspace(), "Loading Dimensions...");
-  const selected = item && item.dimension ? item.dimension : item;
-  const dimension = selected || await chooseDimension(catalog, "Josh: Open Dimension");
+function selectDimension(item) {
+  const dimension = item && item.dimension ? item.dimension : item;
   if (!dimension) return "cancelled";
   selectedDimensionId = dimension.id || dimension.dimension_id;
-  if (roomsProvider) await roomsProvider.refresh();
-  await vscode.window.showInformationMessage(
-    "Using Dimension " + (dimension.display_name || dimension.name || dimension.id) + ".",
-  );
-  return "opened";
+  return "selected";
 }
 
 async function loadNativeCatalog(cwd, title) {
@@ -1177,29 +1220,42 @@ class HierarchyRoomsProvider {
     const emptyKind = ["load", "loading", "empty", "error"].includes(item.kind);
     if (emptyKind) {
       const labels = {
-        load: "Load Dimensions",
-        loading: "Loading Dimensions...",
-        empty: "No Dimensions configured",
-        error: "Could not load Dimensions - click to retry",
+        load: "Load Storage",
+        loading: "Loading Storage...",
+        empty: "No storage connected",
+        error: "Could not load storage - click to retry",
       };
       const treeItem = new vscode.TreeItem(labels[item.kind], vscode.TreeItemCollapsibleState.None);
       treeItem.iconPath = new vscode.ThemeIcon(item.kind === "loading" ? "sync~spin" : item.kind === "error" ? "error" : "cloud-download");
-      treeItem.command = { command: item.kind === "empty" ? "joshRoom.addDimension" : "joshRoom.refresh", title: labels[item.kind] };
+      treeItem.command = { command: item.kind === "empty" ? "joshRoom.addStorage" : "joshRoom.refresh", title: labels[item.kind] };
       return treeItem;
     }
     const hasChildren = Array.isArray(item.children) && item.children.length > 0;
     const state = hasChildren
-      ? item.kind === "provider" ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+      ? ["provider", "dimension", "connection"].includes(item.kind)
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.Collapsed
       : vscode.TreeItemCollapsibleState.None;
     const treeItem = new vscode.TreeItem(item.label || item.id, state);
     treeItem.id = [item.kind, dimensionId(item), item.id].filter(Boolean).join(":");
-    treeItem.contextValue = item.kind;
+    treeItem.contextValue = item.kind === "connection"
+      ? item.state === "expired" ? "r2-connection-expired"
+        : item.state === "connected" ? "r2-connection-connected" : "r2-connection"
+      : item.kind;
     treeItem.description = item.description || "";
     treeItem.iconPath = new vscode.ThemeIcon(
-      item.kind === "provider" ? "cloud" : item.kind === "dimension" ? "database" : item.kind === "room" ? "archive" : "history",
+      item.kind === "provider" ? "cloud"
+        : item.kind === "dimension" ? "database"
+          : item.kind === "connection" ? item.state === "connected" ? "pass-filled" : item.state === "expired" ? "warning" : "plug"
+            : item.kind === "room" ? "archive" : "history",
     );
     if (item.kind === "dimension") {
-      treeItem.command = { command: "joshRoom.openDimension", title: "Open Dimension", arguments: [item] };
+      treeItem.command = { command: "joshRoom.selectDimension", title: "Select Storage", arguments: [item] };
+    }
+    if (item.kind === "connection" && item.state !== "connected") {
+      const command = item.state === "expired" ? "joshRoom.reconnectCloudflare" : "joshRoom.connectCloudflare";
+      const title = item.state === "expired" ? "Reconnect Cloudflare" : "Connect Cloudflare";
+      treeItem.command = { command, title, arguments: [item] };
     }
     if (item.kind === "room") {
       let current;
@@ -1532,8 +1588,11 @@ function activateNative(context) {
   }));
   register(context, "joshRoom.save", saveRoom);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
-  register(context, "joshRoom.addDimension", addDimension);
-  register(context, "joshRoom.openDimension", openDimension);
+  register(context, "joshRoom.addStorage", addStorage);
+  register(context, "joshRoom.connectCloudflare", connectCloudflare);
+  register(context, "joshRoom.reconnectCloudflare", connectCloudflare);
+  register(context, "joshRoom.selectDimension", selectDimension);
+  register(context, "joshRoom.editStorageSettings", editStorageSettings);
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.link", linkRoom);
   register(context, "joshRoom.repair", repairRoom);
@@ -1554,13 +1613,51 @@ module.exports.activate = activateNative;
 
 async function loadNativeCatalogWithSnapshots(cwd, title) {
   const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd);
+  const authState = await runOperation(
+    title || "Loading your Rooms...",
+    ["auth", "status"],
+    cwd,
+    { cancellable: false },
+  ).catch((error) => {
+    outputChannel && outputChannel.warn("Cloudflare connection state unavailable: " + error.message);
+    return { state: "missing" };
+  });
   const dimensions = dimensionList(catalog);
+  const hasR2 = dimensions.some((dimension) => nativeRegistry.providerKey(dimension.provider) === "r2");
+  const legacyCatalog = !dimensions.length && (catalog.dimension_id || Array.isArray(catalog.projects));
+  if (!hasR2 && !legacyCatalog) {
+    const r2 = {
+      id: "r2",
+      display_name: "Default",
+      provider: "r2",
+      connection_state: authState.state || "missing",
+      projects: [],
+    };
+    if (r2.connection_state === "connected") {
+      try {
+        const listed = await runOperation(title || "Loading your Rooms...", ["projects", "list", "--backend", "r2"], cwd);
+        r2.id = listed.dimension_id || r2.id;
+        r2.projects = listed.projects || [];
+      } catch (error) {
+        outputChannel && outputChannel.warn("Unable to load Rooms for Cloudflare R2: " + error.message);
+      }
+    }
+    dimensions.push(r2);
+  }
   for (const dimension of dimensions) {
     const id = dimension.id || dimension.dimension_id;
     if (!id) {
       outputChannel && outputChannel.warn("Skipping a Dimension without dimension_id.");
       dimension.projects = [];
       continue;
+    }
+    const provider = nativeRegistry.providerKey(dimension.provider);
+    if (provider === "r2") {
+      dimension.connection_state = authState.state || dimension.connection_state || "connected";
+      if (dimension.connection_state !== "connected") {
+        dimension.projects = [];
+        continue;
+      }
     }
     let projects = dimension.projects || dimension.rooms;
     try {
@@ -1600,6 +1697,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
   }
   return Object.assign({}, catalog, {
     dimensions,
+    auth_state: authState.state,
     projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions }),
   });
 }
@@ -1607,52 +1705,54 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
 loadNativeCatalog = loadNativeCatalogWithSnapshots;
 loadCatalog = loadNativeCatalogWithSnapshots;
 
-openDimension = async function editOrOpenDimension(item) {
-  const catalog = await loadCatalog(activeWorkspace(), "Loading Dimensions...");
+async function editStorageSettings(item) {
   const selected = item && item.dimension ? item.dimension : item;
-  const dimension = selected || await chooseDimension(catalog, "Josh: Open Dimension");
+  const catalog = selected ? undefined : await loadCatalog(activeWorkspace(), "Loading storage...");
+  const dimension = selected || await chooseDimension(catalog, "Edit Settings");
   if (!dimension) return "cancelled";
-  const action = await vscode.window.showQuickPick(
-    [{ label: "Use Dimension", edit: false }, { label: "Edit non-secret settings", edit: true }],
-    { title: "Josh: Open Dimension", placeHolder: "Use or edit this Dimension" },
-  );
-  if (!action) return "cancelled";
   selectedDimensionId = dimension.id || dimension.dimension_id;
-  if (action.edit) {
-    const displayName = await vscode.window.showInputBox({
-      title: "Edit Dimension", prompt: "Display name", value: dimension.display_name || dimension.name || "",
-    });
-    if (!displayName) return "cancelled";
+  const displayName = await vscode.window.showInputBox({
+    title: "Edit Settings", prompt: "Storage name", value: dimension.display_name || dimension.name || "",
+  });
+  if (!displayName) return "cancelled";
+  const args = [
+    "dimensions", "update", selectedDimensionId,
+    "--display-name", displayName.trim(),
+  ];
+  if (nativeRegistry.providerKey(dimension.provider) === "minio") {
     const endpoint = await vscode.window.showInputBox({
-      title: "Edit Dimension", prompt: "Endpoint URL", value: dimension.endpoint || "",
+      title: "Edit MinIO Settings", prompt: "Endpoint URL", value: dimension.endpoint || "",
     });
     if (!endpoint) return "cancelled";
     const bucket = await vscode.window.showInputBox({
-      title: "Edit Dimension", prompt: "Bucket", value: dimension.bucket || "",
+      title: "Edit MinIO Settings", prompt: "Bucket", value: dimension.bucket || "",
     });
     if (!bucket) return "cancelled";
     const region = await vscode.window.showInputBox({
-      title: "Edit Dimension", prompt: "Region", value: dimension.region || "",
+      title: "Edit MinIO Settings", prompt: "Region", value: dimension.region || "",
     });
     if (!region) return "cancelled";
     const profile = await vscode.window.showInputBox({
-      title: "Edit Dimension", prompt: "Existing host keyring credential profile (name only)",
+      title: "Edit MinIO Settings", prompt: "Existing host keyring credential profile (name only)",
       value: dimension.credential_profile || dimension.credentialProfile || "",
     });
     if (!profile) return "cancelled";
-    await runOperation("Updating Dimension...", [
-      "dimensions", "update", selectedDimensionId,
-      "--display-name", displayName.trim(), "--endpoint", endpoint.trim(),
-      "--bucket", bucket.trim(), "--region", region.trim(),
+    args.push(
+      "--endpoint", endpoint.trim(), "--bucket", bucket.trim(), "--region", region.trim(),
       "--credential-profile", profile.trim(),
-    ], activeWorkspace());
+    );
   }
+  await runOperation("Updating storage...", args, activeWorkspace());
   if (roomsProvider) await roomsProvider.refresh();
-  return action.edit ? "updated" : "opened";
-};
+  return "updated";
+}
 
 Object.assign(module.exports.__test__, {
   chooseServeProject,
+  addStorage,
+  connectCloudflare,
+  editStorageSettings,
+  HierarchyRoomsProvider,
   linkRoom,
   loadCatalog,
   repairRoom,
@@ -1660,4 +1760,8 @@ Object.assign(module.exports.__test__, {
   RoomDragAndDropController,
   roomLabel,
   runJoshRoom,
+  selectDimension,
+  setRoomsProvider(value) {
+    roomsProvider = value;
+  },
 });
