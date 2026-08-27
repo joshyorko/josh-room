@@ -9,6 +9,11 @@ const path = require("path");
 const DIGEST = /^[0-9a-f]{64}$/;
 const VERSION = /^v\d+\.\d+\.\d+$/;
 const MANIFEST_PATH = path.join(__dirname, "runtime", "manifest.json");
+const HAULER_VERSION_CHECK = "import shutil, subprocess, sys; executable = shutil.which('hauler'); sys.exit(127 if executable is None else subprocess.run([executable, 'version'], check=False).returncode)";
+
+function haulerVersionCommand() {
+  return ["python", "-c", HAULER_VERSION_CHECK];
+}
 
 function resolvePlatform(platform = process.platform, arch = process.arch) {
   if (platform === "linux" && arch === "x64") return "linux-x64";
@@ -170,7 +175,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   }
   const executed = await runJson(
     rccRuntime.executable,
-    ["env", "exec", "--artifact", artifact.digest, "--permissive-local", "--json", "--", "hauler", "version"],
+    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--json", "--", ...haulerVersionCommand()],
     { cwd: paths.storageRoot, env: environment },
   );
   if (executed.artifactDigest !== artifact.digest || executed.exitCode !== 0) {
@@ -395,5 +400,6 @@ module.exports = {
   readManifest,
   resolvePlatform,
   runtimeEnvironment,
+  haulerVersionCommand,
   sha256File,
 };

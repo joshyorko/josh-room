@@ -8,6 +8,8 @@ const zlib = require("node:zlib");
 
 const { ensureManagedRcc, readManifest, resolvePlatform, runtimeEnvironment } = require("./runtime");
 
+const HAULER_VERSION_CHECK = "import shutil, subprocess, sys; executable = shutil.which('hauler'); sys.exit(127 if executable is None else subprocess.run([executable, 'version'], check=False).returncode)";
+
 function tarMember(name, body, type = "0") {
   const content = Buffer.from(body);
   const header = Buffer.alloc(512);
@@ -173,6 +175,9 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
       runJson: async (executable, args, options) => {
         calls.push({ executable, args, options });
         if (args[1] === "acquire") return { artifactDigest: artifact, verification: { valid: true } };
+        if (args.at(-2) === "hauler" && args.at(-1) === "version") {
+          return { artifactDigest: artifact, exitCode: 127 };
+        }
         return { artifactDigest: artifact, exitCode: 0 };
       },
     },
@@ -183,11 +188,12 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
   assert.equal(result.sourceSha, "d".repeat(40));
   assert.deepEqual(calls.map((call) => call.args.slice(0, 3)), [
     ["env", "acquire", "--archive"],
-    ["env", "exec", "--artifact"],
+    ["--no-build", "env", "exec"],
   ]);
   assert.equal(calls[0].args.includes("--permissive-local"), true);
   assert.equal(calls[1].args.includes("--permissive-local"), true);
-  assert.deepEqual(calls[1].args.slice(-2), ["hauler", "version"]);
+  assert.equal(calls[1].args.includes("--no-build"), true);
+  assert.deepEqual(calls[1].args.slice(-3), ["python", "-c", HAULER_VERSION_CHECK]);
   assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
   assert.equal(calls[0].options.env.RCC_HOLOTREE_MODE, "private");
 });

@@ -40,11 +40,11 @@ def _runtime_credentials(
         raise RuntimeError("runtime credential source permissions are not private")
     values = json.loads(path.read_text())
     if not isinstance(values, dict):
-        raise RuntimeError("runtime credential source is incomplete")
+        raise TypeError("runtime credential source is incomplete")
     if isinstance(values.get("profiles"), dict):
         values = values["profiles"].get(profile)
         if not isinstance(values, dict):
-            raise RuntimeError(f"runtime credential profile is unavailable: {profile}")
+            raise TypeError(f"runtime credential profile is unavailable: {profile}")
     elif profile != runtime_profile:
         raise RuntimeError(f"runtime credential profile is unavailable: {profile}")
     if not all(

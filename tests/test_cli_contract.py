@@ -408,14 +408,12 @@ def test_workspace_root_detects_clean_room_parent(tmp_path, monkeypatch):
     assert _workspace_root() == tmp_path
 
 
-def test_tar_capability_finds_linuxbrew_keg_tar(monkeypatch):
-    paths = {"gtar": None, "tar": "/usr/bin/tar", "brew": "/brew/bin/brew"}
+def test_tar_capability_finds_capable_host_tar_without_homebrew(monkeypatch):
+    paths = {"gtar": "/tools/gtar", "tar": None, "brew": "/brew/bin/brew"}
     monkeypatch.setattr("josh_room.cli.shutil.which", lambda name: paths.get(name))
 
     def run(argv, **_kwargs):
-        if argv == ["/brew/bin/brew", "--prefix", "gnu-tar"]:
-            return __import__("subprocess").CompletedProcess(argv, 0, "/brew/Cellar/gnu-tar/1.35\n", "")
-        if argv[0] == "/brew/Cellar/gnu-tar/1.35/bin/tar":
+        if argv[0] == "/tools/gtar":
             return __import__("subprocess").CompletedProcess(argv, 0, "--zstd", "")
         return __import__("subprocess").CompletedProcess(argv, 0, "BusyBox", "")
 

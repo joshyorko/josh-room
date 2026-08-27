@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from josh_room import auth
+from josh_room import auth, keyring
 from josh_room.auth import (
     _request,
     ensure_runtime_session,
@@ -15,7 +15,6 @@ from josh_room.auth import (
     wait_oauth_session,
 )
 from josh_room.config import DimensionRegistry
-from josh_room import keyring
 
 
 def test_worker_request_identifies_josh_room_instead_of_python_urllib(monkeypatch):
@@ -352,5 +351,5 @@ def test_extension_runtime_credentials_support_profile_scoped_secretstorage_hand
         "access-key-id": "synthetic-access",
         "secret-access-key": "synthetic-secret",
     }
-    with pytest.raises(RuntimeError, match="profile is unavailable"):
+    with pytest.raises(TypeError, match="profile is unavailable"):
         keyring.lookup("other-profile", allow_runtime=False)

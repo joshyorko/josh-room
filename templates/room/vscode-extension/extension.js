@@ -516,6 +516,9 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         const error = new Error(`Josh Room exited with status ${code}`);
         error.stdout = stdout;
         error.stderr = stderr;
+        error.command = runtime.command;
+        error.args = runtime.args(args);
+        error.resultPath = resultPath;
         reject(error);
       }
     });
@@ -2520,6 +2523,10 @@ Object.assign(module.exports.__test__, {
   selectDimension,
   setRuntimeForTests(value) {
     testRuntime = value;
+  },
+  setExtensionContextForTests(value) {
+    extensionContext = value;
+    managedRuntimePromise = undefined;
   },
   setRoomsProvider(value) {
     roomsProvider = value;

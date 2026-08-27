@@ -387,7 +387,7 @@ test("real managed extension runner reaches the packaged controller", {
   const extension = loadExtensionWithRealProcesses(vscode);
   extension.__test__.setStatusItem(statusItem);
   extension.__test__.setExtensionContextForTests({
-    extensionPath: path.join(__dirname, ".."),
+    extensionPath: __dirname,
     globalStorageUri: { fsPath: process.env.JOSH_ROOM_MANAGED_RUNTIME_ROOT },
     secrets: { get: async () => undefined },
   });

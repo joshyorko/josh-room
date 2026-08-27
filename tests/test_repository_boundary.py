@@ -114,7 +114,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert "createStatusBarItem" in extension and "sync~spin" in extension
     assert "createFileSystemWatcher" in extension and "onDidChangeTextDocument" in extension and "Needs save" in extension
     assert "onStartupFinished" in package["activationEvents"]
-    assert "createTerminal" in extension and "josh-room serve" in extension
+    assert "createTerminal" in extension and "runtime.command" in extension
     assert "Include local OCI images" in extension and '"--all-images"' in extension
     assert "onTaskType:josh-room" not in package["activationEvents"]
     assert "taskDefinitions" not in package["contributes"]
@@ -145,6 +145,7 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
 
 
 def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
+    package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     recipe = (ROOT / "vscode-extension/runtime/controller/robot.yaml").read_text()
     assert "shell: python -m josh_room\n" in recipe
     assert "python -m josh_room.cli" not in recipe
