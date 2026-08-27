@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -36,12 +37,22 @@ function createSpawnHarness(respond) {
   function spawn(command, args, options) {
     const child = new EventEmitter();
     child.pid = 1000 + calls.length;
+    child.stdin = new EventEmitter();
+    child.stdin.end = (value) => { child.stdinPayload = value; };
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    child.kill = () => {};
+    child.kill = (signal = "SIGTERM") => {
+      child.killed = signal;
+      if (!child.closed) {
+        child.closed = true;
+        child.emit("close", null, signal);
+      }
+    };
     child.closeWith = ({ stdout = "", stderr = "", code = 0 } = {}) => {
+      if (child.closed) return;
       if (stdout) child.stdout.emit("data", Buffer.from(stdout));
       if (stderr) child.stderr.emit("data", Buffer.from(stderr));
+      child.closed = true;
       child.emit("close", code);
     };
     calls.push({ command, args, options, child });
@@ -69,6 +80,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   const inputBoxResponses = [];
   const infoResponses = [];
   const warningResponses = [];
+  const progressCalls = [];
   const statusItem = {
     text: "",
     tooltip: "",
@@ -182,7 +194,23 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
           warningCalls.push(args);
           return warningResponses.shift();
         },
-        withProgress: async (_options, task) => task({ report() {} }, { onCancellationRequested() { return { dispose() {} }; } }),
+        withProgress: async (options, task) => {
+          const listeners = [];
+          const token = {
+            isCancellationRequested: false,
+            onCancellationRequested(callback) {
+              listeners.push(callback);
+              return { dispose: () => listeners.splice(listeners.indexOf(callback), 1) };
+            },
+            cancel() {
+              if (token.isCancellationRequested) return;
+              token.isCancellationRequested = true;
+              for (const callback of [...listeners]) callback();
+            },
+          };
+          progressCalls.push({ options, token });
+          return task({ report() {} }, token);
+        },
         createStatusBarItem: () => statusItem,
         createOutputChannel: () => outputChannel,
         createTreeView: () => ({ dispose() {} }),
@@ -222,6 +250,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     inputBoxResponses,
     infoResponses,
     warningResponses,
+    progressCalls,
   };
 }
 
@@ -469,6 +498,10 @@ function catalogResponse() {
         projects: [{
           id: "trusted-room",
           display_name: "Trusted Room",
+          snapshots: [
+            { snapshot_id: "new-snapshot", created_at: "2026-08-26T12:00:00Z", workspace_fingerprint: "a".repeat(64) },
+            { snapshot_id: "old-snapshot", created_at: "2026-08-25T12:00:00Z", workspace_fingerprint: "a".repeat(64) },
+          ],
         }],
       }],
     }),
@@ -505,14 +538,20 @@ test("Link and Repair use an explicit trusted Dimension, Room, and JAT instead o
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
   vscode.quickPickResponses.push({
-    project: { id: "trusted-room", display_name: "Trusted Room", dimension_id: "trusted-dimension" },
+    project: { id: "trusted-room", display_name: "Trusted Room", dimension_id: "trusted-dimension", snapshots: [
+      { snapshot_id: "new-snapshot", workspace_fingerprint: "a".repeat(64) },
+      { snapshot_id: "old-snapshot", workspace_fingerprint: "a".repeat(64) },
+    ] },
     snapshot: { snapshot_id: "old-snapshot" },
     snapshotId: "old-snapshot",
     dimension_id: "trusted-dimension",
   });
   await extension.__test__.linkRoom();
   vscode.quickPickResponses.push({
-    project: { id: "trusted-room", display_name: "Trusted Room", dimension_id: "trusted-dimension" },
+    project: { id: "trusted-room", display_name: "Trusted Room", dimension_id: "trusted-dimension", snapshots: [
+      { snapshot_id: "new-snapshot", workspace_fingerprint: "a".repeat(64) },
+      { snapshot_id: "old-snapshot", workspace_fingerprint: "a".repeat(64) },
+    ] },
     snapshot: { snapshot_id: "new-snapshot" },
     snapshotId: "new-snapshot",
     dimension_id: "trusted-dimension",
@@ -530,95 +569,510 @@ test("Link and Repair use an explicit trusted Dimension, Room, and JAT instead o
   }
 });
 
+test("Link Existing Folder verifies a legacy JAT in isolation before binding", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-legacy-link-match-test-"));
+  const content = path.join(root, "keep.txt");
+  fs.writeFileSync(content, "keep this folder unchanged\n");
+  const before = fs.readFileSync(content, "utf8");
+  const { vscode, statusItem } = createVscodeMock(root);
+  let verificationRoot;
+  const linkCalls = [];
+  const fingerprint = "a".repeat(64);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{
+      id: "archive", display_name: "Archive", provider: "minio", projects: [{
+        id: "legacy-room", display_name: "Legacy Room", snapshots: [{
+          snapshot_id: "legacy-jat", display_name: "Legacy JAT", workspace_fingerprint: "0".repeat(64),
+        }],
+      }],
+    }] }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    if (args[0] === "hydrate") {
+      verificationRoot = args[args.indexOf("--destination") + 1];
+      return { stdout: JSON.stringify({ ok: true }) };
+    }
+    if (args[0] === "status") return { stdout: JSON.stringify({
+      ok: true, path_matches: true, state: "clean", current_workspace_fingerprint: fingerprint,
+    }) };
+    if (args[0] === "link") {
+      linkCalls.push(args);
+      return { stdout: JSON.stringify({ ok: true, workspace_fingerprint: fingerprint }) };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  assert.equal(await extension.__test__.linkRoom({
+    kind: "jat",
+    project: { id: "legacy-room", display_name: "Legacy Room", dimension_id: "archive" },
+    snapshot: { snapshot_id: "legacy-jat" },
+    snapshotId: "legacy-jat",
+    dimension_id: "archive",
+  }), "linked");
+  assert.equal(linkCalls.length, 1);
+  assert.equal(linkCalls[0][linkCalls[0].indexOf("--workspace-fingerprint") + 1], fingerprint);
+  assert.equal(fs.readFileSync(content, "utf8"), before);
+  assert.equal(fs.existsSync(verificationRoot), false);
+});
+
+test("legacy Link Existing Folder rejects a mismatch without touching the folder", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-legacy-link-mismatch-test-"));
+  const content = path.join(root, "keep.txt");
+  fs.writeFileSync(content, "keep this folder unchanged\n");
+  const before = fs.readFileSync(content, "utf8");
+  const { vscode, statusItem, warningCalls } = createVscodeMock(root);
+  let verificationRoot;
+  let linkCalls = 0;
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{
+      id: "archive", display_name: "Archive", provider: "minio", projects: [{
+        id: "legacy-room", display_name: "Legacy Room", snapshots: [{
+          snapshot_id: "legacy-jat", display_name: "Legacy JAT", workspace_fingerprint: "0".repeat(64),
+        }],
+      }],
+    }] }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    if (args[0] === "hydrate") {
+      verificationRoot = args[args.indexOf("--destination") + 1];
+      return { stdout: JSON.stringify({ ok: true }) };
+    }
+    if (args[0] === "status") {
+      const workspace = args[args.indexOf("--workspace") + 1];
+      return { stdout: JSON.stringify({
+        ok: true, path_matches: true, state: "clean",
+        current_workspace_fingerprint: workspace === root ? "a".repeat(64) : "b".repeat(64),
+      }) };
+    }
+    if (args[0] === "link") {
+      linkCalls += 1;
+      return { stdout: JSON.stringify({ ok: true }) };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  assert.equal(await extension.__test__.linkRoom({
+    kind: "jat",
+    project: { id: "legacy-room", display_name: "Legacy Room", dimension_id: "archive" },
+    snapshot: { snapshot_id: "legacy-jat" },
+    snapshotId: "legacy-jat",
+    dimension_id: "archive",
+  }), "mismatch");
+  assert.equal(linkCalls, 0);
+  assert.equal(fs.readFileSync(content, "utf8"), before);
+  assert.equal(fs.existsSync(verificationRoot), false);
+  assert.match(warningCalls[0][0], /does not match.*Enter.*save this folder as a new Room/);
+  assert.deepEqual(warningCalls[0].slice(1), ["Enter", "Save as New"]);
+});
+
 test("clicking a historical JAT and pressing Enter hydrates that exact old snapshot", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-historical-jat-test-"));
   writeMarker(root, { snapshot_id: "new-snapshot" });
-  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "dimensions") return catalogResponse();
-    if (args[0] === "snapshots") return snapshotResponse();
-    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
-    return { stdout: JSON.stringify({ ok: true }) };
-  });
-  const extension = loadExtension(vscode, spawnHarness.spawn);
-  extension.__test__.setStatusItem(statusItem);
-  await extension.__test__.enterRoom({
-    kind: "jat",
-    id: "old-snapshot",
-    snapshot: { snapshot_id: "old-snapshot" },
-    project: { id: "trusted-room", display_name: "Trusted Room" },
-    dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
-  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = root;
+  process.env.JOSH_ROOM_INSTANCE = path.join(root, "state");
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(root);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "dimensions") return catalogResponse();
+      if (args[0] === "snapshots") return snapshotResponse();
+      if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "old-snapshot",
+      snapshot: { snapshot_id: "old-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    });
 
-  const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
-  assert.ok(hydrate);
-  assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
-  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
+    const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+    assert.ok(hydrate);
+    assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
+    assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
 });
 
-test("historical JAT Enter does not treat the same Room's newer snapshot as already open", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-same-room-historical-jat-test-"));
-  writeMarker(root, {
-    dimension_id: "trusted-dimension",
-    project_id: "trusted-room",
-    snapshot_id: "new-snapshot",
-  });
-  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "dimensions") return catalogResponse();
-    if (args[0] === "snapshots") return snapshotResponse();
-    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
-    return { stdout: JSON.stringify({ ok: true }) };
-  });
-  const extension = loadExtension(vscode, spawnHarness.spawn);
-  extension.__test__.setStatusItem(statusItem);
-  await extension.__test__.enterRoom({
-    kind: "jat",
-    id: "old-snapshot",
-    snapshot_id: "old-snapshot",
-    snapshot: { snapshot_id: "old-snapshot" },
-    project: { id: "trusted-room", display_name: "Trusted Room" },
-    dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
-  });
-
-  const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
-  assert.ok(hydrate);
-  assert.equal(hydrate.args[hydrate.args.indexOf("--snapshot") + 1], "old-snapshot");
-  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), true);
-});
-
-test("historical JAT Enter rejects a destination linked to a newer snapshot", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-destination-historical-jat-test-"));
-  const destination = path.join(root, "trusted-room");
+test("Enter reopens a canonical Room from an unrelated CWD without provider or restore work", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-unrelated-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-canonical-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
   fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "keep.txt"), "keep this materialization\n");
   writeMarker(destination, {
     dimension_id: "trusted-dimension",
     project_id: "trusted-room",
     snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
   });
-  const { vscode, statusItem, executeCalls } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "dimensions") return catalogResponse();
-    if (args[0] === "snapshots") return snapshotResponse();
-    if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
-    return { stdout: JSON.stringify({ ok: true }) };
-  });
-  const extension = loadExtension(vscode, spawnHarness.spawn);
-  extension.__test__.setStatusItem(statusItem);
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "dimensions") return catalogResponse();
+      if (args[0] === "snapshots") return snapshotResponse();
+      if (args[0] === "hydrate") return { stdout: JSON.stringify({ ok: true }) };
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
 
-  await assert.rejects(
-    extension.__test__.enterRoom({
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "new-snapshot",
+      snapshot_id: "new-snapshot",
+      snapshot: { snapshot_id: "new-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    });
+
+    assert.deepEqual(spawnHarness.calls, []);
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("clean historical JAT Enter switches the same canonical Room directory atomically", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "before.txt"), "before\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, warningResponses, warningCalls, executeCalls } = createVscodeMock(cwd);
+    warningResponses.push("Switch Recovery Point");
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "status") return { stdout: JSON.stringify({
+        ok: true,
+        state: "clean",
+        path_matches: true,
+        fingerprint_matches: true,
+      }) };
+      if (args[0] === "hydrate") {
+        const restored = args[args.indexOf("--destination") + 1];
+        fs.mkdirSync(restored, { recursive: true });
+        fs.writeFileSync(path.join(restored, "after.txt"), "after\n");
+        writeMarker(restored, {
+          dimension_id: "trusted-dimension",
+          project_id: "trusted-room",
+          snapshot_id: "old-snapshot",
+          workspace_path_sha256: sha256Hex(restored),
+        });
+        return { stdout: JSON.stringify({ ok: true, destination: restored, snapshot_id: "old-snapshot" }) };
+      }
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    await extension.__test__.enterRoom({
       kind: "jat",
       id: "old-snapshot",
       snapshot_id: "old-snapshot",
       snapshot: { snapshot_id: "old-snapshot" },
       project: { id: "trusted-room", display_name: "Trusted Room" },
       dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
-    }),
-    /unexplained existing folder/,
-  );
-  assert.equal(executeCalls.some(([name]) => name === "vscode.openFolder"), false);
-  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "hydrate"), false);
+    });
+
+    const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+    assert.ok(hydrate);
+    assert.notEqual(hydrate.args[hydrate.args.indexOf("--destination") + 1], destination);
+    assert.equal(fs.existsSync(path.join(destination, "after.txt")), true);
+    assert.equal(fs.existsSync(path.join(destination, "before.txt")), false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(destination, ".josh-room.json"))).snapshot_id, "old-snapshot");
+    assert.equal(fs.existsSync(`${destination}.josh-room-backup`), false);
+    assert.match(warningCalls[0][0], /Switch this Room to.*old-snapshot/);
+    assert.deepEqual(warningCalls[0].slice(-2), [{ modal: true }, "Switch Recovery Point"]);
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("clean historical JAT Enter rewrites the promoted marker hash and reuses the final path without rehydrating", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-rebind-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-switch-rebind-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  const stateRoot = path.join(workspaceRoot, "state");
+  fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "before.txt"), "before\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = stateRoot;
+  try {
+    const first = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "status") {
+        return { stdout: JSON.stringify({
+          ok: true,
+          state: "clean",
+          path_matches: true,
+          fingerprint_matches: true,
+        }) };
+      }
+      if (args[0] === "hydrate") {
+        const restored = args[args.indexOf("--destination") + 1];
+        fs.mkdirSync(restored, { recursive: true });
+        fs.writeFileSync(path.join(restored, "after.txt"), "after\n");
+        writeMarker(restored, {
+          dimension_id: "trusted-dimension",
+          project_id: "trusted-room",
+          snapshot_id: "old-snapshot",
+          workspace_path_sha256: sha256Hex(restored),
+        });
+        return { stdout: JSON.stringify({ ok: true, destination: restored, snapshot_id: "old-snapshot" }) };
+      }
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(first.vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(first.statusItem);
+    first.warningResponses.push("Switch Recovery Point");
+
+    const selected = {
+      kind: "jat",
+      id: "old-snapshot",
+      snapshot_id: "old-snapshot",
+      snapshot: { snapshot_id: "old-snapshot" },
+      project: {
+        id: "trusted-room",
+        display_name: "Trusted Room",
+        dimension_id: "trusted-dimension",
+        dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+      },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    };
+    await extension.__test__.enterRoom(selected);
+
+    const marker = JSON.parse(fs.readFileSync(path.join(destination, ".josh-room.json"), "utf8"));
+    const locator = JSON.parse(fs.readFileSync(path.join(stateRoot, "materializations.json"), "utf8"));
+    const statusCall = spawnHarness.calls.find((entry) => entry.args[0] === "status");
+
+    assert.equal(marker.workspace_path_sha256, sha256Hex(destination));
+    assert.equal(marker.snapshot_id, "old-snapshot");
+    assert.equal(locator.materializations[JSON.stringify(["trusted-dimension", "trusted-room"])], destination);
+    assert.equal(statusCall.args[statusCall.args.indexOf("--workspace") + 1], destination);
+
+    const reopened = createVscodeMock(destination);
+    const reopenedExtension = loadExtension(reopened.vscode, spawnHarness.spawn);
+    reopenedExtension.__test__.setStatusItem(reopened.statusItem);
+    const before = spawnHarness.calls.length;
+    const reopenedSelected = { ...selected, snapshotId: "old-snapshot" };
+    assert.equal(await reopenedExtension.__test__.enterRoom(reopenedSelected), "current");
+    assert.equal(spawnHarness.calls.length, before);
+    assert.equal(reopened.executeCalls.some(([name]) => name === "vscode.openFolder"), false);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("dirty historical JAT Enter offers safe actions without replacing local content", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dirty-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dirty-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  fs.mkdirSync(destination);
+  const content = path.join(destination, "unsaved.txt");
+  fs.writeFileSync(content, "do not clobber\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, warningResponses, warningCalls } = createVscodeMock(cwd);
+    warningResponses.push("Cancel");
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "status") return { stdout: JSON.stringify({
+        ok: false,
+        state: "changed",
+        path_matches: true,
+        fingerprint_matches: false,
+      }) };
+      if (args[0] === "hydrate") throw new Error("dirty Room must not hydrate");
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    assert.equal(await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "old-snapshot",
+      snapshot_id: "old-snapshot",
+      snapshot: { snapshot_id: "old-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    }), "cancelled");
+    assert.deepEqual(spawnHarness.calls.map((entry) => entry.args[0]), ["status"]);
+    assert.equal(fs.readFileSync(content, "utf8"), "do not clobber\n");
+    assert.match(warningCalls[0][0], /Save Current First.*Discard Changes \& Switch.*Cancel/);
+    assert.deepEqual(warningCalls[0].slice(-4), [
+      { modal: true }, "Save Current First", "Discard Changes & Switch", "Cancel",
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("stale local Room locator entries are repaired from corroborated markers", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-stale-index-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-stale-index-root-test-"));
+  const destination = path.join(workspaceRoot, "trusted-room");
+  const stateRoot = path.join(workspaceRoot, "state");
+  fs.mkdirSync(destination);
+  fs.writeFileSync(path.join(destination, "keep.txt"), "keep\n");
+  writeMarker(destination, {
+    dimension_id: "trusted-dimension",
+    project_id: "trusted-room",
+    snapshot_id: "new-snapshot",
+    workspace_path_sha256: sha256Hex(destination),
+  });
+  fs.mkdirSync(stateRoot);
+  fs.writeFileSync(path.join(stateRoot, "materializations.json"), JSON.stringify({
+    format_version: 1,
+    materializations: { [JSON.stringify(["trusted-dimension", "trusted-room"])]: path.join(workspaceRoot, "removed-room") },
+  }));
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = stateRoot;
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "new-snapshot",
+      snapshot_id: "new-snapshot",
+      snapshot: { snapshot_id: "new-snapshot" },
+      project: { id: "trusted-room", display_name: "Trusted Room" },
+      dimension: { id: "trusted-dimension", display_name: "Trusted Dimension" },
+    });
+
+    assert.deepEqual(spawnHarness.calls, []);
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+    const repaired = JSON.parse(fs.readFileSync(path.join(stateRoot, "materializations.json")));
+    assert.equal(repaired.materializations[JSON.stringify(["trusted-dimension", "trusted-room"])], destination);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
+});
+
+test("identical Room IDs in different Dimensions cannot collide on first materialization", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dimension-collision-cwd-test-"));
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-dimension-collision-root-test-"));
+  const existing = path.join(workspaceRoot, "same-room");
+  fs.mkdirSync(existing);
+  writeMarker(existing, {
+    dimension_id: "archive",
+    project_id: "same-room",
+    snapshot_id: "archive-jat",
+    workspace_path_sha256: sha256Hex(existing),
+  });
+  const previousRoot = process.env.JOSH_ROOM_WORKSPACE_ROOT;
+  const previousInstance = process.env.JOSH_ROOM_INSTANCE;
+  process.env.JOSH_ROOM_WORKSPACE_ROOT = workspaceRoot;
+  process.env.JOSH_ROOM_INSTANCE = path.join(workspaceRoot, "state");
+  try {
+    const { vscode, statusItem, executeCalls } = createVscodeMock(cwd);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "hydrate") {
+        const destination = args[args.indexOf("--destination") + 1];
+        fs.mkdirSync(destination, { recursive: true });
+        writeMarker(destination, {
+          dimension_id: "backup",
+          project_id: "same-room",
+          snapshot_id: "backup-jat",
+          workspace_path_sha256: sha256Hex(destination),
+        });
+      }
+      return { stdout: JSON.stringify({ ok: true }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    await extension.__test__.enterRoom({
+      kind: "jat",
+      id: "backup-jat",
+      snapshot_id: "backup-jat",
+      snapshot: { snapshot_id: "backup-jat" },
+      project: { id: "same-room", display_name: "Same Room" },
+      dimension: { id: "backup", display_name: "Backup", provider: "minio" },
+    });
+
+    const hydrate = spawnHarness.calls.find((entry) => entry.args[0] === "hydrate");
+    assert.ok(hydrate);
+    const destination = hydrate.args[hydrate.args.indexOf("--destination") + 1];
+    assert.equal(destination, path.join(workspaceRoot, "backup--same-room"));
+    assert.equal(fs.existsSync(existing), true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(existing, ".josh-room.json"))).dimension_id, "archive");
+    assert.deepEqual(executeCalls.find(([name]) => name === "vscode.openFolder"), [
+      "vscode.openFolder", { fsPath: destination }, false,
+    ]);
+  } finally {
+    if (previousRoot === undefined) delete process.env.JOSH_ROOM_WORKSPACE_ROOT;
+    else process.env.JOSH_ROOM_WORKSPACE_ROOT = previousRoot;
+    if (previousInstance === undefined) delete process.env.JOSH_ROOM_INSTANCE;
+    else process.env.JOSH_ROOM_INSTANCE = previousInstance;
+  }
 });
 
 test("a v1 marker requires explicit selection for Serve instead of guessing a Dimension", async () => {
@@ -655,6 +1109,76 @@ test("a v1 marker requires explicit selection for Serve instead of guessing a Di
     display_name: "Legacy Room",
   });
   assert.equal(selected.dimension_id, "backup");
+});
+
+test("serving a historical JAT preserves its provider, Dimension, Room, and snapshot", async () => {
+  for (const provider of ["r2", "minio"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `josh-room-${provider}-jat-serve-test-`));
+    const { vscode, statusItem } = createVscodeMock(root);
+    const terminalCalls = [];
+    const dimensionId = `${provider}-dimension`;
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "dimensions" && !args.includes("--with-hierarchy")) return { stdout: JSON.stringify({
+        ok: true,
+        dimensions: [{
+          id: dimensionId,
+          display_name: provider === "r2" ? "Cloud Archive" : "MinIO Archive",
+          provider,
+          projects: [{
+            id: "room-a",
+            display_name: "Room A",
+            snapshots: [
+              { snapshot_id: "jat-new", created_at: "2026-08-27T00:01:00Z" },
+              { snapshot_id: "jat-old", created_at: "2026-08-26T00:01:00Z" },
+            ],
+          }],
+        }],
+      }) };
+      if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
+      if (args[0] === "snapshots") return { stdout: JSON.stringify({
+        ok: true,
+        latest: "jat-new",
+        snapshots: [
+          { snapshot_id: "jat-new", created_at: "2026-08-27T00:01:00Z" },
+          { snapshot_id: "jat-old", created_at: "2026-08-26T00:01:00Z" },
+        ],
+      }) };
+      throw new Error(`unexpected command: ${args.join(" ")}`);
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+
+    const result = await extension.__test__.serveRoom({
+      kind: "jat",
+      id: "jat-old",
+      snapshot_id: "jat-old",
+      project: { id: "room-a", display_name: "Room A" },
+      dimension: { id: dimensionId, display_name: "Archive", provider },
+    }, {
+      startRegistry: async (options) => {
+        terminalCalls.push(options);
+        return "started";
+      },
+    });
+
+    assert.equal(result, "started");
+    assert.equal(terminalCalls.length, 1);
+    assert.match(terminalCalls[0].command, new RegExp(
+      `josh-room serve room-a --snapshot jat-old --backend ${provider} --dimension ${dimensionId}`,
+    ));
+    assert.doesNotMatch(terminalCalls[0].command, /jat-new/);
+    assert.equal(spawnHarness.calls.filter((entry) => entry.args[0] === "snapshots").length, 1);
+  }
+});
+
+test("JAT nodes expose the existing Serve Images action in root and template manifests", () => {
+  for (const manifest of ["vscode-extension/package.json", "templates/room/vscode-extension/package.json"]) {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifest), "utf8"));
+    assert.ok(packageJson.contributes.menus["view/item/context"].some((item) => (
+      item.command === "joshRoom.serve"
+      && item.when.includes("viewItem == jat")
+    )));
+  }
 });
 
 test("same-named Dimensions produce stable command-palette Room labels", async () => {
@@ -721,16 +1245,18 @@ test("a failed Dimension loader leaves the healthy Dimension usable", async () =
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-dimension-loader-test-"));
   const { vscode } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [
+    if (args[0] === "dimensions" && !args.includes("--with-hierarchy")) return { stdout: JSON.stringify({ ok: true, dimensions: [
       { id: "unavailable", display_name: "Unavailable", provider: "r2" },
       { id: "healthy", display_name: "Healthy", provider: "minio" },
     ] }) };
-    if (args[0] === "projects" && args.includes("unavailable")) return { stderr: "unavailable", code: 1 };
-    if (args[0] === "projects") return { stdout: JSON.stringify({ ok: true,
-      dimension_id: "healthy",
-      projects: [{ id: "healthy-room", display_name: "Healthy Room" }],
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")
+      && args[args.indexOf("--dimension") + 1] === "unavailable") {
+      return { stderr: "unavailable", code: 1 };
+    }
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) return { stdout: JSON.stringify({ ok: true,
+      dimensions: [{ id: "healthy", display_name: "Healthy", provider: "minio",
+        rooms: [{ id: "healthy-room", display_name: "Healthy Room", jats: [] }] }],
     }) };
-    if (args[0] === "snapshots") return { stdout: JSON.stringify({ ok: true, latest: "healthy-jat", snapshots: [{ snapshot_id: "healthy-jat" }] }) };
     return { stdout: JSON.stringify({ ok: true }) };
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
@@ -831,8 +1357,8 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
 
   const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
   const tree = buildProviderTree(catalog);
-  const dimension = tree[0].children[0];
-  const connection = dimension.children[0];
+  const connection = tree[0].children[0];
+  const dimension = connection.children[0];
   const treeProvider = new extension.__test__.HierarchyRoomsProvider();
   const connectionItem = treeProvider.getTreeItem(connection);
 
@@ -840,8 +1366,64 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
   assert.equal(dimension.label, "Default");
   assert.equal(connection.label, "⚠ Not connected");
   assert.equal(connection.description, "Connect Cloudflare");
-  assert.equal(connectionItem.command.command, "joshRoom.connectCloudflare");
+  assert.equal(connectionItem.command.command, "joshRoom.connectStorage");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
+});
+
+test("disconnected MinIO storage stays disconnected and does not load hierarchy until reconnect", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-disconnected-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) {
+      throw new Error("disconnected MinIO must not load hierarchy");
+    }
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{
+        id: "rooms-a",
+        display_name: "Rooms A",
+        provider: "minio",
+        connection_id: "home-minio",
+        connection_state: "connected",
+        bucket: "rooms-a",
+      }],
+      connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+        auth_state: "disconnected",
+      }],
+    }) };
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") return { stdout: JSON.stringify({
+      ok: true,
+      connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+        auth_state: "disconnected",
+      }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const tree = buildProviderTree(catalog);
+  const minioProvider = tree.find((provider) => provider.provider === "minio");
+  const connection = minioProvider.children[0];
+  const dimension = connection.children[0];
+  const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(connection);
+
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "dimensions" && entry.args.includes("--with-hierarchy")), false);
+  assert.equal(connection.label, "⚠ Disconnected");
+  assert.equal(connection.description, "Reconnect");
+  assert.equal(connection.state, "disconnected");
+  assert.equal(treeItem.command.command, "joshRoom.reconnectStorage");
+  assert.equal(dimension.children.length, 0);
 });
 
 test("Add Storage sends Cloudflare directly to OAuth without R2 questionnaires", async () => {
@@ -858,7 +1440,7 @@ test("Add Storage sends Cloudflare directly to OAuth without R2 questionnaires",
       session_id: "session-1",
       authorization_url: "https://dash.cloudflare.example/oauth",
     }) };
-    if (args[0] === "auth" && args[1] === "poll") return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    if (args[0] === "auth" && args[1] === "wait") return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
     throw new Error(`unexpected command: ${args.join(" ")}`);
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
@@ -872,6 +1454,35 @@ test("Add Storage sends Cloudflare directly to OAuth without R2 questionnaires",
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth" && entry.args[1] === "start"), true);
 });
 
+test("Cloudflare connect delegates polling to one long-lived wait command", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-single-wait-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  let waitCalls = 0;
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "auth" && args[1] === "start") return { stdout: JSON.stringify({
+      ok: true,
+      session_id: "session-single-wait",
+      authorization_url: "https://dash.cloudflare.example/oauth-single-wait",
+    }) };
+    if (args[0] === "auth" && args[1] === "wait") {
+      waitCalls += 1;
+      return { stdout: JSON.stringify({ ok: true, status: waitCalls === 1 ? "pending" : "authorized" }) };
+    }
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  await assert.rejects(
+    extension.__test__.connectCloudflare(
+      { kind: "connection", state: "missing", dimension: { id: "r2", provider: "r2" } },
+      { pollIntervalMs: 0 },
+    ),
+    /Cloudflare authorization pending/,
+  );
+  assert.equal(waitCalls, 1);
+});
+
 test("Cloudflare authorization refreshes the hierarchy and loads Rooms and JATs", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-authorized-test-"));
   const { vscode, statusItem, openExternalCalls } = createVscodeMock(root);
@@ -881,7 +1492,13 @@ test("Cloudflare authorization refreshes the hierarchy and loads Rooms and JATs"
       session_id: "session-2",
       authorization_url: "https://dash.cloudflare.example/oauth-2",
     }) };
-    if (args[0] === "auth" && args[1] === "poll") return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    if (args[0] === "auth" && args[1] === "wait") return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2", rooms: [{
+        id: "room-a", display_name: "Room A", jats: [{ snapshot_id: "jat-a", display_name: "JAT A" }],
+      }] }],
+    }) };
     if (args[0] === "dimensions") return { stdout: JSON.stringify({
       ok: true,
       dimensions: [{ id: "r2", display_name: "Default", provider: "r2" }],
@@ -909,13 +1526,13 @@ test("Cloudflare authorization refreshes the hierarchy and loads Rooms and JATs"
     { kind: "connection", state: "missing", dimension: { id: "r2", provider: "r2" } },
     { pollIntervalMs: 0 },
   ), "connected");
-  const connection = provider.roots[0].children[0].children[0];
+  const connection = provider.roots[0].children[0];
 
   assert.equal(connection.label, "✓ Connected");
-  assert.equal(connection.children[0].label, "Room A · Default");
-  assert.equal(connection.children[0].children[0].label, "JAT A");
+  assert.equal(connection.children[0].label, "Default");
+  assert.equal(connection.children[0].children[0].label, "Room A · Default");
   assert.equal(openExternalCalls[0].value, "https://dash.cloudflare.example/oauth-2");
-  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), true);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
 
 test("expired Cloudflare authority offers Reconnect Cloudflare instead of an empty Room", async () => {
@@ -932,12 +1549,12 @@ test("expired Cloudflare authority offers Reconnect Cloudflare instead of an emp
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
   const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
-  const connection = buildProviderTree(catalog)[0].children[0].children[0];
+  const connection = buildProviderTree(catalog)[0].children[0];
   const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(connection);
 
   assert.equal(connection.label, "⚠ Session expired");
   assert.equal(connection.description, "Reconnect Cloudflare");
-  assert.equal(treeItem.command.command, "joshRoom.reconnectCloudflare");
+  assert.equal(treeItem.command.command, "joshRoom.reconnectStorage");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
 
@@ -959,7 +1576,7 @@ test("unavailable Cloudflare authority status fails closed without probing R2", 
   extension.__test__.setStatusItem(statusItem);
 
   const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
-  const connection = buildProviderTree(catalog)[0].children[0].children[0];
+  const connection = buildProviderTree(catalog)[0].children[0];
 
   assert.equal(connection.label, "⚠ Not connected");
   assert.equal(connection.description, "Connect Cloudflare");
@@ -970,25 +1587,116 @@ test("MinIO Add Storage asks for concrete settings without invoking Cloudflare O
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-minio-test-"));
   const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") return { stdout: JSON.stringify({ ok: true, connections: [] }) };
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "create") return { stdout: JSON.stringify({ ok: true, connection: { id: "home", provider: "minio" } }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") return { stdout: JSON.stringify({ ok: true, buckets: ["rooms"] }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") return { stdout: JSON.stringify({ ok: true, accessible: true }) };
     if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
     throw new Error(`unexpected command: ${args.join(" ")}`);
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
   vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
-  vscode.inputBoxResponses.push("Homelab", "https://minio.example", "rooms", "homelab-profile");
+  vscode.inputBoxResponses.push("https://minio.example", "access-synthetic", "secret-synthetic");
 
   assert.equal(await extension.__test__.addStorage(), "added");
   assert.deepEqual(inputBoxCalls.map((options) => options.prompt), [
-    "Friendly Dimension name",
     "Endpoint URL",
-    "Bucket or object-store namespace",
-    "Existing host keyring credential profile (name only)",
+    "Access key",
+    "Secret key",
   ]);
+  assert.equal(inputBoxCalls[1].password, true);
+  assert.equal(inputBoxCalls[2].password, true);
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth"), false);
+  assert.match(String(spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[2] === "create").child.stdinPayload), /access-synthetic/);
+  assert.doesNotMatch(spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[2] === "create").args.join(" "), /access-synthetic|secret-synthetic/);
   const addCall = spawnHarness.calls.find((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add");
   assert.ok(addCall);
-  assert.equal(addCall.args[addCall.args.indexOf("--provider") + 1], "minio");
+  assert.equal(addCall.args[addCall.args.indexOf("--connection") + 1], "home");
+});
+
+test("MinIO Add Storage offers an existing connection and a new connection when one reusable connection exists", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-minio-reuse-test-"));
+  const { vscode, statusItem, quickPickCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+      }] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, buckets: ["rooms"] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") {
+      return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    }
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push(
+    { label: "MinIO", provider: "minio" },
+    {
+      label: "Home MinIO",
+      connection: {
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+      },
+    },
+  );
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  assert.equal(quickPickCalls.length, 2);
+  assert.deepEqual(quickPickCalls[1].items.map((item) => item.label), [
+    "Home MinIO",
+    "$(add) New MinIO Connection…",
+  ]);
+});
+
+test("root extension storage commands parse through the actual Python CLI contract", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-extension-cli-contract-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [] }) };
+    }
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "create") {
+      return { stdout: JSON.stringify({ ok: true, connection: { id: "synthetic-minio", provider: "minio" } }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, buckets: ["synthetic-room"] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") {
+      return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    }
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.inputBoxResponses.push("https://minio.example.invalid:9000", "synthetic-access", "synthetic-secret");
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  const vectors = spawnHarness.calls.map((entry) => entry.args);
+  const python = path.join(__dirname, "..", ".venv", "bin", "python");
+  const parser = spawnSync(fs.existsSync(python) ? python : "python3", ["-c", [
+    "import json, sys",
+    "from josh_room.cli import build_parser",
+    "for argv in json.load(sys.stdin): build_parser().parse_args(argv)",
+  ].join("\n")], {
+    cwd: path.join(__dirname, ".."),
+    env: { ...process.env, PYTHONPATH: path.join(__dirname, "..", "src") },
+    input: JSON.stringify(vectors),
+    encoding: "utf8",
+  });
+  assert.equal(parser.status, 0, `Python CLI rejected root extension vectors: ${parser.stderr}`);
 });
 
 test("native storage commands are understandable, distinct, and omit Use Dimension", () => {
@@ -1026,11 +1734,262 @@ test("synthetic Default Cloudflare storage does not expose editable settings", a
       projects: [],
     }],
   });
-  const dimension = catalog[0].children[0];
+  const dimension = catalog[0].children[0].children[0];
   const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(dimension);
 
   assert.equal(treeItem.contextValue, "dimension-synthetic");
   assert.equal(await extension.__test__.editStorageSettings(dimension), "cancelled");
   assert.equal(inputBoxCalls.length, 0);
   assert.match(infoCalls[0][0], /managed by OAuth/);
+});
+
+test("editStorageSettings uses the actual reusable connection instead of the Dimension id", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-edit-storage-settings-test-"));
+  const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "update") {
+      return { stdout: JSON.stringify({ ok: true, connection: { id: "home-minio", provider: "minio" } }) };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const tree = buildProviderTree({
+    connections: [{
+      id: "home-minio",
+      display_name: "Home MinIO",
+      provider: "minio",
+      endpoint: "https://minio.example.invalid:9000",
+    }],
+    dimensions: [{
+      id: "rooms-a",
+      display_name: "Rooms A",
+      provider: "minio",
+      connection_id: "home-minio",
+      endpoint: "https://wrong.example.invalid:9000",
+      bucket: "rooms-a",
+      projects: [],
+    }],
+  });
+  const dimension = tree[0].children[0].children[0];
+  vscode.inputBoxResponses.push("https://minio.example.invalid:9000", "access-synthetic", "secret-synthetic");
+
+  assert.equal(await extension.__test__.editStorageSettings(dimension), "updated");
+  assert.equal(inputBoxCalls[0].value, "https://minio.example.invalid:9000");
+  const updateCall = spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[1] === "connection" && entry.args[2] === "update");
+  assert.ok(updateCall);
+  assert.equal(updateCall.args[updateCall.args.indexOf("--connection") + 1], "home-minio");
+});
+
+test("generic MinIO bucket-list failures surface instead of falling back to manual entry", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-bucket-list-error-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [{
+        id: "home-minio",
+        display_name: "Home MinIO",
+        provider: "minio",
+        endpoint: "https://minio.example.invalid:9000",
+      }] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") {
+      throw new Error("backend unavailable");
+    }
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.quickPickResponses.push({
+    label: "Home MinIO",
+    connection: {
+      id: "home-minio",
+      display_name: "Home MinIO",
+      provider: "minio",
+      endpoint: "https://minio.example.invalid:9000",
+    },
+  });
+
+  await assert.rejects(extension.__test__.addStorage(), /backend unavailable/);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "provider" && entry.args[1] === "bucket" && entry.args[2] === "check"), false);
+});
+
+test("cancelling Cloudflare OAuth stops its child and a later Connect starts cleanly", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-cancel-test-"));
+  const { vscode, statusItem, progressCalls } = createVscodeMock(root);
+  let authStarts = 0;
+  let authPolls = 0;
+  const authCancels = [];
+  const spawnHarness = createSpawnHarness(({ args, child }) => {
+    if (args[0] === "auth" && args[1] === "start") {
+      authStarts += 1;
+      return { stdout: JSON.stringify({
+        ok: true,
+        session_id: `session-${authStarts}`,
+        authorization_url: `https://dash.cloudflare.example/oauth-${authStarts}`,
+      }) };
+    }
+    if (args[0] === "auth" && args[1] === "wait") {
+      authPolls += 1;
+      if (authPolls === 1) {
+        setImmediate(() => progressCalls.at(-1).token.cancel());
+        return { autoClose: false };
+      }
+      return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    }
+    if (args[0] === "auth" && args[1] === "cancel") {
+      authCancels.push(args[2]);
+      return { stdout: JSON.stringify({ ok: true, status: "canceled" }) };
+    }
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2", rooms: [{
+        id: "room-a", display_name: "Room A", jats: [{ snapshot_id: "jat-a", display_name: "JAT A" }],
+      }] }],
+    }) };
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "r2", display_name: "Default", provider: "r2" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
+    if (args[0] === "projects") return { stdout: JSON.stringify({
+      ok: true,
+      dimension_id: "r2",
+      projects: [{ id: "room-a", display_name: "Room A" }],
+    }) };
+    if (args[0] === "snapshots") return { stdout: JSON.stringify({
+      ok: true,
+      dimension_id: "r2",
+      latest: "jat-a",
+      snapshots: [{ snapshot_id: "jat-a", display_name: "JAT A" }],
+    }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(provider);
+  const dimension = { id: "r2", provider: "r2" };
+
+  const cancelled = await extension.__test__.connectCloudflare(
+    { kind: "connection", state: "missing", dimension },
+    { pollIntervalMs: 0 },
+  );
+  assert.equal(cancelled, "cancelled");
+  assert.equal(authPolls, 1);
+  assert.equal(spawnHarness.calls[1].child.killed, "SIGTERM");
+  assert.deepEqual(authCancels, ["session-1"]);
+  assert.equal(progressCalls.some((entry) => entry.options.cancellable === true), true);
+
+  const relaunched = loadExtension(vscode, spawnHarness.spawn);
+  relaunched.__test__.setStatusItem(statusItem);
+  const relaunchedProvider = new relaunched.__test__.HierarchyRoomsProvider();
+  relaunched.__test__.setRoomsProvider(relaunchedProvider);
+  assert.equal(await relaunched.__test__.connectCloudflare(
+    { kind: "connection", state: "missing", dimension },
+    { pollIntervalMs: 0 },
+  ), "connected");
+  assert.equal(authStarts, 2);
+  assert.equal(authPolls, 2);
+  assert.equal(relaunchedProvider.roots[0].children[0].children[0].children[0].label, "Room A · Default");
+  assert.equal(spawnHarness.calls.filter((entry) => entry.args[0] === "dimensions").length > 0, true);
+});
+
+test("native loading reads each Dimension hierarchy once without Room snapshot N+1", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-hierarchy-read-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const hierarchyCalls = [];
+  const forbiddenCalls = [];
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) {
+      const id = args[args.indexOf("--dimension") + 1];
+      hierarchyCalls.push(id);
+      return { stdout: JSON.stringify({ ok: true, dimensions: [{
+        id,
+        display_name: id,
+        provider: "minio",
+        connection_id: "home-minio",
+        bucket: id,
+        rooms: [{
+          id: `${id}-room`,
+          display_name: `${id} Room`,
+          latest: `${id}-jat-2`,
+          jats: [
+            { snapshot_id: `${id}-jat-1`, display_name: `${id} JAT 1` },
+            { snapshot_id: `${id}-jat-2`, display_name: `${id} JAT 2` },
+          ],
+        }],
+      }] }) };
+    }
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [
+      { id: "development", display_name: "Development", provider: "minio", connection_id: "home-minio", bucket: "development" },
+      { id: "experiments", display_name: "Experiments", provider: "minio", connection_id: "home-minio", bucket: "experiments" },
+    ] }) };
+    if (args[0] === "provider" && args[1] === "connection") {
+      return { stdout: JSON.stringify({ ok: true, connections: [{
+        id: "home-minio", display_name: "Homelab", provider: "minio", endpoint: "https://minio.example.invalid",
+      }] }) };
+    }
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    if (args[0] === "projects" || args[0] === "snapshots") {
+      forbiddenCalls.push(args);
+      return { stderr: "N+1 catalog call forbidden", code: 1 };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading hierarchy");
+
+  assert.deepEqual(hierarchyCalls.sort(), ["development", "experiments"]);
+  assert.deepEqual(forbiddenCalls, []);
+  assert.deepEqual(catalog.projects.map((project) => project.id).sort(), [
+    "development-room", "experiments-room",
+  ]);
+  assert.deepEqual(catalog.projects.flatMap((project) => (project.jats || project.snapshots || []).map((snapshot) => snapshot.snapshot_id)).sort(), [
+    "development-jat-1", "development-jat-2", "experiments-jat-1", "experiments-jat-2",
+  ]);
+});
+
+test("native loading keeps a failed Dimension visibly failed instead of empty", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-dimension-error-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")
+      && args[args.indexOf("--dimension") + 1] === "broken") {
+      return { stdout: JSON.stringify({
+        ok: false,
+        error: "MinIO bucket is unavailable",
+        error_code: "bucket-access-denied",
+        dimension_id: "broken",
+      }), code: 1 };
+    }
+    if (args[0] === "dimensions" && !args.includes("--with-hierarchy")) return { stdout: JSON.stringify({ ok: true, dimensions: [
+      { id: "broken", display_name: "Broken bucket", provider: "minio", connection_id: "home-minio", bucket: "broken" },
+      { id: "healthy", display_name: "Healthy bucket", provider: "minio", connection_id: "home-minio", bucket: "healthy" },
+    ] }) };
+    if (args[0] === "provider" && args[1] === "connection") return { stdout: JSON.stringify({ ok: true, connections: [
+      { id: "home-minio", display_name: "Homelab", provider: "minio", endpoint: "https://minio.example.invalid" },
+    ] }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) return { stdout: JSON.stringify({ ok: true, dimensions: [{
+      id: "healthy", display_name: "Healthy bucket", provider: "minio", connection_id: "home-minio", bucket: "healthy",
+      rooms: [{ id: "healthy-room", display_name: "Healthy Room", jats: [] }],
+    }] }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading error states");
+  const tree = buildProviderTree(catalog);
+  const dimensions = tree[0].children[0].children;
+  const broken = dimensions.find((item) => item.id === "broken");
+  const healthy = dimensions.find((item) => item.id === "healthy");
+  assert.equal(broken.state, "error");
+  assert.match(broken.children[0].label, /Bucket access denied|Could not load/);
+  assert.equal(healthy.children[0].label, "Healthy Room · Healthy bucket");
 });

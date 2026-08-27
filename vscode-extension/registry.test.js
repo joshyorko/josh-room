@@ -68,8 +68,8 @@ test("empty Dimensions remain visible even when a legacy top-level project list 
   });
 
   assert.equal(tree[0].children.length, 1);
-  assert.equal(tree[0].children[0].label, "Empty");
-  assert.deepEqual(tree[0].children[0].children, []);
+  assert.equal(tree[0].children[0].children[0].label, "Empty");
+  assert.deepEqual(tree[0].children[0].children[0].children, []);
 });
 
 test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
@@ -98,16 +98,17 @@ test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
   assert.equal(tree.length, 1);
   assert.equal(tree[0].kind, "provider");
   assert.equal(tree[0].label, "Cloudflare R2");
-  assert.equal(tree[0].children[0].kind, "dimension");
-  assert.equal(tree[0].children[0].label, "Archive");
-  assert.equal(tree[0].children[0].children[0].kind, "room");
-  assert.equal(tree[0].children[0].children[0].label, "Demo Room · Archive");
+  assert.equal(tree[0].children[0].kind, "connection");
+  assert.equal(tree[0].children[0].children[0].kind, "dimension");
+  assert.equal(tree[0].children[0].children[0].label, "Archive");
+  assert.equal(tree[0].children[0].children[0].children[0].kind, "room");
+  assert.equal(tree[0].children[0].children[0].children[0].label, "Demo Room · Archive");
   assert.deepEqual(
-    tree[0].children[0].children[0].children.map((item) => [item.kind, item.id]),
+    tree[0].children[0].children[0].children[0].children.map((item) => [item.kind, item.id]),
     [["jat", "jat-002"], ["jat", "jat-001"]],
   );
-  assert.equal(tree[0].children[0].description, "");
-  assert.doesNotMatch(tree[0].children[0].description, /secret|access.key|identity/i);
+  assert.equal(tree[0].children[0].children[0].description, "");
+  assert.doesNotMatch(tree[0].children[0].children[0].description, /secret|access.key|identity/i);
 });
 
 test("dimensionArgs routes storage operations through the selected Dimension", () => {
@@ -141,9 +142,9 @@ test("buildProviderTree reads v2 dimension catalogs and populates JAT children",
       },
     },
   });
-  assert.equal(tree[0].children[0].id, "archive");
-  assert.equal(tree[0].children[0].children[0].id, "demo-room");
-  assert.deepEqual(tree[0].children[0].children[0].children.map((item) => item.id), ["jat-002"]);
+  assert.equal(tree[0].children[0].children[0].id, "archive");
+  assert.equal(tree[0].children[0].children[0].children[0].id, "demo-room");
+  assert.deepEqual(tree[0].children[0].children[0].children[0].children.map((item) => item.id), ["jat-002"]);
 });
 
 test("snapshotCopyArgs matches the native copy contract", () => {
@@ -194,7 +195,79 @@ test("duplicate Room IDs and names remain Dimension-qualified in the hierarchy",
       { id: "backup", display_name: "Backup", provider: "minio", projects: [{ id: "same-room", display_name: "Same Room" }] },
     ],
   });
-  const rooms = tree.flatMap((provider) => provider.children.flatMap((dimension) => dimension.children));
+  const rooms = tree.flatMap((provider) => provider.children.flatMap((connection) => connection.children.flatMap((dimension) => dimension.children)));
   assert.deepEqual(rooms.map((room) => room.label), ["Same Room · Archive", "Same Room · Backup"]);
   assert.deepEqual(rooms.map((room) => room.dimension.id), ["archive", "backup"]);
+});
+
+test("buildProviderTree renders Provider to reusable Provider Connection to bucket Dimension", () => {
+  const tree = buildProviderTree({
+    connections: [{ id: "minio-home", display_name: "Home MinIO", provider: "minio" }],
+    dimensions: [
+      { id: "rooms-a", display_name: "Rooms A", provider: "minio", connection_id: "minio-home", bucket: "rooms-a", projects: [] },
+      { id: "rooms-b", display_name: "Rooms B", provider: "minio", connection_id: "minio-home", bucket: "rooms-b", projects: [] },
+    ],
+  });
+
+  assert.equal(tree[0].kind, "provider");
+  assert.equal(tree[0].children[0].kind, "connection");
+  assert.equal(tree[0].children[0].label, "Home MinIO");
+  assert.deepEqual(tree[0].children[0].children.map((item) => [item.kind, item.id, item.dimension.bucket]), [
+    ["dimension", "rooms-a", "rooms-a"],
+    ["dimension", "rooms-b", "rooms-b"],
+  ]);
+});
+
+test("buildProviderTree renders a disconnected connection as unavailable", () => {
+  const tree = buildProviderTree({
+    connections: [{
+      id: "home-minio",
+      display_name: "Home MinIO",
+      provider: "minio",
+      auth_state: "disconnected",
+    }],
+    dimensions: [{
+      id: "rooms",
+      display_name: "Rooms",
+      provider: "minio",
+      connection_id: "home-minio",
+      bucket: "rooms",
+      projects: [{ id: "room", display_name: "Room" }],
+    }],
+  });
+
+  const connection = tree[0].children[0];
+  assert.equal(connection.state, "disconnected");
+  assert.equal(connection.label, "⚠ Disconnected");
+  assert.equal(connection.description, "Reconnect");
+  assert.deepEqual(connection.children[0].children, []);
+});
+
+test("buildProviderTree accepts worker connection and bucket records without exposing credentials", () => {
+  const tree = buildProviderTree({
+    providers: [{
+      id: "minio",
+      connections: [{
+        connection_id: "home",
+        name: "Home MinIO",
+        endpoint: "https://minio.example",
+        buckets: [{ name: "rooms" }],
+      }],
+    }],
+    dimensions: [{
+      dimension_id: "rooms",
+      display_name: "Rooms",
+      provider: "minio",
+      connection_id: "home",
+      bucket: "rooms",
+      projects: [],
+    }],
+  });
+
+  const connection = tree[0].children[0];
+  assert.equal(connection.kind, "connection");
+  assert.equal(connection.id, "home");
+  assert.equal(connection.children[0].kind, "dimension");
+  assert.equal(connection.children[0].children.length, 0);
+  assert.doesNotMatch(JSON.stringify(tree), /access.key|secret.key|session.token/i);
 });

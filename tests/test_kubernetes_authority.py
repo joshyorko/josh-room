@@ -11,9 +11,9 @@ ROOT = Path(__file__).parents[1]
 def test_local_r2_temporary_credential_is_scoped_signed_and_short_lived(tmp_path):
     parent_secret = "synthetic-parent-secret"
     request = {
-        "endpoint": "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
+        "endpoint": "https://r2.example.invalid",
         "bucket": "synthetic-room",
-        "account_id": "0123456789abcdef0123456789abcdef",
+        "account_id": "synthetic-account",
         "access_key_id": "synthetic-parent-access",
         "secret_access_key": parent_secret,
         "ttl_seconds": 21600,

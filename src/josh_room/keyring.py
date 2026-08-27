@@ -10,10 +10,13 @@ def available() -> bool:
     return shutil.which("secret-tool") is not None
 
 
-def lookup(profile: str) -> dict[str, str]:
+def lookup(profile: str, *, allow_runtime: bool | None = None) -> dict[str, str]:
     """Read operation-time credentials from Secret Service without logging them."""
+    runtime_profile = os.environ.get("JOSH_ROOM_RUNTIME_PROFILE", "oauth-runtime")
     runtime_path = os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS")
-    if runtime_path:
+    if allow_runtime is None:
+        allow_runtime = profile == runtime_profile
+    if allow_runtime and profile == runtime_profile and runtime_path:
         path = Path(runtime_path)
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
             raise RuntimeError("runtime credential source is unsafe")

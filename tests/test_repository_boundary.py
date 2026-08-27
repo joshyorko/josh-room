@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -58,15 +59,16 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     body = bootstrap.read_text()
     assert "git -C \"$jat_root\" fetch" in body
     assert "bootstrap-jat-environment.sh" in body
-    assert 'sudo "$(command -v rcc)" ht shared --enable --once' in body
-    assert "rcc ht init" in body
-    assert body.index("rcc ht init") < body.index("bootstrap-jat-environment.sh")
+    assert 'sudo "$(command -v rcc)" ht shared --enable --once' not in body
+    assert "rcc ht init" not in body
     assert 'for task in Build Restore Serve JAT' in body
     assert 'python -m jat.cli' in body
     assert "brew install age uv libsecret" in body
     assert "brew install --cask joshyorko/tools/rcc joshyorko/tools/action-server" in body
+    assert 'export RCC_HOLOTREE_MODE="${RCC_HOLOTREE_MODE:-private}"' in body
+    assert 'export ROBOCORP_HOME="${ROBOCORP_HOME:-$HOME/.local/share/josh-room/robocorp}"' in body
     assert body.index('test "$(rcc version | head -n 1)" = "$EXPECTED_RCC_VERSION"') < body.index(
-        'sudo "$(command -v rcc)" ht shared --enable --once'
+        'bootstrap-jat-environment.sh'
     )
     assert "scripts/install_dependencies.sh" in body
     assert "CONDA_PREFIX=" in body
@@ -82,6 +84,10 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.addStorage",
         "joshRoom.connectCloudflare",
         "joshRoom.reconnectCloudflare",
+        "joshRoom.connectStorage",
+        "joshRoom.reconnectStorage",
+        "joshRoom.editConnection",
+        "joshRoom.disconnectStorage",
         "joshRoom.editStorageSettings",
         "joshRoom.link",
         "joshRoom.repair",
@@ -155,6 +161,29 @@ def test_root_devcontainer_is_the_personal_room_and_matches_template():
     ).read_bytes()
     assert not (ROOT / ".vscode/tasks.json").exists()
     assert not (ROOT / "templates/room/.vscode/tasks.json").exists()
+
+
+def test_devcontainer_persists_rcc_lifecycle_for_new_processes():
+    root_config = json.loads((ROOT / ".devcontainer/devcontainer.json").read_text())
+    template_config = json.loads((ROOT / "templates/room/.devcontainer/devcontainer.json").read_text())
+    expected = {
+        "ROBOCORP_HOME": "/home/vscode/.local/share/josh-room/robocorp",
+        "RCC_HOLOTREE_MODE": "private",
+    }
+    for config in (root_config, template_config):
+        assert {name: config["remoteEnv"][name] for name in expected} == expected
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import os; print(os.environ['ROBOCORP_HOME'] + '|' + os.environ['RCC_HOLOTREE_MODE'], end='')",
+            ],
+            env={name: config["remoteEnv"][name] for name in expected},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert completed.stdout == f"{expected['ROBOCORP_HOME']}|{expected['RCC_HOLOTREE_MODE']}"
 
 
 def test_devcontainer_opens_clean_room_not_controller_source():
@@ -240,7 +269,7 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert lock["candidate_version"] == "0.1.0"
     assert lock["room_of_requirement"]["image"].endswith("@" + lock["room_of_requirement"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
-    assert lock["josh_room"]["git_sha"] == "89822d84a2ec98e49615764b7ed8e81527b1605d"
+    assert lock["josh_room"]["git_sha"] == "e75edfaf3ecda295fd9321611e441926f4d949f5"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["reference"].endswith("@" + artifact["manifest_digest"])

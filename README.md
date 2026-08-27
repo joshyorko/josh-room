@@ -88,12 +88,16 @@ josh-room doctor --backend r2
 josh-room enter hive
 ```
 
-The first Save or Enter operation in a disposable Room opens Cloudflare OAuth.
-The resulting short-lived session is reused by later operations in that Room
-until expiry. R2 and VS Code Insiders are the defaults. `doctor` fails with remediation when
+Cloudflare R2 uses the existing OAuth flow: the first R2 operation opens a local
+browser authorization and reuses its short-lived session until expiry. MinIO
+uses a user-supplied endpoint and masked credentials entered once through the
+native Connect Storage flow. A reusable Provider Connection owns that authority;
+each Dimension is one bucket-backed encrypted catalog, containing Rooms and
+their immutable JAT history. R2 and VS Code Insiders are the defaults. `doctor` fails with remediation when
 age, Hauler, RCC, JAT, the daily identity, R2, the encrypted catalog, or the IDE
 is unavailable. `enter` discovers logical project names from the encrypted R2
-catalog, hydrates safely, then launches VS Code Insiders.
+or MinIO catalog selected for the Room, hydrates safely, then launches VS Code
+Insiders.
 
 The bundled extension provides a native Rooms TreeView, toolbar actions,
 per-Room Enter/Serve/Delete actions, Docker-style operation progress, and a
@@ -111,14 +115,16 @@ a Quick Pick of saved Rooms plus “Create a new Room”. The selected folder is
 the snapshot source and receives only the non-secret `.josh-room.json` identity
 marker after a successful save. Selecting an existing Room appends an immutable
 snapshot and advances its `latest` pointer; it does not create another logical
-Room. `Josh: Enter Room` hydrates beside the clean bootstrap workspace and
-switches the current VS Code window to the restored root.
+Room. `Josh: Enter Room` reopens an already materialized `(Dimension, Room)` on
+the device without downloading it again. A missing Room is restored beneath
+the configured Josh Room workspace root; selecting another historical JAT reuses
+that same folder after an explicit clean/dirty-state confirmation.
 Save can include all tagged local OCI images in the JAT haul. `Josh: Serve Room
 Images` decrypts the chosen snapshot only into private runtime staging and runs
 JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
 removes the temporary haul and registry store.
 
-A separate `JAT Tools` view preserves one-off automation outside the Room/R2
+A separate `JAT Tools` view preserves one-off automation outside the Room/storage
 workflow: pack any folder into a portable haul, restore a JAT-compatible haul
 into a new destination, or serve any Hauler haul as a foreground registry. These
 commands use the same typed RCC Build/Restore/Serve tasks but require no Room,
@@ -140,15 +146,23 @@ josh-room snapshots remove <project> <snapshot> [--backend local|r2] [--json]
 josh-room snapshot create <project> [--source <path>] [--image <ref> ... | --all-images] [--backend local|r2] [--json]
 josh-room hydrate <project> --destination <path> [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room enter [<project>] [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
-josh-room serve <project> [--snapshot latest|<id>] [--backend local|r2] [--json]
+josh-room serve <project> [--snapshot latest|<id>] [--backend local|r2|minio] [--dimension <id>] [--json]
+josh-room provider connection list [--json]
+josh-room provider connection create|update|reconnect|disconnect [options] [--json]
+josh-room provider bucket list|create|check [options] [--json]
+josh-room dimensions list [--dimension <id>] [--with-hierarchy] [--json]
+josh-room auth start|wait|cancel|status [options] [--json]
 josh-room jat build --source <path> --output <haul.tar.zst> [--image <ref> ... | --all-images] [--json]
 josh-room jat restore --haul <haul.tar.zst> --destination <path> [--json]
 josh-room jat serve --haul <haul.tar.zst> [--json]
 ```
 
-`enter` lists logical project display names, resolves the encrypted catalog,
-hydrates into an adjacent owned stage, atomically promotes the workspace, and
-launches the selected IDE only after durable completion.
+`provider connection` and `provider bucket` are the canonical storage boundary.
+The older `connections` and `buckets` command families remain compatibility
+aliases only. `enter` resolves the selected Dimension and Room, reuses a
+corroborated device-local materialization when present, or hydrates into the
+configured workspace root and launches the selected IDE only after durable
+completion.
 
 ## Evidence and current limits
 
@@ -168,6 +182,10 @@ bootstrap, and Save requests JAT `rcc_environment=auto` with optional typed
 receipt metadata. RCC/JAT retain ownership of acquisition and production
 details. Actions Runtime, Hive projections, OpenAI uploads, periodic capture,
 and garbage collection remain deliberately deferred.
+
+Cloudflare OAuth uses the official hosted Josh Room authority by default.
+`JOSH_ROOM_AUTH_URL` is an optional override for self-hosted or custom
+deployments; the public repository contains no personal account configuration.
 
 See [architecture](docs/architecture.md), [ADRs](docs/adr), and
 [deferred integrations](docs/DEFERRED-INTEGRATIONS.md).

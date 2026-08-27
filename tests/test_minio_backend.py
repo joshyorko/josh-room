@@ -21,11 +21,43 @@ def test_minio_backend_is_provider_neutral_store():
 
 def test_minio_client_uses_custom_ca_and_path_style(monkeypatch):
     captured = {}
-    monkeypatch.setattr("josh_room.minio.lookup", lambda _: {"access-key-id": "id", "secret-access-key": "secret"})
+    monkeypatch.setattr("josh_room.minio.lookup", lambda _profile, **_kwargs: {"access-key-id": "id", "secret-access-key": "secret"})
     monkeypatch.setattr("boto3.client", lambda *args, **kwargs: captured.update(kwargs) or object())
     MinioBackend(MinioConfig("https://minio.invalid", "synthetic", "fixture", verify_tls=False, ca_bundle="/tmp/ca.pem", path_style=True))
     assert captured["verify"] == "/tmp/ca.pem"
     assert captured["config"].s3["addressing_style"] == "path"
+
+
+def test_minio_config_carries_persisted_disconnect_state():
+    config = MinioConfig.from_private({
+        "minio": {
+            "endpoint": "https://minio.invalid",
+            "bucket": "synthetic",
+            "credential_profile": "fixture",
+            "auth_state": "disconnected",
+        }
+    })
+
+    assert config.auth_state == "disconnected"
+
+
+def test_disconnected_minio_backend_fails_closed_before_using_credentials():
+    class UnexpectedClient:
+        def head_object(self, **_kwargs):
+            raise AssertionError("disconnected backend should fail before using the client")
+
+    backend = MinioBackend(
+        MinioConfig(
+            "https://minio.invalid",
+            "synthetic",
+            "fixture",
+            auth_state="disconnected",
+        ),
+        client=UnexpectedClient(),
+    )
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        backend.read_catalog()
 
 
 def test_doctor_probes_selected_backend_and_oauth_is_r2_only(tmp_path, monkeypatch):

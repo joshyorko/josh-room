@@ -1,10 +1,35 @@
 # Private MinIO setup
 
-MinIO is an explicit, private S3-compatible backend. Set `minio.endpoint`,
-`bucket`, `region`, `credential_profile`, and optionally `verify_tls`,
-`ca_bundle`, and `path_style` (true by default) in the private config schema.
-Only the opaque keyring profile is stored in configuration; access and secret
-keys remain in the host OS Secret Service. Use `--backend minio` for commands.
+MinIO is an explicit, private S3-compatible backend. In the normal native
+flow choose **Connect Storage → MinIO**, enter the endpoint and masked access
+and secret keys once, then choose one of the buckets visible to those
+credentials. The selected bucket becomes a Dimension; additional buckets on
+the same server reuse the Provider Connection.
+
+The non-secret persisted model is:
+
+```text
+connections/<connection-id>
+  provider: minio
+  endpoint: <user-supplied endpoint>
+  credential_profile: <opaque keyring reference>
+
+dimensions/<dimension-id>
+  connection_id: <connection-id>
+  bucket: <selected bucket>
+```
+
+Access and secret keys are handed to the CLI over its bounded stdin channel and
+remain in the host OS Secret Service. They never enter argv, logs, catalogs,
+markers, or persisted Dimension JSON. If Secret Service is unavailable,
+connection setup fails rather than writing plaintext credentials. Advanced
+provider options include `region`, `verify_tls`, `ca_bundle`, and `path_style`
+(`true` by default); normal HTTP endpoints do not require a TLS questionnaire.
+
+Legacy top-level `minio`/Dimension records remain readable for compatibility;
+new connections and Dimensions use the reusable connection model. Use an
+explicit `--dimension` for CLI operations when more than one destination is
+available.
 
 The default `r2` backend remains unchanged and is the only backend that starts
 Cloudflare OAuth/session acquisition. Josh Room verifies SHA-256 and byte size

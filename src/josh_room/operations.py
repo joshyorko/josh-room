@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -421,7 +422,7 @@ def _evidence_matches(snapshot: dict, object_evidence: dict | None) -> bool:
     return all(field in object_evidence for field in ("snapshot_id", "ciphertext_sha256", "ciphertext_size"))
 
 
-def _workspace_binding(workspace: Path, catalog: Catalog, object_evidence: dict | None, *, project_id: str | None = None, snapshot_id: str | None = None, dimension_id: str | None = None):
+def _workspace_binding(workspace: Path, catalog: Catalog, object_evidence: dict | None, *, project_id: str | None = None, snapshot_id: str | None = None, dimension_id: str | None = None, verified_workspace_fingerprint: str | None = None):
     workspace = Path(workspace)
     if not object_evidence:
         raise ValueError("object evidence is required")
@@ -452,6 +453,10 @@ def _workspace_binding(workspace: Path, catalog: Catalog, object_evidence: dict 
         marker_fingerprint = (marker or {}).get("workspace_fingerprint")
         if (marker or {}).get("format_version") == 2 and marker_fingerprint != "0" * 64:
             expected_fingerprint = marker_fingerprint
+    if expected_fingerprint in {None, "0" * 64} and verified_workspace_fingerprint is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", verified_workspace_fingerprint) or verified_workspace_fingerprint == "0" * 64:
+            raise ValueError("verified workspace fingerprint is invalid")
+        expected_fingerprint = verified_workspace_fingerprint
     if not expected_fingerprint:
         raise ValueError("catalog workspace fingerprint is unavailable")
     if expected_fingerprint == "0" * 64:
@@ -473,8 +478,8 @@ def _workspace_binding(workspace: Path, catalog: Catalog, object_evidence: dict 
     return marker, project_id, snapshot_id, dimension_id, snapshot
 
 
-def link_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None, *, project_id: str | None = None, snapshot_id: str | None = None, dimension_id: str | None = None) -> dict:
-    _marker, project_id, snapshot_id, dimension_id, snapshot = _workspace_binding(workspace, catalog, object_evidence, project_id=project_id, snapshot_id=snapshot_id, dimension_id=dimension_id)
+def link_workspace(workspace: Path, catalog: Catalog, object_evidence: dict | None = None, *, project_id: str | None = None, snapshot_id: str | None = None, dimension_id: str | None = None, verified_workspace_fingerprint: str | None = None) -> dict:
+    _marker, project_id, snapshot_id, dimension_id, snapshot = _workspace_binding(workspace, catalog, object_evidence, project_id=project_id, snapshot_id=snapshot_id, dimension_id=dimension_id, verified_workspace_fingerprint=verified_workspace_fingerprint)
     display_name = catalog.body["projects"][project_id]["display_name"]
     write_workspace_marker(workspace, dimension_id=dimension_id, project_id=project_id, display_name=display_name, snapshot_id=snapshot_id, workspace_fingerprint=snapshot["workspace_fingerprint"])
     return {"ok": True, "dimension_id": dimension_id, "project_id": project_id, "snapshot_id": snapshot_id, "marker": read_workspace_marker(workspace)}

@@ -15,6 +15,10 @@
     "onCommand:joshRoom.addStorage",
     "onCommand:joshRoom.connectCloudflare",
     "onCommand:joshRoom.reconnectCloudflare",
+    "onCommand:joshRoom.connectStorage",
+    "onCommand:joshRoom.reconnectStorage",
+    "onCommand:joshRoom.editConnection",
+    "onCommand:joshRoom.disconnectStorage",
     "onCommand:joshRoom.editStorageSettings",
     "onCommand:joshRoom.link",
     "onCommand:joshRoom.repair",
@@ -51,13 +55,33 @@
         "icon": "$(sync)"
       },
       {
+        "command": "joshRoom.connectStorage",
+        "title": "Josh: Connect",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "joshRoom.reconnectStorage",
+        "title": "Josh: Reconnect",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "joshRoom.editConnection",
+        "title": "Josh: Edit Connection",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "joshRoom.disconnectStorage",
+        "title": "Josh: Disconnect",
+        "icon": "$(debug-disconnect)"
+      },
+      {
         "command": "joshRoom.editStorageSettings",
         "title": "Josh: Edit Settings",
         "icon": "$(settings-gear)"
       },
       {
         "command": "joshRoom.link",
-        "title": "Josh: Link Room",
+        "title": "Josh: Link Existing Folder",
         "icon": "$(link)"
       },
       {
@@ -145,13 +169,16 @@
         { "command": "joshRoom.refresh", "when": "view == joshRoom.rooms", "group": "navigation@3" }
       ],
       "view/item/context": [
-        { "command": "joshRoom.connectCloudflare", "when": "view == joshRoom.rooms && viewItem == r2-connection", "group": "inline@1" },
-        { "command": "joshRoom.reconnectCloudflare", "when": "view == joshRoom.rooms && viewItem == r2-connection-expired", "group": "inline@1" },
+        { "command": "joshRoom.connectStorage", "when": "view == joshRoom.rooms && viewItem == provider-connection", "group": "inline@1" },
+        { "command": "joshRoom.reconnectStorage", "when": "view == joshRoom.rooms && viewItem == provider-connection-expired", "group": "inline@1" },
+        { "command": "joshRoom.editConnection", "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)", "group": "inline@2" },
+        { "command": "joshRoom.disconnectStorage", "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)", "group": "inline@3" },
         { "command": "joshRoom.editStorageSettings", "when": "view == joshRoom.rooms && viewItem == dimension", "group": "inline@2" },
         { "command": "joshRoom.enter", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@1" },
         { "command": "joshRoom.link", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
         { "command": "joshRoom.repair", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" },
         { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
+        { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == jat", "group": "inline@2" },
         { "command": "joshRoom.remove", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" }
       ]
     }

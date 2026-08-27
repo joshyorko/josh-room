@@ -4,11 +4,30 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .config import config_dir
 from .progress import report_progress
 
-WORKER_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
+_RUNTIME_FILES = ("r2.json", "age.identity", "config.json", "session.json")
+DEFAULT_AUTH_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
+
+
+def _runtime_paths() -> tuple[Path, ...]:
+    root = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "josh-room" / "session"
+    return tuple(root / name for name in _RUNTIME_FILES)
+
+
+def _clear_runtime_session() -> None:
+    for path in _runtime_paths():
+        path.unlink(missing_ok=True)
+    for name in (
+        "JOSH_ROOM_RUNTIME_CREDENTIALS",
+        "JOSH_ROOM_RUNTIME_CONFIG",
+        "JOSH_ROOM_IDENTITY",
+        "JOSH_ROOM_RUNTIME_PROFILE",
+    ):
+        os.environ.pop(name, None)
 
 
 def start_oauth_session() -> dict:
@@ -26,26 +45,60 @@ def poll_oauth_session(session_id: str, dimension_id: str | None = None) -> dict
     if status == "pending":
         return {"status": "pending"}
     if status != "authorized":
+        _clear_runtime_session()
         raise RuntimeError(f"Cloudflare authorization {status or 'failed'}")
     _write_runtime(session, dimension_id=dimension_id)
     return {"status": "authorized"}
 
 
+def cancel_oauth_session(session_id: str) -> dict:
+    result = _request(f"/session/{session_id}/cancel", method="POST")
+    if result.get("status") == "canceled":
+        _clear_runtime_session()
+    return result
+
+
+def wait_oauth_session(
+    session_id: str,
+    timeout: int = 600,
+    poll_interval: int = 2,
+    dimension_id: str | None = None,
+) -> dict:
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            result = poll_oauth_session(session_id, dimension_id=dimension_id)
+            if result["status"] != "pending":
+                return result
+            remaining = deadline - time.monotonic()
+            if remaining > 0 and poll_interval > 0:
+                time.sleep(min(poll_interval, remaining))
+    except KeyboardInterrupt:
+        _clear_runtime_session()
+        raise
+    _clear_runtime_session()
+    raise RuntimeError("Cloudflare authorization timed out")
+
+
 def runtime_session_state() -> str:
-    root = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "josh-room" / "session"
-    metadata = root / "session.json"
-    runtime_files = tuple(
-        root / name for name in ("r2.json", "age.identity", "config.json")
-    )
+    runtime_files = _runtime_paths()
+    metadata = runtime_files[-1]
     if not metadata.is_file():
+        if any(path.exists() for path in runtime_files):
+            _clear_runtime_session()
         return "missing"
     try:
         expires_at = float(json.loads(metadata.read_text())["expires_at"])
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        _clear_runtime_session()
         return "missing"
     if expires_at <= time.time() + 60:
+        _clear_runtime_session()
         return "expired"
-    return "connected" if all(path.is_file() for path in runtime_files) else "missing"
+    if not all(path.is_file() for path in runtime_files[:-1]):
+        _clear_runtime_session()
+        return "missing"
+    return "connected"
 
 
 def ensure_runtime_session(timeout: int = 600, dimension_id: str | None = None) -> None:
@@ -58,24 +111,26 @@ def ensure_runtime_session(timeout: int = 600, dimension_id: str | None = None) 
     if _load_runtime():
         report_progress("auth", "Reusing this Room's Cloudflare session")
         return
+    _clear_runtime_session()
     report_progress("auth", "Opening Cloudflare sign-in")
     started = start_oauth_session()
     webbrowser.open(started["authorization_url"])
     report_progress("auth", "Waiting for Cloudflare approval in your browser")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = poll_oauth_session(started["session_id"], dimension_id=dimension_id)
-        if result["status"] == "pending":
-            time.sleep(2)
-            continue
-        report_progress("auth", "Cloudflare session authorized")
-        return
-    raise RuntimeError("Cloudflare authorization timed out")
+    wait_oauth_session(started["session_id"], timeout=timeout, dimension_id=dimension_id)
+    report_progress("auth", "Cloudflare session authorized")
+
+
+def _worker_url() -> str:
+    value = os.environ.get("JOSH_ROOM_AUTH_URL", DEFAULT_AUTH_URL).strip().rstrip("/")
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+        raise RuntimeError("Cloudflare auth authority is not configured; set JOSH_ROOM_AUTH_URL to an http(s) URL")
+    return value
 
 
 def _request(path: str, method: str = "GET") -> dict:
     request = urllib.request.Request(
-        WORKER_URL + path,
+        _worker_url() + path,
         method=method,
         headers={"User-Agent": "Josh-Room/0.1 (+https://github.com/joshyorko/josh-room)"},
     )
@@ -116,8 +171,21 @@ def _write_runtime(session: dict, dimension_id: str | None = None) -> None:
     }
     runtime_config["r2"] = {**runtime_config.get("r2", {}), **runtime_r2}
     dimensions = runtime_config.setdefault("dimensions", {})
+    connections = runtime_config.setdefault("connections", {})
     target = dimension_id or "r2"
-    if target == "r2" or target not in dimensions:
+    target_record = dimensions.get(target)
+    if isinstance(target_record, dict) and target_record.get("connection_id"):
+        connection_id = target_record["connection_id"]
+        connections[connection_id] = {
+            **connections.get(connection_id, {}),
+            "provider": "r2",
+            "endpoint": session["endpoint"],
+            "credential_profile": "oauth-runtime",
+            "region": "auto",
+            "temporary_credentials": True,
+            "auth_state": "configured",
+        }
+    elif target == "r2" or target not in dimensions:
         dimensions["r2"] = {
             "display_name": "Cloudflare R2",
             "provider": "r2",
@@ -132,23 +200,25 @@ def _write_runtime(session: dict, dimension_id: str | None = None) -> None:
     os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] = str(credentials)
     os.environ["JOSH_ROOM_IDENTITY"] = str(identity)
     os.environ["JOSH_ROOM_RUNTIME_CONFIG"] = str(config)
+    os.environ["JOSH_ROOM_RUNTIME_PROFILE"] = "oauth-runtime"
 
 
 def _load_runtime() -> bool:
-    root = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "josh-room" / "session"
-    credentials = root / "r2.json"
-    identity = root / "age.identity"
-    config = root / "config.json"
-    metadata = root / "session.json"
+    credentials, identity, config, metadata = _runtime_paths()
     if not all(path.is_file() for path in (credentials, identity, config, metadata)):
+        if any(path.exists() for path in (credentials, identity, config, metadata)):
+            _clear_runtime_session()
         return False
     try:
         expires_at = float(json.loads(metadata.read_text())["expires_at"])
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        _clear_runtime_session()
         return False
     if expires_at <= time.time() + 60:
+        _clear_runtime_session()
         return False
     os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] = str(credentials)
     os.environ["JOSH_ROOM_IDENTITY"] = str(identity)
     os.environ["JOSH_ROOM_RUNTIME_CONFIG"] = str(config)
+    os.environ["JOSH_ROOM_RUNTIME_PROFILE"] = "oauth-runtime"
     return True

@@ -76,7 +76,7 @@ class R2Backend(ObjectStore):
         import boto3
         from botocore.config import Config
 
-        credentials = lookup(self.config.credential_profile)
+        credentials = lookup(self.config.credential_profile, allow_runtime=True)
         return boto3.client(
             "s3",
             endpoint_url=self.config.endpoint,
