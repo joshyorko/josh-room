@@ -10,7 +10,12 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from . import r2 as _r2
-from .auth import ensure_runtime_session
+from .auth import (
+    ensure_runtime_session,
+    poll_oauth_session,
+    runtime_session_state,
+    start_oauth_session,
+)
 from .catalog import Catalog
 from .config import DimensionRegistry, auth_status, private_config, save_private_config
 from .crypto import decrypt
@@ -67,6 +72,18 @@ def build_parser() -> argparse.ArgumentParser:
         dimension_edit.add_argument("--region")
         dimension_edit.add_argument("--catalog-key")
         _json_option(dimension_edit)
+    auth = commands.add_parser("auth")
+    auth_commands = auth.add_subparsers(dest="auth_command", required=True)
+    auth_start = auth_commands.add_parser("start")
+    auth_start.add_argument("--dimension")
+    _json_option(auth_start)
+    auth_poll = auth_commands.add_parser("poll")
+    auth_poll.add_argument("session_id")
+    auth_poll.add_argument("--dimension")
+    _json_option(auth_poll)
+    auth_status = auth_commands.add_parser("status")
+    auth_status.add_argument("--dimension")
+    _json_option(auth_status)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(status)
@@ -171,9 +188,16 @@ def main(argv=None):
     instance = _instance_root()
     try:
         if _requires_oauth(args):
-            selected = None if getattr(args, "snapshot_command", None) == "copy" else _effective_dimension(args)
-            ensure_runtime_session(dimension_id=selected.dimension_id if selected else None)
-        identity_context = nullcontext() if args.command in {"setup", "status"} else _identity_environment()
+            requested_dimension = getattr(args, "dimension", None)
+            selected = None
+            if getattr(args, "snapshot_command", None) != "copy":
+                try:
+                    selected = _effective_dimension(args)
+                except ValueError:
+                    if requested_dimension != "r2":
+                        raise
+            ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
+        identity_context = nullcontext() if args.command in {"auth", "setup", "status"} else _identity_environment()
         with identity_context:
             result = dispatch(args, instance)
     except (OSError, RuntimeError, ValueError) as error:
@@ -188,19 +212,19 @@ def _requires_oauth(args) -> bool:
     if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
-        registry = DimensionRegistry(private_config() or {})
+        source_dimension = _copy_source_dimension(args)
+        dimensions = [dimension for dimension in (source_dimension, args.destination_dimension) if dimension]
         try:
-            source_dimension = _copy_source_dimension(args)
-            dimensions = [dimension for dimension in (source_dimension, args.destination_dimension) if dimension]
+            registry = DimensionRegistry(private_config() or {})
             return any(registry.select(dimension).provider == "r2" for dimension in dimensions)
         except ValueError:
-            return False
+            return "r2" in dimensions
     dimension = getattr(args, "dimension", None)
     if dimension:
         try:
             return DimensionRegistry(private_config() or {}).select(dimension).provider == "r2"
         except ValueError:
-            return False
+            return dimension == "r2"
     try:
         selected = _effective_dimension(args)
     except ValueError:
@@ -221,6 +245,12 @@ def _copy_source_dimension(args) -> str | None:
 
 
 def dispatch(args, instance: Path) -> dict:
+    if args.command == "auth":
+        if args.auth_command == "start":
+            return {"ok": True, **start_oauth_session()}
+        if args.auth_command == "poll":
+            return {"ok": True, **poll_oauth_session(args.session_id, dimension_id=args.dimension)}
+        return {"ok": True, "state": runtime_session_state(), "dimension_id": args.dimension}
     if args.command == "dimensions":
         config = private_config() or {}
         if args.dimension_command == "list":

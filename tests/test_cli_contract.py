@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from josh_room.cli import (
+    _effective_dimension,
     _requires_oauth,
     _tar_capable,
     _workspace_root,
@@ -130,6 +131,10 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     assert args.ide == "terminal"
     args = parser.parse_args(["projects", "list", "--backend", "r2", "--json"])
     assert args.backend == "r2"
+    args = parser.parse_args(["auth", "start", "--dimension", "archive", "--json"])
+    assert args.command == "auth" and args.auth_command == "start" and args.dimension == "archive"
+    args = parser.parse_args(["auth", "poll", "session-one", "--dimension", "archive", "--json"])
+    assert args.command == "auth" and args.auth_command == "poll" and args.session_id == "session-one"
     args = parser.parse_args(["rooms", "remove", "demo", "--backend", "r2", "--json"])
     assert args.command == "rooms" and args.room_command == "remove" and args.project == "demo"
     args = parser.parse_args(["snapshots", "remove", "demo", "snapshot-one", "--backend", "r2", "--json"])
@@ -148,6 +153,74 @@ def test_documented_subcommands_and_options_parse_as_typed_arguments(tmp_path):
     image_args = parser.parse_args(["snapshot", "create", "demo", "--image", "example/image:tag"])
     assert image_args.images == ["example/image:tag"] and image_args.all_images is False
     assert parser.parse_args(["snapshot", "create", "demo", "--all-images"]).all_images is True
+
+
+def test_native_auth_commands_delegate_to_existing_worker_session_helpers(tmp_path, monkeypatch):
+    module = __import__("josh_room.cli", fromlist=["dispatch"])
+    monkeypatch.setattr(module, "start_oauth_session", lambda: {
+        "session_id": "session-one",
+        "authorization_url": "https://example.invalid/auth",
+        "expires_in": 600,
+    })
+    monkeypatch.setattr(module, "poll_oauth_session", lambda session_id, dimension_id=None: {
+        "status": "authorized", "session_id": session_id, "dimension_id": dimension_id,
+    })
+
+    start = module.dispatch(build_parser().parse_args(["auth", "start", "--dimension", "archive"]), tmp_path)
+    poll = module.dispatch(build_parser().parse_args(["auth", "poll", "session-one", "--dimension", "archive"]), tmp_path)
+
+    assert start["authorization_url"] == "https://example.invalid/auth"
+    assert poll == {
+        "ok": True,
+        "status": "authorized",
+        "session_id": "session-one",
+        "dimension_id": "archive",
+    }
+
+
+def test_runtime_default_r2_is_oauth_routed_before_dimension_resolution(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    args = build_parser().parse_args(["snapshot", "create", "demo", "--dimension", "r2"])
+    assert _requires_oauth(args) is True
+    copy_args = build_parser().parse_args([
+        "snapshot", "copy", "source", "--source-dimension", "r2",
+        "--destination-dimension", "r2", "--destination-room", "destination",
+    ])
+    assert _requires_oauth(copy_args) is True
+
+    events = []
+    runtime_config = tmp_path / "runtime-config.json"
+    runtime_config.write_text(json.dumps({
+        "default_backend": "r2",
+        "dimensions": {
+            "r2": {
+                "display_name": "Default",
+                "provider": "r2",
+                "endpoint": "https://r2.example.invalid",
+                "bucket": "room",
+                "credential_profile": "oauth-runtime",
+            },
+        },
+        "r2": {
+            "endpoint": "https://r2.example.invalid",
+            "bucket": "room",
+            "credential_profile": "oauth-runtime",
+        },
+    }))
+
+    def restore_runtime(**kwargs):
+        events.append(kwargs)
+        monkeypatch.setenv("JOSH_ROOM_RUNTIME_CONFIG", str(runtime_config))
+
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", restore_runtime)
+    monkeypatch.setattr(
+        "josh_room.cli.dispatch",
+        lambda parsed, _instance: {"ok": True, "dimension_id": _effective_dimension(parsed).dimension_id},
+    )
+
+    assert main(["snapshot", "create", "demo", "--dimension", "r2", "--json"]) == 0
+    assert events == [{"dimension_id": "r2"}]
 
 
 def test_one_off_jat_commands_use_typed_service_without_room_backend(tmp_path, monkeypatch):

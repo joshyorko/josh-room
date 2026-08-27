@@ -13,7 +13,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-BASE_HEAD = "9bdecf230e3a54ff65680fc781e4c853d94d829d"
+BASE_HEAD = "89822d84a2ec98e49615764b7ed8e81527b1605d"
 
 
 def _dimension(provider, endpoint, bucket, profile):

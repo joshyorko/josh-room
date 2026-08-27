@@ -12,8 +12,10 @@
     "onStartupFinished",
     "onCommand:joshRoom.save",
     "onCommand:joshRoom.new",
-    "onCommand:joshRoom.addDimension",
-    "onCommand:joshRoom.openDimension",
+    "onCommand:joshRoom.addStorage",
+    "onCommand:joshRoom.connectCloudflare",
+    "onCommand:joshRoom.reconnectCloudflare",
+    "onCommand:joshRoom.editStorageSettings",
     "onCommand:joshRoom.link",
     "onCommand:joshRoom.repair",
     "onCommand:joshRoom.enter",
@@ -34,14 +36,24 @@
         "icon": "$(add)"
       },
       {
-        "command": "joshRoom.addDimension",
-        "title": "Josh: Add Dimension",
-        "icon": "$(database)"
+        "command": "joshRoom.addStorage",
+        "title": "Josh: Connect Storage",
+        "icon": "$(cloud)"
       },
       {
-        "command": "joshRoom.openDimension",
-        "title": "Josh: Open Dimension",
-        "icon": "$(database)"
+        "command": "joshRoom.connectCloudflare",
+        "title": "Josh: Connect Cloudflare",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "joshRoom.reconnectCloudflare",
+        "title": "Josh: Reconnect Cloudflare",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "joshRoom.editStorageSettings",
+        "title": "Josh: Edit Settings",
+        "icon": "$(settings-gear)"
       },
       {
         "command": "joshRoom.link",
@@ -121,19 +133,21 @@
     "viewsWelcome": [
       {
         "view": "joshRoom.rooms",
-        "contents": "No Rooms yet.\n[Save a folder as your first Room](command:joshRoom.new)",
+        "contents": "Connect storage to begin.\n[Add Storage](command:joshRoom.addStorage)",
         "when": "joshRoom.roomsEmpty"
       }
     ],
     "menus": {
       "view/title": [
         { "command": "joshRoom.new", "when": "view == joshRoom.rooms", "group": "navigation@1" },
-        { "command": "joshRoom.addDimension", "when": "view == joshRoom.rooms", "group": "navigation@2" },
-        { "command": "joshRoom.openDimension", "when": "view == joshRoom.rooms", "group": "navigation@3" },
+        { "command": "joshRoom.addStorage", "when": "view == joshRoom.rooms", "group": "navigation@2" },
         { "command": "joshRoom.save", "when": "view == joshRoom.rooms", "group": "navigation@2" },
         { "command": "joshRoom.refresh", "when": "view == joshRoom.rooms", "group": "navigation@3" }
       ],
       "view/item/context": [
+        { "command": "joshRoom.connectCloudflare", "when": "view == joshRoom.rooms && viewItem == r2-connection", "group": "inline@1" },
+        { "command": "joshRoom.reconnectCloudflare", "when": "view == joshRoom.rooms && viewItem == r2-connection-expired", "group": "inline@1" },
+        { "command": "joshRoom.editStorageSettings", "when": "view == joshRoom.rooms && viewItem == dimension", "group": "inline@2" },
         { "command": "joshRoom.enter", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@1" },
         { "command": "joshRoom.link", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
         { "command": "joshRoom.repair", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" },
