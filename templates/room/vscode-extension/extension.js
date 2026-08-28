@@ -416,14 +416,34 @@ function fallbackIdentity(manifest, rcc, controllerRoot) {
 
 async function localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot) {
   progressReporter?.event({ stage: "runtime", message: `LOCAL BUILD FALLBACK: ${error.message}` });
-  progressReporter?.event({ stage: "runtime", message: "Materializing bundled JAT and controller recipes locally" });
+  progressReporter?.event({ stage: "runtime", message: "Building controller environment locally; JAT remains lazy until a JAT operation" });
   const jatRoot = jat?.jatRoot || await managedRuntime.ensureJatSource(context, manifest.jat);
   const identity = fallbackIdentity(manifest, rcc, controllerRoot);
   const warm = await managedRuntime.verifyLocalFallback(
     context, rcc, path.join(controllerRoot, "robot.yaml"), identity,
   );
-  if (warm) progressReporter?.event({ stage: "runtime", message: "Reusing verified LOCAL BUILD FALLBACK Holotree" });
-  else if (await chooseLocalFallback(error) !== "build") throw new Error("Local runtime build cancelled");
+  if (warm) {
+    progressReporter?.event({ stage: "runtime", message: "Reusing verified LOCAL BUILD FALLBACK controller environment" });
+  } else {
+    if (await chooseLocalFallback(error) !== "build") throw new Error("Local runtime build cancelled");
+    await managedRuntime.prepareLocalController(
+      context,
+      rcc,
+      path.join(controllerRoot, "robot.yaml"),
+      {
+        onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+        onOutput: (stream, chunk) => {
+          if (stream !== "stderr") return;
+          const sanitized = sanitizeRuntimeLine(chunk);
+          if (!sanitized) return;
+          outputChannel?.appendLine(`${new Date().toISOString()} RCC ${stream}: ${sanitized}`);
+          progressReporter?.event({ stage: "runtime", message: sanitized });
+        },
+      },
+    );
+    await managedRuntime.writeLocalFallbackRecord(context, identity);
+    progressReporter?.event({ stage: "runtime", message: "Controller environment ready (LOCAL BUILD FALLBACK); JAT will build on first JAT operation" });
+  }
   return {
     manifest,
     rcc,
@@ -2805,6 +2825,7 @@ Object.assign(module.exports.__test__, {
   roomLabel,
   runJoshRoom,
   chooseLocalFallback,
+  localRuntimeState,
   clearLocalFallback,
   serveRoom,
   selectDimension,
