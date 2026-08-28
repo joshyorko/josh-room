@@ -20,7 +20,7 @@ On a plain supported Linux amd64 VS Code or VS Code Insiders host, install the
 released VSIX directly:
 
 ```bash
-code-insiders --install-extension /path/to/josh-room-0.1.11.vsix
+code-insiders --install-extension /path/to/josh-room-0.1.12.vsix
 ```
 
 The extension acquires its pinned RCC binary and JAT Environment Artifact under
