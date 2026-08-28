@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
