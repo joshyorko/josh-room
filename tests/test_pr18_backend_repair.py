@@ -13,7 +13,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-BASE_HEAD = "d89eecb57232db637e842fca9181b8fbba519f77"
+BASE_HEAD = "e6456abd6ed7d64ddcf2c400d82a5a33172d97fb"
 
 
 def _dimension(provider, endpoint, bucket, profile):
@@ -47,7 +47,7 @@ def test_clean_bootstrap_uses_exact_repaired_candidate_and_cli_contract():
     assert "josh-room = \"josh_room.cli:main\"" in Path("pyproject.toml").read_text()
     for path in (Path(".devcontainer/bootstrap.sh"), Path("templates/room/.devcontainer/bootstrap.sh")):
         body = path.read_text()
-        assert "joshyorko.josh-room-0.1.5" in body
+        assert "joshyorko.josh-room-0.1.6" in body
         assert "uv tool install" not in body
         assert "brew" not in body.lower()
 
