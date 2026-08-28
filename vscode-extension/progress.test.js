@@ -99,7 +99,7 @@ test("progress display formatting is compact and deterministic", () => {
     logLine: "██████████████░░░░░░ 68% · Uploading encrypted Room · 1.46 / 2.15 GiB",
     notification: "Uploading encrypted Room · 1.46 / 2.15 GiB · 68%",
     statusText: "$(sync~spin) ███████◆░░ 68% Saving Heather Mk1 Room",
-    tooltip: "Saving Heather Mk1 Room\n██████████████░░░░░░ 68%\nUploading encrypted Room · 1.46 / 2.15 GiB",
+    tooltip: "Saving Heather Mk1 Room\n██████████████░░░░░░ 68%\nUploading encrypted Room · 1.46 / 2.15 GiB\nFull details: Output → Josh Room",
   });
   assert.equal(renderStatusBar(68, 0), "███████◆░░");
   assert.equal(renderStatusBar(68, 1), "███████░◆░");

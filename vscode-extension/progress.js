@@ -135,16 +135,22 @@ function renderStatusBar(percent, frame = 0, width = 10) {
   return "█".repeat(filled) + "░".repeat(pulse) + "◆" + "░".repeat(empty - pulse - 1);
 }
 
-function formatProgressDisplay(title, _kind, state, frame = 0) {
+function formatElapsed(elapsedMs) {
+  const seconds = Math.max(0, Math.floor(Number(elapsedMs || 0) / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function formatProgressDisplay(title, _kind, state, frame = 0, elapsedMs) {
   const percent = state.indeterminate || state.percent === undefined ? "…" : `${state.percent}%`;
   const transfer = state.transfer ? ` · ${state.transfer}` : "";
   const detail = `${state.message}${transfer}`;
+  const elapsed = elapsedMs === undefined ? "" : ` · elapsed ${formatElapsed(elapsedMs)}`;
   const statusBar = renderStatusBar(state.indeterminate ? undefined : state.percent, frame);
   return {
     logLine: `${state.bar} ${percent} · ${detail}`,
-    notification: `${detail} · ${percent}`,
-    statusText: `$(sync~spin) ${statusBar} ${percent === "…" ? "" : `${percent} `}${title}`,
-    tooltip: `${title}\n${state.bar} ${percent}\n${detail}`,
+    notification: `${detail} · ${percent}${elapsed}`,
+    statusText: `$(sync~spin) ${statusBar} ${percent === "…" ? "" : `${percent} `}${title}${elapsedMs === undefined ? "" : ` · ${formatElapsed(elapsedMs)}`}`,
+    tooltip: `${title}\n${state.bar} ${percent}\n${detail}${elapsed}\nFull details: Output → Josh Room`,
   };
 }
 
@@ -173,6 +179,7 @@ module.exports = {
   createProgressTracker,
   followProgressFile,
   formatBytes,
+  formatElapsed,
   formatProgressDisplay,
   operationKind,
   parseProgressLine,

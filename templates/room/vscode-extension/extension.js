@@ -27,6 +27,8 @@ let dirtyTrackingGeneration = 0;
 const dirtyBuffers = new Set();
 let activeAuthAttempt;
 let managedRuntimePromise;
+let runtimeReadinessOverride;
+let runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
 let testRuntime;
 const CREDENTIALS_SECRET = "josh-room.credentials.v1";
 
@@ -330,11 +332,37 @@ function createCancellationController(parentToken) {
   return controller;
 }
 
-async function initializeManagedRuntime(context) {
+function setRuntimeLifecycle(state, message) {
+  runtimeLifecycle = { state, message };
+  roomsProvider?.emitter?.fire(undefined);
+}
+
+function startRuntimeReadiness(context, progressReporter) {
+  if (managedRuntimePromise) return managedRuntimePromise;
+  setRuntimeLifecycle("RCC_RESOLVING", "Resolving managed RCC");
+  const source = runtimeReadinessOverride || initializeManagedRuntime(context, progressReporter);
+  managedRuntimePromise = Promise.resolve(source).then((state) => {
+    setRuntimeLifecycle("RUNTIME_READY", "Managed runtime ready; cached artifacts reused when available");
+    return state || testRuntime;
+  }).catch((error) => {
+    setRuntimeLifecycle("FAILED", `Josh Room runtime unavailable: ${error.message}`);
+    managedRuntimePromise = undefined;
+    throw error;
+  });
+  return managedRuntimePromise;
+}
+
+async function initializeManagedRuntime(context, progressReporter) {
   const manifest = managedRuntime.readManifest();
   setStatus("$(sync~spin) Josh Room", "Preparing managed runtime…");
-  const rcc = await managedRuntime.ensureManagedRcc(context, manifest);
-  const jat = await managedRuntime.ensureJatRuntime(context, manifest, rcc);
+  progressReporter?.event({ stage: "runtime", message: "Resolving managed RCC" });
+  const rcc = await managedRuntime.ensureManagedRcc(context, manifest, {
+    onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+  });
+  progressReporter?.event({ stage: "runtime", message: "JAT source and artifact are being prepared" });
+  const jat = await managedRuntime.ensureJatRuntime(context, manifest, rcc, {
+    onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+  });
   const controllerRobot = manifest.controller?.robot;
   if (typeof controllerRobot !== "string" || path.isAbsolute(controllerRobot)
     || controllerRobot.split(/[\\/]+/).includes("..")) {
@@ -355,15 +383,12 @@ async function initializeManagedRuntime(context) {
 }
 
 async function runtimeFor(cwd) {
-  if (testRuntime) return testRuntime;
-  if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
-  if (!managedRuntimePromise) {
-    managedRuntimePromise = initializeManagedRuntime(extensionContext).catch((error) => {
-      managedRuntimePromise = undefined;
-      throw error;
-    });
+  if (testRuntime) {
+    setRuntimeLifecycle("RUNTIME_READY", "Managed runtime ready");
+    return testRuntime;
   }
-  const state = await managedRuntimePromise;
+  if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
+  const state = await startRuntimeReadiness(extensionContext);
   return {
     command: state.rcc.executable,
     args: (args) => [
@@ -437,6 +462,21 @@ function parseControllerOutput(output) {
   }
 }
 
+function sanitizeRuntimeLine(line) {
+  let value = String(line).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim();
+  value = value.replace(/(bearer\s+)[^\s]+/ig, "$1[REDACTED]");
+  value = value.replace(/((?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|password|oauth[-_ ]?code|authorization|stdin|argv|env)\s*[:=]\s*)[^\s,]+/ig, "$1[REDACTED]");
+  value = value.replace(/https?:\/\/[^\s]+/ig, (match) => {
+    try {
+      const url = new URL(match.replace(/[),.;]+$/, ""));
+      return `${url.origin}${url.pathname}${url.search || url.hash ? "/[REDACTED]" : ""}`;
+    } catch (_error) {
+      return "[REDACTED URL]";
+    }
+  });
+  return value.slice(0, 240);
+}
+
 async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
   progressReporter?.event({
     stage: "controller",
@@ -482,8 +522,20 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     let stderr = "";
     let cancelled = Boolean(cancellationToken?.isCancellationRequested);
     const append = (current, chunk) => (current + chunk.toString()).slice(-1024 * 1024);
-    child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); });
-    child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); });
+    const streamBuffers = { stdout: "", stderr: "" };
+    const stream = (name, chunk) => {
+      const current = streamBuffers[name] + chunk.toString();
+      const lines = current.split(/\r?\n/);
+      streamBuffers[name] = lines.pop() || "";
+      for (const line of lines) {
+        const sanitized = sanitizeRuntimeLine(line);
+        if (!sanitized) continue;
+        outputChannel?.appendLine(`${new Date().toISOString()} RCC ${name}: ${sanitized}`);
+        progressReporter?.event({ stage: "controller", message: sanitized });
+      }
+    };
+    child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); stream("stdout", chunk); });
+    child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); stream("stderr", chunk); });
     const cancellation = cancellationToken?.onCancellationRequested(() => {
       cancelled = true;
       try {
@@ -597,10 +649,11 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
   let lastPercent = 0;
   let latestState;
   let frame = 0;
+  const startedAt = Date.now();
   let animation;
   const updateStatus = () => {
     if (!latestState) return;
-    const animated = formatProgressDisplay(title, kind, latestState, frame);
+    const animated = formatProgressDisplay(title, kind, latestState, frame, Date.now() - startedAt);
     frame += 1;
     const tooltip = new vscode.MarkdownString();
     tooltip.appendCodeblock(animated.tooltip);
@@ -614,7 +667,7 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
   const publish = (event) => {
     const state = tracker.update(event);
     latestState = state;
-    const display = formatProgressDisplay(title, kind, state);
+    const display = formatProgressDisplay(title, kind, state, 0, Date.now() - startedAt);
     const increment = state.percent === undefined ? undefined : Math.max(0, state.percent - lastPercent);
     if (state.percent !== undefined) lastPercent = state.percent;
     progress.report({ message: display.notification, ...(increment ? { increment } : {}) });
@@ -1459,6 +1512,9 @@ module.exports.__test__ = {
   setStatusItem(value) {
     statusItem = value;
   },
+  setOutputChannelForTests(value) {
+    outputChannel = value;
+  },
   startDirtyTracking,
 };
 
@@ -1902,6 +1958,13 @@ class HierarchyRoomsProvider {
   }
 
   getTreeItem(item) {
+    if (item.kind === "runtime") {
+      const treeItem = new vscode.TreeItem(item.label, vscode.TreeItemCollapsibleState.None);
+      treeItem.description = item.description || "";
+      treeItem.iconPath = new vscode.ThemeIcon(item.failed ? "error" : "sync~spin");
+      treeItem.command = { command: "joshRoom.refresh", title: item.failed ? "Retry runtime preparation" : "Show runtime progress" };
+      return treeItem;
+    }
     const emptyKind = ["load", "loading", "empty", "error"].includes(item.kind);
     if (item.kind === "dimension-error") {
       const treeItem = new vscode.TreeItem(
@@ -1979,6 +2042,14 @@ class HierarchyRoomsProvider {
 
   getChildren(item) {
     if (item) return item.children || [];
+    if (runtimeLifecycle.state !== "RUNTIME_READY") {
+      return [{
+        kind: "runtime",
+        label: runtimeLifecycle.state === "FAILED" ? "Josh Room runtime unavailable — Retry" : "Preparing Josh Room runtime…",
+        description: runtimeLifecycle.message,
+        failed: runtimeLifecycle.state === "FAILED",
+      }];
+    }
     if (this.state === "loading") return [{ kind: "loading" }];
     if (this.state === "error") return [{ kind: "error" }];
     if (this.state === "initial") return [{ kind: "load" }];
@@ -1986,6 +2057,11 @@ class HierarchyRoomsProvider {
   }
 
   async refresh() {
+    if (runtimeLifecycle.state !== "RUNTIME_READY") {
+      this.state = "runtime";
+      this.emitter.fire(undefined);
+      await startRuntimeReadiness(extensionContext);
+    }
     this.state = "loading";
     this.emitter.fire(undefined);
     try {
@@ -2372,11 +2448,30 @@ function activateNative(context) {
   register(context, "joshRoom.jatBuild", jatBuild);
   register(context, "joshRoom.jatRestore", jatRestore);
   register(context, "joshRoom.jatServe", jatServe);
-  startDirtyTracking(context).catch((error) => {
-    outputChannel.warn("Unable to index saved Room: " + error.message);
-    setRoomDirty(true);
-  });
-  roomsProvider.refresh().catch((error) => outputChannel.appendLine("error: " + error.message));
+  const runtimePreparation = vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Preparing Josh Room runtime…", cancellable: true },
+    async (progress, token) => {
+      const reporter = createVisualReporter("Preparing Josh Room runtime", "generic", progress);
+      token?.onCancellationRequested?.(() => setRuntimeLifecycle("CANCELLED", "Runtime preparation cancelled; choose Retry to start again"));
+      try {
+        const ready = await startRuntimeReadiness(context, reporter);
+        reporter.finish();
+        return ready;
+      } catch (error) {
+        reporter.fail(error);
+        throw error;
+      } finally {
+        reporter.dispose();
+      }
+    },
+  );
+  runtimePreparation.then(() => {
+    startDirtyTracking(context).catch((error) => {
+      outputChannel.warn("Unable to index saved Room: " + error.message);
+      setRoomDirty(true);
+    });
+    return roomsProvider.refresh();
+  }).catch((error) => outputChannel.appendLine(`error: ${error.message || String(error)}`));
 }
 
 module.exports.activate = activateNative;
@@ -2573,6 +2668,12 @@ Object.assign(module.exports.__test__, {
   setExtensionContextForTests(value) {
     extensionContext = value;
     managedRuntimePromise = undefined;
+    runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
+  },
+  setRuntimeReadinessForTests(value) {
+    runtimeReadinessOverride = value;
+    managedRuntimePromise = undefined;
+    runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
   },
   setRoomsProvider(value) {
     roomsProvider = value;

@@ -86,6 +86,8 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
   await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
   const verifyVersion = options.verifyVersion || verifyRccVersion;
   const download = options.download || downloadFile;
+  const report = (message, extra = {}) => options.onProgress?.({ phase: message, message, ...extra });
+  report("Resolving managed RCC");
 
   if (await isRegularFile(executable)) {
     const observed = await sha256File(executable);
@@ -93,6 +95,7 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
       throw new Error(`cached RCC checksum does not match ${manifest.rcc.version}`);
     }
     await verifyVersion(executable, manifest.rcc.version);
+    report("Reusing cached verified RCC");
     return { executable, storageRoot: paths.storageRoot, platform, version: manifest.rcc.version };
   }
   if (await pathExists(executable)) {
@@ -102,7 +105,9 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
   const temporaryDirectory = await fs.promises.mkdtemp(path.join(directory, ".rcc-download-"));
   const temporary = path.join(temporaryDirectory, pin.asset);
   try {
+    report("Downloading RCC");
     await download(pin.url, temporary);
+    report("Verifying RCC SHA256");
     const observed = await sha256File(temporary);
     if (observed !== pin.sha256) {
       throw new Error(`downloaded RCC checksum mismatch: expected ${pin.sha256}, got ${observed}`);
@@ -113,6 +118,7 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
     await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
   }
   await verifyVersion(executable, manifest.rcc.version);
+  report("Managed RCC ready");
   return { executable, storageRoot: paths.storageRoot, platform, version: manifest.rcc.version };
 }
 
@@ -148,6 +154,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   } else if (await pathExists(archivePath)) {
     throw new Error(`JAT environment archive is not a regular file: ${archivePath}`);
   } else {
+    options.onProgress?.({ phase: "jat-artifact", message: "Downloading JAT Environment Artifact" });
     const temporaryDirectory = await fs.promises.mkdtemp(path.join(paths.jatArtifactRoot, ".download-"));
     const temporary = path.join(temporaryDirectory, archivePin.asset);
     try {
@@ -156,6 +163,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
         throw new Error("downloaded JAT environment archive size mismatch");
       }
       const observed = await sha256File(temporary);
+      options.onProgress?.({ phase: "jat-artifact", message: "Verifying JAT Environment Artifact" });
       if (observed !== archivePin.sha256) {
         throw new Error(`downloaded JAT environment checksum mismatch: expected ${archivePin.sha256}, got ${observed}`);
       }
@@ -178,18 +186,23 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
     ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
     { cwd: paths.storageRoot, env: environment },
   );
+  options.onProgress?.({ phase: "import", message: "Verifying/importing artifact content" });
   if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
     const detail = acquired.error || acquired.message || "RCC did not validate the pinned JAT environment artifact";
     throw new Error(`RCC rejected the pinned JAT environment artifact: ${detail}`);
   }
+  options.onProgress?.({ phase: "compatibility", message: "Checking host/artifact compatibility" });
+  await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
+  const receiptFile = path.join(paths.logsRoot, "jat-artifact-receipt.json");
   const executed = await runJson(
     rccRuntime.executable,
-    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--json", "--", ...haulerVersionCommand()],
-    { cwd: paths.storageRoot, env: environment },
+    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
+    { cwd: paths.storageRoot, env: environment, receiptFile },
   );
   if (executed.artifactDigest !== artifact.digest || executed.exitCode !== 0) {
     throw new Error("acquired JAT environment failed Hauler version verification");
   }
+  options.onProgress?.({ phase: "holotree", message: "Materializing JAT Holotree" });
   return {
     artifact: artifact.digest,
     archive: archivePath,
@@ -315,6 +328,15 @@ function runJsonCommand(executable, args, options = {}) {
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", reject);
     child.on("close", (code) => {
+      if (options.receiptFile && fs.existsSync(options.receiptFile)) {
+        try {
+          resolve(JSON.parse(fs.readFileSync(options.receiptFile, "utf8")));
+          return;
+        } catch (error) {
+          reject(new Error(`managed RCC returned an invalid receipt: ${error.message}`));
+          return;
+        }
+      }
       const start = stdout.indexOf("{");
       const end = stdout.lastIndexOf("}");
       if (code !== 0 && (start < 0 || end < start)) {

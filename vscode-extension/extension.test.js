@@ -82,6 +82,8 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   const infoResponses = [];
   const warningResponses = [];
   const progressCalls = [];
+  const logLines = [];
+  const treeViewCalls = [];
   const statusItem = {
     text: "",
     tooltip: "",
@@ -93,7 +95,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     info() {},
     warn() {},
     error() {},
-    appendLine() {},
+    appendLine(line) { logLines.push(line); },
     show() {},
   };
   return {
@@ -214,7 +216,10 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
         },
         createStatusBarItem: () => statusItem,
         createOutputChannel: () => outputChannel,
-        createTreeView: () => ({ dispose() {} }),
+        createTreeView: (id, options) => {
+          treeViewCalls.push({ id, options });
+          return { dispose() {} };
+        },
         createTerminal: () => ({ show() {}, sendText() {}, dispose() {} }),
         onDidCloseTerminal() { return { dispose() {} }; },
       },
@@ -252,6 +257,8 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     infoResponses,
     warningResponses,
     progressCalls,
+    logLines,
+    treeViewCalls,
   };
 }
 
@@ -1787,6 +1794,52 @@ test("controller preparation is reported before the first RCC recipe constructio
   await extension.__test__.runJoshRoom(["dimensions", "list"], root, undefined, { event: (event) => events.push(event) });
   assert.equal(events[0].stage, "controller");
   assert.match(events[0].message, /Preparing Josh Room controller environment/);
+});
+
+test("RCC stdout and stderr stream live with sanitized popup/output lines", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-rcc-stream-test-"));
+  const { vscode, statusItem, logLines } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ autoClose: false }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ appendLine: (line) => logLines.push(line), info() {}, warn() {}, error() {}, show() {} });
+  const events = [];
+  const operation = extension.__test__.runJoshRoom(["dimensions", "list"], root, undefined, { event: (event) => events.push(event) });
+  await new Promise((resolve) => setImmediate(resolve));
+  const child = spawnHarness.calls[0].child;
+  child.stdout.emit("data", Buffer.from("RCC materializing controller\n"));
+  child.stderr.emit("data", Buffer.from("Bearer super-secret-token\n"));
+  child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, dimensions: [] })));
+  child.closeWith();
+  await operation;
+
+  assert.equal(logLines.some((line) => /RCC materializing controller/.test(line)), true);
+  assert.equal(logLines.some((line) => /super-secret-token/.test(line)), false);
+  assert.equal(logLines.some((line) => /^\d{4}-\d{2}-\d{2}T/.test(line)), true);
+  assert.equal(events.some((event) => /RCC materializing controller/.test(event.message)), true);
+});
+
+test("fresh activation gates all storage calls behind runtime readiness", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-activation-gate-test-"));
+  const { vscode, treeViewCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    throw new Error(`storage command started before runtime readiness: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  let release;
+  extension.__test__.setRuntimeReadinessForTests(new Promise((resolve) => { release = resolve; }));
+  extension.__test__.setRuntimeForTests({ command: "/private/rcc", args: (args) => [...args, "--json"], env: {}, jatRoot: root });
+  const context = { extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [], secrets: { get: async () => undefined } };
+
+  extension.activate(context);
+  await new Promise((resolve) => setImmediate(resolve));
+  const roomsView = treeViewCalls.find((view) => view.id === "joshRoom.rooms").options.treeDataProvider;
+  const pending = roomsView.getChildren();
+  assert.equal(pending[0].kind, "runtime");
+  assert.match(pending[0].label, /Preparing Josh Room runtime/);
+  assert.deepEqual(spawnHarness.calls, []);
+  release({});
+  await new Promise((resolve) => setImmediate(resolve));
 });
 
 test("MinIO Add Storage asks for concrete settings without invoking Cloudflare OAuth", async () => {

@@ -99,6 +99,29 @@ test("ensureManagedRcc verifies the downloaded binary before atomic promotion", 
   assert.equal(fs.readdirSync(path.dirname(result.executable)).some((name) => name.includes("tmp")), false);
 });
 
+test("ensureManagedRcc reports ordered acquisition, verification, and cached reuse phases", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-phases-test-"));
+  const binary = Buffer.from("managed-rcc-binary");
+  const manifest = manifestFor(binary);
+  const phases = [];
+  const options = {
+    platform: "linux-x64",
+    onProgress: (event) => phases.push(event),
+    download: async (_url, destination) => fs.writeFileSync(destination, binary),
+    verifyVersion: async () => {},
+  };
+  await ensureManagedRcc(context(root), manifest, options);
+  await ensureManagedRcc(context(root), manifest, options);
+  assert.deepEqual(phases.map((event) => event.message), [
+    "Resolving managed RCC",
+    "Downloading RCC",
+    "Verifying RCC SHA256",
+    "Managed RCC ready",
+    "Resolving managed RCC",
+    "Reusing cached verified RCC",
+  ]);
+});
+
 test("ensureManagedRcc refuses a corrupt cached binary without replacing it", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-cache-test-"));
   const binary = Buffer.from("managed-rcc-binary");
@@ -205,6 +228,9 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
   assert.equal(calls[0].args.includes("--permissive-local"), true);
   assert.equal(calls[1].args.includes("--permissive-local"), true);
   assert.equal(calls[1].args.includes("--no-build"), true);
+  assert.equal(calls[1].args.includes("--inherit-streams"), true);
+  assert.equal(calls[1].args.includes("--receipt-file"), true);
+  assert.ok(calls[1].args[calls[1].args.indexOf("--receipt-file") + 1].startsWith(root));
   assert.deepEqual(calls[1].args.slice(-3), ["python", "-c", HAULER_VERSION_CHECK]);
   assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
   assert.equal(calls[0].options.env.RCC_HOLOTREE_MODE, "private");
