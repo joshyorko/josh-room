@@ -1,8 +1,8 @@
-import fcntl
 import json
 import os
 import re
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +10,41 @@ from pathlib import Path
 from .crypto import decrypt, encrypt
 from .local_store import OBJECT_KEY
 
+try:
+    import fcntl as _fcntl
+except ImportError:  # Windows
+    _fcntl = None
+
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # POSIX
+    _msvcrt = None
+
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+@contextmanager
+def _exclusive_file_lock(handle):
+    if _fcntl is not None:
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        return
+    if _msvcrt is None:
+        raise RuntimeError("this platform has no supported file-lock implementation")
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+    _msvcrt.locking(handle.fileno(), _msvcrt.LK_LOCK, 1)
+    try:
+        yield
+    finally:
+        handle.seek(0)
+        _msvcrt.locking(handle.fileno(), _msvcrt.LK_UNLCK, 1)
 
 
 class CatalogConflict(RuntimeError):
@@ -184,8 +218,7 @@ class CatalogFile:
 
     def update_if_revision(self, expected_revision: int, catalog: Catalog, recipients: list[str]) -> Catalog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a+") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        with self.lock_path.open("a+b") as lock, _exclusive_file_lock(lock):
             current = self.read()
             if current.body["revision"] != expected_revision:
                 raise CatalogConflict("stale catalog revision")
