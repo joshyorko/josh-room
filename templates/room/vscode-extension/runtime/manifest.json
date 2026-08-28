@@ -2,12 +2,13 @@
   "schema_version": 1,
   "extension_version": "0.1.10",
   "rcc": {
-    "version": "v18.19.2",
+    "version": "v18.19.3",
     "platforms": {
       "linux-x64": {
         "asset": "rcc-linux64",
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-linux64",
-        "sha256": "3a90a331325feb5b75b3ebc7492303a964438ce017347f451aeee3ed7d578b3d"
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
+        "sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428",
+        "size": 22282402
       }
     }
   },
@@ -15,19 +16,20 @@
     "robot": "runtime/controller/robot.yaml"
   },
   "jat": {
-    "git_sha": "096c5f3c5d735a67f41c4fabbf63e4af1aacadf1",
+    "git_sha": "f6005b48dfbe13b6976d44f17c844794be569d5f",
     "source_archive": {
-      "asset": "josh-all-the-things-096c5f3c5d735a67f41c4fabbf63e4af1aacadf1.tar.gz",
-      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/096c5f3c5d735a67f41c4fabbf63e4af1aacadf1",
-      "sha256": "2c5a1523938eaf5699968bbc9c60067977231a0336dc026ce3231631350aa613"
+      "asset": "josh-all-the-things-f6005b48dfbe13b6976d44f17c844794be569d5f.tar.gz",
+      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/f6005b48dfbe13b6976d44f17c844794be569d5f",
+      "sha256": "04964eebdacc5617b311ad82a3825f254ff9f0159e87e3b5deed6f88b3063c74",
+      "size": 60288
     },
     "environment_artifact": {
-      "digest": "sha256:0b5891d1ddc82ffa6dd8d0616b5b77693ec733709492307b2ef947ff0f8f34fb",
+      "digest": "sha256:3e473a015f809da0b77382e54da460da212f9fee2ee02f146736e7acd64f929c",
       "archive": {
-        "asset": "jat-runtime.rcca",
-        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.8-jat-runtime/jat-runtime.rcca",
-        "sha256": "cebd4652f9f8be66300bc193f008971494010367e895c81ae5ec0521175e71be",
-        "size": 169767408
+        "asset": "jat-runtime-linux-amd64.rcca",
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-linux-amd64.rcca",
+        "sha256": "8ccd065e9156ac9067230b0f06dd667f98dc5b95af4535adc2715d02c279f751",
+        "size": 169752215
       }
     }
   }
