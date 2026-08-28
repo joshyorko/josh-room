@@ -12,6 +12,10 @@ const JAT_SOURCE_URL_PREFIX = "https://api.github.com/repos/joshyorko/josh-all-t
 const MANIFEST_PATH = path.join(__dirname, "runtime", "manifest.json");
 const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)";
 
+function isDigest(value) {
+  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
 function haulerVersionCommand() {
   return ["python", "-c", HAULER_VERSION_CHECK];
 }
@@ -115,10 +119,75 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
       ["--no-build", "ht", "vars", "--robot", controllerRobot, "--json"],
       { cwd: privatePaths(context).storageRoot, env: environment },
     );
-    return result !== undefined && result.error === undefined;
+    if (result === undefined || result.error !== undefined) return false;
+    const artifact = record.jat_artifact_digest;
+    if (!artifact) return true;
+    await fs.promises.mkdir(privatePaths(context).logsRoot, { recursive: true, mode: 0o700 });
+    const receiptFile = path.join(privatePaths(context).logsRoot, `local-jat-warm-${process.pid}-${Date.now()}.json`);
+    const verified = await runJson(
+      rccRuntime.executable,
+      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
+      { cwd: privatePaths(context).storageRoot, env: environment, receiptFile },
+    );
+    const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
+    return verified !== undefined && verified.error === undefined && verified.artifactDigest === artifact && exitCode === 0;
   } catch (_error) {
     return false;
   }
+}
+
+async function prepareLocalController(context, rccRuntime, controllerRobot, options = {}) {
+  const environment = { ...process.env, ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
+  options.onProgress?.({ phase: "local-controller", message: "Building controller environment locally" });
+  const runJson = options.runJson || runJsonCommand;
+  const result = await runJson(
+    rccRuntime.executable,
+    ["ht", "vars", "-r", controllerRobot, "--json"],
+    { cwd: path.dirname(controllerRobot), env: environment, onOutput: options.onOutput },
+  );
+  if (!result || result.error !== undefined) throw new Error("managed RCC did not prepare the local controller environment");
+  return result;
+}
+
+async function buildLocalJatArtifact(context, rccRuntime, jatRobot, options = {}) {
+  const release = await acquireProcessLock(path.join(privatePaths(context).runtimeRoot, "local-jat-build.lock"));
+  try {
+    return await buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options);
+  } finally {
+    await release();
+  }
+}
+
+async function buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options = {}) {
+  const paths = privatePaths(context);
+  const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
+  const runJson = options.runJson || runJsonCommand;
+  options.onProgress?.({ phase: "local-jat", message: "Building local JAT artifact once" });
+  const published = await runJson(
+    rccRuntime.executable,
+    ["env", "publish", "--robot", jatRobot, "--provider", "local", "--json"],
+    { cwd: path.dirname(jatRobot), env: environment, onOutput: options.onOutput },
+  );
+  const artifact = published?.artifactDigest || published?.artifact_digest;
+  if (!isDigest(artifact)) throw new Error("managed RCC local JAT publish did not return an artifact digest");
+  await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
+  const receiptFile = path.join(paths.logsRoot, `local-jat-${process.pid}-${Date.now()}.json`);
+  options.onProgress?.({ phase: "local-jat", message: "Verifying Hauler through local JAT artifact" });
+  const verified = await runJson(
+    rccRuntime.executable,
+    ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
+    { cwd: path.dirname(jatRobot), env: environment, receiptFile, onOutput: options.onOutput },
+  );
+  const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
+  if (verified?.artifactDigest !== artifact && verified?.artifact_digest !== artifact || exitCode !== 0) {
+    throw new Error("local JAT artifact failed Hauler version verification");
+  }
+  return {
+    artifact,
+    specification: published.specificationDigest || published.specification_digest,
+    blueprint: published.legacyBlueprintKey || published.legacy_blueprint_key,
+    receiptFile,
+  };
 }
 
 async function writeLocalFallbackRecord(context, record) {
@@ -133,6 +202,22 @@ async function writeLocalFallbackRecord(context, record) {
 
 async function clearLocalFallbackRecord(context) {
   await fs.promises.rm(localFallbackRecordPath(context), { force: true });
+}
+
+async function acquireProcessLock(filename, timeoutMs = 30 * 60 * 1000) {
+  await fs.promises.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      await fs.promises.mkdir(filename, { recursive: false, mode: 0o700 });
+      return async () => fs.promises.rm(filename, { recursive: true, force: true });
+    } catch (error) {
+      if (error.code !== "EEXIST" || Date.now() >= deadline) {
+        throw new Error(`managed runtime lock unavailable at ${filename}: ${error.message}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
 
 async function ensureFreeSpace(root, requiredBytes, label) {
@@ -474,6 +559,27 @@ function verifyRccVersion(executable, expected) {
   });
 }
 
+function parseJsonOutput(output) {
+  const text = String(output).trim();
+  try {
+    return JSON.parse(text);
+  } catch (directError) {
+    for (let start = 0; start < text.length; start += 1) {
+      const opener = text[start];
+      if (opener !== "{" && opener !== "[") continue;
+      const closer = opener === "{" ? "}" : "]";
+      for (let end = text.lastIndexOf(closer); end > start; end = text.lastIndexOf(closer, end - 1)) {
+        try {
+          return JSON.parse(text.slice(start, end + 1));
+        } catch (_error) {
+          // Continue until a complete JSON value is found after streamed RCC output.
+        }
+      }
+    }
+    throw directError;
+  }
+}
+
 function runJsonCommand(executable, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(executable, args, {
@@ -483,8 +589,8 @@ function runJsonCommand(executable, args, options = {}) {
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); options.onOutput?.("stdout", chunk.toString()); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); options.onOutput?.("stderr", chunk.toString()); });
     child.on("error", reject);
     child.on("close", (code) => {
       if (options.receiptFile && fs.existsSync(options.receiptFile)) {
@@ -496,19 +602,17 @@ function runJsonCommand(executable, args, options = {}) {
           return;
         }
       }
-      const start = stdout.indexOf("{");
-      const end = stdout.lastIndexOf("}");
-      if (code !== 0 && (start < 0 || end < start)) {
-        reject(new Error(stderr || `managed RCC exited with status ${code}`));
-        return;
-      }
-      if (start < 0 || end < start) {
-        reject(new Error("managed RCC returned no JSON result"));
-        return;
-      }
       try {
-        resolve(JSON.parse(stdout.slice(start, end + 1)));
+        resolve(parseJsonOutput(stdout));
       } catch (error) {
+        if (code !== 0 && !stdout.trim()) {
+          reject(new Error(stderr || `managed RCC exited with status ${code}`));
+          return;
+        }
+        if (!stdout.trim()) {
+          reject(new Error("managed RCC returned no JSON result"));
+          return;
+        }
         reject(new Error(`managed RCC returned invalid JSON: ${error.message}`));
       }
     });
@@ -595,6 +699,8 @@ module.exports = {
   localFallbackRecordPath,
   readLocalFallbackRecord,
   verifyLocalFallback,
+  prepareLocalController,
+  buildLocalJatArtifact,
   writeLocalFallbackRecord,
   privatePaths,
   readManifest,
@@ -602,5 +708,6 @@ module.exports = {
   runtimeEnvironment,
   haulerVersionCommand,
   localFallbackReason,
+  parseJsonOutput,
   sha256File,
 };

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "extension_version": "0.1.6",
+  "extension_version": "0.1.10",
   "rcc": {
     "version": "v18.19.2",
     "platforms": {

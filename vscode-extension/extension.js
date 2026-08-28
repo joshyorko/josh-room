@@ -401,14 +401,15 @@ function controllerSourceVersion(controllerRoot) {
   return digest.digest("hex");
 }
 
-function fallbackIdentity(manifest, rcc, controllerRoot) {
+function fallbackIdentity(manifest, rcc, controllerRoot, jatArtifactDigest) {
   return {
     mode: "local-build-fallback",
     extension_version: manifest.extension_version,
     rcc_version: rcc.version,
     platform: managedRuntime.resolvePlatform(),
     jat_source_sha: manifest.jat.git_sha,
-    jat_artifact_digest: manifest.jat.environment_artifact.digest,
+    ...(jatArtifactDigest ? { jat_artifact_digest: jatArtifactDigest } : {}),
+    portable_jat_artifact_digest: manifest.jat.environment_artifact.digest,
     controller_source_version: controllerSourceVersion(controllerRoot),
     controller_artifact_digest: manifest.controller.environment_artifact?.digest || "unpublished",
   };
@@ -416,24 +417,73 @@ function fallbackIdentity(manifest, rcc, controllerRoot) {
 
 async function localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot) {
   progressReporter?.event({ stage: "runtime", message: `LOCAL BUILD FALLBACK: ${error.message}` });
-  progressReporter?.event({ stage: "runtime", message: "Materializing bundled JAT and controller recipes locally" });
+  progressReporter?.event({ stage: "runtime", message: "Building controller environment locally; JAT remains lazy until a JAT operation" });
   const jatRoot = jat?.jatRoot || await managedRuntime.ensureJatSource(context, manifest.jat);
-  const identity = fallbackIdentity(manifest, rcc, controllerRoot);
+  const identityBase = fallbackIdentity(manifest, rcc, controllerRoot);
   const warm = await managedRuntime.verifyLocalFallback(
-    context, rcc, path.join(controllerRoot, "robot.yaml"), identity,
+    context, rcc, path.join(controllerRoot, "robot.yaml"), identityBase,
   );
-  if (warm) progressReporter?.event({ stage: "runtime", message: "Reusing verified LOCAL BUILD FALLBACK Holotree" });
-  else if (await chooseLocalFallback(error) !== "build") throw new Error("Local runtime build cancelled");
+  const marker = managedRuntime.readLocalFallbackRecord(context);
+  const localJatDigest = marker?.jat_artifact_digest || jat?.artifact;
+  const identity = fallbackIdentity(manifest, rcc, controllerRoot, localJatDigest);
+  let localJat;
+  let readyIdentity = identity;
+  if (warm) {
+    progressReporter?.event({ stage: "runtime", message: "Reusing verified LOCAL BUILD FALLBACK controller environment" });
+  } else {
+    if (await chooseLocalFallback(error) !== "build") throw new Error("Local runtime build cancelled");
+    await managedRuntime.prepareLocalController(
+      context,
+      rcc,
+      path.join(controllerRoot, "robot.yaml"),
+      {
+        onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+        onOutput: (stream, chunk) => {
+          if (stream !== "stderr") return;
+          const sanitized = sanitizeRuntimeLine(chunk);
+          if (!sanitized) return;
+          outputChannel?.appendLine(`${new Date().toISOString()} RCC ${stream}: ${sanitized}`);
+          progressReporter?.event({ stage: "runtime", message: sanitized });
+        },
+      },
+    );
+    if (error.fallbackReason === "environment-compatibility") {
+      localJat = await managedRuntime.buildLocalJatArtifact(
+        context,
+        rcc,
+        path.join(jatRoot, "robot.yaml"),
+        {
+          onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+          onOutput: (stream, chunk) => {
+            if (stream !== "stderr") return;
+            const sanitized = sanitizeRuntimeLine(chunk);
+            if (!sanitized) return;
+            outputChannel?.appendLine(`${new Date().toISOString()} RCC ${stream}: ${sanitized}`);
+            progressReporter?.event({ stage: "runtime", message: sanitized });
+          },
+        },
+      );
+    }
+    readyIdentity = fallbackIdentity(manifest, rcc, controllerRoot, localJat?.artifact || jat?.artifact);
+    await managedRuntime.writeLocalFallbackRecord(context, { ...readyIdentity, ...(localJat ? { local_jat_artifact_digest: localJat.artifact } : {}) });
+    progressReporter?.event({
+      stage: "runtime",
+      message: localJat
+        ? "Controller and local JAT artifacts ready (LOCAL BUILD FALLBACK)"
+        : "Controller environment ready (LOCAL BUILD FALLBACK); JAT remains lazy",
+    });
+  }
+  const effectiveJatDigest = localJat?.artifact || localJatDigest || jat?.artifact;
   return {
     manifest,
     rcc,
-    jat: jat || { jatRoot, artifact: undefined, sourceSha: manifest.jat.git_sha },
+    jat: jat ? { ...jat, artifact: effectiveJatDigest || jat.artifact } : { jatRoot, artifact: effectiveJatDigest, sourceSha: manifest.jat.git_sha },
     controller: undefined,
     controllerRoot,
     mode: "local-build-fallback",
     fallbackReason: error.fallbackReason,
     localReady: warm,
-    localIdentity: identity,
+    localIdentity: readyIdentity,
   };
 }
 
@@ -515,6 +565,7 @@ async function runtimeFor(cwd) {
       controllerArtifact: state.controller?.artifact,
     }, cwd),
     jatRoot: state.jat.jatRoot,
+    jatArtifact: state.jat.artifact,
     mode: state.mode,
     markLocalReady: state.mode === "local-build-fallback"
       ? () => managedRuntime.writeLocalFallbackRecord(extensionContext, state.localIdentity)
@@ -594,10 +645,6 @@ function sanitizeRuntimeLine(line) {
 }
 
 async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
-  progressReporter?.event({
-    stage: "controller",
-    message: "Preparing Josh Room controller environment; first use may take a minute",
-  });
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
   fs.chmodSync(progressDirectory, 0o700);
   const progressPath = path.join(progressDirectory, "events.jsonl");
@@ -610,7 +657,9 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   try {
     runtime = await runtimeFor(cwd);
     environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
-    credentialsCleanup = await writeRuntimeCredentials(environment, { extensionMode: runtime.mode !== "local-build-fallback" });
+    credentialsCleanup = await writeRuntimeCredentials(environment, {
+      extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
+    });
   } catch (error) {
     fs.rmSync(progressDirectory, { recursive: true, force: true });
     throw error;
@@ -641,6 +690,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       detached: true,
       stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
+    progressReporter?.event({ stage: "controller", message: "Starting Josh Room controller" });
     if (stdinPayload !== undefined) child.stdin.end(stdinPayload);
     let stdout = "";
     let stderr = "";
@@ -648,6 +698,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     const append = (current, chunk) => (current + chunk.toString()).slice(-1024 * 1024);
     const streamBuffers = { stdout: "", stderr: "" };
     const stream = (name, chunk) => {
+      if (name !== "stderr") return;
       const current = streamBuffers[name] + chunk.toString();
       const lines = current.split(/\r?\n/);
       streamBuffers[name] = lines.pop() || "";
@@ -2805,6 +2856,7 @@ Object.assign(module.exports.__test__, {
   roomLabel,
   runJoshRoom,
   chooseLocalFallback,
+  localRuntimeState,
   clearLocalFallback,
   serveRoom,
   selectDimension,

@@ -85,7 +85,83 @@ test("local fallback warm reuse requires the complete scoped identity", async ()
   const api = require("./runtime");
   await api.writeLocalFallbackRecord(runtimeContext, expected);
   assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), expected), true);
-  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.6" }), false);
+  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.10" }), false);
+});
+
+test("local fallback controller preparation runs managed RCC before readiness resolves", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-test-"));
+  const calls = [];
+  const phases = [];
+  const runtime = require("./runtime");
+  await assert.rejects(
+    runtime.prepareLocalController(
+      context(root),
+      { executable: "/private/managed/rcc", version: "v18.19.2" },
+      "/private/controller/robot.yaml",
+      {
+        runJson: async (_executable, args) => {
+          calls.push(args);
+          throw new Error("local controller preparation failed");
+        },
+        onProgress: (event) => phases.push(event.message),
+      },
+    ),
+    /local controller preparation failed/,
+  );
+  assert.deepEqual(calls, [["ht", "vars", "-r", "/private/controller/robot.yaml", "--json"]]);
+  assert.deepEqual(phases, ["Building controller environment locally"]);
+  assert.equal(fs.existsSync(runtime.localFallbackRecordPath(context(root))), false);
+});
+
+test("RCC JSON framing accepts ht vars arrays with streamed output around them", () => {
+  const runtime = require("./runtime");
+  const variables = [{ key: "PYTHON_EXE", value: "/managed/python" }, { key: "CONDA_PREFIX", value: "/managed" }];
+  assert.deepEqual(runtime.parseJsonOutput(JSON.stringify(variables)), variables);
+  assert.deepEqual(
+    runtime.parseJsonOutput(`RCC progress line\n${JSON.stringify(variables, null, 2)}\nRCC finished\n`),
+    variables,
+  );
+});
+
+test("warm local fallback proof uses no-build ht vars and the exact private RCC home", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-warm-test-"));
+  const runtime = require("./runtime");
+  const expected = { schema_version: 1, mode: "local-build-fallback", extension_version: "0.1.10", platform: "linux-x64" };
+  await runtime.writeLocalFallbackRecord(context(root), expected);
+  const calls = [];
+  assert.equal(await runtime.verifyLocalFallback(context(root), { executable: "/private/managed/rcc", version: "v18.19.2" }, "/private/controller/robot.yaml", expected, {
+    runJson: async (_executable, args, options) => {
+      calls.push({ args, options });
+      return { vars: [] };
+    },
+  }), true);
+  assert.deepEqual(calls[0].args, ["--no-build", "ht", "vars", "--robot", "/private/controller/robot.yaml", "--json"]);
+  assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
+});
+
+test("local JAT fallback publishes once and verifies Hauler through the local artifact", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-artifact-test-"));
+  const calls = [];
+  const artifact = "sha256:" + "d".repeat(64);
+  const result = await require("./runtime").buildLocalJatArtifact(
+    context(root),
+    { executable: "/private/managed/rcc", version: "v18.19.2" },
+    "/private/jat/robot.yaml",
+    {
+      runJson: async (_executable, args, options) => {
+        calls.push({ args, options });
+        if (args[1] === "publish") return { artifactDigest: artifact, specificationDigest: "sha256:" + "e".repeat(64), legacyBlueprintKey: "blueprint" };
+        return { artifactDigest: artifact, exitCode: 0, verification: { valid: true } };
+      },
+    },
+  );
+  assert.equal(result.artifact, artifact);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].args, ["env", "publish", "--robot", "/private/jat/robot.yaml", "--provider", "local", "--json"]);
+  assert.equal(calls[1].args.includes("--no-build"), true);
+  assert.equal(calls[1].args.includes("--artifact"), true);
+  assert.equal(calls[1].args.includes("hauler"), true);
+  assert.equal(calls[1].options.env.RCC_HOLOTREE_MODE, "private");
 });
 
 test("readManifest rejects an RCC pin without an exact digest", () => {

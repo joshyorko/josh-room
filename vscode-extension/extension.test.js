@@ -1783,7 +1783,7 @@ test("R2 disconnect logs out the local OAuth session instead of treating the end
   assert.equal(refreshes, 1);
 });
 
-test("controller preparation is reported before the first RCC recipe construction can finish", async () => {
+test("warm controller calls use operation progress without repeating preparation messaging", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-preparation-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true, dimensions: [] }) }));
@@ -1792,8 +1792,8 @@ test("controller preparation is reported before the first RCC recipe constructio
   const events = [];
 
   await extension.__test__.runJoshRoom(["dimensions", "list"], root, undefined, { event: (event) => events.push(event) });
-  assert.equal(events[0].stage, "controller");
-  assert.match(events[0].message, /Preparing Josh Room controller environment/);
+  assert.equal(events.some((event) => /Preparing Josh Room controller environment/.test(event.message)), false);
+  assert.equal(events.some((event) => /Starting Josh Room controller/.test(event.message)), true);
 });
 
 test("RCC stdout and stderr stream live with sanitized popup/output lines", async () => {
@@ -1807,9 +1807,8 @@ test("RCC stdout and stderr stream live with sanitized popup/output lines", asyn
   const operation = extension.__test__.runJoshRoom(["dimensions", "list"], root, undefined, { event: (event) => events.push(event) });
   await new Promise((resolve) => setImmediate(resolve));
   const child = spawnHarness.calls[0].child;
-  child.stdout.emit("data", Buffer.from("RCC materializing controller\n"));
-  child.stderr.emit("data", Buffer.from("Bearer super-secret-token\n"));
-  child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, dimensions: [] })));
+  child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, dimensions: [{ id: "private-catalog-data" }] })));
+  child.stderr.emit("data", Buffer.from("RCC materializing controller\nBearer super-secret-token\n"));
   child.closeWith();
   await operation;
 
@@ -1817,6 +1816,7 @@ test("RCC stdout and stderr stream live with sanitized popup/output lines", asyn
   assert.equal(logLines.some((line) => /super-secret-token/.test(line)), false);
   assert.equal(logLines.some((line) => /^\d{4}-\d{2}-\d{2}T/.test(line)), true);
   assert.equal(events.some((event) => /RCC materializing controller/.test(event.message)), true);
+  assert.equal(logLines.some((line) => /private-catalog-data/.test(line)), false);
 });
 
 test("fresh activation gates all storage calls behind runtime readiness", async () => {
@@ -1856,6 +1856,106 @@ test("local fallback prompt requires explicit Build Locally and supports Show Lo
   assert.equal(outputChannel.shown, true);
 });
 
+test("choosing Build Locally prewarms the controller before local runtime readiness returns", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-extension-test-"));
+  const controllerRoot = path.join(root, "controller");
+  fs.mkdirSync(controllerRoot, { recursive: true });
+  fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
+  const { vscode, warningResponses } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => args[0] === "ht"
+    ? { stdout: JSON.stringify({ ok: true }) }
+    : { stdout: JSON.stringify({ ok: true }) });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  warningResponses.push("Build Locally");
+  const events = [];
+  const manifest = {
+    extension_version: "0.1.10",
+    jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } },
+    controller: {},
+  };
+  const error = new Error("controller artifact unpublished");
+  error.fallbackReason = "controller-artifact-unpublished";
+  const state = await extension.__test__.localRuntimeState(
+      { globalStorageUri: { fsPath: root } }, manifest,
+      { version: "v18.19.2" }, { jatRoot: path.join(root, "jat"), sourceSha: manifest.jat.git_sha },
+      error, { event: (event) => events.push(event) }, controllerRoot,
+    );
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "ht"), true);
+  assert.equal(state.localReady, false);
+  assert.equal(fs.existsSync(path.join(root, "runtime", "local-fallback.json")), true);
+  assert.equal(events.some((event) => /Controller environment ready/.test(event.message)), true);
+  assert.equal(events.some((event) => /JAT.*materializ/i.test(event.message)), false);
+});
+
+test("local JAT fallback publishes once and warm reuse performs only no-build checks", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-once-test-"));
+  const controllerRoot = path.join(root, "controller");
+  const jatRoot = path.join(root, "jat");
+  fs.mkdirSync(controllerRoot, { recursive: true });
+  fs.mkdirSync(jatRoot, { recursive: true });
+  fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
+  fs.writeFileSync(path.join(jatRoot, "robot.yaml"), "tasks: {}\n");
+  const { vscode, warningResponses } = createVscodeMock(root);
+  const localArtifact = "sha256:" + "d".repeat(64);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "env" && args[1] === "publish") return { stdout: JSON.stringify({ artifactDigest: localArtifact }) };
+    if (args[0] === "--no-build" && args.includes("hauler")) return { stdout: JSON.stringify({ artifactDigest: localArtifact, exitCode: 0 }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  warningResponses.push("Build Locally");
+  const manifest = {
+    extension_version: "0.1.10",
+    jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } },
+    controller: {},
+  };
+  const error = new Error("portable JAT is incompatible");
+  error.fallbackReason = "environment-compatibility";
+  const first = await extension.__test__.localRuntimeState(
+    { globalStorageUri: { fsPath: root } }, manifest,
+    { version: "v18.19.2", executable: "/private/managed/rcc" },
+    { jatRoot, sourceSha: manifest.jat.git_sha }, error, { event() {} }, controllerRoot,
+  );
+  assert.equal(first.jat.artifact, localArtifact);
+  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "env" && call.args[1] === "publish").length, 1);
+
+  const beforeWarm = spawnHarness.calls.length;
+  const second = await extension.__test__.localRuntimeState(
+    { globalStorageUri: { fsPath: root } }, manifest,
+    { version: "v18.19.2", executable: "/private/managed/rcc" },
+    first.jat, error, { event() {} }, controllerRoot,
+  );
+  assert.equal(second.localReady, true);
+  const warmCalls = spawnHarness.calls.slice(beforeWarm);
+  assert.equal(warmCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
+  assert.equal(warmCalls.some((call) => call.args[0] === "run"), false);
+  assert.equal(warmCalls.every((call) => call.args[0] === "--no-build"), true);
+});
+
+test("failed local controller prewarm writes no marker and never reports runtime ready", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-failure-test-"));
+  const controllerRoot = path.join(root, "controller");
+  fs.mkdirSync(controllerRoot, { recursive: true });
+  fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
+  const { vscode, warningResponses } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => args[0] === "ht"
+    ? { stderr: "controller prewarm failed", code: 1 }
+    : { stdout: JSON.stringify({ ok: true }) });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  warningResponses.push("Build Locally");
+  const events = [];
+  const error = new Error("controller artifact unpublished");
+  error.fallbackReason = "controller-artifact-unpublished";
+  await assert.rejects(extension.__test__.localRuntimeState(
+      { globalStorageUri: { fsPath: root } },
+      { extension_version: "0.1.10", jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } }, controller: {} },
+      { version: "v18.19.2" }, { jatRoot: path.join(root, "jat") }, error,
+      { event: (event) => events.push(event) }, controllerRoot,
+    ), /controller prewarm failed/);
+  assert.equal(fs.existsSync(path.join(root, "runtime", "local-fallback.json")), false);
+  assert.equal(events.some((event) => /Controller environment ready/.test(event.message)), false);
+});
+
 test("local fallback runtime command uses managed RCC and the packaged recipe", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-command-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
@@ -1866,7 +1966,8 @@ test("local fallback runtime command uses managed RCC and the packaged recipe", 
     mode: "local-build-fallback",
     command: "/private/managed/rcc",
     args: (args) => ["run", "--silent", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--", ...args, "--json"],
-    env: { RCC_HOLOTREE_MODE: "private", PATH: "/private/managed:/usr/bin", JOSH_ROOM_EXTENSION_MODE: "0" },
+    env: { RCC_HOLOTREE_MODE: "private", PATH: "/private/managed:/usr/bin", JOSH_ROOM_EXTENSION_MODE: "1", JOSH_ROOM_JAT_ARTIFACT: "sha256:" + "a".repeat(64) },
+    jatArtifact: "sha256:" + "a".repeat(64),
     jatRoot: root,
   });
 
@@ -1876,7 +1977,7 @@ test("local fallback runtime command uses managed RCC and the packaged recipe", 
     "run", "--silent", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--",
   ]);
   assert.equal(spawnHarness.calls[0].options.env.RCC_HOLOTREE_MODE, "private");
-  assert.equal(spawnHarness.calls[0].options.env.JOSH_ROOM_EXTENSION_MODE, "0");
+  assert.equal(spawnHarness.calls[0].options.env.JOSH_ROOM_EXTENSION_MODE, "1");
 });
 
 test("portable runtime retry clears only the scoped fallback marker", async () => {
