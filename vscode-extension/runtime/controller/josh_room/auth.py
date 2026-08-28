@@ -4,6 +4,7 @@ import time
 import urllib.request
 import webbrowser
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from .config import config_dir
@@ -52,9 +53,17 @@ def poll_oauth_session(session_id: str, dimension_id: str | None = None) -> dict
 
 
 def cancel_oauth_session(session_id: str) -> dict:
-    result = _request(f"/session/{session_id}/cancel", method="POST")
+    try:
+        result = _request(f"/session/{session_id}/cancel", method="POST")
+    except HTTPError as error:
+        _clear_runtime_session()
+        if error.code == 404:
+            return {"status": "canceled", "stale": True}
+        raise
     if result.get("status") == "canceled":
         _clear_runtime_session()
+        return result
+    return result
     return result
 
 
@@ -71,11 +80,14 @@ def wait_oauth_session(
     dimension_id: str | None = None,
 ) -> dict:
     deadline = time.monotonic() + timeout
+    started_at = time.monotonic()
     try:
         while time.monotonic() < deadline:
             result = poll_oauth_session(session_id, dimension_id=dimension_id)
             if result["status"] != "pending":
+                report_progress("auth", f"Validating Cloudflare session ({int(time.monotonic() - started_at)}s elapsed)")
                 return result
+            report_progress("auth", f"Waiting for browser approval ({int(time.monotonic() - started_at)}s elapsed)")
             remaining = deadline - time.monotonic()
             if remaining > 0 and poll_interval > 0:
                 time.sleep(min(poll_interval, remaining))
