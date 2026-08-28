@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from .config import config_dir
 from .progress import report_progress
+from .tls import system_ssl_context
 
 _RUNTIME_FILES = ("r2.json", "age.identity", "config.json", "session.json")
 DEFAULT_AUTH_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
@@ -152,7 +153,7 @@ def _request(path: str, method: str = "GET") -> dict:
         method=method,
         headers={"User-Agent": "Josh-Room/0.1 (+https://github.com/joshyorko/josh-room)"},
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=30, context=system_ssl_context()) as response:
         return json.load(response)
 
 

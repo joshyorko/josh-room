@@ -29,7 +29,7 @@ def test_worker_request_identifies_josh_room_instead_of_python_urllib(monkeypatc
         def __exit__(self, *_args):
             self.close()
 
-    def open_request(request, timeout):
+    def open_request(request, timeout, **_kwargs):
         captured.append((request, timeout))
         return Response(b'{"status":"pending"}')
 
@@ -50,7 +50,7 @@ def test_worker_request_uses_explicit_auth_authority(monkeypatch):
         def __exit__(self, *_args):
             self.close()
 
-    def open_request(request, timeout):
+    def open_request(request, timeout, **_kwargs):
         captured.append((request, timeout))
         return Response(b'{"status":"pending"}')
 
@@ -71,7 +71,7 @@ def test_worker_request_uses_official_authority_without_override(monkeypatch):
         def __exit__(self, *_args):
             self.close()
 
-    def open_request(request, timeout):
+    def open_request(request, timeout, **_kwargs):
         captured.append((request, timeout))
         return Response(b'{"status":"pending"}')
 
@@ -81,6 +81,31 @@ def test_worker_request_uses_official_authority_without_override(monkeypatch):
     auth._request("/session/synthetic")
 
     assert captured[0][0].full_url == "https://josh-room-auth.joshua-yorko.workers.dev/session/synthetic"
+
+
+def test_worker_request_passes_a_scoped_system_trust_context(monkeypatch):
+    captured = {}
+
+    class Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    def open_request(request, timeout, **kwargs):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        captured["context"] = kwargs.get("context")
+        return Response(b'{"status":"pending"}')
+
+    sentinel = object()
+    monkeypatch.setenv("JOSH_ROOM_AUTH_URL", "https://auth.example.invalid")
+    monkeypatch.setattr(auth, "system_ssl_context", lambda: sentinel, raising=False)
+    monkeypatch.setattr("josh_room.auth.urllib.request.urlopen", open_request)
+
+    assert _request("/session/synthetic") == {"status": "pending"}
+    assert captured["context"] is sentinel
 
 
 def test_cancel_oauth_session_invalidates_worker_transaction(monkeypatch):

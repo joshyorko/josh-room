@@ -297,6 +297,17 @@ test("runtimeEnvironment keeps RCC and Room state under extension global storage
   assert.equal(environment.JOSH_ROOM_JAT_SHA, "b".repeat(40));
 });
 
+test("runtimeEnvironment gives RCC a space-safe home for VS Code paths with spaces", () => {
+  const root = "/private/vscode/Code - Insiders/User/globalStorage/josh-room";
+  const environment = runtimeEnvironment(context(root), {}, "/workspaces/example");
+
+  assert.equal(/\s/.test(environment.ROBOCORP_HOME), false);
+  assert.notEqual(environment.ROBOCORP_HOME, path.join(root, "robocorp"));
+  assert.equal(environment.JOSH_ROOM_RCC_HOME, environment.ROBOCORP_HOME);
+  assert.equal(environment.JOSH_ROOM_INSTANCE, path.join(root, "state", "josh-room"));
+  assert.equal(environment.JOSH_ROOM_CONFIG_DIR, path.join(root, "config"));
+});
+
 test("selectJatArtifact chooses the platform pin and preserves the Linux legacy fallback", () => {
   const legacy = { digest: "sha256:" + "a".repeat(64) };
   const linux = { digest: "sha256:" + "b".repeat(64) };

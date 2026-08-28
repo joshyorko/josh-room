@@ -20,6 +20,27 @@ function haulerVersionCommand() {
   return ["python", "-c", HAULER_VERSION_CHECK];
 }
 
+function rccPathIsSafe(filename) {
+  return typeof filename === "string" && !/\s/.test(filename);
+}
+
+function rccHomePath(storageRoot) {
+  const preferred = path.join(storageRoot, "robocorp");
+  if (rccPathIsSafe(preferred)) return preferred;
+  const digest = crypto.createHash("sha256").update(storageRoot).digest("hex").slice(0, 16);
+  const candidates = [
+    process.env.XDG_CACHE_HOME,
+    process.env.LOCALAPPDATA,
+    path.join(os.homedir(), ".cache"),
+    os.tmpdir(),
+    path.parse(os.tmpdir()).root,
+    process.platform === "win32" ? "C:\\" : "/tmp",
+  ];
+  const base = candidates.find((candidate) => rccPathIsSafe(candidate));
+  if (!base) throw new Error("Josh Room could not find a space-safe RCC home");
+  return path.join(base, "josh-room", `rcc-${digest}`);
+}
+
 function localFallbackReason(error) {
   const reason = error?.fallbackReason;
   return reason === "environment-compatibility" || reason === "controller-artifact-unpublished" ? reason : undefined;
@@ -125,7 +146,7 @@ function privatePaths(context) {
   return {
     storageRoot,
     runtimeRoot: path.join(storageRoot, "runtime"),
-    rccHome: path.join(storageRoot, "robocorp"),
+    rccHome: rccHomePath(storageRoot),
     configRoot: path.join(storageRoot, "config"),
     instanceRoot: path.join(storageRoot, "state", "josh-room"),
     runtimeRootDirectory: path.join(storageRoot, "runtime", "josh-room"),
