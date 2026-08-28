@@ -487,6 +487,27 @@ function verifyRccVersion(executable, expected) {
   });
 }
 
+function parseJsonOutput(output) {
+  const text = String(output).trim();
+  try {
+    return JSON.parse(text);
+  } catch (directError) {
+    for (let start = 0; start < text.length; start += 1) {
+      const opener = text[start];
+      if (opener !== "{" && opener !== "[") continue;
+      const closer = opener === "{" ? "}" : "]";
+      for (let end = text.lastIndexOf(closer); end > start; end = text.lastIndexOf(closer, end - 1)) {
+        try {
+          return JSON.parse(text.slice(start, end + 1));
+        } catch (_error) {
+          // Continue until a complete JSON value is found after streamed RCC output.
+        }
+      }
+    }
+    throw directError;
+  }
+}
+
 function runJsonCommand(executable, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(executable, args, {
@@ -509,19 +530,17 @@ function runJsonCommand(executable, args, options = {}) {
           return;
         }
       }
-      const start = stdout.indexOf("{");
-      const end = stdout.lastIndexOf("}");
-      if (code !== 0 && (start < 0 || end < start)) {
-        reject(new Error(stderr || `managed RCC exited with status ${code}`));
-        return;
-      }
-      if (start < 0 || end < start) {
-        reject(new Error("managed RCC returned no JSON result"));
-        return;
-      }
       try {
-        resolve(JSON.parse(stdout.slice(start, end + 1)));
+        resolve(parseJsonOutput(stdout));
       } catch (error) {
+        if (code !== 0 && !stdout.trim()) {
+          reject(new Error(stderr || `managed RCC exited with status ${code}`));
+          return;
+        }
+        if (!stdout.trim()) {
+          reject(new Error("managed RCC returned no JSON result"));
+          return;
+        }
         reject(new Error(`managed RCC returned invalid JSON: ${error.message}`));
       }
     });
@@ -616,5 +635,6 @@ module.exports = {
   runtimeEnvironment,
   haulerVersionCommand,
   localFallbackReason,
+  parseJsonOutput,
   sha256File,
 };
