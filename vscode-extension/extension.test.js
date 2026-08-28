@@ -1869,7 +1869,7 @@ test("choosing Build Locally prewarms the controller before local runtime readin
   warningResponses.push("Build Locally");
   const events = [];
   const manifest = {
-    extension_version: "0.1.6",
+    extension_version: "0.1.7",
     jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } },
     controller: {},
   };
@@ -1903,7 +1903,7 @@ test("failed local controller prewarm writes no marker and never reports runtime
   error.fallbackReason = "controller-artifact-unpublished";
   await assert.rejects(extension.__test__.localRuntimeState(
       { globalStorageUri: { fsPath: root } },
-      { extension_version: "0.1.6", jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } }, controller: {} },
+      { extension_version: "0.1.7", jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } }, controller: {} },
       { version: "v18.19.2" }, { jatRoot: path.join(root, "jat") }, error,
       { event: (event) => events.push(event) }, controllerRoot,
     ), /controller prewarm failed/);

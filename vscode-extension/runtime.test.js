@@ -85,7 +85,7 @@ test("local fallback warm reuse requires the complete scoped identity", async ()
   const api = require("./runtime");
   await api.writeLocalFallbackRecord(runtimeContext, expected);
   assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), expected), true);
-  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.6" }), false);
+  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.7" }), false);
 });
 
 test("local fallback controller preparation runs managed RCC before readiness resolves", async () => {
@@ -116,7 +116,7 @@ test("local fallback controller preparation runs managed RCC before readiness re
 test("warm local fallback proof uses no-build ht vars and the exact private RCC home", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-warm-test-"));
   const runtime = require("./runtime");
-  const expected = { schema_version: 1, mode: "local-build-fallback", extension_version: "0.1.6", platform: "linux-x64" };
+  const expected = { schema_version: 1, mode: "local-build-fallback", extension_version: "0.1.7", platform: "linux-x64" };
   await runtime.writeLocalFallbackRecord(context(root), expected);
   const calls = [];
   assert.equal(await runtime.verifyLocalFallback(context(root), { executable: "/private/managed/rcc", version: "v18.19.2" }, "/private/controller/robot.yaml", expected, {
