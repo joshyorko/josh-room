@@ -39,7 +39,7 @@ def test_jat_build_uses_typed_rcc_request_and_preserves_receipt(tmp_path, monkey
     output.write_text('{"format_version": 1, "operation": "build", "success": true, "exit_status": 0, "producer_version": "jat-test", "payload_size": 12, "sha256": "' + "a" * 64 + '"}')
     seen = {}
 
-    def fake_run(argv, _timeout):
+    def fake_run(argv, _timeout, **_kwargs):
         seen["argv"] = argv
         request = json.loads(Path(argv[-1]).read_text())
         assert request == {
@@ -64,14 +64,14 @@ def test_jat_rejects_stale_receipt(tmp_path, monkeypatch):
     result_path = tmp_path / "output" / "result.json"
     result_path.parent.mkdir()
     result_path.write_text('{"operation":"build","success":true,"exit_status":0}')
-    monkeypatch.setattr("josh_room.jat._run", lambda *_args: (0, ""))
+    monkeypatch.setattr("josh_room.jat._run", lambda *_args, **_kwargs: (0, ""))
     with pytest.raises(JATError, match="fresh"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
 
 
 def test_jat_missing_receipt_reports_bounded_rcc_diagnostic(tmp_path, monkeypatch):
     (tmp_path / "output").mkdir()
-    monkeypatch.setattr("josh_room.jat._run", lambda *_args: (1, "typed request validation failed"))
+    monkeypatch.setattr("josh_room.jat._run", lambda *_args, **_kwargs: (1, "typed request validation failed"))
     with pytest.raises(JATError, match="typed request validation failed"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(
             tmp_path, tmp_path / "source", tmp_path / "haul"
@@ -81,7 +81,7 @@ def test_jat_missing_receipt_reports_bounded_rcc_diagnostic(tmp_path, monkeypatc
 def test_jat_rejects_receipt_operation_mismatch(tmp_path, monkeypatch):
     result_path = tmp_path / "output" / "result.json"
     result_path.parent.mkdir()
-    def write_mismatch(*_args):
+    def write_mismatch(*_args, **_kwargs):
         result_path.write_text('{"operation":"restore","success":true,"exit_status":0}')
         return 0, ""
     monkeypatch.setattr("josh_room.jat._run", write_mismatch)
@@ -92,12 +92,33 @@ def test_jat_rejects_receipt_operation_mismatch(tmp_path, monkeypatch):
 def test_jat_rejects_inconsistent_receipt_exit_status(tmp_path, monkeypatch):
     result_path = tmp_path / "output" / "result.json"
     result_path.parent.mkdir()
-    def write_inconsistent(*_args):
+    def write_inconsistent(*_args, **_kwargs):
         result_path.write_text('{"operation":"build","success":true,"exit_status":1}')
         return 0, ""
     monkeypatch.setattr("josh_room.jat._run", write_inconsistent)
     with pytest.raises(JATError, match="exit status"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
+
+
+def test_local_fallback_jat_pins_cwd_and_result_directory(tmp_path, monkeypatch):
+    result_path = tmp_path / "output" / "result.json"
+    result_path.parent.mkdir()
+    seen = {}
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "0")
+
+    def fake_run(argv, timeout, **kwargs):
+        seen.update(argv=argv, timeout=timeout, kwargs=kwargs)
+        result_path.write_text('{"operation":"restore","success":true,"exit_status":0}')
+        return 0, "local RCC output"
+
+    monkeypatch.setattr("josh_room.jat._run", fake_run)
+    __import__("josh_room.jat", fromlist=["run_restore"]).run_restore(
+        tmp_path, tmp_path / "haul", tmp_path / "destination"
+    )
+
+    assert seen["kwargs"]["cwd"] == tmp_path
+    assert seen["kwargs"]["env"]["ROBOT_ARTIFACTS"] == str(tmp_path / "output")
+    assert seen["kwargs"]["env"]["JAT_RUN_DIR"] == str(tmp_path / "output")
 
 
 def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monkeypatch):
