@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.4",
+  "candidate_version": "0.1.5",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -10,19 +10,19 @@
   },
   "josh_room": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "version": "0.1.4",
-    "git_sha": "2e25721eb37066d6cdf55118d39e3307701ef3f5"
+    "version": "0.1.5",
+    "git_sha": "d89eecb57232db637e842fca9181b8fbba519f77"
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
-    "version": "git-028efba",
-    "git_sha": "028efba3f2d0ad7385a957adcc8de81954bbb2d7",
+    "version": "git-096c5f3",
+    "git_sha": "096c5f3c5d735a67f41c4fabbf63e4af1aacadf1",
     "environment_artifact": {
-      "release_tag": "v0.1.7-jat-runtime",
-      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.7-jat-runtime/jat-runtime.rcca",
-      "archive_sha256": "1e327c4fe7b67667084fc1967d93affa6d22779b0b71d6df14030e8c505df4cf",
-      "archive_size": 169768304,
-      "rcc_artifact_digest": "sha256:2102b3b97d855070f1498378712baa13d21693e5f82ca3e929fbbf281cfe595d",
+      "release_tag": "v0.1.8-jat-runtime",
+      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.8-jat-runtime/jat-runtime.rcca",
+      "archive_sha256": "cebd4652f9f8be66300bc193f008971494010367e895c81ae5ec0521175e71be",
+      "archive_size": 169767408,
+      "rcc_artifact_digest": "sha256:0b5891d1ddc82ffa6dd8d0616b5b77693ec733709492307b2ef947ff0f8f34fb",
       "rcc_specification_digest": "sha256:8f5dcf65688aa04a7c41d3d54c95e94a1617d514983f11e3e7777460ad5d0a71",
       "legacy_blueprint_key": "91ad9c0ba23e9008",
       "rcc_version": "v18.19.2",

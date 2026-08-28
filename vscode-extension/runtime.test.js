@@ -145,7 +145,7 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
       git_sha: "d".repeat(40),
       source_archive: {
         asset: "josh-all-the-things.tar.gz",
-        url: "https://github.com/joshyorko/josh-all-the-things/archive/dd.tar.gz",
+        url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "d".repeat(40),
         sha256: "e".repeat(64),
       },
       environment_artifact: {
@@ -198,6 +198,27 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
   assert.equal(calls[0].options.env.RCC_HOLOTREE_MODE, "private");
 });
 
+test("ensureJatSource rejects a non-official JAT source URL before download", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-source-url-test-"));
+  const sha = "d".repeat(40);
+
+  await assert.rejects(
+    require("./runtime").ensureJatSource(context(root), {
+      git_sha: sha,
+      source_archive: {
+        asset: "josh-all-the-things.tar.gz",
+        url: "https://github.com/joshyorko/josh-all-the-things/archive/" + sha + ".tar.gz",
+        sha256: "e".repeat(64),
+      },
+    }, {
+      download: async () => {
+        throw new Error("download attempted");
+      },
+    }),
+    /official JAT source URL/,
+  );
+});
+
 test("ensureJatRuntime rejects a downloaded archive with the pinned size mismatch", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-size-test-"));
   const rccBinary = Buffer.from("managed-rcc-binary");
@@ -205,7 +226,7 @@ test("ensureJatRuntime rejects a downloaded archive with the pinned size mismatc
   const manifest = manifestFor(rccBinary, {
     jat: {
       git_sha: "d".repeat(40),
-      source_archive: { asset: "source.tar.gz", url: "https://github.com/joshyorko/jat/archive/dd.tar.gz", sha256: "e".repeat(64) },
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "d".repeat(40), sha256: "e".repeat(64) },
       environment_artifact: {
         digest: "sha256:" + "c".repeat(64),
         archive: {
@@ -246,7 +267,7 @@ test("ensureJatSource extracts a verified GitHub source archive without host tar
     git_sha: sha,
     source_archive: {
       asset: "jat-source.tar.gz",
-      url: "https://github.com/joshyorko/josh-all-the-things/archive/dd.tar.gz",
+      url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + sha,
       sha256: digest(archive),
     },
   };

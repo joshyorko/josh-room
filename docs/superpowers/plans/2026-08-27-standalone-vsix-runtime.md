@@ -83,7 +83,7 @@
 - Modify: `release-lock.json`
 - Modify: `README.md`, `docs/architecture.md`, and repository-boundary tests
 - Modify: `.devcontainer/bootstrap.sh`, `templates/room/.devcontainer/bootstrap.sh` only to remove Action Server/global Josh Room runtime requirements while retaining the optional golden host
-- Produce: `dist/josh-room-0.1.4.vsix`
+- Produce: `dist/josh-room-0.1.5.vsix`
 
 - [ ] **Step 1: Add a packaging test that inspects the VSIX for runtime manifest, controller source, recipe, JAT source contract, and no secrets.**
 - [ ] **Step 2: Run the package test and observe missing VSIX contents/scripts.**
