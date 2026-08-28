@@ -713,11 +713,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); stream("stderr", chunk); });
     const cancellation = cancellationToken?.onCancellationRequested(() => {
       cancelled = true;
-      try {
-        process.kill(-child.pid, "SIGTERM");
-      } catch (_error) {
-        child.kill("SIGTERM");
-      }
+      terminateChild(child);
     });
     child.on("error", (error) => {
       cancellation?.dispose();
@@ -1412,12 +1408,47 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   });
 }
 
-function shellQuote(value) {
+function shellQuote(value, platform = process.platform) {
+  const text = String(value);
+  if (platform === "win32") return '"' + text.replaceAll('"', '\\"') + '"';
   return `'${String(value).replaceAll("'", `'"'"'`)}'`;
 }
 
-function shellJoin(values) {
-  return values.map(shellQuote).join(" ");
+function shellJoin(values, platform = process.platform) {
+  return values.map((value) => shellQuote(value, platform)).join(" ");
+}
+
+function buildTerminalLaunch(runtime, args, environment, platform = process.platform, receiptFile) {
+  return {
+    command: shellJoin([runtime.command, ...runtime.args(args, receiptFile)], platform),
+    environment: { ...environment },
+  };
+}
+
+function isSafeRestoreName(value) {
+  const name = String(value ?? "").trim();
+  return Boolean(
+    name
+      && name !== "."
+      && name !== ".."
+      && !name.includes("\0")
+      && !/[\\/]/.test(name)
+      && !path.posix.isAbsolute(name)
+      && !path.win32.isAbsolute(name)
+      && !/^[A-Za-z]:/.test(name),
+  );
+}
+
+function terminateChild(child, platform = process.platform) {
+  if (platform === "win32") {
+    child.kill("SIGTERM");
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch (_error) {
+    child.kill("SIGTERM");
+  }
 }
 
 async function jatBuild() {
@@ -1478,7 +1509,7 @@ async function jatRestore() {
     prompt: "New destination folder name",
     value: defaultName,
     ignoreFocusOut: true,
-    validateInput: (value) => value.trim() && !value.includes("/") ? undefined : "Enter one folder name.",
+    validateInput: (value) => isSafeRestoreName(value) ? undefined : "Enter one folder name without path separators.",
   });
   if (!name) return "cancelled";
   const destination = path.join(parents[0].fsPath, name);
@@ -1521,16 +1552,15 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) 
   const runtime = await runtimeFor(cwd);
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
-  const command = `${Object.entries(environment)
-    .filter(([key]) => key !== "PATH" && key !== "HOME")
-    .map(([key, value]) => `${key}=${shellQuote(value)}`)
-    .join(" ")} ${shellJoin([runtime.command, ...runtime.args(args)])}`;
   const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
   fs.chmodSync(progressDirectory, 0o700);
   const progressPath = path.join(progressDirectory, "events.jsonl");
+  const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
   fs.writeFileSync(progressPath, "", { mode: 0o600 });
-  const terminal = vscode.window.createTerminal({ name: terminalName, cwd });
+  environment.JOSH_ROOM_PROGRESS_FILE = progressPath;
+  const launch = buildTerminalLaunch(runtime, args, environment, process.platform, receiptPath);
+  const terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment });
   const followers = [];
   let latestLog = "";
   let progressReporter;
@@ -1577,7 +1607,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) 
         progressReporter = createVisualReporter(title, "serve", progress);
         progressActive = true;
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
-        terminal.sendText(`JOSH_ROOM_PROGRESS_FILE=${shellQuote(progressPath)} ${command}`, true);
+        terminal.sendText(launch.command, true);
         try {
           return await waitForRegistry();
         } finally {
@@ -2858,6 +2888,9 @@ Object.assign(module.exports.__test__, {
   chooseLocalFallback,
   localRuntimeState,
   clearLocalFallback,
+  buildTerminalLaunch,
+  isSafeRestoreName,
+  terminateChild,
   serveRoom,
   selectDimension,
   setRuntimeForTests(value) {

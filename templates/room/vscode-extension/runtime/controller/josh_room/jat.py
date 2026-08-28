@@ -17,6 +17,15 @@ class JATError(RuntimeError):
         self.result = result or {}
 
 
+def _terminate_process(process, platform: str | None = None) -> None:
+    platform = platform or os.name
+    if platform == "nt":
+        process.terminate()
+    else:
+        os.killpg(process.pid, signal.SIGTERM)
+    process.communicate()
+
+
 def _version(jat_root: Path) -> str:
     pinned = os.environ.get("JOSH_ROOM_JAT_SHA")
     if pinned:
@@ -34,24 +43,23 @@ def _diagnostic(stderr: str) -> str:
 
 
 def _run(argv: list[str], timeout: float | None, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> tuple[int, str]:
-    process = subprocess.Popen(
-        argv,
-        cwd=str(cwd) if cwd else None,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
+    options = {
+        "cwd": str(cwd) if cwd else None,
+        "env": env,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if os.name != "nt":
+        options["start_new_session"] = True
+    process = subprocess.Popen(argv, **options)
     try:
         _stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        os.killpg(process.pid, signal.SIGTERM)
-        process.communicate()
+        _terminate_process(process)
         raise JATError("JAT operation timed out", {"argv": argv, "exit_status": None, "timed_out": True}) from error
     except BaseException:
-        os.killpg(process.pid, signal.SIGTERM)
-        process.communicate()
+        _terminate_process(process)
         raise
     return process.returncode, _diagnostic(stderr or _stdout)
 
@@ -99,7 +107,15 @@ def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
 
 
 def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
-    if os.environ.get("JOSH_ROOM_EXTENSION_MODE") != "1":
+    extension_mode = os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1"
+    handoff_values = (
+        os.environ.get("JOSH_ROOM_RCC_EXE"),
+        os.environ.get("JOSH_ROOM_JAT_ARTIFACT"),
+        os.environ.get("JOSH_ROOM_RCC_HOME"),
+    )
+    if not extension_mode and any(handoff_values):
+        raise JATError("managed Josh Room runtime is incomplete")
+    if not extension_mode:
         return None
     executable = os.environ.get("JOSH_ROOM_RCC_EXE")
     artifact = os.environ.get("JOSH_ROOM_JAT_ARTIFACT")
