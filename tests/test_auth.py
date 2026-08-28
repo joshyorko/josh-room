@@ -2,6 +2,7 @@ import json
 import os
 from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -94,6 +95,36 @@ def test_cancel_oauth_session_invalidates_worker_transaction(monkeypatch):
     assert hasattr(auth, "cancel_oauth_session")
     assert auth.cancel_oauth_session("session-1") == {"status": "canceled"}
     assert captured == [("/session/session-1/cancel", "POST")]
+
+
+def test_cancel_oauth_session_treats_vanished_session_as_idempotent_cleanup(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    for name in ("r2.json", "age.identity", "config.json", "session.json"):
+        (runtime / name).write_text("stale")
+
+    def vanished(*_args, **_kwargs):
+        raise HTTPError("https://auth.example.invalid/session", 404, "gone", {}, None)
+
+    monkeypatch.setattr(auth, "_request", vanished)
+    assert auth.cancel_oauth_session("vanished") == {"status": "canceled", "stale": True}
+    assert not any(path.exists() for path in runtime.iterdir())
+
+
+def test_cancel_oauth_session_preserves_non_404_authority_failures_and_cleans_local_state(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    (runtime / "session.json").write_text("stale")
+
+    def failed(*_args, **_kwargs):
+        raise HTTPError("https://auth.example.invalid/session", 503, "unavailable", {}, None)
+
+    monkeypatch.setattr(auth, "_request", failed)
+    with pytest.raises(HTTPError):
+        auth.cancel_oauth_session("failed")
+    assert not any(path.exists() for path in runtime.iterdir())
 
 
 def test_cli_exposes_auth_cancel_for_native_cancellation(monkeypatch, capsys):
@@ -352,6 +383,23 @@ def test_wait_oauth_session_polls_until_authorized_in_one_long_lived_operation(m
         "status": "authorized"
     }
     assert writes == [({"status": "authorized"}, "archive")]
+
+
+def test_wait_oauth_session_reports_browser_wait_and_validation_elapsed_without_extra_processes(monkeypatch):
+    responses = iter([{"status": "pending"}, {"status": "authorized"}])
+    events = []
+    clock = [100.0]
+    monkeypatch.setattr("josh_room.auth._request", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr("josh_room.auth._write_runtime", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("josh_room.auth.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("josh_room.auth.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr("josh_room.auth.report_progress", lambda stage, message: events.append((stage, message)))
+
+    assert wait_oauth_session("session-one", timeout=10, poll_interval=2, dimension_id="archive") == {"status": "authorized"}
+    assert events == [
+        ("auth", "Waiting for browser approval (0s elapsed)"),
+        ("auth", "Validating Cloudflare session (2s elapsed)"),
+    ]
 
 
 def test_extension_runtime_credentials_support_profile_scoped_secretstorage_handoff(tmp_path, monkeypatch):

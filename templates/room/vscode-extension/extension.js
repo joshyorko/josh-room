@@ -645,10 +645,6 @@ function sanitizeRuntimeLine(line) {
 }
 
 async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
-  progressReporter?.event({
-    stage: "controller",
-    message: "Preparing Josh Room controller environment; first use may take a minute",
-  });
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
   fs.chmodSync(progressDirectory, 0o700);
   const progressPath = path.join(progressDirectory, "events.jsonl");
@@ -694,6 +690,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       detached: true,
       stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
+    progressReporter?.event({ stage: "controller", message: "Starting Josh Room controller" });
     if (stdinPayload !== undefined) child.stdin.end(stdinPayload);
     let stdout = "";
     let stderr = "";
@@ -701,6 +698,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     const append = (current, chunk) => (current + chunk.toString()).slice(-1024 * 1024);
     const streamBuffers = { stdout: "", stderr: "" };
     const stream = (name, chunk) => {
+      if (name !== "stderr") return;
       const current = streamBuffers[name] + chunk.toString();
       const lines = current.split(/\r?\n/);
       streamBuffers[name] = lines.pop() || "";

@@ -1783,7 +1783,7 @@ test("R2 disconnect logs out the local OAuth session instead of treating the end
   assert.equal(refreshes, 1);
 });
 
-test("controller preparation is reported before the first RCC recipe construction can finish", async () => {
+test("warm controller calls use operation progress without repeating preparation messaging", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-preparation-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true, dimensions: [] }) }));
@@ -1792,8 +1792,8 @@ test("controller preparation is reported before the first RCC recipe constructio
   const events = [];
 
   await extension.__test__.runJoshRoom(["dimensions", "list"], root, undefined, { event: (event) => events.push(event) });
-  assert.equal(events[0].stage, "controller");
-  assert.match(events[0].message, /Preparing Josh Room controller environment/);
+  assert.equal(events.some((event) => /Preparing Josh Room controller environment/.test(event.message)), false);
+  assert.equal(events.some((event) => /Starting Josh Room controller/.test(event.message)), true);
 });
 
 test("RCC stdout and stderr stream live with sanitized popup/output lines", async () => {
@@ -1807,9 +1807,8 @@ test("RCC stdout and stderr stream live with sanitized popup/output lines", asyn
   const operation = extension.__test__.runJoshRoom(["dimensions", "list"], root, undefined, { event: (event) => events.push(event) });
   await new Promise((resolve) => setImmediate(resolve));
   const child = spawnHarness.calls[0].child;
-  child.stdout.emit("data", Buffer.from("RCC materializing controller\n"));
-  child.stderr.emit("data", Buffer.from("Bearer super-secret-token\n"));
-  child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, dimensions: [] })));
+  child.stdout.emit("data", Buffer.from(JSON.stringify({ ok: true, dimensions: [{ id: "private-catalog-data" }] })));
+  child.stderr.emit("data", Buffer.from("RCC materializing controller\nBearer super-secret-token\n"));
   child.closeWith();
   await operation;
 
@@ -1817,6 +1816,7 @@ test("RCC stdout and stderr stream live with sanitized popup/output lines", asyn
   assert.equal(logLines.some((line) => /super-secret-token/.test(line)), false);
   assert.equal(logLines.some((line) => /^\d{4}-\d{2}-\d{2}T/.test(line)), true);
   assert.equal(events.some((event) => /RCC materializing controller/.test(event.message)), true);
+  assert.equal(logLines.some((line) => /private-catalog-data/.test(line)), false);
 });
 
 test("fresh activation gates all storage calls behind runtime readiness", async () => {
