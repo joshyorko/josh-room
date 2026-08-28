@@ -42,8 +42,8 @@ def resolve_rcc_pin(manifest: dict, platform: str, checksum: str | None = None) 
 def build_commands(*, rcc: str, robot: str, archive: str, artifact: str, receipt: str) -> list[list[str]]:
     del rcc
     return [
-        ["env", "publish", "--robot", robot, "--json"],
-        ["env", "export", "--artifact", artifact, "--output", archive],
+        ["env", "publish", "--robot", robot, "--provider", "local", "--json"],
+        ["env", "export", "--artifact", artifact, "--provider", "local", "--output", archive],
         ["env", "acquire", "--archive", archive, "--permissive-local", "--json"],
         ["--no-build", "ht", "vars", "--robot", robot, "--json"],
         ["--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--inherit-streams", "--receipt-file", receipt, "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
@@ -137,11 +137,11 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
         builder_home = Path(temporary) / "builder"
         consumer_home = Path(temporary) / "consumer"
         stage = Path(temporary) / archive.name
-        publish = _run(rcc, ["env", "publish", "--robot", str(robot), "--json"], home=builder_home, cwd=robot.parent)
+        publish = _run(rcc, ["env", "publish", "--robot", str(robot), "--provider", "local", "--json"], home=builder_home, cwd=robot.parent)
         artifact = publish.get("artifactDigest") or publish.get("artifact_digest")
         if not isinstance(artifact, str) or not artifact.startswith("sha256:"):
             raise ValueError("RCC publish did not return artifactDigest")
-        exported = _run(rcc, ["env", "export", "--artifact", artifact, "--output", str(stage)], home=builder_home, cwd=robot.parent)
+        exported = _run(rcc, ["env", "export", "--artifact", artifact, "--provider", "local", "--output", str(stage)], home=builder_home, cwd=robot.parent)
         del exported
         if not stage.is_file():
             raise RuntimeError("RCC export did not create the controller archive")

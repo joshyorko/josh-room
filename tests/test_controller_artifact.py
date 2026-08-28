@@ -47,7 +47,13 @@ def test_checked_in_controller_manifest_is_v18_19_3_only_and_has_no_fake_checksu
     template = root / "templates/room/vscode-extension/runtime/controller-artifact-manifest.json"
     assert (root / "vscode-extension/runtime/controller-artifact-manifest.json").read_bytes() == template.read_bytes()
     assert value["rcc"]["version"] == "v18.19.3"
-    assert all(pin["sha256"] is None for pin in value["rcc"]["platforms"].values())
+    assert value["rcc"]["platforms"]["linux-x64"] == {
+        "asset": "rcc-linux64",
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
+        "sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428",
+        "size": 22282402,
+    }
+    assert value["rcc"]["platforms"]["win32-x64"]["sha256"] == "523a6be8ad92235fbe0a4e4732699f2cd66f9ef6ad57e045df434257c46112e4"
     workflow = (root / ".github/workflows/controller-artifact.yml").read_text()
     assert "workflow_dispatch" in workflow
     assert "v18.19.2" not in workflow
@@ -63,8 +69,8 @@ def test_controller_build_commands_use_canonical_artifact_flow():
         receipt="/dist/controller-receipt.json",
     )
     assert commands == [
-        ["env", "publish", "--robot", "/workspace/vscode-extension/runtime/controller/robot.yaml", "--json"],
-        ["env", "export", "--artifact", "sha256:" + "b" * 64, "--output", "/dist/josh-room-controller-linux-amd64.rcca"],
+        ["env", "publish", "--robot", "/workspace/vscode-extension/runtime/controller/robot.yaml", "--provider", "local", "--json"],
+        ["env", "export", "--artifact", "sha256:" + "b" * 64, "--provider", "local", "--output", "/dist/josh-room-controller-linux-amd64.rcca"],
         ["env", "acquire", "--archive", "/dist/josh-room-controller-linux-amd64.rcca", "--permissive-local", "--json"],
         ["--no-build", "ht", "vars", "--robot", "/workspace/vscode-extension/runtime/controller/robot.yaml", "--json"],
         ["--no-build", "env", "exec", "--artifact", "sha256:" + "b" * 64, "--permissive-local", "--inherit-streams", "--receipt-file", "/dist/controller-receipt.json", "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
