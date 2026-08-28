@@ -50,7 +50,7 @@ def build_commands(*, rcc: str, robot: str, archive: str, artifact: str, receipt
     ]
 
 
-def _json_result(stdout: str) -> dict:
+def _json_result(stdout: str) -> dict | list:
     decoder = json.JSONDecoder()
     values = []
     index = 0
@@ -63,12 +63,12 @@ def _json_result(stdout: str) -> dict:
             values.append(value)
             index += end
     for value in reversed(values):
-        if isinstance(value, dict):
+        if isinstance(value, (dict, list)):
             return value
-    raise ValueError("RCC command returned no JSON object")
+    raise ValueError("RCC command returned no JSON object or array")
 
 
-def _run(rcc: Path, args: list[str], *, home: Path, cwd: Path, receipt: Path | None = None) -> dict:
+def _run(rcc: Path, args: list[str], *, home: Path, cwd: Path, receipt: Path | None = None) -> dict | list:
     environment = {**os.environ, "ROBOCORP_HOME": str(home), "RCC_HOLOTREE_MODE": "private"}
     process = subprocess.run([str(rcc), *args], cwd=cwd, env=environment, capture_output=True, text=True, check=False)
     for line in process.stderr.splitlines():
