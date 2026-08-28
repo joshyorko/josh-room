@@ -329,6 +329,55 @@ test("extension backend commands use the managed RCC controller boundary", async
   assert.notEqual(spawnHarness.calls[0].command, "josh-room");
 });
 
+test("Windows terminal launch passes environment through terminal options", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-terminal-test-"));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const launch = extension.__test__.buildTerminalLaunch(
+    {
+      command: "C:\\Program Files\\Josh Room\\rcc.exe",
+      args: (args) => ["--no-build", "env", "exec", "--", ...args],
+    },
+    ["jat", "serve", "--haul", "C:\\Users\\Josh\\Room Files\\images.tar.zst"],
+    {
+      JOSH_ROOM_EXTENSION_MODE: "1",
+      JOSH_ROOM_PROGRESS_FILE: "C:\\Users\\Josh\\AppData\\Local\\progress.jsonl",
+      PATH: "C:\\managed;C:\\Windows\\System32",
+    },
+    "win32",
+  );
+
+  assert.doesNotMatch(launch.command, /JOSH_ROOM_EXTENSION_MODE=/);
+  assert.doesNotMatch(launch.command, /JOSH_ROOM_PROGRESS_FILE=/);
+  assert.match(launch.command, /^"C:\\Program Files\\Josh Room\\rcc\.exe"/);
+  assert.equal(launch.environment.JOSH_ROOM_EXTENSION_MODE, "1");
+  assert.equal(launch.environment.PATH, "C:\\managed;C:\\Windows\\System32");
+});
+
+test("restore destination names reject Windows separators, drives, UNC paths, and dot segments", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const safe = extension.__test__.isSafeRestoreName;
+  assert.equal(safe("room-01"), true);
+  for (const value of ["..", ".", "..\\outside", ".. /outside", "C:\\outside", "C:/outside", "\\\\server\\share", "/outside", "room/name", "room\\name", "room\0name"]) {
+    assert.equal(safe(value), false, value);
+  }
+});
+
+test("Windows child cancellation terminates the child directly", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const originalKill = process.kill;
+  let killed;
+  process.kill = () => { throw new Error("negative process-group kill is forbidden on Windows"); };
+  try {
+    extension.__test__.terminateChild({ pid: 123, kill: (signal) => { killed = signal; } }, "win32");
+  } finally {
+    process.kill = originalKill;
+  }
+  assert.equal(killed, "SIGTERM");
+});
+
 test("extension consumes the private controller result receipt when RCC suppresses stdout", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-result-receipt-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
