@@ -16,6 +16,18 @@ function haulerVersionCommand() {
   return ["python", "-c", HAULER_VERSION_CHECK];
 }
 
+function localFallbackReason(error) {
+  const reason = error?.fallbackReason;
+  return reason === "environment-compatibility" || reason === "controller-artifact-unpublished" ? reason : undefined;
+}
+
+function compatibilityError(error) {
+  if (error && /incompatib|os[-_ ]?version|minimum[-_ ]?version|kernel|compatibility/i.test(error.message || String(error))) {
+    error.fallbackReason = "environment-compatibility";
+  }
+  return error;
+}
+
 function resolvePlatform(platform = process.platform, arch = process.arch) {
   if (platform === "linux" && arch === "x64") return "linux-x64";
   if (platform === "win32" && arch === "x64") return "win32-x64";
@@ -69,6 +81,68 @@ function privatePaths(context) {
     controllerArtifactRoot: path.join(storageRoot, "runtime", "controller-artifact"),
     logsRoot: path.join(storageRoot, "logs"),
   };
+}
+
+function localFallbackRecordPath(context) {
+  return path.join(privatePaths(context).runtimeRoot, "local-fallback.json");
+}
+
+function readLocalFallbackRecord(context) {
+  const filename = localFallbackRecordPath(context);
+  try {
+    const stat = fs.lstatSync(filename);
+    if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+    const record = JSON.parse(fs.readFileSync(filename, "utf8"));
+    return record && typeof record === "object" && !Array.isArray(record) ? record : undefined;
+  } catch (_error) {
+    return undefined;
+  }
+}
+
+function localFallbackRecordMatches(record, expected) {
+  if (!record || !expected || record.schema_version !== 1) return false;
+  return Object.entries(expected).every(([key, value]) => record[key] === value);
+}
+
+async function verifyLocalFallback(context, rccRuntime, controllerRobot, expected, options = {}) {
+  const record = readLocalFallbackRecord(context);
+  if (!localFallbackRecordMatches(record, expected)) return false;
+  const environment = { ...process.env, ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
+  const runJson = options.runJson || runJsonCommand;
+  try {
+    const result = await runJson(
+      rccRuntime.executable,
+      ["--no-build", "ht", "vars", "--robot", controllerRobot, "--json"],
+      { cwd: privatePaths(context).storageRoot, env: environment },
+    );
+    return result !== undefined && result.error === undefined;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function writeLocalFallbackRecord(context, record) {
+  const filename = localFallbackRecordPath(context);
+  await fs.promises.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temporary = path.join(path.dirname(filename), `.local-fallback.${process.pid}.${Date.now()}`);
+  const value = { schema_version: 1, ...record };
+  await fs.promises.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await fs.promises.chmod(temporary, 0o600);
+  await fs.promises.rename(temporary, filename);
+}
+
+async function clearLocalFallbackRecord(context) {
+  await fs.promises.rm(localFallbackRecordPath(context), { force: true });
+}
+
+async function ensureFreeSpace(root, requiredBytes, label) {
+  if (!Number.isInteger(requiredBytes) || requiredBytes < 1 || typeof fs.promises.statfs !== "function") return;
+  const stats = await fs.promises.statfs(root);
+  const available = Number(stats.bavail) * Number(stats.bsize);
+  const needed = requiredBytes * 3;
+  if (Number.isFinite(available) && available < needed) {
+    throw new Error(`insufficient free space for ${label} under managed path ${root}: need approximately ${needed} bytes, have ${available}`);
+  }
 }
 
 async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options = {}) {
@@ -155,6 +229,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   } else if (await pathExists(archivePath)) {
     throw new Error(`JAT environment archive is not a regular file: ${archivePath}`);
   } else {
+    await ensureFreeSpace(paths.jatArtifactRoot, archivePin.size, "JAT Environment Artifact");
     options.onProgress?.({ phase: "jat-artifact", message: "Downloading JAT Environment Artifact" });
     const temporaryDirectory = await fs.promises.mkdtemp(path.join(paths.jatArtifactRoot, ".download-"));
     const temporary = path.join(temporaryDirectory, archivePin.asset);
@@ -182,15 +257,24 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
     RCC_HOLOTREE_MODE: "private",
   };
   const runJson = options.runJson || runJsonCommand;
-  const acquired = await runJson(
-    rccRuntime.executable,
-    ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-    { cwd: paths.storageRoot, env: environment },
-  );
+  let acquired;
+  try {
+    acquired = await runJson(
+      rccRuntime.executable,
+      ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
+      { cwd: paths.storageRoot, env: environment },
+    );
+  } catch (error) {
+    throw compatibilityError(error);
+  }
   options.onProgress?.({ phase: "import", message: "Verifying/importing artifact content" });
   if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
     const detail = acquired.error || acquired.message || "RCC did not validate the pinned JAT environment artifact";
-    throw new Error(`RCC rejected the pinned JAT environment artifact: ${detail}`);
+    const error = new Error(`RCC rejected the pinned JAT environment artifact: ${detail}`);
+    if (/incompatib|os[-_ ]?version|minimum[-_ ]?version|kernel|compatibility/i.test(String(detail))) {
+      error.fallbackReason = "environment-compatibility";
+    }
+    throw error;
   }
   options.onProgress?.({ phase: "compatibility", message: "Checking host/artifact compatibility" });
   await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
@@ -221,7 +305,9 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
     || !archivePin.url.startsWith("https://github.com/joshyorko/josh-room/releases/download/")
     || typeof archivePin.sha256 !== "string" || !DIGEST.test(archivePin.sha256)
     || archivePin.size !== undefined && (!Number.isInteger(archivePin.size) || archivePin.size < 1)) {
-    throw new Error("Josh Room runtime manifest is missing a separate Josh Room controller environment artifact pin");
+    const error = new Error("Josh Room runtime manifest is missing a separate Josh Room controller environment artifact pin");
+    error.fallbackReason = "controller-artifact-unpublished";
+    throw error;
   }
   if (!rccRuntime?.executable || !rccRuntime?.version) {
     throw new Error("managed RCC runtime is required for controller artifact acquisition");
@@ -240,6 +326,7 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   } else if (await pathExists(archivePath)) {
     throw new Error(`controller environment archive is not a regular file: ${archivePath}`);
   } else {
+    await ensureFreeSpace(paths.controllerArtifactRoot, archivePin.size, "Josh Room controller environment artifact");
     const temporaryDirectory = await fs.promises.mkdtemp(path.join(paths.controllerArtifactRoot, ".download-"));
     const temporary = path.join(temporaryDirectory, archivePin.asset);
     try {
@@ -258,14 +345,23 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   }
   const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
   const runJson = options.runJson || runJsonCommand;
-  const acquired = await runJson(
-    rccRuntime.executable,
-    ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-    { cwd: paths.storageRoot, env: environment },
-  );
+  let acquired;
+  try {
+    acquired = await runJson(
+      rccRuntime.executable,
+      ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
+      { cwd: paths.storageRoot, env: environment },
+    );
+  } catch (error) {
+    throw compatibilityError(error);
+  }
   if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
     const detail = acquired.error || acquired.message || "RCC did not validate the pinned controller environment artifact";
-    throw new Error(`RCC rejected the pinned controller environment artifact: ${detail}`);
+    const error = new Error(`RCC rejected the pinned controller environment artifact: ${detail}`);
+    if (/incompatib|os[-_ ]?version|minimum[-_ ]?version|kernel|compatibility/i.test(String(detail))) {
+      error.fallbackReason = "environment-compatibility";
+    }
+    throw error;
   }
   return { artifact: artifact.digest, archive: archivePath };
 }
@@ -273,6 +369,7 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
 function runtimeEnvironment(context, runtime, workspace) {
   const paths = privatePaths(context);
   const values = runtime || {};
+  const managedBin = values.rccExecutable ? path.dirname(values.rccExecutable) : "";
   return {
     RCC_HOLOTREE_MODE: "private",
     ROBOCORP_HOME: paths.rccHome,
@@ -287,6 +384,7 @@ function runtimeEnvironment(context, runtime, workspace) {
     JOSH_ROOM_CONFIG_DIR: paths.configRoot,
     XDG_RUNTIME_DIR: path.join(paths.runtimeRoot, "xdg-runtime"),
     PYTHONPATH: values.controllerRoot || paths.controllerRoot,
+    PATH: [managedBin, process.env.PATH].filter(Boolean).join(path.delimiter),
     JOSH_ROOM_EXTENSION_MODE: "1",
     ...(workspace ? { JOSH_ROOM_WORKSPACE_ROOT: path.resolve(workspace) } : {}),
   };
@@ -492,10 +590,17 @@ module.exports = {
   ensureControllerRuntime,
   ensureJatRuntime,
   ensureJatSource,
+  clearLocalFallbackRecord,
+  localFallbackRecordMatches,
+  localFallbackRecordPath,
+  readLocalFallbackRecord,
+  verifyLocalFallback,
+  writeLocalFallbackRecord,
   privatePaths,
   readManifest,
   resolvePlatform,
   runtimeEnvironment,
   haulerVersionCommand,
+  localFallbackReason,
   sha256File,
 };

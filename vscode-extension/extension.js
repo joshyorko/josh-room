@@ -337,6 +337,106 @@ function setRuntimeLifecycle(state, message) {
   roomsProvider?.emitter?.fire(undefined);
 }
 
+async function chooseLocalFallback(error) {
+  const reason = managedRuntime.localFallbackReason(error);
+  if (!reason) return "unavailable";
+  const reasonText = reason === "controller-artifact-unpublished"
+    ? "the controller artifact is not published yet"
+    : "the portable environment is incompatible with this host";
+  while (true) {
+    const action = await vscode.window.showWarningMessage(
+      `Portable runtime is unavailable on this host because ${reasonText}. Build the verified bundled runtime locally now? This may take several minutes and requires network access.`,
+      "Build Locally", "Show Logs", "Cancel",
+    );
+    if (action === "Show Logs") {
+      outputChannel?.show(true);
+      continue;
+    }
+    return action === "Build Locally" ? "build" : "cancelled";
+  }
+}
+
+async function clearLocalFallback() {
+  if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
+  await managedRuntime.clearLocalFallbackRecord(extensionContext);
+  managedRuntimePromise = undefined;
+  runtimeLifecycle = { state: "UNINITIALIZED", message: "Retrying portable Josh Room runtime" };
+  roomsProvider?.emitter?.fire(undefined);
+  if (roomsProvider) await roomsProvider.refresh();
+  return "portable-runtime-retry";
+}
+
+function controllerRootFor(context, manifest) {
+  const controllerRobot = manifest.controller?.robot;
+  if (typeof controllerRobot !== "string" || path.isAbsolute(controllerRobot)
+    || controllerRobot.split(/[\\/]+/).includes("..")) {
+    throw new Error("Josh Room runtime manifest has an unsafe controller recipe path");
+  }
+  const extensionRoot = path.resolve(context.extensionPath);
+  const controllerPath = path.resolve(extensionRoot, controllerRobot);
+  const relativeController = path.relative(extensionRoot, controllerPath);
+  if (!relativeController || relativeController.startsWith("..") || path.isAbsolute(relativeController)) {
+    throw new Error("Josh Room controller recipe escapes the VSIX");
+  }
+  return path.dirname(controllerPath);
+}
+
+function controllerSourceVersion(controllerRoot) {
+  const digest = crypto.createHash("sha256");
+  const files = [];
+  const visit = (directory, relative = "") => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name === "__pycache__" || entry.name.endsWith(".pyc")) continue;
+      const child = path.join(directory, entry.name);
+      const childRelative = path.posix.join(relative, entry.name);
+      if (entry.isDirectory()) visit(child, childRelative);
+      else if (entry.isFile()) files.push([childRelative, child]);
+    }
+  };
+  visit(controllerRoot);
+  for (const [relative, filename] of files) {
+    digest.update(relative);
+    digest.update(fs.readFileSync(filename));
+  }
+  return digest.digest("hex");
+}
+
+function fallbackIdentity(manifest, rcc, controllerRoot) {
+  return {
+    mode: "local-build-fallback",
+    extension_version: manifest.extension_version,
+    rcc_version: rcc.version,
+    platform: managedRuntime.resolvePlatform(),
+    jat_source_sha: manifest.jat.git_sha,
+    jat_artifact_digest: manifest.jat.environment_artifact.digest,
+    controller_source_version: controllerSourceVersion(controllerRoot),
+    controller_artifact_digest: manifest.controller.environment_artifact?.digest || "unpublished",
+  };
+}
+
+async function localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot) {
+  progressReporter?.event({ stage: "runtime", message: `LOCAL BUILD FALLBACK: ${error.message}` });
+  progressReporter?.event({ stage: "runtime", message: "Materializing bundled JAT and controller recipes locally" });
+  const jatRoot = jat?.jatRoot || await managedRuntime.ensureJatSource(context, manifest.jat);
+  const identity = fallbackIdentity(manifest, rcc, controllerRoot);
+  const warm = await managedRuntime.verifyLocalFallback(
+    context, rcc, path.join(controllerRoot, "robot.yaml"), identity,
+  );
+  if (warm) progressReporter?.event({ stage: "runtime", message: "Reusing verified LOCAL BUILD FALLBACK Holotree" });
+  else if (await chooseLocalFallback(error) !== "build") throw new Error("Local runtime build cancelled");
+  return {
+    manifest,
+    rcc,
+    jat: jat || { jatRoot, artifact: undefined, sourceSha: manifest.jat.git_sha },
+    controller: undefined,
+    controllerRoot,
+    mode: "local-build-fallback",
+    fallbackReason: error.fallbackReason,
+    localReady: warm,
+    localIdentity: identity,
+  };
+}
+
 function startRuntimeReadiness(context, progressReporter) {
   if (managedRuntimePromise) return managedRuntimePromise;
   setRuntimeLifecycle("RCC_RESOLVING", "Resolving managed RCC");
@@ -359,31 +459,33 @@ async function initializeManagedRuntime(context, progressReporter) {
   const rcc = await managedRuntime.ensureManagedRcc(context, manifest, {
     onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
   });
+  const controllerRoot = controllerRootFor(context, manifest);
   progressReporter?.event({ stage: "runtime", message: "JAT source and artifact are being prepared" });
-  const jat = await managedRuntime.ensureJatRuntime(context, manifest, rcc, {
-    onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-  });
-  progressReporter?.event({ stage: "runtime", message: "Preparing Josh Room controller environment" });
-  const controller = await managedRuntime.ensureControllerRuntime(context, manifest, rcc, {
-    onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-  });
-  const controllerRobot = manifest.controller?.robot;
-  if (typeof controllerRobot !== "string" || path.isAbsolute(controllerRobot)
-    || controllerRobot.split(/[\\/]+/).includes("..")) {
-    throw new Error("Josh Room runtime manifest has an unsafe controller recipe path");
+  let jat;
+  try {
+    jat = await managedRuntime.ensureJatRuntime(context, manifest, rcc, {
+      onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+    });
+  } catch (error) {
+    if (managedRuntime.localFallbackReason(error)) return localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot);
+    throw error;
   }
-  const extensionRoot = path.resolve(context.extensionPath);
-  const controllerPath = path.resolve(extensionRoot, controllerRobot);
-  const relativeController = path.relative(extensionRoot, controllerPath);
-  if (!relativeController || relativeController.startsWith("..") || path.isAbsolute(relativeController)) {
-    throw new Error("Josh Room controller recipe escapes the VSIX");
+  progressReporter?.event({ stage: "runtime", message: "Preparing Josh Room controller environment" });
+  let controller;
+  try {
+    controller = await managedRuntime.ensureControllerRuntime(context, manifest, rcc, {
+      onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+    });
+  } catch (error) {
+    if (managedRuntime.localFallbackReason(error)) return localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot);
+    throw error;
   }
   return {
     manifest,
     rcc,
     jat,
     controller,
-    controllerRoot: path.dirname(controllerPath),
+    controllerRoot,
   };
 }
 
@@ -394,26 +496,34 @@ async function runtimeFor(cwd) {
   }
   if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
   const state = await startRuntimeReadiness(extensionContext);
+  const localFallback = state.mode === "local-build-fallback";
   return {
     command: state.rcc.executable,
-    args: (args, receiptFile) => [
-      "--no-build", "env", "exec", "--artifact", state.controller.artifact,
-      "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile,
-      "--", "python", "-m", "josh_room", ...args, "--json",
-    ],
+    args: localFallback
+      ? (args) => ["run", "--silent", "-r", path.join(state.controllerRoot, "robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"]
+      : (args, receiptFile) => [
+        "--no-build", "env", "exec", "--artifact", state.controller.artifact,
+        "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile,
+        "--", "python", "-m", "josh_room", ...args, "--json",
+      ],
     env: managedRuntime.runtimeEnvironment(extensionContext, {
       rccExecutable: state.rcc.executable,
       controllerRoot: state.controllerRoot,
       jatRoot: state.jat.jatRoot,
       jatArtifact: state.jat.artifact,
       jatSourceSha: state.jat.sourceSha,
-      controllerArtifact: state.controller.artifact,
+      controllerArtifact: state.controller?.artifact,
     }, cwd),
     jatRoot: state.jat.jatRoot,
+    mode: state.mode,
+    markLocalReady: state.mode === "local-build-fallback"
+      ? () => managedRuntime.writeLocalFallbackRecord(extensionContext, state.localIdentity)
+      : undefined,
   };
 }
 
-async function writeRuntimeCredentials(environment) {
+async function writeRuntimeCredentials(environment, { extensionMode = true } = {}) {
+  environment.JOSH_ROOM_EXTENSION_MODE = extensionMode ? "1" : "0";
   if (!extensionContext?.secrets?.get) return () => {};
   const serialized = await extensionContext.secrets.get(CREDENTIALS_SECRET);
   if (!serialized) return () => {};
@@ -432,7 +542,6 @@ async function writeRuntimeCredentials(environment) {
   fs.writeFileSync(filename, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   fs.chmodSync(filename, 0o600);
   environment.JOSH_ROOM_RUNTIME_CREDENTIALS = filename;
-  environment.JOSH_ROOM_EXTENSION_MODE = "1";
   return () => fs.rmSync(directory, { recursive: true, force: true });
 }
 
@@ -501,7 +610,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   try {
     runtime = await runtimeFor(cwd);
     environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
-    credentialsCleanup = await writeRuntimeCredentials(environment);
+    credentialsCleanup = await writeRuntimeCredentials(environment, { extensionMode: runtime.mode !== "local-build-fallback" });
   } catch (error) {
     fs.rmSync(progressDirectory, { recursive: true, force: true });
     throw error;
@@ -595,11 +704,11 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         return;
       }
       if (result) {
-        resolve({ stdout: JSON.stringify(result), stderr });
+        resolve({ stdout: JSON.stringify(result), stderr, runtime });
         return;
       }
       if (code === 0) {
-        resolve({ stdout, stderr });
+        resolve({ stdout, stderr, runtime });
       } else {
         const error = new Error(`Josh Room exited with status ${code}`);
         error.stdout = stdout;
@@ -616,7 +725,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
 async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
   outputChannel?.info(`START · controller ${args.join(" ")}`);
   try {
-    const { stdout } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload);
+    const { stdout, runtime } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload);
     const result = parseControllerOutput(stdout);
     // `status` deliberately returns ok=false for a changed or unlinked
     // workspace. That is authoritative state, not an operation failure.
@@ -625,6 +734,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
       failure.result = result;
       throw failure;
     }
+    if (runtime?.markLocalReady) await runtime.markLocalReady();
     outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
     return result;
   } catch (error) {
@@ -1522,6 +1632,7 @@ function activate(context) {
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
   register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
+  register(context, "joshRoom.clearLocalFallback", clearLocalFallback);
   register(context, "joshRoom.jatBuild", jatBuild);
   register(context, "joshRoom.jatRestore", jatRestore);
   register(context, "joshRoom.jatServe", jatServe);
@@ -2693,6 +2804,8 @@ Object.assign(module.exports.__test__, {
   RoomDragAndDropController,
   roomLabel,
   runJoshRoom,
+  chooseLocalFallback,
+  clearLocalFallback,
   serveRoom,
   selectDimension,
   setRuntimeForTests(value) {

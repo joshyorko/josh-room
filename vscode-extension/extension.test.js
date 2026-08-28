@@ -96,7 +96,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     warn() {},
     error() {},
     appendLine(line) { logLines.push(line); },
-    show() {},
+    show() { outputChannel.shown = true; },
   };
   return {
     vscode: {
@@ -1840,6 +1840,56 @@ test("fresh activation gates all storage calls behind runtime readiness", async 
   assert.deepEqual(spawnHarness.calls, []);
   release({});
   await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("local fallback prompt requires explicit Build Locally and supports Show Logs then Cancel", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-prompt-test-"));
+  const { vscode, warningResponses, outputChannel } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("not expected"); });
+  extension.__test__.setOutputChannelForTests(outputChannel);
+  warningResponses.push("Show Logs", "Cancel");
+
+  const error = new Error("controller artifact is unpublished");
+  error.fallbackReason = "controller-artifact-unpublished";
+  const result = await extension.__test__.chooseLocalFallback(error);
+  assert.equal(result, "cancelled");
+  assert.equal(outputChannel.shown, true);
+});
+
+test("local fallback runtime command uses managed RCC and the packaged recipe", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-command-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests({
+    mode: "local-build-fallback",
+    command: "/private/managed/rcc",
+    args: (args) => ["run", "--silent", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--", ...args, "--json"],
+    env: { RCC_HOLOTREE_MODE: "private", PATH: "/private/managed:/usr/bin", JOSH_ROOM_EXTENSION_MODE: "0" },
+    jatRoot: root,
+  });
+
+  await extension.__test__.runJoshRoom(["status"], root);
+  assert.equal(spawnHarness.calls[0].command, "/private/managed/rcc");
+  assert.deepEqual(spawnHarness.calls[0].args.slice(0, 7), [
+    "run", "--silent", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--",
+  ]);
+  assert.equal(spawnHarness.calls[0].options.env.RCC_HOLOTREE_MODE, "private");
+  assert.equal(spawnHarness.calls[0].options.env.JOSH_ROOM_EXTENSION_MODE, "0");
+});
+
+test("portable runtime retry clears only the scoped fallback marker", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-clear-test-"));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("not expected"); });
+  extension.__test__.setExtensionContextForTests({ globalStorageUri: { fsPath: root }, secrets: { get: async () => undefined } });
+  const marker = path.join(root, "runtime", "local-fallback.json");
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, "scoped marker");
+
+  assert.equal(await extension.__test__.clearLocalFallback(), "portable-runtime-retry");
+  assert.equal(fs.existsSync(marker), false);
 });
 
 test("MinIO Add Storage asks for concrete settings without invoking Cloudflare OAuth", async () => {

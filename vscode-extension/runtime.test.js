@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const zlib = require("node:zlib");
 
-const { ensureManagedRcc, readManifest, resolvePlatform, runtimeEnvironment } = require("./runtime");
+const { ensureManagedRcc, localFallbackReason, readManifest, resolvePlatform, runtimeEnvironment } = require("./runtime");
 
 const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)";
 
@@ -60,6 +60,32 @@ test("resolvePlatform accepts only the first supported Linux mapping", () => {
   assert.equal(resolvePlatform("win32", "x64"), "win32-x64");
   assert.throws(() => resolvePlatform("linux", "arm64"), /not supported/);
   assert.throws(() => resolvePlatform("darwin", "x64"), /does not support macOS yet/);
+});
+
+test("local fallback eligibility is limited to compatibility and unpublished controller artifacts", () => {
+  assert.equal(localFallbackReason({ fallbackReason: "environment-compatibility" }), "environment-compatibility");
+  assert.equal(localFallbackReason({ fallbackReason: "controller-artifact-unpublished" }), "controller-artifact-unpublished");
+  assert.equal(localFallbackReason({ fallbackReason: "checksum-mismatch" }), undefined);
+  assert.equal(localFallbackReason(new Error("credentials unavailable")), undefined);
+});
+
+test("local fallback warm reuse requires the complete scoped identity", async () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-marker-test-"));
+  const runtimeContext = context(runtime);
+  const expected = {
+    mode: "local-build-fallback",
+    extension_version: "0.1.5",
+    rcc_version: "v18.19.2",
+    platform: "linux-x64",
+    jat_source_sha: "a".repeat(40),
+    jat_artifact_digest: "sha256:" + "b".repeat(64),
+    controller_source_version: "c".repeat(64),
+    controller_artifact_digest: "unpublished",
+  };
+  const api = require("./runtime");
+  await api.writeLocalFallbackRecord(runtimeContext, expected);
+  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), expected), true);
+  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.6" }), false);
 });
 
 test("readManifest rejects an RCC pin without an exact digest", () => {
