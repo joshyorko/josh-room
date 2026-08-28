@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.10",
+  "candidate_version": "0.1.11",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -10,31 +10,31 @@
   },
   "josh_room": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "version": "0.1.10",
-    "git_sha": "e6456abd6ed7d64ddcf2c400d82a5a33172d97fb"
+    "version": "0.1.11",
+    "git_sha": "577e7dd7bdaf710a4989d85406e59e028636c4c5"
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
-    "version": "git-096c5f3",
-    "git_sha": "096c5f3c5d735a67f41c4fabbf63e4af1aacadf1",
+    "version": "git-f6005b4",
+    "git_sha": "f6005b48dfbe13b6976d44f17c844794be569d5f",
     "environment_artifact": {
-      "release_tag": "v0.1.8-jat-runtime",
-      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.8-jat-runtime/jat-runtime.rcca",
-      "archive_sha256": "cebd4652f9f8be66300bc193f008971494010367e895c81ae5ec0521175e71be",
-      "archive_size": 169767408,
-      "rcc_artifact_digest": "sha256:0b5891d1ddc82ffa6dd8d0616b5b77693ec733709492307b2ef947ff0f8f34fb",
-      "rcc_specification_digest": "sha256:8f5dcf65688aa04a7c41d3d54c95e94a1617d514983f11e3e7777460ad5d0a71",
+      "release_tag": "v0.1.9-jat-runtime",
+      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-linux-amd64.rcca",
+      "archive_sha256": "8ccd065e9156ac9067230b0f06dd667f98dc5b95af4535adc2715d02c279f751",
+      "archive_size": 169752215,
+      "rcc_artifact_digest": "sha256:3e473a015f809da0b77382e54da460da212f9fee2ee02f146736e7acd64f929c",
+      "rcc_specification_digest": "sha256:62d517dbb857bba63835d83c8d3ad1c2154006a8e260070b909a56e7f9bacff4",
       "legacy_blueprint_key": "91ad9c0ba23e9008",
-      "rcc_version": "v18.19.2",
+      "rcc_version": "v18.19.3",
       "platform": "linux_amd64"
     }
   },
   "rcc": {
     "repository": "https://github.com/joshyorko/rcc",
-    "version": "v18.19.2",
-    "source_sha": "43aa8c3f834fc84606fd1e442443fbb224324c40",
+    "version": "v18.19.3",
+    "source_sha": "4148c2b71705c9d2baf0e88b48d08a79cb7bda0f",
     "managed_asset": "rcc-linux64",
-    "managed_asset_sha256": "3a90a331325feb5b75b3ebc7492303a964438ce017347f451aeee3ed7d578b3d"
+    "managed_asset_sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428"
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",
