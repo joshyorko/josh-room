@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import josh_room.catalog as catalog_module
 from josh_room.catalog import Catalog, CatalogConflict, CatalogFile
 from josh_room.crypto import CryptoError, decrypt, decrypt_file, encrypt_file
 from josh_room.envelope import (
@@ -314,6 +315,29 @@ def test_catalog_file_rejects_stale_revision_and_preserves_old_on_interruption(t
         catalog_file.update_if_revision(current.body["revision"], newer, ["age1synthetic", "age1recovery"])
     assert path.read_bytes() == old_ciphertext
     assert not [item for item in tmp_path.glob(".catalog.jroom.*") if item.name != ".catalog.jroom.lock"]
+
+
+def test_catalog_lock_uses_windows_stdlib_locking_when_fcntl_is_unavailable(tmp_path, monkeypatch):
+    class FakeMsvcrt:
+        LK_LOCK = 1
+        LK_UNLCK = 2
+
+        def __init__(self):
+            self.calls = []
+
+        def locking(self, descriptor, mode, size):
+            self.calls.append((descriptor, mode, size))
+
+    windows = FakeMsvcrt()
+    monkeypatch.setattr(catalog_module, "_fcntl", None, raising=False)
+    monkeypatch.setattr(catalog_module, "_msvcrt", windows, raising=False)
+    lock_path = tmp_path / "catalog.lock"
+
+    with lock_path.open("a+b") as lock, catalog_module._exclusive_file_lock(lock):
+        assert windows.calls == [(lock.fileno(), windows.LK_LOCK, 1)]
+
+    assert windows.calls[-1][1:] == (windows.LK_UNLCK, 1)
+    assert lock_path.read_bytes() == b"\0"
 
 
 def test_catalog_resolves_explicit_latest_and_rejects_stale_revision():
