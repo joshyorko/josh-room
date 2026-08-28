@@ -1,7 +1,9 @@
 import hashlib
 import os
+import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -12,9 +14,68 @@ class CryptoError(RuntimeError):
     pass
 
 
-def _identity(path: Path) -> list[str]:
+def _runtime_prefixes(platform: str) -> list[Path]:
+    executable = Path(os.path.abspath(sys.executable))
+    parent = executable.parent
+    inferred = parent.parent if parent.name.lower() in {"bin", "scripts"} else parent
+    values = [inferred]
+    declared = os.environ.get("CONDA_PREFIX")
+    if declared:
+        values.append(Path(declared))
+    unique = []
+    seen = set()
+    for value in values:
+        key = os.path.normcase(os.path.abspath(value))
+        if key not in seen:
+            seen.add(key)
+            unique.append(value)
+    return unique
+
+
+def _managed_executable(
+    name: str,
+    *,
+    prefixes: list[Path] | None = None,
+    platform: str | None = None,
+    extension_mode: bool | None = None,
+    path_search=None,
+) -> Path:
+    if name not in {"age", "age-keygen"}:
+        raise ValueError("unsupported managed executable")
+    platform = platform or sys.platform
+    windows = platform.startswith("win")
+    extension_mode = os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1" if extension_mode is None else extension_mode
+    if prefixes is None:
+        prefixes = _runtime_prefixes(platform)
+        if extension_mode:
+            prefixes = prefixes[:1]
+    else:
+        prefixes = [Path(value) for value in prefixes]
+    for prefix in prefixes:
+        candidates = (
+            [prefix / "Library" / "bin" / f"{name}.exe", prefix / "Scripts" / f"{name}.exe", prefix / f"{name}.exe"]
+            if windows
+            else [prefix / "bin" / name]
+        )
+        for candidate in candidates:
+            if candidate.is_file() and (windows or os.access(candidate, os.X_OK)):
+                return candidate
+    if not extension_mode:
+        found = (path_search or shutil.which)(name)
+        if found:
+            candidate = Path(found)
+            if candidate.is_file() and (windows or os.access(candidate, os.X_OK)):
+                return candidate
+    if extension_mode:
+        raise CryptoError(f"managed controller environment does not provide {name}")
+    raise CryptoError(f"{name} executable is unavailable")
+
+
+def _identity(path: Path, platform: str | None = None) -> list[str]:
+    if not path.is_file() or path.is_symlink():
+        raise CryptoError(f"identity must be a regular file: {path}")
     mode = stat.S_IMODE(path.stat().st_mode)
-    if mode & 0o077:
+    if not (platform or sys.platform).startswith("win") and mode & 0o077:
         raise CryptoError(f"identity permissions must be private: {path}")
     return ["-i", str(path)]
 
@@ -37,7 +98,7 @@ def encrypt_file(source: Path, recipients: list[str], output: Path) -> None:
     if len(recipients) < 2:
         raise CryptoError("production snapshots require two recipients")
     output.parent.mkdir(parents=True, exist_ok=True)
-    args = ["age"]
+    args = [str(_managed_executable("age"))]
     for recipient in recipients:
         args.extend(["-r", recipient])
     fd, temp_name = tempfile.mkstemp(prefix=f".{output.name}.", dir=output.parent)
@@ -67,7 +128,7 @@ def decrypt(path: Path, identity_paths: list[Path], max_bytes: int = MAX_DECRYPT
 def decrypt_file(
     path: Path, identity_paths: list[Path], output: Path, max_bytes: int = MAX_DECRYPTED_SIZE
 ) -> tuple[int, str]:
-    args = ["age", "--decrypt"]
+    args = [str(_managed_executable("age")), "--decrypt"]
     for identity in identity_paths:
         args += _identity(identity)
     output.parent.mkdir(parents=True, exist_ok=True)

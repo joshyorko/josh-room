@@ -50,6 +50,23 @@ def build_commands(*, rcc: str, robot: str, archive: str, artifact: str, receipt
     ]
 
 
+def controller_crypto_command(*, artifact: str, receipt: str, script: str) -> list[str]:
+    return [
+        "--no-build",
+        "env",
+        "exec",
+        "--artifact",
+        artifact,
+        "--permissive-local",
+        "--inherit-streams",
+        "--receipt-file",
+        receipt,
+        "--",
+        "python",
+        script,
+    ]
+
+
 def _json_result(stdout: str) -> dict | list:
     decoder = json.JSONDecoder()
     values = []
@@ -106,7 +123,7 @@ def _sha256(path: Path) -> str:
 
 
 def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str) -> None:
-    required = {"artifact_digest", "specification_digest", "legacy_blueprint_key", "archive", "rcc_version", "source", "platform", "verified_acquire", "verified_no_build", "verified_exec"}
+    required = {"artifact_digest", "specification_digest", "legacy_blueprint_key", "archive", "rcc_version", "source", "platform", "verified_acquire", "verified_no_build", "verified_exec", "verified_crypto"}
     if not required <= receipt.keys():
         raise ValueError("controller artifact receipt is missing provenance fields")
     if receipt["rcc_version"] != expected_rcc:
@@ -123,7 +140,7 @@ def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str
         raise ValueError("controller artifact receipt archive SHA256 is invalid")
     if not isinstance(receipt["archive"].get("size"), int) or receipt["archive"]["size"] < 1:
         raise ValueError("controller artifact receipt archive size is invalid")
-    if not all(receipt[name] is True for name in ("verified_acquire", "verified_no_build", "verified_exec")):
+    if not all(receipt[name] is True for name in ("verified_acquire", "verified_no_build", "verified_exec", "verified_crypto")):
         raise ValueError("controller artifact receipt is not fully verified")
 
 
@@ -145,6 +162,9 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
     if archive.exists() or receipt_path.exists():
         raise FileExistsError("refusing to overwrite an existing controller artifact or receipt")
     robot = (repository / manifest["controller"]["robot"]).resolve()
+    crypto_smoke = (repository / "scripts" / "controller_crypto_smoke.py").resolve()
+    if not crypto_smoke.is_file():
+        raise FileNotFoundError("controller crypto smoke script is missing")
     source = subprocess.run(["git", "-C", str(repository), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     with tempfile.TemporaryDirectory(prefix="josh-room-controller-build-") as temporary:
         builder_home = Path(temporary) / "builder"
@@ -162,6 +182,11 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
         if acquire.get("artifactDigest", acquire.get("artifact_digest")) != artifact or acquire.get("verification", {}).get("valid") is not True:
             raise ValueError("fresh RCC acquire did not verify the controller artifact")
         _run(rcc, ["--no-build", "ht", "vars", "--robot", str(robot), "--json"], home=consumer_home, cwd=robot.parent)
+        controller_environment = {
+            "PYTHONPATH": str(robot.parent),
+            "JOSH_ROOM_CONTROLLER_ROOT": str(robot.parent),
+            "JOSH_ROOM_EXTENSION_MODE": "1",
+        }
         exec_receipt = Path(temporary) / "exec-receipt.json"
         execution = _run(
             rcc,
@@ -169,14 +194,25 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
             home=consumer_home,
             cwd=robot.parent,
             receipt=exec_receipt,
-            environment_overrides={
-                "PYTHONPATH": str(robot.parent),
-                "JOSH_ROOM_CONTROLLER_ROOT": str(robot.parent),
-                "JOSH_ROOM_EXTENSION_MODE": "1",
-            },
+            environment_overrides=controller_environment,
         )
         if execution.get("exitCode", execution.get("exit_code", 0)) != 0:
             raise RuntimeError("controller dimensions list failed in the acquired artifact")
+        crypto_receipt = Path(temporary) / "crypto-exec-receipt.json"
+        crypto_execution = _run(
+            rcc,
+            controller_crypto_command(
+                artifact=artifact,
+                receipt=str(crypto_receipt),
+                script=str(crypto_smoke),
+            ),
+            home=consumer_home,
+            cwd=robot.parent,
+            receipt=crypto_receipt,
+            environment_overrides=controller_environment,
+        )
+        if crypto_execution.get("exitCode", crypto_execution.get("exit_code", 0)) != 0:
+            raise RuntimeError("controller age encrypt/decrypt smoke failed in the acquired artifact")
         specification = publish.get("specificationDigest") or publish.get("specification_digest")
         blueprint = publish.get("legacyBlueprintKey") or publish.get("legacy_blueprint_key")
         if not isinstance(specification, str) or not specification.startswith("sha256:") or not isinstance(blueprint, str) or not blueprint:
@@ -193,6 +229,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
             "verified_acquire": True,
             "verified_no_build": True,
             "verified_exec": True,
+            "verified_crypto": True,
         }
         validate_receipt(receipt, expected_platform=platform, expected_rcc=EXPECTED_RCC)
         stage.replace(archive)

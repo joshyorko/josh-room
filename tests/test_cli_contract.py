@@ -104,7 +104,16 @@ def test_extension_doctor_uses_managed_rcc_and_jat_doctor_not_host_tools(tmp_pat
     monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
     monkeypatch.setenv("JOSH_ROOM_RCC_EXE", str(tmp_path / "runtime" / "rcc"))
     monkeypatch.setenv("JOSH_ROOM_JAT_ROOT", str(tmp_path / "jat"))
-    monkeypatch.setattr("josh_room.cli.shutil.which", lambda name: "/managed/age" if name == "age" else None)
+    managed = []
+    monkeypatch.setattr(
+        "josh_room.cli._managed_executable",
+        lambda name: managed.append(name) or tmp_path / "managed" / "controller" / "bin" / "age",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.shutil.which",
+        lambda name: pytest.fail("extension Doctor must not use host PATH for age") if name == "age" else None,
+    )
     monkeypatch.setattr("josh_room.cli._jat_contract", lambda _root: {"robot": True, "tasks": True, "interactive": True})
     calls = []
     monkeypatch.setattr("josh_room.cli.run_doctor", lambda root: calls.append(root) or {"success": True})
@@ -112,6 +121,7 @@ def test_extension_doctor_uses_managed_rcc_and_jat_doctor_not_host_tools(tmp_pat
     report = __import__("josh_room.cli", fromlist=["_doctor"])._doctor(tmp_path, "local", "vscode-insiders")
 
     assert calls == [tmp_path / "jat"]
+    assert managed == ["age"]
     checks = {check["name"]: check["ok"] for check in report["checks"]}
     assert checks["rcc"] is False
     assert checks["age"] is True

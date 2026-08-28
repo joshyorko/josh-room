@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.build_controller_artifact as builder_module
 from scripts.build_controller_artifact import (
     _json_result,
     _run,
@@ -100,6 +101,29 @@ def test_rcc_exec_receives_vsix_controller_source_path(tmp_path):
     assert result == {"pythonpath": str(controller)}
 
 
+def test_controller_crypto_proof_runs_inside_acquired_artifact():
+    artifact = "sha256:" + "a" * 64
+    command = builder_module.controller_crypto_command(
+        artifact=artifact,
+        receipt="/dist/crypto-receipt.json",
+        script="/repo/scripts/controller_crypto_smoke.py",
+    )
+    assert command == [
+        "--no-build",
+        "env",
+        "exec",
+        "--artifact",
+        artifact,
+        "--permissive-local",
+        "--inherit-streams",
+        "--receipt-file",
+        "/dist/crypto-receipt.json",
+        "--",
+        "python",
+        "/repo/scripts/controller_crypto_smoke.py",
+    ]
+
+
 def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
     receipt = {
         "format_version": 1,
@@ -113,11 +137,16 @@ def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
         "verified_acquire": True,
         "verified_no_build": True,
         "verified_exec": True,
+        "verified_crypto": True,
     }
     validate_receipt(receipt, expected_platform="linux-x64", expected_rcc="v18.19.3")
     broken = {**receipt, "rcc_version": "v18.19.2"}
     with pytest.raises(ValueError, match="RCC version"):
         validate_receipt(broken, expected_platform="linux-x64", expected_rcc="v18.19.3")
+    missing_crypto = dict(receipt)
+    missing_crypto.pop("verified_crypto")
+    with pytest.raises(ValueError, match="provenance fields"):
+        validate_receipt(missing_crypto, expected_platform="linux-x64", expected_rcc="v18.19.3")
 
 
 def test_manifest_pin_integration_updates_root_and_template_atomically(tmp_path):

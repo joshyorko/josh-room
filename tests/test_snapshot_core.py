@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import josh_room.catalog as catalog_module
+import josh_room.crypto as crypto_module
 from josh_room.catalog import Catalog, CatalogConflict, CatalogFile
 from josh_room.crypto import CryptoError, decrypt, decrypt_file, encrypt_file
 from josh_room.envelope import (
@@ -76,6 +77,7 @@ def test_file_crypto_uses_paths_without_subprocess_input(tmp_path, monkeypatch):
     identity.write_text("synthetic")
     identity.chmod(0o600)
     calls = []
+    managed_age = tmp_path / "managed" / "bin" / "age"
 
     def fake_run(argv, **kwargs):
         calls.append((argv, kwargs))
@@ -84,14 +86,100 @@ def test_file_crypto_uses_paths_without_subprocess_input(tmp_path, monkeypatch):
         return __import__("subprocess").CompletedProcess(argv, 0, b"", b"")
 
     monkeypatch.setattr("josh_room.crypto.subprocess.run", fake_run)
+    monkeypatch.setattr(crypto_module, "_managed_executable", lambda name: managed_age, raising=False)
     encrypt_file(source, ["age1daily", "age1recovery"], encrypted)
     size, digest = decrypt_file(encrypted, [identity], decrypted)
     assert all("input" not in kwargs for _argv, kwargs in calls)
+    assert all(argv[0] == str(managed_age) for argv, _kwargs in calls)
     assert str(source) in calls[0][0]
     assert str(encrypted) in calls[1][0]
     assert decrypted.read_bytes() == b"payload"
     assert size == 7
     assert digest == hashlib.sha256(b"payload").hexdigest()
+
+
+def test_extension_resolves_age_from_managed_linux_prefix_without_host_fallback(tmp_path):
+    prefix = tmp_path / "controller"
+    managed_age = prefix / "bin" / "age"
+    managed_age.parent.mkdir(parents=True)
+    managed_age.write_bytes(b"managed")
+    managed_age.chmod(0o700)
+    host_age = tmp_path / "host" / "age"
+
+    resolved = crypto_module._managed_executable(
+        "age",
+        prefixes=[prefix],
+        platform="linux",
+        extension_mode=True,
+        path_search=lambda _name: str(host_age),
+    )
+
+    assert resolved == managed_age
+
+
+def test_extension_resolves_windows_age_from_conda_library_bin(tmp_path):
+    prefix = tmp_path / "controller"
+    managed_age = prefix / "Library" / "bin" / "age.exe"
+    managed_age.parent.mkdir(parents=True)
+    managed_age.write_bytes(b"managed")
+
+    resolved = crypto_module._managed_executable(
+        "age",
+        prefixes=[prefix],
+        platform="win32",
+        extension_mode=True,
+        path_search=lambda _name: None,
+    )
+
+    assert resolved == managed_age
+
+
+def test_extension_refuses_host_age_when_managed_runtime_is_missing(tmp_path):
+    host_age = tmp_path / "host" / "age"
+    host_age.parent.mkdir()
+    host_age.write_bytes(b"host")
+    host_age.chmod(0o700)
+
+    with pytest.raises(CryptoError, match="managed controller environment"):
+        crypto_module._managed_executable(
+            "age",
+            prefixes=[tmp_path / "empty"],
+            platform="linux",
+            extension_mode=True,
+            path_search=lambda _name: str(host_age),
+        )
+
+
+def test_extension_ignores_inherited_conda_prefix_outside_active_python(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    hostile = tmp_path / "hostile"
+    hostile_age = hostile / "bin" / "age"
+    hostile_age.parent.mkdir(parents=True)
+    hostile_age.write_bytes(b"hostile")
+    hostile_age.chmod(0o700)
+    monkeypatch.setattr(crypto_module.sys, "executable", str(runtime / "bin" / "python"))
+    monkeypatch.setenv("CONDA_PREFIX", str(hostile))
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+
+    with pytest.raises(CryptoError, match="managed controller environment"):
+        crypto_module._managed_executable("age", platform="linux", path_search=lambda _name: None)
+
+
+def test_standalone_cli_can_use_host_age(tmp_path):
+    host_age = tmp_path / "host" / "age"
+    host_age.parent.mkdir()
+    host_age.write_bytes(b"host")
+    host_age.chmod(0o700)
+
+    resolved = crypto_module._managed_executable(
+        "age",
+        prefixes=[],
+        platform="linux",
+        extension_mode=False,
+        path_search=lambda _name: str(host_age),
+    )
+
+    assert resolved == host_age
 
 
 def test_envelope_rejects_symlink_member():
@@ -130,6 +218,14 @@ def test_identity_permissions_are_restrictive(tmp_path):
     identity.chmod(0o644)
     with pytest.raises(CryptoError, match="permissions"):
         decrypt(tmp_path / "ciphertext", [identity])
+
+
+def test_windows_identity_uses_private_runtime_acl_instead_of_posix_mode_bits(tmp_path):
+    identity = tmp_path / "identity.txt"
+    identity.write_text("AGE-SECRET-KEY-synthetic")
+    identity.chmod(0o644)
+
+    assert crypto_module._identity(identity, platform="win32") == ["-i", str(identity)]
 
 
 def test_runtime_secret_file_is_ephemeral_keyring_source(tmp_path, monkeypatch):

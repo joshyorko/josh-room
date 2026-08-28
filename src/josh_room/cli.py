@@ -28,7 +28,7 @@ from .config import (
     private_config,
     save_private_config,
 )
-from .crypto import decrypt
+from .crypto import CryptoError, _managed_executable, decrypt
 from .jat import _jat_contract, run_build, run_doctor, run_restore, run_serve
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
@@ -1025,7 +1025,12 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
             except OSError:
                 rcc_ok = False
         record("rcc", rcc_ok, "Reload Josh Room so it can acquire its managed RCC runtime.")
-        record("age", shutil.which("age"), "The managed Josh Room controller environment must provide age.")
+        try:
+            managed_age = _managed_executable("age")
+        except CryptoError as error:
+            record("age", False, "The managed Josh Room controller environment must provide age.", str(error))
+        else:
+            record("age", True, "The managed Josh Room controller environment must provide age.", str(managed_age))
         jat_ready = False
         jat_error = None
         jat_root = _jat_root()
