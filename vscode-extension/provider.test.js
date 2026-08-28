@@ -34,16 +34,33 @@ test("dimensionConnection reuses one worker connection for every bucket Dimensio
   }, connections).id, "home");
 });
 
-test("bucketChoices includes accessible buckets plus Create Bucket and preserves manual fallback", () => {
+test("bucketChoices includes a recommended dedicated bucket plus accessible buckets and manual fallback", () => {
   assert.deepEqual(bucketChoices({ buckets: [{ name: "rooms" }, { bucket: "archive" }] }), [
+    { label: "$(add) Create new bucket… (recommended: josh-room)", create: true, bucket: "josh-room", recommended: true },
     { label: "rooms", bucket: "rooms" },
     { label: "archive", bucket: "archive" },
-    { label: "$(add) Create Bucket…", create: true },
     { label: "Enter Bucket Manually…", manual: true },
   ]);
   assert.deepEqual(bucketChoices({ ok: false, forbidden: true }), [
+    { label: "$(add) Create new bucket… (recommended: josh-room)", create: true, bucket: "josh-room", recommended: true },
     { label: "Enter Bucket Manually…", manual: true },
   ]);
+});
+
+test("R2 and MinIO singleton bucket choices keep creation explicit and recommend a dedicated Josh Room bucket", () => {
+  for (const provider of ["r2", "minio"]) {
+    const choices = bucketChoices({ provider, buckets: [{ name: "existing-app-bucket" }] });
+    assert.deepEqual(choices[0], {
+      label: "$(add) Create new bucket… (recommended: josh-room)",
+      create: true,
+      bucket: "josh-room",
+      recommended: true,
+    });
+    assert.deepEqual(choices.slice(1), [
+      { label: "existing-app-bucket", bucket: "existing-app-bucket" },
+      { label: "Enter Bucket Manually…", manual: true },
+    ]);
+  }
 });
 
 test("connectionCommand keeps MinIO credentials in the JSON handoff, never argv", () => {

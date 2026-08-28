@@ -39,6 +39,19 @@ def test_extension_controller_writes_a_private_result_receipt(tmp_path, monkeypa
     assert stat.S_IMODE(receipt.stat().st_mode) == 0o600
 
 
+def test_auth_logout_is_a_local_session_operation_and_never_requires_a_connection(tmp_path, monkeypatch, capsys):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    for name in ("r2.json", "age.identity", "config.json", "session.json"):
+        (runtime / name).write_text("synthetic-local-session")
+
+    assert main(["auth", "logout", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result == {"dimension_id": None, "logged_out": True, "ok": True, "status": "logged_out"}
+    assert not any((runtime / name).exists() for name in ("r2.json", "age.identity", "config.json", "session.json"))
+
+
 def test_r2_command_initializes_system_trust_before_auth_and_dispatch(monkeypatch, capsys):
     events = []
     monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: events.append("tls"))

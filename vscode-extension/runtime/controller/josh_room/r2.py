@@ -15,6 +15,10 @@ from .keyring import lookup
 from .local_store import ObjectRef
 from .object_store import ObjectStore
 from .progress import report_progress
+from .s3 import BucketAccessDenied, BucketListForbidden
+from .s3 import check_bucket_access as _check_bucket_access
+from .s3 import create_bucket as _create_bucket
+from .s3 import list_buckets as _list_buckets
 
 OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
 
@@ -62,6 +66,36 @@ class R2Config:
             raise ValueError("private R2 configuration is unavailable")
         return cls(endpoint=values["endpoint"], bucket=values["bucket"], credential_profile=values["credential_profile"], region=values.get("region", "auto"), catalog_key=values.get("catalog_key", "catalog.jroom.age"), temporary_credentials=values.get("temporary_credentials", True), dimension_id="r2")
 
+def client_for_config(config: R2Config):
+    import boto3
+    from botocore.config import Config
+
+    credentials = lookup(config.credential_profile, allow_runtime=True)
+    return boto3.client(
+        "s3",
+        endpoint_url=config.endpoint,
+        region_name=config.region,
+        aws_access_key_id=credentials["access-key-id"],
+        aws_secret_access_key=credentials["secret-access-key"],
+        aws_session_token=credentials.get("session-token"),
+        config=Config(
+            connect_timeout=config.timeout_seconds,
+            read_timeout=config.timeout_seconds,
+            retries={"max_attempts": config.max_attempts, "mode": "standard"},
+        ),
+    )
+
+
+def list_buckets(config: R2Config, client=None) -> list[str]:
+    return _list_buckets(client or client_for_config(config), "Cloudflare R2", error_type=BucketListForbidden, context=config.dimension_id)
+
+
+def create_bucket(config: R2Config, bucket: str, client=None) -> str:
+    return _create_bucket(client or client_for_config(config), bucket, region=config.region)
+
+
+def check_bucket_access(config: R2Config, bucket: str, client=None) -> str:
+    return _check_bucket_access(client or client_for_config(config), bucket, "Cloudflare R2", error_type=BucketAccessDenied, context=config.dimension_id)
 
 
 class R2Backend(ObjectStore):
@@ -73,23 +107,7 @@ class R2Backend(ObjectStore):
             raise ValueError("catalog key must be fixed and opaque")
 
     def _client_from_keyring(self):
-        import boto3
-        from botocore.config import Config
-
-        credentials = lookup(self.config.credential_profile, allow_runtime=True)
-        return boto3.client(
-            "s3",
-            endpoint_url=self.config.endpoint,
-            region_name=self.config.region,
-            aws_access_key_id=credentials["access-key-id"],
-            aws_secret_access_key=credentials["secret-access-key"],
-            aws_session_token=credentials.get("session-token"),
-            config=Config(
-                connect_timeout=self.config.timeout_seconds,
-                read_timeout=self.config.timeout_seconds,
-                retries={"max_attempts": self.config.max_attempts, "mode": "standard"},
-            ),
-        )
+        return client_for_config(self.config)
 
     def put_bytes(self, key: str, body: bytes) -> ObjectRef:
         digest = hashlib.sha256(body).hexdigest()

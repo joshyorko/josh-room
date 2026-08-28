@@ -364,7 +364,10 @@ test("MinIO credentials use VS Code SecretStorage and stay out of controller arg
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
   extension.__test__.setExtensionContextForTests({ secrets });
-  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.quickPickResponses.push(
+    { label: "MinIO", provider: "minio" },
+    { label: "secret-room", bucket: "secret-room" },
+  );
   vscode.inputBoxResponses.push("https://minio.example.invalid:9000", "secret-access", "secret-key");
 
   assert.equal(await extension.__test__.addStorage(), "added");
@@ -1586,7 +1589,7 @@ test("disconnected MinIO storage stays disconnected and does not load hierarchy 
   assert.equal(dimension.children.length, 0);
 });
 
-test("Add Storage sends Cloudflare directly to OAuth without R2 questionnaires", async () => {
+test("Add Storage uses Cloudflare OAuth and then the shared explicit bucket workflow", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-r2-test-"));
   const { vscode, statusItem, inputBoxCalls, openExternalCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
@@ -1601,16 +1604,24 @@ test("Add Storage sends Cloudflare directly to OAuth without R2 questionnaires",
       authorization_url: "https://dash.cloudflare.example/oauth",
     }) };
     if (args[0] === "auth" && args[1] === "wait") return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") return { stdout: JSON.stringify({ ok: true, provider: "r2", endpoint: "https://r2.example", credential_profile: "oauth-runtime", buckets: ["existing-r2"] }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "create") return { stdout: JSON.stringify({ ok: true, provider: "r2", bucket: "josh-room-r2", created: true }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") return { stdout: JSON.stringify({ ok: true, provider: "r2", bucket: "josh-room-r2", accessible: true }) };
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
     throw new Error(`unexpected command: ${args.join(" ")}`);
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
-  vscode.quickPickResponses.push({ label: "Cloudflare R2", provider: "r2" });
+  vscode.quickPickResponses.push(
+    { label: "Cloudflare R2", provider: "r2" },
+    { label: "$(add) Create new bucket… (recommended: josh-room)", create: true, bucket: "josh-room" },
+  );
+  vscode.inputBoxResponses.push("josh-room-r2");
 
-  assert.equal(await extension.__test__.addStorage(), "connected");
-  assert.equal(inputBoxCalls.length, 0);
+  assert.equal(await extension.__test__.addStorage(), "added");
+  assert.equal(inputBoxCalls.length, 1);
   assert.deepEqual(openExternalCalls.map((uri) => uri.value), ["https://dash.cloudflare.example/oauth"]);
-  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add"), false);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add"), true);
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth" && entry.args[1] === "start"), true);
 });
 
@@ -1743,6 +1754,41 @@ test("unavailable Cloudflare authority status fails closed without probing R2", 
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
 
+test("R2 disconnect logs out the local OAuth session instead of treating the endpoint as a connection id", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-logout-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "auth" && args[1] === "logout") return { stdout: JSON.stringify({ ok: true, status: "logged_out", logged_out: true }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  let refreshes = 0;
+  extension.__test__.setRoomsProvider({ refresh: async () => { refreshes += 1; } });
+
+  assert.equal(await extension.__test__.disconnectStorage({
+    id: "https://r2.example.invalid",
+    provider: "r2",
+    connection: { id: "https://r2.example.invalid", provider: "r2" },
+    dimension: { id: "r2", provider: "r2" },
+  }), "disconnected");
+  assert.deepEqual(spawnHarness.calls.map((entry) => entry.args.slice(0, 3)), [["auth", "logout", "--json"]]);
+  assert.equal(refreshes, 1);
+});
+
+test("controller preparation is reported before the first RCC recipe construction can finish", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-preparation-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true, dimensions: [] }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const events = [];
+
+  await extension.__test__.runJoshRoom(["dimensions", "list"], root, undefined, { event: (event) => events.push(event) });
+  assert.equal(events[0].stage, "controller");
+  assert.match(events[0].message, /Preparing Josh Room controller environment/);
+});
+
 test("MinIO Add Storage asks for concrete settings without invoking Cloudflare OAuth", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-minio-test-"));
   const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
@@ -1757,6 +1803,7 @@ test("MinIO Add Storage asks for concrete settings without invoking Cloudflare O
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
   vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.quickPickResponses.push({ label: "rooms", bucket: "rooms" });
   vscode.inputBoxResponses.push("https://minio.example", "access-synthetic", "secret-synthetic");
 
   assert.equal(await extension.__test__.addStorage(), "added");
@@ -1809,14 +1856,45 @@ test("MinIO Add Storage offers an existing connection and a new connection when 
         endpoint: "https://minio.example.invalid:9000",
       },
     },
+    { label: "rooms", bucket: "rooms" },
   );
 
   assert.equal(await extension.__test__.addStorage(), "added");
-  assert.equal(quickPickCalls.length, 2);
+  assert.equal(quickPickCalls.length, 3);
   assert.deepEqual(quickPickCalls[1].items.map((item) => item.label), [
     "Home MinIO",
     "$(add) New MinIO Connection…",
   ]);
+});
+
+test("MinIO Add Storage never auto-selects a singleton existing bucket and recommends a new Josh Room bucket", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-minio-singleton-test-"));
+  const { vscode, statusItem, quickPickCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") return { stdout: JSON.stringify({ ok: true, connections: [] }) };
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "create") return { stdout: JSON.stringify({ ok: true, connection: { id: "home", provider: "minio", credential_profile: "home-profile" } }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") return { stdout: JSON.stringify({ ok: true, buckets: ["fizzy-production"] }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "create") return { stdout: JSON.stringify({ ok: true, bucket: "josh-room", created: true }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push(
+    { label: "MinIO", provider: "minio" },
+    { label: "$(add) Create new bucket… (recommended: josh-room)", create: true, bucket: "josh-room", recommended: true },
+  );
+  vscode.inputBoxResponses.push("http://minio.example.invalid:9000", "synthetic-access", "synthetic-secret", "josh-room");
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  assert.equal(quickPickCalls[1].items[0].create, true);
+  assert.equal(quickPickCalls[1].items[0].bucket, "josh-room");
+  const createCall = spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[1] === "bucket" && entry.args[2] === "create");
+  assert.equal(createCall.args[createCall.args.indexOf("--bucket") + 1], "josh-room");
+  const addCall = spawnHarness.calls.find((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add");
+  assert.equal(addCall.args.includes("fizzy-production"), false);
+  assert.equal(addCall.args.includes("josh-room"), true);
 });
 
 test("root extension storage commands parse through the actual Python CLI contract", async () => {
@@ -1840,7 +1918,10 @@ test("root extension storage commands parse through the actual Python CLI contra
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
-  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.quickPickResponses.push(
+    { label: "MinIO", provider: "minio" },
+    { label: "synthetic-room", bucket: "synthetic-room" },
+  );
   vscode.inputBoxResponses.push("https://minio.example.invalid:9000", "synthetic-access", "synthetic-secret");
 
   assert.equal(await extension.__test__.addStorage(), "added");

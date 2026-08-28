@@ -58,6 +58,12 @@ def cancel_oauth_session(session_id: str) -> dict:
     return result
 
 
+def logout_runtime_session() -> dict:
+    """Forget the local Cloudflare session without contacting the authority."""
+    _clear_runtime_session()
+    return {"status": "logged_out"}
+
+
 def wait_oauth_session(
     session_id: str,
     timeout: int = 600,

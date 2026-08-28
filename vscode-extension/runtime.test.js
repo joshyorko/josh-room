@@ -57,8 +57,9 @@ function context(root) {
 
 test("resolvePlatform accepts only the first supported Linux mapping", () => {
   assert.equal(resolvePlatform("linux", "x64"), "linux-x64");
+  assert.equal(resolvePlatform("win32", "x64"), "win32-x64");
   assert.throws(() => resolvePlatform("linux", "arm64"), /not supported/);
-  assert.throws(() => resolvePlatform("darwin", "x64"), /not supported/);
+  assert.throws(() => resolvePlatform("darwin", "x64"), /does not support macOS yet/);
 });
 
 test("readManifest rejects an RCC pin without an exact digest", () => {
@@ -117,6 +118,17 @@ test("ensureManagedRcc refuses a corrupt cached binary without replacing it", as
   );
   assert.equal(downloaded, 0);
   assert.equal(fs.readFileSync(expected, "utf8"), "corrupt");
+});
+
+test("ensureManagedRcc reports the exact missing Windows runtime dependency", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-win32-pin-test-"));
+  await assert.rejects(
+    require("./runtime").ensureManagedRcc(context(root), manifestFor(Buffer.from("rcc")), {
+      platform: "win32-x64",
+      download: async () => { throw new Error("download must not run without a Windows pin"); },
+    }),
+    /Windows RCC binary and matching Windows JAT environment artifact must be published and pinned first/,
+  );
 });
 
 test("runtimeEnvironment keeps RCC and Room state under extension global storage", () => {
@@ -196,6 +208,39 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
   assert.deepEqual(calls[1].args.slice(-3), ["python", "-c", HAULER_VERSION_CHECK]);
   assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
   assert.equal(calls[0].options.env.RCC_HOLOTREE_MODE, "private");
+});
+
+test("ensureJatRuntime surfaces RCC artifact incompatibility without fallback build", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-incompatibility-test-"));
+  const rccBinary = Buffer.from("managed-rcc-binary");
+  const jatArchive = Buffer.from("rcca-archive");
+  const artifact = "sha256:" + "c".repeat(64);
+  const manifest = manifestFor(rccBinary, {
+    jat: {
+      git_sha: "d".repeat(40),
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "d".repeat(40), sha256: "e".repeat(64) },
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset: "jat-runtime.rcca", url: "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.1/jat-runtime.rcca", sha256: digest(jatArchive), size: jatArchive.length },
+      },
+    },
+  });
+  const calls = [];
+  await assert.rejects(
+    require("./runtime").ensureJatRuntime(context(root), manifest, { executable: `${root}/runtime/rcc`, version: "v18.19.2" }, {
+      platform: "linux-x64",
+      download: async (_url, destination) => fs.writeFileSync(destination, jatArchive),
+      ensureSource: async () => path.join(root, "jat-source"),
+      runJson: async (_executable, args) => {
+        calls.push(args);
+        if (args[1] === "acquire") return { artifactDigest: artifact, verification: { valid: false }, error: "reject incompatible environment artifact [os-version]: os.minimumVersion requires 7.1.8, worker has 5.14.0" };
+        throw new Error("fallback build must not run");
+      },
+    }),
+    /reject incompatible environment artifact \[os-version\].*requires 7\.1\.8.*worker has 5\.14\.0/,
+  );
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][0], /^env$/);
 });
 
 test("ensureJatSource rejects a non-official JAT source URL before download", async () => {

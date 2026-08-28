@@ -18,6 +18,8 @@ function haulerVersionCommand() {
 
 function resolvePlatform(platform = process.platform, arch = process.arch) {
   if (platform === "linux" && arch === "x64") return "linux-x64";
+  if (platform === "win32" && arch === "x64") return "win32-x64";
+  if (platform === "darwin") throw new Error("Josh Room does not support macOS yet; use a supported Linux or Windows x64 host.");
   throw new Error(`Josh Room runtime platform is not supported: ${platform}/${arch}`);
 }
 
@@ -72,7 +74,12 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
   const manifest = readManifest(manifestSource);
   const platform = options.platform || resolvePlatform();
   const pin = manifest.rcc.platforms[platform];
-  if (!pin) throw new Error(`Josh Room has no RCC runtime pin for ${platform}`);
+  if (!pin) {
+    const detail = platform === "win32-x64"
+      ? "a Windows RCC binary and matching Windows JAT environment artifact must be published and pinned first"
+      : `no RCC binary is pinned for ${platform}`;
+    throw new Error(`Josh Room cannot start on ${platform}: ${detail}`);
+  }
   const paths = privatePaths(context);
   const executable = path.join(paths.runtimeRoot, "rcc", manifest.rcc.version, platform, "rcc");
   const directory = path.dirname(executable);
@@ -172,7 +179,8 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
     { cwd: paths.storageRoot, env: environment },
   );
   if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
-    throw new Error("RCC did not validate the pinned JAT environment artifact");
+    const detail = acquired.error || acquired.message || "RCC did not validate the pinned JAT environment artifact";
+    throw new Error(`RCC rejected the pinned JAT environment artifact: ${detail}`);
   }
   const executed = await runJson(
     rccRuntime.executable,

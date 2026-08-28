@@ -438,6 +438,10 @@ function parseControllerOutput(output) {
 }
 
 async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
+  progressReporter?.event({
+    stage: "controller",
+    message: "Preparing Josh Room controller environment; first use may take a minute",
+  });
   const runtime = await runtimeFor(cwd);
   const environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: "" };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
@@ -1643,6 +1647,90 @@ async function connectCloudflare(item, { timeoutMs = 600000 } = {}) {
   }
 }
 
+async function configureStorageBucket({ provider, connectionId, dimensionId, connectionMetadata = {}, credentials, cwd }) {
+  let bucketResult;
+  const commandOptions = credentials === undefined ? {} : { stdin: credentials };
+  try {
+    bucketResult = await runOperation(
+      `Loading ${provider === "r2" ? "Cloudflare R2" : "MinIO"} buckets...`,
+      providerTools.bucketCommand("list", { provider, connectionId, dimensionId }),
+      cwd,
+      commandOptions,
+    );
+  } catch (error) {
+    if (error.result?.error_code === "bucket-list-forbidden") {
+      outputChannel?.warn(`${provider} bucket listing unavailable: ${error.message}`);
+      bucketResult = { ok: false, ...error.result, forbidden: true };
+    } else {
+      outputChannel?.error(`${provider} bucket listing unavailable: ${error.message}`);
+      throw error;
+    }
+  }
+  const bucketChoice = await vscode.window.showQuickPick(providerTools.bucketChoices(bucketResult || {}), {
+    title: `Josh: Choose a ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Bucket`,
+    placeHolder: "Create a dedicated Josh Room bucket or choose an existing bucket",
+    ignoreFocusOut: true,
+  });
+  if (!bucketChoice) return "cancelled";
+  let bucket = bucketChoice.bucket;
+  const target = {
+    provider,
+    connectionId,
+    dimensionId,
+  };
+  if (bucketChoice.create) {
+    bucket = await vscode.window.showInputBox({
+      title: `Josh: Create ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Bucket`,
+      prompt: "New bucket name (dedicated to Josh Room)",
+      value: bucketChoice.bucket || "josh-room",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
+    });
+    if (!bucket) return "cancelled";
+    await runOperation(
+      `Creating ${provider === "r2" ? "Cloudflare R2" : "MinIO"} bucket...`,
+      providerTools.bucketCommand("create", { ...target, bucket: bucket.trim() }),
+      cwd,
+      commandOptions,
+    );
+  } else if (bucketChoice.manual) {
+    bucket = await vscode.window.showInputBox({
+      title: `Josh: Add ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Storage`,
+      prompt: "Bucket name",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
+    });
+    if (!bucket) return "cancelled";
+  }
+  bucket = bucket.trim();
+  await runOperation(
+    `Checking ${provider === "r2" ? "Cloudflare R2" : "MinIO"} bucket access...`,
+    providerTools.bucketCommand("check", { ...target, bucket }),
+    cwd,
+    commandOptions,
+  );
+  const connectionRef = connectionId ? connectionId : dimensionId;
+  const dimensionIdValue = `${provider}-${connectionRef}-${bucket}`
+    .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const dimensionArgs = [
+    "dimensions", "add", dimensionIdValue, "--display-name", bucket,
+    "--provider", provider, "--bucket", bucket,
+  ];
+  if (provider === "minio") dimensionArgs.push("--connection", connectionId);
+  else dimensionArgs.push(
+    "--endpoint", bucketResult.endpoint || connectionMetadata.endpoint || "",
+    "--credential-profile", bucketResult.credential_profile || "oauth-runtime",
+    "--region", bucketResult.region || "auto",
+  );
+  await runOperation(`Adding ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Dimension...`, dimensionArgs, cwd, commandOptions);
+  selectedDimensionId = dimensionIdValue;
+  if (roomsProvider) await roomsProvider.refresh();
+  await vscode.window.showInformationMessage(
+    `Connected ${provider === "r2" ? "Cloudflare R2" : "MinIO"} bucket ${bucket}. ${provider === "minio" ? "Credentials were handed to the secure backend." : "Cloudflare authorization remains local to this Room."}`,
+  );
+  return "added";
+}
+
 async function addStorage() {
   const cwd = activeWorkspace();
   const providerChoice = await vscode.window.showQuickPick([
@@ -1650,10 +1738,14 @@ async function addStorage() {
     { label: "MinIO", provider: "minio" },
   ], { title: "Josh: Add Storage", placeHolder: "Choose a storage provider", ignoreFocusOut: true });
   if (!providerChoice) return "cancelled";
-  if (providerChoice.provider === "r2") return connectCloudflare();
+  if (providerChoice.provider === "r2") {
+    const connected = await connectCloudflare();
+    return connected === "connected" ? configureStorageBucket({ provider: "r2", dimensionId: "r2", cwd }) : connected;
+  }
   let endpoint;
   let credentials;
   let returnedConnectionId;
+  let connectionMetadata;
   let existingConnections = [];
   try {
       existingConnections = providerTools.connectionRecords(
@@ -1674,6 +1766,7 @@ async function addStorage() {
     const connection = reuseChoice.connection || reuseChoice;
     endpoint = connection.endpoint;
     returnedConnectionId = connection.id || connection.connection_id;
+    connectionMetadata = connection;
   } else {
     endpoint = await vscode.window.showInputBox({
       title: "Josh: Add MinIO Storage", prompt: "Endpoint URL", placeHolder: "https://...", ignoreFocusOut: true,
@@ -1697,6 +1790,7 @@ async function addStorage() {
     }), cwd, { stdin: credentials });
     const connection = created.connection || created;
     returnedConnectionId = typeof connection === "string" ? connection : connection.id || connection.connection_id;
+    connectionMetadata = typeof connection === "object" ? connection : {};
     if (credentials) {
       const parsedCredentials = JSON.parse(credentials);
       const profile = typeof connection === "object" && connection.credential_profile
@@ -1706,64 +1800,13 @@ async function addStorage() {
     }
   }
   if (!returnedConnectionId) throw new Error("MinIO connection did not return a connection id.");
-  let bucketResult;
-  try {
-    bucketResult = await runOperation("Loading MinIO buckets...", providerTools.connectionCommand("list-buckets", {
-      connectionId: returnedConnectionId,
-    }), cwd, credentials === undefined ? {} : { stdin: credentials });
-  } catch (error) {
-    if (error.result?.error_code === "bucket-list-forbidden") {
-      outputChannel?.warn(`MinIO bucket listing unavailable: ${error.message}`);
-      bucketResult = { ok: false, ...error.result, forbidden: true };
-    } else {
-      outputChannel?.error(`MinIO bucket listing unavailable: ${error.message}`);
-      throw error;
-    }
-  }
-  const listedBuckets = providerTools.bucketChoices(bucketResult || {})
-    .filter((choice) => choice.bucket).map((choice) => choice.bucket);
-  let bucketChoice;
-  if (listedBuckets.length === 1) {
-    bucketChoice = { bucket: listedBuckets[0] };
-  } else {
-    bucketChoice = await vscode.window.showQuickPick(providerTools.bucketChoices(bucketResult), {
-      title: "Josh: Choose a MinIO Bucket", placeHolder: "Use an existing bucket or create one", ignoreFocusOut: true,
-    });
-  }
-  if (!bucketChoice) return "cancelled";
-  let bucket = bucketChoice.bucket;
-  if (bucketChoice.create) {
-    bucket = await vscode.window.showInputBox({
-      title: "Josh: Create MinIO Bucket", prompt: "Bucket name", ignoreFocusOut: true,
-      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
-    });
-    if (!bucket) return "cancelled";
-    await runOperation("Creating MinIO bucket...", providerTools.connectionCommand("create-bucket", {
-      connectionId: returnedConnectionId, bucket: bucket.trim(),
-    }), cwd, credentials === undefined ? {} : { stdin: credentials });
-  }
-  if (bucketChoice.manual) {
-    bucket = await vscode.window.showInputBox({
-      title: "Josh: Add MinIO Storage", prompt: "Bucket name", ignoreFocusOut: true,
-      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
-    });
-    if (!bucket) return "cancelled";
-  }
-  await runOperation("Checking MinIO bucket access...", providerTools.connectionCommand("check-bucket", {
-    connectionId: returnedConnectionId, bucket: bucket.trim(),
-  }), cwd, credentials === undefined ? {} : { stdin: credentials });
-  const dimensionIdValue = `${providerChoice.provider}-${returnedConnectionId}-${bucket}`
-    .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  await runOperation("Adding MinIO Dimension...", [
-    "dimensions", "add", dimensionIdValue, "--display-name", bucket.trim(),
-    "--bucket", bucket.trim(), "--connection", returnedConnectionId,
-  ], cwd, { stdin: credentials });
-  selectedDimensionId = dimensionIdValue;
-  if (roomsProvider) await roomsProvider.refresh();
-  await vscode.window.showInformationMessage(
-    "Connected MinIO bucket " + bucket.trim() + ". Credentials were handed to the secure backend.",
-  );
-  return "added";
+  return configureStorageBucket({
+    provider: "minio",
+    connectionId: returnedConnectionId,
+    connectionMetadata: { ...connectionMetadata, endpoint: endpoint.trim(), credential_profile: connectionMetadata.credential_profile || `josh-room-${returnedConnectionId}` },
+    credentials,
+    cwd,
+  });
 }
 
 async function connectStorage(item) {
@@ -1808,9 +1851,12 @@ async function editConnection(item, { reconnect = false } = {}) {
 
 async function disconnectStorage(item) {
   const connection = item?.connection || item;
+  const provider = nativeRegistry.providerKey(item?.provider || connection?.provider);
   const connectionId = connection?.id || connection?.connection_id;
   selectedDimensionId = undefined;
-  if (connectionId) {
+  if (provider === "r2") {
+    await runOperation("Disconnecting Cloudflare locally...", ["auth", "logout"], activeWorkspace());
+  } else if (connectionId) {
     await runOperation("Disconnecting locally...", providerTools.connectionCommand("disconnect", { connectionId }), activeWorkspace());
   }
   if (roomsProvider) await roomsProvider.refresh();
