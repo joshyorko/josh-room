@@ -13,7 +13,29 @@
     }
   },
   "controller": {
-    "robot": "runtime/controller/robot.yaml"
+    "robot": "runtime/controller/robot.yaml",
+    "environment_artifacts": {
+      "linux-x64": {
+        "digest": "sha256:22109a276162252953df47134458e4cb94d19566fc9e5430f15f398d6c2abf1a",
+        "platform": "linux-x64",
+        "archive": {
+          "asset": "josh-room-controller-linux-amd64.rcca",
+          "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.10-controller-artifacts/josh-room-controller-linux-amd64.rcca",
+          "sha256": "7fd9a87a2a39714e2fcfaba34d394b7553e3979518d5bbf833ee6bdc14a1d548",
+          "size": 124494418
+        }
+      }
+    },
+    "environment_artifact": {
+      "digest": "sha256:22109a276162252953df47134458e4cb94d19566fc9e5430f15f398d6c2abf1a",
+      "platform": "linux-x64",
+      "archive": {
+        "asset": "josh-room-controller-linux-amd64.rcca",
+        "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.10-controller-artifacts/josh-room-controller-linux-amd64.rcca",
+        "sha256": "7fd9a87a2a39714e2fcfaba34d394b7553e3979518d5bbf833ee6bdc14a1d548",
+        "size": 124494418
+      }
+    }
   },
   "jat": {
     "git_sha": "f6005b48dfbe13b6976d44f17c844794be569d5f",

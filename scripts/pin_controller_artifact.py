@@ -31,7 +31,10 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
     }
     values = [json.loads(path.read_text()) for path in (root, template)]
     for value in values:
-        value.setdefault("controller", {})["environment_artifact"] = update
+        controller = value.setdefault("controller", {})
+        controller.setdefault("environment_artifacts", {})[platform] = update
+        if platform == "linux-x64":
+            controller["environment_artifact"] = update
     for path, value in zip((root, template), values, strict=True):
         temporary = path.with_name(f".{path.name}.{os.getpid()}")
         temporary.write_text(json.dumps(value, indent=2) + "\n")

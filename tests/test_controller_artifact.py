@@ -178,3 +178,28 @@ def test_manifest_pin_integration_updates_root_and_template_atomically(tmp_path)
     }))
     with pytest.raises(ValueError, match="archive SHA256"):
         pin_manifest(root, template, artifact, receipt, "v0.1.7-controller-artifact")
+
+
+def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
+    root = tmp_path / "runtime-manifest.json"
+    template = tmp_path / "template-runtime-manifest.json"
+    initial = {"schema_version": 1, "controller": {"environment_artifact": {"digest": "linux"}}}
+    for target in (root, template):
+        target.write_text(json.dumps(initial))
+    artifact = tmp_path / "josh-room-controller-windows-amd64.rcca"
+    artifact.write_bytes(b"windows-controller-artifact")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({
+        "format_version": 1,
+        "artifact_digest": "sha256:" + "a" * 64,
+        "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
+        "rcc_version": "v18.19.3",
+        "platform": "win32-x64",
+        "source": "b" * 40,
+    }))
+
+    pin_manifest(root, template, artifact, receipt, "v0.1.10-controller-artifacts", platform="win32-x64")
+    for target in (root, template):
+        value = json.loads(target.read_text())
+        assert value["controller"]["environment_artifact"]["digest"] == "linux"
+        assert value["controller"]["environment_artifacts"]["win32-x64"]["platform"] == "win32-x64"
