@@ -363,6 +363,10 @@ async function initializeManagedRuntime(context, progressReporter) {
   const jat = await managedRuntime.ensureJatRuntime(context, manifest, rcc, {
     onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
   });
+  progressReporter?.event({ stage: "runtime", message: "Preparing Josh Room controller environment" });
+  const controller = await managedRuntime.ensureControllerRuntime(context, manifest, rcc, {
+    onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+  });
   const controllerRobot = manifest.controller?.robot;
   if (typeof controllerRobot !== "string" || path.isAbsolute(controllerRobot)
     || controllerRobot.split(/[\\/]+/).includes("..")) {
@@ -378,6 +382,7 @@ async function initializeManagedRuntime(context, progressReporter) {
     manifest,
     rcc,
     jat,
+    controller,
     controllerRoot: path.dirname(controllerPath),
   };
 }
@@ -391,9 +396,10 @@ async function runtimeFor(cwd) {
   const state = await startRuntimeReadiness(extensionContext);
   return {
     command: state.rcc.executable,
-    args: (args) => [
-      "run", "--silent", "-r", path.join(state.controllerRoot, "robot.yaml"),
-      "-t", "Josh Room", "--", ...args, "--json",
+    args: (args, receiptFile) => [
+      "--no-build", "env", "exec", "--artifact", state.controller.artifact,
+      "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile,
+      "--", "python", "-m", "josh_room", ...args, "--json",
     ],
     env: managedRuntime.runtimeEnvironment(extensionContext, {
       rccExecutable: state.rcc.executable,
@@ -401,6 +407,7 @@ async function runtimeFor(cwd) {
       jatRoot: state.jat.jatRoot,
       jatArtifact: state.jat.artifact,
       jatSourceSha: state.jat.sourceSha,
+      controllerArtifact: state.controller.artifact,
     }, cwd),
     jatRoot: state.jat.jatRoot,
   };
@@ -482,16 +489,24 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     stage: "controller",
     message: "Preparing Josh Room controller environment; first use may take a minute",
   });
-  const runtime = await runtimeFor(cwd);
-  const environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: "" };
-  const credentialsCleanup = await writeRuntimeCredentials(environment);
+  const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
+  fs.chmodSync(progressDirectory, 0o700);
+  const progressPath = path.join(progressDirectory, "events.jsonl");
+  const resultPath = path.join(progressDirectory, "result.json");
+  const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
+  fs.writeFileSync(progressPath, "", { mode: 0o600 });
+  let runtime;
+  let environment;
+  let credentialsCleanup = () => {};
+  try {
+    runtime = await runtimeFor(cwd);
+    environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
+    credentialsCleanup = await writeRuntimeCredentials(environment);
+  } catch (error) {
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
+    throw error;
+  }
   return new Promise((resolve, reject) => {
-    const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
-    fs.chmodSync(progressDirectory, 0o700);
-    const progressPath = path.join(progressDirectory, "events.jsonl");
-    const resultPath = path.join(progressDirectory, "result.json");
-    fs.writeFileSync(progressPath, "", { mode: 0o600 });
-    environment.JOSH_ROOM_PROGRESS_FILE = progressPath;
     environment.JOSH_ROOM_RESULT_FILE = resultPath;
     const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(event))];
     if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
@@ -511,7 +526,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       fs.rmSync(progressDirectory, { recursive: true, force: true });
       credentialsCleanup();
     };
-    const child = childProcess.spawn(runtime.command, runtime.args(args), {
+    const child = childProcess.spawn(runtime.command, runtime.args(args, receiptPath), {
       cwd,
       env: environment,
       detached: true,
@@ -552,6 +567,23 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     child.on("close", (code) => {
       cancellation?.dispose();
       let result;
+      let receipt;
+      try {
+        if (fs.existsSync(receiptPath)) receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
+      } catch (error) {
+        outputChannel?.warn(`Unable to read RCC receipt: ${error.message}`);
+      }
+      const receiptExit = receipt && (receipt.exitCode ?? receipt.exit_code ?? receipt.exit);
+      if (receiptExit !== undefined && Number(receiptExit) !== 0) {
+        const detail = receipt.compatibility || receipt.error || receipt.message || `RCC controller exited with status ${receiptExit}`;
+        cleanup();
+        const failure = new Error(String(detail));
+        failure.receipt = receipt;
+        failure.stdout = stdout;
+        failure.stderr = stderr;
+        reject(failure);
+        return;
+      }
       try {
         if (fs.existsSync(resultPath)) result = parseControllerOutput(fs.readFileSync(resultPath, "utf8"));
       } catch (error) {
@@ -1489,6 +1521,7 @@ function activate(context) {
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
+  register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
   register(context, "joshRoom.jatBuild", jatBuild);
   register(context, "joshRoom.jatRestore", jatRestore);
   register(context, "joshRoom.jatServe", jatServe);

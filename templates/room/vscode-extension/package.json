@@ -34,6 +34,7 @@
     "onCommand:joshRoom.remove",
     "onCommand:joshRoom.serve",
     "onCommand:joshRoom.refresh",
+    "onCommand:joshRoom.showLogs",
     "onCommand:joshRoom.jatBuild",
     "onCommand:joshRoom.jatRestore",
     "onCommand:joshRoom.jatServe",
@@ -121,6 +122,11 @@
         "command": "joshRoom.refresh",
         "title": "Josh: Refresh Rooms",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "joshRoom.showLogs",
+        "title": "Josh: Show Logs",
+        "icon": "$(output)"
       },
       {
         "command": "joshRoom.jatBuild",

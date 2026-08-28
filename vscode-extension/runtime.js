@@ -66,6 +66,7 @@ function privatePaths(context) {
     jatRoot: path.join(storageRoot, "runtime", "jat"),
     jatArtifactRoot: path.join(storageRoot, "runtime", "jat-artifact"),
     controllerRoot: path.join(storageRoot, "runtime", "controller"),
+    controllerArtifactRoot: path.join(storageRoot, "runtime", "controller-artifact"),
     logsRoot: path.join(storageRoot, "logs"),
   };
 }
@@ -211,6 +212,64 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   };
 }
 
+async function ensureControllerRuntime(context, manifestSource, rccRuntime, options = {}) {
+  const manifest = readManifest(manifestSource);
+  const artifact = manifest.controller?.environment_artifact;
+  const archivePin = artifact?.archive;
+  if (!archivePin || typeof artifact.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(artifact.digest)
+    || typeof archivePin.asset !== "string" || typeof archivePin.url !== "string"
+    || !archivePin.url.startsWith("https://github.com/joshyorko/josh-room/releases/download/")
+    || typeof archivePin.sha256 !== "string" || !DIGEST.test(archivePin.sha256)
+    || archivePin.size !== undefined && (!Number.isInteger(archivePin.size) || archivePin.size < 1)) {
+    throw new Error("Josh Room runtime manifest is missing a separate Josh Room controller environment artifact pin");
+  }
+  if (!rccRuntime?.executable || !rccRuntime?.version) {
+    throw new Error("managed RCC runtime is required for controller artifact acquisition");
+  }
+  const paths = privatePaths(context);
+  await fs.promises.mkdir(paths.controllerArtifactRoot, { recursive: true, mode: 0o700 });
+  const archivePath = path.join(paths.controllerArtifactRoot, archivePin.asset);
+  const download = options.download || downloadFile;
+  if (await isRegularFile(archivePath)) {
+    if (archivePin.size !== undefined && (await fs.promises.stat(archivePath)).size !== archivePin.size) {
+      throw new Error("cached controller environment archive size mismatch");
+    }
+    if (await sha256File(archivePath) !== archivePin.sha256) {
+      throw new Error("cached controller environment archive checksum mismatch");
+    }
+  } else if (await pathExists(archivePath)) {
+    throw new Error(`controller environment archive is not a regular file: ${archivePath}`);
+  } else {
+    const temporaryDirectory = await fs.promises.mkdtemp(path.join(paths.controllerArtifactRoot, ".download-"));
+    const temporary = path.join(temporaryDirectory, archivePin.asset);
+    try {
+      await download(archivePin.url, temporary);
+      if (archivePin.size !== undefined && (await fs.promises.stat(temporary)).size !== archivePin.size) {
+        throw new Error("downloaded controller environment archive size mismatch");
+      }
+      if (await sha256File(temporary) !== archivePin.sha256) {
+        throw new Error("downloaded controller environment checksum mismatch");
+      }
+      await fs.promises.chmod(temporary, 0o600);
+      await fs.promises.rename(temporary, archivePath);
+    } finally {
+      await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+  const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
+  const runJson = options.runJson || runJsonCommand;
+  const acquired = await runJson(
+    rccRuntime.executable,
+    ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
+    { cwd: paths.storageRoot, env: environment },
+  );
+  if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
+    const detail = acquired.error || acquired.message || "RCC did not validate the pinned controller environment artifact";
+    throw new Error(`RCC rejected the pinned controller environment artifact: ${detail}`);
+  }
+  return { artifact: artifact.digest, archive: archivePath };
+}
+
 function runtimeEnvironment(context, runtime, workspace) {
   const paths = privatePaths(context);
   const values = runtime || {};
@@ -220,12 +279,14 @@ function runtimeEnvironment(context, runtime, workspace) {
     JOSH_ROOM_RCC_HOME: paths.rccHome,
     JOSH_ROOM_RCC_EXE: values.rccExecutable || "",
     JOSH_ROOM_CONTROLLER_ROOT: values.controllerRoot || paths.controllerRoot,
+    JOSH_ROOM_CONTROLLER_ARTIFACT: values.controllerArtifact || "",
     JOSH_ROOM_JAT_ROOT: values.jatRoot || paths.jatRoot,
     JOSH_ROOM_JAT_ARTIFACT: values.jatArtifact || "",
     JOSH_ROOM_JAT_SHA: values.jatSourceSha || "",
     JOSH_ROOM_INSTANCE: paths.instanceRoot,
     JOSH_ROOM_CONFIG_DIR: paths.configRoot,
     XDG_RUNTIME_DIR: path.join(paths.runtimeRoot, "xdg-runtime"),
+    PYTHONPATH: values.controllerRoot || paths.controllerRoot,
     JOSH_ROOM_EXTENSION_MODE: "1",
     ...(workspace ? { JOSH_ROOM_WORKSPACE_ROOT: path.resolve(workspace) } : {}),
   };
@@ -428,6 +489,7 @@ async function extractGzipTar(archivePath, destination) {
 
 module.exports = {
   ensureManagedRcc,
+  ensureControllerRuntime,
   ensureJatRuntime,
   ensureJatSource,
   privatePaths,

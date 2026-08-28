@@ -269,6 +269,50 @@ test("ensureJatRuntime surfaces RCC artifact incompatibility without fallback bu
   assert.match(calls[0][0], /^env$/);
 });
 
+test("ensureControllerRuntime acquires a separate controller artifact and rejects missing metadata", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-artifact-test-"));
+  const rccBinary = Buffer.from("managed-rcc-binary");
+  const archive = Buffer.from("controller-rcca");
+  const digestValue = "sha256:" + "f".repeat(64);
+  const manifest = manifestFor(rccBinary, {
+    controller: {
+      environment_artifact: {
+        digest: digestValue,
+        archive: {
+          asset: "josh-room-controller.rcca",
+          url: "https://github.com/joshyorko/josh-room/releases/download/v0.1.6/josh-room-controller.rcca",
+          sha256: digest(archive),
+          size: archive.length,
+        },
+      },
+    },
+  });
+  const calls = [];
+  const result = await require("./runtime").ensureControllerRuntime(
+    context(root), manifest, { executable: `${root}/runtime/rcc`, version: "v18.19.2" }, {
+      platform: "linux-x64",
+      download: async (_url, destination) => fs.writeFileSync(destination, archive),
+      runJson: async (_executable, args) => {
+        calls.push(args);
+        return { artifactDigest: digestValue, verification: { valid: true } };
+      },
+    },
+  );
+  assert.equal(result.artifact, digestValue);
+  assert.equal(calls[0][0], "env");
+  assert.equal(calls[0][1], "acquire");
+  assert.equal(calls[0].includes("--archive"), true);
+  await assert.rejects(
+    require("./runtime").ensureControllerRuntime(
+      context(fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-no-pin-"))),
+      manifestFor(rccBinary),
+      { executable: `${root}/runtime/rcc`, version: "v18.19.2" },
+      { platform: "linux-x64", runJson: async () => ({}) },
+    ),
+    /separate Josh Room controller environment artifact pin/,
+  );
+});
+
 test("ensureJatSource rejects a non-official JAT source URL before download", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-source-url-test-"));
   const sha = "d".repeat(40);
