@@ -8,7 +8,7 @@ const zlib = require("node:zlib");
 
 const { ensureManagedRcc, readManifest, resolvePlatform, runtimeEnvironment } = require("./runtime");
 
-const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); resolved = os.path.realpath(executable) if executable else ''; inside = bool(prefix and resolved.startswith(os.path.realpath(prefix) + os.sep)); sys.exit(127 if not inside else subprocess.run([resolved, 'version'], check=False).returncode)";
+const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)";
 
 function tarMember(name, body, type = "0") {
   const content = Buffer.from(body);
