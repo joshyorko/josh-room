@@ -32,6 +32,34 @@ function compatibilityError(error) {
   return error;
 }
 
+function localArtifactMissing(error) {
+  return /artifact is not local|no provider was supplied/i.test(error?.message || String(error));
+}
+
+async function acquirePinnedArtifact({
+  rccExecutable, artifactDigest, archivePath, archiveCached, runJson, cwd, environment, onProgress, onOutput, label,
+}) {
+  const options = { cwd, env: environment, onOutput };
+  if (archiveCached) {
+    onProgress?.({ phase: "reuse", message: `Reusing cached ${label} materialization` });
+    try {
+      return await runJson(
+        rccExecutable,
+        ["env", "acquire", "--artifact", artifactDigest, "--permissive-local", "--json"],
+        options,
+      );
+    } catch (error) {
+      if (!localArtifactMissing(error)) throw error;
+    }
+  }
+  onProgress?.({ phase: "import", message: `Importing ${label} into private RCC storage` });
+  return runJson(
+    rccExecutable,
+    ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
+    options,
+  );
+}
+
 function resolvePlatform(platform = process.platform, arch = process.arch) {
   if (platform === "linux" && arch === "x64") return "linux-x64";
   if (platform === "win32" && arch === "x64") return "win32-x64";
@@ -325,7 +353,9 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   await fs.promises.mkdir(paths.jatArtifactRoot, { recursive: true, mode: 0o700 });
   const archivePath = path.join(paths.jatArtifactRoot, archivePin.asset);
   const download = options.download || downloadFile;
+  let archiveCached = false;
   if (await isRegularFile(archivePath)) {
+    archiveCached = true;
     if (archivePin.size !== undefined && (await fs.promises.stat(archivePath)).size !== archivePin.size) {
       throw new Error("cached JAT environment archive size mismatch");
     }
@@ -365,13 +395,19 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   };
   const runJson = options.runJson || runJsonCommand;
   let acquired;
-  options.onProgress?.({ phase: "import", message: "Importing JAT Environment Artifact into private RCC storage" });
   try {
-    acquired = await runJson(
-      rccRuntime.executable,
-      ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-      { cwd: paths.storageRoot, env: environment, onOutput: options.onOutput },
-    );
+    acquired = await acquirePinnedArtifact({
+      rccExecutable: rccRuntime.executable,
+      artifactDigest: artifact.digest,
+      archivePath,
+      archiveCached,
+      runJson,
+      cwd: paths.storageRoot,
+      environment,
+      onProgress: options.onProgress,
+      onOutput: options.onOutput,
+      label: "JAT Environment Artifact",
+    });
   } catch (error) {
     throw compatibilityError(error);
   }
@@ -424,7 +460,9 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   await fs.promises.mkdir(paths.controllerArtifactRoot, { recursive: true, mode: 0o700 });
   const archivePath = path.join(paths.controllerArtifactRoot, archivePin.asset);
   const download = options.download || downloadFile;
+  let archiveCached = false;
   if (await isRegularFile(archivePath)) {
+    archiveCached = true;
     if (archivePin.size !== undefined && (await fs.promises.stat(archivePath)).size !== archivePin.size) {
       throw new Error("cached controller environment archive size mismatch");
     }
@@ -454,13 +492,19 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
   const runJson = options.runJson || runJsonCommand;
   let acquired;
-  options.onProgress?.({ phase: "import", message: "Importing controller Environment Artifact into private RCC storage" });
   try {
-    acquired = await runJson(
-      rccRuntime.executable,
-      ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-      { cwd: paths.storageRoot, env: environment, onOutput: options.onOutput },
-    );
+    acquired = await acquirePinnedArtifact({
+      rccExecutable: rccRuntime.executable,
+      artifactDigest: artifact.digest,
+      archivePath,
+      archiveCached,
+      runJson,
+      cwd: paths.storageRoot,
+      environment,
+      onProgress: options.onProgress,
+      onOutput: options.onOutput,
+      label: "controller Environment Artifact",
+    });
   } catch (error) {
     throw compatibilityError(error);
   }

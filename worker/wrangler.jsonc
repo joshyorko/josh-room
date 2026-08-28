@@ -3,11 +3,12 @@
   "main": "src/index.js",
   "compatibility_date": "2026-08-24",
   "observability": { "enabled": true },
-  "vars": {
-    "OAUTH_CLIENT_ID": "REPLACE_WITH_YOUR_OAUTH_CLIENT_ID",
-    "OAUTH_REDIRECT_URI": "https://your-auth-worker.example/oauth/callback"
+  "durable_objects": {
+    "bindings": [
+      { "name": "OAUTH_SESSION", "class_name": "OAuthSession" }
+    ]
   },
-  "kv_namespaces": [
-    { "binding": "OAUTH_SESSIONS", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }
+  "migrations": [
+    { "tag": "v1-oauth-session-do", "new_sqlite_classes": ["OAuthSession"] }
   ]
 }
