@@ -1887,6 +1887,51 @@ test("choosing Build Locally prewarms the controller before local runtime readin
   assert.equal(events.some((event) => /JAT.*materializ/i.test(event.message)), false);
 });
 
+test("local JAT fallback publishes once and warm reuse performs only no-build checks", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-once-test-"));
+  const controllerRoot = path.join(root, "controller");
+  const jatRoot = path.join(root, "jat");
+  fs.mkdirSync(controllerRoot, { recursive: true });
+  fs.mkdirSync(jatRoot, { recursive: true });
+  fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
+  fs.writeFileSync(path.join(jatRoot, "robot.yaml"), "tasks: {}\n");
+  const { vscode, warningResponses } = createVscodeMock(root);
+  const localArtifact = "sha256:" + "d".repeat(64);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "env" && args[1] === "publish") return { stdout: JSON.stringify({ artifactDigest: localArtifact }) };
+    if (args[0] === "--no-build" && args.includes("hauler")) return { stdout: JSON.stringify({ artifactDigest: localArtifact, exitCode: 0 }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  warningResponses.push("Build Locally");
+  const manifest = {
+    extension_version: "0.1.9",
+    jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } },
+    controller: {},
+  };
+  const error = new Error("portable JAT is incompatible");
+  error.fallbackReason = "environment-compatibility";
+  const first = await extension.__test__.localRuntimeState(
+    { globalStorageUri: { fsPath: root } }, manifest,
+    { version: "v18.19.2", executable: "/private/managed/rcc" },
+    { jatRoot, sourceSha: manifest.jat.git_sha }, error, { event() {} }, controllerRoot,
+  );
+  assert.equal(first.jat.artifact, localArtifact);
+  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "env" && call.args[1] === "publish").length, 1);
+
+  const beforeWarm = spawnHarness.calls.length;
+  const second = await extension.__test__.localRuntimeState(
+    { globalStorageUri: { fsPath: root } }, manifest,
+    { version: "v18.19.2", executable: "/private/managed/rcc" },
+    first.jat, error, { event() {} }, controllerRoot,
+  );
+  assert.equal(second.localReady, true);
+  const warmCalls = spawnHarness.calls.slice(beforeWarm);
+  assert.equal(warmCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
+  assert.equal(warmCalls.some((call) => call.args[0] === "run"), false);
+  assert.equal(warmCalls.every((call) => call.args[0] === "--no-build"), true);
+});
+
 test("failed local controller prewarm writes no marker and never reports runtime ready", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-failure-test-"));
   const controllerRoot = path.join(root, "controller");
@@ -1921,7 +1966,8 @@ test("local fallback runtime command uses managed RCC and the packaged recipe", 
     mode: "local-build-fallback",
     command: "/private/managed/rcc",
     args: (args) => ["run", "--silent", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--", ...args, "--json"],
-    env: { RCC_HOLOTREE_MODE: "private", PATH: "/private/managed:/usr/bin", JOSH_ROOM_EXTENSION_MODE: "0" },
+    env: { RCC_HOLOTREE_MODE: "private", PATH: "/private/managed:/usr/bin", JOSH_ROOM_EXTENSION_MODE: "1", JOSH_ROOM_JAT_ARTIFACT: "sha256:" + "a".repeat(64) },
+    jatArtifact: "sha256:" + "a".repeat(64),
     jatRoot: root,
   });
 
@@ -1931,7 +1977,7 @@ test("local fallback runtime command uses managed RCC and the packaged recipe", 
     "run", "--silent", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--",
   ]);
   assert.equal(spawnHarness.calls[0].options.env.RCC_HOLOTREE_MODE, "private");
-  assert.equal(spawnHarness.calls[0].options.env.JOSH_ROOM_EXTENSION_MODE, "0");
+  assert.equal(spawnHarness.calls[0].options.env.JOSH_ROOM_EXTENSION_MODE, "1");
 });
 
 test("portable runtime retry clears only the scoped fallback marker", async () => {

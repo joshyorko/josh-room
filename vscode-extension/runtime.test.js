@@ -139,6 +139,31 @@ test("warm local fallback proof uses no-build ht vars and the exact private RCC 
   assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
 });
 
+test("local JAT fallback publishes once and verifies Hauler through the local artifact", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-artifact-test-"));
+  const calls = [];
+  const artifact = "sha256:" + "d".repeat(64);
+  const result = await require("./runtime").buildLocalJatArtifact(
+    context(root),
+    { executable: "/private/managed/rcc", version: "v18.19.2" },
+    "/private/jat/robot.yaml",
+    {
+      runJson: async (_executable, args, options) => {
+        calls.push({ args, options });
+        if (args[1] === "publish") return { artifactDigest: artifact, specificationDigest: "sha256:" + "e".repeat(64), legacyBlueprintKey: "blueprint" };
+        return { artifactDigest: artifact, exitCode: 0, verification: { valid: true } };
+      },
+    },
+  );
+  assert.equal(result.artifact, artifact);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].args, ["env", "publish", "--robot", "/private/jat/robot.yaml", "--provider", "local", "--json"]);
+  assert.equal(calls[1].args.includes("--no-build"), true);
+  assert.equal(calls[1].args.includes("--artifact"), true);
+  assert.equal(calls[1].args.includes("hauler"), true);
+  assert.equal(calls[1].options.env.RCC_HOLOTREE_MODE, "private");
+});
+
 test("readManifest rejects an RCC pin without an exact digest", () => {
   assert.throws(
     () => readManifest({ schema_version: 1, extension_version: "0.1.1", rcc: { version: "v18.19.2", platforms: { "linux-x64": {} } } }),
