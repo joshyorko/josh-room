@@ -121,6 +121,19 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
   }
 }
 
+async function prepareLocalController(context, rccRuntime, controllerRobot, options = {}) {
+  const environment = { ...process.env, ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
+  options.onProgress?.({ phase: "local-controller", message: "Building controller environment locally" });
+  const runJson = options.runJson || runJsonCommand;
+  const result = await runJson(
+    rccRuntime.executable,
+    ["ht", "vars", "-r", controllerRobot, "--json"],
+    { cwd: path.dirname(controllerRobot), env: environment, onOutput: options.onOutput },
+  );
+  if (!result || result.error !== undefined) throw new Error("managed RCC did not prepare the local controller environment");
+  return result;
+}
+
 async function writeLocalFallbackRecord(context, record) {
   const filename = localFallbackRecordPath(context);
   await fs.promises.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -483,8 +496,8 @@ function runJsonCommand(executable, args, options = {}) {
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); options.onOutput?.("stdout", chunk.toString()); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); options.onOutput?.("stderr", chunk.toString()); });
     child.on("error", reject);
     child.on("close", (code) => {
       if (options.receiptFile && fs.existsSync(options.receiptFile)) {
@@ -595,6 +608,7 @@ module.exports = {
   localFallbackRecordPath,
   readLocalFallbackRecord,
   verifyLocalFallback,
+  prepareLocalController,
   writeLocalFallbackRecord,
   privatePaths,
   readManifest,

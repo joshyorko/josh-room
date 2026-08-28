@@ -1856,6 +1856,61 @@ test("local fallback prompt requires explicit Build Locally and supports Show Lo
   assert.equal(outputChannel.shown, true);
 });
 
+test("choosing Build Locally prewarms the controller before local runtime readiness returns", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-extension-test-"));
+  const controllerRoot = path.join(root, "controller");
+  fs.mkdirSync(controllerRoot, { recursive: true });
+  fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
+  const { vscode, warningResponses } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => args[0] === "ht"
+    ? { stdout: JSON.stringify({ ok: true }) }
+    : { stdout: JSON.stringify({ ok: true }) });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  warningResponses.push("Build Locally");
+  const events = [];
+  const manifest = {
+    extension_version: "0.1.6",
+    jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } },
+    controller: {},
+  };
+  const error = new Error("controller artifact unpublished");
+  error.fallbackReason = "controller-artifact-unpublished";
+  const state = await extension.__test__.localRuntimeState(
+      { globalStorageUri: { fsPath: root } }, manifest,
+      { version: "v18.19.2" }, { jatRoot: path.join(root, "jat"), sourceSha: manifest.jat.git_sha },
+      error, { event: (event) => events.push(event) }, controllerRoot,
+    );
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "ht"), true);
+  assert.equal(state.localReady, false);
+  assert.equal(fs.existsSync(path.join(root, "runtime", "local-fallback.json")), true);
+  assert.equal(events.some((event) => /Controller environment ready/.test(event.message)), true);
+  assert.equal(events.some((event) => /JAT.*materializ/i.test(event.message)), false);
+});
+
+test("failed local controller prewarm writes no marker and never reports runtime ready", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-failure-test-"));
+  const controllerRoot = path.join(root, "controller");
+  fs.mkdirSync(controllerRoot, { recursive: true });
+  fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
+  const { vscode, warningResponses } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => args[0] === "ht"
+    ? { stderr: "controller prewarm failed", code: 1 }
+    : { stdout: JSON.stringify({ ok: true }) });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  warningResponses.push("Build Locally");
+  const events = [];
+  const error = new Error("controller artifact unpublished");
+  error.fallbackReason = "controller-artifact-unpublished";
+  await assert.rejects(extension.__test__.localRuntimeState(
+      { globalStorageUri: { fsPath: root } },
+      { extension_version: "0.1.6", jat: { git_sha: "a".repeat(40), environment_artifact: { digest: "sha256:" + "b".repeat(64) } }, controller: {} },
+      { version: "v18.19.2" }, { jatRoot: path.join(root, "jat") }, error,
+      { event: (event) => events.push(event) }, controllerRoot,
+    ), /controller prewarm failed/);
+  assert.equal(fs.existsSync(path.join(root, "runtime", "local-fallback.json")), false);
+  assert.equal(events.some((event) => /Controller environment ready/.test(event.message)), false);
+});
+
 test("local fallback runtime command uses managed RCC and the packaged recipe", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-command-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
