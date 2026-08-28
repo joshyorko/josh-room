@@ -1,6 +1,6 @@
 # Deferred integrations
 
-Josh Room currently consumes the immutable JAT RCC v18.19.2 Environment Artifact
+Josh Room currently consumes the immutable JAT RCC v18.19.3 Environment Artifact
 for VSIX bootstrap and asks JAT for `rcc_environment=auto` during Save. RCC/JAT
 own artifact production, acquisition, and materialization; Josh Room carries
 only optional typed receipt metadata in the encrypted inner manifest. The

@@ -29,7 +29,7 @@ and the thin consumer template. Real credentials, age identities, catalogs,
 snapshot objects, private paths, and employer/customer data stay outside Git.
 
 The standalone VSIX owns acquisition of the pinned RCC binary and keeps its
-private `ROBOCORP_HOME` under VS Code global storage. It consumes the immutable JAT RCC v18.19.2 Environment Artifact; JAT remains a separate source and
+private `ROBOCORP_HOME` under VS Code global storage. It consumes the immutable JAT RCC v18.19.3 Environment Artifact; JAT remains a separate source and
 runtime substrate, and Hauler remains JAT-owned through its `rccPostInstall`
 contract. RCC owns environment specifications, artifact verification, and
 materialization. Save asks JAT for `rcc_environment=auto` and may carry typed

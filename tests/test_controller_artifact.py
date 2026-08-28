@@ -124,6 +124,17 @@ def test_controller_crypto_proof_runs_inside_acquired_artifact():
     ]
 
 
+def test_controller_artifact_stage_is_adjacent_to_destination(tmp_path):
+    destination = tmp_path / "dist" / "controller.rcca"
+    destination.parent.mkdir()
+    stage = builder_module.destination_stage(destination)
+    try:
+        assert stage.parent == destination.parent
+        assert stage != destination
+    finally:
+        stage.unlink(missing_ok=True)
+
+
 def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
     receipt = {
         "format_version": 1,

@@ -193,7 +193,7 @@ contract. That evidence does not substitute for the standalone VSIX gate.
 
 This remains a review checkpoint, not the final portability release. The standalone clean-container
 VSIX acceptance and dedicated short-lived R2 credential rotation remain open.
-Josh Room consumes the immutable JAT RCC v18.19.2 Environment Artifact during
+Josh Room consumes the immutable JAT RCC v18.19.3 Environment Artifact during
 extension bootstrap, and Save requests JAT `rcc_environment=auto` with optional
 typed receipt metadata. RCC/JAT retain ownership of acquisition and production
 details. Actions Runtime, Hive projections, OpenAI uploads, periodic capture,

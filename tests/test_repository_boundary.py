@@ -42,7 +42,7 @@ def test_environment_artifact_boundary_is_current_and_other_projections_deferred
     architecture = (ROOT / "docs/architecture.md").read_text()
     readme = (ROOT / "README.md").read_text()
     deferred = (ROOT / "docs/DEFERRED-INTEGRATIONS.md").read_text()
-    assert "immutable JAT RCC v18.19.2 Environment" in architecture
+    assert "immutable JAT RCC v18.19.3 Environment" in architecture
     assert "rcc_environment=auto" in readme
     assert "Actions Runtime integration" in deferred and "remain deferred" in deferred
 
@@ -135,7 +135,7 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     assert "runtime/controller/**/__pycache__/**" in vscodeignore
     assert "runtime/controller/**/*.pyc" in vscodeignore
     assert runtime["extension_version"] == package["version"]
-    assert runtime["rcc"]["version"] == "v18.19.2"
+    assert runtime["rcc"]["version"] == "v18.19.3"
     assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
     assert runtime["jat"]["environment_artifact"]["digest"].startswith("sha256:")
     assert "ensureManagedRcc" in extension and "ensureJatRuntime" in extension
