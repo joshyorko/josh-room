@@ -20,7 +20,7 @@ On a plain supported Linux amd64 VS Code or VS Code Insiders host, install the
 released VSIX directly:
 
 ```bash
-code-insiders --install-extension /path/to/josh-room-0.1.2.vsix
+code-insiders --install-extension /path/to/josh-room-0.1.3.vsix
 ```
 
 The extension acquires its pinned RCC binary and JAT Environment Artifact under
@@ -191,7 +191,7 @@ The optional golden-host readiness gate resolves the `secure` Room image to an
 immutable digest and runs a clean non-root Podman smoke proving its image
 contract. That evidence does not substitute for the standalone VSIX gate.
 
-This remains a review checkpoint, not `v0.1.2`. The standalone clean-container
+This remains a review checkpoint, not `v0.1.3`. The standalone clean-container
 VSIX acceptance and dedicated short-lived R2 credential rotation remain open.
 Josh Room consumes the immutable JAT RCC v18.19.2 Environment Artifact during
 extension bootstrap, and Save requests JAT `rcc_environment=auto` with optional
