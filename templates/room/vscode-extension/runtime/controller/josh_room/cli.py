@@ -13,6 +13,7 @@ from . import r2 as _r2
 from .auth import (
     cancel_oauth_session,
     ensure_runtime_session,
+    logout_runtime_session,
     poll_oauth_session,
     runtime_session_state,
     start_oauth_session,
@@ -124,14 +125,20 @@ def build_parser() -> argparse.ArgumentParser:
     provider_bucket = provider_commands.add_parser("bucket")
     provider_bucket_commands = provider_bucket.add_subparsers(dest="provider_bucket_command", required=True)
     provider_bucket_list = provider_bucket_commands.add_parser("list")
-    provider_bucket_list.add_argument("--connection", required=True)
+    provider_bucket_list.add_argument("--connection")
+    provider_bucket_list.add_argument("--provider", choices=("r2", "minio"))
+    provider_bucket_list.add_argument("--dimension")
     _json_option(provider_bucket_list)
     provider_bucket_create = provider_bucket_commands.add_parser("create")
-    provider_bucket_create.add_argument("--connection", required=True)
+    provider_bucket_create.add_argument("--connection")
+    provider_bucket_create.add_argument("--provider", choices=("r2", "minio"))
+    provider_bucket_create.add_argument("--dimension")
     provider_bucket_create.add_argument("--bucket", required=True)
     _json_option(provider_bucket_create)
     provider_bucket_check = provider_bucket_commands.add_parser("check")
-    provider_bucket_check.add_argument("--connection", required=True)
+    provider_bucket_check.add_argument("--connection")
+    provider_bucket_check.add_argument("--provider", choices=("r2", "minio"))
+    provider_bucket_check.add_argument("--dimension")
     provider_bucket_check.add_argument("--bucket", required=True)
     _json_option(provider_bucket_check)
     dimensions = commands.add_parser("dimensions")
@@ -174,6 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
     auth_status = auth_commands.add_parser("status")
     auth_status.add_argument("--dimension")
     _json_option(auth_status)
+    auth_logout = auth_commands.add_parser("logout", help="clear the local Cloudflare session")
+    auth_logout.add_argument("--dimension")
+    _json_option(auth_logout)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(status)
@@ -323,6 +333,15 @@ def _write_runtime_result(result):
 
 
 def _requires_oauth(args) -> bool:
+    if args.command == "provider" and args.provider_command == "bucket":
+        if getattr(args, "provider", None) == "r2":
+            return True
+        if getattr(args, "dimension", None):
+            try:
+                return DimensionRegistry(private_config() or {}).select(args.dimension).provider == "r2"
+            except ValueError:
+                return args.dimension == "r2"
+        return False
     if args.command == "dimensions":
         if not getattr(args, "with_hierarchy", False):
             return False
@@ -368,6 +387,64 @@ def _copy_source_dimension(args) -> str | None:
     return status["dimension_id"]
 
 
+def _bucket_target(args, config):
+    dimension_id = getattr(args, "dimension", None)
+    if dimension_id:
+        dimension = DimensionRegistry(config).select(dimension_id)
+        if getattr(args, "provider", None) and args.provider != dimension.provider:
+            raise ValueError("bucket provider does not match the selected Dimension")
+        return dimension.provider, dimension, None
+    if getattr(args, "provider", None) == "r2":
+        return "r2", DimensionRegistry(config).select("r2"), None
+    connection_id = getattr(args, "connection", None)
+    if not connection_id:
+        raise ValueError("bucket operations require --connection or an R2 --dimension")
+    connection = connection_configs(config).get(connection_id)
+    if connection is None:
+        raise ValueError(f"connection {connection_id} is missing")
+    return connection.provider, None, connection
+
+
+def _bucket_operation(args, config):
+    provider, dimension, connection = _bucket_target(args, config)
+    if provider == "r2":
+        if dimension is None:
+            raise ValueError("R2 bucket operations require a Dimension")
+        target = _r2.R2Config.from_dimension(dimension)
+        connection_id = dimension.dimension_id
+        if args.provider_bucket_command == "list":
+            buckets = _r2.list_buckets(target)
+        elif args.provider_bucket_command == "create":
+            buckets = _r2.create_bucket(target, args.bucket)
+        else:
+            buckets = _r2.check_bucket_access(target, args.bucket)
+    else:
+        connection_id = connection.connection_id
+        if args.provider_bucket_command == "list":
+            buckets = list_minio_buckets(connection)
+        elif args.provider_bucket_command == "create":
+            buckets = create_minio_bucket(connection, args.bucket)
+        else:
+            buckets = check_minio_bucket(connection, args.bucket)
+    if args.provider_bucket_command == "list":
+        result = {"ok": True, "connection_id": connection_id, "provider": provider, "buckets": buckets}
+        if dimension is not None:
+            result.update({
+                "endpoint": dimension.endpoint,
+                "credential_profile": dimension.credential_profile,
+                "region": dimension.region,
+            })
+        return result
+    return {
+        "ok": True,
+        "connection_id": connection_id,
+        "provider": provider,
+        "bucket": buckets,
+        "created": args.provider_bucket_command == "create",
+        "accessible": args.provider_bucket_command == "check",
+    }
+
+
 def dispatch(args, instance: Path) -> dict:
     if args.command == "auth":
         if args.auth_command == "start":
@@ -378,6 +455,8 @@ def dispatch(args, instance: Path) -> dict:
             return {"ok": True, **wait_oauth_session(args.session_id, timeout=args.timeout, poll_interval=args.poll_interval, dimension_id=args.dimension)}
         if args.auth_command == "cancel":
             return {"ok": True, **cancel_oauth_session(args.session_id)}
+        if args.auth_command == "logout":
+            return {"ok": True, **logout_runtime_session(), "logged_out": True, "dimension_id": args.dimension}
         return {"ok": True, "state": runtime_session_state(), "dimension_id": args.dimension}
     if args.command == "provider":
         config = private_config() or {}
@@ -434,26 +513,8 @@ def dispatch(args, instance: Path) -> dict:
             save_private_config(config)
             return {"ok": True, "connection": connection.connection_id, "reconnected": action == "reconnect", "updated": action == "update"}
         if args.provider_bucket_command == "list":
-            connection = connection_configs(config).get(args.connection)
-            if connection is None:
-                raise ValueError(f"connection {args.connection} is missing")
-            return {"ok": True, "connection_id": connection.connection_id, "buckets": list_minio_buckets(connection)}
-        connection = connection_configs(config).get(args.connection)
-        if connection is None:
-            raise ValueError(f"connection {args.connection} is missing")
-        if args.provider_bucket_command == "check":
-            return {
-                "ok": True,
-                "connection_id": connection.connection_id,
-                "bucket": check_minio_bucket(connection, args.bucket),
-                "accessible": True,
-            }
-        return {
-            "ok": True,
-            "connection_id": connection.connection_id,
-            "bucket": create_minio_bucket(connection, args.bucket),
-            "created": True,
-        }
+            return _bucket_operation(args, config)
+        return _bucket_operation(args, config) | ({"accessible": True} if args.provider_bucket_command == "check" else {})
     if args.command == "connections":
         config = private_config() or {}
         if args.connection_command == "list":

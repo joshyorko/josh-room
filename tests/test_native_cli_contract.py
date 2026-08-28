@@ -36,6 +36,20 @@ function vectors(provider) {
       connectionId: "home-minio",
       bucket: "room-a",
     }),
+    r2_bucket_list: provider.bucketCommand("list", {
+      provider: "r2",
+      dimensionId: "r2",
+    }),
+    r2_bucket_create: provider.bucketCommand("create", {
+      provider: "r2",
+      dimensionId: "r2",
+      bucket: "josh-room",
+    }),
+    r2_bucket_check: provider.bucketCommand("check", {
+      provider: "r2",
+      dimensionId: "r2",
+      bucket: "josh-room",
+    }),
   };
 }
 
@@ -100,9 +114,12 @@ def test_native_provider_dimension_vectors_match_and_parse_in_real_cli():
             "--bucket", "room-a",
         ],
         "bucket_check": [
-            "provider", "bucket", "check", "--connection", "home-minio",
+        "provider", "bucket", "check", "--connection", "home-minio",
             "--bucket", "room-a",
         ],
+        "r2_bucket_list": ["provider", "bucket", "list", "--provider", "r2", "--dimension", "r2"],
+        "r2_bucket_create": ["provider", "bucket", "create", "--provider", "r2", "--dimension", "r2", "--bucket", "josh-room"],
+        "r2_bucket_check": ["provider", "bucket", "check", "--provider", "r2", "--dimension", "r2", "--bucket", "josh-room"],
     }
     for name, expected in expected_provider_vectors.items():
         assert root_vectors.get(name) == expected, (

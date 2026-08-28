@@ -1,45 +1,33 @@
-import re
 from dataclasses import dataclass
 
 from botocore.config import Config
-from botocore.exceptions import ClientError
 
 from .config import ConnectionConfig, DimensionConfig, resolve_dimension
 from .keyring import lookup
 from .object_store import ObjectStore
 from .r2 import R2Backend
-
-_BUCKET_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{1,61}[a-z0-9])?$")
-
-
-class BucketListForbidden(PermissionError):
-    def __init__(self, message: str, connection: ConnectionConfig | None = None):
-        self.result = {
-            "error_code": "bucket-list-forbidden",
-            "recoverable": True,
-        }
-        if connection is not None:
-            self.result.update({"connection_id": connection.connection_id, "provider": connection.provider})
-        super().__init__(message)
+from .s3 import BucketAccessDenied as _S3BucketAccessDenied
+from .s3 import BucketListForbidden as _S3BucketListForbidden
+from .s3 import check_bucket_access as _check_bucket_access
+from .s3 import create_bucket as _create_bucket
+from .s3 import list_buckets as _list_buckets
+from .s3 import validate_bucket_name as _validate_bucket_name
 
 
-class BucketAccessDenied(PermissionError):
-    def __init__(self, message: str, connection: ConnectionConfig | None = None):
-        self.result = {
-            "error_code": "bucket-access-denied",
-            "recoverable": True,
-        }
-        if connection is not None:
-            self.result.update({"connection_id": connection.connection_id, "provider": connection.provider})
-        super().__init__(message)
+class BucketListForbidden(_S3BucketListForbidden):
+    def __init__(self, message: str, connection: ConnectionConfig | None = None, context=None, **_kwargs):
+        connection = connection or context
+        super().__init__(message, "minio", connection.connection_id if connection else None)
+
+
+class BucketAccessDenied(_S3BucketAccessDenied):
+    def __init__(self, message: str, connection: ConnectionConfig | None = None, context=None, **_kwargs):
+        connection = connection or context
+        super().__init__(message, "minio", connection.connection_id if connection else None)
 
 
 def validate_bucket_name(bucket: str) -> str:
-    if not isinstance(bucket, str) or not _BUCKET_NAME.fullmatch(bucket):
-        raise ValueError("bucket name must be 3-63 lowercase letters, numbers, dots, or hyphens")
-    if ".." in bucket or ".-" in bucket or "-." in bucket:
-        raise ValueError("bucket name contains an invalid separator")
-    return bucket
+    return _validate_bucket_name(bucket)
 
 
 def client_for_connection(connection: ConnectionConfig):
@@ -70,41 +58,17 @@ def client_for_connection(connection: ConnectionConfig):
 
 def list_buckets(connection: ConnectionConfig, client=None) -> list[str]:
     client = client or client_for_connection(connection)
-    try:
-        response = client.list_buckets()
-    except ClientError as error:
-        details = error.response.get("Error", {})
-        code = str(details.get("Code", ""))
-        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        if code.lower() in {"accessdenied", "forbidden", "unauthorized"} or status == 403:
-            raise BucketListForbidden("MinIO bucket listing is forbidden", connection) from error
-        raise
-    return sorted(bucket["Name"] for bucket in response.get("Buckets", []) if isinstance(bucket, dict) and bucket.get("Name"))
+    return _list_buckets(client, "MinIO", error_type=BucketListForbidden, context=connection)
 
 
 def create_bucket(connection: ConnectionConfig, bucket: str, client=None) -> str:
-    bucket = validate_bucket_name(bucket)
     client = client or client_for_connection(connection)
-    kwargs = {"Bucket": bucket}
-    if connection.region != "us-east-1":
-        kwargs["CreateBucketConfiguration"] = {"LocationConstraint": connection.region}
-    client.create_bucket(**kwargs)
-    return bucket
+    return _create_bucket(client, bucket, region=connection.region)
 
 
 def check_bucket_access(connection: ConnectionConfig, bucket: str, client=None) -> str:
-    bucket = validate_bucket_name(bucket)
     client = client or client_for_connection(connection)
-    try:
-        client.head_bucket(Bucket=bucket)
-    except ClientError as error:
-        details = error.response.get("Error", {})
-        code = str(details.get("Code", ""))
-        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        if code.lower() in {"accessdenied", "forbidden", "unauthorized", "nosuchbucket"} or status in {403, 404}:
-            raise BucketAccessDenied("MinIO bucket is unavailable or access is denied", connection) from error
-        raise
-    return bucket
+    return _check_bucket_access(client, bucket, "MinIO", error_type=BucketAccessDenied, context=connection)
 
 
 @dataclass(frozen=True)

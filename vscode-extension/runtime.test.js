@@ -6,7 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const zlib = require("node:zlib");
 
-const { ensureManagedRcc, readManifest, resolvePlatform, runtimeEnvironment } = require("./runtime");
+const { ensureManagedRcc, localFallbackReason, readManifest, resolvePlatform, runtimeEnvironment } = require("./runtime");
 
 const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)";
 
@@ -57,8 +57,35 @@ function context(root) {
 
 test("resolvePlatform accepts only the first supported Linux mapping", () => {
   assert.equal(resolvePlatform("linux", "x64"), "linux-x64");
+  assert.equal(resolvePlatform("win32", "x64"), "win32-x64");
   assert.throws(() => resolvePlatform("linux", "arm64"), /not supported/);
-  assert.throws(() => resolvePlatform("darwin", "x64"), /not supported/);
+  assert.throws(() => resolvePlatform("darwin", "x64"), /does not support macOS yet/);
+});
+
+test("local fallback eligibility is limited to compatibility and unpublished controller artifacts", () => {
+  assert.equal(localFallbackReason({ fallbackReason: "environment-compatibility" }), "environment-compatibility");
+  assert.equal(localFallbackReason({ fallbackReason: "controller-artifact-unpublished" }), "controller-artifact-unpublished");
+  assert.equal(localFallbackReason({ fallbackReason: "checksum-mismatch" }), undefined);
+  assert.equal(localFallbackReason(new Error("credentials unavailable")), undefined);
+});
+
+test("local fallback warm reuse requires the complete scoped identity", async () => {
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-marker-test-"));
+  const runtimeContext = context(runtime);
+  const expected = {
+    mode: "local-build-fallback",
+    extension_version: "0.1.5",
+    rcc_version: "v18.19.2",
+    platform: "linux-x64",
+    jat_source_sha: "a".repeat(40),
+    jat_artifact_digest: "sha256:" + "b".repeat(64),
+    controller_source_version: "c".repeat(64),
+    controller_artifact_digest: "unpublished",
+  };
+  const api = require("./runtime");
+  await api.writeLocalFallbackRecord(runtimeContext, expected);
+  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), expected), true);
+  assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.6" }), false);
 });
 
 test("readManifest rejects an RCC pin without an exact digest", () => {
@@ -98,6 +125,29 @@ test("ensureManagedRcc verifies the downloaded binary before atomic promotion", 
   assert.equal(fs.readdirSync(path.dirname(result.executable)).some((name) => name.includes("tmp")), false);
 });
 
+test("ensureManagedRcc reports ordered acquisition, verification, and cached reuse phases", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-phases-test-"));
+  const binary = Buffer.from("managed-rcc-binary");
+  const manifest = manifestFor(binary);
+  const phases = [];
+  const options = {
+    platform: "linux-x64",
+    onProgress: (event) => phases.push(event),
+    download: async (_url, destination) => fs.writeFileSync(destination, binary),
+    verifyVersion: async () => {},
+  };
+  await ensureManagedRcc(context(root), manifest, options);
+  await ensureManagedRcc(context(root), manifest, options);
+  assert.deepEqual(phases.map((event) => event.message), [
+    "Resolving managed RCC",
+    "Downloading RCC",
+    "Verifying RCC SHA256",
+    "Managed RCC ready",
+    "Resolving managed RCC",
+    "Reusing cached verified RCC",
+  ]);
+});
+
 test("ensureManagedRcc refuses a corrupt cached binary without replacing it", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-cache-test-"));
   const binary = Buffer.from("managed-rcc-binary");
@@ -117,6 +167,17 @@ test("ensureManagedRcc refuses a corrupt cached binary without replacing it", as
   );
   assert.equal(downloaded, 0);
   assert.equal(fs.readFileSync(expected, "utf8"), "corrupt");
+});
+
+test("ensureManagedRcc reports the exact missing Windows runtime dependency", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-win32-pin-test-"));
+  await assert.rejects(
+    require("./runtime").ensureManagedRcc(context(root), manifestFor(Buffer.from("rcc")), {
+      platform: "win32-x64",
+      download: async () => { throw new Error("download must not run without a Windows pin"); },
+    }),
+    /Windows RCC binary and matching Windows JAT environment artifact must be published and pinned first/,
+  );
 });
 
 test("runtimeEnvironment keeps RCC and Room state under extension global storage", () => {
@@ -193,9 +254,89 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
   assert.equal(calls[0].args.includes("--permissive-local"), true);
   assert.equal(calls[1].args.includes("--permissive-local"), true);
   assert.equal(calls[1].args.includes("--no-build"), true);
+  assert.equal(calls[1].args.includes("--inherit-streams"), true);
+  assert.equal(calls[1].args.includes("--receipt-file"), true);
+  assert.ok(calls[1].args[calls[1].args.indexOf("--receipt-file") + 1].startsWith(root));
   assert.deepEqual(calls[1].args.slice(-3), ["python", "-c", HAULER_VERSION_CHECK]);
   assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
   assert.equal(calls[0].options.env.RCC_HOLOTREE_MODE, "private");
+});
+
+test("ensureJatRuntime surfaces RCC artifact incompatibility without fallback build", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-incompatibility-test-"));
+  const rccBinary = Buffer.from("managed-rcc-binary");
+  const jatArchive = Buffer.from("rcca-archive");
+  const artifact = "sha256:" + "c".repeat(64);
+  const manifest = manifestFor(rccBinary, {
+    jat: {
+      git_sha: "d".repeat(40),
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "d".repeat(40), sha256: "e".repeat(64) },
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset: "jat-runtime.rcca", url: "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.1/jat-runtime.rcca", sha256: digest(jatArchive), size: jatArchive.length },
+      },
+    },
+  });
+  const calls = [];
+  await assert.rejects(
+    require("./runtime").ensureJatRuntime(context(root), manifest, { executable: `${root}/runtime/rcc`, version: "v18.19.2" }, {
+      platform: "linux-x64",
+      download: async (_url, destination) => fs.writeFileSync(destination, jatArchive),
+      ensureSource: async () => path.join(root, "jat-source"),
+      runJson: async (_executable, args) => {
+        calls.push(args);
+        if (args[1] === "acquire") return { artifactDigest: artifact, verification: { valid: false }, error: "reject incompatible environment artifact [os-version]: os.minimumVersion requires 7.1.8, worker has 5.14.0" };
+        throw new Error("fallback build must not run");
+      },
+    }),
+    /reject incompatible environment artifact \[os-version\].*requires 7\.1\.8.*worker has 5\.14\.0/,
+  );
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][0], /^env$/);
+});
+
+test("ensureControllerRuntime acquires a separate controller artifact and rejects missing metadata", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-artifact-test-"));
+  const rccBinary = Buffer.from("managed-rcc-binary");
+  const archive = Buffer.from("controller-rcca");
+  const digestValue = "sha256:" + "f".repeat(64);
+  const manifest = manifestFor(rccBinary, {
+    controller: {
+      environment_artifact: {
+        digest: digestValue,
+        archive: {
+          asset: "josh-room-controller.rcca",
+          url: "https://github.com/joshyorko/josh-room/releases/download/v0.1.6/josh-room-controller.rcca",
+          sha256: digest(archive),
+          size: archive.length,
+        },
+      },
+    },
+  });
+  const calls = [];
+  const result = await require("./runtime").ensureControllerRuntime(
+    context(root), manifest, { executable: `${root}/runtime/rcc`, version: "v18.19.2" }, {
+      platform: "linux-x64",
+      download: async (_url, destination) => fs.writeFileSync(destination, archive),
+      runJson: async (_executable, args) => {
+        calls.push(args);
+        return { artifactDigest: digestValue, verification: { valid: true } };
+      },
+    },
+  );
+  assert.equal(result.artifact, digestValue);
+  assert.equal(calls[0][0], "env");
+  assert.equal(calls[0][1], "acquire");
+  assert.equal(calls[0].includes("--archive"), true);
+  await assert.rejects(
+    require("./runtime").ensureControllerRuntime(
+      context(fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-no-pin-"))),
+      manifestFor(rccBinary),
+      { executable: `${root}/runtime/rcc`, version: "v18.19.2" },
+      { platform: "linux-x64", runJson: async () => ({}) },
+    ),
+    /separate Josh Room controller environment artifact pin/,
+  );
 });
 
 test("ensureJatSource rejects a non-official JAT source URL before download", async () => {

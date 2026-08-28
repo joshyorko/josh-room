@@ -9,6 +9,7 @@ from josh_room import auth, keyring
 from josh_room.auth import (
     _request,
     ensure_runtime_session,
+    logout_runtime_session,
     poll_oauth_session,
     runtime_session_state,
     start_oauth_session,
@@ -238,6 +239,26 @@ def test_runtime_session_state_distinguishes_missing_and_expired_authority(tmp_p
     (runtime / "session.json").write_text(json.dumps({"expires_at": 0}))
 
     assert runtime_session_state() == "expired"
+
+
+def test_logout_runtime_session_clears_only_local_r2_session_material(tmp_path, monkeypatch):
+    root = tmp_path / "runtime" / "josh-room" / "session"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    for name in ("r2.json", "age.identity", "config.json", "session.json"):
+        (root / name).write_text("local-session-material")
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_CREDENTIALS", str(root / "r2.json"))
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_CONFIG", str(root / "config.json"))
+    monkeypatch.setenv("JOSH_ROOM_IDENTITY", str(root / "age.identity"))
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_PROFILE", "oauth-runtime")
+
+    assert logout_runtime_session() == {"status": "logged_out"}
+    assert not any((root / name).exists() for name in ("r2.json", "age.identity", "config.json", "session.json"))
+    assert runtime_session_state() == "missing"
+    assert all(os.environ.get(name) is None for name in (
+        "JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG",
+        "JOSH_ROOM_IDENTITY", "JOSH_ROOM_RUNTIME_PROFILE",
+    ))
 
 
 def test_expired_runtime_session_is_removed_before_a_new_login(tmp_path, monkeypatch):

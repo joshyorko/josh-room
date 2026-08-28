@@ -43,16 +43,31 @@ function dimensionConnection(dimension, connections = []) {
   };
 }
 
-function bucketChoices(payload = {}) {
+function bucketChoices(payload = {}, { recommendedBucket = "josh-room" } = {}) {
   const buckets = (Array.isArray(payload.buckets || payload.bucket_list)
     ? (payload.buckets || payload.bucket_list).map((bucket) => typeof bucket === "string" ? bucket : bucket.name || bucket.bucket)
     : records(payload.buckets || payload.bucket_list, "name").map((bucket) => bucket.name || bucket.bucket))
     .filter(Boolean)
     .map((bucket) => ({ label: bucket, bucket }));
-  const choices = buckets.length || payload.ok !== false
-    ? [...buckets, { label: "$(add) Create Bucket…", create: true }, { label: "Enter Bucket Manually…", manual: true }]
-    : [{ label: "Enter Bucket Manually…", manual: true }];
-  return choices;
+  return [
+    {
+      label: `$(add) Create new bucket… (recommended: ${recommendedBucket})`,
+      create: true,
+      bucket: recommendedBucket,
+      recommended: true,
+    },
+    ...buckets,
+    { label: "Enter Bucket Manually…", manual: true },
+  ];
+}
+
+function bucketCommand(action, { provider, connectionId, dimensionId, bucket } = {}) {
+  const args = ["provider", "bucket", action];
+  if (provider) args.push("--provider", provider);
+  if (connectionId) args.push("--connection", connectionId);
+  if (dimensionId) args.push("--dimension", dimensionId);
+  if (bucket) args.push("--bucket", bucket);
+  return args;
 }
 
 function connectionCommand(action, { provider, endpoint, connectionId, bucket } = {}) {
@@ -66,4 +81,4 @@ function connectionCommand(action, { provider, endpoint, connectionId, bucket } 
   return ["provider", "connection", action, "--connection", connectionId];
 }
 
-module.exports = { bucketChoices, connectionCommand, connectionRecords, dimensionConnection, records };
+module.exports = { bucketChoices, bucketCommand, connectionCommand, connectionRecords, dimensionConnection, records };

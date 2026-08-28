@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from josh_room import cli, keyring, minio
+from josh_room import cli, keyring, minio, r2
 from josh_room import config as config_module
 from josh_room.catalog import Catalog
 
@@ -227,6 +227,58 @@ def test_bucket_access_check_validates_manual_bucket_before_dimension_creation()
     connection = config_module.ConnectionConfig.from_private("home-minio", _connection())
     assert minio.check_bucket_access(connection, "room-a", client=Client()) == "room-a"
     assert calls == [{"Bucket": "room-a"}]
+
+
+def test_r2_bucket_adapter_uses_the_same_s3_list_create_check_contract():
+    calls = []
+
+    class Client:
+        def list_buckets(self):
+            calls.append(("list", None))
+            return {"Buckets": [{"Name": "existing-r2"}]}
+
+        def create_bucket(self, **kwargs):
+            calls.append(("create", kwargs))
+
+        def head_bucket(self, **kwargs):
+            calls.append(("check", kwargs))
+
+    connection = r2.R2Config(
+        "https://r2.example.invalid", "existing-r2", "oauth-runtime", region="auto", dimension_id="r2"
+    )
+    client = Client()
+    assert r2.list_buckets(connection, client=client) == ["existing-r2"]
+    assert r2.create_bucket(connection, "josh-room", client=client) == "josh-room"
+    assert r2.check_bucket_access(connection, "josh-room", client=client) == "josh-room"
+    assert calls == [
+        ("list", None),
+        ("create", {"Bucket": "josh-room"}),
+        ("check", {"Bucket": "josh-room"}),
+    ]
+
+
+def test_r2_bucket_cli_routes_shared_bucket_commands_to_the_r2_adapter(tmp_path, monkeypatch):
+    config = {
+        "dimensions": {"r2": {
+            "display_name": "Cloudflare R2",
+            "provider": "r2",
+            "endpoint": "https://r2.example.invalid",
+            "bucket": "existing-r2",
+            "credential_profile": "oauth-runtime",
+        }},
+    }
+    monkeypatch.setattr(cli, "private_config", lambda: config)
+    monkeypatch.setattr(cli._r2, "list_buckets", lambda _config: ["existing-r2"])
+    monkeypatch.setattr(cli._r2, "create_bucket", lambda _config, bucket: bucket)
+    monkeypatch.setattr(cli._r2, "check_bucket_access", lambda _config, bucket: bucket)
+
+    list_args = cli.build_parser().parse_args(["provider", "bucket", "list", "--provider", "r2", "--dimension", "r2"])
+    create_args = cli.build_parser().parse_args(["provider", "bucket", "create", "--provider", "r2", "--dimension", "r2", "--bucket", "josh-room"])
+    check_args = cli.build_parser().parse_args(["provider", "bucket", "check", "--provider", "r2", "--dimension", "r2", "--bucket", "josh-room"])
+    assert cli._requires_oauth(list_args) is True
+    assert cli._bucket_operation(list_args, config)["buckets"] == ["existing-r2"]
+    assert cli._bucket_operation(create_args, config)["created"] is True
+    assert cli._bucket_operation(check_args, config)["accessible"] is True
 
 
 def test_connections_and_dimensions_cli_show_reuse_and_bucket_ownership(tmp_path, monkeypatch, capsys):

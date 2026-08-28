@@ -82,6 +82,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.reconnectStorage",
         "joshRoom.editConnection",
         "joshRoom.disconnectStorage",
+        "joshRoom.showLogs",
+        "joshRoom.clearLocalFallback",
         "joshRoom.editStorageSettings",
         "joshRoom.link",
         "joshRoom.repair",
