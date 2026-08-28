@@ -68,8 +68,21 @@ def _json_result(stdout: str) -> dict | list:
     raise ValueError("RCC command returned no JSON object or array")
 
 
-def _run(rcc: Path, args: list[str], *, home: Path, cwd: Path, receipt: Path | None = None) -> dict | list:
-    environment = {**os.environ, "ROBOCORP_HOME": str(home), "RCC_HOLOTREE_MODE": "private"}
+def _run(
+    rcc: Path,
+    args: list[str],
+    *,
+    home: Path,
+    cwd: Path,
+    receipt: Path | None = None,
+    environment_overrides: dict[str, str] | None = None,
+) -> dict | list:
+    environment = {
+        **os.environ,
+        "ROBOCORP_HOME": str(home),
+        "RCC_HOLOTREE_MODE": "private",
+        **(environment_overrides or {}),
+    }
     process = subprocess.run([str(rcc), *args], cwd=cwd, env=environment, capture_output=True, text=True, check=False)
     for line in process.stderr.splitlines():
         print(line, flush=True)
@@ -150,7 +163,18 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
             raise ValueError("fresh RCC acquire did not verify the controller artifact")
         _run(rcc, ["--no-build", "ht", "vars", "--robot", str(robot), "--json"], home=consumer_home, cwd=robot.parent)
         exec_receipt = Path(temporary) / "exec-receipt.json"
-        execution = _run(rcc, ["--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--inherit-streams", "--receipt-file", str(exec_receipt), "--", "python", "-m", "josh_room", "dimensions", "list", "--json"], home=consumer_home, cwd=robot.parent, receipt=exec_receipt)
+        execution = _run(
+            rcc,
+            ["--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--inherit-streams", "--receipt-file", str(exec_receipt), "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
+            home=consumer_home,
+            cwd=robot.parent,
+            receipt=exec_receipt,
+            environment_overrides={
+                "PYTHONPATH": str(robot.parent),
+                "JOSH_ROOM_CONTROLLER_ROOT": str(robot.parent),
+                "JOSH_ROOM_EXTENSION_MODE": "1",
+            },
+        )
         if execution.get("exitCode", execution.get("exit_code", 0)) != 0:
             raise RuntimeError("controller dimensions list failed in the acquired artifact")
         specification = publish.get("specificationDigest") or publish.get("specification_digest")

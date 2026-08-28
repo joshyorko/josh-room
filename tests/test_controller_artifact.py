@@ -1,10 +1,12 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts.build_controller_artifact import (
     _json_result,
+    _run,
     build_commands,
     load_manifest,
     resolve_rcc_pin,
@@ -80,6 +82,22 @@ def test_controller_build_commands_use_canonical_artifact_flow():
 
 def test_rcc_json_result_accepts_ht_vars_array():
     assert _json_result('[{"key": "value"}]\n') == [{"key": "value"}]
+
+
+def test_rcc_exec_receives_vsix_controller_source_path(tmp_path):
+    controller = tmp_path / "controller"
+    result = _run(
+        Path(sys.executable),
+        [
+            "-c",
+            "import json, os; print(json.dumps({'pythonpath': os.environ.get('PYTHONPATH')}))",
+            "--json",
+        ],
+        home=tmp_path / "rcc-home",
+        cwd=tmp_path,
+        environment_overrides={"PYTHONPATH": str(controller)},
+    )
+    assert result == {"pythonpath": str(controller)}
 
 
 def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
