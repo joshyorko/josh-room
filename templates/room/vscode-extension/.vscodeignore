@@ -1,0 +1,6 @@
+*.test.js
+node_modules/**
+runtime/controller/output/**
+runtime/controller/.rcc/**
+runtime/controller/**/__pycache__/**
+runtime/controller/**/*.pyc

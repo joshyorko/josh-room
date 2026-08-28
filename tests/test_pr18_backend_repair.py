@@ -13,7 +13,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-BASE_HEAD = "e75edfaf3ecda295fd9321611e441926f4d949f5"
+BASE_HEAD = "d89eecb57232db637e842fca9181b8fbba519f77"
 
 
 def _dimension(provider, endpoint, bucket, profile):
@@ -47,8 +47,9 @@ def test_clean_bootstrap_uses_exact_repaired_candidate_and_cli_contract():
     assert "josh-room = \"josh_room.cli:main\"" in Path("pyproject.toml").read_text()
     for path in (Path(".devcontainer/bootstrap.sh"), Path("templates/room/.devcontainer/bootstrap.sh")):
         body = path.read_text()
-        assert f'JOSH_ROOM_GIT_SHA="{BASE_HEAD}"' in body
-        assert 'uv tool install --force "git+https://github.com/joshyorko/josh-room.git@${JOSH_ROOM_GIT_SHA}"' in body
+        assert "joshyorko.josh-room-0.1.5" in body
+        assert "uv tool install" not in body
+        assert "brew" not in body.lower()
 
 
 def test_oauth_runtime_overlay_preserves_named_dimensions_and_default_routing(tmp_path, monkeypatch):

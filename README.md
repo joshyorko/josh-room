@@ -3,29 +3,46 @@
 Your development workspaces, on demand.
 
 Josh Room gives logical names to encrypted development-workspace snapshots and
-restores them into a Room of Requirement environment.
+restores them into a local or remote development workspace.
 
 ```bash
 josh-room enter hive
 ```
 
-Room of Requirement provides the development environment. Josh's All the
-Things provides Hauler capture and restore. Josh Room provides project
-identity, age encryption, private R2 storage, catalog resolution, safe
-hydration, and IDE entry.
+Josh's All the Things provides the separate Hauler capture and restore
+substrate. Josh Room provides project identity, age encryption, private R2
+storage, catalog resolution, safe hydration, and IDE entry. Room of Requirement
+is an optional golden host; it is not part of the Josh Room runtime contract.
 
-## Open the Room with DevPod
+## Standalone VSIX
 
-The repository itself is the personal Room entrypoint; no host enrollment is
-required:
+On a plain supported Linux amd64 VS Code or VS Code Insiders host, install the
+released VSIX directly:
+
+```bash
+code-insiders --install-extension /path/to/josh-room-0.1.5.vsix
+```
+
+The extension acquires its pinned RCC binary and JAT Environment Artifact under
+VS Code global storage. The JAT artifact already contains Hauler, installed by
+JAT's RCC `rccPostInstall` hook before freeze. No Homebrew, host RCC, host
+Hauler, Action Server, global Josh Room CLI, or Room of Requirement image is
+required. The standalone VSIX requires no host enrollment.
+
+## Optional Room of Requirement golden host
+
+The repository still offers a pre-optimized Room of Requirement entrypoint for
+development and comparison. This path is optional and is not required by the
+VSIX:
 
 ```bash
 devpod up github.com/joshyorko/josh-room --ide vscode-insiders
 ```
 
 DevPod clones the repository, discovers the root `.devcontainer`, starts the
-Room of Requirement secure image, runs the capability-only bootstrap, and
-opens VS Code Insiders with a dedicated Josh Room Activity Bar view.
+digest-pinned golden image, copies the extension into the user-scoped VS Code
+server directory, and opens VS Code Insiders with the Josh Room Activity Bar
+view. The bootstrap does not install a global Josh Room CLI or runtime tools.
 
 The same configuration is published for standard Dev Container template
 consumers:
@@ -42,8 +59,8 @@ does not require users to apply it when opening this repository directly.
 
 Josh Room is not an image factory, backup daemon, source-control system, remote
 development provider, agent harness, package runtime, scheduler, or multi-user
-platform. It consumes published Room of Requirement images; it does not contain
-their Dockerfiles, Brewfiles, image CI, or maintenance machinery.
+platform. It may run in a published Room of Requirement image, but the
+standalone VSIX does not consume or require that image.
 
 ## Synthetic local demo
 
@@ -77,9 +94,9 @@ remains private; object keys contain only ciphertext SHA-256 digests.
 
 ### Room use
 
-The personal Room template bootstraps `age`, `uv`, stable RCC, Action Server,
-Hauler, JAT, Josh Room, and its small VS Code command bridge without running a
-JAT workload.
+The optional golden-host template copies the native extension without running a
+JAT workload. On a plain host, the packaged extension owns RCC bootstrap and
+the JAT artifact owns Hauler.
 
 Daily use is:
 
@@ -93,11 +110,11 @@ browser authorization and reuses its short-lived session until expiry. MinIO
 uses a user-supplied endpoint and masked credentials entered once through the
 native Connect Storage flow. A reusable Provider Connection owns that authority;
 each Dimension is one bucket-backed encrypted catalog, containing Rooms and
-their immutable JAT history. R2 and VS Code Insiders are the defaults. `doctor` fails with remediation when
-age, Hauler, RCC, JAT, the daily identity, R2, the encrypted catalog, or the IDE
-is unavailable. `enter` discovers logical project names from the encrypted R2
-or MinIO catalog selected for the Room, hydrates safely, then launches VS Code
-Insiders.
+their immutable JAT history. R2 and VS Code Insiders are the defaults.
+Extension-mode `doctor` reports the managed RCC/JAT runtime and controller
+state; standalone CLI mode may report optional host integrations separately.
+`enter` discovers logical project names from the encrypted R2 or MinIO catalog
+selected for the Room, hydrates safely, then launches VS Code Insiders.
 
 The bundled extension provides a native Rooms TreeView, toolbar actions,
 per-Room Enter/Serve/Delete actions, Docker-style operation progress, and a
@@ -170,16 +187,15 @@ The test suite includes real synthetic JAT/Hauler/age local hydration and a
 secret-gated private R2 create/read-back/catalog/fresh-hydrate acceptance test.
 Generic S3 tests do not substitute for live R2 evidence.
 
-The v0.1 readiness gate also resolves the `secure` Room image to an immutable
-digest and runs a clean non-root Podman smoke proving the `vscode` user,
-Homebrew, Bash, Git, zstd, and writable home contract before pinning that digest
-in the root devcontainer and OCI template.
+The optional golden-host readiness gate resolves the `secure` Room image to an
+immutable digest and runs a clean non-root Podman smoke proving its image
+contract. That evidence does not substitute for the standalone VSIX gate.
 
-This remains a review checkpoint, not `v0.1.0`. The secure Room of Requirement
-container smoke and dedicated short-lived R2 credential rotation remain open.
+This remains a review checkpoint, not `v0.1.5`. The standalone clean-container
+VSIX acceptance and dedicated short-lived R2 credential rotation remain open.
 Josh Room consumes the immutable JAT RCC v18.19.2 Environment Artifact during
-bootstrap, and Save requests JAT `rcc_environment=auto` with optional typed
-receipt metadata. RCC/JAT retain ownership of acquisition and production
+extension bootstrap, and Save requests JAT `rcc_environment=auto` with optional
+typed receipt metadata. RCC/JAT retain ownership of acquisition and production
 details. Actions Runtime, Hive projections, OpenAI uploads, periodic capture,
 and garbage collection remain deliberately deferred.
 

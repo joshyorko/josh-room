@@ -8,6 +8,7 @@ const test = require("node:test");
 const { EventEmitter } = require("node:events");
 const Module = require("node:module");
 const { buildProviderTree, flattenDimensionRooms } = require("./registry");
+const managedRuntime = require("./runtime");
 
 function sha256Hex(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -261,6 +262,7 @@ function loadExtension(vscodeMock, spawnMock) {
     require.resolve("./dirty"),
     require.resolve("./registry"),
     require.resolve("./progress"),
+    require.resolve("./runtime"),
   ];
   for (const target of targets) delete require.cache[target];
   Module._load = function patchedLoad(request, parent, isMain) {
@@ -269,11 +271,169 @@ function loadExtension(vscodeMock, spawnMock) {
     return originalLoad(request, parent, isMain);
   };
   try {
+    const extension = require("./extension");
+    extension.__test__.setRuntimeForTests({
+      command: "/test/managed-rcc",
+      args: (args) => [...args, "--json"],
+      env: {},
+      jatRoot: path.join(os.tmpdir(), "josh-room-test-jat"),
+    });
+    return extension;
+  } finally {
+    Module._load = originalLoad;
+  }
+}
+
+function loadExtensionWithRealProcesses(vscodeMock) {
+  const originalLoad = Module._load;
+  const targets = [require.resolve("./extension"), require.resolve("./runtime")];
+  for (const target of targets) delete require.cache[target];
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === "vscode") return vscodeMock;
+    return originalLoad(request, parent, isMain);
+  };
+  try {
     return require("./extension");
   } finally {
     Module._load = originalLoad;
   }
 }
+
+test("extension backend commands use the managed RCC controller boundary", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-command-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests({
+    command: "/private/runtime/rcc",
+    args: (args) => ["run", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--", ...args, "--json"],
+    env: { ROBOCORP_HOME: "/private/runtime/robocorp", RCC_HOLOTREE_MODE: "private" },
+  });
+
+  await extension.__test__.runJoshRoom(["status"], root);
+
+  assert.equal(spawnHarness.calls[0].command, "/private/runtime/rcc");
+  assert.deepEqual(spawnHarness.calls[0].args.slice(0, 6), [
+    "run", "-r", "/private/controller/robot.yaml", "-t", "Josh Room", "--",
+  ]);
+  assert.equal(spawnHarness.calls[0].options.env.ROBOCORP_HOME, "/private/runtime/robocorp");
+  assert.equal(spawnHarness.calls[0].options.env.RCC_HOLOTREE_MODE, "private");
+  assert.notEqual(spawnHarness.calls[0].command, "josh-room");
+});
+
+test("extension consumes the private controller result receipt when RCC suppresses stdout", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-result-receipt-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ options }) => {
+    fs.writeFileSync(options.env.JOSH_ROOM_RESULT_FILE, '{"ok":true,"operation":"status"}');
+    return { stdout: "" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const result = await extension.__test__.runJoshRoom(["status"], root);
+
+  assert.deepEqual(result, { ok: true, operation: "status" });
+});
+
+test("MinIO credentials use VS Code SecretStorage and stay out of controller argv", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-secretstorage-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const values = new Map();
+  const secrets = {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  };
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [] }) };
+    }
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "create") {
+      return { stdout: JSON.stringify({ ok: true, connection: { id: "secret-minio", provider: "minio", credential_profile: "secret-profile" } }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, buckets: ["secret-room"] }) };
+    }
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") {
+      return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    }
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets });
+  vscode.quickPickResponses.push({ label: "MinIO", provider: "minio" });
+  vscode.inputBoxResponses.push("https://minio.example.invalid:9000", "secret-access", "secret-key");
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  const stored = JSON.parse(values.get("josh-room.credentials.v1"));
+  assert.deepEqual(stored.profiles["secret-profile"], {
+    "access-key-id": "secret-access",
+    "secret-access-key": "secret-key",
+  });
+  for (const call of spawnHarness.calls) {
+    assert.doesNotMatch(call.args.join(" "), /secret-access|secret-key/);
+  }
+  assert.match(String(spawnHarness.calls.find((call) => call.args[0] === "provider" && call.args[1] === "connection" && call.args[2] === "create").child.stdinPayload), /secret-access/);
+});
+
+test("real managed extension runner reaches the packaged controller", {
+  skip: !process.env.JOSH_ROOM_MANAGED_RUNTIME_ROOT,
+}, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-real-runner-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const extension = loadExtensionWithRealProcesses(vscode);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({
+    extensionPath: __dirname,
+    globalStorageUri: { fsPath: process.env.JOSH_ROOM_MANAGED_RUNTIME_ROOT },
+    secrets: { get: async () => undefined },
+  });
+  extension.__test__.setRuntimeForTests(undefined);
+
+  let result;
+  try {
+    result = await extension.__test__.runJoshRoom(["auth", "status"], root);
+  } catch (error) {
+    console.error(JSON.stringify({ message: error.message, command: error.command, args: error.args, resultPath: error.resultPath }));
+    throw error;
+  }
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "missing");
+});
+
+test("real extension process uses an already resolved managed runtime", {
+  skip: !process.env.JOSH_ROOM_MANAGED_RUNTIME_ROOT,
+}, async () => {
+  const storage = process.env.JOSH_ROOM_MANAGED_RUNTIME_ROOT;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-real-process-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const extension = loadExtensionWithRealProcesses(vscode);
+  const rcc = path.join(storage, "runtime/rcc/v18.19.2/linux-x64/rcc");
+  const jatRoot = path.join(storage, "runtime/jat/096c5f3c5d735a67f41c4fabbf63e4af1aacadf1");
+  const environment = managedRuntime.runtimeEnvironment({ globalStorageUri: { fsPath: storage } }, {
+    rccExecutable: rcc,
+    controllerRoot: path.join(__dirname, "runtime/controller"),
+    jatRoot,
+    jatArtifact: "sha256:0b5891d1ddc82ffa6dd8d0616b5b77693ec733709492307b2ef947ff0f8f34fb",
+    jatSourceSha: "096c5f3c5d735a67f41c4fabbf63e4af1aacadf1",
+  }, root);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests({
+    command: rcc,
+    args: (args) => ["run", "--silent", "-r", path.join(__dirname, "runtime/controller/robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"],
+    env: environment,
+    jatRoot,
+  });
+
+  const result = await extension.__test__.runJoshRoom(["auth", "status"], root);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "missing");
+});
 
 test("enter Room keeps the selected Dimension when the project id already exists elsewhere", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-enter-test-"));
@@ -1163,10 +1323,10 @@ test("serving a historical JAT preserves its provider, Dimension, Room, and snap
 
     assert.equal(result, "started");
     assert.equal(terminalCalls.length, 1);
-    assert.match(terminalCalls[0].command, new RegExp(
-      `josh-room serve room-a --snapshot jat-old --backend ${provider} --dimension ${dimensionId}`,
-    ));
-    assert.doesNotMatch(terminalCalls[0].command, /jat-new/);
+    assert.deepEqual(terminalCalls[0].args, [
+      "serve", "room-a", "--snapshot", "jat-old", "--backend", provider, "--dimension", dimensionId,
+    ]);
+    assert.equal(terminalCalls[0].args.includes("jat-new"), false);
     assert.equal(spawnHarness.calls.filter((entry) => entry.args[0] === "snapshots").length, 1);
   }
 });

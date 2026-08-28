@@ -95,6 +95,23 @@ def test_minio_connection_setup_reads_credentials_from_json_stdin_and_persists_o
     }
 
 
+def test_extension_minio_connection_does_not_require_secret_service(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setattr(cli, "store_keyring", lambda *_args: pytest.fail("extension must use VS Code SecretStorage"))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "endpoint": "http://minio.home.arpa:9000",
+        "access-key-id": "synthetic-access",
+        "secret-access-key": "synthetic-secret",
+    })))
+
+    assert cli.main([
+        "connections", "setup", "minio", "--connection", "extension-minio",
+        "--credential-profile", "extension-profile", "--json",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["stored"] is True
+
+
 def test_minio_connection_client_uses_arbitrary_endpoint_and_existing_keyring(monkeypatch):
     captured = {}
     def lookup(profile, **_kwargs):

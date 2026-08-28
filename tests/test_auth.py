@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from josh_room import auth
+from josh_room import auth, keyring
 from josh_room.auth import (
     _request,
     ensure_runtime_session,
@@ -331,3 +331,25 @@ def test_wait_oauth_session_polls_until_authorized_in_one_long_lived_operation(m
         "status": "authorized"
     }
     assert writes == [({"status": "authorized"}, "archive")]
+
+
+def test_extension_runtime_credentials_support_profile_scoped_secretstorage_handoff(tmp_path, monkeypatch):
+    credentials = tmp_path / "credentials.json"
+    credentials.write_text(json.dumps({
+        "profiles": {
+            "minio-home": {
+                "access-key-id": "synthetic-access",
+                "secret-access-key": "synthetic-secret",
+            },
+        },
+    }))
+    credentials.chmod(0o600)
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_CREDENTIALS", str(credentials))
+
+    assert keyring.lookup("minio-home", allow_runtime=False) == {
+        "access-key-id": "synthetic-access",
+        "secret-access-key": "synthetic-secret",
+    }
+    with pytest.raises(TypeError, match="profile is unavailable"):
+        keyring.lookup("other-profile", allow_runtime=False)

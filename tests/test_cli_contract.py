@@ -1,5 +1,6 @@
 import argparse
 import json
+import stat
 import subprocess
 import sys
 
@@ -25,6 +26,17 @@ assert ssl.SSLContext is original
 """
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_extension_controller_writes_a_private_result_receipt(tmp_path, monkeypatch, capsys):
+    receipt = tmp_path / "controller-result.json"
+    monkeypatch.setenv("JOSH_ROOM_RESULT_FILE", str(receipt))
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+
+    assert main(["auth", "status", "--json"]) == 0
+    json.loads(capsys.readouterr().out)
+    assert json.loads(receipt.read_text())["ok"] is True
+    assert stat.S_IMODE(receipt.stat().st_mode) == 0o600
 
 
 def test_r2_command_initializes_system_trust_before_auth_and_dispatch(monkeypatch, capsys):
@@ -73,6 +85,33 @@ def test_doctor_json_is_stable(tmp_path, monkeypatch, capsys):
     missing = {check["name"] for check in report["checks"] if not check["ok"]}
     assert {"age", "hauler", "tar", "rcc", "jat-robot", "jat-python", "jat-interactive", "identity", "r2", "catalog", "ide"} <= missing
     assert all(check.get("remediation") for check in report["checks"] if not check["ok"])
+
+
+def test_extension_doctor_uses_managed_rcc_and_jat_doctor_not_host_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", str(tmp_path / "runtime" / "rcc"))
+    monkeypatch.setenv("JOSH_ROOM_JAT_ROOT", str(tmp_path / "jat"))
+    monkeypatch.setattr("josh_room.cli.shutil.which", lambda name: "/managed/age" if name == "age" else None)
+    monkeypatch.setattr("josh_room.cli._jat_contract", lambda _root: {"robot": True, "tasks": True, "interactive": True})
+    calls = []
+    monkeypatch.setattr("josh_room.cli.run_doctor", lambda root: calls.append(root) or {"success": True})
+
+    report = __import__("josh_room.cli", fromlist=["_doctor"])._doctor(tmp_path, "local", "vscode-insiders")
+
+    assert calls == [tmp_path / "jat"]
+    checks = {check["name"]: check["ok"] for check in report["checks"]}
+    assert checks["rcc"] is False
+    assert checks["age"] is True
+    assert checks["hauler"] is True
+    assert checks["tar"] is True
+    assert checks["ide"] is True
+
+
+def test_cli_tar_capability_does_not_probe_homebrew(monkeypatch):
+    monkeypatch.setattr("josh_room.cli.shutil.which", lambda name: "/tools/brew" if name == "brew" else None)
+    monkeypatch.setattr("josh_room.cli.subprocess.run", lambda *_args, **_kwargs: pytest.fail("must not invoke brew"))
+
+    assert __import__("josh_room.cli", fromlist=["_tar_capable"])._tar_capable() is False
 
 
 def test_status_does_not_load_identity_or_keyring(tmp_path, monkeypatch, capsys):
@@ -369,14 +408,12 @@ def test_workspace_root_detects_clean_room_parent(tmp_path, monkeypatch):
     assert _workspace_root() == tmp_path
 
 
-def test_tar_capability_finds_linuxbrew_keg_tar(monkeypatch):
-    paths = {"gtar": None, "tar": "/usr/bin/tar", "brew": "/brew/bin/brew"}
+def test_tar_capability_finds_capable_host_tar_without_homebrew(monkeypatch):
+    paths = {"gtar": "/tools/gtar", "tar": None, "brew": "/brew/bin/brew"}
     monkeypatch.setattr("josh_room.cli.shutil.which", lambda name: paths.get(name))
 
     def run(argv, **_kwargs):
-        if argv == ["/brew/bin/brew", "--prefix", "gnu-tar"]:
-            return __import__("subprocess").CompletedProcess(argv, 0, "/brew/Cellar/gnu-tar/1.35\n", "")
-        if argv[0] == "/brew/Cellar/gnu-tar/1.35/bin/tar":
+        if argv[0] == "/tools/gtar":
             return __import__("subprocess").CompletedProcess(argv, 0, "--zstd", "")
         return __import__("subprocess").CompletedProcess(argv, 0, "BusyBox", "")
 
