@@ -1,4 +1,4 @@
-name: Build release artifact
+name: Publish release artifacts
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -14,8 +14,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify tag and package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./vscode-extension/package.json').version")
+          test "${GITHUB_REF_NAME}" = "v${version}-standalone-vsix"
+          test "$(node -p "require('./templates/room/vscode-extension/package.json').version")" = "$version"
+          test "$(jq -r .extension_version vscode-extension/runtime/manifest.json)" = "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build Python and VSIX artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv build
+          version="${{ steps.version.outputs.version }}"
+          (cd vscode-extension && npm run package -- --out "../dist/josh-room-${version}.vsix")
+          (cd dist && sha256sum * > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
           name: josh-room-dist
           path: dist/
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --prerelease \
+            --title "Josh Room v${version} standalone VSIX" \
+            --notes "Install josh-room-${version}.vsix directly from this release. SHA256SUMS contains checksums for every attached artifact."
