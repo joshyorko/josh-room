@@ -136,6 +136,8 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
     def fake_run(argv, timeout, **kwargs):
         seen.update(argv=argv, timeout=timeout, kwargs=kwargs)
         result_path.write_text('{"operation":"build","success":true,"exit_status":0}')
+        receipt = Path(argv[argv.index("--receipt-file") + 1])
+        receipt.write_text(json.dumps({"artifactDigest": os.environ["JOSH_ROOM_JAT_ARTIFACT"], "exitCode": 0}))
         return 0, "managed RCC output"
 
     monkeypatch.setattr("josh_room.jat._run", fake_run)
@@ -152,6 +154,8 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
         "sha256:" + "a" * 64,
     ]
     assert "--permissive-local" in seen["argv"]
+    assert "--inherit-streams" in seen["argv"]
+    assert "--receipt-file" in seen["argv"]
     assert "--json" in seen["argv"]
     command = seen["argv"][seen["argv"].index("--") + 1:]
     assert command[:6] == [

@@ -3,6 +3,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 from robocorp import log
@@ -80,6 +81,23 @@ def _request_file(root: Path, operation: str, request: dict) -> Path:
     return path
 
 
+def _rcc_receipt_path(root: Path, task: str) -> Path:
+    return root / "output" / f".rcc-{task.lower()}-{uuid.uuid4().hex}.json"
+
+
+def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
+    if not path.is_file():
+        raise JATError("managed RCC did not produce its execution receipt")
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise JATError("managed RCC produced an invalid execution receipt") from error
+    observed = receipt.get("artifactDigest", receipt.get("artifact_digest"))
+    reported = receipt.get("exitCode", receipt.get("exit_code", receipt.get("exit")))
+    if observed != artifact or reported is not None and int(reported) != exit_status:
+        raise JATError("managed RCC execution receipt does not match the selected artifact")
+
+
 def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
     if os.environ.get("JOSH_ROOM_EXTENSION_MODE") != "1":
         return None
@@ -112,6 +130,7 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
     result_path = jat_root / "output" / "result.json"
     result_path.unlink(missing_ok=True)
     managed = _managed_runtime(jat_root)
+    rcc_receipt = None
     if managed is None:
         argv = ["rcc", "run", "-r", str(jat_root / "robot.yaml"), "-t", task]
         if request_path is not None:
@@ -125,6 +144,7 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
         run_kwargs = {"cwd": jat_root, "env": environment}
     else:
         executable, artifact, environment = managed
+        rcc_receipt = _rcc_receipt_path(jat_root, task)
         argv = [
             executable,
             "--no-build",
@@ -133,6 +153,9 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
             "--artifact",
             artifact,
             "--permissive-local",
+            "--inherit-streams",
+            "--receipt-file",
+            str(rcc_receipt),
             "--json",
             "--",
             "python",
@@ -150,6 +173,8 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
         report_progress("jat", f"Running JAT {task} through RCC")
         timeout = None if foreground else float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600"))
         exit_status, diagnostic = _run(argv, timeout, **run_kwargs)
+        if managed is not None:
+            _validate_rcc_receipt(rcc_receipt, artifact, exit_status)
         if not result_path.is_file():
             message = "JAT task did not produce a fresh output/result.json"
             if diagnostic:
@@ -176,6 +201,8 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
     finally:
         if request_path is not None:
             request_path.unlink(missing_ok=True)
+        if rcc_receipt is not None:
+            rcc_receipt.unlink(missing_ok=True)
 
 
 def run_build(
