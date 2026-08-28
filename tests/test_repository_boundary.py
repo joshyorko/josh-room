@@ -58,7 +58,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert bootstrap.is_file()
     body = bootstrap.read_text()
     assert "Optional golden-host extension copy complete" in body
-    assert "joshyorko.josh-room-0.1.12" in body
+    assert "joshyorko.josh-room-0.1.13" in body
     assert "Room of Requirement" not in body
     assert "brew" not in body.lower()
     assert "action-server" not in body
@@ -128,7 +128,7 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     extension = (ROOT / "vscode-extension/extension.js").read_text()
 
-    assert package["version"] == "0.1.12"
+    assert package["version"] == "0.1.13"
     assert package["scripts"]["package"]
     assert (ROOT / "vscode-extension/.vscodeignore").is_file()
     vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
@@ -189,7 +189,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
-    assert "joshyorko.josh-room-0.1.12" in bootstrap
+    assert "joshyorko.josh-room-0.1.13" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
     assert template_package["contributes"] == package["contributes"]
     assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
@@ -316,10 +316,10 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
 def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
     assert lock["format_version"] == 1
-    assert lock["candidate_version"] == "0.1.12"
+    assert lock["candidate_version"] == "0.1.13"
     assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
-    assert lock["josh_room"]["git_sha"] == "93a45cf27864ec0c003ac98741baa75966ffd2b5"
+    assert lock["josh_room"]["git_sha"] == "470def6f78768001d274f696ba766fe058f873fa"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
