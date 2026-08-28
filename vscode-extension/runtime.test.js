@@ -7,12 +7,14 @@ const test = require("node:test");
 const zlib = require("node:zlib");
 
 const {
+  ensureControllerRuntime,
   ensureJatRuntime,
   ensureManagedRcc,
   localFallbackReason,
   readManifest,
   resolvePlatform,
   runtimeEnvironment,
+  selectControllerArtifact,
   selectJatArtifact,
 } = require("./runtime");
 
@@ -68,6 +70,21 @@ test("resolvePlatform accepts only the first supported Linux mapping", () => {
   assert.equal(resolvePlatform("win32", "x64"), "win32-x64");
   assert.throws(() => resolvePlatform("linux", "arm64"), /not supported/);
   assert.throws(() => resolvePlatform("darwin", "x64"), /does not support macOS yet/);
+});
+
+test("controller artifacts are selected by runtime platform", () => {
+  const linux = { digest: "sha256:" + "a".repeat(64) };
+  const windows = { digest: "sha256:" + "b".repeat(64) };
+  const controller = {
+    environment_artifact: linux,
+    environment_artifacts: { "linux-x64": linux, "win32-x64": windows },
+  };
+  assert.equal(selectControllerArtifact(controller, "linux-x64"), linux);
+  assert.equal(selectControllerArtifact(controller, "win32-x64"), windows);
+  assert.throws(
+    () => selectControllerArtifact({ environment_artifact: linux }, "win32-x64"),
+    /controller environment artifact pin for win32-x64/,
+  );
 });
 
 test("local fallback eligibility is limited to compatibility and unpublished controller artifacts", () => {
@@ -434,6 +451,72 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
   assert.equal(calls[0].options.env.RCC_HOLOTREE_MODE, "private");
 });
 
+test("cached JAT archive reuses local artifact digest without reimporting 6596 archive objects", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cached-jat-runtime-"));
+  const archive = Buffer.from("cached-jat-rcca");
+  const artifact = "sha256:" + "a".repeat(64);
+  const asset = "jat-runtime-linux-amd64.rcca";
+  const artifactRoot = path.join(root, "runtime", "jat-artifact");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  const manifest = manifestFor(Buffer.from("rcc"), {
+    jat: {
+      git_sha: "b".repeat(40),
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "b".repeat(40), sha256: "c".repeat(64) },
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset, url: "https://github.com/joshyorko/josh-all-the-things/releases/download/test/" + asset, sha256: digest(archive), size: archive.length },
+      },
+    },
+  });
+  const calls = [];
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+    ensureSource: async () => path.join(root, "jat-source"),
+    runJson: async (_executable, args) => {
+      calls.push(args);
+      return args[1] === "acquire"
+        ? { artifactDigest: artifact, verification: { valid: true }, cacheHit: "local-materialization" }
+        : { artifactDigest: artifact, exitCode: 0 };
+    },
+  });
+  assert.equal(calls[0].includes("--artifact"), true);
+  assert.equal(calls[0].includes("--archive"), false);
+  assert.equal(calls[0].includes(artifact), true);
+});
+
+test("cached JAT archive imports only when the local RCC artifact is genuinely absent", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cached-jat-recovery-"));
+  const archive = Buffer.from("cached-jat-rcca");
+  const artifact = "sha256:" + "e".repeat(64);
+  const asset = "jat-runtime-linux-amd64.rcca";
+  const artifactRoot = path.join(root, "runtime", "jat-artifact");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  const manifest = manifestFor(Buffer.from("rcc"), {
+    jat: {
+      git_sha: "f".repeat(40),
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "f".repeat(40), sha256: "a".repeat(64) },
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset, url: "https://github.com/joshyorko/josh-all-the-things/releases/download/test/" + asset, sha256: digest(archive), size: archive.length },
+      },
+    },
+  });
+  const calls = [];
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+    ensureSource: async () => path.join(root, "jat-source"),
+    runJson: async (_executable, args) => {
+      calls.push(args);
+      if (calls.length === 1) throw new Error("artifact is not local and no provider was supplied");
+      return args[1] === "acquire"
+        ? { artifactDigest: artifact, verification: { valid: true } }
+        : { artifactDigest: artifact, exitCode: 0 };
+    },
+  });
+  assert.equal(calls[0].includes("--artifact"), true);
+  assert.equal(calls[1].includes("--archive"), true);
+});
+
 test("ensureJatRuntime surfaces RCC artifact incompatibility without fallback build", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-incompatibility-test-"));
   const rccBinary = Buffer.from("managed-rcc-binary");
@@ -509,6 +592,34 @@ test("ensureControllerRuntime acquires a separate controller artifact and reject
     ),
     /separate Josh Room controller environment artifact pin/,
   );
+});
+
+test("cached controller archive reuses local artifact digest without archive import", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cached-controller-runtime-"));
+  const archive = Buffer.from("cached-controller-rcca");
+  const artifact = "sha256:" + "d".repeat(64);
+  const asset = "josh-room-controller-linux-amd64.rcca";
+  const artifactRoot = path.join(root, "runtime", "controller-artifact");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  const manifest = manifestFor(Buffer.from("rcc"), {
+    controller: {
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset, url: "https://github.com/joshyorko/josh-room/releases/download/test/" + asset, sha256: digest(archive), size: archive.length },
+      },
+    },
+  });
+  const calls = [];
+  await ensureControllerRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+    runJson: async (_executable, args) => {
+      calls.push(args);
+      return { artifactDigest: artifact, verification: { valid: true }, cacheHit: "local-materialization" };
+    },
+  });
+  assert.equal(calls[0].includes("--artifact"), true);
+  assert.equal(calls[0].includes("--archive"), false);
+  assert.equal(calls[0].includes(artifact), true);
 });
 
 test("ensureJatSource rejects a non-official JAT source URL before download", async () => {

@@ -32,6 +32,34 @@ function compatibilityError(error) {
   return error;
 }
 
+function localArtifactMissing(error) {
+  return /artifact is not local|no provider was supplied/i.test(error?.message || String(error));
+}
+
+async function acquirePinnedArtifact({
+  rccExecutable, artifactDigest, archivePath, archiveCached, runJson, cwd, environment, onProgress, onOutput, label,
+}) {
+  const options = { cwd, env: environment, onOutput };
+  if (archiveCached) {
+    onProgress?.({ phase: "reuse", message: `Reusing cached ${label} materialization` });
+    try {
+      return await runJson(
+        rccExecutable,
+        ["env", "acquire", "--artifact", artifactDigest, "--permissive-local", "--json"],
+        options,
+      );
+    } catch (error) {
+      if (!localArtifactMissing(error)) throw error;
+    }
+  }
+  onProgress?.({ phase: "import", message: `Importing ${label} into private RCC storage` });
+  return runJson(
+    rccExecutable,
+    ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
+    options,
+  );
+}
+
 function resolvePlatform(platform = process.platform, arch = process.arch) {
   if (platform === "linux" && arch === "x64") return "linux-x64";
   if (platform === "win32" && arch === "x64") return "win32-x64";
@@ -47,6 +75,18 @@ function selectJatArtifact(jat, platform) {
   }
   if (platform === "linux-x64" && jat?.environment_artifact) return jat.environment_artifact;
   throw new Error(`Josh Room runtime manifest is missing a JAT environment artifact pin for ${platform}`);
+}
+
+function selectControllerArtifact(controller, platform) {
+  const platformArtifacts = controller?.environment_artifacts;
+  if (platformArtifacts && typeof platformArtifacts === "object" && !Array.isArray(platformArtifacts)) {
+    const selected = platformArtifacts[platform];
+    if (selected && typeof selected === "object" && !Array.isArray(selected)) return selected;
+  }
+  if (platform === "linux-x64" && controller?.environment_artifact) return controller.environment_artifact;
+  const error = new Error(`Josh Room runtime manifest is missing a separate Josh Room controller environment artifact pin for ${platform}`);
+  error.fallbackReason = "controller-artifact-unpublished";
+  throw error;
 }
 
 function readManifest(source = MANIFEST_PATH) {
@@ -313,7 +353,9 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   await fs.promises.mkdir(paths.jatArtifactRoot, { recursive: true, mode: 0o700 });
   const archivePath = path.join(paths.jatArtifactRoot, archivePin.asset);
   const download = options.download || downloadFile;
+  let archiveCached = false;
   if (await isRegularFile(archivePath)) {
+    archiveCached = true;
     if (archivePin.size !== undefined && (await fs.promises.stat(archivePath)).size !== archivePin.size) {
       throw new Error("cached JAT environment archive size mismatch");
     }
@@ -354,15 +396,21 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   const runJson = options.runJson || runJsonCommand;
   let acquired;
   try {
-    acquired = await runJson(
-      rccRuntime.executable,
-      ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-      { cwd: paths.storageRoot, env: environment },
-    );
+    acquired = await acquirePinnedArtifact({
+      rccExecutable: rccRuntime.executable,
+      artifactDigest: artifact.digest,
+      archivePath,
+      archiveCached,
+      runJson,
+      cwd: paths.storageRoot,
+      environment,
+      onProgress: options.onProgress,
+      onOutput: options.onOutput,
+      label: "JAT Environment Artifact",
+    });
   } catch (error) {
     throw compatibilityError(error);
   }
-  options.onProgress?.({ phase: "import", message: "Verifying/importing artifact content" });
   if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
     const detail = acquired.error || acquired.message || "RCC did not validate the pinned JAT environment artifact";
     const error = new Error(`RCC rejected the pinned JAT environment artifact: ${detail}`);
@@ -377,7 +425,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   const executed = await runJson(
     rccRuntime.executable,
     ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
-    { cwd: paths.storageRoot, env: environment, receiptFile },
+    { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
   );
   if (executed.artifactDigest !== artifact.digest || executed.exitCode !== 0) {
     throw new Error("acquired JAT environment failed Hauler version verification");
@@ -393,7 +441,8 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
 
 async function ensureControllerRuntime(context, manifestSource, rccRuntime, options = {}) {
   const manifest = readManifest(manifestSource);
-  const artifact = manifest.controller?.environment_artifact;
+  const platform = options.platform || resolvePlatform();
+  const artifact = selectControllerArtifact(manifest.controller, platform);
   const archivePin = artifact?.archive;
   if (!archivePin || typeof artifact.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(artifact.digest)
     || typeof archivePin.asset !== "string" || typeof archivePin.url !== "string"
@@ -411,7 +460,9 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   await fs.promises.mkdir(paths.controllerArtifactRoot, { recursive: true, mode: 0o700 });
   const archivePath = path.join(paths.controllerArtifactRoot, archivePin.asset);
   const download = options.download || downloadFile;
+  let archiveCached = false;
   if (await isRegularFile(archivePath)) {
+    archiveCached = true;
     if (archivePin.size !== undefined && (await fs.promises.stat(archivePath)).size !== archivePin.size) {
       throw new Error("cached controller environment archive size mismatch");
     }
@@ -442,11 +493,18 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   const runJson = options.runJson || runJsonCommand;
   let acquired;
   try {
-    acquired = await runJson(
-      rccRuntime.executable,
-      ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-      { cwd: paths.storageRoot, env: environment },
-    );
+    acquired = await acquirePinnedArtifact({
+      rccExecutable: rccRuntime.executable,
+      artifactDigest: artifact.digest,
+      archivePath,
+      archiveCached,
+      runJson,
+      cwd: paths.storageRoot,
+      environment,
+      onProgress: options.onProgress,
+      onOutput: options.onOutput,
+      label: "controller Environment Artifact",
+    });
   } catch (error) {
     throw compatibilityError(error);
   }
@@ -715,6 +773,7 @@ module.exports = {
   privatePaths,
   readManifest,
   resolvePlatform,
+  selectControllerArtifact,
   selectJatArtifact,
   runtimeEnvironment,
   haulerVersionCommand,

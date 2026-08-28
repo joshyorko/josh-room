@@ -9,6 +9,12 @@
         "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
         "sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428",
         "size": 22282402
+      },
+      "win32-x64": {
+        "asset": "rcc-windows64.exe",
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-windows64.exe",
+        "sha256": "523a6be8ad92235fbe0a4e4732699f2cd66f9ef6ad57e045df434257c46112e4",
+        "size": 19985408
       }
     }
   },
@@ -23,6 +29,16 @@
           "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.10-controller-artifacts/josh-room-controller-linux-amd64.rcca",
           "sha256": "7fd9a87a2a39714e2fcfaba34d394b7553e3979518d5bbf833ee6bdc14a1d548",
           "size": 124494418
+        }
+      },
+      "win32-x64": {
+        "digest": "sha256:9f681a9a4b402d37fb098ac33679c01e48960fa7f33ba08e33ad249170759391",
+        "platform": "win32-x64",
+        "archive": {
+          "asset": "josh-room-controller-windows-amd64.rcca",
+          "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.10-controller-artifacts/josh-room-controller-windows-amd64.rcca",
+          "sha256": "cfbda1cfae16e2f538036b09094f2c7b03d9af6e6071b7fb080d35da5da20719",
+          "size": 77076530
         }
       }
     },
@@ -52,6 +68,26 @@
         "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-linux-amd64.rcca",
         "sha256": "8ccd065e9156ac9067230b0f06dd667f98dc5b95af4535adc2715d02c279f751",
         "size": 169752215
+      }
+    },
+    "environment_artifacts": {
+      "linux-x64": {
+        "digest": "sha256:3e473a015f809da0b77382e54da460da212f9fee2ee02f146736e7acd64f929c",
+        "archive": {
+          "asset": "jat-runtime-linux-amd64.rcca",
+          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-linux-amd64.rcca",
+          "sha256": "8ccd065e9156ac9067230b0f06dd667f98dc5b95af4535adc2715d02c279f751",
+          "size": 169752215
+        }
+      },
+      "win32-x64": {
+        "digest": "sha256:b975746c61cd89e838b9fff63c7def943eb75b54f04cc6dbacfcf701e133229c",
+        "archive": {
+          "asset": "jat-runtime-windows-amd64.rcca",
+          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-windows-amd64.rcca",
+          "sha256": "b9c6cebe5b20c07299e01c20502caf285e48707115be27a31655ad558ad653d6",
+          "size": 103018723
+        }
       }
     }
   }

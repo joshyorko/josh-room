@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import worker from "../src/index.js";
+import worker, { OAuthSession } from "../src/index.js";
 
 class MemoryKV {
   constructor() {
@@ -27,6 +27,44 @@ class MemoryKV {
   }
 }
 
+class MemoryStorage {
+  constructor() {
+    this.values = new Map();
+  }
+
+  async get(key) { return this.values.get(key); }
+  async put(key, value) { this.values.set(key, value); }
+  async deleteAll() { this.values.clear(); }
+  async setAlarm() {}
+}
+
+class MemoryDurableNamespace {
+  constructor(env) {
+    this.env = env;
+    this.instances = new Map();
+    this.next = 0;
+  }
+
+  newUniqueId() {
+    this.next += 1;
+    return { toString: () => this.next.toString(16).padStart(64, "0") };
+  }
+
+  idFromString(value) {
+    if (!/^[0-9a-f]{64}$/.test(value)) throw new Error("invalid durable object id");
+    return { toString: () => value };
+  }
+
+  get(id) {
+    const key = id.toString();
+    if (!this.instances.has(key)) {
+      this.instances.set(key, new OAuthSession({ storage: new MemoryStorage() }, this.env));
+    }
+    const instance = this.instances.get(key);
+    return { fetch: (request) => instance.fetch(request) };
+  }
+}
+
 function environment(kv) {
   return {
     OAUTH_SESSIONS: kv,
@@ -39,6 +77,13 @@ function environment(kv) {
     OPERATIONAL_AGE_IDENTITY: "AGE-SECRET-KEY-synthetic",
     AGE_RECIPIENTS: JSON.stringify(["age1synthetic"]),
   };
+}
+
+function durableEnvironment() {
+  const env = environment(undefined);
+  delete env.OAUTH_SESSIONS;
+  env.OAUTH_SESSION = new MemoryDurableNamespace(env);
+  return env;
 }
 
 function request(path, method = "GET") {
@@ -171,6 +216,42 @@ test("a live callback still authorizes once and consumes its state", async () =>
   assert.equal(authorized.status, "authorized");
   assert.equal(authorized.secretAccessKey, "temporary-secret");
   assert.equal(await kv.get(`state:${started.state}`, "json"), null);
+});
+
+test("Durable Object callback is immediately visible to a poll from another request", async () => {
+  const env = durableEnvironment();
+  const started = await startSession(env);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url === "https://dash.cloudflare.com/oauth2/token") {
+      return Response.json({ access_token: "synthetic-cloudflare-token" });
+    }
+    if (url === "https://dash.cloudflare.com/oauth2/userinfo") {
+      return Response.json({ sub: "synthetic-owner" });
+    }
+    if (url === "https://api.cloudflare.com/client/v4/accounts/synthetic-account/r2/temp-access-credentials") {
+      return Response.json({ success: true, result: {
+        accessKeyId: "temporary-access",
+        secretAccessKey: "temporary-secret",
+        sessionToken: "temporary-token",
+      } });
+    }
+    throw new Error(`unexpected upstream URL: ${url}`);
+  };
+  try {
+    const callback = await worker.fetch(
+      request(`/oauth/callback?state=${encodeURIComponent(started.state)}&code=synthetic-code`),
+      env,
+    );
+    assert.equal(callback.status, 200);
+    const status = await worker.fetch(request(`/session/${started.sessionId}`), env);
+    assert.equal(status.status, 200);
+    const body = await status.json();
+    assert.equal(body.status, "authorized");
+    assert.equal(body.secretAccessKey, "temporary-secret");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("unknown cancellation is expired and authorized sessions are protected", async () => {
