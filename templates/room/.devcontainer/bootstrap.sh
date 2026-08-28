@@ -4,7 +4,7 @@ set -euo pipefail
 room_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 extension_source="$room_root/vscode-extension"
 extension_base="${VSCODE_EXTENSIONS_DIR:-$HOME/.vscode-server-insiders/extensions}"
-extension_target="$extension_base/joshyorko.josh-room-0.1.9"
+extension_target="$extension_base/joshyorko.josh-room-0.1.10"
 
 test -f "$extension_source/extension.js"
 test -f "$extension_source/package.json"
