@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
@@ -295,6 +296,36 @@ def test_runtime_session_state_distinguishes_missing_and_expired_authority(tmp_p
     (runtime / "session.json").write_text(json.dumps({"expires_at": 0}))
 
     assert runtime_session_state() == "expired"
+
+
+def test_load_runtime_session_reuses_age_material_without_contacting_authority(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    (runtime / "r2.json").write_text("{}")
+    (runtime / "age.identity").write_text("AGE-SECRET-KEY-synthetic\n")
+    (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600}))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert hasattr(auth, "load_runtime_session")
+    assert auth.load_runtime_session() is True
+    assert os.environ["JOSH_ROOM_RUNTIME_CONFIG"] == str(runtime / "config.json")
+    assert os.environ["JOSH_ROOM_IDENTITY"] == str(runtime / "age.identity")
+
+
+def test_non_r2_snapshot_loads_existing_runtime_session_before_dispatch(monkeypatch, capsys):
+    from josh_room import cli
+
+    calls = []
+    monkeypatch.setattr(cli, "_requires_oauth", lambda _args: False)
+    monkeypatch.setattr(cli, "load_runtime_session", lambda: calls.append(True) or True, raising=False)
+    monkeypatch.setattr(cli, "dispatch", lambda *_args: {"ok": True})
+
+    assert cli.main(["snapshot", "create", "synthetic", "--backend", "minio", "--json"]) == 0
+    capsys.readouterr()
+    assert calls == [True]
 
 
 def test_logout_runtime_session_clears_only_local_r2_session_material(tmp_path, monkeypatch):

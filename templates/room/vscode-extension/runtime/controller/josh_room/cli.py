@@ -13,6 +13,7 @@ from . import r2 as _r2
 from .auth import (
     cancel_oauth_session,
     ensure_runtime_session,
+    load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
     runtime_session_state,
@@ -288,6 +289,8 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     instance = _instance_root()
     try:
+        if args.command not in {"auth", "setup"}:
+            load_runtime_session()
         if _requires_oauth(args):
             requested_dimension = getattr(args, "dimension", None)
             selected = None

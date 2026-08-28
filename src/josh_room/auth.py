@@ -241,3 +241,8 @@ def _load_runtime() -> bool:
     os.environ["JOSH_ROOM_RUNTIME_CONFIG"] = str(config)
     os.environ["JOSH_ROOM_RUNTIME_PROFILE"] = "oauth-runtime"
     return True
+
+
+def load_runtime_session() -> bool:
+    """Load an existing local session without contacting the authority."""
+    return _load_runtime()
