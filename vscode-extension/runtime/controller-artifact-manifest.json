@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "rcc": {
+    "version": "v18.19.3",
+    "platforms": {
+      "linux-x64": {
+        "asset": "rcc-linux64",
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
+        "sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428",
+        "size": 22282402
+      },
+      "win32-x64": {
+        "asset": "rcc-windows64.exe",
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-windows64.exe",
+        "sha256": "523a6be8ad92235fbe0a4e4732699f2cd66f9ef6ad57e045df434257c46112e4",
+        "size": 19985408
+      }
+    }
+  },
+  "controller": {
+    "robot": "vscode-extension/runtime/controller/robot.yaml",
+    "artifact_assets": {
+      "linux-x64": "josh-room-controller-linux-amd64.rcca",
+      "win32-x64": "josh-room-controller-windows-amd64.rcca"
+    }
+  }
+}
