@@ -13,6 +13,7 @@ const {
   readManifest,
   resolvePlatform,
   runtimeEnvironment,
+  selectControllerArtifact,
   selectJatArtifact,
 } = require("./runtime");
 
@@ -68,6 +69,21 @@ test("resolvePlatform accepts only the first supported Linux mapping", () => {
   assert.equal(resolvePlatform("win32", "x64"), "win32-x64");
   assert.throws(() => resolvePlatform("linux", "arm64"), /not supported/);
   assert.throws(() => resolvePlatform("darwin", "x64"), /does not support macOS yet/);
+});
+
+test("controller artifacts are selected by runtime platform", () => {
+  const linux = { digest: "sha256:" + "a".repeat(64) };
+  const windows = { digest: "sha256:" + "b".repeat(64) };
+  const controller = {
+    environment_artifact: linux,
+    environment_artifacts: { "linux-x64": linux, "win32-x64": windows },
+  };
+  assert.equal(selectControllerArtifact(controller, "linux-x64"), linux);
+  assert.equal(selectControllerArtifact(controller, "win32-x64"), windows);
+  assert.throws(
+    () => selectControllerArtifact({ environment_artifact: linux }, "win32-x64"),
+    /controller environment artifact pin for win32-x64/,
+  );
 });
 
 test("local fallback eligibility is limited to compatibility and unpublished controller artifacts", () => {

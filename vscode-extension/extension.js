@@ -27,6 +27,7 @@ let dirtyTrackingGeneration = 0;
 const dirtyBuffers = new Set();
 let activeAuthAttempt;
 let managedRuntimePromise;
+let managedJatPromise;
 let runtimeReadinessOverride;
 let runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
 let testRuntime;
@@ -360,6 +361,7 @@ async function clearLocalFallback() {
   if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
   await managedRuntime.clearLocalFallbackRecord(extensionContext);
   managedRuntimePromise = undefined;
+  managedJatPromise = undefined;
   runtimeLifecycle = { state: "UNINITIALIZED", message: "Retrying portable Josh Room runtime" };
   roomsProvider?.emitter?.fire(undefined);
   if (roomsProvider) await roomsProvider.refresh();
@@ -510,16 +512,6 @@ async function initializeManagedRuntime(context, progressReporter) {
     onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
   });
   const controllerRoot = controllerRootFor(context, manifest);
-  progressReporter?.event({ stage: "runtime", message: "JAT source and artifact are being prepared" });
-  let jat;
-  try {
-    jat = await managedRuntime.ensureJatRuntime(context, manifest, rcc, {
-      onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-    });
-  } catch (error) {
-    if (managedRuntime.localFallbackReason(error)) return localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot);
-    throw error;
-  }
   progressReporter?.event({ stage: "runtime", message: "Preparing Josh Room controller environment" });
   let controller;
   try {
@@ -527,25 +519,55 @@ async function initializeManagedRuntime(context, progressReporter) {
       onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
     });
   } catch (error) {
-    if (managedRuntime.localFallbackReason(error)) return localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot);
+    if (managedRuntime.localFallbackReason(error)) return localRuntimeState(context, manifest, rcc, undefined, error, progressReporter, controllerRoot);
     throw error;
   }
   return {
     manifest,
     rcc,
-    jat,
+    jat: undefined,
     controller,
     controllerRoot,
   };
 }
 
-async function runtimeFor(cwd) {
+function operationNeedsJat(args) {
+  if (!Array.isArray(args) || !args.length) return false;
+  if (["hydrate", "serve", "jat", "doctor"].includes(args[0])) return true;
+  return args[0] === "snapshot" && args[1] === "create";
+}
+
+async function ensureJatForState(context, state, progressReporter) {
+  if (state.mode === "local-build-fallback" || state.jat?.artifact) return state.jat;
+  if (!managedJatPromise) {
+    progressReporter?.event({ stage: "runtime", message: "Preparing JAT runtime for this operation" });
+    managedJatPromise = managedRuntime.ensureJatRuntime(context, state.manifest, state.rcc, {
+      onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
+      onOutput: (stream, chunk) => {
+        const sanitized = sanitizeRuntimeLine(chunk);
+        if (!sanitized) return;
+        outputChannel?.appendLine(`${new Date().toISOString()} RCC ${stream}: ${sanitized}`);
+        progressReporter?.event({ stage: "runtime", message: sanitized });
+      },
+    }).then((jat) => {
+      state.jat = jat;
+      return jat;
+    }).catch((error) => {
+      managedJatPromise = undefined;
+      throw error;
+    });
+  }
+  return managedJatPromise;
+}
+
+async function runtimeFor(cwd, args = [], progressReporter) {
   if (testRuntime) {
     setRuntimeLifecycle("RUNTIME_READY", "Managed runtime ready");
     return testRuntime;
   }
   if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
   const state = await startRuntimeReadiness(extensionContext);
+  if (operationNeedsJat(args)) await ensureJatForState(extensionContext, state, progressReporter);
   const localFallback = state.mode === "local-build-fallback";
   return {
     command: state.rcc.executable,
@@ -559,13 +581,13 @@ async function runtimeFor(cwd) {
     env: managedRuntime.runtimeEnvironment(extensionContext, {
       rccExecutable: state.rcc.executable,
       controllerRoot: state.controllerRoot,
-      jatRoot: state.jat.jatRoot,
-      jatArtifact: state.jat.artifact,
-      jatSourceSha: state.jat.sourceSha,
+      jatRoot: state.jat?.jatRoot,
+      jatArtifact: state.jat?.artifact,
+      jatSourceSha: state.jat?.sourceSha,
       controllerArtifact: state.controller?.artifact,
     }, cwd),
-    jatRoot: state.jat.jatRoot,
-    jatArtifact: state.jat.artifact,
+    jatRoot: state.jat?.jatRoot,
+    jatArtifact: state.jat?.artifact,
     mode: state.mode,
     markLocalReady: state.mode === "local-build-fallback"
       ? () => managedRuntime.writeLocalFallbackRecord(extensionContext, state.localIdentity)
@@ -655,7 +677,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   let environment;
   let credentialsCleanup = () => {};
   try {
-    runtime = await runtimeFor(cwd);
+    runtime = await runtimeFor(cwd, args, progressReporter);
     environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
@@ -1549,7 +1571,7 @@ async function jatServe() {
 }
 
 async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) {
-  const runtime = await runtimeFor(cwd);
+  const runtime = await runtimeFor(cwd, args);
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
   const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
@@ -2887,6 +2909,8 @@ Object.assign(module.exports.__test__, {
   runJoshRoom,
   chooseLocalFallback,
   localRuntimeState,
+  initializeManagedRuntime,
+  operationNeedsJat,
   clearLocalFallback,
   buildTerminalLaunch,
   isSafeRestoreName,
@@ -2899,11 +2923,13 @@ Object.assign(module.exports.__test__, {
   setExtensionContextForTests(value) {
     extensionContext = value;
     managedRuntimePromise = undefined;
+    managedJatPromise = undefined;
     runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
   },
   setRuntimeReadinessForTests(value) {
     runtimeReadinessOverride = value;
     managedRuntimePromise = undefined;
+    managedJatPromise = undefined;
     runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
   },
   setRoomsProvider(value) {

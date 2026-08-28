@@ -49,6 +49,18 @@ function selectJatArtifact(jat, platform) {
   throw new Error(`Josh Room runtime manifest is missing a JAT environment artifact pin for ${platform}`);
 }
 
+function selectControllerArtifact(controller, platform) {
+  const platformArtifacts = controller?.environment_artifacts;
+  if (platformArtifacts && typeof platformArtifacts === "object" && !Array.isArray(platformArtifacts)) {
+    const selected = platformArtifacts[platform];
+    if (selected && typeof selected === "object" && !Array.isArray(selected)) return selected;
+  }
+  if (platform === "linux-x64" && controller?.environment_artifact) return controller.environment_artifact;
+  const error = new Error(`Josh Room runtime manifest is missing a separate Josh Room controller environment artifact pin for ${platform}`);
+  error.fallbackReason = "controller-artifact-unpublished";
+  throw error;
+}
+
 function readManifest(source = MANIFEST_PATH) {
   const manifest = typeof source === "string"
     ? JSON.parse(fs.readFileSync(source, "utf8"))
@@ -353,16 +365,16 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   };
   const runJson = options.runJson || runJsonCommand;
   let acquired;
+  options.onProgress?.({ phase: "import", message: "Importing JAT Environment Artifact into private RCC storage" });
   try {
     acquired = await runJson(
       rccRuntime.executable,
       ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-      { cwd: paths.storageRoot, env: environment },
+      { cwd: paths.storageRoot, env: environment, onOutput: options.onOutput },
     );
   } catch (error) {
     throw compatibilityError(error);
   }
-  options.onProgress?.({ phase: "import", message: "Verifying/importing artifact content" });
   if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
     const detail = acquired.error || acquired.message || "RCC did not validate the pinned JAT environment artifact";
     const error = new Error(`RCC rejected the pinned JAT environment artifact: ${detail}`);
@@ -377,7 +389,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   const executed = await runJson(
     rccRuntime.executable,
     ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
-    { cwd: paths.storageRoot, env: environment, receiptFile },
+    { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
   );
   if (executed.artifactDigest !== artifact.digest || executed.exitCode !== 0) {
     throw new Error("acquired JAT environment failed Hauler version verification");
@@ -393,7 +405,8 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
 
 async function ensureControllerRuntime(context, manifestSource, rccRuntime, options = {}) {
   const manifest = readManifest(manifestSource);
-  const artifact = manifest.controller?.environment_artifact;
+  const platform = options.platform || resolvePlatform();
+  const artifact = selectControllerArtifact(manifest.controller, platform);
   const archivePin = artifact?.archive;
   if (!archivePin || typeof artifact.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(artifact.digest)
     || typeof archivePin.asset !== "string" || typeof archivePin.url !== "string"
@@ -441,11 +454,12 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
   const runJson = options.runJson || runJsonCommand;
   let acquired;
+  options.onProgress?.({ phase: "import", message: "Importing controller Environment Artifact into private RCC storage" });
   try {
     acquired = await runJson(
       rccRuntime.executable,
       ["env", "acquire", "--archive", archivePath, "--permissive-local", "--json"],
-      { cwd: paths.storageRoot, env: environment },
+      { cwd: paths.storageRoot, env: environment, onOutput: options.onOutput },
     );
   } catch (error) {
     throw compatibilityError(error);
@@ -715,6 +729,7 @@ module.exports = {
   privatePaths,
   readManifest,
   resolvePlatform,
+  selectControllerArtifact,
   selectJatArtifact,
   runtimeEnvironment,
   haulerVersionCommand,

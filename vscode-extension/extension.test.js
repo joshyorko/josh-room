@@ -378,6 +378,62 @@ test("Windows child cancellation terminates the child directly", () => {
   assert.equal(killed, "SIGTERM");
 });
 
+test("JAT runtime acquisition is lazy and limited to JAT-backed operations", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const needsJat = extension.__test__.operationNeedsJat;
+  assert.equal(needsJat(["dimensions", "list"]), false);
+  assert.equal(needsJat(["auth", "status"]), false);
+  assert.equal(needsJat(["status"]), false);
+  assert.equal(needsJat(["snapshot", "create"]), true);
+  assert.equal(needsJat(["hydrate"]), true);
+  assert.equal(needsJat(["serve"]), true);
+  assert.equal(needsJat(["jat", "build"]), true);
+  assert.equal(needsJat(["doctor"]), true);
+});
+
+test("initial runtime readiness acquires controller and defers JAT", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-lazy-jat-startup-"));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const liveRuntime = require("./runtime");
+  const originals = {
+    readManifest: liveRuntime.readManifest,
+    ensureManagedRcc: liveRuntime.ensureManagedRcc,
+    ensureControllerRuntime: liveRuntime.ensureControllerRuntime,
+    ensureJatRuntime: liveRuntime.ensureJatRuntime,
+  };
+  let controllerCalls = 0;
+  let jatCalls = 0;
+  liveRuntime.readManifest = () => ({
+    schema_version: 1,
+    extension_version: "test",
+    rcc: { version: "v18.19.3", platforms: {} },
+    controller: { robot: "runtime/controller/robot.yaml" },
+    jat: { git_sha: "a".repeat(40) },
+  });
+  liveRuntime.ensureManagedRcc = async () => ({ executable: "/managed/rcc", version: "v18.19.3" });
+  liveRuntime.ensureControllerRuntime = async () => {
+    controllerCalls += 1;
+    return { artifact: "sha256:" + "b".repeat(64) };
+  };
+  liveRuntime.ensureJatRuntime = async () => {
+    jatCalls += 1;
+    return { artifact: "sha256:" + "c".repeat(64) };
+  };
+  try {
+    const state = await extension.__test__.initializeManagedRuntime(
+      { globalStorageUri: { fsPath: root }, extensionPath: root },
+      { event() {} },
+    );
+    assert.equal(controllerCalls, 1);
+    assert.equal(jatCalls, 0);
+    assert.equal(state.jat, undefined);
+  } finally {
+    Object.assign(liveRuntime, originals);
+  }
+});
+
 test("extension consumes the private controller result receipt when RCC suppresses stdout", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-result-receipt-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
