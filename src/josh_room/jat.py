@@ -29,7 +29,7 @@ def _diagnostic(stderr: str) -> str:
     for value in os.environ.values():
         if value and len(value) > 3:
             cleaned = cleaned.replace(value, "[redacted]")
-    return cleaned[:2048]
+    return cleaned[-4096:]
 
 
 def _run(argv: list[str], timeout: float | None, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> tuple[int, str]:
@@ -116,7 +116,13 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
         argv = ["rcc", "run", "-r", str(jat_root / "robot.yaml"), "-t", task]
         if request_path is not None:
             argv.extend(("--", "--json-input", str(request_path)))
-        run_kwargs = {}
+        environment = os.environ.copy()
+        environment.update({
+            "JOSH_ROOM_JAT_ROOT": str(jat_root),
+            "ROBOT_ARTIFACTS": str(jat_root / "output"),
+            "JAT_RUN_DIR": str(jat_root / "output"),
+        })
+        run_kwargs = {"cwd": jat_root, "env": environment}
     else:
         executable, artifact, environment = managed
         argv = [
