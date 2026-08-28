@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "extension_version": "0.1.3",
+  "extension_version": "0.1.4",
   "rcc": {
     "version": "v18.19.2",
     "platforms": {
@@ -15,19 +15,19 @@
     "robot": "runtime/controller/robot.yaml"
   },
   "jat": {
-    "git_sha": "d4a24cfeeca7096fffd0c019c71abc2fa75ce783",
+    "git_sha": "028efba3f2d0ad7385a957adcc8de81954bbb2d7",
     "source_archive": {
-      "asset": "josh-all-the-things-d4a24cfeeca7096fffd0c019c71abc2fa75ce783.tar.gz",
-      "url": "https://github.com/joshyorko/josh-all-the-things/archive/d4a24cfeeca7096fffd0c019c71abc2fa75ce783.tar.gz",
-      "sha256": "c666b4ae3c3f4e3b05ff9d072b95ebc1cedd289d2078c6c2ba0f9d5ad406622f"
+      "asset": "josh-all-the-things-028efba3f2d0ad7385a957adcc8de81954bbb2d7.tar.gz",
+      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/028efba3f2d0ad7385a957adcc8de81954bbb2d7",
+      "sha256": "0fa85279c2f50a4016aeb9fc25003d425414975e31827afe3e4498b8376c9997"
     },
     "environment_artifact": {
-      "digest": "sha256:6d2ff28507008d13938493deaf64084499d975df4128f4ae03954b42cb7fc3cb",
+      "digest": "sha256:2102b3b97d855070f1498378712baa13d21693e5f82ca3e929fbbf281cfe595d",
       "archive": {
         "asset": "jat-runtime.rcca",
-        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.6-jat-runtime/jat-runtime.rcca",
-        "sha256": "ffb62a7359ba18e964eb841052107447eca46ffe124172171eff222fdc288f87",
-        "size": 169767233
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.7-jat-runtime/jat-runtime.rcca",
+        "sha256": "1e327c4fe7b67667084fc1967d93affa6d22779b0b71d6df14030e8c505df4cf",
+        "size": 169768304
       }
     }
   }
