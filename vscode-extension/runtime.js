@@ -39,6 +39,16 @@ function resolvePlatform(platform = process.platform, arch = process.arch) {
   throw new Error(`Josh Room runtime platform is not supported: ${platform}/${arch}`);
 }
 
+function selectJatArtifact(jat, platform) {
+  const platformArtifacts = jat?.environment_artifacts;
+  if (platformArtifacts && typeof platformArtifacts === "object" && !Array.isArray(platformArtifacts)) {
+    const selected = platformArtifacts[platform];
+    if (selected && typeof selected === "object" && !Array.isArray(selected)) return selected;
+  }
+  if (platform === "linux-x64" && jat?.environment_artifact) return jat.environment_artifact;
+  throw new Error(`Josh Room runtime manifest is missing a JAT environment artifact pin for ${platform}`);
+}
+
 function readManifest(source = MANIFEST_PATH) {
   const manifest = typeof source === "string"
     ? JSON.parse(fs.readFileSync(source, "utf8"))
@@ -286,7 +296,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   const manifest = readManifest(manifestSource);
   const platform = options.platform || resolvePlatform();
   const jat = manifest.jat;
-  const artifact = jat?.environment_artifact;
+  const artifact = selectJatArtifact(jat, platform);
   const archivePin = artifact?.archive;
   if (!jat || typeof jat.git_sha !== "string" || !/^[0-9a-f]{40}$/.test(jat.git_sha)
     || !archivePin || typeof artifact.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(artifact.digest)
@@ -705,6 +715,7 @@ module.exports = {
   privatePaths,
   readManifest,
   resolvePlatform,
+  selectJatArtifact,
   runtimeEnvironment,
   haulerVersionCommand,
   localFallbackReason,

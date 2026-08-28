@@ -6,7 +6,15 @@ const path = require("node:path");
 const test = require("node:test");
 const zlib = require("node:zlib");
 
-const { ensureManagedRcc, localFallbackReason, readManifest, resolvePlatform, runtimeEnvironment } = require("./runtime");
+const {
+  ensureJatRuntime,
+  ensureManagedRcc,
+  localFallbackReason,
+  readManifest,
+  resolvePlatform,
+  runtimeEnvironment,
+  selectJatArtifact,
+} = require("./runtime");
 
 const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)";
 
@@ -270,6 +278,94 @@ test("runtimeEnvironment keeps RCC and Room state under extension global storage
   assert.equal(environment.JOSH_ROOM_WORKSPACE_ROOT, "/workspaces/example");
   assert.equal(environment.JOSH_ROOM_JAT_ARTIFACT, "sha256:" + "a".repeat(64));
   assert.equal(environment.JOSH_ROOM_JAT_SHA, "b".repeat(40));
+});
+
+test("selectJatArtifact chooses the platform pin and preserves the Linux legacy fallback", () => {
+  const legacy = { digest: "sha256:" + "a".repeat(64) };
+  const linux = { digest: "sha256:" + "b".repeat(64) };
+  const windows = { digest: "sha256:" + "c".repeat(64) };
+  const jat = {
+    environment_artifact: legacy,
+    environment_artifacts: { "linux-x64": linux, "win32-x64": windows },
+  };
+
+  assert.deepEqual(selectJatArtifact(jat, "linux-x64"), linux);
+  assert.deepEqual(selectJatArtifact(jat, "win32-x64"), windows);
+  assert.deepEqual(selectJatArtifact({ environment_artifact: legacy }, "linux-x64"), legacy);
+});
+
+test("selectJatArtifact fails closed when Windows has no platform artifact", () => {
+  assert.throws(
+    () => selectJatArtifact({ environment_artifact: { digest: "sha256:" + "a".repeat(64) } }, "win32-x64"),
+    /missing a JAT environment artifact pin for win32-x64/,
+  );
+});
+
+test("ensureJatRuntime validates and acquires the selected Windows artifact", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-jat-runtime-test-"));
+  const rccBinary = Buffer.from("managed-rcc-binary");
+  const legacyArchive = Buffer.from("legacy-rcca-archive");
+  const windowsArchive = Buffer.from("windows-rcca-archive");
+  const legacyArtifact = "sha256:" + "a".repeat(64);
+  const windowsArtifact = "sha256:" + "b".repeat(64);
+  const manifest = manifestFor(rccBinary, {
+    jat: {
+      git_sha: "d".repeat(40),
+      source_archive: {
+        asset: "josh-all-the-things.tar.gz",
+        url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "d".repeat(40),
+        sha256: "e".repeat(64),
+      },
+      environment_artifact: {
+        digest: legacyArtifact,
+        archive: {
+          asset: "jat-runtime-linux-amd64.rcca",
+          url: "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.1/jat-runtime-linux-amd64.rcca",
+          sha256: digest(legacyArchive),
+          size: legacyArchive.length,
+        },
+      },
+      environment_artifacts: {
+        "win32-x64": {
+          digest: windowsArtifact,
+          archive: {
+            asset: "jat-runtime-windows-amd64.rcca",
+            url: "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.1/jat-runtime-windows-amd64.rcca",
+            sha256: digest(windowsArchive),
+            size: windowsArchive.length,
+          },
+        },
+      },
+    },
+  });
+  const calls = [];
+  const downloads = [];
+  const result = await ensureJatRuntime(
+    context(root),
+    manifest,
+    { executable: `${root}/runtime/rcc`, version: "v18.19.2" },
+    {
+      platform: "win32-x64",
+      download: async (url, destination) => {
+        downloads.push(url);
+        fs.writeFileSync(destination, windowsArchive);
+      },
+      ensureSource: async () => path.join(root, "jat-source"),
+      runJson: async (executable, args, options) => {
+        calls.push({ executable, args, options });
+        if (args[1] === "acquire") return { artifactDigest: windowsArtifact, verification: { valid: true } };
+        if (args.at(-2) === "hauler" && args.at(-1) === "version") {
+          return { artifactDigest: windowsArtifact, exitCode: 0 };
+        }
+        return { artifactDigest: windowsArtifact, exitCode: 0 };
+      },
+    },
+  );
+
+  assert.equal(result.artifact, windowsArtifact);
+  assert.deepEqual(downloads, ["https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.1/jat-runtime-windows-amd64.rcca"]);
+  assert.equal(calls[0].args.some((arg) => arg.endsWith("jat-runtime-windows-amd64.rcca")), true);
+  assert.equal(calls[1].args.includes(windowsArtifact), true);
 });
 
 test("ensureJatRuntime acquires the pinned archive and proves Hauler through the artifact", async () => {
