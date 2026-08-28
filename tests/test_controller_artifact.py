@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from scripts.build_controller_artifact import (
+    _json_result,
     build_commands,
     load_manifest,
     resolve_rcc_pin,
@@ -75,6 +76,10 @@ def test_controller_build_commands_use_canonical_artifact_flow():
         ["--no-build", "ht", "vars", "--robot", "/workspace/vscode-extension/runtime/controller/robot.yaml", "--json"],
         ["--no-build", "env", "exec", "--artifact", "sha256:" + "b" * 64, "--permissive-local", "--inherit-streams", "--receipt-file", "/dist/controller-receipt.json", "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
     ]
+
+
+def test_rcc_json_result_accepts_ht_vars_array():
+    assert _json_result('[{"key": "value"}]\n') == [{"key": "value"}]
 
 
 def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
