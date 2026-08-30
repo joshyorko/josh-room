@@ -262,7 +262,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   };
 }
 
-function loadExtension(vscodeMock, spawnMock) {
+function loadExtension(vscodeMock, spawnMock, registryMock) {
   const originalLoad = Module._load;
   const targets = [
     require.resolve("./extension"),
@@ -275,6 +275,9 @@ function loadExtension(vscodeMock, spawnMock) {
   Module._load = function patchedLoad(request, parent, isMain) {
     if (request === "vscode") return vscodeMock;
     if (request === "child_process") return { spawn: spawnMock };
+    if (request === "./registry" && registryMock) {
+      return { ...originalLoad(request, parent, isMain), ...registryMock };
+    }
     return originalLoad(request, parent, isMain);
   };
   try {
@@ -3025,6 +3028,78 @@ test("Serve JAT offers the four projection modes and launches the mode-specific 
   assert.match(launch.command, /--mode/);
   assert.match(launch.command, /both/);
   assert.match(launch.command, /'jat' 'serve' '--haul'/);
+});
+
+test("Auto serve reports the registry when JAT starts the registry projection", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-registry-test-"));
+  const haul = path.join(root, "mixed.capsule.tar.zst");
+  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
+  const extension = loadExtension(vscode, spawnHarness.spawn, {
+    waitForRegistry: async () => ({ repositories: ["demo/app"] }),
+    waitForFileserver: async () => { throw new Error("fileserver must not win when the registry is up"); },
+  });
+  extension.__test__.setStatusItem(statusItem);
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
+
+  assert.equal(await extension.__test__.jatServe(), "started");
+  assert.match(infoCalls[0][0], /Hauler registry is ready/);
+});
+
+test("Auto serve follows the fileserver when JAT resolves a files-only capsule", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-files-test-"));
+  const haul = path.join(root, "files-only.capsule.tar.zst");
+  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
+  const extension = loadExtension(vscode, spawnHarness.spawn, {
+    // A files-only capsule never opens port 5000; the wait must not hang on it.
+    waitForRegistry: () => new Promise(() => {}),
+    waitForFileserver: async () => ({ fileserver: true }),
+  });
+  extension.__test__.setStatusItem(statusItem);
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
+
+  assert.equal(await extension.__test__.jatServe(), "started");
+  assert.match(infoCalls[0][0], /resolved this capsule to a files projection/);
+  assert.match(infoCalls[0][0], /127\.0\.0\.1:8080/);
+});
+
+test("Auto serve fails when no JAT serve endpoint becomes ready", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-fail-test-"));
+  const haul = path.join(root, "capsule.tar.zst");
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
+  const extension = loadExtension(vscode, spawnHarness.spawn, {
+    waitForRegistry: async () => { throw new Error("registry down"); },
+    waitForFileserver: async () => { throw new Error("fileserver down"); },
+  });
+  extension.__test__.setStatusItem(statusItem);
+  const extras = withWindowExtras(vscode);
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
+
+  assert.equal(await extension.__test__.jatServe(), "failed");
+  assert.match(extras.errorCalls[0][0], /JAT serve failed to start/);
+  assert.match(extras.errorCalls[0][0], /fileserver down/);
+});
+
+test("waitForServeEndpoint resolves with the first endpoint JAT starts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-race-test-"));
+  const { vscode } = createVscodeMock(root);
+  let registryResolve;
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); }, {
+    waitForRegistry: () => new Promise((resolve) => { registryResolve = resolve; }),
+    waitForFileserver: async () => ({ fileserver: true }),
+  });
+
+  const pending = extension.__test__.waitForServeEndpoint();
+  registryResolve({ repositories: ["late/app"] });
+  assert.equal((await pending).kind, "files");
 });
 
 test("cancelling a JAT operation kills the spawned controller child", async () => {

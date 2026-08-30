@@ -12,7 +12,7 @@ const {
   formatProgressDisplay,
   operationKind,
 } = require("./progress");
-const { REGISTRY_URL, followLogFile, stageForLog, waitForRegistry } = require("./registry");
+const { FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
 const providerTools = require("./provider");
 
 let outputChannel;
@@ -1880,6 +1880,33 @@ async function jatCopy() {
   return "copied";
 }
 
+function firstEndpointSuccess(attempts) {
+  return new Promise((resolve, reject) => {
+    let pending = attempts.length;
+    let lastError;
+    if (!pending) {
+      resolve(undefined);
+      return;
+    }
+    for (const attempt of attempts) {
+      attempt.then(resolve, (error) => {
+        lastError = error;
+        pending -= 1;
+        if (pending === 0) reject(lastError);
+      });
+    }
+  });
+}
+
+function waitForServeEndpoint() {
+  // Auto delegates the projection decision to JAT, so wait for the first
+  // endpoint JAT actually starts (registry or fileserver) and report that.
+  return firstEndpointSuccess([
+    waitForRegistry().then((catalog) => ({ kind: "registry", catalog })),
+    waitForFileserver().then(() => ({ kind: "files" })),
+  ]);
+}
+
 async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry }) {
   const runtime = await runtimeFor(cwd, args);
   const environment = { ...runtime.env };
@@ -1926,11 +1953,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
   });
   outputChannel?.info(`START · ${title}`);
   outputChannel?.info(`LOGS · ${path.join(jatRoot, "output")}`);
-  setStatus("$(sync~spin) Starting registry", title);
+  setStatus("$(sync~spin) Starting serve endpoints", title);
+  const autoServe = mode === "auto";
   const waitsForRegistry = mode !== "files";
   terminal.show(true);
   try {
-    const catalog = await vscode.window.withProgress(
+    const outcome = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title,
@@ -1942,22 +1970,31 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
         terminal.sendText(launch.command, true);
         try {
-          return waitsForRegistry ? await waitForRegistry() : undefined;
+          if (autoServe) {
+            // JAT resolves Auto itself: a files-only capsule starts only the
+            // fileserver. Wait for whichever endpoint JAT actually starts
+            // instead of assuming the registry projection.
+            return await waitForServeEndpoint();
+          }
+          return waitsForRegistry ? { kind: "registry", catalog: await waitForRegistry() } : undefined;
         } finally {
           progressActive = false;
         }
       },
     );
-    if (!waitsForRegistry) {
+    if (!outcome || outcome.kind === "files") {
       setStatus("$(server-process) Serving files", title);
       outputChannel?.info(`READY · JAT fileserver · ${title}`);
       const filesAction = await vscode.window.showInformationMessage(
-        `JAT is serving files from this capsule — the JAT fileserver default is http://127.0.0.1:8080. Close the ${terminalName} terminal to stop.`,
+        outcome
+          ? `JAT resolved this capsule to a files projection — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`
+          : `JAT is serving files from this capsule — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`,
         "Show Logs",
       );
       if (filesAction === "Show Logs") outputChannel?.show(true);
       return "started";
     }
+    const catalog = outcome.catalog;
     const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
     const count = repositories.length;
     const servingFiles = mode === "both";
@@ -1966,7 +2003,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     outputChannel?.info(`READY · ${REGISTRY_URL} · ${count} ${count === 1 ? "repository" : "repositories"}`);
     const action = await vscode.window.showInformationMessage(
       servingFiles
-        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL} and files at http://127.0.0.1:8080.`
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL} and files at ${FILESERVER_URL}.`
         : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
       "Show Images",
       "Copy Registry URL",
@@ -1995,10 +2032,10 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     progressActive = false;
     const detail = latestLog || error.message || String(error);
     progressReporter?.fail(error);
-    outputChannel?.error(`Registry failed: ${detail}`);
-    setStatus("$(error) Registry failed", detail);
+    outputChannel?.error(`JAT serve failed: ${detail}`);
+    setStatus("$(error) JAT serve failed", detail);
     const action = await vscode.window.showErrorMessage(
-      `Hauler registry failed to start: ${detail.slice(0, 240)}`,
+      `JAT serve failed to start: ${detail.slice(0, 240)}`,
       "Show Logs",
       "Retry",
     );
@@ -3226,6 +3263,7 @@ async function editStorageSettings(item) {
 Object.assign(module.exports.__test__, {
   JAT_SERVE_MODES,
   JatToolsProvider,
+  waitForServeEndpoint,
   jatBuild,
   jatInspect,
   jatExtract,
