@@ -2,6 +2,7 @@ const fs = require("fs");
 const http = require("http");
 
 const REGISTRY_URL = "http://127.0.0.1:5000";
+const FILESERVER_URL = "http://127.0.0.1:8080";
 
 function probeRegistry() {
   return new Promise((resolve, reject) => {
@@ -24,6 +25,36 @@ function probeRegistry() {
     request.on("timeout", () => request.destroy(new Error("registry probe timed out")));
     request.on("error", reject);
   });
+}
+
+function probeFileserver() {
+  // Any HTTP response proves the JAT fileserver is accepting connections.
+  return new Promise((resolve, reject) => {
+    const request = http.get(`${FILESERVER_URL}/`, { timeout: 1000 }, (response) => {
+      response.resume();
+      resolve({ fileserver: true });
+    });
+    request.on("timeout", () => request.destroy(new Error("fileserver probe timed out")));
+    request.on("error", reject);
+  });
+}
+
+async function waitForFileserver(
+  probe = probeFileserver,
+  { timeoutMs = 120000, intervalMs = 500 } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = new Error("fileserver did not become ready");
+  do {
+    try {
+      return await probe();
+    } catch (error) {
+      lastError = error;
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  } while (true);
+  throw new Error(`JAT fileserver did not become ready: ${lastError.message}`);
 }
 
 async function waitForRegistry(
@@ -97,7 +128,17 @@ function followLogFile(logPath, onLine, { intervalMs = 100 } = {}) {
   };
 }
 
-module.exports = { REGISTRY_URL, cleanLogLine, followLogFile, probeRegistry, stageForLog, waitForRegistry };
+module.exports = {
+  FILESERVER_URL,
+  REGISTRY_URL,
+  cleanLogLine,
+  followLogFile,
+  probeFileserver,
+  probeRegistry,
+  stageForLog,
+  waitForFileserver,
+  waitForRegistry,
+};
 
 const PROVIDER_LABELS = {
   r2: "Cloudflare R2",

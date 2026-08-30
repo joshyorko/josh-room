@@ -12,7 +12,7 @@ const {
   formatProgressDisplay,
   operationKind,
 } = require("./progress");
-const { REGISTRY_URL, followLogFile, stageForLog, waitForRegistry } = require("./registry");
+const { FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
 const providerTools = require("./provider");
 
 let outputChannel;
@@ -992,9 +992,13 @@ class JatToolsProvider {
 
   getChildren() {
     return [
-      { label: "Pack Folder into Haul", description: "Build", icon: "package", command: "joshRoom.jatBuild" },
-      { label: "Restore JAT Haul", description: "Restore", icon: "folder-library", command: "joshRoom.jatRestore" },
-      { label: "Serve Hauler Haul", description: "Registry :5000", icon: "server-process", command: "joshRoom.jatServe" },
+      { label: "Pack Folder into JAT", description: "Build", icon: "package", command: "joshRoom.jatBuild" },
+      { label: "Inspect JAT", description: "Inventory", icon: "search", command: "joshRoom.jatInspect" },
+      { label: "Extract from JAT", description: "One reference", icon: "go-to-file", command: "joshRoom.jatExtract" },
+      { label: "Restore Workspace", description: "Restore", icon: "folder-library", command: "joshRoom.jatRestore" },
+      { label: "Serve JAT…", description: "Auto · Files · Registry · Both", icon: "server-process", command: "joshRoom.jatServe" },
+      { label: "Export Images…", description: "containerd", icon: "archive", command: "joshRoom.jatExport" },
+      { label: "Copy / Seed…", description: "registry · dir", icon: "copy", command: "joshRoom.jatCopy" },
     ];
   }
 }
@@ -1473,10 +1477,74 @@ function terminateChild(child, platform = process.platform) {
   }
 }
 
+function formatHaulerSize(size) {
+  if (typeof size !== "number" || !Number.isFinite(size) || size < 0) return undefined;
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size;
+  let unit = "B";
+  for (const candidate of units) {
+    if (value < 1024) break;
+    value /= 1024;
+    unit = candidate;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+}
+
+function resultPayloads(result, fallbackPath) {
+  if (Array.isArray(result?.payloads) && result.payloads.length) return result.payloads;
+  if (result?.payload_path) return [{ path: result.payload_path, size: result.payload_size, sha256: result.sha256 }];
+  return fallbackPath ? [{ path: fallbackPath }] : [];
+}
+
+function payloadReceipt(payloads) {
+  return payloads
+    .map((output) => {
+      const size = formatHaulerSize(output.size);
+      const digest = typeof output.sha256 === "string" && output.sha256.length >= 16 ? ` sha256 ${output.sha256.slice(0, 16)}…` : "";
+      return `${output.path}${size ? ` (${size})` : ""}${digest}`;
+    })
+    .join(", ");
+}
+
+function isHaulerChunkSize(value) {
+  return /^[1-9][0-9]*(?:[KMGT](?:B)?)?$/i.test(String(value || "").trim());
+}
+
+function isSafeCopyTarget(value, scheme) {
+  const target = String(value || "").trim();
+  if (!target.startsWith(scheme) || /\s/.test(target)) return false;
+  const remainder = target.slice(scheme.length);
+  return Boolean(remainder) && !remainder.includes("@") && !remainder.includes("?") && !remainder.includes("#");
+}
+
+async function chooseHaul(cwd, title, openLabel = "Use this haul") {
+  const files = await vscode.window.showOpenDialog({
+    title,
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { "JAT Hauler archive": ["zst", "tar"] },
+    openLabel,
+  });
+  return files?.length ? files[0].fsPath : undefined;
+}
+
+function inventoryQuickPickItems(inventory) {
+  return (Array.isArray(inventory) ? inventory : [])
+    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference)
+    .map((entry) => ({
+      label: `$(package) ${entry.reference}`,
+      description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
+      entry,
+    }));
+}
+
 async function jatBuild() {
   const cwd = activeWorkspace();
   const folders = await vscode.window.showOpenDialog({
-    title: "JAT: Pack Folder into Haul",
+    title: "JAT: Pack Folder into JAT",
     defaultUri: vscode.Uri.file(cwd),
     canSelectFiles: false,
     canSelectFolders: true,
@@ -1496,11 +1564,176 @@ async function jatBuild() {
     { label: "Workspace + all tagged local OCI images", allImages: true },
   ], { title: "Include local OCI images?", ignoreFocusOut: true });
   if (!imageChoice) return "cancelled";
+  const advanced = await vscode.window.showQuickPick([
+    { label: "images.txt image list (Hauler-native sync)", id: "imagesFile" },
+    { label: "Hauler manifest (advanced declarative composition)", id: "manifests" },
+    { label: "Chunked haul (split into sized chunks)", id: "chunk" },
+    { label: "Slim build (exclude signatures, attestations, SBOMs)", id: "slim" },
+  ], {
+    title: "Advanced capture inputs",
+    placeHolder: "Optional — press Esc to keep the simple one-click pack",
+    canPickMany: true,
+    ignoreFocusOut: true,
+  });
+  const advancedIds = new Set((Array.isArray(advanced) ? advanced : []).map((item) => item.id));
   const args = ["jat", "build", "--source", source, "--output", output.fsPath];
   if (imageChoice.allImages) args.push("--all-images");
+  if (advancedIds.has("imagesFile")) {
+    const lists = await vscode.window.showOpenDialog({
+      title: "Choose images.txt consumed by Hauler",
+      defaultUri: vscode.Uri.file(source),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      filters: { "Image list": ["txt"] },
+      openLabel: "Use this image list",
+    });
+    if (!lists) return "cancelled";
+    for (const list of lists) args.push("--images-file", list.fsPath);
+  }
+  if (advancedIds.has("manifests")) {
+    const manifests = await vscode.window.showOpenDialog({
+      title: "Choose Hauler manifests (Files / Images / Charts)",
+      defaultUri: vscode.Uri.file(source),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      filters: { "Hauler manifest": ["yaml", "yml"] },
+      openLabel: "Use these manifests",
+    });
+    if (!manifests) return "cancelled";
+    for (const manifest of manifests) args.push("--hauler-manifest", manifest.fsPath);
+  }
+  if (advancedIds.has("chunk")) {
+    const chunkSize = await vscode.window.showInputBox({
+      title: "Chunked haul size",
+      prompt: "Split the haul into chunks of this size (e.g. 500M, 1G)",
+      placeHolder: "500M",
+      ignoreFocusOut: true,
+      validateInput: (value) => isHaulerChunkSize(value) ? undefined : "Use a positive byte count with an optional K/KM/M/MB/G/GB/T/TB unit, e.g. 500M.",
+    });
+    if (!chunkSize) return "cancelled";
+    args.push("--chunk-size", chunkSize.trim());
+  }
+  if (advancedIds.has("slim")) {
+    const slimChoice = await vscode.window.showWarningMessage(
+      "Slim build excludes cosign signatures, attestations, SBOMs, and other referrer extras from remote acquisition. Keep full supply-chain extras by default?",
+      { modal: true },
+      "Use slim build",
+      "Keep full extras",
+    );
+    if (!slimChoice) return "cancelled";
+    if (slimChoice === "Use slim build") args.push("--exclude-extras");
+  }
   const result = await runOperation(`Packing ${path.basename(source)}…`, args, cwd);
-  await vscode.window.showInformationMessage(`Created ${result.payload_path || output.fsPath}.`);
+  const payloads = resultPayloads(result, output.fsPath);
+  const action = await vscode.window.showInformationMessage(
+    payloads.length > 1
+      ? `Created ${payloads.length} chunk files starting at ${payloads[0].path}.`
+      : `Created ${payloads[0]?.path || output.fsPath}.`,
+    "Show Logs",
+  );
+  if (action === "Show Logs") outputChannel?.show(true);
   return "built";
+}
+
+async function jatInspect() {
+  const cwd = activeWorkspace();
+  const haul = await chooseHaul(cwd, "JAT: Inspect Haul");
+  if (!haul) return "cancelled";
+  return showJatInventory(haul, cwd);
+}
+
+async function showJatInventory(haul, cwd) {
+  const result = await runOperation(`Inspecting ${path.basename(haul)}…`, ["jat", "inspect", "--haul", haul], cwd);
+  const anchors = result.anchors && typeof result.anchors === "object"
+    ? Object.entries(result.anchors).filter(([, present]) => present).map(([kind]) => kind)
+    : [];
+  const items = inventoryQuickPickItems(result.inventory);
+  if (!items.length) {
+    await vscode.window.showInformationMessage(
+      `JAT inspect found no content references in ${path.basename(haul)}.`,
+      "Show Logs",
+    );
+    return "empty";
+  }
+  const selected = await vscode.window.showQuickPick(items, {
+    title: `JAT inventory · ${items.length} ${items.length === 1 ? "reference" : "references"}`,
+    placeHolder: `JAT anchors: ${anchors.length ? anchors.join(", ") : "none"} — select a reference for details`,
+    ignoreFocusOut: true,
+  });
+  if (!selected) return "inspected";
+  const detail = [
+    selected.entry.type || "content",
+    selected.entry.platform,
+    formatHaulerSize(selected.entry.size),
+    selected.entry.digest,
+  ].filter(Boolean).join(" · ");
+  const action = await vscode.window.showInformationMessage(
+    `${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
+    "Copy Reference",
+    "Extract…",
+  );
+  if (action === "Copy Reference") {
+    await vscode.env.clipboard.writeText(selected.entry.reference);
+    await vscode.window.showInformationMessage(`Copied ${selected.entry.reference}.`);
+  } else if (action === "Extract…") {
+    return jatExtract({ haul, reference: selected.entry.reference });
+  }
+  return "inspected";
+}
+
+async function jatExtract(preselection) {
+  const cwd = activeWorkspace();
+  const haul = preselection?.haul || await chooseHaul(cwd, "JAT: Extract from JAT");
+  if (!haul) return "cancelled";
+  let reference = typeof preselection?.reference === "string" ? preselection.reference : undefined;
+  if (!reference) {
+    const inspected = await runOperation(`Inspecting ${path.basename(haul)}…`, ["jat", "inspect", "--haul", haul], cwd);
+    const items = inventoryQuickPickItems(inspected.inventory);
+    if (!items.length) {
+      await vscode.window.showInformationMessage(`JAT inspect found no extractable references in ${path.basename(haul)}.`);
+      return "empty";
+    }
+    const selected = await vscode.window.showQuickPick(items, {
+      title: "Extract which reference?",
+      placeHolder: "Content comes from the JAT inspect inventory — nothing is restored to a workspace",
+      ignoreFocusOut: true,
+    });
+    if (!selected) return "cancelled";
+    reference = selected.entry.reference;
+  }
+  const parents = await vscode.window.showOpenDialog({
+    title: "Choose extract parent folder",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Extract here",
+  });
+  if (!parents?.length) return "cancelled";
+  const defaultName = `${path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "")}-extract`;
+  const name = await vscode.window.showInputBox({
+    title: "JAT: Extract from JAT",
+    prompt: "New destination folder name (created only if absent)",
+    value: defaultName,
+    ignoreFocusOut: true,
+    validateInput: (value) => isSafeRestoreName(value) ? undefined : "Enter one folder name without path separators.",
+  });
+  if (!name) return "cancelled";
+  const destination = path.join(parents[0].fsPath, name);
+  if (fs.existsSync(destination)) throw new Error(`Destination already exists: ${destination}`);
+  const result = await runOperation(
+    `Extracting ${reference}…`,
+    ["jat", "extract", "--haul", haul, "--reference", reference, "--destination", destination],
+    cwd,
+  );
+  const payloads = resultPayloads(result, destination);
+  await vscode.window.showInformationMessage(
+    `Extracted ${reference} to ${payloadReceipt(payloads) || destination}.`,
+    "Show Logs",
+  );
+  return "extracted";
 }
 
 async function jatRestore() {
@@ -1548,29 +1781,133 @@ async function jatRestore() {
   return "restored";
 }
 
+const JAT_SERVE_MODES = [
+  { label: "Auto", description: "Let JAT choose the compatible projection", mode: "auto" },
+  { label: "Files", description: "Direct downloads / file artifacts", mode: "files" },
+  { label: "Registry", description: "OCI images and charts", mode: "registry" },
+  { label: "Files + Registry", description: "Expose both from the same capsule", mode: "both" },
+];
+
 async function jatServe() {
   const cwd = activeWorkspace();
-  const files = await vscode.window.showOpenDialog({
-    title: "JAT: Serve Hauler Haul",
-    defaultUri: vscode.Uri.file(cwd),
-    canSelectFiles: true,
-    canSelectFolders: false,
-    canSelectMany: false,
-    filters: { "Hauler archive": ["zst"] },
-    openLabel: "Serve this haul",
+  const haul = await chooseHaul(cwd, "JAT: Serve Haul", "Serve this haul");
+  if (!haul) return "cancelled";
+  const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
+    title: "JAT: Serve Haul",
+    placeHolder: "How should JAT expose this capsule?",
+    ignoreFocusOut: true,
   });
-  if (!files?.length) return "cancelled";
-  const haul = files[0].fsPath;
+  if (!chosen) return "cancelled";
   return startRegistryTerminal({
     cwd,
     title: `Serving ${path.basename(haul)}`,
-    terminalName: "JAT Hauler Registry",
-    args: ["jat", "serve", "--haul", haul],
+    terminalName: "JAT Hauler Serve",
+    args: ["jat", "serve", "--haul", haul, "--mode", chosen.mode],
+    mode: chosen.mode,
     retry: () => vscode.commands.executeCommand("joshRoom.jatServe"),
   });
 }
 
-async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) {
+async function jatExport() {
+  const cwd = activeWorkspace();
+  const haul = await chooseHaul(cwd, "JAT: Export Images…");
+  if (!haul) return "cancelled";
+  const base = path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "");
+  const output = await vscode.window.showSaveDialog({
+    title: "Save containerd image archive",
+    defaultUri: vscode.Uri.file(path.join(path.dirname(haul), `${base}-images.tar`)),
+    filters: { "containerd archive": ["tar"] },
+  });
+  if (!output) return "cancelled";
+  const result = await runOperation(
+    `Exporting images from ${path.basename(haul)}…`,
+    ["jat", "export", "--haul", haul, "--output", output.fsPath],
+    cwd,
+  );
+  const payloads = resultPayloads(result, output.fsPath);
+  const action = await vscode.window.showInformationMessage(
+    `Exported containerd archive — ${payloadReceipt(payloads)}.`,
+    "Show Logs",
+  );
+  if (action === "Show Logs") outputChannel?.show(true);
+  return "exported";
+}
+
+async function jatCopy() {
+  const cwd = activeWorkspace();
+  const haul = await chooseHaul(cwd, "JAT: Copy / Seed…");
+  if (!haul) return "cancelled";
+  const kind = await vscode.window.showQuickPick([
+    { label: "Registry", description: "Seed a remote registry (registry://…) — retry-capable transfer", scheme: "registry://" },
+    { label: "Directory", description: "Project into a local directory (dir://…)", scheme: "dir://" },
+  ], {
+    title: "JAT: Copy / Seed",
+    placeHolder: "Choose a destination type supported by JAT — credentials are never stored by Josh Room",
+    ignoreFocusOut: true,
+  });
+  if (!kind) return "cancelled";
+  let target;
+  if (kind.scheme === "registry://") {
+    target = await vscode.window.showInputBox({
+      title: "JAT: Copy / Seed",
+      prompt: "Registry target (authenticate with hauler login or a credential helper — never in this target)",
+      placeHolder: "registry://registry.example.test:5000",
+      ignoreFocusOut: true,
+      validateInput: (value) => isSafeCopyTarget(value, "registry://") ? undefined : "Use registry://host[:port][/path] without credentials, spaces, query, or fragment.",
+    });
+  } else {
+    const folders = await vscode.window.showOpenDialog({
+      title: "Choose seed destination directory",
+      defaultUri: vscode.Uri.file(cwd),
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: "Seed this directory",
+    });
+    target = folders?.length ? `dir://${folders[0].fsPath}` : undefined;
+  }
+  if (!target) return "cancelled";
+  const result = await runOperation(
+    `Seeding ${kind.label.toLowerCase()} from ${path.basename(haul)}…`,
+    ["jat", "copy", "--haul", haul, "--to", target],
+    cwd,
+  );
+  const transfer = result.transfer && typeof result.transfer === "object" ? result.transfer : {};
+  await vscode.window.showInformationMessage(
+    `Seeded ${transfer.destination || target}${transfer.transport ? ` (${transfer.transport})` : ""}.`,
+    "Show Logs",
+  );
+  return "copied";
+}
+
+function firstEndpointSuccess(attempts) {
+  return new Promise((resolve, reject) => {
+    let pending = attempts.length;
+    let lastError;
+    if (!pending) {
+      resolve(undefined);
+      return;
+    }
+    for (const attempt of attempts) {
+      attempt.then(resolve, (error) => {
+        lastError = error;
+        pending -= 1;
+        if (pending === 0) reject(lastError);
+      });
+    }
+  });
+}
+
+function waitForServeEndpoint() {
+  // Auto delegates the projection decision to JAT, so wait for the first
+  // endpoint JAT actually starts (registry or fileserver) and report that.
+  return firstEndpointSuccess([
+    waitForRegistry().then((catalog) => ({ kind: "registry", catalog })),
+    waitForFileserver().then(() => ({ kind: "files" })),
+  ]);
+}
+
+async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry }) {
   const runtime = await runtimeFor(cwd, args);
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
@@ -1616,10 +1953,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) 
   });
   outputChannel?.info(`START · ${title}`);
   outputChannel?.info(`LOGS · ${path.join(jatRoot, "output")}`);
-  setStatus("$(sync~spin) Starting registry", title);
+  setStatus("$(sync~spin) Starting serve endpoints", title);
+  const autoServe = mode === "auto";
+  const waitsForRegistry = mode !== "files";
   terminal.show(true);
   try {
-    const catalog = await vscode.window.withProgress(
+    const outcome = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
         title,
@@ -1631,19 +1970,41 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) 
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
         terminal.sendText(launch.command, true);
         try {
-          return await waitForRegistry();
+          if (autoServe) {
+            // JAT resolves Auto itself: a files-only capsule starts only the
+            // fileserver. Wait for whichever endpoint JAT actually starts
+            // instead of assuming the registry projection.
+            return await waitForServeEndpoint();
+          }
+          return waitsForRegistry ? { kind: "registry", catalog: await waitForRegistry() } : undefined;
         } finally {
           progressActive = false;
         }
       },
     );
+    if (!outcome || outcome.kind === "files") {
+      setStatus("$(server-process) Serving files", title);
+      outputChannel?.info(`READY · JAT fileserver · ${title}`);
+      const filesAction = await vscode.window.showInformationMessage(
+        outcome
+          ? `JAT resolved this capsule to a files projection — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`
+          : `JAT is serving files from this capsule — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`,
+        "Show Logs",
+      );
+      if (filesAction === "Show Logs") outputChannel?.show(true);
+      return "started";
+    }
+    const catalog = outcome.catalog;
     const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
     const count = repositories.length;
-    progressReporter?.event({ stage: "complete", message: "Registry ready" });
+    const servingFiles = mode === "both";
+    progressReporter?.event({ stage: "complete", message: "Serve endpoints ready" });
     setStatus("$(server-process) Registry :5000", `${count} repositories · ${title}`);
     outputChannel?.info(`READY · ${REGISTRY_URL} · ${count} ${count === 1 ? "repository" : "repositories"}`);
     const action = await vscode.window.showInformationMessage(
-      `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
+      servingFiles
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL} and files at ${FILESERVER_URL}.`
+        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
       "Show Images",
       "Copy Registry URL",
       "Show Logs",
@@ -1671,10 +2032,10 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, retry }) 
     progressActive = false;
     const detail = latestLog || error.message || String(error);
     progressReporter?.fail(error);
-    outputChannel?.error(`Registry failed: ${detail}`);
-    setStatus("$(error) Registry failed", detail);
+    outputChannel?.error(`JAT serve failed: ${detail}`);
+    setStatus("$(error) JAT serve failed", detail);
     const action = await vscode.window.showErrorMessage(
-      `Hauler registry failed to start: ${detail.slice(0, 240)}`,
+      `JAT serve failed to start: ${detail.slice(0, 240)}`,
       "Show Logs",
       "Retry",
     );
@@ -1737,8 +2098,12 @@ function activate(context) {
   register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
   register(context, "joshRoom.clearLocalFallback", clearLocalFallback);
   register(context, "joshRoom.jatBuild", jatBuild);
+  register(context, "joshRoom.jatInspect", jatInspect);
+  register(context, "joshRoom.jatExtract", jatExtract);
   register(context, "joshRoom.jatRestore", jatRestore);
   register(context, "joshRoom.jatServe", jatServe);
+  register(context, "joshRoom.jatExport", jatExport);
+  register(context, "joshRoom.jatCopy", jatCopy);
   startDirtyTracking(context).catch((error) => {
     outputChannel.warn(`Unable to index saved Room: ${error.message}`);
     setRoomDirty(true);
@@ -2693,8 +3058,12 @@ function activateNative(context) {
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
   register(context, "joshRoom.jatBuild", jatBuild);
+  register(context, "joshRoom.jatInspect", jatInspect);
+  register(context, "joshRoom.jatExtract", jatExtract);
   register(context, "joshRoom.jatRestore", jatRestore);
   register(context, "joshRoom.jatServe", jatServe);
+  register(context, "joshRoom.jatExport", jatExport);
+  register(context, "joshRoom.jatCopy", jatCopy);
   const runtimePreparation = vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "Preparing Josh Room runtime…", cancellable: true },
     async (progress, token) => {
@@ -2892,6 +3261,20 @@ async function editStorageSettings(item) {
 }
 
 Object.assign(module.exports.__test__, {
+  JAT_SERVE_MODES,
+  JatToolsProvider,
+  waitForServeEndpoint,
+  jatBuild,
+  jatInspect,
+  jatExtract,
+  jatServe,
+  jatExport,
+  jatCopy,
+  chooseHaul,
+  inventoryQuickPickItems,
+  isHaulerChunkSize,
+  isSafeCopyTarget,
+  resultPayloads,
   chooseServeProject,
   addStorage,
   connectCloudflare,

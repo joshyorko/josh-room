@@ -142,10 +142,14 @@ JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
 removes the temporary haul and registry store.
 
 A separate `JAT Tools` view preserves one-off automation outside the Room/storage
-workflow: pack any folder into a portable haul, restore a JAT-compatible haul
-into a new destination, or serve any Hauler haul as a foreground registry. These
-commands use the same typed RCC Build/Restore/Serve tasks but require no Room,
-catalog, OAuth, or R2 operation.
+workflow: pack any folder into a portable capability capsule (with optional
+images.txt, Hauler manifest, chunked, or explicitly slim advanced capture),
+inspect a capsule's inventory, extract one selected reference, restore a
+workspace, serve a capsule (Auto / Files / Registry / Files + Registry), export
+images for containerd, or seed a registry or directory. New operations invoke the
+canonical JAT CLI contract inside the acquired JAT Environment Artifact; Hauler
+behavior stays owned by JAT. These commands require no Room, catalog, OAuth, or
+R2 operation.
 The single trash action lists the selected Room's snapshots and requires exact
 modal confirmation before deleting one. Removing Latest safely promotes the
 newest remaining snapshot; deleting the final snapshot removes the now-empty
@@ -169,9 +173,13 @@ josh-room provider connection create|update|reconnect|disconnect [options] [--js
 josh-room provider bucket list|create|check [options] [--json]
 josh-room dimensions list [--dimension <id>] [--with-hierarchy] [--json]
 josh-room auth start|wait|cancel|status [options] [--json]
-josh-room jat build --source <path> --output <haul.tar.zst> [--image <ref> ... | --all-images] [--json]
+josh-room jat build --source <path> --output <haul.tar.zst> [--image <ref> ... | --all-images] [--images-file <images.txt> ...] [--hauler-manifest <manifest.yaml> ...] [--chunk-size <size>] [--exclude-extras] [--json]
 josh-room jat restore --haul <haul.tar.zst> --destination <path> [--json]
-josh-room jat serve --haul <haul.tar.zst> [--json]
+josh-room jat inspect --haul <haul.tar.zst> [--json]
+josh-room jat extract --haul <haul.tar.zst> --reference <ref> --destination <path> [--json]
+josh-room jat serve --haul <haul.tar.zst> [--mode auto|files|registry|both] [--json]
+josh-room jat export --haul <haul.tar.zst> --output <images.tar> [--json]
+josh-room jat copy --haul <haul.tar.zst> --to <registry://...|dir://...> [--retries <n>] [--plain-http] [--insecure] [--json]
 ```
 
 `provider connection` and `provider bucket` are the canonical storage boundary.

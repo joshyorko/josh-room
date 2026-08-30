@@ -262,7 +262,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   };
 }
 
-function loadExtension(vscodeMock, spawnMock) {
+function loadExtension(vscodeMock, spawnMock, registryMock) {
   const originalLoad = Module._load;
   const targets = [
     require.resolve("./extension"),
@@ -275,6 +275,9 @@ function loadExtension(vscodeMock, spawnMock) {
   Module._load = function patchedLoad(request, parent, isMain) {
     if (request === "vscode") return vscodeMock;
     if (request === "child_process") return { spawn: spawnMock };
+    if (request === "./registry" && registryMock) {
+      return { ...originalLoad(request, parent, isMain), ...registryMock };
+    }
     return originalLoad(request, parent, isMain);
   };
   try {
@@ -2542,4 +2545,637 @@ test("native loading keeps a failed Dimension visibly failed instead of empty", 
   assert.equal(broken.state, "error");
   assert.match(broken.children[0].label, /Bucket access denied|Could not load/);
   assert.equal(healthy.children[0].label, "Healthy Room · Healthy bucket");
+});
+
+// ---------------------------------------------------------------------------
+// JAT capability-capsule workflows (Pack / Inspect / Extract / Restore /
+// Serve / Export / Copy)
+// ---------------------------------------------------------------------------
+
+const JAT_COMMAND_IDS = [
+  "joshRoom.jatBuild",
+  "joshRoom.jatInspect",
+  "joshRoom.jatExtract",
+  "joshRoom.jatRestore",
+  "joshRoom.jatServe",
+  "joshRoom.jatExport",
+  "joshRoom.jatCopy",
+];
+
+function withWindowExtras(vscode) {
+  const saveDialogCalls = [];
+  const saveDialogResponses = [];
+  const errorCalls = [];
+  const errorResponses = [];
+  vscode.window.showSaveDialog = async (options) => {
+    saveDialogCalls.push(options);
+    return saveDialogResponses.shift();
+  };
+  vscode.window.showErrorMessage = async (...args) => {
+    errorCalls.push(args);
+    return errorResponses.shift();
+  };
+  return { saveDialogCalls, saveDialogResponses, errorCalls, errorResponses };
+}
+
+function withClipboardRecorder(vscode) {
+  const writes = [];
+  const originalWrite = vscode.env.clipboard.writeText;
+  vscode.env.clipboard.writeText = async (value) => {
+    writes.push(value);
+    return originalWrite(value);
+  };
+  return writes;
+}
+
+function demoInventory() {
+  return [
+    {
+      reference: "registry.example.test:5000/demo/app:1.0",
+      type: "image",
+      platform: "linux/amd64",
+      size: 1048576,
+      digest: "sha256:" + "d".repeat(64),
+    },
+    { reference: "files/app-settings", type: "files" },
+  ];
+}
+
+test("JAT Tools rows expose the seven capability-capsule commands in order", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const provider = new extension.__test__.JatToolsProvider();
+  const rows = provider.getChildren();
+
+  assert.equal(rows.length, 7);
+  assert.deepEqual(rows.map((row) => row.label), [
+    "Pack Folder into JAT",
+    "Inspect JAT",
+    "Extract from JAT",
+    "Restore Workspace",
+    "Serve JAT…",
+    "Export Images…",
+    "Copy / Seed…",
+  ]);
+  assert.deepEqual(rows.map((row) => row.description), [
+    "Build",
+    "Inventory",
+    "One reference",
+    "Restore",
+    "Auto · Files · Registry · Both",
+    "containerd",
+    "registry · dir",
+  ]);
+  assert.deepEqual(rows.map((row) => row.command), JAT_COMMAND_IDS);
+  for (const row of rows) {
+    const treeItem = provider.getTreeItem(row);
+    assert.equal(treeItem.label, row.label);
+    assert.equal(treeItem.description, row.description);
+    assert.equal(treeItem.iconPath.id, row.icon);
+    assert.deepEqual(treeItem.command, { command: row.command, title: row.label });
+    assert.equal(treeItem.collapsibleState, vscode.TreeItemCollapsibleState.None);
+  }
+  for (const handler of ["jatBuild", "jatInspect", "jatExtract", "jatServe", "jatExport", "jatCopy"]) {
+    assert.equal(typeof extension.__test__[handler], "function", handler);
+  }
+});
+
+test("activation registers every JAT capability command", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-registration-test-"));
+  const { vscode, statusItem, commandCallbacks } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({
+    extensionPath: root,
+    globalStorageUri: { fsPath: root },
+    subscriptions: [],
+    secrets: { get: async () => undefined },
+  });
+
+  for (const id of JAT_COMMAND_IDS) {
+    assert.equal(typeof commandCallbacks.get(id), "function", id);
+  }
+});
+
+test("registered JAT commands wrap controller failures into the error message UX", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-register-error-test-"));
+  const { vscode, statusItem, commandCallbacks } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({ ok: false, error: "boom" }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const extras = withWindowExtras(vscode);
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({
+    extensionPath: root,
+    globalStorageUri: { fsPath: root },
+    subscriptions: [],
+    secrets: { get: async () => undefined },
+  });
+  vscode.openDialogResponses.push([{ fsPath: path.join(root, "capsule.haul.tar.zst") }]);
+
+  assert.equal(await commandCallbacks.get("joshRoom.jatInspect")(), "failed");
+  assert.deepEqual(spawnHarness.calls[0].args.slice(0, 4), ["jat", "inspect", "--haul", path.join(root, "capsule.haul.tar.zst")]);
+  assert.deepEqual(extras.errorCalls, [["boom"]]);
+});
+
+test("Pack Folder into JAT forwards every advanced capture input to the build controller", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-build-advanced-test-"));
+  const source = path.join(root, "demo-room");
+  fs.mkdirSync(source);
+  const output = path.join(root, "demo-room.haul.tar.zst");
+  const imagesList = path.join(source, "images.txt");
+  const manifest = path.join(source, "hauler-manifest.yaml");
+  const { vscode, statusItem, quickPickCalls, openDialogCalls, inputBoxCalls, warningCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({ ok: true, payload_path: output, payload_size: 4096, sha256: "c".repeat(64) }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const extras = withWindowExtras(vscode);
+  extras.saveDialogResponses.push({ fsPath: output });
+  vscode.openDialogResponses.push(
+    [{ fsPath: source }],
+    [{ fsPath: imagesList }],
+    [{ fsPath: manifest }],
+  );
+  vscode.quickPickResponses.push(
+    { label: "Workspace only", allImages: false },
+    [{ id: "imagesFile" }, { id: "manifests" }, { id: "chunk" }, { id: "slim" }],
+  );
+  vscode.inputBoxResponses.push(" 500M ");
+  vscode.warningResponses.push("Keep full extras");
+
+  assert.equal(await extension.__test__.jatBuild(), "built");
+
+  assert.deepEqual(quickPickCalls[0].items.map((item) => item.label), [
+    "Workspace only",
+    "Workspace + all tagged local OCI images",
+  ]);
+  assert.equal(quickPickCalls[1].options.canPickMany, true);
+  assert.equal(quickPickCalls[1].options.title, "Advanced capture inputs");
+  assert.match(warningCalls[0][0], /Slim build excludes cosign signatures/);
+  assert.deepEqual(warningCalls[0].slice(1), [{ modal: true }, "Use slim build", "Keep full extras"]);
+  const buildCall = spawnHarness.calls.at(-1);
+  assert.deepEqual(buildCall.args, [
+    "jat", "build", "--source", source, "--output", output,
+    "--images-file", imagesList,
+    "--hauler-manifest", manifest,
+    "--chunk-size", "500M",
+    "--json",
+  ]);
+  assert.equal(buildCall.args.includes("--exclude-extras"), false);
+  assert.equal(buildCall.args.includes("--all-images"), false);
+  assert.equal(inputBoxCalls[0].validateInput("500M"), undefined);
+  assert.match(String(inputBoxCalls[0].validateInput("1Mi")), /positive byte count/);
+  assert.deepEqual(extras.errorCalls, []);
+});
+
+test("Pack Folder into JAT slim confirmation excludes referrer extras", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-build-slim-test-"));
+  const source = path.join(root, "demo-room");
+  fs.mkdirSync(source);
+  const output = path.join(root, "demo-room.haul.tar.zst");
+  const imagesList = path.join(source, "images.txt");
+  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({ ok: true, payload_path: output, payload_size: 4096, sha256: "c".repeat(64) }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const extras = withWindowExtras(vscode);
+  extras.saveDialogResponses.push({ fsPath: output });
+  vscode.openDialogResponses.push([{ fsPath: source }], [{ fsPath: imagesList }]);
+  vscode.quickPickResponses.push(
+    { label: "Workspace only", allImages: false },
+    [{ id: "imagesFile" }, { id: "slim" }],
+  );
+  vscode.warningResponses.push("Use slim build");
+
+  assert.equal(await extension.__test__.jatBuild(), "built");
+
+  const buildCall = spawnHarness.calls.at(-1);
+  assert.deepEqual(buildCall.args.slice(0, 8), [
+    "jat", "build", "--source", source, "--output", output,
+    "--images-file", imagesList,
+  ]);
+  assert.equal(buildCall.args.includes("--exclude-extras"), true);
+  assert.match(infoCalls[0][0], new RegExp(output.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("Pack Folder into JAT Esc on advanced inputs keeps the simple one-click pack", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-build-simple-test-"));
+  const source = path.join(root, "demo-room");
+  fs.mkdirSync(source);
+  const output = path.join(root, "demo-room.haul.tar.zst");
+  const { vscode, statusItem, quickPickCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({ ok: true, payload_path: output, payload_size: 4096, sha256: "c".repeat(64) }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const extras = withWindowExtras(vscode);
+  extras.saveDialogResponses.push({ fsPath: output });
+  vscode.openDialogResponses.push([{ fsPath: source }]);
+  vscode.quickPickResponses.push({ label: "Workspace only", allImages: false }, undefined);
+
+  assert.equal(await extension.__test__.jatBuild(), "built");
+
+  assert.equal(quickPickCalls.length, 2);
+  assert.deepEqual(spawnHarness.calls.at(-1).args, [
+    "jat", "build", "--source", source, "--output", output, "--json",
+  ]);
+});
+
+test("Inspect JAT renders the inventory QuickPick and copies the selected reference", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-inspect-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const inventory = demoInventory();
+  const { vscode, statusItem, quickPickCalls, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({
+      ok: true,
+      inventory,
+      anchors: { images: true, files: true, charts: false },
+    }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const clipboardWrites = withClipboardRecorder(vscode);
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push({ entry: inventory[0] });
+  vscode.infoResponses.push("Copy Reference");
+
+  assert.equal(await extension.__test__.jatInspect(), "inspected");
+
+  const inspectCall = spawnHarness.calls[0];
+  assert.deepEqual(inspectCall.args.slice(0, 4), ["jat", "inspect", "--haul", haul]);
+  assert.equal(inspectCall.args.at(-1), "--json");
+  const pick = quickPickCalls.at(-1);
+  assert.deepEqual(pick.items.map((item) => item.label), [
+    "$(package) registry.example.test:5000/demo/app:1.0",
+    "$(package) files/app-settings",
+  ]);
+  assert.deepEqual(pick.items.map((item) => item.description), [
+    "image · linux/amd64 · 1.0 MB",
+    "files",
+  ]);
+  assert.match(pick.options.title, /2 references/);
+  assert.match(pick.options.placeHolder, /JAT anchors: images, files/);
+  assert.match(infoCalls[0][0], /registry\.example\.test:5000\/demo\/app:1\.0/);
+  assert.deepEqual(infoCalls[0].slice(1), ["Copy Reference", "Extract…"]);
+  assert.deepEqual(clipboardWrites, ["registry.example.test:5000/demo/app:1.0"]);
+  assert.equal(infoCalls.at(-1)[0], "Copied registry.example.test:5000/demo/app:1.0.");
+});
+
+test("Inspect JAT surfaces controller failures to the caller", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-inspect-error-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({ ok: false, error: "boom" }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+
+  await assert.rejects(extension.__test__.jatInspect(), (error) => {
+    assert.equal(error.message, "boom");
+    assert.deepEqual(error.result, { ok: false, error: "boom" });
+    return true;
+  });
+  assert.deepEqual(spawnHarness.calls[0].args.slice(0, 4), ["jat", "inspect", "--haul", haul]);
+});
+
+test("Extract from JAT inspects once and extracts the chosen reference", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-extract-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-extract-parent-"));
+  const inventory = demoInventory();
+  const destination = path.join(parent, "demo-extract");
+  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "jat" && args[1] === "inspect") {
+      return { stdout: JSON.stringify({ ok: true, inventory }) };
+    }
+    return {
+      stdout: JSON.stringify({
+        ok: true,
+        payload_path: path.join(destination, "app"),
+        payload_size: 2048,
+        sha256: "b".repeat(64),
+      }),
+    };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: haul }], [{ fsPath: parent }]);
+  vscode.quickPickResponses.push({ entry: inventory[0] });
+  vscode.inputBoxResponses.push("demo-extract");
+
+  assert.equal(await extension.__test__.jatExtract(), "extracted");
+  assert.equal(fs.existsSync(destination), false);
+
+  assert.equal(spawnHarness.calls.length, 2);
+  assert.deepEqual(spawnHarness.calls[0].args.slice(0, 4), ["jat", "inspect", "--haul", haul]);
+  assert.deepEqual(spawnHarness.calls[1].args, [
+    "jat", "extract", "--haul", haul,
+    "--reference", "registry.example.test:5000/demo/app:1.0",
+    "--destination", destination,
+    "--json",
+  ]);
+  assert.match(infoCalls[0][0], /Extracted registry\.example\.test:5000\/demo\/app:1\.0 to/);
+  assert.match(infoCalls[0][0], new RegExp(path.join(destination, "app").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("Extract from JAT with a preselected reference skips the inspect spawn", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-extract-preselected-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-extract-preselected-parent-"));
+  const reference = "registry.example.test:5000/demo/app:1.0";
+  const destination = path.join(parent, "demo-extract");
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: parent }]);
+  vscode.inputBoxResponses.push("demo-extract");
+
+  assert.equal(await extension.__test__.jatExtract({ haul, reference }), "extracted");
+
+  assert.equal(spawnHarness.calls.length, 1);
+  assert.deepEqual(spawnHarness.calls[0].args, [
+    "jat", "extract", "--haul", haul,
+    "--reference", reference,
+    "--destination", destination,
+    "--json",
+  ]);
+});
+
+test("Export Images writes the containerd archive and reports the payload receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-export-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const output = path.join(root, "capsule-images.tar");
+  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({
+      ok: true,
+      payloads: [{ path: output, size: 1048576, sha256: "a".repeat(64) }],
+    }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const extras = withWindowExtras(vscode);
+  extras.saveDialogResponses.push({ fsPath: output });
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+
+  assert.equal(await extension.__test__.jatExport(), "exported");
+
+  assert.deepEqual(spawnHarness.calls[0].args, [
+    "jat", "export", "--haul", haul, "--output", output, "--json",
+  ]);
+  assert.match(infoCalls[0][0], /Exported containerd archive/);
+  assert.ok(infoCalls[0][0].includes(output));
+  assert.ok(infoCalls[0][0].includes("a".repeat(16)));
+});
+
+test("Copy / Seed pushes a haul to a credential-free registry target", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-copy-registry-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const target = "registry://registry.example.test:5000";
+  const { vscode, statusItem, quickPickCalls, inputBoxCalls, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({
+    stdout: JSON.stringify({
+      ok: true,
+      transfer: { destination: target, transport: "registry" },
+    }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push({ label: "Registry", scheme: "registry://" });
+  vscode.inputBoxResponses.push(target);
+
+  assert.equal(await extension.__test__.jatCopy(), "copied");
+
+  assert.deepEqual(spawnHarness.calls[0].args, [
+    "jat", "copy", "--haul", haul, "--to", target, "--json",
+  ]);
+  assert.deepEqual(quickPickCalls.at(-1).items.map((item) => item.label), ["Registry", "Directory"]);
+  assert.equal(inputBoxCalls[0].placeHolder, "registry://registry.example.test:5000");
+  assert.equal(inputBoxCalls[0].validateInput(target), undefined);
+  assert.match(String(inputBoxCalls[0].validateInput("registry://user:token@host")), /credentials/);
+  assert.match(String(inputBoxCalls[0].validateInput("registry://host?x=1")), /credentials/);
+  assert.match(infoCalls[0][0], /Seeded registry:\/\/registry\.example\.test:5000 \(registry\)/);
+});
+
+test("Copy / Seed projects a haul into a local directory target", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-copy-dir-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const seedDirectory = path.join(root, "seed");
+  fs.mkdirSync(seedDirectory);
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: haul }], [{ fsPath: seedDirectory }]);
+  vscode.quickPickResponses.push({ label: "Directory", scheme: "dir://" });
+
+  assert.equal(await extension.__test__.jatCopy(), "copied");
+
+  assert.deepEqual(spawnHarness.calls[0].args, [
+    "jat", "copy", "--haul", haul, "--to", `dir://${seedDirectory}`, "--json",
+  ]);
+});
+
+test("Serve JAT offers the four projection modes and launches the mode-specific terminal", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-serve-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const { vscode, statusItem, quickPickCalls, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  assert.deepEqual(extension.__test__.JAT_SERVE_MODES.map((item) => item.label), [
+    "Auto", "Files", "Registry", "Files + Registry",
+  ]);
+  assert.deepEqual(extension.__test__.JAT_SERVE_MODES.map((item) => item.mode), [
+    "auto", "files", "registry", "both",
+  ]);
+  assert.deepEqual(extension.__test__.JAT_SERVE_MODES.map((item) => item.description), [
+    "Let JAT choose the compatible projection",
+    "Direct downloads / file artifacts",
+    "OCI images and charts",
+    "Expose both from the same capsule",
+  ]);
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[1]);
+
+  assert.equal(await extension.__test__.jatServe(), "started");
+  assert.equal(quickPickCalls.at(-1).items, extension.__test__.JAT_SERVE_MODES);
+  assert.match(infoCalls[0][0], /serving files from this capsule/);
+  assert.deepEqual(spawnHarness.calls, []);
+
+  const launch = extension.__test__.buildTerminalLaunch(
+    { command: "/test/managed-rcc", args: (args) => [...args, "--json"] },
+    ["jat", "serve", "--haul", haul, "--mode", "both"],
+    { JOSH_ROOM_EXTENSION_MODE: "1" },
+    "linux",
+  );
+  assert.match(launch.command, /--mode/);
+  assert.match(launch.command, /both/);
+  assert.match(launch.command, /'jat' 'serve' '--haul'/);
+});
+
+test("Auto serve reports the registry when JAT starts the registry projection", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-registry-test-"));
+  const haul = path.join(root, "mixed.capsule.tar.zst");
+  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
+  const extension = loadExtension(vscode, spawnHarness.spawn, {
+    waitForRegistry: async () => ({ repositories: ["demo/app"] }),
+    waitForFileserver: async () => { throw new Error("fileserver must not win when the registry is up"); },
+  });
+  extension.__test__.setStatusItem(statusItem);
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
+
+  assert.equal(await extension.__test__.jatServe(), "started");
+  assert.match(infoCalls[0][0], /Hauler registry is ready/);
+});
+
+test("Auto serve follows the fileserver when JAT resolves a files-only capsule", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-files-test-"));
+  const haul = path.join(root, "files-only.capsule.tar.zst");
+  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
+  const extension = loadExtension(vscode, spawnHarness.spawn, {
+    // A files-only capsule never opens port 5000; the wait must not hang on it.
+    waitForRegistry: () => new Promise(() => {}),
+    waitForFileserver: async () => ({ fileserver: true }),
+  });
+  extension.__test__.setStatusItem(statusItem);
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
+
+  assert.equal(await extension.__test__.jatServe(), "started");
+  assert.match(infoCalls[0][0], /resolved this capsule to a files projection/);
+  assert.match(infoCalls[0][0], /127\.0\.0\.1:8080/);
+});
+
+test("Auto serve fails when no JAT serve endpoint becomes ready", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-fail-test-"));
+  const haul = path.join(root, "capsule.tar.zst");
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
+  const extension = loadExtension(vscode, spawnHarness.spawn, {
+    waitForRegistry: async () => { throw new Error("registry down"); },
+    waitForFileserver: async () => { throw new Error("fileserver down"); },
+  });
+  extension.__test__.setStatusItem(statusItem);
+  const extras = withWindowExtras(vscode);
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
+
+  assert.equal(await extension.__test__.jatServe(), "failed");
+  assert.match(extras.errorCalls[0][0], /JAT serve failed to start/);
+  assert.match(extras.errorCalls[0][0], /fileserver down/);
+});
+
+test("waitForServeEndpoint resolves with the first endpoint JAT starts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-race-test-"));
+  const { vscode } = createVscodeMock(root);
+  let registryResolve;
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); }, {
+    waitForRegistry: () => new Promise((resolve) => { registryResolve = resolve; }),
+    waitForFileserver: async () => ({ fileserver: true }),
+  });
+
+  const pending = extension.__test__.waitForServeEndpoint();
+  registryResolve({ repositories: ["late/app"] });
+  assert.equal((await pending).kind, "files");
+});
+
+test("cancelling a JAT operation kills the spawned controller child", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-cancel-test-"));
+  const haul = path.join(root, "capsule.haul.tar.zst");
+  const { vscode, statusItem, progressCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => {
+    setImmediate(() => progressCalls.at(-1).token.cancel());
+    return { autoClose: false };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+
+  await assert.rejects(extension.__test__.jatInspect(), /cancelled/);
+
+  assert.deepEqual(spawnHarness.calls[0].args.slice(0, 4), ["jat", "inspect", "--haul", haul]);
+  assert.equal(spawnHarness.calls[0].child.killed, "SIGTERM");
+});
+
+test("JAT chunk size validation accepts hauler byte counts with optional units", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const accepts = extension.__test__.isHaulerChunkSize;
+  for (const value of ["500M", "1G", "500MB", "1024", "512k", "2T", "2TB", " 500M "]) {
+    assert.equal(accepts(value), true, value);
+  }
+  for (const value of ["1B", "1Mi", "-5", "abc", "", "0M", "1.5G", undefined]) {
+    assert.equal(accepts(value), false, String(value));
+  }
+});
+
+test("copy target validation rejects credentials, queries, fragments, and whitespace", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const accepts = extension.__test__.isSafeCopyTarget;
+  assert.equal(accepts("registry://registry.example.test:5000", "registry://"), true);
+  assert.equal(accepts("registry://registry.example.test:5000/team/app", "registry://"), true);
+  assert.equal(accepts("dir:///tmp/seed-room", "dir://"), true);
+  assert.equal(accepts("registry://user:token@registry.example.test:5000", "registry://"), false);
+  assert.equal(accepts("registry://registry.example.test:5000?ns=team", "registry://"), false);
+  assert.equal(accepts("registry://registry.example.test:5000#frag", "registry://"), false);
+  assert.equal(accepts("dir://C:/x y", "dir://"), false);
+  assert.equal(accepts("registry://", "registry://"), false);
+  assert.equal(accepts("https://registry.example.test:5000", "registry://"), false);
+});
+
+test("resultPayloads prefers controller payloads and falls back to receipts", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const payloads = extension.__test__.resultPayloads;
+  const preferred = [{ path: "chunk-000.tar.zst", size: 1, sha256: "a".repeat(64) }];
+  assert.equal(payloads({ payloads: preferred, payload_path: "fallback" }, "fallback"), preferred);
+  assert.deepEqual(payloads({ payload_path: "out.tar.zst", payload_size: 2048, sha256: "b".repeat(64) }, "fallback"), [
+    { path: "out.tar.zst", size: 2048, sha256: "b".repeat(64) },
+  ]);
+  assert.deepEqual(payloads({}, "destination"), [{ path: "destination" }]);
+  assert.deepEqual(payloads({}), []);
+  assert.deepEqual(payloads(undefined, undefined), []);
+});
+
+test("inventory quick pick items skip reference-less entries and compose descriptions", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const items = extension.__test__.inventoryQuickPickItems;
+  const entry = {
+    reference: "registry.example.test:5000/demo/app:1.0",
+    type: "image",
+    platform: "linux/amd64",
+    size: 1048576,
+  };
+  const mapped = items([entry, {}, { reference: "" }, { reference: 42 }, null]);
+  assert.equal(mapped.length, 1);
+  assert.equal(mapped[0].label, "$(package) registry.example.test:5000/demo/app:1.0");
+  assert.equal(mapped[0].description, "image · linux/amd64 · 1.0 MB");
+  assert.equal(mapped[0].entry, entry);
+  assert.deepEqual(items(undefined), []);
+  assert.deepEqual(items("not-a-list"), []);
 });

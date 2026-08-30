@@ -37,8 +37,12 @@
     "onCommand:joshRoom.showLogs",
     "onCommand:joshRoom.clearLocalFallback",
     "onCommand:joshRoom.jatBuild",
+    "onCommand:joshRoom.jatInspect",
+    "onCommand:joshRoom.jatExtract",
     "onCommand:joshRoom.jatRestore",
     "onCommand:joshRoom.jatServe",
+    "onCommand:joshRoom.jatExport",
+    "onCommand:joshRoom.jatCopy",
     "onView:joshRoom.rooms"
   ],
   "main": "./extension.js",
@@ -136,18 +140,38 @@
       },
       {
         "command": "joshRoom.jatBuild",
-        "title": "JAT: Pack Folder into Haul",
+        "title": "JAT: Pack Folder into JAT",
         "icon": "$(package)"
       },
       {
+        "command": "joshRoom.jatInspect",
+        "title": "JAT: Inspect Haul",
+        "icon": "$(search)"
+      },
+      {
+        "command": "joshRoom.jatExtract",
+        "title": "JAT: Extract from JAT",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "joshRoom.jatRestore",
-        "title": "JAT: Restore Haul",
+        "title": "JAT: Restore Workspace",
         "icon": "$(folder-library)"
       },
       {
         "command": "joshRoom.jatServe",
-        "title": "JAT: Serve Hauler Haul",
+        "title": "JAT: Serve Haul…",
         "icon": "$(server-process)"
+      },
+      {
+        "command": "joshRoom.jatExport",
+        "title": "JAT: Export Images…",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "joshRoom.jatCopy",
+        "title": "JAT: Copy / Seed…",
+        "icon": "$(copy)"
       }
     ],
     "viewsContainers": {
