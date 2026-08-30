@@ -39,7 +39,7 @@ jobs:
         with:
           name: josh-room-dist
           path: dist/
-      - name: Publish GitHub prerelease
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -48,6 +48,5 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
-            --prerelease \
             --title "Josh Room v${version} standalone VSIX" \
             --notes "Install josh-room-${version}.vsix directly from this release. SHA256SUMS contains checksums for every attached artifact."

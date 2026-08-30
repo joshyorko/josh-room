@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.13",
+  "candidate_version": "0.1.14",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -10,13 +10,13 @@
   },
   "josh_room": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "version": "0.1.13",
-    "git_sha": "470def6f78768001d274f696ba766fe058f873fa"
+    "version": "0.1.14",
+    "git_sha": "1b4a0b671dfdf839385d89afc65adeb92cc5f690"
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
-    "version": "git-f6005b4",
-    "git_sha": "f6005b48dfbe13b6976d44f17c844794be569d5f",
+    "version": "git-1b3cfbc",
+    "git_sha": "1b3cfbcb9ab4d184f4bc755c09789c3b1987e2b0",
     "environment_artifact": {
       "release_tag": "v0.1.9-jat-runtime",
       "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-linux-amd64.rcca",
