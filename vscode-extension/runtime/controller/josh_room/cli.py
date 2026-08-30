@@ -30,7 +30,17 @@ from .config import (
     save_private_config,
 )
 from .crypto import CryptoError, _managed_executable, decrypt
-from .jat import _jat_contract, run_build, run_doctor, run_restore, run_serve
+from .jat import (
+    _jat_contract,
+    run_build,
+    run_copy,
+    run_doctor,
+    run_export,
+    run_extract,
+    run_inspect,
+    run_restore,
+    run_serve,
+)
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
@@ -269,14 +279,39 @@ def build_parser() -> argparse.ArgumentParser:
     jat_build.add_argument("--output", type=Path, required=True)
     jat_build.add_argument("--image", dest="images", action="append", default=[])
     jat_build.add_argument("--all-images", action="store_true")
+    jat_build.add_argument("--images-file", dest="images_files", action="append", default=[])
+    jat_build.add_argument("--hauler-manifest", dest="hauler_manifests", action="append", default=[])
+    jat_build.add_argument("--chunk-size", dest="chunk_size")
+    jat_build.add_argument("--exclude-extras", action="store_true")
+    jat_build.add_argument("--retries", type=int)
     _json_option(jat_build)
     jat_restore = jat_commands.add_parser("restore")
     jat_restore.add_argument("--haul", type=Path, required=True)
     jat_restore.add_argument("--destination", type=Path, required=True)
     _json_option(jat_restore)
+    jat_inspect = jat_commands.add_parser("inspect")
+    jat_inspect.add_argument("--haul", type=Path, required=True)
+    _json_option(jat_inspect)
+    jat_extract = jat_commands.add_parser("extract")
+    jat_extract.add_argument("--haul", type=Path, required=True)
+    jat_extract.add_argument("--reference", required=True)
+    jat_extract.add_argument("--destination", type=Path, required=True)
+    _json_option(jat_extract)
     jat_serve = jat_commands.add_parser("serve")
     jat_serve.add_argument("--haul", type=Path, required=True)
+    jat_serve.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
     _json_option(jat_serve)
+    jat_export = jat_commands.add_parser("export")
+    jat_export.add_argument("--haul", type=Path, required=True)
+    jat_export.add_argument("--output", type=Path, required=True)
+    _json_option(jat_export)
+    jat_copy = jat_commands.add_parser("copy")
+    jat_copy.add_argument("--haul", type=Path, required=True)
+    jat_copy.add_argument("--to", required=True)
+    jat_copy.add_argument("--retries", type=int)
+    jat_copy.add_argument("--plain-http", dest="plain_http", action="store_true")
+    jat_copy.add_argument("--insecure", action="store_true")
+    _json_option(jat_copy)
     setup = commands.add_parser("setup")
     setup.add_argument("--profile", required=True)
     setup.add_argument("--age-profile", required=True)
@@ -793,12 +828,35 @@ def dispatch(args, instance: Path) -> dict:
                     args.output,
                     images=args.images,
                     all_images=args.all_images,
+                    images_files=args.images_files,
+                    hauler_manifests=args.hauler_manifests,
+                    chunk_size=args.chunk_size,
+                    exclude_extras=args.exclude_extras,
+                    retries=args.retries,
                 ),
             }
         if args.jat_command == "restore":
             return {"ok": True, **run_restore(jat_root, args.haul, args.destination)}
+        if args.jat_command == "inspect":
+            return {"ok": True, **run_inspect(jat_root, args.haul)}
+        if args.jat_command == "extract":
+            return {"ok": True, **run_extract(jat_root, args.haul, args.reference, args.destination)}
         if args.jat_command == "serve":
-            return {"ok": True, **run_serve(jat_root, args.haul)}
+            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode)}
+        if args.jat_command == "export":
+            return {"ok": True, **run_export(jat_root, args.haul, args.output)}
+        if args.jat_command == "copy":
+            return {
+                "ok": True,
+                **run_copy(
+                    jat_root,
+                    args.haul,
+                    args.to,
+                    retries=args.retries,
+                    plain_http=args.plain_http,
+                    insecure=args.insecure,
+                ),
+            }
     if args.command == "setup":
         credentials = json.load(sys.stdin)
         required = {

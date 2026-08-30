@@ -298,18 +298,46 @@ def test_one_off_jat_commands_use_typed_service_without_room_backend(tmp_path, m
     )
     monkeypatch.setattr(
         "josh_room.cli.run_serve",
-        lambda jat, haul: calls.append(("serve", jat, haul)) or {"operation": "serve"},
+        lambda jat, haul, **options: calls.append(("serve", jat, haul, options)) or {"operation": "serve"},
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.run_inspect",
+        lambda jat, haul: calls.append(("inspect", jat, haul)) or {"operation": "inspect"},
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.run_extract",
+        lambda jat, haul, reference, destination: calls.append(("extract", jat, haul, reference, destination)) or {"operation": "extract"},
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.run_export",
+        lambda jat, haul, output: calls.append(("export", jat, haul, output)) or {"operation": "export"},
+    )
+    monkeypatch.setattr(
+        "josh_room.cli.run_copy",
+        lambda jat, haul, to, **options: calls.append(("copy", jat, haul, to, options)) or {"operation": "copy"},
     )
     module = __import__("josh_room.cli", fromlist=["dispatch"])
 
     build = build_parser().parse_args(["jat", "build", "--source", str(tmp_path), "--output", str(tmp_path / "haul"), "--all-images"])
     restore = build_parser().parse_args(["jat", "restore", "--haul", str(tmp_path / "haul"), "--destination", str(tmp_path / "restored")])
-    serve = build_parser().parse_args(["jat", "serve", "--haul", str(tmp_path / "haul")])
+    serve = build_parser().parse_args(["jat", "serve", "--haul", str(tmp_path / "haul"), "--mode", "both"])
+    inspect = build_parser().parse_args(["jat", "inspect", "--haul", str(tmp_path / "haul")])
+    extract = build_parser().parse_args(["jat", "extract", "--haul", str(tmp_path / "haul"), "--reference", "hauler/app:latest", "--destination", str(tmp_path / "out")])
+    export = build_parser().parse_args(["jat", "export", "--haul", str(tmp_path / "haul"), "--output", str(tmp_path / "images.tar")])
+    copy = build_parser().parse_args(["jat", "copy", "--haul", str(tmp_path / "haul"), "--to", "registry://registry.example.test"])
 
     assert module.dispatch(build, tmp_path / "instance")["operation"] == "build"
     assert module.dispatch(restore, tmp_path / "instance")["operation"] == "restore"
     assert module.dispatch(serve, tmp_path / "instance")["operation"] == "serve"
-    assert [call[0] for call in calls] == ["build", "restore", "serve"]
+    assert module.dispatch(inspect, tmp_path / "instance")["operation"] == "inspect"
+    assert module.dispatch(extract, tmp_path / "instance")["operation"] == "extract"
+    assert module.dispatch(export, tmp_path / "instance")["operation"] == "export"
+    assert module.dispatch(copy, tmp_path / "instance")["operation"] == "copy"
+    assert [call[0] for call in calls] == ["build", "restore", "serve", "inspect", "extract", "export", "copy"]
+    assert calls[2][3] == {"mode": "both"}
+    assert calls[3][2] == tmp_path / "haul"
+    assert calls[4][3] == "hauler/app:latest"
+    assert calls[6][3] == "registry://registry.example.test"
 
 
 def test_hydrate_passes_explicit_snapshot_to_operations(tmp_path, monkeypatch):

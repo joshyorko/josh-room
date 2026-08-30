@@ -54,12 +54,12 @@
     }
   },
   "jat": {
-    "git_sha": "f6005b48dfbe13b6976d44f17c844794be569d5f",
+    "git_sha": "1b3cfbcb9ab4d184f4bc755c09789c3b1987e2b0",
     "source_archive": {
-      "asset": "josh-all-the-things-f6005b48dfbe13b6976d44f17c844794be569d5f.tar.gz",
-      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/f6005b48dfbe13b6976d44f17c844794be569d5f",
-      "sha256": "04964eebdacc5617b311ad82a3825f254ff9f0159e87e3b5deed6f88b3063c74",
-      "size": 60288
+      "asset": "josh-all-the-things-1b3cfbcb9ab4d184f4bc755c09789c3b1987e2b0.tar.gz",
+      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/1b3cfbcb9ab4d184f4bc755c09789c3b1987e2b0",
+      "sha256": "00f9249a7c6399239c1d3d776ec754352db1b2c8c7d0a71aa3711e108bb3283d",
+      "size": 89393
     },
     "environment_artifact": {
       "digest": "sha256:3e473a015f809da0b77382e54da460da212f9fee2ee02f146736e7acd64f929c",

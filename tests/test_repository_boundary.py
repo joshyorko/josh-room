@@ -88,7 +88,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.link",
         "joshRoom.repair",
         "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
-        "joshRoom.jatBuild", "joshRoom.jatRestore", "joshRoom.jatServe",
+        "joshRoom.jatBuild", "joshRoom.jatInspect", "joshRoom.jatExtract", "joshRoom.jatRestore",
+        "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
     }
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
@@ -118,7 +119,13 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert package["contributes"]["views"]["josh-room"][0]["id"] == "joshRoom.rooms"
     assert package["contributes"]["viewsWelcome"][0]["view"] == "joshRoom.rooms"
     assert {view["id"] for view in package["contributes"]["views"]["josh-room"]} == {"joshRoom.rooms", "joshRoom.jatTools"}
-    assert "Pack Folder into Haul" in extension and "Restore JAT Haul" in extension and "Serve Hauler Haul" in extension
+    assert "Pack Folder into JAT" in extension and "Restore Workspace" in extension and "Serve JAT…" in extension
+    assert "joshRoom.jatInspect" in extension and "joshRoom.jatCopy" in extension
+    jat_command_ids = {
+        "joshRoom.jatBuild", "joshRoom.jatInspect", "joshRoom.jatExtract", "joshRoom.jatRestore",
+        "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
+    }
+    assert jat_command_ids <= commands
     assert "Use Dimension" not in extension
     assert "Open Dimension" not in extension
 
