@@ -614,7 +614,7 @@ async function writeRuntimeCredentials(environment, { extensionMode = true } = {
   const filename = path.join(directory, "credentials.json");
   fs.writeFileSync(filename, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   fs.chmodSync(filename, 0o600);
-  environment.JOSH_ROOM_RUNTIME_CREDENTIALS = filename;
+  environment.JOSH_ROOM_PROVIDER_CREDENTIALS = filename;
   return () => fs.rmSync(directory, { recursive: true, force: true });
 }
 
@@ -2566,7 +2566,7 @@ async function disconnectStorage(item) {
   const connectionId = connection?.id || connection?.connection_id;
   selectedDimensionId = undefined;
   if (provider === "r2") {
-    await runOperation("Disconnecting Cloudflare locally...", ["auth", "logout"], activeWorkspace());
+    await runOperation("Disconnecting Cloudflare locally...", ["auth", "logout", "--purpose", "r2"], activeWorkspace());
   } else if (connectionId) {
     await runOperation("Disconnecting locally...", providerTools.connectionCommand("disconnect", { connectionId }), activeWorkspace());
   }
@@ -3209,18 +3209,22 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
   const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd);
   const dimensions = dimensionList(catalog);
   let connections = catalog.connections;
-  if (dimensions.some((dimension) => dimension.connection_id || dimension.connectionId)) {
+  let connectionLookupFailed = false;
+  if (!connections && (!dimensions.length || dimensions.some((dimension) => dimension.connection_id || dimension.connectionId))) {
     try {
       const listedConnections = await runOperation(title || "Loading your Rooms...", providerTools.connectionCommand("list"), cwd);
       connections = listedConnections.connections || connections;
     } catch (error) {
+      connectionLookupFailed = true;
       outputChannel && outputChannel.warn("Unable to load provider connections: " + error.message);
     }
   }
+  const providerConnections = providerTools.connectionRecords({ connections });
   const r2Dimension = dimensions.find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
   const legacyCatalog = !dimensions.length && (catalog.dimension_id || Array.isArray(catalog.projects));
+  const offerSyntheticR2 = !dimensions.length && !legacyCatalog && !connectionLookupFailed && !providerConnections.length;
   const authDimensionId = r2Dimension && (r2Dimension.id || r2Dimension.dimension_id)
-    || (!legacyCatalog ? "r2" : undefined);
+    || (offerSyntheticR2 ? "r2" : undefined);
   const authState = authDimensionId ? await runOperation(
     title || "Loading your Rooms...",
     ["auth", "status", "--dimension", authDimensionId],
@@ -3233,7 +3237,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
   const r2State = authState.r2_state || authState.state || "missing";
   const encryptionState = authState.encryption_state || authState.state || "missing";
   const hasR2 = dimensions.some((dimension) => nativeRegistry.providerKey(dimension.provider) === "r2");
-  if (!hasR2 && !legacyCatalog) {
+  if (!hasR2 && offerSyntheticR2) {
     dimensions.push({
       id: "r2",
       display_name: "Default",
@@ -3242,7 +3246,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
       connection_state: r2State,
     });
   }
-  const connectionStates = new Map(providerTools.connectionRecords({ connections }).map((connection) => [
+  const connectionStates = new Map(providerConnections.map((connection) => [
     connection.id || connection.connection_id,
     connection.auth_state === "disconnected" || connection.connection_state === "disconnected"
       ? "disconnected"
@@ -3288,6 +3292,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
   return Object.assign({}, catalog, {
     dimensions: loaded,
     ...(connections ? { connections } : {}),
+    offer_synthetic_r2: offerSyntheticR2,
     auth_state: r2State,
     encryption_state: encryptionState,
     projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions: loaded }),

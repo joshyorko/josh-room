@@ -200,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(auth_status)
     auth_logout = auth_commands.add_parser("logout", help="clear the local Cloudflare session")
     auth_logout.add_argument("--dimension")
+    auth_logout.add_argument("--purpose", choices=("all", "r2"), default="all")
     _json_option(auth_logout)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -557,7 +558,7 @@ def dispatch(args, instance: Path) -> dict:
         if args.auth_command == "cancel":
             return {"ok": True, **cancel_oauth_session(args.session_id)}
         if args.auth_command == "logout":
-            return {"ok": True, **logout_runtime_session(), "logged_out": True, "dimension_id": args.dimension}
+            return {"ok": True, **logout_runtime_session(args.purpose), "logged_out": True, "dimension_id": args.dimension}
         state = runtime_session_state()
         capabilities = list(runtime_capabilities()) if state == "connected" else []
         return {

@@ -460,7 +460,8 @@ test("MinIO credentials use VS Code SecretStorage and stay out of controller arg
     get: async (key) => values.get(key),
     store: async (key, value) => values.set(key, value),
   };
-  const spawnHarness = createSpawnHarness(({ args }) => {
+  let providerBroker;
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
     if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
       return { stdout: JSON.stringify({ ok: true, connections: [] }) };
     }
@@ -474,6 +475,15 @@ test("MinIO credentials use VS Code SecretStorage and stay out of controller arg
       return { stdout: JSON.stringify({ ok: true, accessible: true }) };
     }
     if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    if (args[0] === "dimensions" && args[1] === "list") {
+      const filename = options.env.JOSH_ROOM_PROVIDER_CREDENTIALS;
+      providerBroker = {
+        private: Boolean(filename) && (fs.statSync(filename).mode & 0o077) === 0,
+        profiles: Object.keys(JSON.parse(fs.readFileSync(filename, "utf8")).profiles),
+        runtimeAlias: options.env.JOSH_ROOM_RUNTIME_CREDENTIALS,
+      };
+      return { stdout: JSON.stringify({ ok: true, dimensions: [] }) };
+    }
     throw new Error(`unexpected command: ${args.join(" ")}`);
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
@@ -495,6 +505,8 @@ test("MinIO credentials use VS Code SecretStorage and stay out of controller arg
     assert.doesNotMatch(call.args.join(" "), /secret-access|secret-key/);
   }
   assert.match(String(spawnHarness.calls.find((call) => call.args[0] === "provider" && call.args[1] === "connection" && call.args[2] === "create").child.stdinPayload), /secret-access/);
+  await extension.__test__.runJoshRoom(["dimensions", "list"], root);
+  assert.deepEqual(providerBroker, { private: true, profiles: ["secret-profile"], runtimeAlias: undefined });
 });
 
 test("real managed extension runner reaches the packaged controller", {
@@ -1705,13 +1717,83 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
 
-test("encryption-only authorization does not mark the synthetic R2 Dimension connected", async () => {
+test("MinIO-only storage does not probe or synthesize Cloudflare R2", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-only-catalog-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "backup", display_name: "Backup", provider: "minio", rooms: [] }],
+    }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const providers = buildProviderTree(catalog);
+
+  assert.deepEqual(providers.map((provider) => provider.provider), ["minio"]);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth"), false);
+});
+
+test("MinIO connection without a Dimension does not synthesize Cloudflare R2", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-connection-only-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [] }) };
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: true, connections: [{
+        id: "home-minio",
+        provider: "minio",
+        display_name: "Home MinIO",
+        endpoint: "https://minio.example.invalid:9000",
+        credential_profile: "home-profile",
+        region: "us-east-1",
+        auth_state: "configured",
+      }] }) };
+    }
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const providers = buildProviderTree(catalog);
+
+  assert.deepEqual(providers.map((provider) => provider.provider), ["minio"]);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth"), false);
+});
+
+test("connection metadata failure does not synthesize Cloudflare R2", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-connection-failure-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [] }) };
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") {
+      return { stdout: JSON.stringify({ ok: false, error: "connection metadata unavailable" }), code: 2 };
+    }
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+
+  assert.deepEqual(buildProviderTree(catalog), []);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth"), false);
+});
+
+test("encryption-only authorization does not mark a configured R2 Dimension connected", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-encryption-only-auth-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
     if (args[0] === "dimensions") return { stdout: JSON.stringify({
       ok: true,
-      dimensions: [{ id: "backup", display_name: "Backup", provider: "minio" }],
+      dimensions: [
+        { id: "backup", display_name: "Backup", provider: "minio", rooms: [] },
+        { id: "r2", display_name: "Cloudflare R2", provider: "r2" },
+      ],
     }) };
     if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({
       ok: true,
@@ -1976,7 +2058,7 @@ test("R2 disconnect logs out the local OAuth session instead of treating the end
     connection: { id: "https://r2.example.invalid", provider: "r2" },
     dimension: { id: "r2", provider: "r2" },
   }), "disconnected");
-  assert.deepEqual(spawnHarness.calls.map((entry) => entry.args.slice(0, 3)), [["auth", "logout", "--json"]]);
+  assert.deepEqual(spawnHarness.calls[0].args, ["auth", "logout", "--purpose", "r2", "--json"]);
   assert.equal(refreshes, 1);
 });
 
