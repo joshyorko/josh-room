@@ -75,7 +75,7 @@ function environment(kv) {
     R2_BUCKET: "synthetic-bucket",
     R2_PARENT_ACCESS_KEY_ID: "synthetic-parent",
     OPERATIONAL_AGE_IDENTITY: "AGE-SECRET-KEY-synthetic",
-    AGE_RECIPIENTS: JSON.stringify(["age1synthetic"]),
+    AGE_RECIPIENTS: JSON.stringify(["age1daily", "age1recovery"]),
   };
 }
 
@@ -90,12 +90,20 @@ function request(path, method = "GET") {
   return new Request(`https://worker.test${path}`, { method });
 }
 
+function purposeRequest(purpose) {
+  return new Request("https://worker.test/session/start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ purpose }),
+  });
+}
+
 async function readJson(response) {
   return response.json();
 }
 
-async function startSession(env) {
-  const response = await worker.fetch(request("/session/start", "POST"), env);
+async function startSession(env, purpose) {
+  const response = await worker.fetch(purpose ? purposeRequest(purpose) : request("/session/start", "POST"), env);
   const body = await readJson(response);
   const state = new URL(body.authorizationUrl).searchParams.get("state");
   return { ...body, state };
@@ -216,6 +224,85 @@ test("a live callback still authorizes once and consumes its state", async () =>
   assert.equal(authorized.status, "authorized");
   assert.equal(authorized.secretAccessKey, "temporary-secret");
   assert.equal(await kv.get(`state:${started.state}`, "json"), null);
+});
+
+test("encryption-only authorization returns age material without R2 credentials", async () => {
+  const kv = new MemoryKV();
+  const env = environment(kv);
+  const started = await startSession(env, "encryption");
+  const authQuery = new URL(started.authorizationUrl).searchParams;
+  const pending = await kv.get(`session:${started.sessionId}`, "json");
+  assert.equal(pending.purpose, "encryption");
+  assert.equal(authQuery.has("scope"), false);
+
+  let temporaryCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url === "https://dash.cloudflare.com/oauth2/token") {
+      return Response.json({ access_token: "synthetic-cloudflare-token" });
+    }
+    if (url === "https://dash.cloudflare.com/oauth2/userinfo") {
+      return Response.json({ sub: "synthetic-owner" });
+    }
+    if (String(url).includes("temp-access-credentials")) {
+      temporaryCalls += 1;
+      throw new Error("encryption-only authorization requested R2 credentials");
+    }
+    throw new Error(`unexpected upstream URL: ${url}`);
+  };
+  try {
+    const callback = await worker.fetch(
+      request(`/oauth/callback?state=${encodeURIComponent(started.state)}&code=synthetic-code`),
+      env,
+    );
+    assert.equal(callback.status, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const authorized = await kv.get(`session:${started.sessionId}`, "json");
+  assert.deepEqual(authorized.capabilities, ["encryption"]);
+  assert.equal(authorized.purpose, "encryption");
+  assert.equal("accessKeyId" in authorized, false);
+  assert.equal("secretAccessKey" in authorized, false);
+  assert.equal("sessionToken" in authorized, false);
+  assert.equal("endpoint" in authorized, false);
+  assert.equal("bucket" in authorized, false);
+  assert.equal(temporaryCalls, 0);
+});
+
+test("encryption-only Durable Object authorization also omits R2 credentials", async () => {
+  const env = durableEnvironment();
+  const started = await startSession(env, "encryption");
+  let temporaryCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url === "https://dash.cloudflare.com/oauth2/token") return Response.json({ access_token: "synthetic-cloudflare-token" });
+    if (url === "https://dash.cloudflare.com/oauth2/userinfo") return Response.json({ sub: "synthetic-owner" });
+    if (String(url).includes("temp-access-credentials")) {
+      temporaryCalls += 1;
+      throw new Error("encryption-only Durable Object authorization requested R2 credentials");
+    }
+    throw new Error(`unexpected upstream URL: ${url}`);
+  };
+  try {
+    const callback = await worker.fetch(
+      request(`/oauth/callback?state=${encodeURIComponent(started.state)}&code=synthetic-code`),
+      env,
+    );
+    assert.equal(callback.status, 200);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const response = await worker.fetch(request(`/session/${started.sessionId}`), env);
+  const authorized = await readJson(response);
+  assert.deepEqual(authorized.capabilities, ["encryption"]);
+  assert.equal(authorized.purpose, "encryption");
+  assert.equal("accessKeyId" in authorized, false);
+  assert.equal("secretAccessKey" in authorized, false);
+  assert.equal("sessionToken" in authorized, false);
+  assert.equal(temporaryCalls, 0);
 });
 
 test("Durable Object callback is immediately visible to a poll from another request", async () => {

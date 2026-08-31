@@ -74,7 +74,7 @@ def create_snapshot(
         if workspace_fingerprint(source) != source_fingerprint:
             raise ValueError("source workspace changed during snapshot capture")
         if backend:
-            report_progress("upload", "Uploading encrypted Room to private R2")
+            report_progress("upload", "Uploading encrypted Room to the selected storage Dimension")
             ref = backend.put_file(f"objects/sha256/{ciphertext_digest}", encrypted)
         else:
             report_progress("store", "Writing encrypted Room to local storage")

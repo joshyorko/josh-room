@@ -1162,6 +1162,8 @@ async function saveRoom(options = {}) {
     targetDimension = await chooseDimension(catalog, "Where should this Room be saved?");
     if (!targetDimension) return "cancelled";
     targetDimensionId = dimensionId(targetDimension);
+  } else if (selected.project?.dimension) {
+    targetDimension = selected.project.dimension;
   }
   if (targetDimensionId) selectedDimensionId = targetDimensionId;
   if (selected.project) {
@@ -1185,11 +1187,29 @@ async function saveRoom(options = {}) {
       if (confirmed !== "Replace Latest") return "cancelled";
     }
   }
-  if (targetDimension
-    && nativeRegistry.providerKey(targetDimension.provider) === "r2"
+  const targetProvider = nativeRegistry.providerKey(
+    targetDimension?.provider || selected.project?.provider || selected.project?.dimension?.provider,
+  );
+  if (targetProvider === "r2"
+    && targetDimension
     && catalog.auth_state
     && catalog.auth_state !== "connected") {
-    await connectCloudflare({ dimension: targetDimension });
+    const connected = await connectCloudflare({ dimension: targetDimension });
+    if (connected !== "connected") return connected;
+  }
+  if (targetProvider === "minio") {
+    const authStatus = await runJoshRoom(
+      ["auth", "status", "--dimension", targetDimensionId], cwd, undefined, undefined,
+    );
+    const encryptionReady = authStatus.encryption_ready === true
+      || authStatus.encryption_state === "connected"
+      || (authStatus.encryption_state === undefined && authStatus.state === "connected");
+    if (!encryptionReady) {
+      const connected = await connectEncryption({
+        dimension: targetDimension || { id: targetDimensionId, provider: targetProvider },
+      });
+      if (connected !== "connected") return connected;
+    }
   }
   const imageChoice = await vscode.window.showQuickPick([
     { label: "Workspace only", allImages: false },
@@ -1197,7 +1217,7 @@ async function saveRoom(options = {}) {
   ], { title: "Include local OCI images?", ignoreFocusOut: true });
   if (!imageChoice) return "cancelled";
   const buildArgs = nativeRegistry.dimensionArgs(
-    ["snapshot", "create", name, "--source", source, "--backend", "r2"],
+    ["snapshot", "create", name, "--source", source, "--backend", targetProvider],
     targetDimensionId || selectedDimensionId,
   );
   if (imageChoice.allImages) buildArgs.push("--all-images");
@@ -2238,14 +2258,18 @@ async function chooseDimension(catalog, title) {
   return choice.dimension;
 }
 
-async function connectCloudflare(item, { timeoutMs = 600000 } = {}) {
+async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   const cwd = activeWorkspace();
   let dimension = item && item.dimension ? item.dimension : item;
+  const encryptionOnly = purpose === "encryption"
+    || nativeRegistry.providerKey(dimension?.provider) === "minio";
+  const authPurpose = encryptionOnly ? "encryption" : "r2";
   if (!dimension) {
     const catalog = await loadCatalog(cwd, "Loading storage...");
-    dimension = dimensionList(catalog).find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
+    dimension = dimensionList(catalog).find((candidate) => nativeRegistry.providerKey(candidate.provider) === (encryptionOnly ? "minio" : "r2"));
   }
-  const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || "r2";
+  const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || (encryptionOnly ? selectedDimensionId : "r2");
+  if (!targetDimensionId) throw new Error("Choose a Dimension before authorizing Josh Room encryption.");
   selectedDimensionId = targetDimensionId;
   activeAuthAttempt?.cancel();
   const attempt = {
@@ -2257,15 +2281,20 @@ async function connectCloudflare(item, { timeoutMs = 600000 } = {}) {
   activeAuthAttempt = attempt;
   try {
     return await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "Connecting Cloudflare...", cancellable: true },
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: encryptionOnly ? "Preparing Josh Room encryption..." : "Connecting Cloudflare...",
+        cancellable: true,
+      },
       async (progress, parentToken) => {
         const controller = createCancellationController(parentToken);
         attempt.controller = controller;
-        const reporter = createVisualReporter("Connecting Cloudflare", operationKind(["auth", "start"]), progress);
+        const authTitle = encryptionOnly ? "Preparing Josh Room encryption" : "Connecting Cloudflare";
+        const reporter = createVisualReporter(authTitle, operationKind(["auth", "start"]), progress);
         let sessionId;
         try {
           const started = await runJoshRoom(
-            ["auth", "start", "--dimension", targetDimensionId], cwd, controller.token, reporter,
+            ["auth", "start", "--dimension", targetDimensionId, "--purpose", authPurpose], cwd, controller.token, reporter,
           );
           if (controller.token.isCancellationRequested) return "cancelled";
           const authorizationUrl = started.authorization_url || started.authorizationUrl;
@@ -2279,27 +2308,37 @@ async function connectCloudflare(item, { timeoutMs = 600000 } = {}) {
           if (controller.token.isCancellationRequested) return "cancelled";
           const result = await runJoshRoom(
             ["auth", "wait", sessionId, "--dimension", targetDimensionId,
+              "--purpose", authPurpose,
               "--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000)))],
             cwd, controller.token, reporter,
           );
           if (controller.token.isCancellationRequested) return "cancelled";
           if (result.status === "authorized") {
             if (roomsProvider) await roomsProvider.refresh();
-            await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
+            await vscode.window.showInformationMessage(
+              encryptionOnly
+                ? "Josh Room encryption is ready. Your selected storage remains unchanged."
+                : "Cloudflare connected. Your Rooms are ready.",
+            );
             reporter.finish();
             return "connected";
           }
-          throw new Error(`Cloudflare authorization ${result.status || "failed"}`);
+          throw new Error(`${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization ${result.status || "failed"}`);
         } catch (error) {
-          if (controller.token.isCancellationRequested || isCancellationError(error)) {
-            outputChannel?.info("Cloudflare authorization cancelled; stale attempt invalidated.");
-            if (sessionId) {
-              await runJoshRoom(["auth", "cancel", sessionId], cwd)
-                .catch((cancelError) => outputChannel?.warn(`Unable to invalidate cancelled Cloudflare authorization: ${cancelError.message}`));
-            }
+          const cancelled = controller.token.isCancellationRequested || isCancellationError(error);
+          if (cancelled) {
+            outputChannel?.info(`${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization cancelled; stale attempt invalidated.`);
+          } else if (sessionId) {
+            outputChannel?.warn(`${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization failed; invalidating the pending attempt.`);
+          }
+          if (sessionId) {
+            await runJoshRoom(["auth", "cancel", sessionId], cwd)
+              .catch((cancelError) => outputChannel?.warn(`Unable to invalidate ${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization: ${cancelError.message}`));
+          }
+          if (cancelled) {
             await runJoshRoom(
               ["auth", "status", "--dimension", targetDimensionId], cwd,
-            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled Cloudflare authorization: ${statusError.message}`));
+            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled ${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization: ${statusError.message}`));
             return "cancelled";
           }
           reporter.fail(error);
@@ -2313,6 +2352,10 @@ async function connectCloudflare(item, { timeoutMs = 600000 } = {}) {
   } finally {
     if (activeAuthAttempt === attempt) activeAuthAttempt = undefined;
   }
+}
+
+async function connectEncryption(item, options = {}) {
+  return connectCloudflare(item, { ...options, purpose: "encryption" });
 }
 
 async function configureStorageBucket({ provider, connectionId, dimensionId, connectionMetadata = {}, credentials, cwd }) {
@@ -2589,7 +2632,8 @@ class HierarchyRoomsProvider {
       const action = item.error?.action;
       const command = action === "edit"
         ? "joshRoom.editConnection"
-        : action === "reconnect" ? "joshRoom.reconnectStorage" : "joshRoom.refresh";
+        : action === "reconnect" ? "joshRoom.reconnectStorage"
+          : action === "authorize" ? "joshRoom.connectEncryption" : "joshRoom.refresh";
       treeItem.command = {
         command,
         title: item.label || "Retry",
@@ -3045,6 +3089,7 @@ function activateNative(context) {
   register(context, "joshRoom.addStorage", addStorage);
   register(context, "joshRoom.connectCloudflare", connectCloudflare);
   register(context, "joshRoom.reconnectCloudflare", connectCloudflare);
+  register(context, "joshRoom.connectEncryption", connectEncryption);
   register(context, "joshRoom.connectStorage", connectStorage);
   register(context, "joshRoom.reconnectStorage", (item) => connectStorage(item));
   register(context, "joshRoom.editConnection", editConnection);
@@ -3096,6 +3141,14 @@ function dimensionLoadFailure(error) {
   const result = error && error.result || {};
   const diagnostic = result.error || error?.message || "unknown storage error";
   const code = result.error_code || "dimension-load-failed";
+  if (/encryption-authorization-required/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Encryption authorization required — Authorize",
+      description: "Authorize Josh Room encryption before reading this Room catalog.",
+      action: "authorize",
+    };
+  }
   if (/bucket|accessdenied|forbidden/i.test(code + " " + diagnostic)) {
     return {
       code,
@@ -3175,8 +3228,10 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
     { cancellable: false },
   ).catch((error) => {
     outputChannel && outputChannel.warn("Cloudflare connection state unavailable: " + error.message);
-    return { state: "missing" };
-  }) : { state: "missing" };
+    return { state: "missing", encryption_state: "missing", r2_state: "missing" };
+  }) : { state: "missing", encryption_state: "missing", r2_state: "missing" };
+  const r2State = authState.r2_state || authState.state || "missing";
+  const encryptionState = authState.encryption_state || authState.state || "missing";
   const hasR2 = dimensions.some((dimension) => nativeRegistry.providerKey(dimension.provider) === "r2");
   if (!hasR2 && !legacyCatalog) {
     dimensions.push({
@@ -3184,7 +3239,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
       display_name: "Default",
       provider: "r2",
       synthetic: true,
-      connection_state: authState.state || "missing",
+      connection_state: r2State,
     });
   }
   const connectionStates = new Map(providerTools.connectionRecords({ connections }).map((connection) => [
@@ -3211,7 +3266,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
       continue;
     }
     if (provider === "r2") {
-      dimension.connection_state = authState.state || dimension.connection_state || "connected";
+      dimension.connection_state = r2State || dimension.connection_state || "connected";
       if (dimension.connection_state !== "connected") {
         loaded.push(dimension);
         continue;
@@ -3233,7 +3288,8 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
   return Object.assign({}, catalog, {
     dimensions: loaded,
     ...(connections ? { connections } : {}),
-    auth_state: authState.state,
+    auth_state: r2State,
+    encryption_state: encryptionState,
     projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions: loaded }),
   });
 }
@@ -3278,6 +3334,7 @@ Object.assign(module.exports.__test__, {
   chooseServeProject,
   addStorage,
   connectCloudflare,
+  connectEncryption,
   connectStorage,
   disconnectStorage,
   editStorageSettings,

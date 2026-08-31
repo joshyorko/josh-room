@@ -11,11 +11,13 @@ from pathlib import Path
 
 from . import r2 as _r2
 from .auth import (
+    _valid_identity,
     cancel_oauth_session,
     ensure_runtime_session,
     load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
+    runtime_capabilities,
     runtime_session_state,
     start_oauth_session,
     wait_oauth_session,
@@ -30,7 +32,17 @@ from .config import (
     save_private_config,
 )
 from .crypto import CryptoError, _managed_executable, decrypt
-from .jat import _jat_contract, run_build, run_doctor, run_restore, run_serve
+from .jat import (
+    _jat_contract,
+    run_build,
+    run_copy,
+    run_doctor,
+    run_export,
+    run_extract,
+    run_inspect,
+    run_restore,
+    run_serve,
+)
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
@@ -165,14 +177,17 @@ def build_parser() -> argparse.ArgumentParser:
     auth_commands = auth.add_subparsers(dest="auth_command", required=True)
     auth_start = auth_commands.add_parser("start")
     auth_start.add_argument("--dimension")
+    auth_start.add_argument("--purpose", choices=("encryption", "r2"), default="r2")
     _json_option(auth_start)
     auth_poll = auth_commands.add_parser("poll")
     auth_poll.add_argument("session_id")
     auth_poll.add_argument("--dimension")
+    auth_poll.add_argument("--purpose", choices=("encryption", "r2"))
     _json_option(auth_poll)
     auth_wait = auth_commands.add_parser("wait", help="wait for one OAuth session in this process")
     auth_wait.add_argument("session_id")
     auth_wait.add_argument("--dimension")
+    auth_wait.add_argument("--purpose", choices=("encryption", "r2"))
     auth_wait.add_argument("--timeout", type=int, default=600)
     auth_wait.add_argument("--poll-interval", type=int, default=2)
     _json_option(auth_wait)
@@ -269,14 +284,39 @@ def build_parser() -> argparse.ArgumentParser:
     jat_build.add_argument("--output", type=Path, required=True)
     jat_build.add_argument("--image", dest="images", action="append", default=[])
     jat_build.add_argument("--all-images", action="store_true")
+    jat_build.add_argument("--images-file", dest="images_files", action="append", default=[])
+    jat_build.add_argument("--hauler-manifest", dest="hauler_manifests", action="append", default=[])
+    jat_build.add_argument("--chunk-size", dest="chunk_size")
+    jat_build.add_argument("--exclude-extras", action="store_true")
+    jat_build.add_argument("--retries", type=int)
     _json_option(jat_build)
     jat_restore = jat_commands.add_parser("restore")
     jat_restore.add_argument("--haul", type=Path, required=True)
     jat_restore.add_argument("--destination", type=Path, required=True)
     _json_option(jat_restore)
+    jat_inspect = jat_commands.add_parser("inspect")
+    jat_inspect.add_argument("--haul", type=Path, required=True)
+    _json_option(jat_inspect)
+    jat_extract = jat_commands.add_parser("extract")
+    jat_extract.add_argument("--haul", type=Path, required=True)
+    jat_extract.add_argument("--reference", required=True)
+    jat_extract.add_argument("--destination", type=Path, required=True)
+    _json_option(jat_extract)
     jat_serve = jat_commands.add_parser("serve")
     jat_serve.add_argument("--haul", type=Path, required=True)
+    jat_serve.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
     _json_option(jat_serve)
+    jat_export = jat_commands.add_parser("export")
+    jat_export.add_argument("--haul", type=Path, required=True)
+    jat_export.add_argument("--output", type=Path, required=True)
+    _json_option(jat_export)
+    jat_copy = jat_commands.add_parser("copy")
+    jat_copy.add_argument("--haul", type=Path, required=True)
+    jat_copy.add_argument("--to", required=True)
+    jat_copy.add_argument("--retries", type=int)
+    jat_copy.add_argument("--plain-http", dest="plain_http", action="store_true")
+    jat_copy.add_argument("--insecure", action="store_true")
+    _json_option(jat_copy)
     setup = commands.add_parser("setup")
     setup.add_argument("--profile", required=True)
     setup.add_argument("--age-profile", required=True)
@@ -289,20 +329,23 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     instance = _instance_root()
     try:
-        if args.command not in {"auth", "setup"}:
-            load_runtime_session()
-        if _requires_oauth(args):
-            requested_dimension = getattr(args, "dimension", None)
-            selected = None
-            if getattr(args, "snapshot_command", None) != "copy":
-                try:
-                    selected = _effective_dimension(args)
-                except ValueError:
-                    if requested_dimension != "r2":
-                        raise
-            ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
+        runtime_loaded = False
         identity_context = nullcontext() if args.command in {"auth", "setup", "status"} else _identity_environment()
         with identity_context:
+            if args.command not in {"auth", "setup"}:
+                runtime_loaded = load_runtime_session()
+            if _requires_oauth(args):
+                requested_dimension = getattr(args, "dimension", None)
+                selected = None
+                if getattr(args, "snapshot_command", None) != "copy":
+                    try:
+                        selected = _effective_dimension(args)
+                    except ValueError:
+                        if requested_dimension != "r2":
+                            raise
+                ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
+            elif _requires_encryption(args) and not runtime_loaded and not _encryption_material_ready():
+                raise _encryption_authorization_required()
             result = dispatch(args, instance)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         result = {"ok": False, "error": str(error)}
@@ -380,6 +423,49 @@ def _requires_oauth(args) -> bool:
     return getattr(args, "backend", "r2") == "r2"
 
 
+def _requires_encryption(args) -> bool:
+    if args.command not in {"rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
+        return False
+    if args.command == "snapshot" and getattr(args, "snapshot_command", None) not in {"create", "copy"}:
+        return False
+    if args.command == "snapshots" and getattr(args, "snapshots_command", None) != "remove":
+        return False
+    dimension = getattr(args, "dimension", None)
+    if dimension:
+        try:
+            return DimensionRegistry(private_config() or {}).select(dimension).provider == "minio"
+        except ValueError:
+            return dimension == "minio"
+    if getattr(args, "snapshot_command", None) == "copy":
+        dimensions = [_copy_source_dimension(args), getattr(args, "destination_dimension", None)]
+        try:
+            registry = DimensionRegistry(private_config() or {})
+            return any(value and registry.select(value).provider == "minio" for value in dimensions)
+        except ValueError:
+            return "minio" in dimensions
+    try:
+        selected = _effective_dimension(args)
+    except ValueError:
+        selected = None
+    if selected is not None:
+        return selected.provider == "minio"
+    return getattr(args, "backend", "r2") == "minio"
+
+
+def _encryption_material_ready() -> bool:
+    identity = os.environ.get("JOSH_ROOM_IDENTITY")
+    if not identity:
+        return False
+    try:
+        path = Path(identity)
+        identity_ready = path.is_file() and not path.is_symlink() and not (path.stat().st_mode & 0o077) \
+            and _valid_identity(path.read_text())
+    except OSError:
+        identity_ready = False
+    recipients = _recipients()
+    return identity_ready and len(recipients) >= 2 and len(set(recipients)) >= 2
+
+
 def _copy_source_dimension(args) -> str | None:
     source_folder = getattr(args, "source_folder", None)
     if not source_folder:
@@ -451,16 +537,36 @@ def _bucket_operation(args, config):
 def dispatch(args, instance: Path) -> dict:
     if args.command == "auth":
         if args.auth_command == "start":
-            return {"ok": True, **start_oauth_session()}
+            started = start_oauth_session() if args.purpose == "r2" else start_oauth_session(args.purpose)
+            return {"ok": True, **started}
         if args.auth_command == "poll":
-            return {"ok": True, **poll_oauth_session(args.session_id, dimension_id=args.dimension)}
+            kwargs = {"dimension_id": args.dimension}
+            if args.purpose is not None:
+                kwargs["purpose"] = args.purpose
+            return {"ok": True, **poll_oauth_session(args.session_id, **kwargs)}
         if args.auth_command == "wait":
-            return {"ok": True, **wait_oauth_session(args.session_id, timeout=args.timeout, poll_interval=args.poll_interval, dimension_id=args.dimension)}
+            kwargs = {
+                "timeout": args.timeout,
+                "poll_interval": args.poll_interval,
+                "dimension_id": args.dimension,
+            }
+            if args.purpose is not None:
+                kwargs["purpose"] = args.purpose
+            return {"ok": True, **wait_oauth_session(args.session_id, **kwargs)}
         if args.auth_command == "cancel":
             return {"ok": True, **cancel_oauth_session(args.session_id)}
         if args.auth_command == "logout":
             return {"ok": True, **logout_runtime_session(), "logged_out": True, "dimension_id": args.dimension}
-        return {"ok": True, "state": runtime_session_state(), "dimension_id": args.dimension}
+        state = runtime_session_state()
+        capabilities = list(runtime_capabilities()) if state == "connected" else []
+        return {
+            "ok": True,
+            "state": state,
+            "encryption_state": state,
+            "r2_state": "connected" if state == "connected" and "r2" in capabilities else state,
+            "capabilities": capabilities,
+            "dimension_id": args.dimension,
+        }
     if args.command == "provider":
         config = private_config() or {}
         if args.provider_command == "connection":
@@ -735,8 +841,8 @@ def dispatch(args, instance: Path) -> dict:
             return copy_snapshot_stream(instance, source_catalog, destination_catalog, source_backend, destination_backend, source_project, args.destination_project, source_snapshot, recipients, destination_etag=destination_etag)
         recipients = _recipients()
         jat_root = _jat_root()
-        if len(recipients) < 2:
-            raise ValueError("snapshot create requires JOSH_ROOM_JAT_ROOT and two age recipients")
+        if len(recipients) < 2 or len(set(recipients)) < 2:
+            raise ValueError("snapshot create requires encryption authorization with two age recipients")
         project_id, display_name = _room_identity(args.project)
         return {
             "ok": True,
@@ -793,12 +899,35 @@ def dispatch(args, instance: Path) -> dict:
                     args.output,
                     images=args.images,
                     all_images=args.all_images,
+                    images_files=args.images_files,
+                    hauler_manifests=args.hauler_manifests,
+                    chunk_size=args.chunk_size,
+                    exclude_extras=args.exclude_extras,
+                    retries=args.retries,
                 ),
             }
         if args.jat_command == "restore":
             return {"ok": True, **run_restore(jat_root, args.haul, args.destination)}
+        if args.jat_command == "inspect":
+            return {"ok": True, **run_inspect(jat_root, args.haul)}
+        if args.jat_command == "extract":
+            return {"ok": True, **run_extract(jat_root, args.haul, args.reference, args.destination)}
         if args.jat_command == "serve":
-            return {"ok": True, **run_serve(jat_root, args.haul)}
+            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode)}
+        if args.jat_command == "export":
+            return {"ok": True, **run_export(jat_root, args.haul, args.output)}
+        if args.jat_command == "copy":
+            return {
+                "ok": True,
+                **run_copy(
+                    jat_root,
+                    args.haul,
+                    args.to,
+                    retries=args.retries,
+                    plain_http=args.plain_http,
+                    insecure=args.insecure,
+                ),
+            }
     if args.command == "setup":
         credentials = json.load(sys.stdin)
         required = {
@@ -1145,24 +1274,41 @@ def _identity() -> Path:
 
 def load_catalog(instance: Path, backend=None) -> Catalog:
     report_progress("catalog", "Reading encrypted Room catalog")
+    dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) if backend else None
     if backend is None:
         path = instance / "catalog.jroom.age"
         if not path.is_file():
-            raise ValueError("encrypted catalog is unavailable")
-        return Catalog(json.loads(decrypt(path, [_identity()])))
+            return Catalog.empty(dimension_id)
+        identity = os.environ.get("JOSH_ROOM_IDENTITY")
+        if not identity:
+            raise _encryption_authorization_required()
+        return Catalog.from_body(json.loads(decrypt(path, [Path(identity)])), dimension_id)
     encrypted, _etag = backend.read_catalog()
     if encrypted is None:
-        raise ValueError("encrypted catalog is unavailable")
+        return Catalog.empty(dimension_id)
+    identity = os.environ.get("JOSH_ROOM_IDENTITY")
+    if not identity:
+        raise _encryption_authorization_required()
     instance.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix=".catalog-read.", delete=False) as handle:
         path = Path(handle.name)
         handle.write(encrypted)
     try:
-        catalog = Catalog.from_body(json.loads(decrypt(path, [_identity()])), getattr(getattr(backend, "config", None), "dimension_id", None))
+        catalog = Catalog.from_body(json.loads(decrypt(path, [Path(identity)])), dimension_id)
         report_progress("catalog", "Room catalog is ready")
         return catalog
     finally:
         path.unlink(missing_ok=True)
+
+
+def _encryption_authorization_required() -> RuntimeError:
+    error = RuntimeError("encryption authorization required to read the Room catalog")
+    error.result = {
+        "error_code": "encryption-authorization-required",
+        "authorization_required": True,
+        "authorization_purpose": "encryption",
+    }
+    return error
 
 
 def list_projects(instance: Path, backend=None) -> list[tuple[str, str]]:
