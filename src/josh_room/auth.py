@@ -28,15 +28,16 @@ def _runtime_paths() -> tuple[Path, ...]:
 
 
 def _clear_runtime_session() -> None:
-    for path in _runtime_paths():
+    credentials, identity, config, metadata = _runtime_paths()
+    for path in (credentials, identity, config, metadata):
         path.unlink(missing_ok=True)
-    for name in (
-        "JOSH_ROOM_RUNTIME_CREDENTIALS",
-        "JOSH_ROOM_RUNTIME_CONFIG",
-        "JOSH_ROOM_RUNTIME_PROFILE",
-    ):
-        os.environ.pop(name, None)
-    if os.environ.get("JOSH_ROOM_IDENTITY") == str(_runtime_paths()[1]):
+    if os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS") == str(credentials):
+        os.environ.pop("JOSH_ROOM_RUNTIME_CREDENTIALS", None)
+    if os.environ.get("JOSH_ROOM_RUNTIME_CONFIG") == str(config):
+        os.environ.pop("JOSH_ROOM_RUNTIME_CONFIG", None)
+    if os.environ.get("JOSH_ROOM_RUNTIME_PROFILE") == "oauth-runtime":
+        os.environ.pop("JOSH_ROOM_RUNTIME_PROFILE", None)
+    if os.environ.get("JOSH_ROOM_IDENTITY") == str(identity):
         os.environ.pop("JOSH_ROOM_IDENTITY", None)
 
 
@@ -211,8 +212,10 @@ def _set_runtime_environment(capabilities: tuple[str, ...]) -> None:
         os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] = str(credentials)
         os.environ["JOSH_ROOM_RUNTIME_PROFILE"] = "oauth-runtime"
     else:
-        os.environ.pop("JOSH_ROOM_RUNTIME_CREDENTIALS", None)
-        os.environ.pop("JOSH_ROOM_RUNTIME_PROFILE", None)
+        if os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS") == str(credentials):
+            os.environ.pop("JOSH_ROOM_RUNTIME_CREDENTIALS", None)
+        if os.environ.get("JOSH_ROOM_RUNTIME_PROFILE") == "oauth-runtime":
+            os.environ.pop("JOSH_ROOM_RUNTIME_PROFILE", None)
 
 
 def _load_runtime(require_r2: bool = False) -> bool:

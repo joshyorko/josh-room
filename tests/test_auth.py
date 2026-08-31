@@ -471,6 +471,46 @@ def test_encryption_only_runtime_keeps_minio_config_and_discards_r2_material(tmp
     assert os.environ.get("JOSH_ROOM_RUNTIME_PROFILE") is None
 
 
+def test_encryption_only_runtime_preserves_extension_minio_credential_broker(tmp_path, monkeypatch, request):
+    broker = tmp_path / "extension-credentials.json"
+    broker.write_text(json.dumps({
+        "profiles": {
+            "minio-profile": {
+                "access-key-id": "synthetic-access",
+                "secret-access-key": "synthetic-secret",
+            },
+        },
+    }))
+    broker.chmod(0o600)
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_RUNTIME_CREDENTIALS", str(broker))
+    monkeypatch.delenv("JOSH_ROOM_RUNTIME_PROFILE", raising=False)
+    request.addfinalizer(auth._clear_runtime_session)
+
+    auth._write_runtime({
+        "purpose": "encryption",
+        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "expiresIn": 600,
+    }, dimension_id="backup")
+
+    assert os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] == str(broker)
+    assert keyring.lookup("minio-profile", allow_runtime=False) == {
+        "access-key-id": "synthetic-access",
+        "secret-access-key": "synthetic-secret",
+    }
+    assert auth.load_runtime_session() is True
+    assert os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] == str(broker)
+    auth._clear_runtime_session()
+    assert os.environ["JOSH_ROOM_RUNTIME_CREDENTIALS"] == str(broker)
+    assert keyring.lookup("minio-profile", allow_runtime=False) == {
+        "access-key-id": "synthetic-access",
+        "secret-access-key": "synthetic-secret",
+    }
+
+
 def test_permissive_runtime_identity_is_cleared(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
