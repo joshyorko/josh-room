@@ -428,7 +428,7 @@ def test_oauth_runtime_overlay_updates_referenced_connection_without_corrupting_
         os.environ.pop(name, None)
 
 
-def test_encryption_only_runtime_keeps_minio_config_and_discards_r2_material(tmp_path, monkeypatch):
+def test_encryption_only_runtime_keeps_minio_config_and_discards_r2_material(tmp_path, monkeypatch, request):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     persisted = {
@@ -446,6 +446,7 @@ def test_encryption_only_runtime_keeps_minio_config_and_discards_r2_material(tmp
     (config_dir / "config.json").write_text(json.dumps(persisted))
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(config_dir))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    request.addfinalizer(auth._clear_runtime_session)
 
     auth._write_runtime({
         "purpose": "encryption",

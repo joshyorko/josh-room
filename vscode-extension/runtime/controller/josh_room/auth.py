@@ -33,10 +33,11 @@ def _clear_runtime_session() -> None:
     for name in (
         "JOSH_ROOM_RUNTIME_CREDENTIALS",
         "JOSH_ROOM_RUNTIME_CONFIG",
-        "JOSH_ROOM_IDENTITY",
         "JOSH_ROOM_RUNTIME_PROFILE",
     ):
         os.environ.pop(name, None)
+    if os.environ.get("JOSH_ROOM_IDENTITY") == str(_runtime_paths()[1]):
+        os.environ.pop("JOSH_ROOM_IDENTITY", None)
 
 
 def _validate_purpose(purpose: str) -> str:

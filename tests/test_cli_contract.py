@@ -1,8 +1,10 @@
 import argparse
 import json
+import os
 import stat
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +52,61 @@ def test_auth_logout_is_a_local_session_operation_and_never_requires_a_connectio
     result = json.loads(capsys.readouterr().out)
     assert result == {"dimension_id": None, "logged_out": True, "ok": True, "status": "logged_out"}
     assert not any((runtime / name).exists() for name in ("r2.json", "age.identity", "config.json", "session.json"))
+
+
+def test_minio_snapshot_keeps_keyring_identity_when_expired_runtime_is_cleared(tmp_path, monkeypatch, capsys):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "config.json").write_text(json.dumps({
+        "age_identity_profile": "synthetic-age-profile",
+        "age_recipients": ["age1daily", "age1recovery"],
+    }))
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    (runtime / "r2.json").write_text("synthetic-stale-credentials")
+    (runtime / "age.identity").write_text("synthetic-stale-identity")
+    (runtime / "config.json").write_text("synthetic-stale-config")
+    (runtime / "session.json").write_text(json.dumps({"expires_at": 0}))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(config))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY", "JOSH_ROOM_RUNTIME_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+    monkeypatch.setattr(
+        "josh_room.cli.lookup_keyring_value",
+        lambda profile, field: "AGE-SECRET-KEY-keyring" if (profile, field) == ("synthetic-age-profile", "age-identity") else None,
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "josh_room.cli.dispatch",
+        lambda _args, _instance: captured.update({"identity": Path(os.environ["JOSH_ROOM_IDENTITY"]).read_text()}) or {"ok": True},
+    )
+
+    assert main(["snapshot", "create", "demo", "--backend", "minio", "--json"]) == 0
+    capsys.readouterr()
+    assert captured["identity"] == "AGE-SECRET-KEY-keyring\n"
+
+
+def test_auth_status_reports_encryption_only_runtime_as_r2_missing(tmp_path, monkeypatch, capsys):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    identity = runtime / "age.identity"
+    identity.write_text("AGE-SECRET-KEY-encryption-only\n")
+    identity.chmod(0o600)
+    (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "session.json").write_text(json.dumps({
+        "expires_at": 4102444800,
+        "capabilities": ["encryption"],
+    }))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+
+    assert main(["auth", "status", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["state"] == "connected"
+    assert result["encryption_state"] == "connected"
+    assert result["r2_state"] == "missing"
+    assert result["capabilities"] == ["encryption"]
 
 
 def test_r2_command_initializes_system_trust_before_auth_and_dispatch(monkeypatch, capsys):

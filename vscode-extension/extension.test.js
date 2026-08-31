@@ -1705,6 +1705,38 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
 
+test("encryption-only authorization does not mark the synthetic R2 Dimension connected", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-encryption-only-auth-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "backup", display_name: "Backup", provider: "minio" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({
+      ok: true,
+      state: "connected",
+      encryption_state: "connected",
+      r2_state: "missing",
+      capabilities: ["encryption"],
+    }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const r2 = buildProviderTree(catalog).find((provider) => provider.provider === "r2");
+  const connection = r2.children[0];
+
+  assert.equal(connection.state, "missing");
+  assert.equal(connection.label, "⚠ Not connected");
+  assert.equal(connection.description, "Connect Cloudflare");
+  assert.equal(connection.children.length, 1);
+  assert.deepEqual(connection.children[0].children, []);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args.includes("--with-hierarchy") && entry.args.includes("r2")), false);
+});
+
 test("disconnected MinIO storage stays disconnected and does not load hierarchy until reconnect", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-disconnected-test-"));
   const { vscode, statusItem } = createVscodeMock(root);

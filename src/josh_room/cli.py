@@ -17,6 +17,7 @@ from .auth import (
     load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
+    r2_session_state,
     runtime_capabilities,
     runtime_session_state,
     start_oauth_session,
@@ -563,7 +564,7 @@ def dispatch(args, instance: Path) -> dict:
             "ok": True,
             "state": state,
             "encryption_state": state,
-            "r2_state": "connected" if state == "connected" and "r2" in capabilities else state,
+            "r2_state": r2_session_state(),
             "capabilities": capabilities,
             "dimension_id": args.dimension,
         }
