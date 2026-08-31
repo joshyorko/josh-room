@@ -74,6 +74,8 @@ class ConnectionConfig:
                 raise ValueError(f"connection {name} must be a non-empty string")
         _validate_identifier("connection id", self.connection_id)
         _validate_endpoint(self.endpoint)
+        if self.provider != "r2" and self.credential_profile == "oauth-runtime":
+            raise ValueError("credential profile oauth-runtime is reserved for R2")
         if not isinstance(self.region, str):
             raise TypeError("connection region must be a string")
         if not isinstance(self.auth_state, str) or not self.auth_state:
@@ -158,6 +160,8 @@ class DimensionConfig:
                 raise ValueError(f"Dimension {name} must be a non-empty string")
         _validate_identifier("dimension id", self.dimension_id)
         _validate_identifier("catalog key", self.catalog_key)
+        if self.provider != "r2" and self.credential_profile == "oauth-runtime":
+            raise ValueError("credential profile oauth-runtime is reserved for R2")
         if self.connection_id is not None:
             _validate_identifier("connection id", self.connection_id)
         if not isinstance(self.region, str):

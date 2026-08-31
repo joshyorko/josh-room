@@ -9,11 +9,13 @@ from pathlib import Path
 def available() -> bool:
     if shutil.which("secret-tool") is not None:
         return True
-    runtime_path = os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS")
+    runtime_paths = (
+        os.environ.get("JOSH_ROOM_PROVIDER_CREDENTIALS"),
+        os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS"),
+    )
     return (
         os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1"
-        and runtime_path is not None
-        and _private_file(Path(runtime_path))
+        and any(value is not None and _private_file(Path(value)) for value in runtime_paths)
     )
 
 
@@ -63,8 +65,13 @@ def lookup(profile: str, *, allow_runtime: bool | None = None) -> dict[str, str]
     """Read operation-time credentials from Secret Service without logging them."""
     runtime_profile = os.environ.get("JOSH_ROOM_RUNTIME_PROFILE", "oauth-runtime")
     runtime_path = os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS")
+    provider_path = os.environ.get("JOSH_ROOM_PROVIDER_CREDENTIALS")
     if allow_runtime is None:
         allow_runtime = profile == runtime_profile
+    if provider_path and profile != runtime_profile:
+        credentials = _runtime_credentials(profile, runtime_profile, provider_path, False)
+        if credentials is not None:
+            return credentials
     credentials = _runtime_credentials(profile, runtime_profile, runtime_path, allow_runtime)
     if credentials is not None:
         return credentials

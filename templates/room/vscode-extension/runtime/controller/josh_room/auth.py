@@ -2,6 +2,7 @@ import json
 import os
 import re
 import stat
+import tempfile
 import time
 import urllib.request
 import webbrowser
@@ -27,10 +28,29 @@ def _runtime_paths() -> tuple[Path, ...]:
     return tuple(root / name for name in _RUNTIME_FILES)
 
 
+def _r2_logout_marker() -> Path:
+    return _runtime_root() / "r2-logout.json"
+
+
+def _write_private_json(path: Path, body: dict) -> None:
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(body, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _clear_runtime_session() -> None:
     credentials, identity, config, metadata = _runtime_paths()
     for path in (credentials, identity, config, metadata):
         path.unlink(missing_ok=True)
+    _r2_logout_marker().unlink(missing_ok=True)
     if os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS") == str(credentials):
         os.environ.pop("JOSH_ROOM_RUNTIME_CREDENTIALS", None)
     if os.environ.get("JOSH_ROOM_RUNTIME_CONFIG") == str(config):
@@ -39,6 +59,33 @@ def _clear_runtime_session() -> None:
         os.environ.pop("JOSH_ROOM_RUNTIME_PROFILE", None)
     if os.environ.get("JOSH_ROOM_IDENTITY") == str(identity):
         os.environ.pop("JOSH_ROOM_IDENTITY", None)
+
+
+def _recover_r2_logout() -> bool:
+    marker = _r2_logout_marker()
+    if not marker.exists():
+        return False
+    if marker.is_symlink() or not marker.is_file() or stat.S_IMODE(marker.stat().st_mode) & 0o077:
+        _clear_runtime_session()
+        return False
+    try:
+        body = json.loads(marker.read_text())
+        config_body = body["config"]
+        metadata_body = body["metadata"]
+        if not isinstance(config_body, dict) or not isinstance(metadata_body, dict) \
+                or metadata_body.get("capabilities") != ["encryption"] \
+                or metadata_body.get("purpose") != "encryption" \
+                or not isinstance(metadata_body.get("expires_at"), (int, float)):
+            raise ValueError("invalid R2 logout recovery marker")
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        _clear_runtime_session()
+        return False
+    credentials, _identity, config, metadata = _runtime_paths()
+    _write_private_json(config, config_body)
+    _write_private_json(metadata, metadata_body)
+    credentials.unlink(missing_ok=True)
+    marker.unlink()
+    return True
 
 
 def _validate_purpose(purpose: str) -> str:
@@ -86,10 +133,43 @@ def cancel_oauth_session(session_id: str) -> dict:
     return result
 
 
-def logout_runtime_session() -> dict:
-    """Forget the local Cloudflare session without contacting the authority."""
-    _clear_runtime_session()
-    return {"status": "logged_out"}
+def logout_runtime_session(purpose: str = "all") -> dict:
+    """Forget R2 authority or the complete local session without contacting the authority."""
+    if purpose not in {"all", "r2"}:
+        raise ValueError("logout purpose must be all or r2")
+    if purpose == "all":
+        _clear_runtime_session()
+        return {"status": "logged_out"}
+
+    state, capabilities = _read_runtime()
+    if state != "connected" or "encryption" not in capabilities:
+        return {"status": "logged_out", "encryption_preserved": False}
+    if "r2" not in capabilities:
+        _set_runtime_environment(capabilities)
+        return {"status": "logged_out", "encryption_preserved": True}
+
+    _credentials, _identity, config, metadata = _runtime_paths()
+    runtime_config = json.loads(config.read_text())
+    metadata_body = json.loads(metadata.read_text())
+    age_recipients = runtime_config["age_recipients"]
+    persisted_path = config_dir() / "config.json"
+    try:
+        persisted = json.loads(persisted_path.read_text()) if persisted_path.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        persisted = {}
+    downgraded = json.loads(json.dumps(persisted)) if isinstance(persisted, dict) else {}
+    downgraded["age_recipients"] = list(age_recipients)
+    _write_private_json(_r2_logout_marker(), {
+        "config": downgraded,
+        "metadata": {
+            "expires_at": metadata_body["expires_at"],
+            "capabilities": ["encryption"],
+            "purpose": "encryption",
+        },
+    })
+    _recover_r2_logout()
+    _set_runtime_environment(("encryption",))
+    return {"status": "logged_out", "encryption_preserved": True}
 
 
 def wait_oauth_session(
@@ -123,6 +203,7 @@ def _valid_identity(value: str) -> bool:
 
 
 def _read_runtime() -> tuple[str, tuple[str, ...]]:
+    _recover_r2_logout()
     credentials, identity, config, metadata = _runtime_paths()
     if not metadata.is_file() or metadata.is_symlink():
         if any(path.exists() for path in (credentials, identity, config, metadata)):

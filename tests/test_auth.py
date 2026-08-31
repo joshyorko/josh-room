@@ -511,6 +511,180 @@ def test_encryption_only_runtime_preserves_extension_minio_credential_broker(tmp
     }
 
 
+def test_r2_runtime_keeps_minio_broker_separate_from_oauth_credentials(tmp_path, monkeypatch, request):
+    broker = tmp_path / "extension-credentials.json"
+    broker.write_text(json.dumps({
+        "profiles": {
+            "minio-profile": {
+                "access-key-id": "synthetic-minio-access",
+                "secret-access-key": "synthetic-minio-secret",
+            },
+        },
+    }))
+    broker.chmod(0o600)
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_PROVIDER_CREDENTIALS", str(broker))
+    monkeypatch.delenv("JOSH_ROOM_RUNTIME_CREDENTIALS", raising=False)
+    monkeypatch.delenv("JOSH_ROOM_RUNTIME_PROFILE", raising=False)
+    request.addfinalizer(auth._clear_runtime_session)
+
+    auth._write_runtime({
+        "purpose": "r2",
+        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-r2-access",
+        "secretAccessKey": "synthetic-r2-secret",
+        "sessionToken": "synthetic-r2-session",
+        "endpoint": "https://r2.example.invalid",
+        "bucket": "r2-bucket",
+        "expiresIn": 600,
+    })
+
+    assert os.environ["JOSH_ROOM_PROVIDER_CREDENTIALS"] == str(broker)
+    assert keyring.lookup("minio-profile", allow_runtime=False) == {
+        "access-key-id": "synthetic-minio-access",
+        "secret-access-key": "synthetic-minio-secret",
+    }
+    assert keyring.lookup("oauth-runtime", allow_runtime=True) == {
+        "access-key-id": "synthetic-r2-access",
+        "secret-access-key": "synthetic-r2-secret",
+        "session-token": "synthetic-r2-session",
+    }
+
+
+def test_r2_logout_downgrades_to_encryption_and_preserves_minio(tmp_path, monkeypatch, request):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    persisted = {
+        "connections": {
+            "minio": {
+                "display_name": "MinIO",
+                "provider": "minio",
+                "endpoint": "https://minio.example.invalid",
+                "credential_profile": "minio-profile",
+            },
+        },
+        "dimensions": {
+            "backup": {
+                "display_name": "Backup",
+                "connection_id": "minio",
+                "bucket": "backup",
+            },
+        },
+    }
+    (config_dir / "config.json").write_text(json.dumps(persisted))
+    broker = tmp_path / "extension-credentials.json"
+    broker.write_text(json.dumps({
+        "profiles": {
+            "minio-profile": {
+                "access-key-id": "synthetic-minio-access",
+                "secret-access-key": "synthetic-minio-secret",
+            },
+        },
+    }))
+    broker.chmod(0o600)
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_PROVIDER_CREDENTIALS", str(broker))
+    request.addfinalizer(auth._clear_runtime_session)
+
+    auth._write_runtime({
+        "purpose": "r2",
+        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-r2-access",
+        "secretAccessKey": "synthetic-r2-secret",
+        "sessionToken": "synthetic-r2-session",
+        "endpoint": "https://r2.example.invalid",
+        "bucket": "r2-bucket",
+        "expiresIn": 600,
+    })
+
+    assert auth.logout_runtime_session(purpose="r2") == {
+        "status": "logged_out",
+        "encryption_preserved": True,
+    }
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    assert not (runtime / "r2.json").exists()
+    assert (runtime / "age.identity").is_file()
+    assert auth.runtime_session_state() == "connected"
+    assert auth.runtime_capabilities() == ("encryption",)
+    assert auth.r2_session_state() == "missing"
+    runtime_config = json.loads((runtime / "config.json").read_text())
+    assert runtime_config == {**persisted, "age_recipients": ["age1daily", "age1recovery"]}
+    assert keyring.lookup("minio-profile", allow_runtime=False)["access-key-id"] == "synthetic-minio-access"
+
+
+def test_r2_logout_write_failure_recovers_encryption_session(tmp_path, monkeypatch, request):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    request.addfinalizer(auth._clear_runtime_session)
+    auth._write_runtime({
+        "purpose": "r2",
+        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-r2-access",
+        "secretAccessKey": "synthetic-r2-secret",
+        "sessionToken": "synthetic-r2-session",
+        "endpoint": "https://r2.example.invalid",
+        "bucket": "r2-bucket",
+        "expiresIn": 600,
+    })
+    original_replace = auth.os.replace
+    failed = False
+
+    def fail_metadata_replace(source, destination):
+        nonlocal failed
+        if not failed and Path(destination).name == "session.json":
+            failed = True
+            raise OSError("synthetic metadata replace failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(auth.os, "replace", fail_metadata_replace)
+    with pytest.raises(OSError, match="synthetic metadata replace failure"):
+        auth.logout_runtime_session(purpose="r2")
+    monkeypatch.setattr(auth.os, "replace", original_replace)
+
+    assert auth.runtime_session_state() == "connected"
+    assert auth.runtime_capabilities() == ("encryption",)
+    assert auth.r2_session_state() == "missing"
+
+
+def test_r2_logout_interruption_after_credential_removal_recovers(tmp_path, monkeypatch, request):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    request.addfinalizer(auth._clear_runtime_session)
+    auth._write_runtime({
+        "purpose": "r2",
+        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-r2-access",
+        "secretAccessKey": "synthetic-r2-secret",
+        "sessionToken": "synthetic-r2-session",
+        "endpoint": "https://r2.example.invalid",
+        "bucket": "r2-bucket",
+        "expiresIn": 600,
+    })
+    original_unlink = Path.unlink
+
+    def fail_marker_unlink(path, *args, **kwargs):
+        if path.name == "r2-logout.json":
+            raise OSError("synthetic interruption")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_marker_unlink)
+    with pytest.raises(OSError, match="synthetic interruption"):
+        auth.logout_runtime_session(purpose="r2")
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+
+    assert auth.runtime_session_state() == "connected"
+    assert auth.runtime_capabilities() == ("encryption",)
+    assert auth.r2_session_state() == "missing"
+
+
 def test_permissive_runtime_identity_is_cleared(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)

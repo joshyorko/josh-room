@@ -196,7 +196,7 @@ function buildProviderTree(catalog = {}) {
   const dimensions = records(catalog.dimensions);
   const connections = connectionRecords(catalog);
   const fallbackProjects = records(catalog.projects, "id");
-  const sourceDimensions = dimensions.length ? dimensions : [{
+  const sourceDimensions = dimensions.length ? dimensions : connections.length || catalog.offer_synthetic_r2 === false ? [] : [{
     id: catalog.dimension_id || "r2",
     display_name: catalog.dimension_name || "Default",
     provider: catalog.provider || "r2",
@@ -294,6 +294,35 @@ function buildProviderTree(catalog = {}) {
       grouped.get(providerId).children.push(connectionNode);
     }
     connectionNode.children.push(dimensionNode);
+  }
+  for (const connection of connections) {
+    const connectionId = connection.id || connection.connection_id;
+    const providerId = providerKey(connection.provider);
+    if (!connectionId || connectionNodes.has(`${providerId}:${connectionId}`)) continue;
+    if (!grouped.has(providerId)) {
+      grouped.set(providerId, {
+        kind: "provider",
+        id: providerId,
+        label: providerLabel(connection.provider || providerId),
+        provider: providerId,
+        children: [],
+      });
+    }
+    const connectionState = connection.connection_state
+      || (connection.auth_state === "disconnected" ? "disconnected" : connection.auth_state === "expired" ? "expired" : "connected");
+    grouped.get(providerId).children.push({
+      kind: "connection",
+      id: connectionId,
+      label: connectionState === "connected"
+        ? connection.display_name || connection.name || connection.label || connection.endpoint || connectionId
+        : connectionLabel(connectionState),
+      description: connectionState === "expired" || connectionState === "disconnected"
+        ? "Reconnect" : connectionState === "connected" ? "Connected" : "Connect",
+      state: connectionState,
+      provider: providerId,
+      connection,
+      children: [],
+    });
   }
   return [...grouped.values()];
 }

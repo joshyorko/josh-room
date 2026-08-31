@@ -130,6 +130,23 @@ def test_minio_connection_client_uses_arbitrary_endpoint_and_existing_keyring(mo
     assert captured["aws_secret_access_key"] == "synthetic-secret"
 
 
+def test_minio_provider_rejects_reserved_oauth_runtime_profile():
+    body = _connection()
+    body["credential_profile"] = "oauth-runtime"
+
+    with pytest.raises(ValueError, match="reserved for R2"):
+        config_module.ConnectionConfig.from_private("home-minio", body)
+
+    with pytest.raises(ValueError, match="reserved for R2"):
+        config_module.DimensionConfig.from_private("home-minio", {
+            "display_name": "Home MinIO",
+            "provider": "minio",
+            "endpoint": "https://minio.example.invalid:9000",
+            "bucket": "rooms",
+            "credential_profile": "oauth-runtime",
+        })
+
+
 def test_minio_profile_never_consumes_unrelated_r2_runtime_credentials(tmp_path, monkeypatch):
     runtime = tmp_path / "r2.json"
     runtime.write_text(json.dumps({
