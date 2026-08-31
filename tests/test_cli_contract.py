@@ -1,8 +1,10 @@
 import argparse
 import json
+import os
 import stat
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +52,61 @@ def test_auth_logout_is_a_local_session_operation_and_never_requires_a_connectio
     result = json.loads(capsys.readouterr().out)
     assert result == {"dimension_id": None, "logged_out": True, "ok": True, "status": "logged_out"}
     assert not any((runtime / name).exists() for name in ("r2.json", "age.identity", "config.json", "session.json"))
+
+
+def test_minio_snapshot_keeps_keyring_identity_when_expired_runtime_is_cleared(tmp_path, monkeypatch, capsys):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "config.json").write_text(json.dumps({
+        "age_identity_profile": "synthetic-age-profile",
+        "age_recipients": ["age1daily", "age1recovery"],
+    }))
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    (runtime / "r2.json").write_text("synthetic-stale-credentials")
+    (runtime / "age.identity").write_text("synthetic-stale-identity")
+    (runtime / "config.json").write_text("synthetic-stale-config")
+    (runtime / "session.json").write_text(json.dumps({"expires_at": 0}))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(config))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY", "JOSH_ROOM_RUNTIME_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+    monkeypatch.setattr(
+        "josh_room.cli.lookup_keyring_value",
+        lambda profile, field: "AGE-SECRET-KEY-keyring" if (profile, field) == ("synthetic-age-profile", "age-identity") else None,
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "josh_room.cli.dispatch",
+        lambda _args, _instance: captured.update({"identity": Path(os.environ["JOSH_ROOM_IDENTITY"]).read_text()}) or {"ok": True},
+    )
+
+    assert main(["snapshot", "create", "demo", "--backend", "minio", "--json"]) == 0
+    capsys.readouterr()
+    assert captured["identity"] == "AGE-SECRET-KEY-keyring\n"
+
+
+def test_auth_status_reports_encryption_only_runtime_as_r2_missing(tmp_path, monkeypatch, capsys):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    identity = runtime / "age.identity"
+    identity.write_text("AGE-SECRET-KEY-encryption-only\n")
+    identity.chmod(0o600)
+    (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "session.json").write_text(json.dumps({
+        "expires_at": 4102444800,
+        "capabilities": ["encryption"],
+    }))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+
+    assert main(["auth", "status", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["state"] == "connected"
+    assert result["encryption_state"] == "connected"
+    assert result["r2_state"] == "missing"
+    assert result["capabilities"] == ["encryption"]
 
 
 def test_r2_command_initializes_system_trust_before_auth_and_dispatch(monkeypatch, capsys):
@@ -283,6 +340,66 @@ def test_runtime_default_r2_is_oauth_routed_before_dimension_resolution(tmp_path
 
     assert main(["snapshot", "create", "demo", "--dimension", "r2", "--json"]) == 0
     assert events == [{"dimension_id": "r2"}]
+
+
+def test_minio_snapshot_requires_explicit_encryption_authorization_without_r2_routing(monkeypatch, capsys):
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+    monkeypatch.setattr("josh_room.cli.load_runtime_session", lambda: False)
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda **_kwargs: pytest.fail("MinIO must not request R2 authorization"))
+    monkeypatch.setattr("josh_room.cli.dispatch", lambda *_args: pytest.fail("dispatch must wait for encryption authorization"))
+
+    assert main(["snapshot", "create", "demo", "--backend", "minio", "--json"]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["error_code"] == "encryption-authorization-required"
+    assert result["authorization_purpose"] == "encryption"
+
+
+def test_extension_controller_returns_stable_encryption_authorization_required_result(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+    monkeypatch.setattr("josh_room.cli.load_runtime_session", lambda: False)
+    monkeypatch.setattr("josh_room.cli.dispatch", lambda *_args: pytest.fail("dispatch must wait for encryption authorization"))
+
+    assert main(["snapshot", "create", "demo", "--backend", "minio", "--json"]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["error_code"] == "encryption-authorization-required"
+    assert result["authorization_purpose"] == "encryption"
+
+
+def test_default_minio_dimension_requires_encryption_authorization(tmp_path, monkeypatch):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "config.json").write_text(json.dumps({
+        "default_dimension": "backup",
+        "dimensions": {
+            "backup": {
+                "display_name": "Backup",
+                "provider": "minio",
+                "endpoint": "https://minio.example.invalid",
+                "bucket": "backup",
+                "credential_profile": "minio-profile",
+            },
+        },
+    }))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(config))
+    args = build_parser().parse_args(["snapshot", "create", "demo"])
+
+    module = __import__("josh_room.cli", fromlist=["_requires_encryption", "_requires_oauth"])
+    assert module._requires_encryption(args) is True
+    assert module._requires_oauth(args) is False
+
+
+def test_missing_remote_catalog_is_the_empty_first_run_state(tmp_path, monkeypatch):
+    class Backend:
+        config = type("Config", (), {"dimension_id": "backup"})()
+
+        def read_catalog(self):
+            return None, None
+
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    catalog = __import__("josh_room.cli", fromlist=["load_catalog"]).load_catalog(tmp_path / "instance", Backend())
+
+    assert catalog.body == {"format_version": 2, "dimension_id": "backup", "revision": 0, "projects": {}}
 
 
 def test_one_off_jat_commands_use_typed_service_without_room_backend(tmp_path, monkeypatch):

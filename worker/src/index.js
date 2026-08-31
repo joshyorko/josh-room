@@ -22,10 +22,38 @@ const durableStub = (env, id) => {
     return null;
   }
 };
+const authPurpose = async request => {
+  if (!request.headers.get("content-type")?.includes("application/json")) return "r2";
+  try {
+    const body = await request.json();
+    const purpose = body?.purpose || "r2";
+    return purpose === "encryption" || purpose === "r2" ? purpose : null;
+  } catch (_error) {
+    return null;
+  }
+};
+const authCapabilities = purpose => purpose === "encryption" ? ["encryption"] : ["encryption", "r2"];
+const authUrl = (env, state, challenge, purpose) => {
+  const auth = new URL("https://dash.cloudflare.com/oauth2/auth");
+  const values = {
+    response_type: "code",
+    client_id: env.OAUTH_CLIENT_ID,
+    redirect_uri: env.OAUTH_REDIRECT_URI,
+    state,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+  };
+  if (purpose === "r2") values.scope = "workers-r2.read workers-r2.write";
+  for (const [k, v] of Object.entries(values)) auth.searchParams.set(k, v);
+  auth.searchParams.set("josh_room_purpose", purpose);
+  return auth;
+};
 
 async function durableRouter(request, env) {
   const url = new URL(request.url);
   if (url.pathname === "/session/start" && request.method === "POST") {
+    const purpose = await authPurpose(request);
+    if (!purpose) return Response.json({ error: "invalid authorization purpose" }, { status: 400 });
     const id = env.OAUTH_SESSION.newUniqueId();
     const sessionId = id.toString();
     const nonce = random();
@@ -34,12 +62,11 @@ async function durableRouter(request, env) {
     await env.OAUTH_SESSION.get(id).fetch(new Request("https://session/start", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ nonce, verifier }),
+      body: JSON.stringify({ nonce, verifier, purpose }),
     }));
     const state = `${sessionId}.${nonce}`;
-    const auth = new URL("https://dash.cloudflare.com/oauth2/auth");
-    for (const [k, v] of Object.entries({ response_type: "code", client_id: env.OAUTH_CLIENT_ID, redirect_uri: env.OAUTH_REDIRECT_URI, scope: "workers-r2.read workers-r2.write", state, code_challenge: challenge, code_challenge_method: "S256" })) auth.searchParams.set(k, v);
-    return Response.json({ sessionId, authorizationUrl: auth.toString(), expiresIn: 600 });
+    const auth = authUrl(env, state, challenge, purpose);
+    return Response.json({ sessionId, authorizationUrl: auth.toString(), expiresIn: 600, purpose });
   }
   const cancel = url.pathname.match(/^\/session\/([^/]+)\/cancel$/);
   if (cancel && request.method === "POST") {
@@ -74,9 +101,18 @@ export class OAuthSession {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/start" && request.method === "POST") {
-      const { nonce, verifier } = await request.json();
+      const { nonce, verifier, purpose = "r2" } = await request.json();
+      if (purpose !== "encryption" && purpose !== "r2") {
+        return Response.json({ error: "invalid authorization purpose" }, { status: 400 });
+      }
       const expiresAt = Date.now() + 600_000;
-      await this.state.storage.put("session", { status: "pending", nonce, verifier, expiresAt });
+      await this.state.storage.put("session", {
+        status: "pending",
+        nonce,
+        verifier,
+        ...(purpose === "encryption" ? { purpose } : {}),
+        expiresAt,
+      });
       await this.state.storage.setAlarm(expiresAt);
       return Response.json({ status: "pending" });
     }
@@ -116,25 +152,33 @@ export class OAuthSession {
         await this.state.storage.put("session", { status: "denied", expiresAt: Date.now() + 120_000 });
         return new Response("This Cloudflare identity is not authorized for Josh Room.", { status: 403 });
       }
-      const temporary = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/r2/temp-access-credentials`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${result.access_token}`, "content-type": "application/json" },
-        body: JSON.stringify({ bucket: this.env.R2_BUCKET, permission: "object-read-write", ttlSeconds: 21600, parentAccessKeyId: this.env.R2_PARENT_ACCESS_KEY_ID })
-      });
-      const temporaryResult = await temporary.json();
-      if (!temporary.ok || !temporaryResult.success) return new Response("Temporary R2 authorization failed.", { status: 502 });
       const current = await this.state.storage.get("session");
       if (!current || current.status !== "pending") return new Response("Invalid or expired login.", { status: 400 });
+      const purpose = current.purpose || "r2";
+      let temporaryResult;
+      if (purpose === "r2") {
+        const temporary = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CLOUDFLARE_ACCOUNT_ID}/r2/temp-access-credentials`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${result.access_token}`, "content-type": "application/json" },
+          body: JSON.stringify({ bucket: this.env.R2_BUCKET, permission: "object-read-write", ttlSeconds: 21600, parentAccessKeyId: this.env.R2_PARENT_ACCESS_KEY_ID })
+        });
+        temporaryResult = await temporary.json();
+        if (!temporary.ok || !temporaryResult.success) return new Response("Temporary R2 authorization failed.", { status: 502 });
+      }
       await this.state.storage.put("session", {
         status: "authorized",
-        accessKeyId: temporaryResult.result.accessKeyId,
-        secretAccessKey: temporaryResult.result.secretAccessKey,
-        sessionToken: temporaryResult.result.sessionToken,
+        purpose,
+        capabilities: authCapabilities(purpose),
+        ...(purpose === "r2" ? {
+          accessKeyId: temporaryResult.result.accessKeyId,
+          secretAccessKey: temporaryResult.result.secretAccessKey,
+          sessionToken: temporaryResult.result.sessionToken,
+          endpoint: `https://${this.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+          bucket: this.env.R2_BUCKET,
+          expiresIn: 21600,
+        } : { expiresIn: 600 }),
         ageIdentity: this.env.OPERATIONAL_AGE_IDENTITY,
         ageRecipients: JSON.parse(this.env.AGE_RECIPIENTS),
-        endpoint: `https://${this.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-        bucket: this.env.R2_BUCKET,
-        expiresIn: 21600,
         expiresAt: Date.now() + 600_000,
       });
       return new Response("Josh Room authorized. Return to VS Code.");
@@ -152,15 +196,20 @@ export default {
     if (env.OAUTH_SESSION) return durableRouter(request, env);
     const url = new URL(request.url);
     if (url.pathname === "/session/start" && request.method === "POST") {
+      const purpose = await authPurpose(request);
+      if (!purpose) return Response.json({ error: "invalid authorization purpose" }, { status: 400 });
       const id = crypto.randomUUID();
       const state = random();
       const verifier = random();
       const challenge = b64(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(verifier))));
       await env.OAUTH_SESSIONS.put(`state:${state}`, JSON.stringify({ id, verifier }), { expirationTtl: 600 });
-      await env.OAUTH_SESSIONS.put(`session:${id}`, JSON.stringify({ status: "pending", state }), { expirationTtl: 600 });
-      const auth = new URL("https://dash.cloudflare.com/oauth2/auth");
-      for (const [k, v] of Object.entries({ response_type: "code", client_id: env.OAUTH_CLIENT_ID, redirect_uri: env.OAUTH_REDIRECT_URI, scope: "workers-r2.read workers-r2.write", state, code_challenge: challenge, code_challenge_method: "S256" })) auth.searchParams.set(k, v);
-      return Response.json({ sessionId: id, authorizationUrl: auth.toString(), expiresIn: 600 });
+      await env.OAUTH_SESSIONS.put(`session:${id}`, JSON.stringify({
+        status: "pending",
+        state,
+        ...(purpose === "encryption" ? { purpose } : {}),
+      }), { expirationTtl: 600 });
+      const auth = authUrl(env, state, challenge, purpose);
+      return Response.json({ sessionId: id, authorizationUrl: auth.toString(), expiresIn: 600, purpose });
     }
     const cancelMatch = url.pathname.match(/^\/session\/([^/]+)\/cancel$/);
     if (cancelMatch && request.method === "POST") {
@@ -195,25 +244,33 @@ export default {
         await env.OAUTH_SESSIONS.put(`session:${saved.id}`, JSON.stringify({ status: "denied" }), { expirationTtl: 120 });
         return new Response("This Cloudflare identity is not authorized for Josh Room.", { status: 403 });
       }
-      const temporary = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/r2/temp-access-credentials`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${result.access_token}`, "content-type": "application/json" },
-        body: JSON.stringify({ bucket: env.R2_BUCKET, permission: "object-read-write", ttlSeconds: 21600, parentAccessKeyId: env.R2_PARENT_ACCESS_KEY_ID })
-      });
-      const temporaryResult = await temporary.json();
-      if (!temporary.ok || !temporaryResult.success) return new Response("Temporary R2 authorization failed.", { status: 502 });
       const current = await env.OAUTH_SESSIONS.get(sessionKey, "json");
       if (!current || current.status !== "pending") return new Response("Invalid or expired login.", { status: 400 });
+      const purpose = current.purpose || "r2";
+      let temporaryResult;
+      if (purpose === "r2") {
+        const temporary = await fetch(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/r2/temp-access-credentials`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${result.access_token}`, "content-type": "application/json" },
+          body: JSON.stringify({ bucket: env.R2_BUCKET, permission: "object-read-write", ttlSeconds: 21600, parentAccessKeyId: env.R2_PARENT_ACCESS_KEY_ID })
+        });
+        temporaryResult = await temporary.json();
+        if (!temporary.ok || !temporaryResult.success) return new Response("Temporary R2 authorization failed.", { status: 502 });
+      }
       await env.OAUTH_SESSIONS.put(sessionKey, JSON.stringify({
         status: "authorized",
-        accessKeyId: temporaryResult.result.accessKeyId,
-        secretAccessKey: temporaryResult.result.secretAccessKey,
-        sessionToken: temporaryResult.result.sessionToken,
+        purpose,
+        capabilities: authCapabilities(purpose),
+        ...(purpose === "r2" ? {
+          accessKeyId: temporaryResult.result.accessKeyId,
+          secretAccessKey: temporaryResult.result.secretAccessKey,
+          sessionToken: temporaryResult.result.sessionToken,
+          endpoint: `https://${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+          bucket: env.R2_BUCKET,
+          expiresIn: 21600,
+        } : { expiresIn: 600 }),
         ageIdentity: env.OPERATIONAL_AGE_IDENTITY,
         ageRecipients: JSON.parse(env.AGE_RECIPIENTS),
-        endpoint: `https://${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-        bucket: env.R2_BUCKET,
-        expiresIn: 21600
       }), { expirationTtl: 600 });
       return new Response("Josh Room authorized. Return to VS Code.");
     }

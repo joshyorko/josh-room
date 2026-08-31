@@ -301,8 +301,8 @@ def test_runtime_session_state_distinguishes_missing_and_expired_authority(tmp_p
 def test_load_runtime_session_reuses_age_material_without_contacting_authority(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
-    (runtime / "r2.json").write_text("{}")
     (runtime / "age.identity").write_text("AGE-SECRET-KEY-synthetic\n")
+    (runtime / "age.identity").chmod(0o600)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600}))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
@@ -426,6 +426,90 @@ def test_oauth_runtime_overlay_updates_referenced_connection_without_corrupting_
     assert DimensionRegistry(runtime_config).select("archive").endpoint == "https://new.example.invalid"
     for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"):
         os.environ.pop(name, None)
+
+
+def test_encryption_only_runtime_keeps_minio_config_and_discards_r2_material(tmp_path, monkeypatch, request):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    persisted = {
+        "default_backend": "minio",
+        "dimensions": {
+            "backup": {
+                "display_name": "Backup",
+                "provider": "minio",
+                "endpoint": "https://minio.example.invalid",
+                "bucket": "backup",
+                "credential_profile": "minio-profile",
+            },
+        },
+    }
+    (config_dir / "config.json").write_text(json.dumps(persisted))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    request.addfinalizer(auth._clear_runtime_session)
+
+    auth._write_runtime({
+        "purpose": "encryption",
+        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "must-not-persist",
+        "secretAccessKey": "must-not-persist",
+        "sessionToken": "must-not-persist",
+        "endpoint": "https://r2.example.invalid",
+        "bucket": "r2-bucket",
+        "expiresIn": 600,
+    }, dimension_id="backup")
+
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime_config = json.loads((runtime / "config.json").read_text())
+    assert runtime_config == {**persisted, "age_recipients": ["age1daily", "age1recovery"]}
+    assert not (runtime / "r2.json").exists()
+    assert auth.runtime_session_state() == "connected"
+    assert auth.r2_session_state() == "missing"
+    assert auth.runtime_capabilities() == ("encryption",)
+    assert os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS") is None
+    assert os.environ.get("JOSH_ROOM_RUNTIME_PROFILE") is None
+
+
+def test_permissive_runtime_identity_is_cleared(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    identity = runtime / "age.identity"
+    identity.write_text("AGE-SECRET-KEY-synthetic\n")
+    identity.chmod(0o644)
+    (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    assert auth.runtime_session_state() == "missing"
+    assert not any(runtime.iterdir())
+
+
+@pytest.mark.parametrize("config_body", [None, [], "malformed"])
+def test_malformed_runtime_config_is_cleared_fail_closed(tmp_path, monkeypatch, config_body):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    (runtime / "age.identity").write_text("AGE-SECRET-KEY-synthetic\n")
+    (runtime / "age.identity").chmod(0o600)
+    (runtime / "config.json").write_text(json.dumps(config_body))
+    (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    assert auth.runtime_session_state() == "missing"
+    assert not runtime.exists() or not any(runtime.iterdir())
+
+
+def test_malformed_runtime_identity_is_cleared_fail_closed(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    (runtime / "age.identity").write_text("not-an-age-identity\n")
+    (runtime / "age.identity").chmod(0o600)
+    (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    assert auth.runtime_session_state() == "missing"
+    assert not runtime.exists() or not any(runtime.iterdir())
 
 
 def test_wait_oauth_session_polls_until_authorized_in_one_long_lived_operation(monkeypatch):

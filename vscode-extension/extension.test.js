@@ -613,6 +613,9 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   fs.mkdirSync(source);
   const { vscode, statusItem, quickPickCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "auth" && args[1] === "status") {
+      return { stdout: JSON.stringify({ ok: true, state: "connected", encryption_state: "connected" }) };
+    }
     if (args[0] === "dimensions") {
       return {
         stdout: JSON.stringify({
@@ -656,6 +659,60 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   assert.equal(quickPickCalls.length >= 3, true);
   assert.deepEqual(quickPickCalls[1].items.map((item) => item.display_name || item.label), ["Archive", "Backup"]);
   assert.match(spawnHarness.calls.at(-1).args.join(" "), /--dimension backup/);
+});
+
+test("Save Room to a fresh MinIO Dimension authorizes encryption once and preserves the target", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-minio-auth-test-"));
+  const source = path.join(root, "source-room");
+  fs.mkdirSync(source);
+  const { vscode, statusItem, openExternalCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) {
+      return { stdout: JSON.stringify({ ok: true, dimensions: [
+        { id: "backup", display_name: "Backup", provider: "minio", rooms: [] },
+      ] }) };
+    }
+    if (args[0] === "dimensions") {
+      return { stdout: JSON.stringify({ ok: true, dimensions: [
+        { id: "backup", display_name: "Backup", provider: "minio" },
+      ] }) };
+    }
+    if (args[0] === "auth" && args[1] === "status") {
+      return { stdout: JSON.stringify({ ok: true, state: "missing", encryption_state: "missing", r2_state: "missing" }) };
+    }
+    if (args[0] === "auth" && args[1] === "start") {
+      return { stdout: JSON.stringify({ ok: true, session_id: "encryption-session", authorization_url: "https://auth.example.invalid/encryption" }) };
+    }
+    if (args[0] === "auth" && args[1] === "wait") {
+      return { stdout: JSON.stringify({ ok: true, status: "authorized" }) };
+    }
+    if (args[0] === "snapshot" && args[1] === "create") {
+      return { stdout: JSON.stringify({ ok: true, project_id: "new-room", ciphertext_size: 1024 }) };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setSelectedDimensionId(undefined);
+  vscode.openDialogResponses.push([{ fsPath: source }]);
+  vscode.inputBoxResponses.push("New Room");
+  vscode.quickPickResponses.push(
+    { create: true },
+    { dimension: { id: "backup", display_name: "Backup", provider: "minio" } },
+    { label: "Workspace only", allImages: false },
+  );
+
+  assert.equal(await extension.__test__.saveRoom(), "saved");
+  assert.deepEqual(openExternalCalls.map((uri) => uri.value), ["https://auth.example.invalid/encryption"]);
+  const authStart = spawnHarness.calls.find((call) => call.args[0] === "auth" && call.args[1] === "start");
+  const authWait = spawnHarness.calls.find((call) => call.args[0] === "auth" && call.args[1] === "wait");
+  assert.ok(authStart.args.includes("--purpose") && authStart.args.includes("encryption"));
+  assert.ok(authWait.args.includes("--purpose") && authWait.args.includes("encryption"));
+  const snapshots = spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "create");
+  assert.equal(snapshots.length, 1);
+  assert.match(snapshots[0].args.join(" "), /--dimension backup/);
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "auth" && call.args[1] === "start" && call.args.includes("r2")), false);
 });
 
 test("startup refuses to mark a copied workspace as Saved when path binding is stale", async () => {
@@ -1646,6 +1703,38 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
   assert.equal(connection.description, "Connect Cloudflare");
   assert.equal(connectionItem.command.command, "joshRoom.connectStorage");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
+});
+
+test("encryption-only authorization does not mark the synthetic R2 Dimension connected", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-encryption-only-auth-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true,
+      dimensions: [{ id: "backup", display_name: "Backup", provider: "minio" }],
+    }) };
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({
+      ok: true,
+      state: "connected",
+      encryption_state: "connected",
+      r2_state: "missing",
+      capabilities: ["encryption"],
+    }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  const r2 = buildProviderTree(catalog).find((provider) => provider.provider === "r2");
+  const connection = r2.children[0];
+
+  assert.equal(connection.state, "missing");
+  assert.equal(connection.label, "⚠ Not connected");
+  assert.equal(connection.description, "Connect Cloudflare");
+  assert.equal(connection.children.length, 1);
+  assert.deepEqual(connection.children[0].children, []);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args.includes("--with-hierarchy") && entry.args.includes("r2")), false);
 });
 
 test("disconnected MinIO storage stays disconnected and does not load hierarchy until reconnect", async () => {
