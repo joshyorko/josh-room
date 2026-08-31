@@ -12,9 +12,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - name: Verify tag and package version
@@ -35,7 +35,7 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           (cd vscode-extension && npm run package -- --out "../dist/josh-room-${version}.vsix")
           (cd dist && sha256sum * > SHA256SUMS)
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: josh-room-dist
           path: dist/

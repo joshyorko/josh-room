@@ -24,8 +24,8 @@ jobs:
     if: inputs.platform == 'linux-x64'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Download and verify pinned RCC v18.19.3
@@ -53,7 +53,7 @@ jobs:
             --rcc-sha256 "$RCC_SHA256" \
             --output-dir dist/controller-artifact \
             --repository "$GITHUB_WORKSPACE"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: josh-room-controller-linux-amd64
           path: dist/controller-artifact/
@@ -62,8 +62,8 @@ jobs:
     if: inputs.platform == 'win32-x64'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Download and verify pinned RCC v18.19.3
@@ -90,7 +90,7 @@ jobs:
             --rcc-sha256 $env:RCC_SHA256 `
             --output-dir dist/controller-artifact `
             --repository $env:GITHUB_WORKSPACE
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: josh-room-controller-windows-amd64
           path: dist/controller-artifact/
