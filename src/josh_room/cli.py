@@ -69,6 +69,7 @@ from .workspace_state import local_status
 
 R2Backend = _r2.R2Backend
 R2Config = _r2.R2Config
+_HUMAN_DIAGNOSTIC_LIMIT = 4096
 
 
 def _store_credentials(profile, credentials):
@@ -1334,6 +1335,54 @@ def choose_project(instance: Path, backend=None) -> str:
         raise ValueError("invalid project selection") from error
 
 
+def _sanitize_human_diagnostic(value) -> str:
+    text = " ".join(str(value or "").split())
+    text = re.sub(r"(bearer\s+)[^\s,]+", r"\1[REDACTED]", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"((?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|password|oauth[-_ ]?code|authorization|stdin|argv|env)\s*[:=]\s*)[^\s,]+",
+        r"\1[REDACTED]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"https?://[^\s]+", "[REDACTED URL]", text, flags=re.IGNORECASE)
+    return text[:_HUMAN_DIAGNOSTIC_LIMIT]
+
+
+def _collect_human_diagnostics(value, key: str = "", in_diagnostic: bool = False) -> list[str]:
+    diagnostic_context = in_diagnostic or "diagnostic" in key.lower()
+    if isinstance(value, str):
+        return [_sanitize_human_diagnostic(value)] if diagnostic_context and value else []
+    if isinstance(value, list):
+        result = []
+        for entry in value:
+            result.extend(_collect_human_diagnostics(entry, key, diagnostic_context))
+        return result
+    if isinstance(value, dict):
+        result = []
+        for entry_key, entry in value.items():
+            result.extend(_collect_human_diagnostics(entry, entry_key, diagnostic_context))
+        return result
+    return []
+
+
+def _human_failure_message(result: dict) -> str:
+    base = _sanitize_human_diagnostic(result.get("error"))
+    diagnostics = []
+    for diagnostic in _collect_human_diagnostics(result):
+        if diagnostic and diagnostic not in diagnostics:
+            diagnostics.append(diagnostic)
+    diagnostic = _sanitize_human_diagnostic(" ".join(diagnostics))
+    if diagnostic and diagnostic in base:
+        parts = base.split(diagnostic)
+        base = f"{parts[0]}{diagnostic}{''.join(parts[1:])}".strip()
+    if diagnostic and diagnostic not in base:
+        if len(diagnostic) + 2 >= _HUMAN_DIAGNOSTIC_LIMIT:
+            return diagnostic
+        available = _HUMAN_DIAGNOSTIC_LIMIT - len(diagnostic) - 2
+        return f"{base[:max(0, available)]}: {diagnostic}" if base else diagnostic
+    return base[:_HUMAN_DIAGNOSTIC_LIMIT]
+
+
 def emit(result: dict, json_mode: bool) -> None:
     if json_mode:
         print(json.dumps(result, sort_keys=True))
@@ -1345,7 +1394,7 @@ def emit(result: dict, json_mode: bool) -> None:
     elif result["ok"]:
         print("ok: " + json.dumps(result, sort_keys=True))
     else:
-        message = result.get("error")
+        message = _human_failure_message(result)
         if not message:
             failed = [check for check in result.get("checks", []) if not check["ok"]]
             message = "; ".join(f"{check['name']}: {check['remediation']}" for check in failed)

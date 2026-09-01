@@ -654,7 +654,7 @@ function parseControllerOutput(output) {
 function sanitizeRuntimeLine(line) {
   let value = String(line).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim();
   value = value.replace(/(bearer\s+)[^\s]+/ig, "$1[REDACTED]");
-  value = value.replace(/((?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|password|oauth[-_ ]?code|authorization|stdin|argv|env)\s*[:=]\s*)[^\s,]+/ig, "$1[REDACTED]");
+  value = value.replace(/((?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|stdin|argv|env)\s*[:=]\s*)[^\s,]+/ig, "$1[REDACTED]");
   value = value.replace(/https?:\/\/[^\s]+/ig, (match) => {
     try {
       const url = new URL(match.replace(/[),.;]+$/, ""));
@@ -664,6 +664,103 @@ function sanitizeRuntimeLine(line) {
     }
   });
   return value.slice(0, 240);
+}
+
+const CONTROLLER_DIAGNOSTIC_LIMIT = 4096;
+
+function sanitizeControllerText(value) {
+  return String(value || "")
+    .replace(/\0/g, "")
+    .split(/\r?\n/)
+    .map((line) => sanitizeRuntimeLine(line))
+    .filter(Boolean)
+    .join(" ")
+    .slice(-CONTROLLER_DIAGNOSTIC_LIMIT);
+}
+
+function sanitizeControllerArgv(argv) {
+  const sanitized = [];
+  const sensitiveFlag = /^-{1,2}(?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|bearer)(?:$|[-_=])/i;
+  const sensitiveAssignment = /^(?:[a-z_][a-z0-9_]*(?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)\s*=/i;
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = String(argv[index]);
+    if (sensitiveFlag.test(value) && !value.includes("=")) {
+      sanitized.push(sanitizeRuntimeLine(value));
+      if (index + 1 < argv.length) sanitized.push("[REDACTED]");
+      index += 1;
+    } else if (sensitiveAssignment.test(value)) {
+      sanitized.push(sanitizeRuntimeLine(value));
+    } else {
+      sanitized.push(sanitizeRuntimeLine(value));
+    }
+  }
+  return sanitized;
+}
+
+function collectResultDiagnostics(value, key, diagnostics, inDiagnostic = false) {
+  const diagnosticContext = inDiagnostic || /diagnostic/i.test(String(key || ""));
+  if (typeof value === "string") {
+    if (diagnosticContext) diagnostics.push(sanitizeControllerText(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectResultDiagnostics(entry, key, diagnostics, diagnosticContext));
+    return;
+  }
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([entryKey, entry]) => collectResultDiagnostics(entry, entryKey, diagnostics, diagnosticContext));
+  }
+}
+
+function resultDiagnostic(result) {
+  const diagnostics = [];
+  collectResultDiagnostics(result, "", diagnostics);
+  return [...new Set(diagnostics.filter(Boolean))].join(" ").slice(-CONTROLLER_DIAGNOSTIC_LIMIT);
+}
+
+function redactResultDiagnostics(value, key = "", inDiagnostic = false) {
+  if (/^argv$/i.test(key) && Array.isArray(value)) return sanitizeControllerArgv(value);
+  const diagnosticContext = inDiagnostic || /error|message|diagnostic|stdout|stderr/i.test(key);
+  if (typeof value === "string") return diagnosticContext ? sanitizeControllerText(value) : value;
+  if (Array.isArray(value)) return value.map((entry) => redactResultDiagnostics(entry, key, diagnosticContext));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([entryKey, entry]) => [
+    entryKey,
+    redactResultDiagnostics(entry, entryKey, diagnosticContext),
+  ]));
+}
+
+function controllerFailure(result, { controllerExitStatus, controllerStderr } = {}) {
+  const diagnostic = resultDiagnostic(result);
+  const safeResult = redactResultDiagnostics(result);
+  const jat = result?.jat && typeof result.jat === "object" ? result.jat : {};
+  const jatExitStatus = jat.exit_status ?? jat.exitStatus ?? result?.exit_status;
+  const safeStderr = sanitizeControllerText(controllerStderr);
+  const baseMessage = sanitizeControllerText(result?.error) || "Josh Room operation failed.";
+  let message = String(baseMessage);
+  if (diagnostic && message.includes(diagnostic)) {
+    const parts = message.split(diagnostic);
+    message = `${parts[0]}${diagnostic}${parts.slice(1).join("")}`.trim();
+  }
+  if (diagnostic && !message.includes(diagnostic)) {
+    const available = CONTROLLER_DIAGNOSTIC_LIMIT - diagnostic.length - 2;
+    message = diagnostic.length + 2 >= CONTROLLER_DIAGNOSTIC_LIMIT
+      ? diagnostic
+      : `${message.slice(0, Math.max(0, available))}: ${diagnostic}`;
+  }
+  const failure = new Error(message);
+  failure.result = {
+    ...safeResult,
+    ...(controllerExitStatus !== undefined ? { controller_exit_status: controllerExitStatus } : {}),
+    ...(jatExitStatus !== undefined ? { jat_exit_status: jatExitStatus } : {}),
+    ...(safeStderr ? { controller_stderr: safeStderr } : {}),
+    ...(diagnostic ? { diagnostic } : {}),
+  };
+  if (controllerExitStatus !== undefined) failure.controller_exit_status = controllerExitStatus;
+  if (jatExitStatus !== undefined) failure.jat_exit_status = jatExitStatus;
+  if (safeStderr) failure.controller_stderr = safeStderr;
+  if (diagnostic) failure.diagnostic = diagnostic;
+  return failure;
 }
 
 async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
@@ -773,7 +870,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         return;
       }
       if (result) {
-        resolve({ stdout: JSON.stringify(result), stderr, runtime });
+        resolve({ stdout: JSON.stringify(result), stderr, runtime, controllerExitStatus: code });
         return;
       }
       if (code === 0) {
@@ -782,6 +879,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         const error = new Error(`Josh Room exited with status ${code}`);
         error.stdout = stdout;
         error.stderr = stderr;
+        error.controller_exit_status = code;
         error.command = runtime.command;
         error.args = runtime.args(args);
         error.resultPath = resultPath;
@@ -794,14 +892,16 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
 async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
   outputChannel?.info(`START · controller ${args.join(" ")}`);
   try {
-    const { stdout, runtime } = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload);
+    const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload);
+    const { stdout, runtime } = execution;
     const result = parseControllerOutput(stdout);
     // `status` deliberately returns ok=false for a changed or unlinked
     // workspace. That is authoritative state, not an operation failure.
     if (!result.ok && args[0] !== "status") {
-      const failure = new Error(result.error || "Josh Room operation failed.");
-      failure.result = result;
-      throw failure;
+      throw controllerFailure(result, {
+        controllerExitStatus: execution.controllerExitStatus,
+        controllerStderr: execution.stderr,
+      });
     }
     if (runtime?.markLocalReady) await runtime.markLocalReady();
     outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
@@ -818,9 +918,10 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
           outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
           return result;
         }
-        const failure = new Error(result.error || "Josh Room operation failed.");
-        failure.result = result;
-        throw failure;
+        throw controllerFailure(result, {
+          controllerExitStatus: error.controller_exit_status,
+          controllerStderr: error.stderr,
+        });
       } catch (parseError) {
         if (parseError instanceof SyntaxError) {
           outputChannel?.error(error.message || String(error));
@@ -2280,16 +2381,19 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   };
   activeAuthAttempt = attempt;
   try {
+    const encryptionLabel = "Josh Room encryption";
+    const encryptionContext = "via Cloudflare (MinIO stays selected; R2 stays disconnected)";
+    const encryptionTitle = "Authorizing Josh Room encryption via Cloudflare (MinIO stays selected; R2 stays disconnected)…";
     return await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: encryptionOnly ? "Preparing Josh Room encryption..." : "Connecting Cloudflare...",
+        title: encryptionOnly ? encryptionTitle : "Connecting Cloudflare...",
         cancellable: true,
       },
       async (progress, parentToken) => {
         const controller = createCancellationController(parentToken);
         attempt.controller = controller;
-        const authTitle = encryptionOnly ? "Preparing Josh Room encryption" : "Connecting Cloudflare";
+        const authTitle = encryptionOnly ? encryptionTitle.slice(0, -1) : "Connecting Cloudflare";
         const reporter = createVisualReporter(authTitle, operationKind(["auth", "start"]), progress);
         let sessionId;
         try {
@@ -2300,10 +2404,20 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
           const authorizationUrl = started.authorization_url || started.authorizationUrl;
           sessionId = started.session_id || started.sessionId;
           if (!authorizationUrl || !sessionId) {
-            throw new Error("Cloudflare connection did not return an authorization session.");
+            throw new Error(
+              encryptionOnly
+                ? `${encryptionLabel} authorization ${encryptionContext} did not return an authorization session.`
+                : "Cloudflare connection did not return an authorization session.",
+            );
           }
           const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
-          if (opened === false) throw new Error("Could not open Cloudflare authorization in your local browser.");
+          if (opened === false) {
+            throw new Error(
+              encryptionOnly
+                ? `Could not open ${encryptionLabel} authorization ${encryptionContext} in your local browser.`
+                : "Could not open Cloudflare authorization in your local browser.",
+            );
+          }
 
           if (controller.token.isCancellationRequested) return "cancelled";
           const result = await runJoshRoom(
@@ -2317,13 +2431,17 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
             if (roomsProvider) await roomsProvider.refresh();
             await vscode.window.showInformationMessage(
               encryptionOnly
-                ? "Josh Room encryption is ready. Your selected storage remains unchanged."
+                ? "Josh Room encryption is ready via Cloudflare. MinIO remains selected; Cloudflare R2 was not connected."
                 : "Cloudflare connected. Your Rooms are ready.",
             );
             reporter.finish();
             return "connected";
           }
-          throw new Error(`${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization ${result.status || "failed"}`);
+          throw new Error(
+            encryptionOnly
+              ? `${encryptionLabel} authorization ${encryptionContext} ${result.status || "failed"}.`
+              : `Cloudflare authorization ${result.status || "failed"}`,
+          );
         } catch (error) {
           const cancelled = controller.token.isCancellationRequested || isCancellationError(error);
           if (cancelled) {
@@ -2340,6 +2458,11 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
               ["auth", "status", "--dimension", targetDimensionId], cwd,
             ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled ${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization: ${statusError.message}`));
             return "cancelled";
+          }
+          if (encryptionOnly && !String(error.message || error).includes(encryptionContext)) {
+            const contextual = new Error(`${error.message || error}; ${encryptionContext}.`);
+            Object.assign(contextual, error);
+            error = contextual;
           }
           reporter.fail(error);
           throw error;

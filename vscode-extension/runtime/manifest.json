@@ -54,39 +54,39 @@
     }
   },
   "jat": {
-    "git_sha": "1b3cfbcb9ab4d184f4bc755c09789c3b1987e2b0",
+    "git_sha": "d8ca0779d14897c10ca6e0ec8b22ef2d70b6b57c",
     "source_archive": {
-      "asset": "josh-all-the-things-1b3cfbcb9ab4d184f4bc755c09789c3b1987e2b0.tar.gz",
-      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/1b3cfbcb9ab4d184f4bc755c09789c3b1987e2b0",
-      "sha256": "00f9249a7c6399239c1d3d776ec754352db1b2c8c7d0a71aa3711e108bb3283d",
-      "size": 89393
+      "asset": "josh-all-the-things-d8ca0779d14897c10ca6e0ec8b22ef2d70b6b57c.tar.gz",
+      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/d8ca0779d14897c10ca6e0ec8b22ef2d70b6b57c",
+      "sha256": "046b9e472f3a2cc6b9e04d57adac7ff328ea803d501b77fa9598739c010914e0",
+      "size": 95547
     },
     "environment_artifact": {
-      "digest": "sha256:3e473a015f809da0b77382e54da460da212f9fee2ee02f146736e7acd64f929c",
+      "digest": "sha256:62b8b7d5c796712148633973f1b7d011254ece84d37b5979fe3a37f6e956f2c8",
       "archive": {
         "asset": "jat-runtime-linux-amd64.rcca",
-        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-linux-amd64.rcca",
-        "sha256": "8ccd065e9156ac9067230b0f06dd667f98dc5b95af4535adc2715d02c279f751",
-        "size": 169752215
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.10-jat-runtime/jat-runtime-linux-amd64.rcca",
+        "sha256": "0b6d7d297fbe0a14a0c3ad93f31cff437fb5b2e75c0a4d5bf59e8f33a79676cc",
+        "size": 169755602
       }
     },
     "environment_artifacts": {
       "linux-x64": {
-        "digest": "sha256:3e473a015f809da0b77382e54da460da212f9fee2ee02f146736e7acd64f929c",
+        "digest": "sha256:62b8b7d5c796712148633973f1b7d011254ece84d37b5979fe3a37f6e956f2c8",
         "archive": {
           "asset": "jat-runtime-linux-amd64.rcca",
-          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-linux-amd64.rcca",
-          "sha256": "8ccd065e9156ac9067230b0f06dd667f98dc5b95af4535adc2715d02c279f751",
-          "size": 169752215
+          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.10-jat-runtime/jat-runtime-linux-amd64.rcca",
+          "sha256": "0b6d7d297fbe0a14a0c3ad93f31cff437fb5b2e75c0a4d5bf59e8f33a79676cc",
+          "size": 169755602
         }
       },
       "win32-x64": {
-        "digest": "sha256:b975746c61cd89e838b9fff63c7def943eb75b54f04cc6dbacfcf701e133229c",
+        "digest": "sha256:4f68b13e75573ac84dfc098c43e46110a8c1a093a62b8aff410efdf4ebe80c01",
         "archive": {
           "asset": "jat-runtime-windows-amd64.rcca",
-          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.9-jat-runtime/jat-runtime-windows-amd64.rcca",
-          "sha256": "b9c6cebe5b20c07299e01c20502caf285e48707115be27a31655ad558ad653d6",
-          "size": 103018723
+          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.10-jat-runtime/jat-runtime-windows-amd64.rcca",
+          "sha256": "df8aac74091856b9e8460f081f667271c90acaa0fcb699692a0f42c7f120cec4",
+          "size": 103018712
         }
       }
     }

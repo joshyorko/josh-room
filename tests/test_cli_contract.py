@@ -143,6 +143,59 @@ def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):
     assert json.loads(capsys.readouterr().out) == result
 
 
+@pytest.mark.parametrize("failure", [
+    {
+        "ok": False,
+        "error": "JAT restore failed with exit 1 " + "y" * 10000,
+        "exit_status": 1,
+        "diagnostic": "archive member has unsupported member type: symlink",
+        "diagnostics": "archive member has unsupported member type: symlink",
+    },
+    {
+        "ok": False,
+        "error": "JAT restore failed with exit 1 " + "y" * 10000,
+        "jat": {
+            "exit_status": 1,
+            "diagnostic": "archive member has unsupported member type: symlink",
+            "diagnostics": "archive member has unsupported member type: symlink",
+        },
+    },
+])
+def test_human_failure_receipt_includes_one_bounded_redacted_jat_diagnostic(failure, capsys):
+    emit({
+        **failure,
+        "diagnostic": failure.get("diagnostic", ""),
+        "diagnostics": failure.get("diagnostics", ""),
+        "controller_stderr": "Bearer synthetic-controller-token " + "x" * 10000,
+    }, False)
+
+    output = capsys.readouterr().out
+    actionable = "archive member has unsupported member type: symlink"
+    assert output.count(actionable) == 1
+    assert "synthetic-controller-token" not in output
+    assert len(output) <= 4200
+
+
+def test_human_failure_message_is_at_most_4096_with_a_4095_char_diagnostic(capsys):
+    diagnostic = "d" * 4095
+    emit({"ok": False, "error": "restore failed", "diagnostic": diagnostic}, False)
+
+    output = capsys.readouterr().out
+    assert len(output.rstrip("\n").removeprefix("error: ")) <= 4096
+
+
+def test_human_failure_message_deduplicates_diagnostic_already_in_error(capsys):
+    diagnostic = "archive member has unsupported member type: symlink"
+    emit({
+        "ok": False,
+        "error": f"JAT restore failed with exit 1: {diagnostic}; retry {diagnostic}",
+        "diagnostic": diagnostic,
+    }, False)
+
+    output = capsys.readouterr().out
+    assert output.count(diagnostic) == 1
+
+
 def test_doctor_json_is_stable(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("JOSH_ROOM_JAT_ROOT", str(tmp_path / "jat-isolated"))

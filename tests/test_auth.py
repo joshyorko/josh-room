@@ -756,6 +756,25 @@ def test_wait_oauth_session_reports_browser_wait_and_validation_elapsed_without_
     ]
 
 
+def test_wait_oauth_session_reports_encryption_authorization_without_cloudflare_wording(monkeypatch):
+    responses = iter([{"status": "pending"}, {"status": "authorized"}])
+    events = []
+    clock = [100.0]
+    monkeypatch.setattr("josh_room.auth._request", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr("josh_room.auth._write_runtime", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("josh_room.auth.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("josh_room.auth.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr("josh_room.auth.report_progress", lambda stage, message: events.append((stage, message)))
+
+    assert wait_oauth_session(
+        "session-one", timeout=10, poll_interval=2, dimension_id="backup", purpose="encryption"
+    ) == {"status": "authorized"}
+    assert events == [
+        ("auth", "Waiting for browser approval (0s elapsed)"),
+        ("auth", "Validating Josh Room encryption authorization (2s elapsed)"),
+    ]
+
+
 def test_extension_runtime_credentials_support_profile_scoped_secretstorage_handoff(tmp_path, monkeypatch):
     credentials = tmp_path / "credentials.json"
     credentials.write_text(json.dumps({

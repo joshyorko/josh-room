@@ -111,7 +111,8 @@ def poll_oauth_session(session_id: str, dimension_id: str | None = None, purpose
         return {"status": "pending"}
     if status != "authorized":
         _clear_runtime_session()
-        raise RuntimeError(f"Cloudflare authorization {status or 'failed'}")
+        label = "Josh Room encryption authorization" if purpose == "encryption" else "Cloudflare authorization"
+        raise RuntimeError(f"{label} {status or 'failed'}")
     if purpose is None:
         _write_runtime(session, dimension_id=dimension_id)
     else:
@@ -181,11 +182,13 @@ def wait_oauth_session(
 ) -> dict:
     deadline = time.monotonic() + timeout
     started_at = time.monotonic()
+    validation_label = "Josh Room encryption authorization" if purpose == "encryption" else "Cloudflare session"
+    authorization_label = "Josh Room encryption authorization" if purpose == "encryption" else "Cloudflare authorization"
     try:
         while time.monotonic() < deadline:
             result = poll_oauth_session(session_id, dimension_id=dimension_id, purpose=purpose)
             if result["status"] != "pending":
-                report_progress("auth", f"Validating Cloudflare session ({int(time.monotonic() - started_at)}s elapsed)")
+                report_progress("auth", f"Validating {validation_label} ({int(time.monotonic() - started_at)}s elapsed)")
                 return result
             report_progress("auth", f"Waiting for browser approval ({int(time.monotonic() - started_at)}s elapsed)")
             remaining = deadline - time.monotonic()
@@ -195,7 +198,7 @@ def wait_oauth_session(
         _clear_runtime_session()
         raise
     _clear_runtime_session()
-    raise RuntimeError("Cloudflare authorization timed out")
+    raise RuntimeError(f"{authorization_label} timed out")
 
 
 def _valid_identity(value: str) -> bool:
