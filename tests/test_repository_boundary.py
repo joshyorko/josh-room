@@ -330,7 +330,7 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
-    assert artifact["release_tag"] == "v0.1.9-jat-runtime"
+    assert artifact["release_tag"] == "v0.1.10-jat-runtime"
     assert len(artifact["archive_sha256"]) == 64
     assert artifact["archive_size"] > 0
     assert artifact["rcc_artifact_digest"].startswith("sha256:")
