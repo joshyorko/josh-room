@@ -452,6 +452,116 @@ test("extension consumes the private controller result receipt when RCC suppress
   assert.deepEqual(result, { ok: true, operation: "status" });
 });
 
+test("failed controller result exposes bounded layered statuses and one redacted JAT diagnostic", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-layered-failure-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const actionable = "archive member has unsupported member type: symlink";
+  const secret = "Bearer synthetic-controller-token";
+  const originalArgv = [
+    "jat", "restore", "https://user:pw@example.invalid/x?token=secret#fragment",
+    "--secret-key=sekret", "--secret-key", "sekret", "MINIO_SECRET_TOKEN=sekret", secret,
+  ];
+  const originalResult = {
+    ok: false,
+    error: `JAT restore failed with exit 1 (Bearer synthetic-result-token) ${actionable}; retry ${actionable}` + "y".repeat(10000),
+    jat: { exit_status: 1, argv: originalArgv, diagnostic: actionable, diagnostics: actionable },
+  };
+  const spawnHarness = createSpawnHarness(() => ({
+    code: 2,
+    stderr: `${secret}\ncontroller stderr detail ${"x".repeat(10000)}\n`,
+    stdout: JSON.stringify(originalResult),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  await assert.rejects(
+    extension.__test__.runJoshRoom(["hydrate", "demo-room"], root),
+    (error) => {
+      assert.match(error.message, new RegExp(actionable));
+      assert.equal(error.message.match(new RegExp(actionable, "g")).length, 1);
+      assert.equal(error.controller_exit_status, 2);
+      assert.equal(error.jat_exit_status, 1);
+      assert.equal(error.diagnostic, actionable);
+      assert.doesNotMatch(error.message, /synthetic-result-token/);
+      assert.ok(error.message.length <= 4096);
+      assert.equal(error.message.match(new RegExp(actionable, "g")).length, 1);
+      assert.ok(error.controller_stderr.length <= 4096);
+      assert.doesNotMatch(error.controller_stderr, /synthetic-controller-token/);
+      assert.equal(error.result.controller_exit_status, 2);
+      assert.equal(error.result.jat_exit_status, 1);
+      assert.doesNotMatch(JSON.stringify(error.result), /synthetic-result-token/);
+      assert.doesNotMatch(JSON.stringify(error.result), /user:pw|token=secret|fragment|sekret/);
+      assert.deepEqual(error.result.jat.argv, [
+        "jat", "restore", "https://example.invalid/x/[REDACTED]",
+        "--secret-key=[REDACTED]", "--secret-key", "[REDACTED]",
+        "MINIO_SECRET_TOKEN=[REDACTED]", "Bearer [REDACTED]",
+      ]);
+      return true;
+    },
+  );
+  assert.deepEqual(originalResult.jat.argv, originalArgv);
+});
+
+test("failed controller result also accepts top-level JAT status and diagnostics", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-top-level-failure-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const actionable = "archive member has unsupported member type: symlink";
+  const spawnHarness = createSpawnHarness(() => ({
+    code: 2,
+    stderr: "controller stderr detail",
+    stdout: JSON.stringify({
+      ok: false,
+      error: "JAT restore failed with exit 1",
+      exit_status: 1,
+      diagnostic: actionable,
+      diagnostics: actionable,
+    }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  await assert.rejects(
+    extension.__test__.runJoshRoom(["hydrate", "demo-room"], root),
+    (error) => {
+      assert.equal(error.controller_exit_status, 2);
+      assert.equal(error.jat_exit_status, 1);
+      assert.equal(error.message.match(new RegExp(actionable, "g")).length, 1);
+      return true;
+    },
+  );
+});
+
+test("encryption-only authorization title and errors name unchanged MinIO storage", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-encryption-auth-error-test-"));
+  const { vscode, statusItem, progressCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "auth" && args[1] === "start") {
+      return { stdout: JSON.stringify({ ok: true, session_id: "encryption-session" }) };
+    }
+    if (args[0] === "auth" && args[1] === "status") {
+      return { stdout: JSON.stringify({ ok: true, state: "missing" }) };
+    }
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  await assert.rejects(
+    extension.__test__.connectEncryption({ dimension: { id: "backup", provider: "minio" } }),
+    (error) => {
+      assert.ok(error.message.includes("Josh Room encryption"));
+      assert.ok(error.message.includes("via Cloudflare"));
+      assert.ok(error.message.includes("MinIO stays selected"));
+      assert.ok(error.message.includes("R2 stays disconnected"));
+      return true;
+    },
+  );
+  assert.equal(
+    progressCalls[0].options.title,
+    "Authorizing Josh Room encryption via Cloudflare (MinIO stays selected; R2 stays disconnected)…",
+  );
+});
+
 test("MinIO credentials use VS Code SecretStorage and stay out of controller argv", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-secretstorage-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
@@ -677,7 +787,7 @@ test("Save Room to a fresh MinIO Dimension authorizes encryption once and preser
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-minio-auth-test-"));
   const source = path.join(root, "source-room");
   fs.mkdirSync(source);
-  const { vscode, statusItem, openExternalCalls } = createVscodeMock(root);
+  const { vscode, statusItem, openExternalCalls, infoCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
     if (args[0] === "dimensions" && args.includes("--with-hierarchy")) {
       return { stdout: JSON.stringify({ ok: true, dimensions: [
@@ -717,6 +827,10 @@ test("Save Room to a fresh MinIO Dimension authorizes encryption once and preser
 
   assert.equal(await extension.__test__.saveRoom(), "saved");
   assert.deepEqual(openExternalCalls.map((uri) => uri.value), ["https://auth.example.invalid/encryption"]);
+  const encryptionReadyMessage = infoCalls.map((call) => call[0]).find((message) => message.includes("Josh Room encryption is ready via Cloudflare"));
+  assert.ok(encryptionReadyMessage);
+  assert.ok(encryptionReadyMessage.includes("MinIO remains selected"));
+  assert.ok(encryptionReadyMessage.includes("Cloudflare R2 was not connected"));
   const authStart = spawnHarness.calls.find((call) => call.args[0] === "auth" && call.args[1] === "start");
   const authWait = spawnHarness.calls.find((call) => call.args[0] === "auth" && call.args[1] === "wait");
   assert.ok(authStart.args.includes("--purpose") && authStart.args.includes("encryption"));
