@@ -37,6 +37,7 @@
       "required": ["display_name", "provider", "endpoint", "bucket", "credential_profile"],
       "properties": {
         "auth_state": { "type": "string", "minLength": 1 },
+        "encryption_domain_id": { "type": "string", "format": "uuid" },
         "display_name": { "type": "string", "minLength": 1 },
         "provider": { "enum": ["r2", "minio"] },
         "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" },

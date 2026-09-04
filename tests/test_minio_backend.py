@@ -58,6 +58,8 @@ def test_disconnected_minio_backend_fails_closed_before_using_credentials():
 
     with pytest.raises(RuntimeError, match="disconnected"):
         backend.read_catalog()
+    with pytest.raises(RuntimeError, match="disconnected"):
+        backend.read_control("control/encryption-keyset.v1.json", 64)
 
 
 def test_doctor_probes_selected_backend_and_oauth_is_r2_only(tmp_path, monkeypatch):

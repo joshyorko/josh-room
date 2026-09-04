@@ -11,6 +11,7 @@ from pathlib import Path
 from botocore.exceptions import ClientError
 
 from .config import DimensionConfig, resolve_dimension
+from .encryption_domain import is_control_key
 from .keyring import lookup
 from .local_store import ObjectRef
 from .object_store import ObjectStore
@@ -267,6 +268,58 @@ class R2Backend(ObjectStore):
         except BaseException as error:
             raise R2PublicationError("catalog publication verification failed", published=True) from error
 
+    def read_control(self, key: str, max_bytes: int):
+        _validate_control_key(key)
+        if type(max_bytes) is not int or max_bytes < 1:
+            raise ValueError("control object size bound is invalid")
+        try:
+            head = self.client.head_object(Bucket=self.config.bucket, Key=key)
+        except ClientError as error:
+            if _not_found(error):
+                return None, None
+            raise
+        size = int(head.get("ContentLength", -1))
+        if size < 0 or size > max_bytes:
+            raise ValueError("control object exceeds maximum size")
+        response = self.client.get_object(Bucket=self.config.bucket, Key=key)
+        body = response["Body"].read(max_bytes + 1)
+        if len(body) != size or len(body) > max_bytes:
+            raise ValueError("control object exceeds maximum size")
+        return body, head.get("ETag")
+
+    def create_control(self, key: str, body: bytes) -> str:
+        return self._publish_control(key, body, expected_etag=None)
+
+    def replace_control(self, key: str, body: bytes, expected_etag: str) -> str:
+        if not isinstance(expected_etag, str) or not expected_etag:
+            raise ValueError("control object ETag is required")
+        return self._publish_control(key, body, expected_etag=expected_etag)
+
+    def _publish_control(self, key: str, body: bytes, expected_etag: str | None) -> str:
+        _validate_control_key(key)
+        if not isinstance(body, bytes):
+            raise TypeError("control object body must be bytes")
+        if len(body) > self.config.max_bytes:
+            raise ValueError("control object exceeds maximum size")
+        kwargs = {"Bucket": self.config.bucket, "Key": key, "Body": body, "ContentLength": len(body)}
+        if expected_etag is None:
+            kwargs["IfNoneMatch"] = "*"
+        else:
+            kwargs["IfMatch"] = expected_etag
+        try:
+            self.client.put_object(**kwargs)
+        except ClientError as error:
+            if _is_precondition(error):
+                raise R2Conflict("control object conditional conflict") from error
+            raise R2PublicationError("control object publication outcome is unknown", published=True) from error
+        try:
+            verified, etag = self.read_control(key, self.config.max_bytes)
+            if verified != body:
+                raise ValueError("control object read-back mismatch")
+            return etag or ""
+        except BaseException as error:
+            raise R2PublicationError("control object publication verification failed", published=True) from error
+
     def record_orphan(self, ref: ObjectRef) -> Path | None:
         if not self.receipt_dir:
             return None
@@ -305,8 +358,13 @@ def _percent(current: int, total: int) -> int:
 
 
 def _is_precondition(error: ClientError) -> bool:
-    return str(error.response.get("Error", {}).get("Code")) in {"412", "PreconditionFailed", "ConditionalRequestConflict"}
+    return str(error.response.get("Error", {}).get("Code")) in {"409", "412", "PreconditionFailed", "ConditionalRequestConflict"}
 
 
 def _not_found(error: ClientError) -> bool:
     return str(error.response.get("Error", {}).get("Code")) in {"404", "NoSuchKey", "NotFound"}
+
+
+def _validate_control_key(key: str) -> None:
+    if not is_control_key(key):
+        raise ValueError("control key is not allowlisted")

@@ -79,8 +79,19 @@ def _validate_v2_snapshot(snapshot: dict) -> None:
 @dataclass(frozen=True)
 class Catalog:
     body: dict
+    encryption_domain_id: str | None = None
 
     def __post_init__(self):
+        body_domain = self.body.get("encryption_domain_id")
+        if self.encryption_domain_id is not None:
+            if body_domain is not None and body_domain != self.encryption_domain_id:
+                raise ValueError("catalog encryption domain mismatch")
+            if body_domain is None:
+                copied = json.loads(json.dumps(self.body))
+                copied["encryption_domain_id"] = self.encryption_domain_id
+                object.__setattr__(self, "body", copied)
+        elif body_domain is not None:
+            object.__setattr__(self, "encryption_domain_id", body_domain)
         version = self.body.get("format_version")
         if version not in {1, 2} or not isinstance(self.body.get("revision"), int):
             raise ValueError("unsupported catalog format")
@@ -104,7 +115,15 @@ class Catalog:
                     _validate_v2_snapshot(snapshot)
 
     @classmethod
-    def empty(cls, dimension_id: str | None = None):
+    def empty(cls, dimension_id: str | None = None, encryption_domain_id: str | None = None):
+        if encryption_domain_id is not None:
+            if dimension_id is not None:
+                raise ValueError("catalog encryption domain arguments are ambiguous")
+            _validate_identifier("encryption domain", encryption_domain_id)
+            return cls(
+                {"format_version": 1, "revision": 0, "projects": {}},
+                encryption_domain_id=encryption_domain_id,
+            )
         if dimension_id is None:
             return cls({"format_version": 1, "revision": 0, "projects": {}})
         _validate_identifier("dimension", dimension_id)

@@ -142,6 +142,18 @@ class MinioBackend(R2Backend, ObjectStore):
         self._require_connected()
         return super().conditional_catalog_put(body, expected_etag)
 
+    def read_control(self, key: str, max_bytes: int):
+        self._require_connected()
+        return super().read_control(key, max_bytes)
+
+    def create_control(self, key: str, body: bytes):
+        self._require_connected()
+        return super().create_control(key, body)
+
+    def replace_control(self, key: str, body: bytes, expected_etag: str):
+        self._require_connected()
+        return super().replace_control(key, body, expected_etag)
+
     def delete_object(self, key: str) -> None:
         self._require_connected()
         return super().delete_object(key)

@@ -18,6 +18,7 @@ from josh_room.envelope import (
     build_envelope_file,
     read_envelope,
     read_envelope_file,
+    verify_envelope_file,
 )
 from josh_room.keyring import lookup
 from josh_room.local_store import ImmutableLocalStore
@@ -67,6 +68,7 @@ def test_file_envelope_preserves_format_and_streams_payload(tmp_path):
     assert read_envelope_file(envelope, restored) == manifest
     assert restored.read_bytes() == b"abc"
     assert restored.stat().st_mode & 0o777 == 0o600
+    assert verify_envelope_file(envelope) == manifest
 
 
 def test_file_crypto_uses_paths_without_subprocess_input(tmp_path, monkeypatch):
