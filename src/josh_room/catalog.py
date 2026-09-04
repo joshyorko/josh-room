@@ -83,7 +83,10 @@ class Catalog:
 
     def __post_init__(self):
         body_domain = self.body.get("encryption_domain_id")
+        if body_domain is not None:
+            _validate_identifier("encryption domain", body_domain)
         if self.encryption_domain_id is not None:
+            _validate_identifier("encryption domain", self.encryption_domain_id)
             if body_domain is not None and body_domain != self.encryption_domain_id:
                 raise ValueError("catalog encryption domain mismatch")
             if body_domain is None:
@@ -117,21 +120,25 @@ class Catalog:
     @classmethod
     def empty(cls, dimension_id: str | None = None, encryption_domain_id: str | None = None):
         if encryption_domain_id is not None:
-            if dimension_id is not None:
-                raise ValueError("catalog encryption domain arguments are ambiguous")
             _validate_identifier("encryption domain", encryption_domain_id)
-            return cls(
-                {"format_version": 1, "revision": 0, "projects": {}},
-                encryption_domain_id=encryption_domain_id,
-            )
+            if dimension_id is None:
+                return cls({"format_version": 1, "revision": 0, "projects": {}}, encryption_domain_id=encryption_domain_id)
+            _validate_identifier("dimension", dimension_id)
+            return cls({"format_version": 2, "dimension_id": dimension_id, "revision": 0, "projects": {}}, encryption_domain_id=encryption_domain_id)
         if dimension_id is None:
             return cls({"format_version": 1, "revision": 0, "projects": {}})
         _validate_identifier("dimension", dimension_id)
         return cls({"format_version": 2, "dimension_id": dimension_id, "revision": 0, "projects": {}})
 
     @classmethod
-    def from_body(cls, body: dict, dimension_id: str | None = None):
+    def from_body(cls, body: dict, dimension_id: str | None = None, encryption_domain_id: str | None = None):
         value = json.loads(json.dumps(body))
+        if encryption_domain_id is not None:
+            _validate_identifier("encryption domain", encryption_domain_id)
+            existing_domain = value.get("encryption_domain_id")
+            if existing_domain is not None and existing_domain != encryption_domain_id:
+                raise ValueError("catalog encryption domain mismatch")
+            value["encryption_domain_id"] = encryption_domain_id
         if value.get("format_version") == 1 and dimension_id is not None:
             _validate_identifier("dimension", dimension_id)
             value["format_version"] = 2
@@ -215,7 +222,7 @@ class Catalog:
     def update_if_revision(self, expected_revision: int, body: dict):
         if self.body["revision"] != expected_revision:
             raise CatalogConflict("stale catalog revision")
-        return Catalog.from_body(body, self.dimension_id)
+        return Catalog.from_body(body, self.dimension_id, self.encryption_domain_id)
 
 
 class CatalogFile:

@@ -121,6 +121,12 @@ def derive_recipient(identity: Path) -> str:
     recipient = process.stdout.decode(errors="replace").strip()
     if not recipient or "\n" in recipient or "\r" in recipient:
         raise CryptoError("managed age-keygen returned an invalid recipient")
+    try:
+        from .encryption_domain import validate_recipient
+
+        validate_recipient(recipient)
+    except ValueError as error:
+        raise CryptoError("managed age-keygen returned an invalid recipient") from error
     return recipient
 
 

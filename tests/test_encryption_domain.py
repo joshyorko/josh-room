@@ -6,11 +6,15 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 from josh_room import crypto
 from josh_room.catalog import Catalog
+from josh_room.config import DimensionConfig
 from josh_room.r2 import R2Backend, R2Config, R2Conflict
+
+OPERATIONAL_RECIPIENT = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"
+RECOVERY_RECIPIENT = "age1qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpquuzgag"
 
 
 def domain_module():
@@ -26,8 +30,9 @@ def keyset(**overrides):
         "provider": "minio",
         "endpoint": "http://127.0.0.1:9000",
         "bucket": "synthetic-bucket",
-        "operational_recipient": "age1operationalrecipient",
-        "recovery_recipients": ["age1recoveryrecipient"],
+        "operational_identity": "AGE-SECRET-KEY-synthetic",
+        "operational_recipient": OPERATIONAL_RECIPIENT,
+        "recovery_recipients": [RECOVERY_RECIPIENT],
     }
     values.update(overrides)
     return module.EncryptionKeyset.create(**values)
@@ -49,6 +54,30 @@ def test_aliases_of_one_physical_bucket_share_a_stable_binding():
     second = module.physical_bucket_identity("minio", "https://minio.example.invalid", "room")
 
     assert first == second
+
+
+def test_keyset_enrollment_reconciles_aliases_and_rejects_identity_reuse():
+    module = domain_module()
+    first = keyset()
+    alias = keyset(encryption_domain_id=str(first.encryption_domain_id))
+    other_bucket = keyset(bucket="other-bucket")
+
+    assert module.reconcile_keyset(first, alias) is first
+    with pytest.raises(ValueError, match="operational identity is already bound"):
+        module.reconcile_keyset(None, other_bucket, occupied=(first,))
+
+
+def test_keyset_create_requires_operational_identity():
+    module = domain_module()
+
+    with pytest.raises(TypeError, match="operational.?identity"):
+        module.EncryptionKeyset.create(
+            provider="minio",
+            endpoint="http://127.0.0.1:9000",
+            bucket="synthetic-bucket",
+            operational_recipient=OPERATIONAL_RECIPIENT,
+            recovery_recipients=[RECOVERY_RECIPIENT],
+        )
 
 
 def test_keyset_rejects_unknown_fields():
@@ -93,19 +122,24 @@ def test_keyset_has_random_domain_id_and_positive_generation():
 
 def test_keyset_rejects_duplicate_operational_and_recovery_recipients():
     with pytest.raises(ValueError, match="duplicate recipient"):
-        keyset(recovery_recipients=["age1operationalrecipient"])
+        keyset(recovery_recipients=[OPERATIONAL_RECIPIENT])
     with pytest.raises(ValueError, match="duplicate recipient"):
-        keyset(recovery_recipients=["age1recoveryrecipient", "age1recoveryrecipient"])
+        keyset(recovery_recipients=[RECOVERY_RECIPIENT, RECOVERY_RECIPIENT])
 
 
-def test_keyset_does_not_serialize_recovery_private_identity():
+def test_keyset_rejects_invalid_age_recipient_syntax():
+    with pytest.raises(ValueError, match="recipient"):
+        keyset(operational_recipient="age1daily")
+
+
+def test_keyset_serializes_operational_identity_but_not_recovery_private_identity():
     module = domain_module()
-    material = module.EncryptionMaterial(keyset(), Path("/private/synthetic-age-key"))
-    serialized = json.dumps(material.keyset.to_dict())
+    serialized = json.dumps(keyset().to_dict())
 
-    assert "AGE-SECRET-KEY" not in serialized
-    assert "identity" not in serialized
-    assert "private" not in serialized
+    assert "AGE-SECRET-KEY-synthetic" in serialized
+    assert "recovery_identity" not in serialized
+    with pytest.raises(ValueError, match="unknown keyset field"):
+        module.EncryptionKeyset.from_dict({**keyset().to_dict(), "recovery_identity": "private"})
 
 
 def test_non_loopback_http_endpoints_are_rejected():
@@ -124,7 +158,7 @@ def test_managed_age_identity_generation_and_recipient_derivation(tmp_path, monk
     def fake_run(argv, **kwargs):
         calls.append((argv, kwargs))
         if "-y" in argv:
-            return subprocess.CompletedProcess(argv, 0, b"age1derivedrecipient\n", b"")
+            return subprocess.CompletedProcess(argv, 0, OPERATIONAL_RECIPIENT.encode() + b"\n", b"")
         Path(argv[argv.index("-o") + 1]).write_text("AGE-SECRET-KEY-synthetic\n")
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
@@ -134,7 +168,7 @@ def test_managed_age_identity_generation_and_recipient_derivation(tmp_path, monk
     crypto.generate_identity(identity)
     recipient = crypto.derive_recipient(identity)
 
-    assert recipient == "age1derivedrecipient"
+    assert recipient == OPERATIONAL_RECIPIENT
     assert keyset(operational_recipient=recipient).operational_recipient == recipient
     assert identity.stat().st_mode & 0o777 == 0o600
     assert len(calls) == 2
@@ -156,6 +190,20 @@ def test_scoped_keyring_helpers_keep_identity_in_secret_input(monkeypatch):
     assert keyring.lookup_encryption_identity("domain-1", 1) == "AGE-SECRET-KEY-synthetic"
     assert all("AGE-SECRET-KEY-synthetic" not in str(argv) for argv, _kwargs in calls)
     assert calls[0][1]["input"] == "AGE-SECRET-KEY-synthetic\n"
+
+
+def test_encryption_material_requires_derived_identity_recipient(tmp_path, monkeypatch):
+    module = domain_module()
+    identity = tmp_path / "identity"
+    identity.write_text("AGE-SECRET-KEY-synthetic\n")
+    identity.chmod(0o600)
+    monkeypatch.setattr(crypto, "derive_recipient", lambda _identity: OPERATIONAL_RECIPIENT)
+
+    material = module.EncryptionMaterial(keyset(), identity)
+    assert material.recipient == OPERATIONAL_RECIPIENT
+    monkeypatch.setattr(crypto, "derive_recipient", lambda _identity: RECOVERY_RECIPIENT)
+    with pytest.raises(ValueError, match="operational recipient"):
+        module.EncryptionMaterial(keyset(), identity)
 
 
 class ControlS3:
@@ -231,6 +279,66 @@ def test_control_publication_failure_is_explicitly_outcome_unknown(tmp_path):
     assert failure.value.__class__.__name__ == "R2PublicationError"
     assert failure.value.published is True
     assert "control-body" not in str(failure.value)
+
+
+def test_control_transport_failure_is_outcome_unknown(tmp_path):
+    module = domain_module()
+    fake = ControlS3()
+
+    def fail(**_kwargs):
+        raise EndpointConnectionError(endpoint_url="https://synthetic.invalid")
+
+    fake.put_object = fail
+    store = R2Backend(R2Config("https://example.invalid", "synthetic", "synthetic"), client=fake, receipt_dir=tmp_path)
+
+    with pytest.raises(RuntimeError) as failure:
+        store.create_control(module.KEYSET_CONTROL_KEY, b"control-body")
+    assert failure.value.__class__.__name__ == "R2PublicationError"
+    assert failure.value.published is True
+
+
+def test_control_limit_is_fixed_and_not_configured_object_limit(tmp_path):
+    module = domain_module()
+    fake = ControlS3()
+    store = R2Backend(
+        R2Config("https://example.invalid", "synthetic", "synthetic", max_bytes=1),
+        client=fake,
+        receipt_dir=tmp_path,
+    )
+
+    store.create_control(module.KEYSET_CONTROL_KEY, b"two")
+    assert store.read_control(module.KEYSET_CONTROL_KEY, 3)[0] == b"two"
+
+
+def test_dimension_config_round_trips_encryption_domain_id():
+    dimension = DimensionConfig.from_private(
+        "archive",
+        {
+            "display_name": "Archive",
+            "provider": "r2",
+            "endpoint": "https://example.invalid",
+            "bucket": "archive",
+            "credential_profile": "archive-profile",
+            "encryption_domain_id": "domain-1",
+        },
+    )
+
+    assert dimension.encryption_domain_id == "domain-1"
+    assert dimension.to_private()["encryption_domain_id"] == "domain-1"
+
+
+def test_catalog_validates_domain_id_alongside_v2_dimension_id():
+    module = domain_module()
+    catalog = Catalog.empty(dimension_id="archive", encryption_domain_id="domain-1")
+
+    assert catalog.body["dimension_id"] == "archive"
+    assert catalog.body["encryption_domain_id"] == "domain-1"
+    assert Catalog.from_body(catalog.body, dimension_id="archive", encryption_domain_id="domain-1").encryption_domain_id == "domain-1"
+    with pytest.raises(ValueError, match="domain"):
+        Catalog.from_body(catalog.body, dimension_id="archive", encryption_domain_id="domain-2")
+    with pytest.raises(ValueError, match="encryption domain"):
+        Catalog({**catalog.body, "encryption_domain_id": "../bad"})
+    assert module.EncryptionKeyset.from_json(json.dumps(keyset().to_dict()).encode()).provider == "minio"
 
 
 def test_read_only_envelope_verification_streams_without_output(tmp_path, monkeypatch):

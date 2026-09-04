@@ -18,7 +18,7 @@ _PROVIDER_CONNECTION_OPTIONS = {
     "r2": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "temporary_credentials", "timeout_seconds"},
     "minio": {"ca_bundle", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds", "verify_tls"},
 }
-_COMMON_DIMENSION_FIELDS = {"auth_state", "bucket", "catalog_key", "connection", "connection_id", "credential_profile", "display_name", "endpoint", "provider", "region"}
+_COMMON_DIMENSION_FIELDS = {"auth_state", "bucket", "catalog_key", "connection", "connection_id", "credential_profile", "display_name", "encryption_domain_id", "endpoint", "provider", "region"}
 _PROVIDER_DIMENSION_OPTIONS = _PROVIDER_CONNECTION_OPTIONS
 _LEGACY_DIMENSION_NAMES = {"r2": "Cloudflare R2", "minio": "MinIO"}
 _BOOLEAN_DIMENSION_OPTIONS = {"path_style", "temporary_credentials", "verify_tls"}
@@ -147,6 +147,7 @@ class DimensionConfig:
     bucket: str
     credential_profile: str
     catalog_key: str = "catalog.jroom.age"
+    encryption_domain_id: str | None = None
     region: str = "auto"
     options: tuple[tuple[str, object], ...] = field(default_factory=tuple, repr=False)
     connection_id: str | None = None
@@ -160,6 +161,8 @@ class DimensionConfig:
                 raise ValueError(f"Dimension {name} must be a non-empty string")
         _validate_identifier("dimension id", self.dimension_id)
         _validate_identifier("catalog key", self.catalog_key)
+        if self.encryption_domain_id is not None:
+            _validate_identifier("encryption domain id", self.encryption_domain_id)
         if self.provider != "r2" and self.credential_profile == "oauth-runtime":
             raise ValueError("credential profile oauth-runtime is reserved for R2")
         if self.connection_id is not None:
@@ -232,6 +235,7 @@ class DimensionConfig:
             bucket=body["bucket"],
             credential_profile=credential_profile,
             catalog_key=body.get("catalog_key", "catalog.jroom.age"),
+            encryption_domain_id=body.get("encryption_domain_id"),
             region=region,
             options=options,
             connection_id=connection_id,
@@ -245,6 +249,7 @@ class DimensionConfig:
                 "connection_id": self.connection_id,
                 "bucket": self.bucket,
                 "catalog_key": self.catalog_key,
+                **({"encryption_domain_id": self.encryption_domain_id} if self.encryption_domain_id is not None else {}),
             }
         return {
             "display_name": self.display_name,
@@ -253,6 +258,7 @@ class DimensionConfig:
             "bucket": self.bucket,
             "credential_profile": self.credential_profile,
             "catalog_key": self.catalog_key,
+            **({"encryption_domain_id": self.encryption_domain_id} if self.encryption_domain_id is not None else {}),
             "region": self.region,
             **dict(self.options),
         }

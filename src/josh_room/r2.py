@@ -8,10 +8,10 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
-from .encryption_domain import is_control_key
+from .encryption_domain import CONTROL_OBJECT_MAX_BYTES, is_control_key
 from .keyring import lookup
 from .local_store import ObjectRef
 from .object_store import ObjectStore
@@ -279,6 +279,7 @@ class R2Backend(ObjectStore):
                 return None, None
             raise
         size = int(head.get("ContentLength", -1))
+        max_bytes = min(max_bytes, CONTROL_OBJECT_MAX_BYTES)
         if size < 0 or size > max_bytes:
             raise ValueError("control object exceeds maximum size")
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
@@ -299,7 +300,7 @@ class R2Backend(ObjectStore):
         _validate_control_key(key)
         if not isinstance(body, bytes):
             raise TypeError("control object body must be bytes")
-        if len(body) > self.config.max_bytes:
+        if len(body) > CONTROL_OBJECT_MAX_BYTES:
             raise ValueError("control object exceeds maximum size")
         kwargs = {"Bucket": self.config.bucket, "Key": key, "Body": body, "ContentLength": len(body)}
         if expected_etag is None:
@@ -308,16 +309,16 @@ class R2Backend(ObjectStore):
             kwargs["IfMatch"] = expected_etag
         try:
             self.client.put_object(**kwargs)
-        except ClientError as error:
-            if _is_precondition(error):
+        except (BotoCoreError, ClientError) as error:
+            if isinstance(error, ClientError) and _is_precondition(error):
                 raise R2Conflict("control object conditional conflict") from error
             raise R2PublicationError("control object publication outcome is unknown", published=True) from error
         try:
-            verified, etag = self.read_control(key, self.config.max_bytes)
+            verified, etag = self.read_control(key, CONTROL_OBJECT_MAX_BYTES)
             if verified != body:
                 raise ValueError("control object read-back mismatch")
             return etag or ""
-        except BaseException as error:
+        except Exception as error:
             raise R2PublicationError("control object publication verification failed", published=True) from error
 
     def record_orphan(self, ref: ObjectRef) -> Path | None:

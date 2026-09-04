@@ -6,7 +6,7 @@ import ipaddress
 import json
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -15,7 +15,9 @@ MIGRATION_JOURNAL_KEY = "control/migration-journal.v1.json"
 CONTROL_KEYS = frozenset({KEYSET_CONTROL_KEY, MIGRATION_JOURNAL_KEY})
 KEYSET_FORMAT_VERSION = 1
 MAX_KEYSET_SIZE = 64 * 1024
+CONTROL_OBJECT_MAX_BYTES = 64 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_BECH32_ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _KEYSET_FIELDS = frozenset(
     {
         "format_version",
@@ -24,6 +26,7 @@ _KEYSET_FIELDS = frozenset(
         "endpoint",
         "bucket",
         "key_generation",
+        "operational_identity",
         "operational_recipient",
         "recovery_recipients",
     }
@@ -75,11 +78,38 @@ def is_control_key(key: str) -> bool:
     return key in CONTROL_KEYS
 
 
-def _validate_recipient(value: object, label: str) -> str:
+def validate_recipient(value: object, label: str = "recipient") -> str:
     if not isinstance(value, str) or not value or len(value) > 4096 or any(
         character.isspace() or ord(character) < 0x20 for character in value
     ):
         raise ValueError(f"{label} is invalid")
+    if not value.startswith("age1") or len(value) < 20 or any(character not in _BECH32_ALPHABET for character in value[4:]):
+        raise ValueError(f"{label} has invalid age recipient syntax")
+    data = [_BECH32_ALPHABET.index(character) for character in value[4:]]
+    if _bech32_polymod(_bech32_hrp_expand("age") + data) != 1:
+        raise ValueError(f"{label} has invalid age recipient syntax")
+    return value
+
+
+def _bech32_hrp_expand(hrp: str) -> list[int]:
+    return [ord(character) >> 5 for character in hrp] + [0] + [ord(character) & 31 for character in hrp]
+
+
+def _bech32_polymod(values: list[int]) -> int:
+    generators = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
+    checksum = 1
+    for value in values:
+        top = checksum >> 25
+        checksum = (checksum & 0x1FFFFFF) << 5 ^ value
+        for index, generator in enumerate(generators):
+            if top >> index & 1:
+                checksum ^= generator
+    return checksum
+
+
+def _validate_operational_identity(value: object) -> str:
+    if not isinstance(value, str) or not value or len(value) > 16 * 1024 or "AGE-SECRET-KEY-" not in value:
+        raise ValueError("operational identity is invalid")
     return value
 
 
@@ -90,6 +120,7 @@ class EncryptionKeyset:
     endpoint: str
     bucket: str
     key_generation: int
+    operational_identity: str = field(repr=False)
     operational_recipient: str
     recovery_recipients: tuple[str, ...]
     format_version: int = KEYSET_FORMAT_VERSION
@@ -110,13 +141,15 @@ class EncryptionKeyset:
             raise ValueError("keyset bucket is invalid")
         if type(self.key_generation) is not int or self.key_generation < 1:
             raise ValueError("key generation must be positive")
-        operational = _validate_recipient(self.operational_recipient, "operational recipient")
-        recovery = tuple(_validate_recipient(value, "recovery recipient") for value in self.recovery_recipients)
+        operational_identity = _validate_operational_identity(self.operational_identity)
+        operational = validate_recipient(self.operational_recipient, "operational recipient")
+        recovery = tuple(validate_recipient(value, "recovery recipient") for value in self.recovery_recipients)
         if not recovery:
             raise ValueError("at least one recovery recipient is required")
         if len({operational, *recovery}) != len(recovery) + 1:
             raise ValueError("duplicate recipient")
         object.__setattr__(self, "operational_recipient", operational)
+        object.__setattr__(self, "operational_identity", operational_identity)
         object.__setattr__(self, "recovery_recipients", recovery)
 
     @property
@@ -129,26 +162,31 @@ class EncryptionKeyset:
         provider: str,
         endpoint: str,
         bucket: str,
+        operational_identity: str,
         operational_recipient: str,
         recovery_recipients: list[str] | tuple[str, ...] | None = None,
         *,
         recovery_recipient: str | None = None,
         encryption_domain_id: str | None = None,
         key_generation: int = 1,
+        existing: EncryptionKeyset | None = None,
+        occupied: tuple[EncryptionKeyset, ...] = (),
     ) -> EncryptionKeyset:
         if recovery_recipients is None:
             recovery_recipients = [recovery_recipient] if recovery_recipient is not None else []
         elif recovery_recipient is not None:
             raise ValueError("recovery recipients are ambiguous")
-        return cls(
+        candidate = cls(
             encryption_domain_id or str(uuid.uuid4()),
             provider,
             endpoint,
             bucket,
             key_generation,
+            operational_identity,
             operational_recipient,
             tuple(recovery_recipients),
         )
+        return reconcile_keyset(existing, candidate, occupied=occupied)
 
     @classmethod
     def from_dict(
@@ -179,6 +217,16 @@ class EncryptionKeyset:
         return cls(**values)
 
     @classmethod
+    def reconcile(
+        cls,
+        existing: EncryptionKeyset | None,
+        candidate: EncryptionKeyset,
+        *,
+        occupied: tuple[EncryptionKeyset, ...] = (),
+    ) -> EncryptionKeyset:
+        return reconcile_keyset(existing, candidate, occupied=occupied)
+
+    @classmethod
     def from_json(cls, body: bytes | str, **bindings) -> EncryptionKeyset:
         raw = body.encode() if isinstance(body, str) else body
         if not isinstance(raw, bytes) or len(raw) > MAX_KEYSET_SIZE:
@@ -197,6 +245,7 @@ class EncryptionKeyset:
             "endpoint": self.endpoint,
             "bucket": self.bucket,
             "key_generation": self.key_generation,
+            "operational_identity": self.operational_identity,
             "operational_recipient": self.operational_recipient,
             "recovery_recipients": list(self.recovery_recipients),
         }
@@ -213,6 +262,15 @@ class EncryptionMaterial:
     keyset: EncryptionKeyset
     identity: Path
 
+    def __post_init__(self):
+        from .crypto import derive_recipient
+
+        identity = Path(self.identity)
+        actual_recipient = derive_recipient(identity)
+        if actual_recipient != self.keyset.operational_recipient:
+            raise ValueError("operational recipient does not match identity")
+        object.__setattr__(self, "identity", identity)
+
     @property
     def recipient(self) -> str:
         return self.keyset.operational_recipient
@@ -224,3 +282,24 @@ class EncryptionMaterial:
     @property
     def key_generation(self) -> int:
         return self.keyset.key_generation
+
+
+def reconcile_keyset(
+    existing: EncryptionKeyset | None,
+    candidate: EncryptionKeyset,
+    *,
+    occupied: tuple[EncryptionKeyset, ...] = (),
+) -> EncryptionKeyset:
+    """Return the remote winner for a physical bucket and reject identity reuse."""
+    if not isinstance(candidate, EncryptionKeyset):
+        raise TypeError("keyset candidate is invalid")
+    if existing is not None:
+        if not isinstance(existing, EncryptionKeyset):
+            raise TypeError("existing keyset is invalid")
+        if existing.binding != candidate.binding:
+            raise ValueError("keyset physical bucket binding mismatch")
+        return existing
+    for item in occupied:
+        if item.operational_identity == candidate.operational_identity and item.binding != candidate.binding:
+            raise ValueError("operational identity is already bound to another bucket")
+    return candidate
