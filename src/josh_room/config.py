@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .encryption_domain import validate_encryption_domain_id
 from .keyring import available
 
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
@@ -162,7 +163,7 @@ class DimensionConfig:
         _validate_identifier("dimension id", self.dimension_id)
         _validate_identifier("catalog key", self.catalog_key)
         if self.encryption_domain_id is not None:
-            _validate_identifier("encryption domain id", self.encryption_domain_id)
+            validate_encryption_domain_id(self.encryption_domain_id)
         if self.provider != "r2" and self.credential_profile == "oauth-runtime":
             raise ValueError("credential profile oauth-runtime is reserved for R2")
         if self.connection_id is not None:

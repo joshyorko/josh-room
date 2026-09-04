@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .crypto import decrypt, encrypt
+from .encryption_domain import validate_encryption_domain_id
 from .local_store import OBJECT_KEY
 
 try:
@@ -84,9 +85,9 @@ class Catalog:
     def __post_init__(self):
         body_domain = self.body.get("encryption_domain_id")
         if body_domain is not None:
-            _validate_identifier("encryption domain", body_domain)
+            validate_encryption_domain_id(body_domain)
         if self.encryption_domain_id is not None:
-            _validate_identifier("encryption domain", self.encryption_domain_id)
+            validate_encryption_domain_id(self.encryption_domain_id)
             if body_domain is not None and body_domain != self.encryption_domain_id:
                 raise ValueError("catalog encryption domain mismatch")
             if body_domain is None:
@@ -120,7 +121,7 @@ class Catalog:
     @classmethod
     def empty(cls, dimension_id: str | None = None, encryption_domain_id: str | None = None):
         if encryption_domain_id is not None:
-            _validate_identifier("encryption domain", encryption_domain_id)
+            validate_encryption_domain_id(encryption_domain_id)
             if dimension_id is None:
                 return cls({"format_version": 1, "revision": 0, "projects": {}}, encryption_domain_id=encryption_domain_id)
             _validate_identifier("dimension", dimension_id)
@@ -134,7 +135,7 @@ class Catalog:
     def from_body(cls, body: dict, dimension_id: str | None = None, encryption_domain_id: str | None = None):
         value = json.loads(json.dumps(body))
         if encryption_domain_id is not None:
-            _validate_identifier("encryption domain", encryption_domain_id)
+            validate_encryption_domain_id(encryption_domain_id)
             existing_domain = value.get("encryption_domain_id")
             if existing_domain is not None and existing_domain != encryption_domain_id:
                 raise ValueError("catalog encryption domain mismatch")

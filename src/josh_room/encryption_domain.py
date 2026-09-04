@@ -57,6 +57,18 @@ def validate_endpoint(endpoint: str) -> str:
     return endpoint
 
 
+def validate_encryption_domain_id(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError("encryption domain id is invalid")
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError as error:
+        raise ValueError("encryption domain id is invalid") from error
+    if parsed.version != 4 or str(parsed) != value:
+        raise ValueError("encryption domain id must be canonical UUID4")
+    return value
+
+
 def physical_bucket_identity(provider: str, endpoint: str, bucket: str) -> str:
     """Return the stable non-secret identity used to compare physical aliases."""
     if provider not in {"r2", "minio"}:
@@ -83,10 +95,13 @@ def validate_recipient(value: object, label: str = "recipient") -> str:
         character.isspace() or ord(character) < 0x20 for character in value
     ):
         raise ValueError(f"{label} is invalid")
-    if not value.startswith("age1") or len(value) < 20 or any(character not in _BECH32_ALPHABET for character in value[4:]):
+    if not value.startswith("age1") or len(value) != 62 or any(character not in _BECH32_ALPHABET for character in value[4:]):
         raise ValueError(f"{label} has invalid age recipient syntax")
     data = [_BECH32_ALPHABET.index(character) for character in value[4:]]
     if _bech32_polymod(_bech32_hrp_expand("age") + data) != 1:
+        raise ValueError(f"{label} has invalid age recipient syntax")
+    payload = _bech32_convertbits(data[:-6], 5, 8, False)
+    if payload is None or len(payload) != 32:
         raise ValueError(f"{label} has invalid age recipient syntax")
     return value
 
@@ -105,6 +120,27 @@ def _bech32_polymod(values: list[int]) -> int:
             if top >> index & 1:
                 checksum ^= generator
     return checksum
+
+
+def _bech32_convertbits(data: list[int], from_bits: int, to_bits: int, pad: bool) -> list[int] | None:
+    accumulator = 0
+    bits = 0
+    result = []
+    maximum = (1 << to_bits) - 1
+    for value in data:
+        if value < 0 or value >> from_bits:
+            return None
+        accumulator = accumulator << from_bits | value
+        bits += from_bits
+        while bits >= to_bits:
+            bits -= to_bits
+            result.append(accumulator >> bits & maximum)
+    if pad:
+        if bits:
+            result.append(accumulator << (to_bits - bits) & maximum)
+    elif bits >= from_bits or accumulator << (to_bits - bits) & maximum:
+        return None
+    return result
 
 
 def _validate_operational_identity(value: object) -> str:
@@ -128,12 +164,7 @@ class EncryptionKeyset:
     def __post_init__(self):
         if self.format_version != KEYSET_FORMAT_VERSION:
             raise ValueError("unsupported keyset format")
-        try:
-            parsed_id = uuid.UUID(self.encryption_domain_id)
-        except (ValueError, AttributeError, TypeError) as error:
-            raise ValueError("encryption domain id is invalid") from error
-        if parsed_id.version != 4:
-            raise ValueError("encryption domain id must be random")
+        validate_encryption_domain_id(self.encryption_domain_id)
         if self.provider not in {"r2", "minio"}:
             raise ValueError("keyset provider is invalid")
         validate_endpoint(self.endpoint)

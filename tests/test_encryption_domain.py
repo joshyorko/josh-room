@@ -3,10 +3,12 @@ import importlib
 import io
 import json
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 from josh_room import crypto
 from josh_room.catalog import Catalog
@@ -15,6 +17,8 @@ from josh_room.r2 import R2Backend, R2Config, R2Conflict
 
 OPERATIONAL_RECIPIENT = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"
 RECOVERY_RECIPIENT = "age1qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpquuzgag"
+INVALID_LENGTH_RECIPIENT = "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqar9jk6"
+DOMAIN_ID = "00000000-0000-4000-8000-000000000001"
 
 
 def domain_module():
@@ -65,6 +69,20 @@ def test_keyset_enrollment_reconciles_aliases_and_rejects_identity_reuse():
     assert module.reconcile_keyset(first, alias) is first
     with pytest.raises(ValueError, match="operational identity is already bound"):
         module.reconcile_keyset(None, other_bucket, occupied=(first,))
+
+
+def test_distinct_bucket_enrollment_requires_distinct_operational_identity():
+    module = domain_module()
+    first = keyset(bucket="first-bucket")
+    second = keyset(
+        bucket="second-bucket",
+        operational_identity="AGE-SECRET-KEY-second",
+        operational_recipient=RECOVERY_RECIPIENT,
+        recovery_recipients=["age1qvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsewmjt2"],
+    )
+
+    assert module.reconcile_keyset(None, second, occupied=(first,)) is second
+    assert first.operational_identity != second.operational_identity
 
 
 def test_keyset_create_requires_operational_identity():
@@ -130,6 +148,12 @@ def test_keyset_rejects_duplicate_operational_and_recovery_recipients():
 def test_keyset_rejects_invalid_age_recipient_syntax():
     with pytest.raises(ValueError, match="recipient"):
         keyset(operational_recipient="age1daily")
+    with pytest.raises(ValueError, match="recipient"):
+        keyset(operational_recipient=OPERATIONAL_RECIPIENT[:-1])
+    with pytest.raises(ValueError, match="recipient"):
+        keyset(operational_recipient="age1" + "q" * 58)
+    with pytest.raises(ValueError, match="recipient"):
+        keyset(operational_recipient=INVALID_LENGTH_RECIPIENT)
 
 
 def test_keyset_serializes_operational_identity_but_not_recovery_private_identity():
@@ -186,8 +210,8 @@ def test_scoped_keyring_helpers_keep_identity_in_secret_input(monkeypatch):
         return subprocess.CompletedProcess(argv, 0, "AGE-SECRET-KEY-synthetic\n", "")
 
     monkeypatch.setattr(keyring.subprocess, "run", fake_run)
-    keyring.store_encryption_identity("domain-1", 1, "AGE-SECRET-KEY-synthetic")
-    assert keyring.lookup_encryption_identity("domain-1", 1) == "AGE-SECRET-KEY-synthetic"
+    keyring.store_encryption_identity(DOMAIN_ID, 1, "AGE-SECRET-KEY-synthetic")
+    assert keyring.lookup_encryption_identity(DOMAIN_ID, 1) == "AGE-SECRET-KEY-synthetic"
     assert all("AGE-SECRET-KEY-synthetic" not in str(argv) for argv, _kwargs in calls)
     assert calls[0][1]["input"] == "AGE-SECRET-KEY-synthetic\n"
 
@@ -319,26 +343,53 @@ def test_dimension_config_round_trips_encryption_domain_id():
             "endpoint": "https://example.invalid",
             "bucket": "archive",
             "credential_profile": "archive-profile",
-            "encryption_domain_id": "domain-1",
+            "encryption_domain_id": DOMAIN_ID,
         },
     )
 
-    assert dimension.encryption_domain_id == "domain-1"
-    assert dimension.to_private()["encryption_domain_id"] == "domain-1"
+    assert dimension.encryption_domain_id == DOMAIN_ID
+    assert dimension.to_private()["encryption_domain_id"] == DOMAIN_ID
 
 
 def test_catalog_validates_domain_id_alongside_v2_dimension_id():
     module = domain_module()
-    catalog = Catalog.empty(dimension_id="archive", encryption_domain_id="domain-1")
+    catalog = Catalog.empty(dimension_id="archive", encryption_domain_id=DOMAIN_ID)
 
     assert catalog.body["dimension_id"] == "archive"
-    assert catalog.body["encryption_domain_id"] == "domain-1"
-    assert Catalog.from_body(catalog.body, dimension_id="archive", encryption_domain_id="domain-1").encryption_domain_id == "domain-1"
+    assert catalog.body["encryption_domain_id"] == DOMAIN_ID
+    assert Catalog.from_body(catalog.body, dimension_id="archive", encryption_domain_id=DOMAIN_ID).encryption_domain_id == DOMAIN_ID
     with pytest.raises(ValueError, match="domain"):
-        Catalog.from_body(catalog.body, dimension_id="archive", encryption_domain_id="domain-2")
+        Catalog.from_body(catalog.body, dimension_id="archive", encryption_domain_id="00000000-0000-4000-8000-000000000002")
     with pytest.raises(ValueError, match="encryption domain"):
         Catalog({**catalog.body, "encryption_domain_id": "../bad"})
     assert module.EncryptionKeyset.from_json(json.dumps(keyset().to_dict()).encode()).provider == "minio"
+
+
+def test_keyset_and_dimension_schema_require_uuid4_domain_ids():
+    module = domain_module()
+    schema = json.loads(Path("schemas/private-config.schema.json").read_text())
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+
+    validator.validate({"dimensions": {"archive": {
+        "display_name": "Archive",
+        "provider": "r2",
+        "endpoint": "https://example.invalid",
+        "bucket": "archive",
+        "credential_profile": "archive-profile",
+        "encryption_domain_id": DOMAIN_ID,
+    }}})
+    with pytest.raises(ValidationError):
+        validator.validate({"dimensions": {"archive": {
+            "display_name": "Archive",
+            "provider": "r2",
+            "endpoint": "https://example.invalid",
+            "bucket": "archive",
+            "credential_profile": "archive-profile",
+            "encryption_domain_id": "domain-1",
+        }}})
+    assert uuid.UUID(keyset().encryption_domain_id).version == 4
+    serialized = keyset().to_dict()
+    assert module.EncryptionKeyset.from_json(json.dumps(serialized).encode()).encryption_domain_id == serialized["encryption_domain_id"]
 
 
 def test_read_only_envelope_verification_streams_without_output(tmp_path, monkeypatch):
@@ -383,8 +434,8 @@ def test_catalog_accepts_optional_encryption_domain_id_and_reads_v1():
         },
     )
     module = domain_module()
-    current = Catalog.empty(encryption_domain_id="domain-1")
+    current = Catalog.empty(encryption_domain_id=DOMAIN_ID)
 
     assert legacy.encryption_domain_id is None
-    assert current.encryption_domain_id == "domain-1"
+    assert current.encryption_domain_id == DOMAIN_ID
     assert module.EncryptionKeyset.from_json(json.dumps(keyset().to_dict()).encode()).provider == "minio"
