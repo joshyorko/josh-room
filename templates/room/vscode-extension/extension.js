@@ -984,8 +984,13 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         resolve({ stdout, stderr, runtime });
       } else {
         const error = new Error(`Josh Room exited with status ${code}`);
-        error.stdout = stdout;
-        error.stderr = stderr;
+        try {
+          error.result = redactResultDiagnostics(parseControllerOutput(stdout));
+        } catch (_parseError) {
+          // Non-JSON failures use the sanitized bounded stream fields below.
+        }
+        error.stdout = sanitizeControllerText(stdout);
+        error.stderr = sanitizeControllerText(stderr);
         error.controller_exit_status = code;
         error.command = runtime.command;
         error.args = runtime.args(args);
@@ -1025,26 +1030,34 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
     if (cancellationToken?.isCancellationRequested || isCancellationError(error)) {
       throw cancellationError();
     }
+    if (error.result) {
+      if (args[0] === "status") {
+        outputChannel?.info(`DONE · status (${error.result.state || "unknown"})`);
+        return error.result;
+      }
+      throw controllerFailure(error.result, {
+        controllerExitStatus: error.controller_exit_status,
+        controllerStderr: error.stderr,
+      });
+    }
     const output = error.stdout || error.stderr;
     if (output) {
+      let result;
       try {
-        const result = parseControllerOutput(output);
-        if (args[0] === "status") {
-          outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
-          return result;
-        }
-        throw controllerFailure(result, {
-          controllerExitStatus: error.controller_exit_status,
-          controllerStderr: error.stderr,
-        });
+        result = parseControllerOutput(output);
       } catch (parseError) {
-        if (parseError instanceof SyntaxError) {
-          outputChannel?.error(error.message || String(error));
-          outputChannel?.show(true);
-          throw error;
-        }
-        throw parseError;
+        outputChannel?.error(sanitizeControllerText(error.message || String(error)));
+        outputChannel?.show(true);
+        throw error;
       }
+      if (args[0] === "status") {
+        outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
+        return result;
+      }
+      throw controllerFailure(result, {
+        controllerExitStatus: error.controller_exit_status,
+        controllerStderr: error.stderr,
+      });
     }
     outputChannel?.error(error.message || String(error));
     outputChannel?.show(true);

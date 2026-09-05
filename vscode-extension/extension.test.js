@@ -3797,3 +3797,31 @@ test("JAT stdout and stderr log lines redact private age material before output"
   await extension.__test__.runJoshRoom(["hydrate", "room"], root);
   assert.equal(logLines.some((line) => line.includes(identity) || line.includes(recipient)), false);
 });
+
+test("non-JSON controller failures sanitize bounded stdout and stderr before rethrowing", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-non-json-redaction-test-"));
+  const { vscode, statusItem, logLines } = createVscodeMock(root);
+  const identity = "AGE-SECRET-KEY-1Qnon-json-private-material";
+  const recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq";
+  const spawnHarness = createSpawnHarness(() => ({
+    code: 7,
+    stdout: `controller failed ${identity} ${recipient}\n`,
+    stderr: `fatal ${recipient} ${identity}\n`,
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ appendLine: (line) => logLines.push(line), info() {}, warn() {}, error: (line) => logLines.push(line), show() {} });
+
+  await assert.rejects(extension.__test__.runJoshRoom(["projects", "list"], root), (error) => {
+    assert.doesNotMatch(error.message, new RegExp(identity));
+    assert.doesNotMatch(error.message, new RegExp(recipient));
+    assert.doesNotMatch(error.stdout, new RegExp(identity));
+    assert.doesNotMatch(error.stdout, new RegExp(recipient));
+    assert.doesNotMatch(error.stderr, new RegExp(identity));
+    assert.doesNotMatch(error.stderr, new RegExp(recipient));
+    assert.doesNotMatch(JSON.stringify(error), new RegExp(identity));
+    assert.doesNotMatch(JSON.stringify(error), new RegExp(recipient));
+    return true;
+  });
+  assert.equal(logLines.some((line) => line.includes(identity) || line.includes(recipient)), false);
+});
