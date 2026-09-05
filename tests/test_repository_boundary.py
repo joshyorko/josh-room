@@ -364,3 +364,36 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert "josh-room.git@main" not in bootstrap
     manifest = json.loads((ROOT / "templates/room/devcontainer-template.json").read_text())
     assert manifest["version"] == lock["template"]["version"]
+
+
+def test_issue_50_public_documentation_states_dimension_encryption_boundary():
+    agents = (ROOT / "AGENTS.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+    minio = (ROOT / "docs/MINIO-SETUP.md").read_text()
+    r2 = (ROOT / "docs/R2-SETUP.md").read_text()
+    architecture = (ROOT / "docs/architecture.md").read_text()
+    docs = " ".join("\n".join((agents, readme, minio, r2, architecture)).split()).lower()
+    minio = " ".join(minio.split()).lower()
+    r2 = " ".join(r2.split()).lower()
+
+    assert "r2 and minio are concrete provider backends" in docs
+    assert "physical bucket" in docs and "one encryption domain" in docs
+    assert "keyset enrollment and catalog reads do not require" in docs
+    assert "cloudflare" in docs
+    assert "cloudflare" in r2 and "r2-only authority" in r2
+    assert "operational" in minio and "identity" in minio
+    assert "bucket-credential trust decision" in minio
+    assert "recovery private identity" in docs and "never stored" in docs
+    assert "provider credentials and encryption material are separate" in docs
+    assert "never" in docs and "argv" in docs and "receipts" in docs
+    assert "outer trusted envelope" in minio
+    assert "never rebuilds or restores jat payloads" in minio
+    assert "explicit approval" in minio and "production migration" in minio
+    for forbidden in ("web ui", "webview", "daemon", "generic provider framework", "automatic bucket administration"):
+        assert forbidden in docs
+    assert "do not add web ui" in docs or "does not add web ui" in docs
+    assert "jat changes" in docs and "minio infrastructure changes" in docs
+    assert "runtime" in docs and "ci" in docs and "live" in docs
+    assert "real credentials" in docs and "private paths" in docs
+    assert "Cloudflare R2 is the private production blob backend" not in agents
+    assert "Do not add web UI, extension" not in agents

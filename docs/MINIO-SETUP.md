@@ -35,6 +35,33 @@ The default `r2` backend remains unchanged and is the only backend that starts
 Cloudflare OAuth/session acquisition. Josh Room verifies SHA-256 and byte size
 itself; provider ETags are never treated as content integrity.
 
+## Encryption domain and enrollment
+
+The selected physical bucket is the Josh Room Dimension and its encryption
+boundary. A fixed, versioned keyset is enrolled in that bucket; the operational
+identity is unique to the bucket and recovery recipients are public-only in the
+keyset. This is an intentional bucket-credential trust decision: a credential
+that can read the keyset and snapshots can enroll and decrypt that Dimension.
+Recovery private identity is never stored in the bucket.
+
+MinIO keyset enrollment and catalog reads do not require Cloudflare. Provider
+credentials and encryption material are separate, and neither private
+identities nor credentials may appear in config, workspace files, logs,
+receipts, argv, Git, or examples.
+
+## Legacy migration
+
+Legacy MinIO migration downloads and verifies the existing ciphertext, decrypts
+the existing outer trusted envelope, and re-encrypts those exact envelope bytes
+for the destination Dimension. It never rebuilds or restores JAT payloads; the
+embedded `payload.haul.tar.zst` remains byte-identical. Production migration
+requires explicit approval and is distinct from runtime, CI, and live-provider
+gates.
+
+This setup remains public-first and native-extension-aware. It does not add web
+UI, webview, daemon, generic provider framework, automatic bucket administration,
+JAT changes, or MinIO infrastructure changes.
+
 The secret-gated integration test uses exactly `JOSH_ROOM_MINIO_LIVE=1`,
 `JOSH_ROOM_MINIO_ENDPOINT`, `JOSH_ROOM_MINIO_BUCKET`, and
 `JOSH_ROOM_MINIO_PROFILE`. The preferred authority is a dedicated,
