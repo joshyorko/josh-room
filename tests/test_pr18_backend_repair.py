@@ -112,6 +112,9 @@ def test_doctor_dimension_minio_inspects_named_minio_backend(monkeypatch, tmp_pa
     class Backend:
         config = SimpleNamespace(dimension_id="minio")
 
+        def read_control(self, _key, _max_bytes):
+            return None, None
+
         def read_catalog(self):
             calls.append("read_catalog")
             return None, None
@@ -129,6 +132,9 @@ def test_doctor_explicit_minio_uses_minio_check_label_and_provider(monkeypatch, 
 
     class Backend:
         config = SimpleNamespace(dimension_id="minio")
+
+        def read_control(self, _key, _max_bytes):
+            return None, None
 
         def read_catalog(self):
             calls.append("read_catalog")

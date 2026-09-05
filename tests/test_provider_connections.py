@@ -545,7 +545,14 @@ def test_dimension_hierarchy_reads_one_catalog_and_returns_rooms_with_jats(tmp_p
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
     (tmp_path / "config.json").write_text(json.dumps(config))
     calls = []
-    monkeypatch.setattr(cli, "_backend", lambda name, instance, dimension=None: object())
+
+    class Backend:
+        def read_control(self, _key, _max_bytes):
+            return None, None
+
+    monkeypatch.setattr(cli, "_backend", lambda name, instance, dimension=None: Backend())
+    monkeypatch.setattr(cli, "resolve_encryption_material", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "_encryption_material_environment", lambda material: cli.nullcontext())
     monkeypatch.setattr(cli, "load_catalog", lambda instance, backend=None: calls.append(backend) or catalog)
 
     assert cli.main([
