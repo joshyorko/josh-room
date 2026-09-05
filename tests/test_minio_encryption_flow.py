@@ -192,6 +192,35 @@ def test_dimensions_hierarchy_resolves_minio_before_reading_a_legacy_catalog(tmp
     assert result["error_code"] == "legacy-encryption-migration-required"
 
 
+@pytest.mark.parametrize(
+    ("backend", "expected_state", "expected_code"),
+    [
+        (FakeBackend(catalog=b"legacy-catalog"), "legacy", "legacy-encryption-migration-required"),
+        (FakeBackend(), "uninitialized", "encryption-initialization-required"),
+        (FakeBackend(control=make_keyset().to_json()), "failed", "encryption-domain-mismatch"),
+    ],
+)
+def test_doctor_surfaces_minio_encryption_state_before_catalog_decrypt(
+    backend, expected_state, expected_code, tmp_path, monkeypatch
+):
+    configured = "00000000-0000-4000-8000-000000000002"
+    selected = dimension(encryption_domain_id=configured) if expected_state == "failed" else dimension()
+    config = {"dimensions": {"archive": selected.to_private()}}
+    global_identity = identity(tmp_path / "global-identity")
+    monkeypatch.setenv("JOSH_ROOM_IDENTITY", str(global_identity))
+    monkeypatch.setattr(cli, "private_config", lambda: config)
+    monkeypatch.setattr(cli, "_backend", lambda *_args: backend)
+    monkeypatch.setattr("josh_room.cli.shutil.which", lambda _name: "/synthetic/tool")
+    monkeypatch.setattr(cli, "_tar_capable", lambda: True)
+    monkeypatch.setattr(cli, "_jat_contract", lambda _root: {"robot": True, "tasks": True, "interactive": True})
+    monkeypatch.setattr(cli, "load_catalog", lambda *_args: pytest.fail("doctor must resolve encryption before decrypting"))
+
+    report = cli._doctor(tmp_path, "minio", "terminal", dimension="archive")
+
+    assert report["encryption_state"] == expected_state
+    assert report["error_code"] == expected_code
+
+
 def test_minio_copy_fails_closed_before_reading_mixed_domains_or_cloudflare(tmp_path, monkeypatch, capsys):
     config = {
         "dimensions": {
@@ -266,15 +295,17 @@ def test_ensure_minio_domain_rejects_mismatched_conditional_race_winner(tmp_path
     monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda _path: OPERATIONAL_RECIPIENT)
     monkeypatch.setattr("josh_room.auth.store_encryption_identity", lambda *_args: None)
 
+    candidate = tmp_path / "loser"
     with pytest.raises(RuntimeError) as failure:
         auth_module.ensure_minio_domain(
             dimension(encryption_domain_id=configured),
             backend,
             recovery_recipients=[RECOVERY_RECIPIENT],
-            identity_path=tmp_path / "loser",
+            identity_path=candidate,
         )
 
     assert failure.value.result["error_code"] == "encryption-domain-mismatch"
+    assert not candidate.exists()
 
 
 def test_recovery_handoff_derives_public_recipient_without_remote_recovery_private_identity(tmp_path, monkeypatch):

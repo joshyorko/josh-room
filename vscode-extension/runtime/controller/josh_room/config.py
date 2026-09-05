@@ -355,7 +355,7 @@ def connection_configs(config: dict | None) -> dict[str, ConnectionConfig]:
             continue
         connections[dimension_id] = ConnectionConfig.from_private(
             dimension_id,
-            {key: value for key, value in body.items() if key != "bucket" and key != "catalog_key"},
+            {key: value for key, value in body.items() if key not in {"bucket", "catalog_key", "encryption_domain_id"}},
         )
     return connections
 

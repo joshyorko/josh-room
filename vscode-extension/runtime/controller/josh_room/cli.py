@@ -14,6 +14,7 @@ from .auth import (
     EncryptionStateError,
     _valid_identity,
     cancel_oauth_session,
+    encryption_status,
     ensure_minio_domain,
     ensure_runtime_session,
     load_runtime_session,
@@ -1367,6 +1368,8 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
     record("identity", identity_ok, "Run josh-room setup to store Josh's daily age identity in the OS keyring.")
 
     catalog_ok = False
+    encryption_state = None
+    encryption_error_code = None
     selected_dimension = None
     selected_backend = backend_name
     if backend_name in {"r2", "minio"}:
@@ -1382,11 +1385,28 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
                 backend = _backend(selected.provider, instance, selected_dimension)
             else:
                 backend = _backend(backend_name, instance)
-            encrypted, _etag = backend.read_catalog()
+            if selected and selected.provider == "minio":
+                state = encryption_status(selected, backend)
+                encryption_state = state["state"]
+                encryption_error_code = state.get("error_code")
+                if encryption_state == "uninitialized":
+                    encryption_error_code = "encryption-initialization-required"
+                r2_ok = True
+                if encryption_state == "ready":
+                    material = resolve_encryption_material(selected, backend, allow_initialize=False)
+                    with _encryption_material_environment(material):
+                        catalog = load_catalog(instance, backend)
+                    catalog_ok = bool(catalog.body.get("projects"))
+            else:
+                encrypted, _etag = backend.read_catalog()
+                r2_ok = True
+                if encrypted is not None and identity_ok:
+                    catalog = load_catalog(instance, backend)
+                    catalog_ok = bool(catalog.body.get("projects"))
+        except EncryptionStateError as error:
+            encryption_state = error.result.get("encryption_state")
+            encryption_error_code = error.result.get("error_code")
             r2_ok = True
-            if encrypted is not None and identity_ok:
-                catalog = load_catalog(instance, backend)
-                catalog_ok = bool(catalog.body.get("projects"))
         except (OSError, RuntimeError, ValueError):
             r2_ok = False
         remediation = ("Run josh-room setup, unlock the host keyring, and verify the private R2 endpoint and bucket."
@@ -1403,7 +1423,7 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
 
     executable = None if ide == "terminal" else ("code-insiders" if ide == "vscode-insiders" else "code")
     record("ide", extension_mode or executable is None or shutil.which(executable), f"Install {executable} or use --ide terminal.")
-    return {
+    result = {
         "ok": all(check["ok"] for check in checks),
         "product": "josh-room",
         "format_version": 1,
@@ -1414,6 +1434,11 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
         "r2_auth": auth_status(),
         "interactive_cloudflare_login": False,
     }
+    if encryption_state is not None:
+        result["encryption_state"] = encryption_state
+    if encryption_error_code is not None:
+        result["error_code"] = encryption_error_code
+    return result
 
 
 def _tar_capable() -> bool:

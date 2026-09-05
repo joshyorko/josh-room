@@ -672,6 +672,7 @@ def ensure_minio_domain(
     candidate_path = Path(identity_path) if identity_path else _runtime_root() / f".enrollment-{uuid.uuid4().hex}.identity"
     candidate_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     candidate_existed = candidate_path.exists()
+    keep_candidate = False
     try:
         generate_identity(candidate_path)
     except BaseException:
@@ -704,13 +705,15 @@ def ensure_minio_domain(
             _assert_keyset_matches_dimension(dimension, winner)
             candidate_path.unlink(missing_ok=True)
         if winner is candidate:
-            return _material_for_keyset(
+            material = _material_for_keyset(
                 winner,
                 identity_path or _encryption_material_path(winner.encryption_domain_id, winner.key_generation),
             )
+            keep_candidate = identity_path is not None
+            return material
         return _material_for_keyset(winner, identity_path if identity_path and identity_path != candidate_path else None)
     finally:
-        if candidate_path.name.startswith(".enrollment-"):
+        if not candidate_existed and not keep_candidate:
             candidate_path.unlink(missing_ok=True)
 
 
