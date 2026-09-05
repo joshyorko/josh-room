@@ -6,6 +6,7 @@ import pytest
 
 from josh_room import auth as auth_module
 from josh_room import cli
+from josh_room.catalog import Catalog
 from josh_room.cli import build_parser
 from josh_room.config import DimensionConfig
 from josh_room.encryption_domain import (
@@ -221,7 +222,7 @@ def test_doctor_surfaces_minio_encryption_state_before_catalog_decrypt(
     assert report["error_code"] == expected_code
 
 
-def test_minio_copy_fails_closed_before_reading_mixed_domains_or_cloudflare(tmp_path, monkeypatch, capsys):
+def test_minio_copy_routes_without_cloudflare(tmp_path, monkeypatch, capsys):
     config = {
         "dimensions": {
             "archive": dimension().to_private(),
@@ -232,15 +233,29 @@ def test_minio_copy_fails_closed_before_reading_mixed_domains_or_cloudflare(tmp_
     monkeypatch.setattr(cli, "private_config", lambda: config)
     monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
     monkeypatch.setattr(cli, "ensure_runtime_session", lambda **_kwargs: events.append("cloudflare"))
-    monkeypatch.setattr(cli, "_backend", lambda *_args: pytest.fail("mixed-domain copy must fail before backend reads"))
+    backend_calls = []
+    monkeypatch.setattr(cli, "_backend", lambda *args: backend_calls.append(args) or object())
+    monkeypatch.setattr(cli, "_identity", lambda: tmp_path / "identity")
+    monkeypatch.setattr(cli, "resolve_encryption_material", lambda *_args, **_kwargs: type(
+        "Material", (), {
+            "identity": tmp_path / "identity",
+            "encryption_domain_id": "11111111-1111-4111-8111-111111111111",
+            "key_generation": 1,
+            "recipient": "recipient",
+            "keyset": type("Keyset", (), {"recovery_recipients": ("recovery",)})(),
+        }
+    )())
+    monkeypatch.setattr(cli, "_read_remote_catalog", lambda *_args, **_kwargs: (Catalog.empty("dimension"), "catalog-1"))
+    monkeypatch.setattr(cli, "copy_snapshot_stream", lambda *_args, **_kwargs: {"ok": True})
 
     assert cli.main([
         "snapshot", "copy", "demo", "--source-dimension", "archive",
         "--destination-dimension", "cloud", "--destination-room", "copied", "--json",
-    ]) == 2
+    ]) == 0
     result = json.loads(capsys.readouterr().out)
 
-    assert result["error_code"] == "unsupported-mixed-domain"
+    assert result["ok"] is True
+    assert [call[0] for call in backend_calls] == ["minio", "r2"]
     assert events == []
 
 

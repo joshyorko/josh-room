@@ -8,13 +8,18 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from .catalog import Catalog, CatalogFile
+from .catalog import Catalog, CatalogConflict, CatalogFile
 from .crypto import decrypt, decrypt_file, encrypt, encrypt_file
-from .encryption_domain import EncryptionKeyset, EncryptionMaterial
-from .envelope import build_envelope_file, read_envelope_file
+from .encryption_domain import (
+    MIGRATION_JOURNAL_KEY,
+    EncryptionKeyset,
+    EncryptionMaterial,
+)
+from .envelope import build_envelope_file, read_envelope_file, verify_envelope_file
 from .jat import run_build, run_restore, run_serve
-from .local_store import ImmutableLocalStore
+from .local_store import ImmutableLocalStore, ObjectRef
 from .progress import report_progress
 from .workspace_state import (
     read_workspace_marker,
@@ -607,8 +612,405 @@ def copy_snapshot(source_catalog: Catalog, destination_catalog: Catalog, source_
         raise
 
 
-def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_catalog: Catalog, source_backend, destination_backend, source_project: str, destination_project: str, snapshot_id: str, recipients: list[str], *, destination_etag: str | None = None) -> dict:
-    """Transfer one immutable ciphertext once, then conditionally publish its new JAT."""
+def _material_value(material, name, default=None):
+    return getattr(material, name, default) if material is not None else default
+
+
+def _domain_value(material, explicit, catalog=None):
+    material_value = _material_value(material, "encryption_domain_id")
+    catalog_value = getattr(catalog, "encryption_domain_id", None)
+    values = [value for value in (explicit, material_value, catalog_value) if value is not None]
+    if len(set(values)) > 1:
+        raise ValueError("encryption domain mismatch")
+    return values[0] if values else None
+
+
+def _generation_value(material, explicit):
+    material_value = _material_value(material, "key_generation")
+    if explicit is not None and material_value is not None and explicit != material_value:
+        raise ValueError("encryption generation mismatch")
+    return explicit if explicit is not None else material_value
+
+
+def _material_recipients(material, fallback):
+    if material is None:
+        return list(fallback)
+    keyset = getattr(material, "keyset", None)
+    return [material.recipient, *getattr(keyset, "recovery_recipients", ())]
+
+
+def _material_identity(material, fallback):
+    return Path(material.identity) if material is not None and getattr(material, "identity", None) else Path(fallback)
+
+
+def _authority(backend, dimension, bucket=None):
+    config = getattr(backend, "config", None)
+    endpoint = getattr(config, "endpoint", None)
+    endpoint_authority = None
+    if isinstance(endpoint, str):
+        endpoint_authority = urlsplit(endpoint).netloc or None
+    return {
+        "dimension": getattr(dimension, "dimension_id", dimension),
+        "bucket": bucket or getattr(config, "bucket", None),
+        "endpoint_authority": endpoint_authority,
+    }
+
+
+def _transport_state(*backends):
+    endpoints = [getattr(getattr(backend, "config", None), "endpoint", None) for backend in backends]
+    endpoints = [endpoint for endpoint in endpoints if isinstance(endpoint, str)]
+    if not endpoints:
+        return "unknown"
+    return "secure" if all(urlsplit(endpoint).scheme == "https" for endpoint in endpoints) else "insecure"
+
+
+def _journal_bytes(journal):
+    return json.dumps(journal, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _read_journal(backend):
+    body, etag = backend.read_control(MIGRATION_JOURNAL_KEY, 64 * 1024)
+    if body is None:
+        return None, None
+    try:
+        journal = json.loads(body)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("migration journal is invalid") from error
+    if not isinstance(journal, dict) or journal.get("format_version") != 1:
+        raise ValueError("migration journal is invalid")
+    return journal, etag
+
+
+def _publish_journal(backend, journal, etag=None):
+    body = _journal_bytes(journal)
+    if etag is None:
+        return backend.create_control(MIGRATION_JOURNAL_KEY, body)
+    return backend.replace_control(MIGRATION_JOURNAL_KEY, body, etag)
+
+
+def _new_journal(source_catalog, source_backend, destination_backend, source_dimension, destination_dimension, source_domain_id, destination_domain_id, source_generation, destination_generation, migration_id, source_catalog_etag=None, journal_exists=False):
+    seen = {}
+    for project in source_catalog.body["projects"].values():
+        for snapshot in project["snapshots"].values():
+            digest = snapshot["ciphertext_sha256"]
+            seen.setdefault(digest, {
+                "source_object_key": snapshot["object_key"],
+                "source_sha256": digest,
+                "source_size": snapshot["ciphertext_size"],
+                "status": "pending",
+            })
+    source = _authority(source_backend, source_dimension)
+    destination = _authority(destination_backend, destination_dimension)
+    now = datetime.now(UTC).isoformat()
+    return {
+        "format_version": 1,
+        "migration_id": migration_id or uuid.uuid4().hex,
+        "source_dimension": source["dimension"],
+        "source_dimension_display_name": getattr(source_dimension, "display_name", None),
+        "source_bucket": source["bucket"],
+        "source_endpoint_authority": source["endpoint_authority"],
+        "destination_dimension": destination["dimension"],
+        "destination_dimension_display_name": getattr(destination_dimension, "display_name", None),
+        "destination_bucket": destination["bucket"],
+        "destination_endpoint_authority": destination["endpoint_authority"],
+        "source_encryption_domain_id": source_domain_id,
+        "destination_encryption_domain_id": destination_domain_id,
+        "source_key_generation": source_generation,
+        "destination_key_generation": destination_generation,
+        "source_catalog_revision": source_catalog.body["revision"],
+        "source_catalog_etag": source_catalog_etag,
+        "room_count": len(source_catalog.body["projects"]),
+        "snapshot_count": sum(len(project["snapshots"]) for project in source_catalog.body["projects"].values()),
+        "object_count": len(seen),
+        "total_bytes": sum(item["source_size"] for item in seen.values()),
+        "largest_object_bytes": max((item["source_size"] for item in seen.values()), default=0),
+        "temporary_disk_bytes": 3 * max((item["source_size"] for item in seen.values()), default=0),
+        "transport_state": _transport_state(source_backend, destination_backend),
+        "journal_exists": journal_exists,
+        "mappings": list(seen.values()),
+        "status": "planned",
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _safe_journal_update(backend, journal, etag, status=None, error=None):
+    if status is not None:
+        journal["status"] = status
+    if error is not None:
+        journal["error_type"] = type(error).__name__
+    elif "error_type" in journal and status in {"running", "committed"}:
+        journal.pop("error_type", None)
+    journal["updated_at"] = datetime.now(UTC).isoformat()
+    return _publish_journal(backend, journal, etag)
+
+
+def plan_encryption_migration(
+    source_catalog: Catalog,
+    source_backend,
+    destination_backend,
+    *,
+    source_dimension,
+    destination_dimension,
+    source_domain_id=None,
+    destination_domain_id=None,
+    source_generation=None,
+    destination_generation=None,
+    destination_material=None,
+    source_catalog_revision=None,
+    source_catalog_etag=None,
+    migration_id=None,
+):
+    """Create and persist a non-secret, unique-object migration plan."""
+    destination_domain_id = _domain_value(destination_material, destination_domain_id)
+    if not destination_domain_id:
+        raise ValueError("destination encryption domain is required")
+    if source_catalog_revision is not None and source_catalog.body["revision"] != source_catalog_revision:
+        raise CatalogConflict("stale source catalog revision")
+    existing, existing_etag = _read_journal(destination_backend)
+    if existing is not None and existing.get("status") not in {"committed", "cancelled", "conflict", "failed"}:
+        raise RuntimeError("an encryption migration is already active")
+    journal = _new_journal(
+        source_catalog,
+        source_backend,
+        destination_backend,
+        source_dimension,
+        destination_dimension,
+        source_domain_id or source_catalog.encryption_domain_id,
+        destination_domain_id,
+        source_generation,
+        _generation_value(destination_material, destination_generation),
+        migration_id,
+        source_catalog_etag,
+        existing is not None,
+    )
+    if existing is None:
+        _publish_journal(destination_backend, journal)
+    else:
+        _publish_journal(destination_backend, journal, existing_etag)
+    result = dict(journal)
+    result["journal_status"] = result["status"]
+    return result
+
+
+def _migration_catalog(source_catalog, destination_catalog, mappings, destination_dimension, destination_domain_id):
+    body = json.loads(json.dumps(source_catalog.body))
+    body["encryption_domain_id"] = destination_domain_id
+    if destination_dimension is not None:
+        body["format_version"] = 2
+        body["dimension_id"] = getattr(destination_dimension, "dimension_id", destination_dimension)
+        for project in body["projects"].values():
+            for snapshot in project["snapshots"].values():
+                snapshot.setdefault("created_at", "1970-01-01T00:00:00+00:00")
+                snapshot.setdefault("workspace_fingerprint", "0" * 64)
+    mapping_by_source = {item["source_sha256"]: item for item in mappings}
+    for project in body["projects"].values():
+        for snapshot in project["snapshots"].values():
+            mapping = mapping_by_source[snapshot["ciphertext_sha256"]]
+            snapshot["object_key"] = mapping["destination_object_key"]
+            snapshot["ciphertext_sha256"] = mapping["destination_sha256"]
+            snapshot["ciphertext_size"] = mapping["destination_size"]
+    return Catalog.from_body(body, body.get("dimension_id"), destination_domain_id)
+
+
+def _validate_journal_mapping_set(source_catalog, journal):
+    expected = {
+        snapshot["ciphertext_sha256"]
+        for project in source_catalog.body["projects"].values()
+        for snapshot in project["snapshots"].values()
+    }
+    expected_bindings = {
+        snapshot["ciphertext_sha256"]: (snapshot["object_key"], snapshot["ciphertext_size"])
+        for project in source_catalog.body["projects"].values()
+        for snapshot in project["snapshots"].values()
+    }
+    mappings = journal.get("mappings")
+    if not isinstance(mappings, list) or len(mappings) != len(expected):
+        raise ValueError("migration journal mapping set does not match source catalog")
+    actual = set()
+    for item in mappings:
+        if not isinstance(item, dict):
+            raise TypeError("migration journal mapping set does not match source catalog")
+        digest = item.get("source_sha256")
+        if digest in actual or expected_bindings.get(digest) != (item.get("source_object_key"), item.get("source_size")):
+            raise ValueError("migration journal mapping set does not match source catalog")
+        actual.add(digest)
+    if actual != expected:
+        raise ValueError("migration journal mapping set does not match source catalog")
+
+
+def _verify_destination_object(backend, ref):
+    verifier = getattr(backend, "verify_object", None) or getattr(backend, "verify", None)
+    if verifier is None:
+        raise ValueError("destination object verification is unavailable")
+    return verifier(ref.key, ref.sha256, ref.size)
+
+
+def _has_object_verifier(backend):
+    return getattr(backend, "verify_object", None) or getattr(backend, "verify", None)
+
+
+def _validate_journal_identity(journal, source_catalog, source_dimension, destination_dimension, source_domain_id, destination_domain_id, source_generation, destination_generation, source_catalog_etag):
+    expected = {
+        "source_dimension": getattr(source_dimension, "dimension_id", source_dimension),
+        "destination_dimension": getattr(destination_dimension, "dimension_id", destination_dimension),
+        "source_encryption_domain_id": source_domain_id or source_catalog.encryption_domain_id,
+        "destination_encryption_domain_id": destination_domain_id,
+        "destination_key_generation": destination_generation,
+    }
+    for field, value in expected.items():
+        if journal.get(field) != value:
+            raise ValueError(f"migration journal {field} does not match the requested migration")
+    if source_generation is not None and journal.get("source_key_generation") != source_generation:
+        raise ValueError("migration journal source_key_generation does not match the requested migration")
+    if source_catalog_etag is not None and journal.get("source_catalog_etag") not in {None, source_catalog_etag}:
+        raise CatalogConflict("migration journal source catalog ETag mismatch")
+
+
+def migrate_encryption(
+    instance: Path,
+    source_catalog: Catalog,
+    destination_catalog=None,
+    *,
+    source_backend,
+    destination_backend,
+    source_dimension,
+    destination_dimension,
+    source_identity=None,
+    destination_material=None,
+    source_material=None,
+    source_domain_id=None,
+    destination_domain_id=None,
+    source_generation=None,
+    destination_generation=None,
+    source_catalog_etag=None,
+    destination_catalog_etag=None,
+    resume=False,
+):
+    """Re-encrypt exact verified envelopes and conditionally publish one catalog."""
+    instance = Path(instance)
+    instance.mkdir(parents=True, exist_ok=True)
+    destination_domain_id = _domain_value(destination_material, destination_domain_id, destination_catalog)
+    journal, journal_etag = _read_journal(destination_backend)
+    if journal is None:
+        journal = plan_encryption_migration(
+            source_catalog,
+            source_backend,
+            destination_backend,
+            source_dimension=source_dimension,
+            destination_dimension=destination_dimension,
+            source_domain_id=source_domain_id,
+            destination_domain_id=destination_domain_id,
+            source_generation=source_generation,
+            destination_generation=destination_generation,
+            destination_material=destination_material,
+            source_catalog_etag=source_catalog_etag,
+        )
+        journal, journal_etag = _read_journal(destination_backend)
+    elif not resume and journal.get("status") not in {"planned", "interrupted"}:
+        raise RuntimeError("an encryption migration is already active")
+    _validate_journal_identity(
+        journal,
+        source_catalog,
+        source_dimension,
+        destination_dimension,
+        source_domain_id,
+        destination_domain_id,
+        source_generation,
+        _generation_value(destination_material, destination_generation),
+        source_catalog_etag,
+    )
+    if journal.get("status") == "cutover-published":
+        observed, _ = destination_backend.read_catalog()
+        if observed is not None:
+            journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
+            candidate = _migration_catalog(source_catalog, destination_catalog, journal["mappings"], destination_dimension, destination_domain_id)
+            return {"ok": True, "status": "committed", "journal_status": "committed", "catalog": candidate, "migration_id": journal["migration_id"]}
+    _validate_journal_mapping_set(source_catalog, journal)
+    journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "running")
+    source_identity = _material_identity(source_material, source_identity) if source_material is not None else (Path(source_identity) if source_identity else None)
+    if source_identity is None:
+        raise ValueError("source encryption identity is required")
+    recipients = _material_recipients(destination_material, [])
+    if len(recipients) < 2:
+        raise ValueError("destination encryption recipients are required")
+    required_disk = journal.get("temporary_disk_bytes", 0)
+    if type(required_disk) is not int or required_disk < 0 or shutil.disk_usage(instance).free < required_disk:
+        raise ValueError("insufficient temporary disk for encryption migration")
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"migration-{journal['migration_id']}-", dir=instance) as work:
+            work = Path(work)
+            for mapping in journal["mappings"]:
+                if mapping.get("status") == "verified":
+                    try:
+                        _verify_destination_object(destination_backend, ObjectRef(mapping["destination_object_key"], mapping["destination_sha256"], mapping["destination_size"]))
+                        continue
+                    except Exception:  # noqa: BLE001 - reprocess a journal mapping whose object is unavailable
+                        mapping["status"] = "pending"
+                encrypted = work / "source.age"
+                envelope = work / "snapshot.jroom"
+                destination_encrypted = work / "destination.age"
+                source_backend.download_file(mapping["source_object_key"], encrypted, mapping["source_sha256"], mapping["source_size"])
+                source_size, source_digest = _file_metadata(encrypted)
+                if source_size != mapping["source_size"] or source_digest != mapping["source_sha256"]:
+                    raise ValueError("source ciphertext metadata mismatch")
+                decrypt_file(encrypted, [source_identity], envelope)
+                verify_envelope_file(envelope)
+                encrypt_file(envelope, recipients, destination_encrypted)
+                destination_size, destination_digest = _file_metadata(destination_encrypted)
+                destination_key = f"objects/sha256/{destination_digest}"
+                try:
+                    ref = destination_backend.put_file(destination_key, destination_encrypted)
+                except Exception:  # noqa: BLE001 - create-only conflicts are corroborated by read-back
+                    ref = _verify_destination_object(destination_backend, ObjectRef(destination_key, destination_digest, destination_size))
+                if ref.key != destination_key or ref.sha256 != destination_digest or ref.size != destination_size:
+                    raise ValueError("destination ciphertext metadata mismatch")
+                if _has_object_verifier(destination_backend):
+                    _verify_destination_object(destination_backend, ref)
+                mapping.update({"destination_object_key": ref.key, "destination_sha256": ref.sha256, "destination_size": ref.size, "status": "verified"})
+                journal_etag = _safe_journal_update(destination_backend, journal, journal_etag)
+            candidate = _migration_catalog(source_catalog, destination_catalog, journal["mappings"], destination_dimension, destination_domain_id)
+            if destination_catalog_etag is None and hasattr(destination_backend, "read_catalog"):
+                _old_body, destination_catalog_etag = destination_backend.read_catalog()
+                if isinstance(destination_catalog_etag, tuple):
+                    destination_catalog_etag = destination_catalog_etag[1]
+            body = _encrypt_catalog(candidate, recipients, instance)
+            if hasattr(source_backend, "read_catalog"):
+                _source_body, observed_source_etag = source_backend.read_catalog()
+                expected_source_etag = source_catalog_etag or journal.get("source_catalog_etag")
+                if expected_source_etag is not None and observed_source_etag != expected_source_etag:
+                    raise CatalogConflict("stale source catalog revision")
+                if _source_body is not None and source_identity is not None:
+                    observed_catalog, _ = _read_remote_catalog(
+                        source_backend,
+                        source_identity,
+                        instance,
+                        getattr(source_dimension, "dimension_id", source_dimension),
+                        source_domain_id or source_catalog.encryption_domain_id,
+                    )
+                    if observed_catalog.body["revision"] != journal["source_catalog_revision"]:
+                        raise CatalogConflict("stale source catalog revision")
+            journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "ready-to-commit")
+            try:
+                destination_backend.conditional_catalog_put(body, destination_catalog_etag)
+            except BaseException as error:
+                if getattr(error, "published", False):
+                    _safe_journal_update(destination_backend, journal, journal_etag, "cutover-published", error)
+                else:
+                    _safe_journal_update(destination_backend, journal, journal_etag, "conflict" if isinstance(error, CatalogConflict) else "failed", error)
+                raise
+            journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
+            return {"ok": True, "status": "committed", "journal_status": "committed", "catalog": candidate, "migration_id": journal["migration_id"]}
+    except BaseException as error:
+        if isinstance(error, CatalogConflict):
+            _safe_journal_update(destination_backend, journal, journal_etag, "conflict", error)
+        elif journal.get("status") not in {"conflict", "failed", "cutover-published"}:
+            _safe_journal_update(destination_backend, journal, journal_etag, "interrupted" if isinstance(error, (KeyboardInterrupt, InterruptedError)) else "failed", error)
+        raise
+
+
+def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_catalog: Catalog, source_backend, destination_backend, source_project: str, destination_project: str, snapshot_id: str, recipients: list[str], *, destination_etag: str | None = None, source_domain_id=None, destination_domain_id=None, source_key_generation=None, destination_key_generation=None, source_identity=None, destination_material=None, source_material=None) -> dict:
+    """Transfer verified ciphertext, or re-encrypt only its exact envelope across domains."""
     instance = Path(instance)
     instance.mkdir(parents=True, exist_ok=True)
     source = source_catalog.resolve_snapshot(source_project, snapshot_id)
@@ -624,21 +1026,59 @@ def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_ca
             raise ValueError("source ciphertext metadata mismatch")
         ref = None
         try:
-            if destination_backend is None:
-                ref = ImmutableLocalStore(instance).put_file(staged)
-            else:
-                ref = destination_backend.put_file(source["object_key"], staged)
-            if ref.key != source["object_key"] or ref.sha256 != digest or ref.size != size:
+            source_domain_id = _domain_value(source_material, source_domain_id, source_catalog)
+            destination_domain_id = _domain_value(destination_material, destination_domain_id, destination_catalog)
+            comparable_domains = any(value is not None for value in (source_domain_id, destination_domain_id, source_key_generation, destination_key_generation))
+            same_domain = not comparable_domains or (
+                source_domain_id is not None
+                and destination_domain_id is not None
+                and source_key_generation is not None
+                and destination_key_generation is not None
+                and source_domain_id == destination_domain_id
+                and source_key_generation == destination_key_generation
+            )
+            object_key = source["object_key"]
+            publish_path = staged
+            if not same_domain:
+                if source_identity is None and source_material is not None:
+                    source_identity = source_material.identity
+                if source_identity is None:
+                    raise ValueError("source encryption identity is required for cross-domain copy")
+                envelope = Path(work) / "snapshot.jroom"
+                destination_encrypted = Path(work) / "destination.jroom.age"
+                decrypt_file(staged, [Path(source_identity)], envelope)
+                verify_envelope_file(envelope)
+                encrypt_file(envelope, _material_recipients(destination_material, recipients), destination_encrypted)
+                publish_path = destination_encrypted
+                size, digest = _file_metadata(publish_path)
+                object_key = f"objects/sha256/{digest}"
+            if same_domain and _has_object_verifier(destination_backend or ImmutableLocalStore(instance)):
+                try:
+                    ref = _verify_destination_object(
+                        destination_backend or ImmutableLocalStore(instance),
+                        ObjectRef(object_key, digest, size),
+                    )
+                except Exception:  # noqa: BLE001 - a missing immutable object needs publication
+                    ref = None
+            if ref is None:
+                if destination_backend is None:
+                    ref = ImmutableLocalStore(instance).put_file(publish_path)
+                else:
+                    ref = destination_backend.put_file(object_key, publish_path)
+            if ref.key != object_key or ref.sha256 != digest or ref.size != size:
                 raise ValueError("destination ciphertext metadata mismatch")
             new_snapshot = dict(source)
             new_snapshot["snapshot_id"] = _snapshot_id()
             new_snapshot["created_at"] = datetime.now(UTC).isoformat()
             new_snapshot["origin_project_id"] = source.get("origin_project_id", source_project)
+            new_snapshot["object_key"] = ref.key
+            new_snapshot["ciphertext_sha256"] = ref.sha256
+            new_snapshot["ciphertext_size"] = ref.size
             if destination_catalog.body["format_version"] == 2:
                 new_snapshot.setdefault("workspace_fingerprint", source.get("workspace_fingerprint", "0" * 64))
             updated = destination_catalog.add_snapshot(destination_project, source_catalog.body["projects"][source_project]["display_name"], new_snapshot)
             if destination_backend is not None and hasattr(destination_backend, "conditional_catalog_put"):
-                body = _encrypt_catalog(updated, recipients, instance)
+                body = _encrypt_catalog(updated, _material_recipients(destination_material, recipients), instance)
                 destination_backend.conditional_catalog_put(body, destination_etag)
             elif destination_backend is None:
                 CatalogFile(instance / "catalog.jroom.age", Path(os.environ["JOSH_ROOM_IDENTITY"]), destination_catalog.dimension_id).update_if_revision(destination_catalog.body["revision"], updated, recipients)

@@ -57,11 +57,14 @@ from .minio import check_bucket_access as check_minio_bucket
 from .minio import create_bucket as create_minio_bucket
 from .minio import list_buckets as list_minio_buckets
 from .operations import (
+    _material_recipients,
     _read_remote_catalog,
     copy_snapshot_stream,
     create_snapshot,
     hydrate,
     link_workspace,
+    migrate_encryption,
+    plan_encryption_migration,
     remove_room,
     remove_snapshot,
     repair_workspace,
@@ -690,6 +693,44 @@ def dispatch(args, instance: Path) -> dict:
                 "encryption_domain_id": material.encryption_domain_id,
                 "key_generation": material.key_generation,
             }
+        if args.encryption_command in {"migrate", "resume"}:
+            if dimension.provider != "minio":
+                raise ValueError("encryption migration is only available for MinIO Dimensions")
+            material = resolve_encryption_material(dimension, backend, allow_initialize=False)
+            identity = Path(material.identity)
+            catalog, catalog_etag = _read_remote_catalog(
+                backend,
+                identity,
+                instance,
+                dimension.dimension_id,
+                material.encryption_domain_id,
+            )
+            if args.encryption_command == "migrate":
+                plan = plan_encryption_migration(
+                    catalog,
+                    backend,
+                    backend,
+                    source_dimension=dimension,
+                    destination_dimension=dimension,
+                    source_domain_id=catalog.encryption_domain_id,
+                    destination_material=material,
+                    source_catalog_revision=catalog.body["revision"],
+                    source_catalog_etag=catalog_etag,
+                )
+                return {"ok": True, **plan}
+            return migrate_encryption(
+                instance,
+                catalog,
+                source_backend=backend,
+                destination_backend=backend,
+                source_dimension=dimension,
+                destination_dimension=dimension,
+                source_material=material,
+                destination_material=material,
+                source_catalog_etag=catalog_etag,
+                destination_catalog_etag=catalog_etag,
+                resume=True,
+            )
         raise EncryptionStateError(
             "encryption migration actions are handled by the migration workflow",
             error_code="encryption-migration-not-implemented",
@@ -979,8 +1020,8 @@ def dispatch(args, instance: Path) -> dict:
         return {"ok": True, "dimension_id": dimension_id, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
         if args.snapshot_command == "copy":
-            _reject_minio_copy(args)
-            identity = _identity()
+            config = private_config() or {}
+            registry = DimensionRegistry(config)
             recipients = _recipients()
             source_project = args.project
             source_snapshot = args.snapshot
@@ -996,11 +1037,44 @@ def dispatch(args, instance: Path) -> dict:
                 source_dimension = folder_status["dimension_id"]
             elif not source_project or not source_dimension:
                 raise ValueError("source project and source dimension are required unless --source-folder is used")
-            source_backend = _backend("r2", instance, source_dimension)
-            destination_backend = _backend("r2", instance, args.destination_dimension)
-            source_catalog, _source_etag = _read_remote_catalog(source_backend, identity, instance)
-            destination_catalog, destination_etag = _read_remote_catalog(destination_backend, identity, instance)
-            return copy_snapshot_stream(instance, source_catalog, destination_catalog, source_backend, destination_backend, source_project, args.destination_project, source_snapshot, recipients, destination_etag=destination_etag)
+            source_dimension_config = registry.select(source_dimension)
+            destination_dimension_config = registry.select(args.destination_dimension)
+            source_backend = _backend(source_dimension_config.provider, instance, source_dimension)
+            destination_backend = _backend(destination_dimension_config.provider, instance, args.destination_dimension)
+            identity = _identity() if "r2" in {source_dimension_config.provider, destination_dimension_config.provider} else None
+            source_material = None
+            destination_material = None
+            if source_dimension_config.provider == "minio":
+                source_material = resolve_encryption_material(source_dimension_config, source_backend, allow_initialize=False)
+            if destination_dimension_config.provider == "minio":
+                destination_material = resolve_encryption_material(destination_dimension_config, destination_backend, allow_initialize=False)
+            source_identity = source_material.identity if source_material is not None else identity
+            destination_identity = destination_material.identity if destination_material is not None else identity
+            if source_identity is None or destination_identity is None:
+                raise ValueError("copy requires source and destination encryption identities")
+            source_catalog, _source_etag = _read_remote_catalog(
+                source_backend, source_identity, instance,
+                source_dimension_config.dimension_id,
+                getattr(source_material, "encryption_domain_id", None),
+            )
+            destination_catalog, destination_etag = _read_remote_catalog(
+                destination_backend, destination_identity, instance,
+                destination_dimension_config.dimension_id,
+                getattr(destination_material, "encryption_domain_id", None),
+            )
+            return copy_snapshot_stream(
+                instance, source_catalog, destination_catalog, source_backend, destination_backend,
+                source_project, args.destination_project, source_snapshot,
+                _material_recipients(destination_material, recipients),
+                destination_etag=destination_etag,
+                source_domain_id=getattr(source_material, "encryption_domain_id", None) or source_catalog.encryption_domain_id,
+                destination_domain_id=getattr(destination_material, "encryption_domain_id", None) or destination_catalog.encryption_domain_id,
+                source_key_generation=getattr(source_material, "key_generation", None),
+                destination_key_generation=getattr(destination_material, "key_generation", None),
+                source_identity=source_identity,
+                destination_material=destination_material,
+                source_material=source_material,
+            )
         recipients = _recipients()
         jat_root = _jat_root()
         if len(recipients) < 2 or len(set(recipients)) < 2:
