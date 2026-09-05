@@ -308,6 +308,27 @@ def test_ensure_minio_domain_rejects_mismatched_conditional_race_winner(tmp_path
     assert not candidate.exists()
 
 
+def test_mismatched_race_winner_preserves_preexisting_caller_identity_path(tmp_path, monkeypatch):
+    winner = make_keyset()
+    backend = FakeBackend()
+    backend.conflict = True
+    backend.race_winner = winner
+    candidate = identity(tmp_path / "caller", "AGE-SECRET-KEY-caller")
+    monkeypatch.setattr("josh_room.crypto.generate_identity", lambda _path: None)
+    monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda _path: OPERATIONAL_RECIPIENT)
+    monkeypatch.setattr("josh_room.auth.store_encryption_identity", lambda *_args: None)
+
+    material = auth_module.ensure_minio_domain(
+        dimension(),
+        backend,
+        recovery_recipients=[RECOVERY_RECIPIENT],
+        identity_path=candidate,
+    )
+
+    assert material.keyset == winner
+    assert candidate.read_text() == "AGE-SECRET-KEY-caller\n"
+
+
 def test_recovery_handoff_derives_public_recipient_without_remote_recovery_private_identity(tmp_path, monkeypatch):
     recovery = identity(tmp_path / "recovery", "AGE-SECRET-KEY-recovery")
     operational = tmp_path / "operational"

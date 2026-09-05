@@ -703,7 +703,8 @@ def ensure_minio_domain(
             if winner is None:
                 raise RuntimeError("MinIO keyset race outcome is unknown") from error
             _assert_keyset_matches_dimension(dimension, winner)
-            candidate_path.unlink(missing_ok=True)
+            if not candidate_existed:
+                candidate_path.unlink(missing_ok=True)
         if winner is candidate:
             material = _material_for_keyset(
                 winner,
