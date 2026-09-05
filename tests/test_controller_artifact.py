@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -203,3 +204,24 @@ def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
         value = json.loads(target.read_text())
         assert value["controller"]["environment_artifact"]["digest"] == "linux"
         assert value["controller"]["environment_artifacts"]["win32-x64"]["platform"] == "win32-x64"
+
+
+def test_packaged_controller_python_file_sets_are_byte_identical_and_importable(tmp_path):
+    root = Path(__file__).parents[1]
+    canonical = {path.name: path.read_bytes() for path in (root / "src/josh_room").glob("*.py")}
+    for packaged_root in (
+        root / "vscode-extension/runtime/controller/josh_room",
+        root / "templates/room/vscode-extension/runtime/controller/josh_room",
+    ):
+        packaged = {path.name: path.read_bytes() for path in packaged_root.glob("*.py")}
+        assert set(packaged) == set(canonical)
+        assert packaged == canonical
+        result = __import__("subprocess").run(
+            [sys.executable, "-c", "import josh_room.encryption_domain, josh_room.cli, josh_room.jat; print(josh_room.encryption_domain.__file__)"],
+            env={**os.environ, "PYTHONPATH": str(packaged_root.parent), "JOSH_ROOM_EXTENSION_MODE": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert str(packaged_root) in result.stdout

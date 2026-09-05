@@ -49,6 +49,37 @@ class SavePublicationError(RuntimeError):
         super().__init__(f"{cause}; catalog publication may be visible; marker committed: {marker}")
 
 
+class CatalogResult(dict):
+    """JSON-native bounded catalog view retained for direct operation callers."""
+
+    @property
+    def body(self):
+        return self
+
+    def resolve_snapshot(self, project_id, snapshot_id):
+        return Catalog(self).resolve_snapshot(project_id, snapshot_id)
+
+
+def _bounded_catalog_result(catalog: Catalog, project_id: str, snapshot_id: str) -> CatalogResult:
+    project = catalog.body["projects"][project_id]
+    snapshot = project["snapshots"][snapshot_id]
+    body = {
+        "format_version": catalog.body["format_version"],
+        "revision": catalog.body["revision"],
+        "projects": {
+            project_id: {
+                "display_name": project["display_name"],
+                "latest": snapshot_id,
+                "snapshots": {snapshot_id: json.loads(json.dumps(snapshot))},
+            },
+        },
+    }
+    for field in ("dimension_id", "encryption_domain_id"):
+        if field in catalog.body:
+            body[field] = catalog.body[field]
+    return CatalogResult(body)
+
+
 def create_snapshot(
     instance: Path,
     project_id: str,
@@ -676,7 +707,7 @@ def _read_journal(backend):
         journal = json.loads(body)
     except (TypeError, json.JSONDecodeError) as error:
         raise ValueError("migration journal is invalid") from error
-    if not isinstance(journal, dict) or journal.get("format_version") != 1:
+    if not isinstance(journal, dict) or type(journal.get("format_version")) is not int or journal["format_version"] != 1:
         raise ValueError("migration journal is invalid")
     return journal, etag
 
@@ -894,6 +925,51 @@ def _destination_catalog_matches_migration(destination_backend, destination_iden
     return True
 
 
+def _destination_catalog_matches_journal(catalog, journal, destination_dimension, destination_domain_id) -> bool:
+    if catalog.encryption_domain_id != destination_domain_id:
+        return False
+    expected_dimension = getattr(destination_dimension, "dimension_id", destination_dimension)
+    if expected_dimension is not None and catalog.dimension_id != expected_dimension:
+        return False
+    expected = {
+        (item.get("destination_object_key"), item.get("destination_sha256"), item.get("destination_size"))
+        for item in journal.get("mappings", [])
+        if item.get("status") == "verified"
+    }
+    actual = {
+        (snapshot.get("object_key"), snapshot.get("ciphertext_sha256"), snapshot.get("ciphertext_size"))
+        for project in catalog.body.get("projects", {}).values()
+        for snapshot in project.get("snapshots", {}).values()
+    }
+    return len(expected) == len(journal.get("mappings", [])) and actual == expected
+
+
+def _recover_committed_migration(destination_backend, journal, destination_material, instance, destination_dimension, destination_domain_id):
+    if journal.get("status") not in {"ready-to-commit", "cutover-published"}:
+        return None
+    destination_identity = Path(destination_material.identity) if destination_material is not None else None
+    observed, _ = destination_backend.read_catalog()
+    if observed is None:
+        if journal.get("status") == "cutover-published":
+            raise CatalogConflict("migration candidate catalog is unavailable")
+        return None
+    try:
+        actual, _ = _read_remote_catalog(
+            destination_backend,
+            destination_identity,
+            instance,
+            getattr(destination_dimension, "dimension_id", destination_dimension),
+            destination_domain_id,
+        )
+    except Exception as error:
+        raise CatalogConflict("migration candidate catalog could not be verified") from error
+    if _destination_catalog_matches_journal(actual, journal, destination_dimension, destination_domain_id):
+        return actual
+    if journal.get("status") == "cutover-published":
+        raise CatalogConflict("destination catalog does not match migration candidate")
+    return None
+
+
 def _record_migration_state(destination_backend, journal, journal_etag, status, error):
     try:
         return _safe_journal_update(destination_backend, journal, journal_etag, status, error)
@@ -950,6 +1026,21 @@ def migrate_encryption(
     elif not resume and journal.get("status") not in {"planned", "interrupted"}:
         raise RuntimeError("an encryption migration is already active")
     try:
+        recovered = _recover_committed_migration(
+            destination_backend,
+            journal,
+            destination_material,
+            instance,
+            destination_dimension,
+            destination_domain_id,
+        )
+        if recovered is not None:
+            journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
+            return _migration_result(journal, recovered)
+    except CatalogConflict as error:
+        _record_migration_state(destination_backend, journal, journal_etag, "conflict", error)
+        raise
+    try:
         _validate_journal_identity(
             journal,
             source_catalog,
@@ -973,7 +1064,7 @@ def migrate_encryption(
         try:
             if _destination_catalog_matches_migration(destination_backend, destination_identity, instance, destination_dimension, destination_domain_id, candidate):
                 journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
-                return {"ok": True, "status": "committed", "journal_status": "committed", "catalog": candidate, "migration_id": journal["migration_id"]}
+                return _migration_result(journal, candidate)
             if journal.get("status") == "cutover-published":
                 raise CatalogConflict("published migration catalog is unavailable")
         except CatalogConflict as error:
@@ -1058,7 +1149,7 @@ def migrate_encryption(
                     _safe_journal_update(destination_backend, journal, journal_etag, "conflict" if isinstance(error, CatalogConflict) else "failed", error)
                 raise
             journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
-            return {"ok": True, "status": "committed", "journal_status": "committed", "catalog": candidate, "migration_id": journal["migration_id"]}
+            return _migration_result(journal, candidate)
     except BaseException as error:
         if catalog_published:
             raise
@@ -1148,7 +1239,23 @@ def copy_snapshot_stream(instance: Path, source_catalog: Catalog, destination_ca
                 raise
             receipt = _write_copy_orphan_receipt(instance, ref, destination_backend, error)
             raise CopyPublicationError(error, receipt) from error
-    return {"ok": True, "project_id": destination_project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog": updated}
+    return {"ok": True, "project_id": destination_project, "snapshot_id": new_snapshot["snapshot_id"], "object_key": new_snapshot["object_key"], "ciphertext_sha256": new_snapshot["ciphertext_sha256"], "ciphertext_size": new_snapshot["ciphertext_size"], "catalog_revision": updated.body["revision"], "catalog": _bounded_catalog_result(updated, destination_project, new_snapshot["snapshot_id"])}
+
+
+def _migration_result(journal: dict, catalog: Catalog) -> dict:
+    return {
+        "ok": True,
+        "status": "committed",
+        "journal_status": "committed",
+        "migration_id": journal["migration_id"],
+        "room_count": len(catalog.body["projects"]),
+        "snapshot_count": sum(len(project["snapshots"]) for project in catalog.body["projects"].values()),
+        "object_count": len({
+            snapshot["ciphertext_sha256"]
+            for project in catalog.body["projects"].values()
+            for snapshot in project["snapshots"].values()
+        }),
+    }
 
 
 def _manifest_matches_snapshot(manifest: dict, project_id: str, snapshot: dict) -> bool:

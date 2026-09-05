@@ -11,7 +11,11 @@ from pathlib import Path
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
-from .encryption_domain import CONTROL_OBJECT_MAX_BYTES, is_control_key
+from .encryption_domain import (
+    CONTROL_OBJECT_MAX_BYTES,
+    is_control_key,
+    validate_minio_transport,
+)
 from .keyring import lookup
 from .local_store import ObjectRef
 from .object_store import ObjectStore
@@ -101,6 +105,12 @@ def check_bucket_access(config: R2Config, bucket: str, client=None) -> str:
 
 class R2Backend(ObjectStore):
     def __init__(self, config: R2Config, client=None, receipt_dir: Path | None = None):
+        if hasattr(config, "verify_tls"):
+            validate_minio_transport(
+                config.endpoint,
+                verify_tls=config.verify_tls,
+                ca_bundle=getattr(config, "ca_bundle", None),
+            )
         self.config = config
         self.client = client or self._client_from_keyring()
         self.receipt_dir = Path(receipt_dir) if receipt_dir else None
@@ -241,7 +251,10 @@ class R2Backend(ObjectStore):
             if _not_found(error):
                 return None, None
             raise
-        response = self.client.get_object(Bucket=self.config.bucket, Key=self.config.catalog_key)
+        kwargs = {"Bucket": self.config.bucket, "Key": self.config.catalog_key}
+        if head.get("ETag"):
+            kwargs["IfMatch"] = head["ETag"]
+        response = self.client.get_object(**kwargs)
         body = response["Body"].read(self.config.max_bytes + 1)
         if len(body) != int(head.get("ContentLength", -1)) or len(body) > self.config.max_bytes:
             raise ValueError("catalog size mismatch")
@@ -282,7 +295,10 @@ class R2Backend(ObjectStore):
         max_bytes = min(max_bytes, CONTROL_OBJECT_MAX_BYTES)
         if size < 0 or size > max_bytes:
             raise ValueError("control object exceeds maximum size")
-        response = self.client.get_object(Bucket=self.config.bucket, Key=key)
+        kwargs = {"Bucket": self.config.bucket, "Key": key}
+        if head.get("ETag"):
+            kwargs["IfMatch"] = head["ETag"]
+        response = self.client.get_object(**kwargs)
         body = response["Body"].read(max_bytes + 1)
         if len(body) != size or len(body) > max_bytes:
             raise ValueError("control object exceeds maximum size")

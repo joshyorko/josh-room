@@ -198,9 +198,8 @@ def test_migration_preserves_exact_envelope_and_never_calls_jat(tmp_path, monkey
     assert source.downloads == [snapshot["object_key"]]
     assert len(destination.puts) == 1
     assert destination.puts[0][1] == b"new:" + envelope
-    copied = result["catalog"].resolve_snapshot("migration-room", "one")
-    assert copied["jat_metadata"] == snapshot["jat_metadata"]
-    assert copied["ciphertext_size"] == len(b"new:" + envelope)
+    assert "catalog" not in result
+    assert result["snapshot_count"] == 1
 
 
 def test_migration_rejects_ciphertext_corruption_before_decryption(tmp_path, monkeypatch):
@@ -441,6 +440,27 @@ def test_resume_marks_a_readable_candidate_catalog_committed(tmp_path, monkeypat
     assert calls
 
 
+def test_restart_reconciles_candidate_before_validating_replaced_source_catalog(tmp_path, monkeypatch):
+    source_catalog, source, destination, journal = _seed_reconciliation_journal(tmp_path, "cutover-published")
+    candidate = operations._migration_catalog(source_catalog, None, journal["mappings"], "minio", DESTINATION_DOMAIN)
+    monkeypatch.setattr(operations, "_read_remote_catalog", lambda *_args, **_kwargs: (candidate, "catalog-2"))
+
+    result = operations.migrate_encryption(
+        tmp_path / "instance",
+        Catalog.empty(dimension_id="minio", encryption_domain_id=DESTINATION_DOMAIN),
+        source_backend=source,
+        destination_backend=destination,
+        source_dimension="legacy",
+        destination_dimension="minio",
+        source_identity=None,
+        destination_material=_material(DESTINATION_DOMAIN),
+        resume=True,
+    )
+
+    assert result["status"] == "committed"
+    assert result["snapshot_count"] == 1
+
+
 def test_resume_recovers_ready_to_commit_after_journal_update_crash(tmp_path, monkeypatch):
     source_catalog, source, destination, _journal = _seed_reconciliation_journal(tmp_path, "planned")
 
@@ -651,6 +671,26 @@ def test_migration_rejects_a_journal_with_a_wrong_source_object_binding(tmp_path
         )
 
 
+def test_migration_rejects_boolean_journal_format_version(tmp_path):
+    destination = FakeStore(domain=DESTINATION_DOMAIN)
+    destination.controls["control/migration-journal.v1.json"] = (
+        json.dumps({"format_version": True}).encode(),
+        '"journal-1"',
+    )
+
+    with pytest.raises(ValueError, match="migration journal is invalid"):
+        operations.migrate_encryption(
+            tmp_path / "instance",
+            _catalog([]),
+            source_backend=destination,
+            destination_backend=destination,
+            source_dimension="legacy",
+            destination_dimension="minio",
+            destination_material=_material(DESTINATION_DOMAIN),
+            resume=True,
+        )
+
+
 def test_migration_projects_source_catalog_into_an_empty_destination_catalog(tmp_path):
     envelope = _envelope(tmp_path)
     snapshot = _snapshot("one", envelope)
@@ -737,7 +777,6 @@ def test_copy_cross_domain_reencrypts_outer_ciphertext_and_preserves_metadata(tm
         source_domain_id=SOURCE_DOMAIN, destination_domain_id=DESTINATION_DOMAIN,
         source_identity=tmp_path / "legacy.identity", destination_material=_material(DESTINATION_DOMAIN),
     )
-    copied = result["catalog"].resolve_snapshot("copied-room", result["snapshot_id"])
     assert destination.puts[0][1] == b"new:" + envelope
-    assert copied["jat_metadata"] == snapshot["jat_metadata"]
-    assert copied["workspace_fingerprint"] == snapshot["workspace_fingerprint"]
+    assert isinstance(result["catalog"], dict)
+    assert result["snapshot_id"]

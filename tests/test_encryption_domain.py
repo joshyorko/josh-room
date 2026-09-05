@@ -145,6 +145,106 @@ def test_keyset_rejects_duplicate_operational_and_recovery_recipients():
         keyset(recovery_recipients=[RECOVERY_RECIPIENT, RECOVERY_RECIPIENT])
 
 
+def test_keyset_rejects_boolean_format_version_and_multiline_identity():
+    with pytest.raises(ValueError, match="unsupported keyset format"):
+        module = domain_module()
+        module.EncryptionKeyset(**{**keyset().to_dict(), "format_version": True})
+    with pytest.raises(ValueError, match="operational identity"):
+        keyset(operational_identity="AGE-SECRET-KEY-synthetic\nsecond-line")
+
+
+def test_minio_transport_policy_rejects_remote_http_and_disabled_tls_before_client_call(monkeypatch):
+    from josh_room.minio import MinioBackend, MinioConfig
+
+    monkeypatch.setattr(MinioBackend, "_client_from_keyring", lambda *_args, **_kwargs: pytest.fail("client was created"))
+    with pytest.raises(ValueError, match="HTTP|HTTPS"):
+        MinioBackend(MinioConfig("http://minio.example.invalid:9000", "synthetic", "profile"))
+    with pytest.raises(ValueError, match="TLS verification"):
+        MinioBackend(MinioConfig("https://minio.example.invalid:9000", "synthetic", "profile", verify_tls=False))
+
+
+def test_minio_transport_policy_rejects_disabled_tls_even_with_a_ca_bundle():
+    from josh_room.encryption_domain import validate_minio_transport
+
+    with pytest.raises(ValueError, match="TLS verification"):
+        validate_minio_transport(
+            "https://minio.example.invalid:9000",
+            verify_tls=False,
+            ca_bundle="/etc/ssl/synthetic.pem",
+        )
+
+
+def test_minio_encryption_status_validates_transport_before_backend_calls():
+    from types import SimpleNamespace
+
+    from josh_room.auth import encryption_status
+
+    calls = []
+    dimension = SimpleNamespace(
+        provider="minio",
+        endpoint="http://minio.example.invalid:9000",
+        bucket="synthetic",
+        dimension_id="archive",
+        option=lambda name, default=None: {"verify_tls": True, "ca_bundle": None}.get(name, default),
+    )
+    backend = SimpleNamespace(
+        config=SimpleNamespace(endpoint=dimension.endpoint, verify_tls=True, ca_bundle=None),
+        read_control=lambda *_args: calls.append("read_control"),
+    )
+
+    with pytest.raises(ValueError, match="HTTP|HTTPS"):
+        encryption_status(dimension, backend)
+
+    assert calls == []
+
+
+def test_minio_encryption_status_rejects_disabled_tls_before_backend_calls():
+    from types import SimpleNamespace
+
+    from josh_room.auth import encryption_status
+
+    calls = []
+    dimension = SimpleNamespace(
+        provider="minio",
+        endpoint="https://minio.example.invalid:9000",
+        bucket="synthetic",
+        dimension_id="archive",
+        option=lambda name, default=None: {"verify_tls": False, "ca_bundle": None}.get(name, default),
+    )
+    backend = SimpleNamespace(
+        config=SimpleNamespace(endpoint=dimension.endpoint, verify_tls=False, ca_bundle=None),
+        read_control=lambda *_args: calls.append("read_control"),
+    )
+
+    with pytest.raises(ValueError, match="TLS verification"):
+        encryption_status(dimension, backend)
+
+    assert calls == []
+
+
+def test_r2_catalog_read_uses_head_etag_as_a_stable_version(tmp_path):
+    fake = ControlS3()
+    fake.objects["catalog.jroom.age"] = {"body": b"catalog", "etag": '"catalog-1"'}
+    store = R2Backend(R2Config("https://example.invalid", "synthetic", "synthetic"), client=fake, receipt_dir=tmp_path)
+
+    store.read_catalog()
+
+    get_calls = [kwargs for name, kwargs in fake.calls if name == "get_object"]
+    assert get_calls[-1]["IfMatch"] == '"catalog-1"'
+
+
+def test_r2_control_read_uses_head_etag_as_a_stable_version(tmp_path):
+    module = domain_module()
+    fake = ControlS3()
+    fake.objects[module.KEYSET_CONTROL_KEY] = {"body": b"control", "etag": '"control-1"'}
+    store = R2Backend(R2Config("https://example.invalid", "synthetic", "synthetic"), client=fake, receipt_dir=tmp_path)
+
+    store.read_control(module.KEYSET_CONTROL_KEY, 1024)
+
+    get_calls = [kwargs for name, kwargs in fake.calls if name == "get_object"]
+    assert get_calls[-1]["IfMatch"] == '"control-1"'
+
+
 def test_keyset_rejects_invalid_age_recipient_syntax():
     with pytest.raises(ValueError, match="recipient"):
         keyset(operational_recipient="age1daily")

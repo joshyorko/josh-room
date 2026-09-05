@@ -153,6 +153,25 @@ def test_minio_catalog_without_keyset_requires_explicit_legacy_migration(tmp_pat
     assert [call[0] for call in backend.calls] == ["read_control", "read_catalog"]
 
 
+def test_explicit_legacy_migration_can_enroll_destination_keyset_over_existing_catalog(tmp_path, monkeypatch):
+    backend = FakeBackend(catalog=b"encrypted-catalog")
+    destination = tmp_path / "destination"
+    monkeypatch.setattr("josh_room.crypto.generate_identity", lambda path: identity(path))
+    monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda _path: OPERATIONAL_RECIPIENT)
+    monkeypatch.setattr("josh_room.auth.store_encryption_identity", lambda *_args: None)
+
+    material = auth_module.ensure_minio_domain(
+        dimension(),
+        backend,
+        recovery_recipients=[RECOVERY_RECIPIENT],
+        identity_path=destination,
+        allow_legacy_migration=True,
+    )
+
+    assert material.keyset.operational_recipient == OPERATIONAL_RECIPIENT
+    assert any(call[0] == "create_control" for call in backend.calls)
+
+
 def test_existing_keyset_uses_domain_and_generation_scoped_cache(tmp_path, monkeypatch):
     keyset = make_keyset()
     backend = FakeBackend(control=keyset.to_json())
@@ -169,6 +188,30 @@ def test_existing_keyset_uses_domain_and_generation_scoped_cache(tmp_path, monke
     assert material.key_generation == 1
     assert lookups == [(DOMAIN_ID, 1)]
     assert [call[0] for call in backend.calls] == ["read_control"]
+
+
+def test_malformed_cached_identity_is_rejected_instead_of_falling_back_to_remote(tmp_path, monkeypatch):
+    keyset = make_keyset()
+    backend = FakeBackend(control=keyset.to_json())
+    cached = tmp_path / "cached"
+    identity(cached, "AGE-SECRET-KEY-malformed")
+    monkeypatch.setattr("josh_room.auth.lookup_encryption_identity", lambda *_args: "AGE-SECRET-KEY-malformed")
+    monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda path: (_ for _ in ()).throw(ValueError("malformed identity")))
+
+    with pytest.raises(ValueError, match="malformed identity"):
+        auth_module.resolve_encryption_material(dimension(), backend, identity_path=tmp_path / "handoff")
+
+
+def test_status_derives_remote_operational_recipient_before_reporting_ready(monkeypatch):
+    keyset = make_keyset()
+    backend = FakeBackend(control=keyset.to_json())
+    calls = []
+    monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda path: calls.append(Path(path).read_text()) or OPERATIONAL_RECIPIENT)
+
+    result = auth_module.encryption_status(dimension(), backend)
+
+    assert result["state"] == "ready"
+    assert calls == ["AGE-SECRET-KEY-operational"]
 
 
 def test_r2_resolution_keeps_legacy_cloudflare_identity_path(monkeypatch, tmp_path):
@@ -222,7 +265,7 @@ def test_doctor_surfaces_minio_encryption_state_before_catalog_decrypt(
     assert report["error_code"] == expected_code
 
 
-def test_minio_copy_routes_without_cloudflare(tmp_path, monkeypatch, capsys):
+def test_mixed_copy_routes_cloudflare_only_for_the_r2_side(tmp_path, monkeypatch, capsys):
     config = {
         "dimensions": {
             "archive": dimension().to_private(),
@@ -256,7 +299,7 @@ def test_minio_copy_routes_without_cloudflare(tmp_path, monkeypatch, capsys):
 
     assert result["ok"] is True
     assert [call[0] for call in backend_calls] == ["minio", "r2"]
-    assert events == []
+    assert events == ["cloudflare"]
 
 
 def test_marker_derived_operation_selects_the_marker_dimension(tmp_path, monkeypatch):
