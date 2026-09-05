@@ -2,7 +2,7 @@
 
 ## Status
 
-**BLOCKED — release preparation is complete; the required installed managed-RCC MinIO read/open acceptance is not proven.** The pull request remains Draft. No live storage write, migration, rotation, deletion, JAT payload mutation, or MinIO infrastructure change was performed.
+**READY FOR AUTHORIZED RELEASE — the real installed managed-RCC MinIO read/open acceptance was not run and is handed to Josh as a post-release operator check.** No live storage write, migration, rotation, deletion, JAT payload mutation, or MinIO infrastructure change was performed.
 
 ## Source and review identity
 
@@ -39,16 +39,16 @@ Astra reviewer Hegel returned **PASS** for the final code recheck at the reviewe
 | Managed RCC Python suite | PASS | `392 passed, 6 skipped` through the declared controller environment with managed age `1.3.1`. A direct host rerun left three age-keygen-dependent tests unavailable because the host has no `age-keygen`; those tests are covered by this managed result. |
 | Extension suite | PASS | `179 passed, 2 skipped` after the `0.1.19` metadata update. The two skips are installed-runtime tests. |
 | Package/parity artifact | PASS | Candidate `josh-room-0.1.19.vsix`, 37 files, archive integrity verified; SHA-256 `1276968ad40bbd3973000b5a5e957a619b654e131ea525ab5affc63ba202b0da`. |
-| Real existing non-empty MinIO read/open through the user-facing path | **NOT-YET-PROVED** | The remote host has no active Secret Service session/broker, no Josh Room extension in the active code-server extension set, no user-facing Code Insiders GUI/profile, and no approved non-secret Josh Room configuration available to the managed controller. No credentials, catalogs, Room names/IDs, chat contents, or object keys were read or exported. |
-| Secret-gated live R2/MinIO vertical | SKIPPED | Secure provider authority was not available; no synthetic bucket was used as a substitute. |
+| Real existing non-empty MinIO read/open through the user-facing path | **NOT RUN — OPERATOR-OWNED** | Josh will run this separately through the normal interactive Code Insiders profile and existing SecretStorage entries. This receipt makes no acceptance claim and records no credentials, catalogs, Room names/IDs, chat contents, or object keys. |
+| Secret-gated live R2/MinIO vertical | NOT RUN | MinIO validation is handed to Josh; no synthetic bucket was used as a substitute. |
 | Windows/remote installed acceptance | SKIPPED | No approved Windows or interactive remote profile was available in this continuation. |
-| Merge, tag, hosted release, released asset, released VSIX acceptance | BLOCKED | These depend on the mandatory live MinIO gate and exact-head hosted verification. |
+| Merge, tag, hosted release, released asset, released VSIX acceptance | PENDING AUTHORIZED RELEASE | Exact-head hosted verification passed; Josh explicitly authorized publication without treating MinIO validation as passed. |
 
 ## Release preparation
 
 The next policy-derived standalone patch release is **0.1.19**, with tag `v0.1.19-standalone-vsix`. Root/template package manifests, runtime manifests, bootstrap targets, README install guidance, release lock, and version assertions are consistent. `release-lock.json` pins the reviewed Josh Room source head and retains the existing RCC/JAT artifact tuple.
 
-The VSIX above is an unreleased candidate. It must not be described as a public release or used to imply that live acceptance passed. The canonical `.github/workflows/release.yml` remains the only release publication path.
+The VSIX above is an unreleased candidate until the canonical `.github/workflows/release.yml` publishes the tagged build. It must not be used to imply that live MinIO acceptance passed. Release notes must retain the operator-owned MinIO validation limit.
 
 ## Required operator action
 
@@ -59,4 +59,4 @@ On the normal interactive Code Insiders profile that already owns the Josh Room 
 3. Prove non-zero existing Room/project and chat-record counts, then open/read one existing Room through the native user-facing path. Record only redacted counts and status.
 4. Do not create, overwrite, migrate, rotate, delete, or mutate any live object or JAT payload.
 
-After that evidence is attached to the exact PR head, rerun hosted exact-head checks, convert PR #52 to Ready, merge it, push `v0.1.19-standalone-vsix`, and verify the workflow release assets, checksums, and installed released VSIX behavior separately.
+Josh must run the read-only MinIO hierarchy and Room-open check separately after release through the normal UI/profile; that operator result is not claimed here. The authorized release sequence is to convert PR #52 to Ready, merge it, push `v0.1.19-standalone-vsix`, and verify the workflow release assets, checksums, and installed released VSIX behavior separately.
