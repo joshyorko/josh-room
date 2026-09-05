@@ -165,6 +165,7 @@ def test_migration_preserves_exact_envelope_and_never_calls_jat(tmp_path, monkey
     source_catalog = _catalog([snapshot])
     source = FakeStore({snapshot["object_key"]: b"old:" + envelope})
     destination = FakeStore(domain=DESTINATION_DOMAIN)
+    destination.catalog_body = b"old-catalog"
     destination.catalog_etag = "catalog-1"
     calls = []
     monkeypatch.setattr("josh_room.operations.run_build", lambda *a, **k: calls.append("build"))
@@ -340,6 +341,10 @@ def test_migration_resume_reconciles_crash_after_catalog_cutover(tmp_path, monke
             destination_material=_material(DESTINATION_DOMAIN),
             source_catalog_etag="catalog-1", destination_catalog_etag="catalog-1",
         )
+    journal_body, _journal_etag = destination.controls["control/migration-journal.v1.json"]
+    journal = json.loads(journal_body)
+    candidate = operations._migration_catalog(source_catalog, None, journal["mappings"], "minio", DESTINATION_DOMAIN)
+    monkeypatch.setattr(operations, "_read_remote_catalog", lambda *_args, **_kwargs: (candidate, "catalog-2"))
     result = operations.migrate_encryption(
         tmp_path / "instance", source_catalog,
         source_backend=source, destination_backend=destination,
@@ -350,6 +355,241 @@ def test_migration_resume_reconciles_crash_after_catalog_cutover(tmp_path, monke
         resume=True,
     )
     assert result["status"] == "committed"
+
+
+def _seed_reconciliation_journal(tmp_path, status):
+    envelope = _envelope(tmp_path)
+    snapshot = _snapshot("one", b"old:" + envelope)
+    source_catalog = _catalog([snapshot])
+    source = FakeStore({snapshot["object_key"]: b"old:" + envelope})
+    destination = FakeStore(domain=DESTINATION_DOMAIN)
+    destination.catalog_body = b"old-catalog"
+    operations.plan_encryption_migration(
+        source_catalog,
+        source,
+        destination,
+        source_dimension="legacy",
+        destination_dimension="minio",
+        source_domain_id=SOURCE_DOMAIN,
+        destination_material=_material(DESTINATION_DOMAIN),
+    )
+    body, etag = destination.controls["control/migration-journal.v1.json"]
+    journal = json.loads(body)
+    destination_body = b"new-ciphertext"
+    destination_digest = hashlib.sha256(destination_body).hexdigest()
+    journal["mappings"][0].update({
+        "destination_object_key": f"objects/sha256/{destination_digest}",
+        "destination_sha256": destination_digest,
+        "destination_size": len(destination_body),
+        "status": "verified",
+    })
+    journal["status"] = status
+    destination.objects[journal["mappings"][0]["destination_object_key"]] = destination_body
+    destination.controls["control/migration-journal.v1.json"] = (json.dumps(journal).encode(), etag)
+    return source_catalog, source, destination, journal
+
+
+def test_resume_does_not_call_an_old_readable_catalog_committed(tmp_path, monkeypatch):
+    source_catalog, source, destination, _journal = _seed_reconciliation_journal(tmp_path, "cutover-published")
+    monkeypatch.setattr(
+        operations,
+        "_read_remote_catalog",
+        lambda *_args, **_kwargs: (Catalog.empty(dimension_id="minio", encryption_domain_id=DESTINATION_DOMAIN), "catalog-1"),
+    )
+
+    with pytest.raises(CatalogConflict, match="migration candidate"):
+        operations.migrate_encryption(
+            tmp_path / "instance",
+            source_catalog,
+            source_backend=source,
+            destination_backend=destination,
+            source_dimension="legacy",
+            destination_dimension="minio",
+            source_identity=tmp_path / "legacy.identity",
+            destination_material=_material(DESTINATION_DOMAIN),
+            resume=True,
+        )
+    body, _etag = destination.controls["control/migration-journal.v1.json"]
+    assert json.loads(body)["status"] == "conflict"
+
+
+def test_resume_marks_a_readable_candidate_catalog_committed(tmp_path, monkeypatch):
+    source_catalog, source, destination, journal = _seed_reconciliation_journal(tmp_path, "cutover-published")
+    candidate = operations._migration_catalog(
+        source_catalog, None, journal["mappings"], "minio", DESTINATION_DOMAIN
+    )
+    calls = []
+
+    def read_candidate(*_args, **_kwargs):
+        calls.append(True)
+        return candidate, "catalog-2"
+
+    monkeypatch.setattr(operations, "_read_remote_catalog", read_candidate)
+    result = operations.migrate_encryption(
+        tmp_path / "instance",
+        source_catalog,
+        source_backend=source,
+        destination_backend=destination,
+        source_dimension="legacy",
+        destination_dimension="minio",
+        source_identity=tmp_path / "legacy.identity",
+        destination_material=_material(DESTINATION_DOMAIN),
+        resume=True,
+    )
+
+    assert result["status"] == "committed"
+    assert calls
+
+
+def test_resume_recovers_ready_to_commit_after_journal_update_crash(tmp_path, monkeypatch):
+    source_catalog, source, destination, _journal = _seed_reconciliation_journal(tmp_path, "planned")
+
+    class CrashOnCommitJournal(FakeStore):
+        crashed = False
+
+        def replace_control(self, key, body, expected_etag):
+            if json.loads(body).get("status") == "committed" and not self.crashed:
+                self.crashed = True
+                error = RuntimeError("crash after journal update boundary")
+                error.published = False
+                raise error
+            return super().replace_control(key, body, expected_etag)
+
+    crashing_destination = CrashOnCommitJournal(destination.objects, domain=DESTINATION_DOMAIN)
+    crashing_destination.controls = destination.controls
+    monkeypatch.setattr(operations, "_encrypt_catalog", lambda *_args: b"catalog")
+    monkeypatch.setattr(
+        operations,
+        "decrypt_file",
+        lambda source_path, _ids, output: output.write_bytes(source_path.read_bytes()[4:]),
+    )
+    monkeypatch.setattr(
+        operations,
+        "encrypt_file",
+        lambda source_path, _recipients, output: output.write_bytes(b"new:" + source_path.read_bytes()),
+    )
+
+    with pytest.raises(RuntimeError, match="journal update boundary"):
+        operations.migrate_encryption(
+            tmp_path / "instance",
+            source_catalog,
+            source_backend=source,
+            destination_backend=crashing_destination,
+            source_dimension="legacy",
+            destination_dimension="minio",
+            source_identity=tmp_path / "legacy.identity",
+            destination_material=_material(DESTINATION_DOMAIN),
+            source_catalog_etag="catalog-1",
+            destination_catalog_etag="catalog-1",
+        )
+    body, _etag = crashing_destination.controls["control/migration-journal.v1.json"]
+    ready = json.loads(body)
+    assert ready["status"] == "ready-to-commit"
+    candidate = operations._migration_catalog(source_catalog, None, ready["mappings"], "minio", DESTINATION_DOMAIN)
+    crashing_destination.catalog_body = b"catalog"
+    monkeypatch.setattr(operations, "_read_remote_catalog", lambda *_args, **_kwargs: (candidate, "catalog-2"))
+    result = operations.migrate_encryption(
+        tmp_path / "instance",
+        source_catalog,
+        source_backend=source,
+        destination_backend=crashing_destination,
+        source_dimension="legacy",
+        destination_dimension="minio",
+        source_identity=tmp_path / "legacy.identity",
+        destination_material=_material(DESTINATION_DOMAIN),
+        source_catalog_etag="catalog-1",
+        destination_catalog_etag="catalog-1",
+        resume=True,
+    )
+    assert result["status"] == "committed"
+
+
+def test_resume_rejects_a_destination_catalog_that_does_not_match_candidate(tmp_path, monkeypatch):
+    source_catalog, source, destination, _journal = _seed_reconciliation_journal(tmp_path, "ready-to-commit")
+    monkeypatch.setattr(
+        operations,
+        "_read_remote_catalog",
+        lambda *_args, **_kwargs: (Catalog.empty(dimension_id="other", encryption_domain_id=DESTINATION_DOMAIN), "catalog-1"),
+    )
+
+    with pytest.raises(CatalogConflict, match="migration candidate"):
+        operations.migrate_encryption(
+            tmp_path / "instance",
+            source_catalog,
+            source_backend=source,
+            destination_backend=destination,
+            source_dimension="legacy",
+            destination_dimension="minio",
+            source_identity=tmp_path / "legacy.identity",
+            destination_material=_material(DESTINATION_DOMAIN),
+            resume=True,
+        )
+
+
+def test_resume_rejects_same_dimension_id_bound_to_a_different_bucket(tmp_path):
+    envelope = _envelope(tmp_path)
+    snapshot = _snapshot("one", b"old:" + envelope)
+    source_catalog = _catalog([snapshot])
+    source = FakeStore({snapshot["object_key"]: b"old:" + envelope})
+    destination = FakeStore(domain=DESTINATION_DOMAIN)
+    source.config = SimpleNamespace(endpoint="https://source.example.invalid", bucket="source-bucket")
+    destination.config = SimpleNamespace(endpoint="https://destination.example.invalid", bucket="destination-bucket")
+    operations.plan_encryption_migration(
+        source_catalog, source, destination, source_dimension="legacy", destination_dimension="minio",
+        source_domain_id=SOURCE_DOMAIN, destination_material=_material(DESTINATION_DOMAIN),
+    )
+    source.config = SimpleNamespace(endpoint="https://rebound.example.invalid", bucket="rebound-bucket")
+
+    with pytest.raises(ValueError, match="authority"):
+        operations.migrate_encryption(
+            tmp_path / "instance", source_catalog,
+            source_backend=source, destination_backend=destination,
+            source_dimension="legacy", destination_dimension="minio",
+            source_identity=tmp_path / "legacy.identity",
+            destination_material=_material(DESTINATION_DOMAIN), resume=True,
+        )
+
+
+def test_prerequisite_failure_does_not_leave_a_running_journal(tmp_path):
+    envelope = _envelope(tmp_path)
+    snapshot = _snapshot("one", b"old:" + envelope)
+    source_catalog = _catalog([snapshot])
+    source = FakeStore({snapshot["object_key"]: b"old:" + envelope})
+    destination = FakeStore(domain=DESTINATION_DOMAIN)
+
+    with pytest.raises(ValueError, match="source encryption identity"):
+        operations.migrate_encryption(
+            tmp_path / "instance", source_catalog,
+            source_backend=source, destination_backend=destination,
+            source_dimension="legacy", destination_dimension="minio",
+            destination_material=_material(DESTINATION_DOMAIN),
+        )
+    body, _etag = destination.controls["control/migration-journal.v1.json"]
+    assert json.loads(body)["status"] == "failed"
+
+
+def test_failed_journal_is_not_implicitly_resumable(tmp_path):
+    envelope = _envelope(tmp_path)
+    snapshot = _snapshot("one", b"old:" + envelope)
+    source_catalog = _catalog([snapshot])
+    source = FakeStore({snapshot["object_key"]: b"old:" + envelope})
+    destination = FakeStore(domain=DESTINATION_DOMAIN)
+    with pytest.raises(ValueError, match="source encryption identity"):
+        operations.migrate_encryption(
+            tmp_path / "instance", source_catalog,
+            source_backend=source, destination_backend=destination,
+            source_dimension="legacy", destination_dimension="minio",
+            destination_material=_material(DESTINATION_DOMAIN),
+        )
+
+    with pytest.raises(RuntimeError, match="not resumable"):
+        operations.migrate_encryption(
+            tmp_path / "instance", source_catalog,
+            source_backend=source, destination_backend=destination,
+            source_dimension="legacy", destination_dimension="minio",
+            source_identity=tmp_path / "legacy.identity",
+            destination_material=_material(DESTINATION_DOMAIN), resume=True,
+        )
 
 
 def test_migration_rejects_a_journal_with_an_unmapped_source_object(tmp_path, monkeypatch):

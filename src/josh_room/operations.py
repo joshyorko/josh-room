@@ -850,7 +850,7 @@ def _has_object_verifier(backend):
     return getattr(backend, "verify_object", None) or getattr(backend, "verify", None)
 
 
-def _validate_journal_identity(journal, source_catalog, source_dimension, destination_dimension, source_domain_id, destination_domain_id, source_generation, destination_generation, source_catalog_etag):
+def _validate_journal_identity(journal, source_catalog, source_backend, source_dimension, destination_backend, destination_dimension, source_domain_id, destination_domain_id, source_generation, destination_generation, source_catalog_etag):
     expected = {
         "source_dimension": getattr(source_dimension, "dimension_id", source_dimension),
         "destination_dimension": getattr(destination_dimension, "dimension_id", destination_dimension),
@@ -858,13 +858,51 @@ def _validate_journal_identity(journal, source_catalog, source_dimension, destin
         "destination_encryption_domain_id": destination_domain_id,
         "destination_key_generation": destination_generation,
     }
+    for prefix, backend, dimension in (
+        ("source", source_backend, source_dimension),
+        ("destination", destination_backend, destination_dimension),
+    ):
+        authority = _authority(backend, dimension)
+        expected[f"{prefix}_bucket"] = authority["bucket"]
+        expected[f"{prefix}_endpoint_authority"] = authority["endpoint_authority"]
     for field, value in expected.items():
         if journal.get(field) != value:
-            raise ValueError(f"migration journal {field} does not match the requested migration")
+            label = " authority" if field.endswith(("_bucket", "_endpoint_authority")) else ""
+            raise ValueError(f"migration journal {field}{label} does not match the requested migration")
     if source_generation is not None and journal.get("source_key_generation") != source_generation:
         raise ValueError("migration journal source_key_generation does not match the requested migration")
     if source_catalog_etag is not None and journal.get("source_catalog_etag") not in {None, source_catalog_etag}:
         raise CatalogConflict("migration journal source catalog ETag mismatch")
+
+
+def _destination_catalog_matches_migration(destination_backend, destination_identity, instance, destination_dimension, destination_domain_id, candidate):
+    observed, _ = destination_backend.read_catalog()
+    if observed is None:
+        return False
+    try:
+        actual, _ = _read_remote_catalog(
+            destination_backend,
+            destination_identity,
+            instance,
+            getattr(destination_dimension, "dimension_id", destination_dimension),
+            destination_domain_id,
+        )
+    except Exception as error:
+        raise CatalogConflict("destination catalog could not be verified") from error
+    if actual.body != candidate.body or actual.encryption_domain_id != destination_domain_id:
+        raise CatalogConflict("destination catalog does not match migration candidate")
+    return True
+
+
+def _record_migration_state(destination_backend, journal, journal_etag, status, error):
+    try:
+        return _safe_journal_update(destination_backend, journal, journal_etag, status, error)
+    except Exception:  # noqa: BLE001 - the previous non-active state is safer than masking the failure
+        return journal_etag
+
+
+def _record_migration_failure(destination_backend, journal, journal_etag, error):
+    return _record_migration_state(destination_backend, journal, journal_etag, "failed", error)
 
 
 def migrate_encryption(
@@ -907,36 +945,55 @@ def migrate_encryption(
             source_catalog_etag=source_catalog_etag,
         )
         journal, journal_etag = _read_journal(destination_backend)
+    elif resume and journal.get("status") not in {"planned", "running", "interrupted", "ready-to-commit", "cutover-published"}:
+        raise RuntimeError("migration journal is not resumable")
     elif not resume and journal.get("status") not in {"planned", "interrupted"}:
         raise RuntimeError("an encryption migration is already active")
-    _validate_journal_identity(
-        journal,
-        source_catalog,
-        source_dimension,
-        destination_dimension,
-        source_domain_id,
-        destination_domain_id,
-        source_generation,
-        _generation_value(destination_material, destination_generation),
-        source_catalog_etag,
-    )
-    if journal.get("status") == "cutover-published":
-        observed, _ = destination_backend.read_catalog()
-        if observed is not None:
-            journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
-            candidate = _migration_catalog(source_catalog, destination_catalog, journal["mappings"], destination_dimension, destination_domain_id)
-            return {"ok": True, "status": "committed", "journal_status": "committed", "catalog": candidate, "migration_id": journal["migration_id"]}
-    _validate_journal_mapping_set(source_catalog, journal)
-    journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "running")
-    source_identity = _material_identity(source_material, source_identity) if source_material is not None else (Path(source_identity) if source_identity else None)
-    if source_identity is None:
-        raise ValueError("source encryption identity is required")
-    recipients = _material_recipients(destination_material, [])
-    if len(recipients) < 2:
-        raise ValueError("destination encryption recipients are required")
-    required_disk = journal.get("temporary_disk_bytes", 0)
-    if type(required_disk) is not int or required_disk < 0 or shutil.disk_usage(instance).free < required_disk:
-        raise ValueError("insufficient temporary disk for encryption migration")
+    try:
+        _validate_journal_identity(
+            journal,
+            source_catalog,
+            source_backend,
+            source_dimension,
+            destination_backend,
+            destination_dimension,
+            source_domain_id,
+            destination_domain_id,
+            source_generation,
+            _generation_value(destination_material, destination_generation),
+            source_catalog_etag,
+        )
+        _validate_journal_mapping_set(source_catalog, journal)
+    except BaseException as error:
+        _record_migration_failure(destination_backend, journal, journal_etag, error)
+        raise
+    if journal.get("status") in {"ready-to-commit", "cutover-published"}:
+        candidate = _migration_catalog(source_catalog, destination_catalog, journal["mappings"], destination_dimension, destination_domain_id)
+        destination_identity = Path(destination_material.identity) if destination_material is not None else None
+        try:
+            if _destination_catalog_matches_migration(destination_backend, destination_identity, instance, destination_dimension, destination_domain_id, candidate):
+                journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
+                return {"ok": True, "status": "committed", "journal_status": "committed", "catalog": candidate, "migration_id": journal["migration_id"]}
+            if journal.get("status") == "cutover-published":
+                raise CatalogConflict("published migration catalog is unavailable")
+        except CatalogConflict as error:
+            _record_migration_state(destination_backend, journal, journal_etag, "conflict", error)
+            raise
+    try:
+        source_identity = _material_identity(source_material, source_identity) if source_material is not None else (Path(source_identity) if source_identity else None)
+        if source_identity is None:
+            raise ValueError("source encryption identity is required")
+        recipients = _material_recipients(destination_material, [])
+        if len(recipients) < 2:
+            raise ValueError("destination encryption recipients are required")
+        required_disk = journal.get("temporary_disk_bytes", 0)
+        if type(required_disk) is not int or required_disk < 0 or shutil.disk_usage(instance).free < required_disk:
+            raise ValueError("insufficient temporary disk for encryption migration")
+        journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "running")
+    except BaseException as error:
+        _record_migration_failure(destination_backend, journal, journal_etag, error)
+        raise
+    catalog_published = False
     try:
         with tempfile.TemporaryDirectory(prefix=f"migration-{journal['migration_id']}-", dir=instance) as work:
             work = Path(work)
@@ -993,6 +1050,7 @@ def migrate_encryption(
             journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "ready-to-commit")
             try:
                 destination_backend.conditional_catalog_put(body, destination_catalog_etag)
+                catalog_published = True
             except BaseException as error:
                 if getattr(error, "published", False):
                     _safe_journal_update(destination_backend, journal, journal_etag, "cutover-published", error)
@@ -1002,6 +1060,8 @@ def migrate_encryption(
             journal_etag = _safe_journal_update(destination_backend, journal, journal_etag, "committed")
             return {"ok": True, "status": "committed", "journal_status": "committed", "catalog": candidate, "migration_id": journal["migration_id"]}
     except BaseException as error:
+        if catalog_published:
+            raise
         if isinstance(error, CatalogConflict):
             _safe_journal_update(destination_backend, journal, journal_etag, "conflict", error)
         elif journal.get("status") not in {"conflict", "failed", "cutover-published"}:
