@@ -5,12 +5,15 @@ import stat
 import tempfile
 import time
 import urllib.request
+import uuid
 import webbrowser
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 from .config import config_dir
+from .encryption_domain import KEYSET_CONTROL_KEY, EncryptionKeyset, EncryptionMaterial
+from .keyring import lookup_encryption_identity, store_encryption_identity
 from .progress import report_progress
 from .tls import system_ssl_context
 
@@ -462,3 +465,242 @@ def _load_runtime_legacy() -> bool:
 def load_runtime_session() -> bool:
     """Load an existing local encryption or Cloudflare session without contacting the authority."""
     return _load_runtime()
+
+
+class EncryptionStateError(RuntimeError):
+    """A machine-readable encryption state prevents unsafe implicit migration."""
+
+    def __init__(self, message: str, *, error_code: str, state: str, dimension_id: str):
+        self.result = {
+            "error_code": error_code,
+            "encryption_state": state,
+            "dimension_id": dimension_id,
+        }
+        super().__init__(message)
+
+
+def _encryption_material_path(domain_id: str, key_generation: int) -> Path:
+    path = _runtime_root() / "encryption" / domain_id / f"generation-{key_generation}.identity"
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    return path
+
+
+def _write_encryption_identity(path: Path, value: str) -> Path:
+    path = Path(path)
+    if path.is_symlink():
+        raise RuntimeError("encryption material path must not be a symlink")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(value.rstrip("\n") + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
+
+
+def _material_for_keyset(keyset: EncryptionKeyset, identity_path: Path | None = None) -> EncryptionMaterial:
+    identity_value = None
+    try:
+        identity_value = lookup_encryption_identity(keyset.encryption_domain_id, keyset.key_generation)
+    except (RuntimeError, OSError):
+        pass
+    if not identity_value:
+        identity_value = keyset.operational_identity
+    path = identity_path or _encryption_material_path(keyset.encryption_domain_id, keyset.key_generation)
+    try:
+        material = EncryptionMaterial(keyset, _write_encryption_identity(path, identity_value))
+    except (OSError, RuntimeError, ValueError):
+        if identity_value == keyset.operational_identity:
+            raise
+        material = EncryptionMaterial(keyset, _write_encryption_identity(path, keyset.operational_identity))
+        identity_value = keyset.operational_identity
+    try:
+        store_encryption_identity(keyset.encryption_domain_id, keyset.key_generation, identity_value)
+    except (RuntimeError, OSError):
+        pass
+    return material
+
+
+def _keyset_from_backend(dimension, backend):
+    body, _etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
+    if body is None:
+        return None
+    try:
+        return EncryptionKeyset.from_json(
+            body,
+            provider=dimension.provider,
+            endpoint=dimension.endpoint,
+            bucket=dimension.bucket,
+        )
+    except (TypeError, ValueError) as error:
+        raise EncryptionStateError(
+            "MinIO encryption keyset is invalid",
+            error_code="encryption-keyset-invalid",
+            state="failed",
+            dimension_id=dimension.dimension_id,
+        ) from error
+
+
+def resolve_encryption_material(
+    dimension,
+    backend,
+    *,
+    recovery_recipients=None,
+    identity_path: Path | None = None,
+    allow_initialize: bool = True,
+    occupied=(),
+) -> EncryptionMaterial | None:
+    """Resolve one selected Dimension's operational age material.
+
+    R2 remains on its existing Cloudflare-issued identity path. MinIO reads the
+    fixed remote keyset and only enrolls an empty physical bucket when callers
+    explicitly supply public recovery recipients.
+    """
+    if dimension.provider == "r2":
+        return None
+    if dimension.provider != "minio":
+        raise ValueError("unsupported encryption provider")
+    keyset = _keyset_from_backend(dimension, backend)
+    if keyset is not None:
+        if dimension.encryption_domain_id and dimension.encryption_domain_id != keyset.encryption_domain_id:
+            raise EncryptionStateError(
+                "Dimension encryption domain does not match remote keyset",
+                error_code="encryption-domain-mismatch",
+                state="failed",
+                dimension_id=dimension.dimension_id,
+            )
+        return _material_for_keyset(keyset, identity_path)
+    if not allow_initialize or not recovery_recipients:
+        catalog, _catalog_etag = backend.read_catalog()
+        if catalog is not None:
+            raise EncryptionStateError(
+                "MinIO catalog requires explicit encryption migration",
+                error_code="legacy-encryption-migration-required",
+                state="legacy",
+                dimension_id=dimension.dimension_id,
+            )
+        raise EncryptionStateError(
+            "MinIO encryption is uninitialized; provide public recovery recipients",
+            error_code="encryption-initialization-required",
+            state="uninitialized",
+            dimension_id=dimension.dimension_id,
+        )
+    return ensure_minio_domain(
+        dimension,
+        backend,
+        recovery_recipients=recovery_recipients,
+        identity_path=identity_path,
+        occupied=occupied,
+    )
+
+
+def ensure_minio_domain(
+    dimension,
+    backend,
+    *,
+    recovery_recipients,
+    identity_path: Path | None = None,
+    occupied=(),
+) -> EncryptionMaterial:
+    """Enroll or reconcile the keyset for one empty MinIO bucket."""
+    if dimension.provider != "minio":
+        raise ValueError("MinIO encryption initialization requires a MinIO Dimension")
+    existing = _keyset_from_backend(dimension, backend)
+    if existing is not None:
+        return _material_for_keyset(existing, identity_path)
+    catalog, _catalog_etag = backend.read_catalog()
+    if catalog is not None:
+        raise EncryptionStateError(
+            "MinIO catalog requires explicit encryption migration",
+            error_code="legacy-encryption-migration-required",
+            state="legacy",
+            dimension_id=dimension.dimension_id,
+        )
+    if not recovery_recipients:
+        raise EncryptionStateError(
+            "MinIO encryption initialization requires public recovery recipients",
+            error_code="encryption-initialization-required",
+            state="uninitialized",
+            dimension_id=dimension.dimension_id,
+        )
+    from .crypto import derive_recipient, generate_identity
+
+    candidate_path = Path(identity_path) if identity_path else _runtime_root() / f".enrollment-{uuid.uuid4().hex}.identity"
+    candidate_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    generate_identity(candidate_path)
+    try:
+        operational_identity = candidate_path.read_text()
+        candidate = EncryptionKeyset.create(
+            provider=dimension.provider,
+            endpoint=dimension.endpoint,
+            bucket=dimension.bucket,
+            operational_identity=operational_identity,
+            operational_recipient=derive_recipient(candidate_path),
+            recovery_recipients=list(recovery_recipients),
+            encryption_domain_id=dimension.encryption_domain_id,
+            occupied=tuple(occupied),
+        )
+        try:
+            backend.create_control(KEYSET_CONTROL_KEY, candidate.to_json())
+            winner = candidate
+        except Exception as error:
+            if error.__class__.__name__ not in {"R2Conflict", "MinioConflict"} and not (
+                getattr(error, "published", None) is False and "conditional" in str(error).lower()
+            ):
+                raise
+            winner = _keyset_from_backend(dimension, backend)
+            if winner is None:
+                raise RuntimeError("MinIO keyset race outcome is unknown") from error
+            candidate_path.unlink(missing_ok=True)
+        if winner is candidate:
+            return _material_for_keyset(
+                winner,
+                identity_path or _encryption_material_path(winner.encryption_domain_id, winner.key_generation),
+            )
+        return _material_for_keyset(winner, identity_path if identity_path and identity_path != candidate_path else None)
+    finally:
+        if candidate_path.name.startswith(".enrollment-"):
+            candidate_path.unlink(missing_ok=True)
+
+
+def encryption_status(dimension, backend) -> dict:
+    """Read non-secret keyset state without enrollment or Cloudflare access."""
+    if dimension.provider == "r2":
+        return {
+            "state": "legacy-cloudflare",
+            "provider": "r2",
+            "dimension_id": dimension.dimension_id,
+        }
+    keyset = _keyset_from_backend(dimension, backend)
+    if keyset is not None:
+        if dimension.encryption_domain_id and dimension.encryption_domain_id != keyset.encryption_domain_id:
+            raise EncryptionStateError(
+                "Dimension encryption domain does not match remote keyset",
+                error_code="encryption-domain-mismatch",
+                state="failed",
+                dimension_id=dimension.dimension_id,
+            )
+        return {
+            "state": "ready",
+            "provider": dimension.provider,
+            "dimension_id": dimension.dimension_id,
+            "encryption_domain_id": keyset.encryption_domain_id,
+            "key_generation": keyset.key_generation,
+        }
+    catalog, _catalog_etag = backend.read_catalog()
+    result = {
+        "state": "legacy" if catalog is not None else "uninitialized",
+        "provider": dimension.provider,
+        "dimension_id": dimension.dimension_id,
+    }
+    if catalog is not None:
+        result["error_code"] = "legacy-encryption-migration-required"
+    return result

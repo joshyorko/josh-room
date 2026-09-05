@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .catalog import Catalog, CatalogFile
 from .crypto import decrypt, decrypt_file, encrypt, encrypt_file
+from .encryption_domain import EncryptionKeyset, EncryptionMaterial
 from .envelope import build_envelope_file, read_envelope_file
 from .jat import run_build, run_restore, run_serve
 from .local_store import ImmutableLocalStore
@@ -53,7 +54,11 @@ def create_snapshot(
     display_name: str | None = None,
     images: list[str] | None = None,
     all_images: bool = False,
+    *,
+    selected_material: EncryptionMaterial | None = None,
+    selected_domain: EncryptionKeyset | None = None,
 ) -> dict:
+    recipients = _selected_recipients(recipients, selected_material)
     instance.mkdir(parents=True, exist_ok=True)
     source_fingerprint = workspace_fingerprint(source)
     with tempfile.TemporaryDirectory(dir=instance) as work:
@@ -83,7 +88,8 @@ def create_snapshot(
             raise ValueError("published ciphertext metadata mismatch")
         catalog_path = instance / "catalog.jroom.age"
         dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) if backend else None
-        identity_value = os.environ.get("JOSH_ROOM_IDENTITY")
+        encryption_domain_id = _selected_domain_id(selected_material, selected_domain)
+        identity_value = str(selected_material.identity) if selected_material else os.environ.get("JOSH_ROOM_IDENTITY")
         marker_path = source / ".josh-room.json"
         previous_marker = None
         marker_written = False
@@ -95,7 +101,7 @@ def create_snapshot(
                 raise ValueError("source workspace changed during snapshot capture")
             report_progress("catalog", "Loading encrypted Room catalog")
             if backend:
-                catalog, catalog_etag = _read_remote_catalog(backend, identity_value, instance, getattr(getattr(backend, "config", None), "dimension_id", None))
+                catalog, catalog_etag = _read_remote_catalog(backend, identity_value, instance, dimension_id, encryption_domain_id)
             else:
                 catalog_file = CatalogFile(catalog_path, Path(identity_value) if identity_value else None, dimension_id)
                 catalog = catalog_file.read()
@@ -129,7 +135,8 @@ def create_snapshot(
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
 
 
-def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, jat_root: Path, backend=None, snapshot_id: str = "latest") -> dict:
+def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, jat_root: Path, backend=None, snapshot_id: str = "latest", *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None) -> dict:
+    identity = _selected_identity(identity, selected_material)
     if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
         raise FileExistsError("destination must be empty or absent")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +146,11 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
     try:
         report_progress("catalog", "Loading encrypted Room catalog")
         if backend:
-            catalog, _catalog_etag = _read_remote_catalog(backend, identity, instance)
+            domain_id = _selected_domain_id(selected_material, selected_domain)
+            if domain_id:
+                catalog, _catalog_etag = _read_remote_catalog(backend, identity, instance, encryption_domain_id=domain_id)
+            else:
+                catalog, _catalog_etag = _read_remote_catalog(backend, identity, instance)
         else:
             catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
         project = catalog.body["projects"][project_id]
@@ -207,12 +218,18 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
             shutil.rmtree(stage)
 
 
-def remove_room(instance: Path, project_id: str, identity: Path, recipients: list[str], backend=None) -> dict:
+def remove_room(instance: Path, project_id: str, identity: Path, recipients: list[str], backend=None, *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None) -> dict:
+    identity = _selected_identity(identity, selected_material)
+    recipients = _selected_recipients(recipients, selected_material)
     operation_id = uuid.uuid4().hex
     receipt = instance / "receipts" / f"{operation_id}.json"
     report_progress("catalog", "Loading encrypted Room catalog")
     if backend:
-        catalog, etag = _read_remote_catalog(backend, identity, instance)
+        domain_id = _selected_domain_id(selected_material, selected_domain)
+        if domain_id:
+            catalog, etag = _read_remote_catalog(backend, identity, instance, encryption_domain_id=domain_id)
+        else:
+            catalog, etag = _read_remote_catalog(backend, identity, instance)
     else:
         catalog_file = CatalogFile(instance / "catalog.jroom.age", identity)
         catalog = catalog_file.read()
@@ -252,12 +269,21 @@ def remove_snapshot(
     identity: Path,
     recipients: list[str],
     backend=None,
+    *,
+    selected_material: EncryptionMaterial | None = None,
+    selected_domain: EncryptionKeyset | None = None,
 ) -> dict:
+    identity = _selected_identity(identity, selected_material)
+    recipients = _selected_recipients(recipients, selected_material)
     operation_id = uuid.uuid4().hex
     receipt = instance / "receipts" / f"{operation_id}.json"
     report_progress("catalog", "Loading encrypted Room catalog")
     if backend:
-        catalog, etag = _read_remote_catalog(backend, identity, instance)
+        domain_id = _selected_domain_id(selected_material, selected_domain)
+        if domain_id:
+            catalog, etag = _read_remote_catalog(backend, identity, instance, encryption_domain_id=domain_id)
+        else:
+            catalog, etag = _read_remote_catalog(backend, identity, instance)
     else:
         catalog_file = CatalogFile(instance / "catalog.jroom.age", identity)
         catalog = catalog_file.read()
@@ -293,13 +319,18 @@ def remove_snapshot(
     return result
 
 
-def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: Path, jat_root: Path, backend=None) -> dict:
+def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: Path, jat_root: Path, backend=None, *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None) -> dict:
+    identity = _selected_identity(identity, selected_material)
     instance.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="serve-", dir=instance) as work:
         stage = Path(work)
         report_progress("catalog", "Loading encrypted Room catalog")
         if backend:
-            catalog, _etag = _read_remote_catalog(backend, identity, instance)
+            domain_id = _selected_domain_id(selected_material, selected_domain)
+            if domain_id:
+                catalog, _etag = _read_remote_catalog(backend, identity, instance, encryption_domain_id=domain_id)
+            else:
+                catalog, _etag = _read_remote_catalog(backend, identity, instance)
         else:
             catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
         snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
@@ -353,16 +384,16 @@ def _restore_marker(path: Path, previous: bytes | None) -> None:
         path.write_bytes(previous)
 
 
-def _read_remote_catalog(backend, identity_value, instance: Path, dimension_id: str | None = None):
+def _read_remote_catalog(backend, identity_value, instance: Path, dimension_id: str | None = None, encryption_domain_id: str | None = None):
     dimension_id = dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None)
     encrypted, etag = backend.read_catalog()
     if encrypted is None:
-        return Catalog.empty(dimension_id), None
+        return Catalog.empty(dimension_id, encryption_domain_id), None
     with tempfile.NamedTemporaryFile(prefix=".catalog-read.", delete=False) as handle:
         path = Path(handle.name)
         handle.write(encrypted)
     try:
-        return Catalog.from_body(json.loads(decrypt(path, [Path(identity_value)])), dimension_id), etag
+        return Catalog.from_body(json.loads(decrypt(path, [Path(identity_value)])), dimension_id, encryption_domain_id), etag
     finally:
         path.unlink(missing_ok=True)
 
@@ -375,6 +406,22 @@ def _encrypt_catalog(catalog: Catalog, recipients: list[str], instance: Path) ->
         return path.read_bytes()
     finally:
         path.unlink(missing_ok=True)
+
+
+def _selected_identity(identity: Path, selected_material: EncryptionMaterial | None) -> Path:
+    return Path(selected_material.identity) if selected_material else Path(identity)
+
+
+def _selected_recipients(recipients: list[str], selected_material: EncryptionMaterial | None) -> list[str]:
+    if selected_material is None:
+        return recipients
+    return [selected_material.recipient, *selected_material.keyset.recovery_recipients]
+
+
+def _selected_domain_id(selected_material: EncryptionMaterial | None, selected_domain: EncryptionKeyset | None) -> str | None:
+    if selected_material is not None:
+        return selected_material.encryption_domain_id
+    return selected_domain.encryption_domain_id if selected_domain is not None else os.environ.get("JOSH_ROOM_SELECTED_DOMAIN")
 
 
 def _snapshot_id() -> str:

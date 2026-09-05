@@ -11,13 +11,16 @@ from pathlib import Path
 
 from . import r2 as _r2
 from .auth import (
+    EncryptionStateError,
     _valid_identity,
     cancel_oauth_session,
+    ensure_minio_domain,
     ensure_runtime_session,
     load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
     r2_session_state,
+    resolve_encryption_material,
     runtime_capabilities,
     runtime_session_state,
     start_oauth_session,
@@ -203,6 +206,16 @@ def build_parser() -> argparse.ArgumentParser:
     auth_logout.add_argument("--dimension")
     auth_logout.add_argument("--purpose", choices=("all", "r2"), default="all")
     _json_option(auth_logout)
+    encryption = commands.add_parser("encryption")
+    encryption_commands = encryption.add_subparsers(dest="encryption_command", required=True)
+    for action in ("status", "migrate", "resume"):
+        encryption_action = encryption_commands.add_parser(action)
+        encryption_action.add_argument("--dimension", required=True)
+        _json_option(encryption_action)
+    encryption_initialize = encryption_commands.add_parser("initialize")
+    encryption_initialize.add_argument("--dimension", required=True)
+    encryption_initialize.add_argument("--recovery-recipient", action="append", dest="recovery_recipients")
+    _json_option(encryption_initialize)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(status)
@@ -333,23 +346,25 @@ def main(argv=None):
     instance = _instance_root()
     try:
         runtime_loaded = False
-        identity_context = nullcontext() if args.command in {"auth", "setup", "status"} else _identity_environment()
+        scoped_minio = _uses_minio_encryption(args)
+        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption"} or scoped_minio else _identity_environment()
         with identity_context:
-            if args.command not in {"auth", "setup"}:
+            if args.command not in {"auth", "setup", "encryption"} and not scoped_minio:
                 runtime_loaded = load_runtime_session()
-            if _requires_oauth(args):
-                requested_dimension = getattr(args, "dimension", None)
-                selected = None
-                if getattr(args, "snapshot_command", None) != "copy":
-                    try:
-                        selected = _effective_dimension(args)
-                    except ValueError:
-                        if requested_dimension != "r2":
-                            raise
-                ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
-            elif _requires_encryption(args) and not runtime_loaded and not _encryption_material_ready():
-                raise _encryption_authorization_required()
-            result = dispatch(args, instance)
+            with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext():
+                if _requires_oauth(args):
+                    requested_dimension = getattr(args, "dimension", None)
+                    selected = None
+                    if getattr(args, "snapshot_command", None) != "copy":
+                        try:
+                            selected = _effective_dimension(args)
+                        except ValueError:
+                            if requested_dimension != "r2":
+                                raise
+                    ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
+                elif _requires_encryption(args) and not runtime_loaded and not _encryption_material_ready():
+                    raise _encryption_authorization_required()
+                result = dispatch(args, instance)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         result = {"ok": False, "error": str(error)}
         if isinstance(getattr(error, "result", None), dict):
@@ -427,11 +442,11 @@ def _requires_oauth(args) -> bool:
 
 
 def _requires_encryption(args) -> bool:
-    if args.command not in {"rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
     if args.command == "snapshot" and getattr(args, "snapshot_command", None) not in {"create", "copy"}:
         return False
-    if args.command == "snapshots" and getattr(args, "snapshots_command", None) != "remove":
+    if args.command == "snapshots" and getattr(args, "snapshots_command", None) not in {"list", "remove"}:
         return False
     dimension = getattr(args, "dimension", None)
     if dimension:
@@ -453,6 +468,43 @@ def _requires_encryption(args) -> bool:
     if selected is not None:
         return selected.provider == "minio"
     return getattr(args, "backend", "r2") == "minio"
+
+
+def _uses_minio_encryption(args) -> bool:
+    if args.command == "encryption":
+        return False
+    if not _requires_encryption(args):
+        return False
+    try:
+        selected = _effective_dimension(args)
+    except ValueError:
+        return False
+    return selected is not None and selected.provider == "minio"
+
+
+@contextmanager
+def _selected_encryption_environment(args, instance: Path):
+    selected = _effective_dimension(args)
+    backend = _backend_for_args(args, instance)
+    material = resolve_encryption_material(selected, backend)
+    previous = {
+        name: os.environ.get(name)
+        for name in ("JOSH_ROOM_IDENTITY", "JOSH_ROOM_ENCRYPTION_MATERIAL", "JOSH_ROOM_SELECTED_RECIPIENTS", "JOSH_ROOM_SELECTED_DOMAIN")
+    }
+    os.environ["JOSH_ROOM_IDENTITY"] = str(material.identity)
+    os.environ["JOSH_ROOM_ENCRYPTION_MATERIAL"] = str(material.identity)
+    os.environ["JOSH_ROOM_SELECTED_RECIPIENTS"] = ",".join(
+        (material.recipient, *material.keyset.recovery_recipients)
+    )
+    os.environ["JOSH_ROOM_SELECTED_DOMAIN"] = material.encryption_domain_id
+    try:
+        yield material
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def _encryption_material_ready() -> bool:
@@ -538,6 +590,42 @@ def _bucket_operation(args, config):
 
 
 def dispatch(args, instance: Path) -> dict:
+    if args.command == "encryption":
+        config = private_config() or {}
+        dimension = DimensionRegistry(config).select(args.dimension)
+        backend = _backend(dimension.provider, instance, dimension.dimension_id)
+        if args.encryption_command == "status":
+            from .auth import encryption_status
+
+            return {"ok": True, **encryption_status(dimension, backend)}
+        if args.encryption_command == "initialize":
+            if dimension.provider != "minio":
+                raise ValueError("encryption initialization is only available for MinIO Dimensions")
+            recipients = args.recovery_recipients or []
+            material = ensure_minio_domain(
+                dimension,
+                backend,
+                recovery_recipients=recipients,
+            )
+            os.environ["JOSH_ROOM_IDENTITY"] = str(material.identity)
+            os.environ["JOSH_ROOM_ENCRYPTION_MATERIAL"] = str(material.identity)
+            os.environ["JOSH_ROOM_SELECTED_RECIPIENTS"] = ",".join(
+                (material.recipient, *material.keyset.recovery_recipients)
+            )
+            return {
+                "ok": True,
+                "state": "ready",
+                "provider": dimension.provider,
+                "dimension_id": dimension.dimension_id,
+                "encryption_domain_id": material.encryption_domain_id,
+                "key_generation": material.key_generation,
+            }
+        raise EncryptionStateError(
+            "encryption migration actions are handled by the migration workflow",
+            error_code="encryption-migration-not-implemented",
+            state="legacy",
+            dimension_id=dimension.dimension_id,
+        )
     if args.command == "auth":
         if args.auth_command == "start":
             started = start_oauth_session() if args.purpose == "r2" else start_oauth_session(args.purpose)
@@ -1096,6 +1184,9 @@ def _jat_root() -> Path:
 
 
 def _recipients() -> list[str]:
+    selected = os.environ.get("JOSH_ROOM_SELECTED_RECIPIENTS")
+    if selected:
+        return [item for item in selected.split(",") if item]
     environment = [item for item in os.environ.get("JOSH_ROOM_RECIPIENTS", "").split(",") if item]
     return environment or list(_configured().get("age_recipients", []))
 
@@ -1278,17 +1369,18 @@ def _identity() -> Path:
 def load_catalog(instance: Path, backend=None) -> Catalog:
     report_progress("catalog", "Reading encrypted Room catalog")
     dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) if backend else None
+    encryption_domain_id = os.environ.get("JOSH_ROOM_SELECTED_DOMAIN")
     if backend is None:
         path = instance / "catalog.jroom.age"
         if not path.is_file():
-            return Catalog.empty(dimension_id)
+            return Catalog.empty(dimension_id, encryption_domain_id)
         identity = os.environ.get("JOSH_ROOM_IDENTITY")
         if not identity:
             raise _encryption_authorization_required()
-        return Catalog.from_body(json.loads(decrypt(path, [Path(identity)])), dimension_id)
+        return Catalog.from_body(json.loads(decrypt(path, [Path(identity)])), dimension_id, encryption_domain_id)
     encrypted, _etag = backend.read_catalog()
     if encrypted is None:
-        return Catalog.empty(dimension_id)
+        return Catalog.empty(dimension_id, encryption_domain_id)
     identity = os.environ.get("JOSH_ROOM_IDENTITY")
     if not identity:
         raise _encryption_authorization_required()
@@ -1297,7 +1389,7 @@ def load_catalog(instance: Path, backend=None) -> Catalog:
         path = Path(handle.name)
         handle.write(encrypted)
     try:
-        catalog = Catalog.from_body(json.loads(decrypt(path, [Path(identity)])), dimension_id)
+        catalog = Catalog.from_body(json.loads(decrypt(path, [Path(identity)])), dimension_id, encryption_domain_id)
         report_progress("catalog", "Room catalog is ready")
         return catalog
     finally:
