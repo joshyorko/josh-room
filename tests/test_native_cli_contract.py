@@ -177,6 +177,7 @@ def test_native_encryption_action_vectors_match_both_extension_manifests():
         ["encryption", "initialize", "--dimension", "backup", "--recovery-handoff", "/tmp/recovery", "--json"],
         ["encryption", "migrate", "--dimension", "backup", "--json"],
         ["encryption", "resume", "--dimension", "backup", "--json"],
+        ["encryption", "recovery", "generate", "--output", "/tmp/recovery", "--json"],
     ]
     parser = build_parser()
     for vector in vectors:

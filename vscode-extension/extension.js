@@ -34,6 +34,7 @@ let testRuntime;
 const CREDENTIALS_SECRET = "josh-room.credentials.v1";
 const ENCRYPTION_SECRET_PREFIX = "josh-room.encryption.v1:";
 const RECOVERY_SECRET_PREFIX = "josh-room.recovery.v1:";
+const INSTALLATION_RECOVERY_SECRET = "josh-room.recovery.v1";
 
 function assertWorkspaceTrusted(action = "use Josh Room") {
   if (vscode.workspace.isTrusted === false) {
@@ -691,6 +692,69 @@ async function readEncryptionMaterial(dimension) {
     // Older extension-owned values may contain the identity directly.
   }
   return { identity: value };
+}
+
+function installationRecoverySecretKey() {
+  return INSTALLATION_RECOVERY_SECRET;
+}
+
+function readPrivateRecoveryFile(filename) {
+  const target = path.resolve(filename);
+  const stat = fs.lstatSync(target);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 || (stat.mode & 0o077) !== 0) {
+    throw new Error("recovery identity must be a private regular file");
+  }
+  const value = fs.readFileSync(target, "utf8");
+  if (!value.trim()) throw new Error("recovery identity is empty");
+  return value.endsWith("\n") ? value : `${value}\n`;
+}
+
+function recoveryPathIsInsideWorkspace(workspace, target) {
+  const relative = path.relative(path.resolve(workspace), path.resolve(target));
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function writeRecoveryBackup(filename, value, workspace) {
+  const target = path.resolve(filename);
+  if (recoveryPathIsInsideWorkspace(workspace, target)) {
+    throw new Error("recovery backup must be outside the workspace");
+  }
+  let descriptor;
+  let created = false;
+  try {
+    descriptor = fs.openSync(target, "wx", 0o600);
+    created = true;
+    fs.writeFileSync(descriptor, value, "utf8");
+    fs.fsyncSync(descriptor);
+  } catch (error) {
+    if (error?.code === "EEXIST") throw new Error("recovery backup already exists; choose a new destination");
+    if (created) fs.rmSync(target, { force: true });
+    throw error;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+  fs.chmodSync(target, 0o600);
+}
+
+function materializeRecoveryValue(value) {
+  if (typeof value !== "string" || !value.trim() || Buffer.byteLength(value) > 16 * 1024) {
+    throw new Error("stored recovery identity is invalid");
+  }
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-"));
+  fs.chmodSync(directory, 0o700);
+  const filename = path.join(directory, "recovery.identity");
+  try {
+    fs.writeFileSync(filename, value.endsWith("\n") ? value : `${value}\n`, { mode: 0o600, flag: "wx" });
+    fs.chmodSync(filename, 0o600);
+  } catch (error) {
+    fs.rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    path: filename,
+    value: readPrivateRecoveryFile(filename),
+    cleanup: () => fs.rmSync(directory, { recursive: true, force: true }),
+  };
 }
 
 async function writeEncryptionHandoff(environment, material) {
@@ -2643,6 +2707,64 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   }
 }
 
+async function prepareRecoveryHandoff(cwd) {
+  const stored = await extensionContext?.secrets?.get?.(INSTALLATION_RECOVERY_SECRET);
+  if (stored) return materializeRecoveryValue(stored);
+  const choice = await vscode.window.showQuickPick([
+    { label: "Import Existing Recovery Key", action: "import" },
+    { label: "Create Recovery Key", action: "create" },
+  ], {
+    title: "Josh: Recovery Identity",
+    placeHolder: "Choose an existing offline key or create one",
+    ignoreFocusOut: true,
+  });
+  if (!choice) return undefined;
+  if (choice.action === "import") {
+    const selected = (await vscode.window.showOpenDialog({
+      title: "Choose recovery identity for MinIO encryption",
+      defaultUri: vscode.Uri.file(cwd),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      openLabel: "Use recovery identity",
+    }))?.[0]?.fsPath;
+    if (!selected) return undefined;
+    return { path: selected, value: readPrivateRecoveryFile(selected), cleanup: () => {} };
+  }
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-create-"));
+  fs.chmodSync(directory, 0o700);
+  const generated = path.join(directory, "recovery.identity");
+  let handedOff = false;
+  try {
+    await runOperation(
+      "Creating recovery identity…",
+      ["encryption", "recovery", "generate", "--output", generated],
+      cwd,
+      { action: "create a recovery identity" },
+    );
+    const value = readPrivateRecoveryFile(generated);
+    const backup = await vscode.window.showSaveDialog({
+      title: "Back Up Recovery Identity",
+      defaultUri: vscode.Uri.file(path.join(os.homedir(), "josh-room-recovery.identity")),
+      filters: { "Age identity": ["identity", "txt"] },
+    });
+    if (!backup) return undefined;
+    writeRecoveryBackup(backup.fsPath, value, cwd);
+    const acknowledged = await vscode.window.showInformationMessage(
+      "Recovery identity backup saved. Continue to create the MinIO encryption domain?",
+      { modal: true },
+      "Continue",
+    );
+    if (acknowledged !== "Continue") throw new Error("recovery identity backup must be acknowledged before initialization");
+    if (!extensionContext?.secrets?.store) throw new Error("SecretStorage is required for the recovery identity");
+    await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, value);
+    handedOff = true;
+    return { path: generated, value, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
+  } finally {
+    if (!handedOff) fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 async function connectEncryption(item, options = {}) {
   assertWorkspaceTrusted("initialize MinIO encryption");
   const cwd = activeWorkspace();
@@ -2651,40 +2773,43 @@ async function connectEncryption(item, options = {}) {
   if (!dimensionIdValue || nativeRegistry.providerKey(dimension?.provider) !== "minio") {
     throw new Error("Choose a MinIO Dimension before initializing encryption.");
   }
-  const handoff = options.recoveryHandoff || (await vscode.window.showOpenDialog({
-    title: "Choose recovery identity for MinIO encryption",
-    defaultUri: vscode.Uri.file(cwd),
-    canSelectFiles: true,
-    canSelectFolders: false,
-    canSelectMany: false,
-    openLabel: "Use recovery identity",
-  }))?.[0]?.fsPath;
-  if (!handoff) return "cancelled";
-  const result = await runOperation(
-    "Initializing MinIO encryption…",
-    ["encryption", "initialize", "--dimension", dimensionIdValue, "--recovery-handoff", handoff],
-    cwd,
-    { cancellable: true },
-  );
-  const domain = result.encryption_domain_id || dimension.encryption_domain_id;
-  const generation = result.key_generation || dimension.key_generation;
-  if (!result.encryption_material && domain && generation) {
-    const runtimeRoot = process.env.XDG_RUNTIME_DIR || os.tmpdir();
-    const candidate = path.join(runtimeRoot, "josh-room", "session", "encryption", domain, `generation-${generation}.identity`);
-    if (fs.existsSync(candidate)) result.encryption_material = candidate;
-  }
-  await cacheEncryptionMaterial(result, { ...dimension, id: dimensionIdValue });
-  if (domain && extensionContext?.secrets?.store) {
-    const recoveryStat = fs.lstatSync(handoff);
-    if (recoveryStat.isFile() && !recoveryStat.isSymbolicLink()
-      && (recoveryStat.mode & 0o077) === 0 && recoveryStat.size <= 16 * 1024) {
-      await extensionContext.secrets.store(recoverySecretKey(domain), fs.readFileSync(handoff, "utf8"));
+  if (!extensionContext?.secrets?.store) throw new Error("SecretStorage is required for MinIO encryption");
+  const prepared = options.recoveryHandoff
+    ? { path: options.recoveryHandoff, value: readPrivateRecoveryFile(options.recoveryHandoff), cleanup: () => {} }
+    : await prepareRecoveryHandoff(cwd);
+  if (!prepared) return "cancelled";
+  try {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-operational-"));
+    fs.chmodSync(directory, 0o700);
+    const materialHandoff = path.join(directory, "operational.identity");
+    try {
+      const result = await runOperation(
+        "Initializing MinIO encryption…",
+        ["encryption", "initialize", "--dimension", dimensionIdValue, "--recovery-handoff", prepared.path, "--material-handoff", materialHandoff],
+        cwd,
+        { cancellable: true },
+      );
+      const domain = result.encryption_domain_id || dimension.encryption_domain_id;
+      const generation = result.key_generation || dimension.key_generation;
+      if (!result.encryption_material && fs.existsSync(materialHandoff)) result.encryption_material = materialHandoff;
+      if (!result.encryption_material && domain && generation) {
+        const runtimeRoot = process.env.XDG_RUNTIME_DIR || os.tmpdir();
+        const candidate = path.join(runtimeRoot, "josh-room", "session", "encryption", domain, `generation-${generation}.identity`);
+        if (fs.existsSync(candidate)) result.encryption_material = candidate;
+      }
+      await cacheEncryptionMaterial(result, { ...dimension, id: dimensionIdValue });
+      if (domain) await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, prepared.value);
+      if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), prepared.value);
+      selectedDimensionId = dimensionIdValue;
+      roomsProvider && await roomsProvider.refresh();
+      await vscode.window.showInformationMessage("MinIO encryption is ready. Cloudflare R2 was not connected.");
+      return "initialized";
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
     }
+  } finally {
+    prepared.cleanup();
   }
-  selectedDimensionId = dimensionIdValue;
-  roomsProvider && await roomsProvider.refresh();
-  await vscode.window.showInformationMessage("MinIO encryption is ready. Cloudflare R2 was not connected.");
-  return "initialized";
 }
 
 async function runSelectedEncryption(args, cwd, dimension, options = {}) {
@@ -2765,21 +2890,13 @@ async function exportRecovery(item) {
   }
   const output = await vscode.window.showSaveDialog({
     title: "Export MinIO recovery identity",
-    defaultUri: vscode.Uri.file(path.join(activeWorkspace(), "josh-room-recovery.identity")),
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), "josh-room-recovery.identity")),
     filters: { "Age identity": ["identity", "txt"] },
   });
   if (!output) return "cancelled";
   const recovery = await extensionContext?.secrets?.get?.(recoverySecretKey(domain));
   if (!recovery) throw new Error("Recovery material is unavailable for the selected Dimension.");
-  const outputPath = path.resolve(output.fsPath);
-  const temporary = path.join(path.dirname(outputPath), `.josh-room-recovery-${process.pid}-${Date.now()}`);
-  try {
-    fs.writeFileSync(temporary, String(recovery).endsWith("\n") ? String(recovery) : `${recovery}\n`, { mode: 0o600, flag: "wx" });
-    fs.chmodSync(temporary, 0o600);
-    fs.renameSync(temporary, outputPath);
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
+  writeRecoveryBackup(output.fsPath, String(recovery).endsWith("\n") ? String(recovery) : `${recovery}\n`, activeWorkspace());
   await vscode.window.showInformationMessage(`Recovery identity exported to ${output.fsPath}.`);
   return "exported";
 }
@@ -3583,6 +3700,24 @@ function dimensionLoadFailure(error) {
   const result = error && error.result || {};
   const diagnostic = result.error || error?.message || "unknown storage error";
   const code = result.error_code || "dimension-load-failed";
+  if (/resumable|resume/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Encryption migration resumable — Resume",
+      description: "Resume the selected Dimension's encryption migration.",
+      action: "resume",
+      state: result.encryption_state || result.state || "resumable",
+    };
+  }
+  if (/legacy|migration-required|encryption-migration/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Encryption migration required — Migrate",
+      description: "Migrate the legacy encrypted catalog before using this Dimension.",
+      action: "migrate",
+      state: result.encryption_state || result.state || "legacy",
+    };
+  }
   if (/encryption-authorization-required/i.test(code + " " + diagnostic)) {
     return {
       code,
@@ -3728,7 +3863,13 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
     } catch (error) {
       const failure = dimensionLoadFailure(error);
       outputChannel && outputChannel.warn("Unable to load Dimension " + id + ": " + (error.result?.error || error.message));
-      loaded.push(Object.assign(dimension, { state: "error", load_error: failure }));
+      const result = error && error.result && typeof error.result === "object" ? error.result : {};
+      const propagated = {};
+      for (const key of ["encryption_state", "encryption_domain_id", "key_generation", "error_code", "authorization_required", "authorization_purpose", "journal_status"]) {
+        if (Object.prototype.hasOwnProperty.call(result, key)) propagated[key] = result[key];
+      }
+      const state = result.encryption_state || result.state || failure.state || "error";
+      loaded.push(Object.assign(dimension, propagated, { state, load_error: { ...failure, state } }));
     }
   }
   const loadedCatalog = Object.assign({}, catalog, {
@@ -3792,6 +3933,7 @@ Object.assign(module.exports.__test__, {
   importRecovery,
   encryptionSecretKey,
   recoverySecretKey,
+  installationRecoverySecretKey,
   connectStorage,
   disconnectStorage,
   editStorageSettings,

@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 
 from . import r2 as _r2
@@ -36,7 +36,7 @@ from .config import (
     private_config,
     save_private_config,
 )
-from .crypto import CryptoError, _managed_executable, decrypt
+from .crypto import CryptoError, _managed_executable, decrypt, generate_identity
 from .encryption_domain import KEYSET_CONTROL_KEY
 from .jat import (
     _jat_contract,
@@ -66,6 +66,7 @@ from .operations import (
     link_workspace,
     migrate_encryption,
     plan_encryption_migration,
+    reconcile_encryption_migration,
     remove_room,
     remove_snapshot,
     repair_workspace,
@@ -213,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(auth_logout)
     encryption = commands.add_parser("encryption")
     encryption_commands = encryption.add_subparsers(dest="encryption_command", required=True)
+    recovery = encryption_commands.add_parser("recovery")
+    recovery_commands = recovery.add_subparsers(dest="recovery_command", required=True)
+    recovery_generate = recovery_commands.add_parser("generate")
+    recovery_generate.add_argument("--output", type=Path, required=True)
+    _json_option(recovery_generate)
     for action in ("status", "migrate", "resume"):
         encryption_action = encryption_commands.add_parser(action)
         encryption_action.add_argument("--dimension", required=True)
@@ -225,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     encryption_initialize.add_argument("--dimension", required=True)
     encryption_initialize.add_argument("--recovery-recipient", action="append", dest="recovery_recipients")
     encryption_initialize.add_argument("--recovery-handoff", type=Path)
+    encryption_initialize.add_argument("--material-handoff", type=Path)
     _json_option(encryption_initialize)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -511,10 +518,25 @@ def _selected_encryption_environment(args, instance: Path):
         with _encryption_material_environment(material):
             yield material
         return
-    with tempfile.TemporaryDirectory(prefix="josh-room-encryption-") as temporary:
-        material = resolve_encryption_material(selected, backend, identity_path=Path(temporary) / "identity")
-        with _encryption_material_environment(material):
+    def resolve_selected(identity_path):
+        return resolve_encryption_material(selected, backend, identity_path=identity_path)
+
+    with _scoped_encryption_material(instance, resolve_selected) as material, _encryption_material_environment(material):
+        yield material
+
+
+@contextmanager
+def _scoped_encryption_material(instance: Path, resolver):
+    instance = Path(instance)
+    instance.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix=".josh-room-encryption-", dir=instance) as temporary:
+        material = resolver(Path(temporary) / "identity")
+        try:
             yield material
+        finally:
+            identity = getattr(material, "identity", None)
+            if identity is not None:
+                Path(identity).unlink(missing_ok=True)
 
 
 @contextmanager
@@ -674,6 +696,14 @@ def _bucket_operation(args, config):
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "encryption":
+        if args.encryption_command == "recovery":
+            if args.recovery_command != "generate":
+                raise ValueError("unsupported recovery action")
+            output = Path(args.output)
+            if output.is_symlink() or output.exists():
+                raise ValueError("recovery identity output already exists")
+            generate_identity(output)
+            return {"ok": True, "state": "generated"}
         config = private_config() or {}
         dimension = DimensionRegistry(config).select(args.dimension)
         backend = _backend(dimension.provider, instance, dimension.dimension_id)
@@ -690,6 +720,7 @@ def dispatch(args, instance: Path) -> dict:
                 backend,
                 recovery_recipients=recipients,
                 recovery_handoff=args.recovery_handoff,
+                identity_path=args.material_handoff,
             )
             try:
                 return {
@@ -701,74 +732,87 @@ def dispatch(args, instance: Path) -> dict:
                     "key_generation": material.key_generation,
                 }
             finally:
-                Path(material.identity).unlink(missing_ok=True)
+                if args.material_handoff is None:
+                    Path(material.identity).unlink(missing_ok=True)
         if args.encryption_command in {"migrate", "resume"}:
             if dimension.provider != "minio":
                 raise ValueError("encryption migration is only available for MinIO Dimensions")
-            with _legacy_migration_identity(args, instance) as source_identity:
-                keyset_body, _keyset_etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
-                material = ensure_minio_domain(
+            def resolve_destination(identity_path):
+                return ensure_minio_domain(
                     dimension,
                     backend,
                     recovery_recipients=args.recovery_recipients or _recipients(),
                     recovery_handoff=args.recovery_handoff,
+                    identity_path=identity_path,
                     allow_legacy_migration=True,
                 )
-                catalog = None
-                catalog_etag = None
-                if keyset_body is not None:
-                    try:
+            with _scoped_encryption_material(instance, resolve_destination) as material:
+                if args.encryption_command == "resume":
+                    recovered = reconcile_encryption_migration(
+                        instance,
+                        destination_backend=backend,
+                        destination_material=material,
+                        destination_dimension=dimension,
+                    )
+                    if recovered is not None:
+                        return recovered
+                with _legacy_migration_identity(args, instance) as source_identity:
+                    keyset_body, _keyset_etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
+                    catalog = None
+                    catalog_etag = None
+                    if keyset_body is not None:
+                        try:
+                            catalog, catalog_etag = _read_remote_catalog(
+                                backend,
+                                material.identity,
+                                instance,
+                                dimension.dimension_id,
+                                material.encryption_domain_id,
+                            )
+                        except (OSError, RuntimeError, TypeError, ValueError):
+                            pass
+                    if catalog is None:
                         catalog, catalog_etag = _read_remote_catalog(
                             backend,
-                            material.identity,
+                            source_identity,
                             instance,
                             dimension.dimension_id,
-                            material.encryption_domain_id,
+                            None,
                         )
-                    except (OSError, RuntimeError, TypeError, ValueError):
-                        pass
-                if catalog is None:
-                    catalog, catalog_etag = _read_remote_catalog(
-                        backend,
-                        source_identity,
+                    if catalog is None:
+                        raise EncryptionStateError(
+                            "MinIO encryption migration requires an existing legacy catalog",
+                            error_code="legacy-catalog-missing",
+                            state="uninitialized",
+                            dimension_id=dimension.dimension_id,
+                        )
+                    if args.encryption_command == "migrate":
+                        plan = plan_encryption_migration(
+                            catalog,
+                            backend,
+                            backend,
+                            source_dimension=dimension,
+                            destination_dimension=dimension,
+                            source_domain_id=catalog.encryption_domain_id,
+                            destination_material=material,
+                            source_catalog_revision=catalog.body["revision"],
+                            source_catalog_etag=catalog_etag,
+                        )
+                        return {"ok": True, **plan}
+                    return migrate_encryption(
                         instance,
-                        dimension.dimension_id,
-                        None,
-                    )
-                if catalog is None:
-                    raise EncryptionStateError(
-                        "MinIO encryption migration requires an existing legacy catalog",
-                        error_code="legacy-catalog-missing",
-                        state="uninitialized",
-                        dimension_id=dimension.dimension_id,
-                    )
-                if args.encryption_command == "migrate":
-                    plan = plan_encryption_migration(
                         catalog,
-                        backend,
-                        backend,
+                        source_backend=backend,
+                        destination_backend=backend,
                         source_dimension=dimension,
                         destination_dimension=dimension,
-                        source_domain_id=catalog.encryption_domain_id,
+                        source_identity=source_identity,
+                        source_material=None,
                         destination_material=material,
-                        source_catalog_revision=catalog.body["revision"],
                         source_catalog_etag=catalog_etag,
+                        destination_catalog_etag=catalog_etag,
+                        resume=True,
                     )
-                    return {"ok": True, **plan}
-                return migrate_encryption(
-                    instance,
-                    catalog,
-                    source_backend=backend,
-                    destination_backend=backend,
-                    source_dimension=dimension,
-                    destination_dimension=dimension,
-                    source_identity=source_identity,
-                    source_material=None,
-                    destination_material=material,
-                    source_catalog_etag=catalog_etag,
-                    destination_catalog_etag=catalog_etag,
-                    resume=True,
-                )
         raise EncryptionStateError(
             "encryption migration actions are handled by the migration workflow",
             error_code="encryption-migration-not-implemented",
@@ -1080,39 +1124,56 @@ def dispatch(args, instance: Path) -> dict:
             source_backend = _backend(source_dimension_config.provider, instance, source_dimension)
             destination_backend = _backend(destination_dimension_config.provider, instance, args.destination_dimension)
             identity = _identity() if "r2" in {source_dimension_config.provider, destination_dimension_config.provider} else None
-            source_material = None
-            destination_material = None
-            if source_dimension_config.provider == "minio":
-                source_material = resolve_encryption_material(source_dimension_config, source_backend, allow_initialize=False)
-            if destination_dimension_config.provider == "minio":
-                destination_material = resolve_encryption_material(destination_dimension_config, destination_backend, allow_initialize=False)
-            source_identity = source_material.identity if source_material is not None else identity
-            destination_identity = destination_material.identity if destination_material is not None else identity
-            if source_identity is None or destination_identity is None:
-                raise ValueError("copy requires source and destination encryption identities")
-            source_catalog, _source_etag = _read_remote_catalog(
-                source_backend, source_identity, instance,
-                source_dimension_config.dimension_id,
-                getattr(source_material, "encryption_domain_id", None),
-            )
-            destination_catalog, destination_etag = _read_remote_catalog(
-                destination_backend, destination_identity, instance,
-                destination_dimension_config.dimension_id,
-                getattr(destination_material, "encryption_domain_id", None),
-            )
-            return copy_snapshot_stream(
-                instance, source_catalog, destination_catalog, source_backend, destination_backend,
-                source_project, args.destination_project, source_snapshot,
-                _material_recipients(destination_material, recipients),
-                destination_etag=destination_etag,
-                source_domain_id=getattr(source_material, "encryption_domain_id", None) or source_catalog.encryption_domain_id,
-                destination_domain_id=getattr(destination_material, "encryption_domain_id", None) or destination_catalog.encryption_domain_id,
-                source_key_generation=getattr(source_material, "key_generation", None),
-                destination_key_generation=getattr(destination_material, "key_generation", None),
-                source_identity=source_identity,
-                destination_material=destination_material,
-                source_material=source_material,
-            )
+            with ExitStack() as stack:
+                source_material = None
+                destination_material = None
+                if source_dimension_config.provider == "minio":
+                    source_material = stack.enter_context(_scoped_encryption_material(
+                        instance,
+                        lambda identity_path: resolve_encryption_material(
+                            source_dimension_config,
+                            source_backend,
+                            allow_initialize=False,
+                            identity_path=identity_path,
+                        ),
+                    ))
+                if destination_dimension_config.provider == "minio":
+                    destination_material = stack.enter_context(_scoped_encryption_material(
+                        instance,
+                        lambda identity_path: resolve_encryption_material(
+                            destination_dimension_config,
+                            destination_backend,
+                            allow_initialize=False,
+                            identity_path=identity_path,
+                        ),
+                    ))
+                source_identity = source_material.identity if source_material is not None else identity
+                destination_identity = destination_material.identity if destination_material is not None else identity
+                if source_identity is None or destination_identity is None:
+                    raise ValueError("copy requires source and destination encryption identities")
+                source_catalog, _source_etag = _read_remote_catalog(
+                    source_backend, source_identity, instance,
+                    source_dimension_config.dimension_id,
+                    getattr(source_material, "encryption_domain_id", None),
+                )
+                destination_catalog, destination_etag = _read_remote_catalog(
+                    destination_backend, destination_identity, instance,
+                    destination_dimension_config.dimension_id,
+                    getattr(destination_material, "encryption_domain_id", None),
+                )
+                return copy_snapshot_stream(
+                    instance, source_catalog, destination_catalog, source_backend, destination_backend,
+                    source_project, args.destination_project, source_snapshot,
+                    _material_recipients(destination_material, recipients),
+                    destination_etag=destination_etag,
+                    source_domain_id=getattr(source_material, "encryption_domain_id", None) or source_catalog.encryption_domain_id,
+                    destination_domain_id=getattr(destination_material, "encryption_domain_id", None) or destination_catalog.encryption_domain_id,
+                    source_key_generation=getattr(source_material, "key_generation", None),
+                    destination_key_generation=getattr(destination_material, "key_generation", None),
+                    source_identity=source_identity,
+                    destination_material=destination_material,
+                    source_material=source_material,
+                )
         recipients = _recipients()
         jat_root = _jat_root()
         if len(recipients) < 2 or len(set(recipients)) < 2:
@@ -1281,18 +1342,21 @@ def _dimension_hierarchy_with_encryption(instance, dimension):
     backend = _backend(dimension.provider, instance, dimension.dimension_id)
     if dimension.provider != "minio":
         return _dimension_hierarchy(instance, dimension, backend)
-    material = resolve_encryption_material(dimension, backend, allow_initialize=False)
-    if material is None or not hasattr(backend, "read_catalog"):
-        return _dimension_hierarchy(instance, dimension, backend)
-    state = encryption_status(dimension, backend)
-    with _encryption_material_environment(material):
-        result = _dimension_hierarchy(instance, dimension, backend)
-    result.update({
-        "encryption_state": state["state"],
-        "encryption_domain_id": material.encryption_domain_id,
-        "key_generation": material.key_generation,
-    })
-    return result
+    def resolve_selected(identity_path):
+        return resolve_encryption_material(dimension, backend, allow_initialize=False, identity_path=identity_path)
+
+    with _scoped_encryption_material(instance, resolve_selected) as material:
+        if material is None or not hasattr(backend, "read_catalog"):
+            return _dimension_hierarchy(instance, dimension, backend)
+        state = encryption_status(dimension, backend)
+        with _encryption_material_environment(material):
+            result = _dimension_hierarchy(instance, dimension, backend)
+        result.update({
+            "encryption_state": state["state"],
+            "encryption_domain_id": material.encryption_domain_id,
+            "key_generation": material.key_generation,
+        })
+        return result
 
 
 def _connection_credentials(payload):
@@ -1552,8 +1616,15 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
                     encryption_error_code = "encryption-initialization-required"
                 r2_ok = True
                 if encryption_state == "ready":
-                    material = resolve_encryption_material(selected, backend, allow_initialize=False)
-                    with _encryption_material_environment(material):
+                    with _scoped_encryption_material(
+                        instance,
+                        lambda identity_path: resolve_encryption_material(
+                            selected,
+                            backend,
+                            allow_initialize=False,
+                            identity_path=identity_path,
+                        ),
+                    ) as material, _encryption_material_environment(material):
                         catalog = load_catalog(instance, backend)
                     catalog_ok = bool(catalog.body.get("projects"))
             else:
@@ -1695,6 +1766,8 @@ def choose_project(instance: Path, backend=None) -> str:
 
 def _sanitize_human_diagnostic(value) -> str:
     text = " ".join(str(value or "").split())
+    text = re.sub(r"\bAGE-SECRET-KEY-[A-Za-z0-9_-]+", "[REDACTED AGE IDENTITY]", text)
+    text = re.sub(r"\bage1[0-9a-z]{20,}", "[REDACTED AGE RECIPIENT]", text)
     text = re.sub(r"(bearer\s+)[^\s,]+", r"\1[REDACTED]", text, flags=re.IGNORECASE)
     text = re.sub(
         r"((?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|password|oauth[-_ ]?code|authorization|stdin|argv|env)\s*[:=]\s*)[^\s,]+",
@@ -1704,6 +1777,14 @@ def _sanitize_human_diagnostic(value) -> str:
     )
     text = re.sub(r"https?://[^\s]+", "[REDACTED URL]", text, flags=re.IGNORECASE)
     return text[:_HUMAN_DIAGNOSTIC_LIMIT]
+
+
+def _sanitize_json_text(value) -> str:
+    text = " ".join(str(value or "").split())
+    text = re.sub(r"\bAGE-SECRET-KEY-[A-Za-z0-9_-]+", "[REDACTED AGE IDENTITY]", text)
+    text = re.sub(r"\bage1[0-9a-z]{20,}", "[REDACTED AGE RECIPIENT]", text)
+    text = re.sub(r"(bearer\s+)[^\s,]+", r"\1[REDACTED]", text, flags=re.IGNORECASE)
+    return text[:_JSON_VALUE_LIMIT]
 
 
 def _collect_human_diagnostics(value, key: str = "", in_diagnostic: bool = False) -> list[str]:
@@ -1775,7 +1856,7 @@ def _json_safe(value, *, key="", depth=0):
     if isinstance(value, bytes):
         return "<binary redacted>"
     if isinstance(value, str):
-        return value[:_JSON_VALUE_LIMIT]
+        return _sanitize_json_text(value)
     if isinstance(value, dict):
         return {
             str(item_key)[:256]: _json_safe(item_value, key=str(item_key), depth=depth + 1)

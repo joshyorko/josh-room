@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from synthetic_identity import synthetic_identity
 
 from josh_room import cli, workspace_state
 from josh_room.auth import _write_runtime
@@ -72,7 +73,7 @@ def test_oauth_runtime_overlay_preserves_named_dimensions_and_default_routing(tm
         "sessionToken": "temporary-session",
         "endpoint": "https://oauth.example.invalid",
         "bucket": "oauth-bucket",
-        "ageIdentity": "AGE-SECRET-KEY-1X",
+        "ageIdentity": synthetic_identity("oauth"),
         "ageRecipients": ["age1daily", "age1recovery"],
         "expiresIn": 600,
     }, dimension_id="archive")

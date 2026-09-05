@@ -5,8 +5,10 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from synthetic_identity import synthetic_identity
 
 from josh_room import cli
 from josh_room.cli import (
@@ -75,7 +77,7 @@ def test_minio_snapshot_keeps_keyring_identity_when_expired_runtime_is_cleared(t
     monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
     monkeypatch.setattr(
         "josh_room.cli.lookup_keyring_value",
-        lambda profile, field: "AGE-SECRET-KEY-keyring" if (profile, field) == ("synthetic-age-profile", "age-identity") else None,
+            lambda profile, field: synthetic_identity("keyring") if (profile, field) == ("synthetic-age-profile", "age-identity") else None,
     )
     captured = {}
     monkeypatch.setattr(
@@ -85,14 +87,14 @@ def test_minio_snapshot_keeps_keyring_identity_when_expired_runtime_is_cleared(t
 
     assert main(["snapshot", "create", "demo", "--backend", "minio", "--json"]) == 0
     capsys.readouterr()
-    assert captured["identity"] == "AGE-SECRET-KEY-keyring\n"
+    assert captured["identity"] == synthetic_identity("keyring") + "\n"
 
 
 def test_auth_status_reports_encryption_only_runtime_as_r2_missing(tmp_path, monkeypatch, capsys):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
     identity = runtime / "age.identity"
-    identity.write_text("AGE-SECRET-KEY-encryption-only\n")
+    identity.write_text(synthetic_identity("encryption-only") + "\n")
     identity.chmod(0o600)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
     (runtime / "session.json").write_text(json.dumps({
@@ -700,6 +702,110 @@ def test_encryption_initialize_does_not_leave_identity_environment_or_file(monke
     assert "JOSH_ROOM_IDENTITY" not in os.environ
     assert "JOSH_ROOM_ENCRYPTION_MATERIAL" not in os.environ
     assert "JOSH_ROOM_SELECTED_RECIPIENTS" not in os.environ
+
+
+def test_encryption_initialize_keeps_only_the_explicit_material_handoff(tmp_path, monkeypatch):
+    material_handoff = tmp_path / "operational.identity"
+    recovery_handoff = tmp_path / "recovery.identity"
+    args = build_parser().parse_args([
+        "encryption", "initialize", "--dimension", "archive",
+        "--recovery-handoff", str(recovery_handoff),
+        "--material-handoff", str(material_handoff), "--json",
+    ])
+    dimension = SimpleNamespace(provider="minio", dimension_id="archive")
+
+    monkeypatch.setattr(cli, "private_config", dict)
+    monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: SimpleNamespace(select=lambda _name: dimension))
+    monkeypatch.setattr(cli, "_backend", lambda *_args: object())
+
+    def ensure(_dimension, _backend, **kwargs):
+        identity_path = kwargs["identity_path"]
+        identity_path.write_text("AGE-SECRET-KEY-synthetic\n")
+        identity_path.chmod(0o600)
+        return SimpleNamespace(
+            identity=identity_path,
+            encryption_domain_id="11111111-1111-4111-8111-111111111111",
+            key_generation=1,
+        )
+
+    monkeypatch.setattr(cli, "ensure_minio_domain", ensure)
+
+    result = cli.dispatch(args, tmp_path / "instance")
+
+    assert result["state"] == "ready"
+    assert material_handoff.read_text() == "AGE-SECRET-KEY-synthetic\n"
+
+
+def test_resume_reconciles_published_cutover_before_legacy_identity(monkeypatch, tmp_path):
+    args = build_parser().parse_args(["encryption", "resume", "--dimension", "archive", "--json"])
+    dimension = SimpleNamespace(provider="minio", dimension_id="archive")
+    material_path = tmp_path / "scoped-identity"
+    material = SimpleNamespace(
+        identity=material_path,
+        encryption_domain_id="11111111-1111-4111-8111-111111111111",
+        key_generation=1,
+        recipient="recipient",
+        keyset=SimpleNamespace(recovery_recipients=("recovery",)),
+    )
+
+    monkeypatch.setattr(cli, "private_config", dict)
+    monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: SimpleNamespace(select=lambda _name: dimension))
+    monkeypatch.setattr(cli, "_backend", lambda *_args: object())
+
+    def ensure(_dimension, _backend, **kwargs):
+        identity_path = kwargs["identity_path"]
+        identity_path.write_text("AGE-SECRET-KEY-synthetic\n")
+        identity_path.chmod(0o600)
+        return SimpleNamespace(**{**material.__dict__, "identity": identity_path})
+
+    monkeypatch.setattr(cli, "ensure_minio_domain", ensure)
+    monkeypatch.setattr(cli, "reconcile_encryption_migration", lambda *_args, **_kwargs: {"ok": True, "status": "committed"}, raising=False)
+    monkeypatch.setattr(cli, "_legacy_migration_identity", lambda *_args, **_kwargs: pytest.fail("restart reconciliation must not require the legacy identity"))
+
+    result = cli.dispatch(args, tmp_path / "instance")
+
+    assert result == {"ok": True, "status": "committed"}
+    assert not material_path.exists()
+
+
+def test_dimension_hierarchy_cleans_controller_created_identity(tmp_path, monkeypatch):
+    dimension = SimpleNamespace(provider="minio", dimension_id="archive")
+    captured = {}
+    material = SimpleNamespace(
+        identity=None,
+        encryption_domain_id="11111111-1111-4111-8111-111111111111",
+        key_generation=1,
+        recipient="recipient",
+        keyset=SimpleNamespace(recovery_recipients=("recovery",)),
+    )
+
+    monkeypatch.setattr(cli, "_backend", lambda *_args: SimpleNamespace(read_catalog=lambda: (None, None)))
+
+    def resolve(_dimension, _backend, **kwargs):
+        captured["identity_path"] = kwargs["identity_path"]
+        captured["identity_path"].write_text("AGE-SECRET-KEY-synthetic\n")
+        captured["identity_path"].chmod(0o600)
+        return SimpleNamespace(**{**material.__dict__, "identity": captured["identity_path"]})
+
+    monkeypatch.setattr(cli, "resolve_encryption_material", resolve)
+    monkeypatch.setattr(cli, "encryption_status", lambda *_args: {"state": "ready"})
+    monkeypatch.setattr(cli, "_dimension_hierarchy", lambda *_args: {"id": "archive", "rooms": []})
+
+    result = cli._dimension_hierarchy_with_encryption(tmp_path / "instance", dimension)
+
+    assert result["encryption_state"] == "ready"
+    assert not captured["identity_path"].exists()
+
+
+def test_json_result_redacts_private_material_inside_error_text():
+    safe = cli._bounded_json_result({
+        "ok": False,
+        "error": "controller rejected AGE-SECRET-KEY-synthetic for age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq",
+    })
+
+    serialized = json.dumps(safe)
+    assert "AGE-SECRET-KEY-synthetic" not in serialized
+    assert "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq" not in serialized
 
 
 def test_enter_launches_selected_ide_after_hydration(tmp_path, monkeypatch):

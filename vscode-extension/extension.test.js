@@ -798,13 +798,17 @@ test("Save Room to a fresh MinIO Dimension authorizes encryption once and preser
 
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async () => undefined,
+    store: async () => {},
+  } });
   extension.__test__.setSelectedDimensionId(undefined);
   vscode.openDialogResponses.push([{ fsPath: source }]);
   vscode.openDialogResponses.push([{ fsPath: recovery }]);
   vscode.inputBoxResponses.push("New Room");
   vscode.quickPickResponses.push(
     { create: true },
-    { dimension: { id: "backup", display_name: "Backup", provider: "minio" } },
+    { label: "Import Existing Recovery Key", action: "import" },
     { label: "Workspace only", allImages: false },
   );
 
@@ -1704,6 +1708,35 @@ test("a failed Dimension loader leaves the healthy Dimension usable", async () =
   const catalog = await extension.__test__.loadCatalog(root, "Loading test catalog");
   assert.deepEqual(catalog.dimensions.map((dimension) => dimension.id), ["unavailable", "healthy"]);
   assert.deepEqual(catalog.projects.map((project) => project.id), ["healthy-room"]);
+});
+
+test("a legacy Dimension loader preserves migration state and action", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-legacy-dimension-loader-test-"));
+  const { vscode } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && !args.includes("--with-hierarchy")) return { stdout: JSON.stringify({ ok: true, dimensions: [
+      { id: "legacy", display_name: "Legacy", provider: "minio" },
+    ] }) };
+    if (args[0] === "dimensions" && args.includes("--with-hierarchy")) return {
+      stdout: JSON.stringify({
+        ok: false,
+        state: "legacy",
+        encryption_state: "legacy",
+        error_code: "legacy-encryption-migration-required",
+        error: "MinIO catalog requires explicit encryption migration",
+      }),
+      code: 1,
+    };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+
+  const catalog = await extension.__test__.loadCatalog(root, "Loading legacy catalog");
+  const legacy = catalog.dimensions.find((dimension) => dimension.id === "legacy");
+
+  assert.equal(legacy.state, "legacy");
+  assert.equal(legacy.encryption_state, "legacy");
+  assert.equal(legacy.load_error.action, "migrate");
 });
 
 test("a minimal legacy catalog keeps its top-level Rooms in the native loader", async () => {
@@ -3502,17 +3535,96 @@ test("MinIO encryption initialization is native and never opens Cloudflare", asy
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
+  const values = new Map();
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  } });
+  vscode.quickPickResponses.push({ label: "Import Existing Recovery Key", action: "import" });
   vscode.openDialogResponses.push([{ fsPath: recovery }]);
 
   assert.equal(await extension.__test__.connectEncryption({
     dimension: { id: "backup", provider: "minio" },
   }), "initialized");
   assert.deepEqual(openExternalCalls, []);
-  assert.deepEqual(spawnHarness.calls[0].args, [
+  const initializeArgs = spawnHarness.calls[0].args;
+  assert.deepEqual(initializeArgs.slice(0, 6), [
     "encryption", "initialize", "--dimension", "backup", "--recovery-handoff", recovery,
-    "--json",
   ]);
+  assert.ok(initializeArgs.includes("--material-handoff"));
+  assert.equal(initializeArgs.at(-1), "--json");
   assert.equal(fs.existsSync(recovery), true);
+});
+
+test("new MinIO encryption backs up a created recovery identity before initialization", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-create-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const extras = withWindowExtras(vscode);
+  const values = new Map();
+  const backup = path.join(path.dirname(root), `josh-room-recovery-${process.pid}-${Date.now()}.identity`);
+  const generated = "AGE-SECRET-KEY-generated\n";
+  const calls = [];
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    calls.push(args);
+    if (args[0] === "encryption" && args[1] === "recovery" && args[2] === "generate") {
+      const output = args[args.indexOf("--output") + 1];
+      fs.writeFileSync(output, generated, { mode: 0o600 });
+      return { stdout: JSON.stringify({ ok: true, state: "generated" }) };
+    }
+    if (args[0] === "encryption" && args[1] === "initialize") {
+      return { stdout: JSON.stringify({ ok: true, state: "ready", encryption_domain_id: "domain-a", key_generation: 1 }) };
+    }
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  } });
+  vscode.quickPickResponses.push({ label: "Create Recovery Key", action: "create" });
+  extras.saveDialogResponses.push({ fsPath: backup });
+  vscode.infoResponses.push("Continue");
+
+  assert.equal(await extension.__test__.connectEncryption({ dimension: { id: "backup", provider: "minio" } }), "initialized");
+  assert.equal(calls[0][0], "encryption");
+  assert.deepEqual(calls[0].slice(0, 4), ["encryption", "recovery", "generate", "--output"]);
+  assert.equal(calls[1][0], "encryption");
+  assert.equal(calls[1][1], "initialize");
+  assert.equal(fs.readFileSync(backup, "utf8"), generated);
+  assert.equal(values.get(extension.__test__.installationRecoverySecretKey()), generated);
+  assert.equal(values.get(extension.__test__.recoverySecretKey("domain-a")), generated);
+});
+
+test("MinIO initialization hands operational material to SecretStorage and cleans the handoff", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-operational-handoff-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const recovery = path.join(root, "recovery.identity");
+  fs.writeFileSync(recovery, "AGE-SECRET-KEY-recovery\n", { mode: 0o600 });
+  const values = new Map();
+  let operationalHandoff;
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "encryption" && args[1] === "initialize") {
+      const index = args.indexOf("--material-handoff");
+      assert.ok(index >= 0);
+      operationalHandoff = args[index + 1];
+      fs.writeFileSync(operationalHandoff, "AGE-SECRET-KEY-operational\n", { mode: 0o600 });
+      return { stdout: JSON.stringify({ ok: true, state: "ready", encryption_domain_id: "domain-a", key_generation: 1 }) };
+    }
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  } });
+
+  assert.equal(await extension.__test__.connectEncryption({
+    dimension: { id: "backup", provider: "minio" },
+  }, { recoveryHandoff: recovery }), "initialized");
+  assert.equal(JSON.parse(values.get(extension.__test__.encryptionSecretKey("domain-a", 1))).identity, "AGE-SECRET-KEY-operational\n");
+  assert.equal(fs.existsSync(operationalHandoff), false);
 });
 
 test("selected encryption material uses a private bounded handoff and cleans up on every exit", async () => {
@@ -3676,12 +3788,36 @@ test("recovery export uses only the native save dialog", async () => {
     store: async (key, value) => values.set(key, value),
   } });
   values.set(extension.__test__.recoverySecretKey("domain-a"), "AGE-SECRET-KEY-recovery\n");
-  extras.saveDialogResponses.push({ fsPath: path.join(root, "recovery.txt") });
+  const output = path.join(path.dirname(root), `josh-room-recovery-${process.pid}-${Date.now()}.txt`);
+  extras.saveDialogResponses.push({ fsPath: output });
   assert.equal(await extension.__test__.exportRecovery({ id: "backup", provider: "minio", encryption_domain_id: "domain-a" }), "exported");
   assert.equal(openExternalCalls.length, 0);
   assert.equal(extras.saveDialogCalls.length, 1);
-  assert.equal(fs.readFileSync(path.join(root, "recovery.txt"), "utf8"), "AGE-SECRET-KEY-recovery\n");
+  assert.equal(fs.readFileSync(output, "utf8"), "AGE-SECRET-KEY-recovery\n");
   assert.equal(spawnHarness.calls.length, 0);
+});
+
+test("recovery export never overwrites an existing destination", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-no-overwrite-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const extras = withWindowExtras(vscode);
+  const values = new Map();
+  const output = path.join(path.dirname(root), `josh-room-recovery-existing-${process.pid}-${Date.now()}.txt`);
+  fs.writeFileSync(output, "keep existing backup\n");
+  const extension = loadExtension(vscode, () => { throw new Error("recovery export must not spawn a controller"); });
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  } });
+  values.set(extension.__test__.recoverySecretKey("domain-a"), "AGE-SECRET-KEY-recovery\n");
+  extras.saveDialogResponses.push({ fsPath: output });
+
+  await assert.rejects(
+    extension.__test__.exportRecovery({ id: "backup", provider: "minio", encryption_domain_id: "domain-a" }),
+    /exists|overwrite|already/i,
+  );
+  assert.equal(fs.readFileSync(output, "utf8"), "keep existing backup\n");
 });
 
 test("tree refresh uses last-known metadata without controller, auth, or storage reads", async () => {

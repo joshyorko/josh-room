@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
+from synthetic_identity import synthetic_identity
 
 from josh_room import crypto
 from josh_room.catalog import Catalog
@@ -34,7 +35,7 @@ def keyset(**overrides):
         "provider": "minio",
         "endpoint": "http://127.0.0.1:9000",
         "bucket": "synthetic-bucket",
-        "operational_identity": "AGE-SECRET-KEY-synthetic",
+        "operational_identity": synthetic_identity("synthetic"),
         "operational_recipient": OPERATIONAL_RECIPIENT,
         "recovery_recipients": [RECOVERY_RECIPIENT],
     }
@@ -76,7 +77,7 @@ def test_distinct_bucket_enrollment_requires_distinct_operational_identity():
     first = keyset(bucket="first-bucket")
     second = keyset(
         bucket="second-bucket",
-        operational_identity="AGE-SECRET-KEY-second",
+        operational_identity=synthetic_identity("second"),
         operational_recipient=RECOVERY_RECIPIENT,
         recovery_recipients=["age1qvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsewmjt2"],
     )
@@ -105,6 +106,13 @@ def test_keyset_rejects_unknown_fields():
 
     with pytest.raises(ValueError, match="unknown keyset field"):
         module.EncryptionKeyset.from_dict(body)
+
+
+def test_operational_identity_rejects_unencoded_placeholder():
+    module = domain_module()
+
+    with pytest.raises(ValueError, match="operational identity"):
+        module.validate_operational_identity("AGE-SECRET-KEY-synthetic")
 
 
 def test_keyset_serialization_has_a_bounded_size():
@@ -260,7 +268,7 @@ def test_keyset_serializes_operational_identity_but_not_recovery_private_identit
     module = domain_module()
     serialized = json.dumps(keyset().to_dict())
 
-    assert "AGE-SECRET-KEY-synthetic" in serialized
+    assert synthetic_identity("synthetic") in serialized
     assert "recovery_identity" not in serialized
     with pytest.raises(ValueError, match="unknown keyset field"):
         module.EncryptionKeyset.from_dict({**keyset().to_dict(), "recovery_identity": "private"})
@@ -283,7 +291,7 @@ def test_managed_age_identity_generation_and_recipient_derivation(tmp_path, monk
         calls.append((argv, kwargs))
         if "-y" in argv:
             return subprocess.CompletedProcess(argv, 0, OPERATIONAL_RECIPIENT.encode() + b"\n", b"")
-        Path(argv[argv.index("-o") + 1]).write_text("AGE-SECRET-KEY-synthetic\n")
+        Path(argv[argv.index("-o") + 1]).write_text(synthetic_identity("synthetic") + "\n")
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
     monkeypatch.setattr(crypto, "_managed_executable", lambda _name: managed_age_keygen)
@@ -296,7 +304,7 @@ def test_managed_age_identity_generation_and_recipient_derivation(tmp_path, monk
     assert keyset(operational_recipient=recipient).operational_recipient == recipient
     assert identity.stat().st_mode & 0o777 == 0o600
     assert len(calls) == 2
-    assert all("AGE-SECRET-KEY-synthetic" not in str(call) for call in calls)
+    assert all(synthetic_identity("synthetic") not in str(call) for call in calls)
 
 
 def test_scoped_keyring_helpers_keep_identity_in_secret_input(monkeypatch):
@@ -307,19 +315,19 @@ def test_scoped_keyring_helpers_keep_identity_in_secret_input(monkeypatch):
 
     def fake_run(argv, **kwargs):
         calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, 0, "AGE-SECRET-KEY-synthetic\n", "")
+        return subprocess.CompletedProcess(argv, 0, synthetic_identity("synthetic") + "\n", "")
 
     monkeypatch.setattr(keyring.subprocess, "run", fake_run)
-    keyring.store_encryption_identity(DOMAIN_ID, 1, "AGE-SECRET-KEY-synthetic")
-    assert keyring.lookup_encryption_identity(DOMAIN_ID, 1) == "AGE-SECRET-KEY-synthetic"
-    assert all("AGE-SECRET-KEY-synthetic" not in str(argv) for argv, _kwargs in calls)
-    assert calls[0][1]["input"] == "AGE-SECRET-KEY-synthetic\n"
+    keyring.store_encryption_identity(DOMAIN_ID, 1, synthetic_identity("synthetic"))
+    assert keyring.lookup_encryption_identity(DOMAIN_ID, 1) == synthetic_identity("synthetic")
+    assert all(synthetic_identity("synthetic") not in str(argv) for argv, _kwargs in calls)
+    assert calls[0][1]["input"] == synthetic_identity("synthetic") + "\n"
 
 
 def test_encryption_material_requires_derived_identity_recipient(tmp_path, monkeypatch):
     module = domain_module()
     identity = tmp_path / "identity"
-    identity.write_text("AGE-SECRET-KEY-synthetic\n")
+    identity.write_text(synthetic_identity("synthetic") + "\n")
     identity.chmod(0o600)
     monkeypatch.setattr(crypto, "derive_recipient", lambda _identity: OPERATIONAL_RECIPIENT)
 

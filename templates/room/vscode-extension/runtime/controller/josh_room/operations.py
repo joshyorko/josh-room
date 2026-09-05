@@ -970,6 +970,37 @@ def _recover_committed_migration(destination_backend, journal, destination_mater
     return None
 
 
+def reconcile_encryption_migration(
+    instance: Path,
+    *,
+    destination_backend,
+    destination_material,
+    destination_dimension,
+    destination_domain_id=None,
+):
+    """Reconcile a published migration using only destination authority."""
+    destination_domain_id = _domain_value(destination_material, destination_domain_id, None)
+    journal, journal_etag = _read_journal(destination_backend)
+    if journal is None or journal.get("status") not in {"ready-to-commit", "cutover-published"}:
+        return None
+    try:
+        recovered = _recover_committed_migration(
+            destination_backend,
+            journal,
+            destination_material,
+            instance,
+            destination_dimension,
+            destination_domain_id,
+        )
+        if recovered is None:
+            return None
+        _safe_journal_update(destination_backend, journal, journal_etag, "committed")
+        return _migration_result(journal, recovered)
+    except CatalogConflict as error:
+        _record_migration_state(destination_backend, journal, journal_etag, "conflict", error)
+        raise
+
+
 def _record_migration_state(destination_backend, journal, journal_etag, status, error):
     try:
         return _safe_journal_update(destination_backend, journal, journal_etag, status, error)

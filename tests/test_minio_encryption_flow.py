@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import pytest
+from synthetic_identity import synthetic_identity
 
 from josh_room import auth as auth_module
 from josh_room import cli
@@ -37,7 +38,8 @@ def dimension(provider="minio", dimension_id="archive", **overrides):
     )
 
 
-def identity(path: Path, value="AGE-SECRET-KEY-operational"):
+def identity(path: Path, value=None):
+    value = synthetic_identity("operational" if value is None else value.removeprefix("AGE-SECRET-KEY-"))
     path.write_text(value + "\n")
     path.chmod(0o600)
     return path
@@ -81,6 +83,7 @@ class FakeBackend:
 
 
 def make_keyset(identity_value="AGE-SECRET-KEY-operational", **overrides):
+    identity_value = synthetic_identity(identity_value.removeprefix("AGE-SECRET-KEY-"))
     values = {
         "encryption_domain_id": DOMAIN_ID,
         "provider": "minio",
@@ -112,9 +115,9 @@ def test_fresh_minio_bucket_enrolls_a_keyset_without_a_catalog(tmp_path, monkeyp
     assert material.keyset.key_generation == 1
     assert material.keyset.encryption_domain_id != dimension().encryption_domain_id
     assert len([call for call in backend.calls if call[0] == "create_control"]) == 1
-    assert "AGE-SECRET-KEY-operational" not in json.dumps({"ok": True})
+    assert synthetic_identity("operational") not in json.dumps({"ok": True})
     assert material.identity.is_file()
-    assert material.identity.read_text().strip() == "AGE-SECRET-KEY-operational"
+    assert material.identity.read_text().strip() == synthetic_identity("operational")
 
 
 def test_minio_enrollment_discards_losing_identity_after_a_conditional_race(tmp_path, monkeypatch):
@@ -135,7 +138,7 @@ def test_minio_enrollment_discards_losing_identity_after_a_conditional_race(tmp_
     )
 
     assert material.keyset == winner
-    assert material.identity.read_text().strip() == "AGE-SECRET-KEY-winner"
+    assert material.identity.read_text().strip() == synthetic_identity("winner")
     assert not generated.exists()
 
 
@@ -195,7 +198,7 @@ def test_malformed_cached_identity_is_rejected_instead_of_falling_back_to_remote
     backend = FakeBackend(control=keyset.to_json())
     cached = tmp_path / "cached"
     identity(cached, "AGE-SECRET-KEY-malformed")
-    monkeypatch.setattr("josh_room.auth.lookup_encryption_identity", lambda *_args: "AGE-SECRET-KEY-malformed")
+    monkeypatch.setattr("josh_room.auth.lookup_encryption_identity", lambda *_args: synthetic_identity("malformed"))
     monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda path: (_ for _ in ()).throw(ValueError("malformed identity")))
 
     with pytest.raises(ValueError, match="malformed identity"):
@@ -211,7 +214,7 @@ def test_status_derives_remote_operational_recipient_before_reporting_ready(monk
     result = auth_module.encryption_status(dimension(), backend)
 
     assert result["state"] == "ready"
-    assert calls == ["AGE-SECRET-KEY-operational"]
+    assert calls == [synthetic_identity("operational")]
 
 
 def test_r2_resolution_keeps_legacy_cloudflare_identity_path(monkeypatch, tmp_path):
@@ -384,7 +387,7 @@ def test_mismatched_race_winner_preserves_preexisting_caller_identity_path(tmp_p
     )
 
     assert material.keyset == winner
-    assert candidate.read_text() == "AGE-SECRET-KEY-caller\n"
+    assert candidate.read_text() == synthetic_identity("caller") + "\n"
 
 
 def test_recovery_handoff_derives_public_recipient_without_remote_recovery_private_identity(tmp_path, monkeypatch):
@@ -408,9 +411,9 @@ def test_recovery_handoff_derives_public_recipient_without_remote_recovery_priva
 
     assert material.identity == operational
     assert keyset_body["recovery_recipients"] == [RECOVERY_RECIPIENT]
-    assert "AGE-SECRET-KEY-recovery" not in backend.control.decode()
-    assert recovery.read_text() == "AGE-SECRET-KEY-recovery\n"
-    assert operational.read_text() == "AGE-SECRET-KEY-operational\n"
+    assert synthetic_identity("recovery") not in backend.control.decode()
+    assert recovery.read_text() == synthetic_identity("recovery") + "\n"
+    assert operational.read_text() == synthetic_identity("operational") + "\n"
     args = build_parser().parse_args([
         "encryption", "initialize", "--dimension", "archive",
         "--recovery-handoff", str(recovery), "--json",
