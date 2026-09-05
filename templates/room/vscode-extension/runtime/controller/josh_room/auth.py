@@ -613,6 +613,7 @@ def resolve_encryption_material(
     recovery_recipients=None,
     recovery_handoff: Path | None = None,
     identity_path: Path | None = None,
+    preserve_identity_path: bool = False,
     allow_initialize: bool = True,
     occupied=(),
 ) -> EncryptionMaterial | None:
@@ -652,6 +653,7 @@ def resolve_encryption_material(
         recovery_recipients=recovery_recipients,
         recovery_handoff=handoff,
         identity_path=identity_path,
+        preserve_identity_path=preserve_identity_path,
         occupied=occupied,
     )
 
@@ -663,6 +665,7 @@ def ensure_minio_domain(
     recovery_recipients=None,
     recovery_handoff: Path | None = None,
     identity_path: Path | None = None,
+    preserve_identity_path: bool = False,
     occupied=(),
     allow_legacy_migration: bool = False,
 ) -> EncryptionMaterial:
@@ -734,7 +737,11 @@ def ensure_minio_domain(
             )
             keep_candidate = identity_path is not None
             return material
-        return _material_for_keyset(winner, identity_path if identity_path and identity_path != candidate_path else None)
+        if identity_path is not None and preserve_identity_path and not candidate_existed:
+            material = _material_for_keyset(winner, identity_path)
+            keep_candidate = True
+            return material
+        return _material_for_keyset(winner, None)
     finally:
         if not candidate_existed and not keep_candidate:
             candidate_path.unlink(missing_ok=True)

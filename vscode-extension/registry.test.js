@@ -269,6 +269,22 @@ test("buildProviderTree preserves native encryption states and exposes contextua
   ]);
 });
 
+test("failed legacy and resumable Dimensions keep their native actions", () => {
+  const tree = buildProviderTree({
+    dimensions: [
+      { id: "legacy", display_name: "Legacy", provider: "minio", load_error: { state: "legacy", action: "migrate", label: "Migrate Encryption" } },
+      { id: "resume", display_name: "Resume", provider: "minio", load_error: { state: "resumable", action: "resume", label: "Resume Encryption" } },
+    ],
+  });
+  const dimensions = tree[0].children[0].children;
+
+  assert.deepEqual(dimensions.map((item) => item.state), ["legacy", "resumable"]);
+  assert.deepEqual(dimensions.map((item) => item.action?.command), [
+    "joshRoom.migrateEncryption",
+    "joshRoom.resumeEncryption",
+  ]);
+});
+
 test("buildProviderTree accepts worker connection and bucket records without exposing credentials", () => {
   const tree = buildProviderTree({
     providers: [{

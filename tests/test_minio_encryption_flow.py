@@ -142,6 +142,31 @@ def test_minio_enrollment_discards_losing_identity_after_a_conditional_race(tmp_
     assert not generated.exists()
 
 
+def test_minio_enrollment_race_keeps_the_winner_in_the_requested_handoff(tmp_path, monkeypatch):
+    winner = make_keyset(identity_value="AGE-SECRET-KEY-winner")
+    backend = FakeBackend()
+    backend.conflict = True
+    backend.race_winner = winner
+    handoff = tmp_path / "handoff" / "identity"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr("josh_room.crypto.generate_identity", lambda path: identity(path, "AGE-SECRET-KEY-loser"))
+    monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda _path: OPERATIONAL_RECIPIENT)
+    monkeypatch.setattr("josh_room.auth.store_encryption_identity", lambda *_args: None)
+
+    material = auth_module.ensure_minio_domain(
+        dimension(),
+        backend,
+        recovery_recipients=[RECOVERY_RECIPIENT],
+        identity_path=handoff,
+        preserve_identity_path=True,
+    )
+
+    assert material.keyset == winner
+    assert material.identity == handoff
+    assert handoff.read_text().strip() == synthetic_identity("winner")
+    assert not list((tmp_path / "runtime").rglob("*.identity"))
+
+
 def test_minio_catalog_without_keyset_requires_explicit_legacy_migration(tmp_path):
     backend = FakeBackend(catalog=b"encrypted-catalog")
 

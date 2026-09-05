@@ -272,15 +272,19 @@ function buildProviderTree(catalog = {}) {
       ? declaredEncryptionState : undefined;
     dimension.connection = connection;
     const loadError = dimension.load_error || dimension.error;
+    const loadErrorState = ["ready", "uninitialized", "legacy", "resumable", "insecure", "failed"].includes(loadError?.state)
+      ? loadError.state
+      : loadError?.action === "migrate" ? "legacy" : loadError?.action === "resume" ? "resumable" : undefined;
+    const effectiveEncryptionState = loadErrorState || encryptionState;
     const dimensionNode = {
       kind: "dimension",
       id: dimension.id || dimension.dimension_id,
       label: displayName,
       description: loadError?.description || "",
       provider: providerId,
-      state: loadError ? "error" : encryptionState || connectionState,
-      encryption_state: encryptionState,
-      action: encryptionAction(loadError ? "failed" : encryptionState),
+      state: loadError ? effectiveEncryptionState || "error" : effectiveEncryptionState || connectionState,
+      encryption_state: effectiveEncryptionState,
+      action: encryptionAction(loadError ? loadErrorState || "failed" : encryptionState),
       dimension,
       children: loadError ? [{
         kind: "dimension-error",

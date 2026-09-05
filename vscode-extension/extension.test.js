@@ -1739,6 +1739,22 @@ test("a legacy Dimension loader preserves migration state and action", async () 
   assert.equal(legacy.load_error.action, "migrate");
 });
 
+test("legacy and resumable Dimension errors invoke their native commands", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-dimension-action-test-"));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("tree-item action must not spawn"); });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const makeError = (state, action) => provider.getTreeItem({
+    kind: "dimension-error",
+    label: "Encryption action",
+    description: "Synthetic state",
+    error: { state, action },
+  });
+
+  assert.equal(makeError("legacy", "migrate").command.command, "joshRoom.migrateEncryption");
+  assert.equal(makeError("resumable", "resume").command.command, "joshRoom.resumeEncryption");
+});
+
 test("a minimal legacy catalog keeps its top-level Rooms in the native loader", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minimal-catalog-test-"));
   const { vscode } = createVscodeMock(root);
@@ -3818,6 +3834,30 @@ test("recovery export never overwrites an existing destination", async () => {
     /exists|overwrite|already/i,
   );
   assert.equal(fs.readFileSync(output, "utf8"), "keep existing backup\n");
+});
+
+test("recovery export rejects a symlinked destination parent inside the workspace", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-symlink-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const extras = withWindowExtras(vscode);
+  const values = new Map();
+  const linkedParent = path.join(path.dirname(root), `josh-room-recovery-link-${process.pid}-${Date.now()}`);
+  fs.symlinkSync(root, linkedParent, "dir");
+  const output = path.join(linkedParent, "recovery.txt");
+  const extension = loadExtension(vscode, () => { throw new Error("recovery export must not spawn a controller"); });
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  } });
+  values.set(extension.__test__.recoverySecretKey("domain-a"), "AGE-SECRET-KEY-recovery\n");
+  extras.saveDialogResponses.push({ fsPath: output });
+
+  await assert.rejects(
+    extension.__test__.exportRecovery({ id: "backup", provider: "minio", encryption_domain_id: "domain-a" }),
+    /workspace|symlink/i,
+  );
+  assert.equal(fs.existsSync(path.join(root, "recovery.txt")), false);
 });
 
 test("tree refresh uses last-known metadata without controller, auth, or storage reads", async () => {

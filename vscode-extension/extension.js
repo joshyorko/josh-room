@@ -710,7 +710,17 @@ function readPrivateRecoveryFile(filename) {
 }
 
 function recoveryPathIsInsideWorkspace(workspace, target) {
-  const relative = path.relative(path.resolve(workspace), path.resolve(target));
+  const absoluteWorkspace = path.resolve(workspace);
+  const absoluteTarget = path.resolve(target);
+  let resolvedWorkspace;
+  let resolvedParent;
+  try {
+    resolvedWorkspace = fs.realpathSync.native(absoluteWorkspace);
+    resolvedParent = fs.realpathSync.native(path.dirname(absoluteTarget));
+  } catch (_error) {
+    return true;
+  }
+  const relative = path.relative(resolvedWorkspace, path.join(resolvedParent, path.basename(absoluteTarget)));
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
@@ -3194,7 +3204,9 @@ class HierarchyRoomsProvider {
       const command = action === "edit"
         ? "joshRoom.editConnection"
         : action === "reconnect" ? "joshRoom.reconnectStorage"
-          : action === "authorize" ? "joshRoom.connectEncryption" : "joshRoom.refresh";
+          : action === "authorize" ? "joshRoom.connectEncryption"
+            : action === "migrate" ? "joshRoom.migrateEncryption"
+              : action === "resume" ? "joshRoom.resumeEncryption" : "joshRoom.refresh";
       treeItem.command = {
         command,
         title: item.label || "Retry",

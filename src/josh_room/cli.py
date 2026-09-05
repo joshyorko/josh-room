@@ -721,6 +721,7 @@ def dispatch(args, instance: Path) -> dict:
                 recovery_recipients=recipients,
                 recovery_handoff=args.recovery_handoff,
                 identity_path=args.material_handoff,
+                preserve_identity_path=args.material_handoff is not None,
             )
             try:
                 return {
@@ -744,6 +745,7 @@ def dispatch(args, instance: Path) -> dict:
                     recovery_recipients=args.recovery_recipients or _recipients(),
                     recovery_handoff=args.recovery_handoff,
                     identity_path=identity_path,
+                    preserve_identity_path=True,
                     allow_legacy_migration=True,
                 )
             with _scoped_encryption_material(instance, resolve_destination) as material:
@@ -1135,6 +1137,7 @@ def dispatch(args, instance: Path) -> dict:
                             source_backend,
                             allow_initialize=False,
                             identity_path=identity_path,
+                            preserve_identity_path=True,
                         ),
                     ))
                 if destination_dimension_config.provider == "minio":
@@ -1145,6 +1148,7 @@ def dispatch(args, instance: Path) -> dict:
                             destination_backend,
                             allow_initialize=False,
                             identity_path=identity_path,
+                            preserve_identity_path=True,
                         ),
                     ))
                 source_identity = source_material.identity if source_material is not None else identity
@@ -1343,7 +1347,13 @@ def _dimension_hierarchy_with_encryption(instance, dimension):
     if dimension.provider != "minio":
         return _dimension_hierarchy(instance, dimension, backend)
     def resolve_selected(identity_path):
-        return resolve_encryption_material(dimension, backend, allow_initialize=False, identity_path=identity_path)
+        return resolve_encryption_material(
+            dimension,
+            backend,
+            allow_initialize=False,
+            identity_path=identity_path,
+            preserve_identity_path=True,
+        )
 
     with _scoped_encryption_material(instance, resolve_selected) as material:
         if material is None or not hasattr(backend, "read_catalog"):
@@ -1623,6 +1633,7 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
                             backend,
                             allow_initialize=False,
                             identity_path=identity_path,
+                            preserve_identity_path=True,
                         ),
                     ) as material, _encryption_material_environment(material):
                         catalog = load_catalog(instance, backend)
