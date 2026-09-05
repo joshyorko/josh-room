@@ -691,19 +691,17 @@ def dispatch(args, instance: Path) -> dict:
                 recovery_recipients=recipients,
                 recovery_handoff=args.recovery_handoff,
             )
-            os.environ["JOSH_ROOM_IDENTITY"] = str(material.identity)
-            os.environ["JOSH_ROOM_ENCRYPTION_MATERIAL"] = str(material.identity)
-            os.environ["JOSH_ROOM_SELECTED_RECIPIENTS"] = ",".join(
-                (material.recipient, *material.keyset.recovery_recipients)
-            )
-            return {
-                "ok": True,
-                "state": "ready",
-                "provider": dimension.provider,
-                "dimension_id": dimension.dimension_id,
-                "encryption_domain_id": material.encryption_domain_id,
-                "key_generation": material.key_generation,
-            }
+            try:
+                return {
+                    "ok": True,
+                    "state": "ready",
+                    "provider": dimension.provider,
+                    "dimension_id": dimension.dimension_id,
+                    "encryption_domain_id": material.encryption_domain_id,
+                    "key_generation": material.key_generation,
+                }
+            finally:
+                Path(material.identity).unlink(missing_ok=True)
         if args.encryption_command in {"migrate", "resume"}:
             if dimension.provider != "minio":
                 raise ValueError("encryption migration is only available for MinIO Dimensions")

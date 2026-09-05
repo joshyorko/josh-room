@@ -372,7 +372,8 @@ def test_issue_50_public_documentation_states_dimension_encryption_boundary():
     minio = (ROOT / "docs/MINIO-SETUP.md").read_text()
     r2 = (ROOT / "docs/R2-SETUP.md").read_text()
     architecture = (ROOT / "docs/architecture.md").read_text()
-    docs = " ".join("\n".join((agents, readme, minio, r2, architecture)).split()).lower()
+    docs = f"{agents}\n{readme}\n{minio}\n{r2}\n{architecture}"
+    docs = " ".join(docs.split()).lower()
     minio = " ".join(minio.split()).lower()
     r2 = " ".join(r2.split()).lower()
 

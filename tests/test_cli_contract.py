@@ -589,10 +589,6 @@ def test_mixed_provider_copy_requires_distinct_r2_and_minio_material(monkeypatch
 
 
 def test_mixed_provider_copy_authorizes_only_the_r2_side(monkeypatch, tmp_path):
-    args = build_parser().parse_args([
-        "snapshot", "copy", "room", "--source-dimension", "archive",
-        "--destination-dimension", "cloud", "--destination-room", "copy",
-    ])
     config = {
         "dimensions": {
             "archive": {
@@ -687,7 +683,7 @@ def test_encryption_initialize_does_not_leave_identity_environment_or_file(monke
     dimension = type("Dimension", (), {
         "provider": "minio", "dimension_id": "archive",
     })()
-    monkeypatch.setattr(cli, "private_config", lambda: {})
+    monkeypatch.setattr(cli, "private_config", dict)
     monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: type(
         "Registry", (), {"select": lambda _self, _name: dimension}
     )())
