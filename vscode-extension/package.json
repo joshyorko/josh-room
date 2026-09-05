@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -23,6 +23,11 @@
     "onCommand:joshRoom.addStorage",
     "onCommand:joshRoom.connectCloudflare",
     "onCommand:joshRoom.reconnectCloudflare",
+    "onCommand:joshRoom.initializeEncryption",
+    "onCommand:joshRoom.migrateEncryption",
+    "onCommand:joshRoom.resumeEncryption",
+    "onCommand:joshRoom.exportRecovery",
+    "onCommand:joshRoom.importRecovery",
     "onCommand:joshRoom.connectStorage",
     "onCommand:joshRoom.reconnectStorage",
     "onCommand:joshRoom.editConnection",
@@ -46,6 +51,13 @@
     "onView:joshRoom.rooms"
   ],
   "main": "./extension.js",
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Josh Room requires a trusted workspace before reading or changing Room data."
+    }
+  },
   "contributes": {
     "commands": [
       {
@@ -67,6 +79,31 @@
         "command": "joshRoom.reconnectCloudflare",
         "title": "Josh: Reconnect Cloudflare",
         "icon": "$(sync)"
+      },
+      {
+        "command": "joshRoom.initializeEncryption",
+        "title": "Josh: Initialize MinIO Encryption",
+        "icon": "$(key)"
+      },
+      {
+        "command": "joshRoom.migrateEncryption",
+        "title": "Josh: Migrate MinIO Encryption",
+        "icon": "$(key)"
+      },
+      {
+        "command": "joshRoom.resumeEncryption",
+        "title": "Josh: Resume Encryption Migration",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "joshRoom.exportRecovery",
+        "title": "Josh: Export Recovery Identity",
+        "icon": "$(export)"
+      },
+      {
+        "command": "joshRoom.importRecovery",
+        "title": "Josh: Import Recovery Identity",
+        "icon": "$(clippy)"
       },
       {
         "command": "joshRoom.connectStorage",
@@ -218,6 +255,11 @@
         { "command": "joshRoom.editConnection", "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)", "group": "inline@2" },
         { "command": "joshRoom.disconnectStorage", "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)", "group": "inline@3" },
         { "command": "joshRoom.editStorageSettings", "when": "view == joshRoom.rooms && viewItem == dimension", "group": "inline@2" },
+        { "command": "joshRoom.initializeEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-uninitialized", "group": "inline@1" },
+        { "command": "joshRoom.initializeEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-insecure", "group": "inline@1" },
+        { "command": "joshRoom.migrateEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-legacy", "group": "inline@1" },
+        { "command": "joshRoom.resumeEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-resumable", "group": "inline@1" },
+        { "command": "joshRoom.exportRecovery", "when": "view == joshRoom.rooms && viewItem == dimension", "group": "inline@3" },
         { "command": "joshRoom.enter", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@1" },
         { "command": "joshRoom.link", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
         { "command": "joshRoom.repair", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" },

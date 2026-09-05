@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 import pytest
+from synthetic_identity import synthetic_identity
 
 from josh_room import auth, keyring
 from josh_room.auth import (
@@ -18,6 +19,9 @@ from josh_room.auth import (
     wait_oauth_session,
 )
 from josh_room.config import DimensionRegistry
+
+TEST_IDENTITY = synthetic_identity("synthetic")
+NATIVE_IDENTITY = synthetic_identity("native")
 
 
 def test_worker_request_identifies_josh_room_instead_of_python_urllib(monkeypatch):
@@ -180,7 +184,7 @@ def test_oauth_session_writes_private_runtime_material_and_environment(tmp_path,
                 "accessKeyId": "temporary-access",
                 "secretAccessKey": "temporary-secret",
                 "sessionToken": "temporary-session",
-                "ageIdentity": "AGE-SECRET-KEY-synthetic",
+                "ageIdentity": TEST_IDENTITY,
                 "ageRecipients": ["age1daily", "age1recovery"],
                 "endpoint": "https://example.invalid",
                 "bucket": "synthetic-room",
@@ -220,7 +224,7 @@ def test_next_cli_process_reuses_unexpired_room_session(tmp_path, monkeypatch):
                 "accessKeyId": "temporary-access",
                 "secretAccessKey": "temporary-secret",
                 "sessionToken": "temporary-session",
-                "ageIdentity": "AGE-SECRET-KEY-synthetic",
+                "ageIdentity": TEST_IDENTITY,
                 "ageRecipients": ["age1daily", "age1recovery"],
                 "endpoint": "https://example.invalid",
                 "bucket": "synthetic-room",
@@ -258,7 +262,7 @@ def test_extension_oauth_boundary_returns_url_then_persists_only_authorized_runt
             "accessKeyId": "temporary-access",
             "secretAccessKey": "temporary-secret",
             "sessionToken": "temporary-session",
-            "ageIdentity": "AGE-SECRET-KEY-native",
+            "ageIdentity": NATIVE_IDENTITY,
             "ageRecipients": ["age1daily", "age1recovery"],
             "endpoint": "https://example.invalid",
             "bucket": "native-room",
@@ -301,7 +305,7 @@ def test_runtime_session_state_distinguishes_missing_and_expired_authority(tmp_p
 def test_load_runtime_session_reuses_age_material_without_contacting_authority(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
-    (runtime / "age.identity").write_text("AGE-SECRET-KEY-synthetic\n")
+    (runtime / "age.identity").write_text(TEST_IDENTITY + "\n")
     (runtime / "age.identity").chmod(0o600)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600}))
@@ -408,7 +412,7 @@ def test_oauth_runtime_overlay_updates_referenced_connection_without_corrupting_
         "accessKeyId": "temporary-access",
         "secretAccessKey": "temporary-secret",
         "sessionToken": "temporary-session",
-        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageIdentity": TEST_IDENTITY,
         "ageRecipients": ["age1daily", "age1recovery"],
         "endpoint": "https://new.example.invalid",
         "bucket": "oauth-archive",
@@ -450,7 +454,7 @@ def test_encryption_only_runtime_keeps_minio_config_and_discards_r2_material(tmp
 
     auth._write_runtime({
         "purpose": "encryption",
-        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageIdentity": TEST_IDENTITY,
         "ageRecipients": ["age1daily", "age1recovery"],
         "accessKeyId": "must-not-persist",
         "secretAccessKey": "must-not-persist",
@@ -491,7 +495,7 @@ def test_encryption_only_runtime_preserves_extension_minio_credential_broker(tmp
 
     auth._write_runtime({
         "purpose": "encryption",
-        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageIdentity": TEST_IDENTITY,
         "ageRecipients": ["age1daily", "age1recovery"],
         "expiresIn": 600,
     }, dimension_id="backup")
@@ -532,7 +536,7 @@ def test_r2_runtime_keeps_minio_broker_separate_from_oauth_credentials(tmp_path,
 
     auth._write_runtime({
         "purpose": "r2",
-        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageIdentity": TEST_IDENTITY,
         "ageRecipients": ["age1daily", "age1recovery"],
         "accessKeyId": "synthetic-r2-access",
         "secretAccessKey": "synthetic-r2-secret",
@@ -593,7 +597,7 @@ def test_r2_logout_downgrades_to_encryption_and_preserves_minio(tmp_path, monkey
 
     auth._write_runtime({
         "purpose": "r2",
-        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageIdentity": TEST_IDENTITY,
         "ageRecipients": ["age1daily", "age1recovery"],
         "accessKeyId": "synthetic-r2-access",
         "secretAccessKey": "synthetic-r2-secret",
@@ -624,7 +628,7 @@ def test_r2_logout_write_failure_recovers_encryption_session(tmp_path, monkeypat
     request.addfinalizer(auth._clear_runtime_session)
     auth._write_runtime({
         "purpose": "r2",
-        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageIdentity": TEST_IDENTITY,
         "ageRecipients": ["age1daily", "age1recovery"],
         "accessKeyId": "synthetic-r2-access",
         "secretAccessKey": "synthetic-r2-secret",
@@ -659,7 +663,7 @@ def test_r2_logout_interruption_after_credential_removal_recovers(tmp_path, monk
     request.addfinalizer(auth._clear_runtime_session)
     auth._write_runtime({
         "purpose": "r2",
-        "ageIdentity": "AGE-SECRET-KEY-synthetic",
+        "ageIdentity": TEST_IDENTITY,
         "ageRecipients": ["age1daily", "age1recovery"],
         "accessKeyId": "synthetic-r2-access",
         "secretAccessKey": "synthetic-r2-secret",
@@ -689,7 +693,7 @@ def test_permissive_runtime_identity_is_cleared(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
     identity = runtime / "age.identity"
-    identity.write_text("AGE-SECRET-KEY-synthetic\n")
+    identity.write_text(TEST_IDENTITY + "\n")
     identity.chmod(0o644)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))
@@ -703,7 +707,7 @@ def test_permissive_runtime_identity_is_cleared(tmp_path, monkeypatch):
 def test_malformed_runtime_config_is_cleared_fail_closed(tmp_path, monkeypatch, config_body):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
-    (runtime / "age.identity").write_text("AGE-SECRET-KEY-synthetic\n")
+    (runtime / "age.identity").write_text(TEST_IDENTITY + "\n")
     (runtime / "age.identity").chmod(0o600)
     (runtime / "config.json").write_text(json.dumps(config_body))
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))

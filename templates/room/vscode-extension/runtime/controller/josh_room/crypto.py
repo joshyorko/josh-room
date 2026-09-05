@@ -80,6 +80,56 @@ def _identity(path: Path, platform: str | None = None) -> list[str]:
     return ["-i", str(path)]
 
 
+def generate_identity(output: Path) -> Path:
+    """Generate one private age identity through the active managed runtime."""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists():
+        raise CryptoError("identity output already exists")
+    try:
+        process = subprocess.run(
+            [str(_managed_executable("age-keygen")), "-o", str(output)],
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        raise CryptoError("managed age-keygen is unavailable") from error
+    if process.returncode:
+        raise CryptoError("managed age-keygen failed")
+    try:
+        output.chmod(0o600)
+    except OSError as error:
+        output.unlink(missing_ok=True)
+        raise CryptoError("generated identity permissions could not be secured") from error
+    return output
+
+
+def derive_recipient(identity: Path) -> str:
+    """Derive the public recipient without exposing private identity material."""
+    identity = Path(identity)
+    _identity(identity)
+    try:
+        process = subprocess.run(
+            [str(_managed_executable("age-keygen")), "-y", str(identity)],
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        raise CryptoError("managed age-keygen is unavailable") from error
+    if process.returncode:
+        raise CryptoError("managed age-keygen recipient derivation failed")
+    recipient = process.stdout.decode(errors="replace").strip()
+    if not recipient or "\n" in recipient or "\r" in recipient:
+        raise CryptoError("managed age-keygen returned an invalid recipient")
+    try:
+        from .encryption_domain import validate_recipient
+
+        validate_recipient(recipient)
+    except ValueError as error:
+        raise CryptoError("managed age-keygen returned an invalid recipient") from error
+    return recipient
+
+
 def encrypt(data: bytes, recipients: list[str], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, source_name = tempfile.mkstemp(prefix=".age-source.", dir=output.parent)
@@ -128,9 +178,10 @@ def decrypt(path: Path, identity_paths: list[Path], max_bytes: int = MAX_DECRYPT
 def decrypt_file(
     path: Path, identity_paths: list[Path], output: Path, max_bytes: int = MAX_DECRYPTED_SIZE
 ) -> tuple[int, str]:
-    args = [str(_managed_executable("age")), "--decrypt"]
+    identity_args = []
     for identity in identity_paths:
-        args += _identity(identity)
+        identity_args += _identity(identity)
+    args = [str(_managed_executable("age")), "--decrypt", *identity_args]
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{output.name}.", dir=output.parent)
     os.close(fd)

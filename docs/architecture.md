@@ -14,7 +14,7 @@ Josh Room native VS Code UX ──┬── managed pinned RCC
                               │       ├── Hauler via JAT rccPostInstall
                               │       └── tar/zstd and JAT dependencies
                               │
-                              ├── encrypts with age ──> private Cloudflare R2
+                              ├── encrypts with age ──> selected physical bucket / Dimension
                               └── invokes JAT capture/restore/serve substrate
 ```
 
@@ -39,3 +39,21 @@ The repository and OCI Dev Container template retain the digest-pinned Room of
 Requirement image as an optional pre-optimized/golden-host path. It is not a
 dependency of VSIX activation, JAT artifact acquisition, or normal Josh Room
 operations.
+
+R2 and MinIO are concrete provider backends. The physical bucket / Josh Room
+Dimension is the encryption boundary: each bucket has its own operational age
+identity and encrypted catalog. MinIO keyset enrollment and catalog reads do
+not require Cloudflare; Cloudflare remains the R2-only authority.
+
+Provider credentials and encryption material are separate. Private identities
+and credentials never enter config, workspace files, logs, receipts, argv, Git,
+or examples. A fixed MinIO keyset makes bucket credentials an intentional trust
+decision while never storing a recovery private identity in the bucket.
+
+Legacy MinIO migration re-encrypts only the outer trusted envelope. It never
+rebuilds or restores JAT payloads; production migration requires explicit
+approval. Runtime, CI, and live gates remain separate.
+
+Josh Room remains public-first and native-extension-aware. It does not add web
+UI, webview, daemon, generic provider framework, automatic bucket administration,
+JAT changes, or MinIO infrastructure changes.

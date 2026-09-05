@@ -33,6 +33,18 @@ The official hosted Josh Room authority is used by default; set
 `JOSH_ROOM_AUTH_URL` only when overriding it for a self-hosted or custom
 deployment.
 
+R2 is a concrete provider backend, and each physical R2 bucket / Dimension is
+one encryption domain. Cloudflare remains the R2-only authority for OAuth and
+bucket-scoped R2 sessions; Cloudflare is not a generic encryption authority for
+MinIO. Provider credentials and encryption material remain separate, with no
+private identities or credentials in config, workspace files, logs, receipts,
+argv, Git, or examples.
+
+Runtime, CI, and live gates are distinct. This public-first, native
+extension-aware setup does not add web UI, webview, daemon, generic provider
+framework, automatic bucket administration, JAT changes, or MinIO
+infrastructure changes.
+
 Current source references:
 
 - [S3 API compatibility](https://developers.cloudflare.com/r2/api/s3/api/)

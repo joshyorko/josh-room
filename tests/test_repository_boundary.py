@@ -58,7 +58,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert bootstrap.is_file()
     body = bootstrap.read_text()
     assert "Optional golden-host extension copy complete" in body
-    assert "joshyorko.josh-room-0.1.18" in body
+    assert "joshyorko.josh-room-0.1.19" in body
     assert "Room of Requirement" not in body
     assert "brew" not in body.lower()
     assert "action-server" not in body
@@ -90,7 +90,11 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
         "joshRoom.jatBuild", "joshRoom.jatInspect", "joshRoom.jatExtract", "joshRoom.jatRestore",
         "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
+        "joshRoom.initializeEncryption", "joshRoom.migrateEncryption", "joshRoom.resumeEncryption",
+        "joshRoom.exportRecovery", "joshRoom.importRecovery",
     }
+    assert package["extensionKind"] == ["workspace"]
+    assert package["capabilities"]["untrustedWorkspaces"]["supported"] is False
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
     assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
@@ -135,7 +139,7 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     extension = (ROOT / "vscode-extension/extension.js").read_text()
 
-    assert package["version"] == "0.1.18"
+    assert package["version"] == "0.1.19"
     assert package["scripts"]["package"]
     assert (ROOT / "vscode-extension/.vscodeignore").is_file()
     vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
@@ -196,7 +200,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
-    assert "joshyorko.josh-room-0.1.18" in bootstrap
+    assert "joshyorko.josh-room-0.1.19" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
     assert template_package["contributes"] == package["contributes"]
     assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
@@ -204,13 +208,22 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
 
 def test_vscode_extension_root_and_template_copies_are_byte_identical():
     for name in (
-        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "runtime.js",
+        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js",
         "runtime/manifest.json", "runtime/controller/robot.yaml", "runtime/controller/conda.yaml",
         "runtime/controller/environment_linux_amd64_freeze.yaml", "media/room.svg",
     ):
         assert (ROOT / "vscode-extension" / name).read_bytes() == (
             ROOT / "templates/room/vscode-extension" / name
         ).read_bytes()
+    root_controller = ROOT / "vscode-extension/runtime/controller"
+    template_controller = ROOT / "templates/room/vscode-extension/runtime/controller"
+    # This pre-existing JAT-owned module is intentionally outside Task 4's write scope.
+    baseline_controller_mismatches = {Path("josh_room/jat.py")}
+    for module in root_controller.rglob("*.py"):
+        relative = module.relative_to(root_controller)
+        if relative in baseline_controller_mismatches:
+            continue
+        assert (template_controller / relative).read_bytes() == module.read_bytes()
 
 
 def test_oauth_room_requires_no_host_setup_mount():
@@ -323,10 +336,10 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
 def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
     assert lock["format_version"] == 1
-    assert lock["candidate_version"] == "0.1.18"
+    assert lock["candidate_version"] == "0.1.19"
     assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
-    assert lock["josh_room"]["git_sha"] == "99b8806a830e1b2823da8aa5857081ccb53ad46d"
+    assert lock["josh_room"]["git_sha"] == "5be9525894b5894e552bbc2189edd3d027041dfe"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
@@ -351,3 +364,37 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert "josh-room.git@main" not in bootstrap
     manifest = json.loads((ROOT / "templates/room/devcontainer-template.json").read_text())
     assert manifest["version"] == lock["template"]["version"]
+
+
+def test_issue_50_public_documentation_states_dimension_encryption_boundary():
+    agents = (ROOT / "AGENTS.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+    minio = (ROOT / "docs/MINIO-SETUP.md").read_text()
+    r2 = (ROOT / "docs/R2-SETUP.md").read_text()
+    architecture = (ROOT / "docs/architecture.md").read_text()
+    docs = f"{agents}\n{readme}\n{minio}\n{r2}\n{architecture}"
+    docs = " ".join(docs.split()).lower()
+    minio = " ".join(minio.split()).lower()
+    r2 = " ".join(r2.split()).lower()
+
+    assert "r2 and minio are concrete provider backends" in docs
+    assert "physical bucket" in docs and "one encryption domain" in docs
+    assert "keyset enrollment and catalog reads do not require" in docs
+    assert "cloudflare" in docs
+    assert "cloudflare" in r2 and "r2-only authority" in r2
+    assert "operational" in minio and "identity" in minio
+    assert "bucket-credential trust decision" in minio
+    assert "recovery private identity" in docs and "never stored" in docs
+    assert "provider credentials and encryption material are separate" in docs
+    assert "never" in docs and "argv" in docs and "receipts" in docs
+    assert "outer trusted envelope" in minio
+    assert "never rebuilds or restores jat payloads" in minio
+    assert "explicit approval" in minio and "production migration" in minio
+    for forbidden in ("web ui", "webview", "daemon", "generic provider framework", "automatic bucket administration"):
+        assert forbidden in docs
+    assert "do not add web ui" in docs or "does not add web ui" in docs
+    assert "jat changes" in docs and "minio infrastructure changes" in docs
+    assert "runtime" in docs and "ci" in docs and "live" in docs
+    assert "real credentials" in docs and "private paths" in docs
+    assert "Cloudflare R2 is the private production blob backend" not in agents
+    assert "Do not add web UI, extension" not in agents

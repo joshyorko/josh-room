@@ -109,6 +109,33 @@ def read_envelope_file(envelope: Path, payload_output: Path) -> dict:
         temp.unlink(missing_ok=True)
 
 
+def verify_envelope_file(envelope: Path, max_bytes: int = MAX_PAYLOAD_SIZE) -> dict:
+    """Validate an envelope and its embedded payload digest without extracting it."""
+    if type(max_bytes) is not int or max_bytes < 0:
+        raise ValueError("envelope size bound is invalid")
+    if envelope.stat().st_size > MAX_ENVELOPE_SIZE:
+        raise EnvelopeError("envelope exceeds maximum size")
+    with tarfile.open(envelope, mode="r:") as archive:
+        manifest, payload_member = _read_headers(archive)
+        source = archive.extractfile(payload_member)
+        if source is None:
+            raise EnvelopeError("payload is unreadable")
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise EnvelopeError("payload too large")
+            digest.update(chunk)
+        if total != payload_member.size:
+            raise EnvelopeError("payload read is truncated")
+        _validate_manifest(manifest, total, digest=digest.hexdigest())
+        return manifest
+
+
 def _read_headers(archive: tarfile.TarFile) -> tuple[dict, tarfile.TarInfo]:
         members = archive.getmembers()
         if len(members) != 2 or {member.name for member in members} != {"manifest.json", "payload.haul.tar.zst"}:

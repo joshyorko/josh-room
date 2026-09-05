@@ -175,6 +175,20 @@ def test_catalog_create_only_and_conditional_update_read_back(tmp_path):
     assert store.read_catalog()[0] == b"two"
 
 
+def test_control_object_create_and_replace_use_distinct_cas_methods(tmp_path):
+    from josh_room.encryption_domain import KEYSET_CONTROL_KEY
+
+    fake = FakeS3()
+    store = backend(fake, tmp_path)
+    etag = store.create_control(KEYSET_CONTROL_KEY, b"synthetic-control")
+    store.replace_control(KEYSET_CONTROL_KEY, b"synthetic-next", etag)
+
+    creates = [kwargs for name, kwargs in fake.calls if name == "put_object"]
+    assert creates[0]["IfNoneMatch"] == "*"
+    assert creates[1]["IfMatch"] == etag
+    assert store.read_control(KEYSET_CONTROL_KEY, 64)[0] == b"synthetic-next"
+
+
 def test_remote_verification_hashes_in_bounded_chunks(tmp_path):
     fake = FakeS3()
     body = b"x" * (2 * 1024 * 1024)

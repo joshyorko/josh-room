@@ -167,6 +167,22 @@ function connectionLabel(state) {
   return "⚠ Not connected";
 }
 
+function encryptionAction(state) {
+  if (state === "uninitialized" || state === "insecure") {
+    return { command: "joshRoom.initializeEncryption", title: "Initialize Encryption" };
+  }
+  if (state === "legacy") {
+    return { command: "joshRoom.migrateEncryption", title: "Migrate Encryption" };
+  }
+  if (state === "resumable") {
+    return { command: "joshRoom.resumeEncryption", title: "Resume Encryption Migration" };
+  }
+  if (state === "failed") {
+    return { command: "joshRoom.refresh", title: "Retry Encryption Status" };
+  }
+  return undefined;
+}
+
 function dimensionDisplayName(dimension, counts) {
   const id = dimension && (dimension.id || dimension.dimension_id);
   const configuredName = dimension && (dimension.display_name || dimension.name || id);
@@ -251,15 +267,24 @@ function buildProviderTree(catalog = {}) {
       || (connection.auth_state === "disconnected" ? "disconnected" : connection.auth_state === "expired" ? "expired" : undefined)
       || (providerId === "r2" && !dimensions.length ? catalog.auth_state : undefined)
       || "connected";
+    const declaredEncryptionState = dimension.encryption_state || dimension.encryptionState || dimension.state;
+    const encryptionState = ["ready", "uninitialized", "legacy", "resumable", "insecure", "failed"].includes(declaredEncryptionState)
+      ? declaredEncryptionState : undefined;
     dimension.connection = connection;
     const loadError = dimension.load_error || dimension.error;
+    const loadErrorState = ["ready", "uninitialized", "legacy", "resumable", "insecure", "failed"].includes(loadError?.state)
+      ? loadError.state
+      : loadError?.action === "migrate" ? "legacy" : loadError?.action === "resume" ? "resumable" : undefined;
+    const effectiveEncryptionState = loadErrorState || encryptionState;
     const dimensionNode = {
       kind: "dimension",
       id: dimension.id || dimension.dimension_id,
       label: displayName,
       description: loadError?.description || "",
       provider: providerId,
-      state: loadError ? "error" : connectionState,
+      state: loadError ? effectiveEncryptionState || "error" : effectiveEncryptionState || connectionState,
+      encryption_state: effectiveEncryptionState,
+      action: encryptionAction(loadError ? loadErrorState || "failed" : encryptionState),
       dimension,
       children: loadError ? [{
         kind: "dimension-error",
@@ -359,6 +384,7 @@ Object.assign(module.exports, {
   connectionLabel,
   providerKey,
   providerLabel,
+  encryptionAction,
 });
 
 function routedDimensionArgs(args, dimension) {

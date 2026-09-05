@@ -5,6 +5,13 @@ Your development workspaces, on demand.
 Josh Room gives logical names to encrypted development-workspace snapshots and
 restores them into a local or remote development workspace.
 
+R2 and MinIO are concrete provider backends. Each physical bucket / Josh Room
+Dimension is one encryption domain with its own operational identity and
+catalog. MinIO keyset enrollment and catalog reads do not require Cloudflare;
+Cloudflare remains the R2-only authority. Provider credentials and encryption
+material are separate, and private identities or credentials never appear in
+config, workspace files, logs, receipts, argv, Git, or examples.
+
 ```bash
 josh-room enter hive
 ```
@@ -20,7 +27,7 @@ On a plain supported Linux amd64 VS Code or VS Code Insiders host, install the
 released VSIX directly:
 
 ```bash
-code-insiders --install-extension /path/to/josh-room-0.1.18.vsix
+code-insiders --install-extension /path/to/josh-room-0.1.19.vsix
 ```
 
 The extension acquires its pinned RCC binary and JAT Environment Artifact under
@@ -210,6 +217,15 @@ and garbage collection remain deliberately deferred.
 Cloudflare OAuth uses the official hosted Josh Room authority by default.
 `JOSH_ROOM_AUTH_URL` is an optional override for self-hosted or custom
 deployments; the public repository contains no personal account configuration.
+
+Legacy MinIO migration re-encrypts only the outer trusted envelope. It never
+rebuilds or restores JAT payloads, and production migration requires explicit
+approval. The embedded payload remains byte-identical.
+
+Josh Room remains public-first and native-extension-aware. Runtime, CI, and live
+gates are reported separately. The project does not add web UI, webview, daemon,
+generic provider framework, automatic bucket administration, JAT changes, or
+MinIO infrastructure changes.
 
 See [architecture](docs/architecture.md), [ADRs](docs/adr), and
 [deferred integrations](docs/DEFERRED-INTEGRATIONS.md).

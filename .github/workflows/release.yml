@@ -49,4 +49,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --verify-tag \
             --title "Josh Room v${version} standalone VSIX" \
-            --notes "Install josh-room-${version}.vsix directly from this release. SHA256SUMS contains checksums for every attached artifact."
+            --notes $'Install josh-room-'"${version}"$'.vsix directly from this release. SHA256SUMS contains checksums for every attached artifact.\n\nKnown acceptance limit: real existing non-empty MinIO read/open validation was not run by this release workflow and remains Josh\'s operator-owned post-release check. No live MinIO migration, rotation, deletion, storage write, or JAT payload mutation was performed.'

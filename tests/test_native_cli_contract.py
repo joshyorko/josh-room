@@ -168,3 +168,21 @@ def test_native_provider_dimension_vectors_match_and_parse_in_real_cli():
                 f"actual josh_room CLI parser rejected {name}: {vector!r} "
                 f"(exit {error.code}); root/template/backend command surfaces disagree"
             ) from error
+
+
+def test_native_encryption_action_vectors_match_both_extension_manifests():
+    root = Path(__file__).parents[1]
+    vectors = [
+        ["encryption", "status", "--dimension", "backup", "--json"],
+        ["encryption", "initialize", "--dimension", "backup", "--recovery-handoff", "/tmp/recovery", "--json"],
+        ["encryption", "migrate", "--dimension", "backup", "--json"],
+        ["encryption", "resume", "--dimension", "backup", "--json"],
+        ["encryption", "recovery", "generate", "--output", "/tmp/recovery", "--json"],
+    ]
+    parser = build_parser()
+    for vector in vectors:
+        parser.parse_args(vector)
+    for name in ("extension.js", "package.json", "registry.js"):
+        assert (root / "vscode-extension" / name).read_bytes() == (
+            root / "templates/room/vscode-extension" / name
+        ).read_bytes()

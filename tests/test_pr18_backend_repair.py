@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from synthetic_identity import synthetic_identity
 
 from josh_room import cli, workspace_state
 from josh_room.auth import _write_runtime
@@ -13,7 +14,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-BASE_HEAD = "99b8806a830e1b2823da8aa5857081ccb53ad46d"
+BASE_HEAD = "5be9525894b5894e552bbc2189edd3d027041dfe"
 
 
 def _dimension(provider, endpoint, bucket, profile):
@@ -47,7 +48,7 @@ def test_clean_bootstrap_uses_exact_repaired_candidate_and_cli_contract():
     assert "josh-room = \"josh_room.cli:main\"" in Path("pyproject.toml").read_text()
     for path in (Path(".devcontainer/bootstrap.sh"), Path("templates/room/.devcontainer/bootstrap.sh")):
         body = path.read_text()
-        assert "joshyorko.josh-room-0.1.18" in body
+        assert "joshyorko.josh-room-0.1.19" in body
         assert "uv tool install" not in body
         assert "brew" not in body.lower()
 
@@ -72,7 +73,7 @@ def test_oauth_runtime_overlay_preserves_named_dimensions_and_default_routing(tm
         "sessionToken": "temporary-session",
         "endpoint": "https://oauth.example.invalid",
         "bucket": "oauth-bucket",
-        "ageIdentity": "AGE-SECRET-KEY-1X",
+        "ageIdentity": synthetic_identity("oauth"),
         "ageRecipients": ["age1daily", "age1recovery"],
         "expiresIn": 600,
     }, dimension_id="archive")
@@ -112,6 +113,9 @@ def test_doctor_dimension_minio_inspects_named_minio_backend(monkeypatch, tmp_pa
     class Backend:
         config = SimpleNamespace(dimension_id="minio")
 
+        def read_control(self, _key, _max_bytes):
+            return None, None
+
         def read_catalog(self):
             calls.append("read_catalog")
             return None, None
@@ -129,6 +133,9 @@ def test_doctor_explicit_minio_uses_minio_check_label_and_provider(monkeypatch, 
 
     class Backend:
         config = SimpleNamespace(dimension_id="minio")
+
+        def read_control(self, _key, _max_bytes):
+            return None, None
 
         def read_catalog(self):
             calls.append("read_catalog")

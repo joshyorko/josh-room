@@ -23,7 +23,7 @@ def test_minio_client_uses_custom_ca_and_path_style(monkeypatch):
     captured = {}
     monkeypatch.setattr("josh_room.minio.lookup", lambda _profile, **_kwargs: {"access-key-id": "id", "secret-access-key": "secret"})
     monkeypatch.setattr("boto3.client", lambda *args, **kwargs: captured.update(kwargs) or object())
-    MinioBackend(MinioConfig("https://minio.invalid", "synthetic", "fixture", verify_tls=False, ca_bundle="/tmp/ca.pem", path_style=True))
+    MinioBackend(MinioConfig("https://minio.invalid", "synthetic", "fixture", verify_tls=True, ca_bundle="/tmp/ca.pem", path_style=True))
     assert captured["verify"] == "/tmp/ca.pem"
     assert captured["config"].s3["addressing_style"] == "path"
 
@@ -58,6 +58,8 @@ def test_disconnected_minio_backend_fails_closed_before_using_credentials():
 
     with pytest.raises(RuntimeError, match="disconnected"):
         backend.read_catalog()
+    with pytest.raises(RuntimeError, match="disconnected"):
+        backend.read_control("control/encryption-keyset.v1.json", 64)
 
 
 def test_doctor_probes_selected_backend_and_oauth_is_r2_only(tmp_path, monkeypatch):

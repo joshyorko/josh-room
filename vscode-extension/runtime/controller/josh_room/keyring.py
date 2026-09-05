@@ -134,3 +134,55 @@ def store_value(profile: str, field: str, value: str, label: str = "Josh Room se
     process = subprocess.run(["secret-tool", "store", "--label", label, "service", "josh-room", "profile", profile, "field", field], input=value + "\n", text=True, capture_output=True, check=False)
     if process.returncode:
         raise RuntimeError("OS Secret Service import failed")
+
+
+def _scoped_attributes(domain_id: str, key_generation: int) -> list[str]:
+    if not isinstance(domain_id, str) or not domain_id or type(key_generation) is not int or key_generation < 1:
+        raise ValueError("encryption key scope is invalid")
+    return ["service", "josh-room", "scope", "encryption", "domain", domain_id, "generation", str(key_generation)]
+
+
+def lookup_encryption_identity(domain_id: str, key_generation: int) -> str:
+    """Read an operational identity from its isolated Secret Service scope."""
+    if not available():
+        raise RuntimeError("OS Secret Service is unavailable")
+    process = subprocess.run(
+        ["secret-tool", "lookup", *_scoped_attributes(domain_id, key_generation), "field", "identity"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    value = process.stdout.rstrip("\n")
+    if process.returncode or not value:
+        raise RuntimeError("OS Secret Service encryption identity is unavailable")
+    return value
+
+
+def store_encryption_identity(domain_id: str, key_generation: int, value: str) -> None:
+    """Store an operational identity without placing it in argv or project files."""
+    if not isinstance(value, str) or not value:
+        raise ValueError("encryption identity is invalid")
+    if not available():
+        raise RuntimeError("OS Secret Service is unavailable")
+    process = subprocess.run(
+        [
+            "secret-tool",
+            "store",
+            "--label",
+            "Josh Room encryption identity",
+            *_scoped_attributes(domain_id, key_generation),
+            "field",
+            "identity",
+        ],
+        input=value + "\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode:
+        raise RuntimeError("OS Secret Service encryption identity import failed")
+
+
+def encryption_identity_scope(domain_id: str, key_generation: int) -> tuple[str, int]:
+    _scoped_attributes(domain_id, key_generation)
+    return domain_id, key_generation
