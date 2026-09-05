@@ -3352,6 +3352,48 @@ test("Auto serve fails when no JAT serve endpoint becomes ready", async () => {
   assert.match(extras.errorCalls[0][0], /fileserver down/);
 });
 
+test("JAT serve failure redacts structured progress material from every error sink", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-progress-failure-redaction-test-"));
+  const haul = path.join(root, "capsule.tar.zst");
+  const { vscode, statusItem, logLines, progressReports } = createVscodeMock(root);
+  const identity = "AGE-SECRET-KEY-1Qserve-progress-private-material";
+  const recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq";
+  const extras = withWindowExtras(vscode);
+  vscode.window.createTerminal = ({ env }) => ({
+    show() {},
+    sendText() {
+      fs.writeFileSync(env.JOSH_ROOM_PROGRESS_FILE, JSON.stringify({
+        format_version: 1,
+        stage: "encrypt",
+        percent: 42,
+        message: `Serving ${identity} for ${recipient}`,
+      }) + "\n");
+    },
+    dispose() {},
+  });
+  const extension = loadExtension(vscode, () => { throw new Error("serve must not spawn a controller"); }, {
+    waitForRegistry: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      throw new Error("registry down");
+    },
+    waitForFileserver: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      throw new Error("fileserver down");
+    },
+  });
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ appendLine: (line) => logLines.push(line), info: (line) => logLines.push(line), warn: (line) => logLines.push(line), error: (line) => logLines.push(line), show() {} });
+
+  vscode.openDialogResponses.push([{ fsPath: haul }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
+
+  assert.equal(await extension.__test__.jatServe(), "failed");
+  const sinks = [extras.errorCalls, statusItem, logLines, progressReports];
+  assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(identity)), false);
+  assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(recipient)), false);
+  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE IDENTITY]")), true);
+});
+
 test("waitForServeEndpoint resolves with the first endpoint JAT starts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-race-test-"));
   const { vscode } = createVscodeMock(root);

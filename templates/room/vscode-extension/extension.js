@@ -2225,8 +2225,9 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
   };
   followers.push(
     followProgressFile(progressPath, (event) => {
-      latestLog = event.message;
-      if (progressActive) progressReporter?.event(event);
+      const safeEvent = sanitizeProgressEvent(event);
+      latestLog = safeEvent.message;
+      if (progressActive) progressReporter?.event(safeEvent);
     }),
     followLogFile(path.join(jatRoot, "output", "stdout.log"), (line) => stream(line)),
     followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
@@ -2330,7 +2331,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     terminal.dispose();
     terminalClosed.dispose();
     progressActive = false;
-    const detail = latestLog || error.message || String(error);
+    const detail = sanitizeRuntimeLine(latestLog || error.message || String(error));
     progressReporter?.fail(error);
     outputChannel?.error(`JAT serve failed: ${detail}`);
     setStatus("$(error) JAT serve failed", detail);
