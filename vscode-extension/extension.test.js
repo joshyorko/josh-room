@@ -3638,3 +3638,162 @@ test("recovery export uses only the native save dialog", async () => {
   assert.equal(fs.readFileSync(path.join(root, "recovery.txt"), "utf8"), "AGE-SECRET-KEY-recovery\n");
   assert.equal(spawnHarness.calls.length, 0);
 });
+
+test("tree refresh uses last-known metadata without controller, auth, or storage reads", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-refresh-metadata-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => {
+    throw new Error("tree refresh must not invoke the controller");
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async () => undefined } });
+  extension.__test__.setRuntimeReadinessForTests(Promise.resolve({}));
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  provider.roots = [{ kind: "dimension", id: "backup" }];
+  await provider.refresh();
+  assert.equal(spawnHarness.calls.length, 0);
+  assert.deepEqual(provider.roots, [{ kind: "dimension", id: "backup" }]);
+});
+
+test("timeout removes the encryption handoff before a non-closing child exits", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-timeout-cleanup-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  let handoff;
+  const spawnHarness = createSpawnHarness(({ options }) => {
+    handoff = options.env.JOSH_ROOM_ENCRYPTION_MATERIAL;
+    return { autoClose: false };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const operation = extension.__test__.runOperation("Timeout encrypted operation…", ["projects", "list"], root, {
+    timeoutMs: 100,
+    encryptionMaterial: { identity: "AGE-SECRET-KEY-operational\n" },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  spawnHarness.calls[0].child.kill = () => {};
+  await new Promise((resolve) => setTimeout(resolve, 125));
+  assert.equal(fs.existsSync(handoff), false);
+  operation.catch(() => {});
+  void operation;
+});
+
+test("failed MinIO serve disposes the terminal and removes its encryption handoff", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-serve-failure-cleanup-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  withWindowExtras(vscode);
+  const values = new Map([[
+    "josh-room.encryption.v1:domain-a:7",
+    JSON.stringify({ identity: "AGE-SECRET-KEY-operational\n" }),
+  ]]);
+  let handoff;
+  let disposed = false;
+  vscode.window.createTerminal = ({ env }) => {
+    handoff = env.JOSH_ROOM_ENCRYPTION_MATERIAL;
+    return { show() {}, sendText() { throw new Error("synthetic serve failure"); }, dispose() { disposed = true; } };
+  };
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{
+      id: "backup", display_name: "Backup", provider: "minio", encryption_domain_id: "domain-a", key_generation: 7,
+      projects: [{ id: "room", display_name: "Room", snapshots: [{ snapshot_id: "jat-1" }] }],
+    }] }) };
+    if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "ready", encryption_domain_id: "domain-a", key_generation: 7 }) };
+    if (args[0] === "snapshots") return { stdout: JSON.stringify({ ok: true, latest: "jat-1", snapshots: [{ snapshot_id: "jat-1" }] }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+  } });
+  assert.equal(await extension.__test__.serveRoom({
+    id: "jat-1", snapshot_id: "jat-1", project: { id: "room", display_name: "Room" },
+    dimension: { id: "backup", provider: "minio", encryption_domain_id: "domain-a", key_generation: 7 },
+  }), "failed");
+  assert.equal(disposed, true);
+  assert.equal(fs.existsSync(handoff), false);
+});
+
+test("MinIO connection editing checks Workspace Trust before credential prompts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-connection-trust-test-"));
+  const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
+  vscode.workspace.isTrusted = false;
+  const extension = loadExtension(vscode, () => { throw new Error("untrusted connection must not spawn"); });
+  extension.__test__.setStatusItem(statusItem);
+  await assert.rejects(
+    extension.__test__.editConnection({ id: "home", provider: "minio", endpoint: "https://minio.example.invalid" }),
+    /Workspace Trust/,
+  );
+  assert.equal(inputBoxCalls.length, 0);
+});
+
+test("bare age identities are redacted from controller diagnostics", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-age-redaction-test-"));
+  const { vscode, statusItem, logLines } = createVscodeMock(root);
+  const secret = "AGE-SECRET-KEY-1Qsynthetic-private-material";
+  const spawnHarness = createSpawnHarness(() => ({ autoClose: false }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ appendLine: (line) => logLines.push(line), info() {}, warn() {}, error() {}, show() {} });
+  const recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq";
+  const operation = extension.__test__.runJoshRoom(["projects", "list"], root);
+  await new Promise((resolve) => setImmediate(resolve));
+  const child = spawnHarness.calls[0].child;
+  child.stderr.emit("data", Buffer.from(`${secret}\n${recipient}\n`));
+  child.closeWith({ stdout: JSON.stringify({ ok: true }) });
+  await operation;
+  assert.equal(logLines.some((line) => line.includes(secret)), false);
+  assert.equal(logLines.some((line) => line.includes(recipient)), false);
+});
+
+test("receipt failures redact private age material and do not retain the raw receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-receipt-redaction-test-"));
+  const { vscode, statusItem, logLines } = createVscodeMock(root);
+  const identity = "AGE-SECRET-KEY-1Qreceipt-private-material";
+  const recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq";
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    const receipt = args[args.indexOf("--receipt-file") + 1];
+    fs.writeFileSync(receipt, JSON.stringify({ exitCode: 1, compatibility: `${identity} ${recipient}` }));
+    return { code: 0, stdout: "" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ appendLine: (line) => logLines.push(line), info() {}, warn() {}, error: (line) => logLines.push(line), show() {} });
+  extension.__test__.setRuntimeForTests({
+    command: "/test/rcc",
+    args: (args, receipt) => [...args, "--receipt-file", receipt],
+    env: {},
+    jatRoot: root,
+  });
+
+  await assert.rejects(extension.__test__.runJoshRoom(["projects", "list"], root), (error) => {
+    assert.doesNotMatch(error.message, new RegExp(identity));
+    assert.doesNotMatch(error.message, new RegExp(recipient));
+    assert.equal(error.receipt, undefined);
+    assert.doesNotMatch(JSON.stringify(error), new RegExp(identity));
+    assert.doesNotMatch(JSON.stringify(error), new RegExp(recipient));
+    return true;
+  });
+  assert.equal(logLines.some((line) => line.includes(identity) || line.includes(recipient)), false);
+});
+
+test("JAT stdout and stderr log lines redact private age material before output", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-redaction-test-"));
+  fs.mkdirSync(path.join(root, "output"));
+  const { vscode, statusItem, logLines } = createVscodeMock(root);
+  const identity = "AGE-SECRET-KEY-1Qjat-private-material";
+  const recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq";
+  const spawnHarness = createSpawnHarness(({ child }) => {
+    fs.writeFileSync(path.join(root, "output", "stdout.log"), `${identity}\n`);
+    fs.writeFileSync(path.join(root, "output", "stderr.log"), `${recipient}\n`);
+    setTimeout(() => child.closeWith({ stdout: JSON.stringify({ ok: true }) }), 150);
+    return { autoClose: false };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ appendLine() {}, info: (line) => logLines.push(line), warn: (line) => logLines.push(line), error() {}, show() {} });
+  extension.__test__.setRuntimeForTests({ command: "/test/rcc", args: (args) => [...args, "--json"], env: {}, jatRoot: root });
+
+  await extension.__test__.runJoshRoom(["hydrate", "room"], root);
+  assert.equal(logLines.some((line) => line.includes(identity) || line.includes(recipient)), false);
+});

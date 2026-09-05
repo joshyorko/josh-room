@@ -880,8 +880,9 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
       const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
       const streamJat = (line, severity = "info") => {
-        outputChannel?.[severity](line);
-        const stage = stageForLog(line);
+        const safeLine = sanitizeRuntimeLine(line);
+        outputChannel?.[severity](safeLine);
+        const stage = stageForLog(safeLine);
         if (stage) progressReporter?.event({ stage: "jat", message: stage });
       };
       followers.push(
@@ -954,12 +955,14 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       }
       const receiptExit = receipt && (receipt.exitCode ?? receipt.exit_code ?? receipt.exit);
       if (receiptExit !== undefined && Number(receiptExit) !== 0) {
-        const detail = receipt.compatibility || receipt.error || receipt.message || `RCC controller exited with status ${receiptExit}`;
+        const detail = sanitizeControllerText(
+          receipt.compatibility || receipt.error || receipt.message || `RCC controller exited with status ${receiptExit}`,
+        );
         cleanup();
         const failure = new Error(String(detail));
-        failure.receipt = receipt;
-        failure.stdout = stdout;
-        failure.stderr = stderr;
+        failure.receipt_exit_status = Number(receiptExit);
+        failure.stdout = sanitizeControllerText(stdout);
+        failure.stderr = sanitizeControllerText(stderr);
         reject(failure);
         return;
       }
@@ -2195,9 +2198,10 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
   let progressReporter;
   let progressActive = false;
   const stream = (line, severity = "info") => {
-    latestLog = line;
-    outputChannel?.[severity](line);
-    const stage = stageForLog(line);
+    const safeLine = sanitizeRuntimeLine(line);
+    latestLog = safeLine;
+    outputChannel?.[severity](safeLine);
+    const stage = stageForLog(safeLine);
     if (stage && progressActive) progressReporter?.event({ stage: "jat", message: stage });
   };
   followers.push(
