@@ -17,9 +17,6 @@ KEYSET_FORMAT_VERSION = 1
 MAX_KEYSET_SIZE = 64 * 1024
 CONTROL_OBJECT_MAX_BYTES = 64 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_SYNTHETIC_IDENTITY_SUFFIXES = frozenset(
-    {"synthetic", "operational", "second", "winner", "loser", "caller", "recovery", "keyring", "encryption-only", "native", "1X"}
-)
 _BECH32_ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _KEYSET_FIELDS = frozenset(
     {
@@ -174,8 +171,6 @@ def _validate_operational_identity(value: object) -> str:
         raise ValueError("operational identity is invalid")
     identity = lines[0]
     suffix = identity[len("AGE-SECRET-KEY-"):]
-    if suffix in _SYNTHETIC_IDENTITY_SUFFIXES:
-        return identity
     if len(identity) != 74 or not suffix.startswith("1") or any(
         character not in _BECH32_ALPHABET for character in suffix[1:].lower()
     ):
