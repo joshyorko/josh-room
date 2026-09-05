@@ -32,6 +32,14 @@ let runtimeReadinessOverride;
 let runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
 let testRuntime;
 const CREDENTIALS_SECRET = "josh-room.credentials.v1";
+const ENCRYPTION_SECRET_PREFIX = "josh-room.encryption.v1:";
+const RECOVERY_SECRET_PREFIX = "josh-room.recovery.v1:";
+
+function assertWorkspaceTrusted(action = "use Josh Room") {
+  if (vscode.workspace.isTrusted === false) {
+    throw new Error(`Workspace Trust is required to ${action}.`);
+  }
+}
 
 function setStatus(text, tooltip = "Open Josh Room") {
   if (!statusItem) return;
@@ -40,6 +48,7 @@ function setStatus(text, tooltip = "Open Josh Room") {
 }
 
 function activeWorkspace() {
+  assertWorkspaceTrusted("use Josh Room");
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {
     throw new Error("Open a workspace folder before using Josh Room.");
@@ -640,6 +649,82 @@ async function rememberExtensionCredentials(profile, credentials) {
   await extensionContext.secrets.store(CREDENTIALS_SECRET, JSON.stringify(value));
 }
 
+function encryptionSecretKey(domain, generation) {
+  return `${ENCRYPTION_SECRET_PREFIX}${domain}:${generation}`;
+}
+
+function recoverySecretKey(domain) {
+  return `${RECOVERY_SECRET_PREFIX}${domain}`;
+}
+
+async function cacheEncryptionMaterial(result, dimension) {
+  const domain = result?.encryption_domain_id || dimension?.encryption_domain_id;
+  const generation = result?.key_generation || dimension?.key_generation;
+  const material = result?.encryption_material || result?.material || result?.identity;
+  if (!extensionContext?.secrets?.store || !domain || !generation || !material) return;
+  let identity = material;
+  if (typeof identity === "string" && fs.existsSync(identity)) identity = fs.readFileSync(identity, "utf8");
+  if (typeof identity !== "string" || Buffer.byteLength(identity) > 16 * 1024) {
+    throw new Error("encryption material is invalid or too large");
+  }
+  const cached = {
+    identity,
+    ...(result.recipient ? { recipient: result.recipient } : {}),
+    ...(Array.isArray(result.recovery_recipients) ? { recovery_recipients: result.recovery_recipients } : {}),
+  };
+  await extensionContext.secrets.store(encryptionSecretKey(domain, generation), JSON.stringify(cached));
+  if (result.recovery_material) {
+    await extensionContext.secrets.store(recoverySecretKey(domain), String(result.recovery_material));
+  }
+}
+
+async function readEncryptionMaterial(dimension) {
+  const domain = dimension?.encryption_domain_id || dimension?.encryptionDomainId;
+  const generation = dimension?.key_generation || dimension?.keyGeneration;
+  if (!domain || !generation || !extensionContext?.secrets?.get) return undefined;
+  const value = await extensionContext.secrets.get(encryptionSecretKey(domain, generation));
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed.identity === "string") return parsed;
+  } catch (_error) {
+    // Older extension-owned values may contain the identity directly.
+  }
+  return { identity: value };
+}
+
+async function writeEncryptionHandoff(environment, material) {
+  delete environment.JOSH_ROOM_ENCRYPTION_MATERIAL;
+  delete environment.JOSH_ROOM_IDENTITY;
+  delete environment.JOSH_ROOM_SELECTED_RECIPIENTS;
+  delete environment.JOSH_ROOM_SELECTED_DOMAIN;
+  if (!material) return () => {};
+  let identity = typeof material === "string" ? material : material.identity;
+  if (typeof identity === "string" && fs.existsSync(identity)) identity = fs.readFileSync(identity, "utf8");
+  if (typeof identity !== "string" || !identity.trim() || Buffer.byteLength(identity) > 16 * 1024) {
+    throw new Error("selected encryption material is invalid or too large");
+  }
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-encryption-"));
+  fs.chmodSync(directory, 0o700);
+  const filename = path.join(directory, "material.identity");
+  try {
+    fs.writeFileSync(filename, identity.endsWith("\n") ? identity : `${identity}\n`, { mode: 0o600 });
+    fs.chmodSync(filename, 0o600);
+  } catch (error) {
+    fs.rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+  environment.JOSH_ROOM_ENCRYPTION_MATERIAL = filename;
+  environment.JOSH_ROOM_IDENTITY = filename;
+  if (material.domain || material.encryption_domain_id) {
+    environment.JOSH_ROOM_SELECTED_DOMAIN = material.domain || material.encryption_domain_id;
+  }
+  if (material.recipients || material.recipient) {
+    environment.JOSH_ROOM_SELECTED_RECIPIENTS = (material.recipients || [material.recipient]).join(",");
+  }
+  return () => fs.rmSync(directory, { recursive: true, force: true });
+}
+
 function parseControllerOutput(output) {
   try {
     return JSON.parse(output);
@@ -763,7 +848,7 @@ function controllerFailure(result, { controllerExitStatus, controllerStderr } = 
   return failure;
 }
 
-async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
+async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options = {}) {
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-"));
   fs.chmodSync(progressDirectory, 0o700);
   const progressPath = path.join(progressDirectory, "events.jsonl");
@@ -773,13 +858,17 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   let runtime;
   let environment;
   let credentialsCleanup = () => {};
+  let encryptionCleanup = () => {};
   try {
     runtime = await runtimeFor(cwd, args, progressReporter);
     environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
     });
+    encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
+    encryptionCleanup();
+    credentialsCleanup();
     fs.rmSync(progressDirectory, { recursive: true, force: true });
     throw error;
   }
@@ -799,16 +888,25 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       );
     }
     const cleanup = () => {
+      if (cleanup.timer) clearTimeout(cleanup.timer);
       for (const follower of followers) follower.dispose();
       fs.rmSync(progressDirectory, { recursive: true, force: true });
       credentialsCleanup();
+      encryptionCleanup();
     };
-    const child = childProcess.spawn(runtime.command, runtime.args(args, receiptPath), {
-      cwd,
-      env: environment,
-      detached: true,
-      stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-    });
+    let child;
+    try {
+      child = childProcess.spawn(runtime.command, runtime.args(args, receiptPath), {
+        cwd,
+        env: environment,
+        detached: true,
+        stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      cleanup();
+      reject(error);
+      return;
+    }
     progressReporter?.event({ stage: "controller", message: "Starting Josh Room controller" });
     if (stdinPayload !== undefined) child.stdin.end(stdinPayload);
     let stdout = "";
@@ -886,13 +984,20 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         reject(error);
       }
     });
+    if (options.timeoutMs > 0) {
+      cleanup.timer = setTimeout(() => {
+        cancelled = true;
+        terminateChild(child);
+      }, options.timeoutMs);
+      cleanup.timer.unref?.();
+    }
   });
 }
 
-async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload) {
+async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options = {}) {
   outputChannel?.info(`START · controller ${args.join(" ")}`);
   try {
-    const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload);
+    const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options);
     const { stdout, runtime } = execution;
     const result = parseControllerOutput(stdout);
     // `status` deliberately returns ok=false for a changed or unlinked
@@ -937,7 +1042,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
   }
 }
 
-function runOperation(title, args, cwd, { cancellable = true, stdin } = {}) {
+function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionMaterial, dimension, timeoutMs } = {}) {
   const operationId = ++activeOperationId;
   const displayTitle = title.replace(/…$/, "");
   return vscode.window.withProgress(
@@ -945,7 +1050,10 @@ function runOperation(title, args, cwd, { cancellable = true, stdin } = {}) {
     async (progress, token) => {
       const reporter = createVisualReporter(displayTitle, operationKind(args), progress, operationId);
       try {
-        const result = await runJoshRoom(args, cwd, token, reporter, stdin);
+        const result = await runJoshRoom(args, cwd, token, reporter, stdin, {
+          encryptionMaterial: encryptionMaterial || (dimension && await readEncryptionMaterial(dimension)),
+          timeoutMs,
+        });
         reporter.finish();
         return result;
       } catch (error) {
@@ -1222,6 +1330,7 @@ async function startDirtyTracking(context) {
 }
 
 async function saveRoom(options = {}) {
+  assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
   const folders = await vscode.window.showOpenDialog({
     title: "Josh: Save Room",
@@ -1300,16 +1409,15 @@ async function saveRoom(options = {}) {
   }
   if (targetProvider === "minio") {
     const authStatus = await runJoshRoom(
-      ["auth", "status", "--dimension", targetDimensionId], cwd, undefined, undefined,
+      ["encryption", "status", "--dimension", targetDimensionId], cwd, undefined, undefined,
     );
-    const encryptionReady = authStatus.encryption_ready === true
-      || authStatus.encryption_state === "connected"
-      || (authStatus.encryption_state === undefined && authStatus.state === "connected");
+    const encryptionReady = authStatus.state === "ready"
+      || (authStatus.state === undefined && authStatus.encryption_state === undefined);
     if (!encryptionReady) {
       const connected = await connectEncryption({
         dimension: targetDimension || { id: targetDimensionId, provider: targetProvider },
       });
-      if (connected !== "connected") return connected;
+      if (connected !== "initialized") return connected;
     }
   }
   const imageChoice = await vscode.window.showQuickPick([
@@ -1322,7 +1430,12 @@ async function saveRoom(options = {}) {
     targetDimensionId || selectedDimensionId,
   );
   if (imageChoice.allImages) buildArgs.push("--all-images");
-  const result = await runOperation(`Saving ${name}…`, buildArgs, source);
+  const result = targetProvider === "minio"
+    ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
+      title: `Saving ${name}…`,
+      action: "save a Room",
+    })
+    : await runOperation(`Saving ${name}…`, buildArgs, source);
   const size = (result.ciphertext_size / (1024 * 1024)).toFixed(1);
   await vscode.window.showInformationMessage(`Saved “${name}” (${size} MiB).`);
   if (path.resolve(source) === path.resolve(cwd)) {
@@ -1333,6 +1446,7 @@ async function saveRoom(options = {}) {
 }
 
 async function enterRoom(preferredProject) {
+  assertWorkspaceTrusted("enter a Room");
   const cwd = activeWorkspace();
   const preferred = roomProject(preferredProject);
   const preferredSnapshotId = snapshotIdentity(preferredProject);
@@ -1378,11 +1492,14 @@ async function enterRoom(preferredProject) {
   let history;
   let snapshotId = selected.snapshotId || "latest";
   if (!selected.snapshotId) {
-    history = await runOperation(
-      `Loading ${selected.label} recovery points…`,
-      nativeRegistry.dimensionArgs(["snapshots", "list", selected.projectId, "--backend", provider], selectedDimensionId),
-      cwd,
+    const historyArgs = nativeRegistry.dimensionArgs(
+      ["snapshots", "list", selected.projectId, "--backend", provider], selectedDimensionId,
     );
+    history = provider === "minio"
+      ? await runSelectedEncryption(historyArgs, cwd, selected.project?.dimension || { id: selectedDimensionId, provider }, {
+        title: `Loading ${selected.label} recovery points…`, action: "read a Room",
+      })
+      : await runOperation(`Loading ${selected.label} recovery points…`, historyArgs, cwd);
     snapshotId = "latest";
     if (history.snapshots.length > 1) {
       const snapshot = await vscode.window.showQuickPick(
@@ -1403,9 +1520,7 @@ async function enterRoom(preferredProject) {
   if (fs.existsSync(destination)) {
     throw new Error(`Refusing to replace an unexplained existing folder: ${destination}`);
   }
-  await runOperation(
-    `Restoring ${selected.label}…`,
-    nativeRegistry.dimensionArgs([
+  const restoreArgs = nativeRegistry.dimensionArgs([
       "hydrate",
       selected.projectId,
       "--snapshot",
@@ -1416,9 +1531,14 @@ async function enterRoom(preferredProject) {
       provider,
       "--ide",
       "terminal",
-    ], selectedDimensionId),
-    cwd,
-  );
+    ], selectedDimensionId);
+  if (provider === "minio") {
+    await runSelectedEncryption(restoreArgs, cwd, selected.project?.dimension || { id: selectedDimensionId, provider }, {
+      title: `Restoring ${selected.label}…`, action: "restore a Room",
+    });
+  } else {
+    await runOperation(`Restoring ${selected.label}…`, restoreArgs, cwd);
+  }
   const materialization = corroboratedMaterialization(destination, selectedDimensionId, selected.projectId);
   if (materialization) rememberMaterialization(materialization);
   await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
@@ -1506,6 +1626,7 @@ async function removeSnapshot(preferredProject) {
 }
 
 async function serveRoom(preferredProject, { startRegistry = startRegistryTerminal } = {}) {
+  assertWorkspaceTrusted("serve a Room");
   const cwd = activeWorkspace();
   const marker = currentRoom(cwd);
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
@@ -1546,11 +1667,17 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
     || !/^[a-z0-9][a-z0-9._-]*$/.test(dimension)) {
     throw new Error("Provider, Dimension, Room, or snapshot identity is unsafe for terminal execution.");
   }
+  let encryptionMaterial;
+  if (provider === "minio") {
+    const status = await runJoshRoom(["encryption", "status", "--dimension", dimension], cwd);
+    encryptionMaterial = await readEncryptionMaterial({ ...(project.dimension || {}), ...status });
+  }
   return startRegistry({
     cwd,
     title: `Serving ${project.display_name}`,
     terminalName: `Images: ${project.display_name}`,
     args: ["serve", project.id, "--snapshot", snapshotId, "--backend", provider, "--dimension", dimension],
+    encryptionMaterial,
     retry: () => vscode.commands.executeCommand("joshRoom.serve", project),
   });
 }
@@ -2028,10 +2155,17 @@ function waitForServeEndpoint() {
   ]);
 }
 
-async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry }) {
+async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry, encryptionMaterial }) {
   const runtime = await runtimeFor(cwd, args);
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
+  let encryptionCleanup = () => {};
+  try {
+    encryptionCleanup = await writeEncryptionHandoff(environment, encryptionMaterial);
+  } catch (error) {
+    credentialsCleanup();
+    throw error;
+  }
   const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
   fs.chmodSync(progressDirectory, 0o700);
@@ -2063,6 +2197,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     for (const follower of followers) follower.dispose();
     progressReporter?.dispose();
     credentialsCleanup();
+    encryptionCleanup();
     fs.rmSync(progressDirectory, { recursive: true, force: true });
   };
   const terminalClosed = vscode.window.onDidCloseTerminal((closed) => {
@@ -2191,6 +2326,15 @@ function activate(context) {
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", { treeDataProvider: roomsProvider });
   const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", { treeDataProvider: new JatToolsProvider() });
   context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
+  if (context.secrets?.onDidChange) {
+    context.subscriptions.push(context.secrets.onDidChange((event) => {
+      if (!event?.key || event.key.startsWith(ENCRYPTION_SECRET_PREFIX) || event.key.startsWith(RECOVERY_SECRET_PREFIX)) {
+        roomsProvider.roots = undefined;
+        roomsProvider.emitter.fire(undefined);
+        refreshRoomStatus();
+      }
+    }));
+  }
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
     const relative = relativeWorkspacePath(event.document.uri);
     if (!relative || !workspaceBaseline) return;
@@ -2362,15 +2506,16 @@ async function chooseDimension(catalog, title) {
 async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   const cwd = activeWorkspace();
   let dimension = item && item.dimension ? item.dimension : item;
-  const encryptionOnly = purpose === "encryption"
-    || nativeRegistry.providerKey(dimension?.provider) === "minio";
-  const authPurpose = encryptionOnly ? "encryption" : "r2";
+  if (purpose === "encryption" || nativeRegistry.providerKey(dimension?.provider) === "minio") {
+    throw new Error("MinIO encryption is initialized by Josh Room; Cloudflare is R2-only.");
+  }
+  const authPurpose = "r2";
   if (!dimension) {
     const catalog = await loadCatalog(cwd, "Loading storage...");
-    dimension = dimensionList(catalog).find((candidate) => nativeRegistry.providerKey(candidate.provider) === (encryptionOnly ? "minio" : "r2"));
+    dimension = dimensionList(catalog).find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
   }
-  const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || (encryptionOnly ? selectedDimensionId : "r2");
-  if (!targetDimensionId) throw new Error("Choose a Dimension before authorizing Josh Room encryption.");
+  const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || "r2";
+  if (!targetDimensionId) throw new Error("Choose an R2 Dimension before connecting Cloudflare.");
   selectedDimensionId = targetDimensionId;
   activeAuthAttempt?.cancel();
   const attempt = {
@@ -2381,20 +2526,16 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   };
   activeAuthAttempt = attempt;
   try {
-    const encryptionLabel = "Josh Room encryption";
-    const encryptionContext = "via Cloudflare (MinIO stays selected; R2 stays disconnected)";
-    const encryptionTitle = "Authorizing Josh Room encryption via Cloudflare (MinIO stays selected; R2 stays disconnected)…";
     return await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: encryptionOnly ? encryptionTitle : "Connecting Cloudflare...",
+        title: "Connecting Cloudflare...",
         cancellable: true,
       },
       async (progress, parentToken) => {
         const controller = createCancellationController(parentToken);
         attempt.controller = controller;
-        const authTitle = encryptionOnly ? encryptionTitle.slice(0, -1) : "Connecting Cloudflare";
-        const reporter = createVisualReporter(authTitle, operationKind(["auth", "start"]), progress);
+        const reporter = createVisualReporter("Connecting Cloudflare", operationKind(["auth", "start"]), progress);
         let sessionId;
         try {
           const started = await runJoshRoom(
@@ -2404,19 +2545,11 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
           const authorizationUrl = started.authorization_url || started.authorizationUrl;
           sessionId = started.session_id || started.sessionId;
           if (!authorizationUrl || !sessionId) {
-            throw new Error(
-              encryptionOnly
-                ? `${encryptionLabel} authorization ${encryptionContext} did not return an authorization session.`
-                : "Cloudflare connection did not return an authorization session.",
-            );
+            throw new Error("Cloudflare connection did not return an authorization session.");
           }
           const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
           if (opened === false) {
-            throw new Error(
-              encryptionOnly
-                ? `Could not open ${encryptionLabel} authorization ${encryptionContext} in your local browser.`
-                : "Could not open Cloudflare authorization in your local browser.",
-            );
+            throw new Error("Could not open Cloudflare authorization in your local browser.");
           }
 
           if (controller.token.isCancellationRequested) return "cancelled";
@@ -2429,40 +2562,27 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
           if (controller.token.isCancellationRequested) return "cancelled";
           if (result.status === "authorized") {
             if (roomsProvider) await roomsProvider.refresh();
-            await vscode.window.showInformationMessage(
-              encryptionOnly
-                ? "Josh Room encryption is ready via Cloudflare. MinIO remains selected; Cloudflare R2 was not connected."
-                : "Cloudflare connected. Your Rooms are ready.",
-            );
+            await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
             reporter.finish();
             return "connected";
           }
-          throw new Error(
-            encryptionOnly
-              ? `${encryptionLabel} authorization ${encryptionContext} ${result.status || "failed"}.`
-              : `Cloudflare authorization ${result.status || "failed"}`,
-          );
+          throw new Error(`Cloudflare authorization ${result.status || "failed"}`);
         } catch (error) {
           const cancelled = controller.token.isCancellationRequested || isCancellationError(error);
           if (cancelled) {
-            outputChannel?.info(`${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization cancelled; stale attempt invalidated.`);
+            outputChannel?.info("Cloudflare authorization cancelled; stale attempt invalidated.");
           } else if (sessionId) {
-            outputChannel?.warn(`${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization failed; invalidating the pending attempt.`);
+            outputChannel?.warn("Cloudflare authorization failed; invalidating the pending attempt.");
           }
           if (sessionId) {
             await runJoshRoom(["auth", "cancel", sessionId], cwd)
-              .catch((cancelError) => outputChannel?.warn(`Unable to invalidate ${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization: ${cancelError.message}`));
+              .catch((cancelError) => outputChannel?.warn(`Unable to invalidate Cloudflare authorization: ${cancelError.message}`));
           }
           if (cancelled) {
             await runJoshRoom(
               ["auth", "status", "--dimension", targetDimensionId], cwd,
-            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled ${encryptionOnly ? "Josh Room encryption" : "Cloudflare"} authorization: ${statusError.message}`));
+            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled Cloudflare authorization: ${statusError.message}`));
             return "cancelled";
-          }
-          if (encryptionOnly && !String(error.message || error).includes(encryptionContext)) {
-            const contextual = new Error(`${error.message || error}; ${encryptionContext}.`);
-            Object.assign(contextual, error);
-            error = contextual;
           }
           reporter.fail(error);
           throw error;
@@ -2478,7 +2598,159 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
 }
 
 async function connectEncryption(item, options = {}) {
-  return connectCloudflare(item, { ...options, purpose: "encryption" });
+  assertWorkspaceTrusted("initialize MinIO encryption");
+  const cwd = activeWorkspace();
+  const dimension = item?.dimension || item;
+  const dimensionIdValue = dimension?.id || dimension?.dimension_id || selectedDimensionId;
+  if (!dimensionIdValue || nativeRegistry.providerKey(dimension?.provider) !== "minio") {
+    throw new Error("Choose a MinIO Dimension before initializing encryption.");
+  }
+  const handoff = options.recoveryHandoff || (await vscode.window.showOpenDialog({
+    title: "Choose recovery identity for MinIO encryption",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    openLabel: "Use recovery identity",
+  }))?.[0]?.fsPath;
+  if (!handoff) return "cancelled";
+  const result = await runOperation(
+    "Initializing MinIO encryption…",
+    ["encryption", "initialize", "--dimension", dimensionIdValue, "--recovery-handoff", handoff],
+    cwd,
+    { cancellable: true },
+  );
+  const domain = result.encryption_domain_id || dimension.encryption_domain_id;
+  const generation = result.key_generation || dimension.key_generation;
+  if (!result.encryption_material && domain && generation) {
+    const runtimeRoot = process.env.XDG_RUNTIME_DIR || os.tmpdir();
+    const candidate = path.join(runtimeRoot, "josh-room", "session", "encryption", domain, `generation-${generation}.identity`);
+    if (fs.existsSync(candidate)) result.encryption_material = candidate;
+  }
+  await cacheEncryptionMaterial(result, { ...dimension, id: dimensionIdValue });
+  if (domain && extensionContext?.secrets?.store) {
+    const recoveryStat = fs.lstatSync(handoff);
+    if (recoveryStat.isFile() && !recoveryStat.isSymbolicLink()
+      && (recoveryStat.mode & 0o077) === 0 && recoveryStat.size <= 16 * 1024) {
+      await extensionContext.secrets.store(recoverySecretKey(domain), fs.readFileSync(handoff, "utf8"));
+    }
+  }
+  selectedDimensionId = dimensionIdValue;
+  roomsProvider && await roomsProvider.refresh();
+  await vscode.window.showInformationMessage("MinIO encryption is ready. Cloudflare R2 was not connected.");
+  return "initialized";
+}
+
+async function runSelectedEncryption(args, cwd, dimension, options = {}) {
+  assertWorkspaceTrusted(options.action || "read or change a trusted Room");
+  const selected = dimension?.dimension || dimension;
+  const provider = nativeRegistry.providerKey(selected?.provider);
+  if (provider !== "minio") return runOperation(options.title || "Running Josh Room operation…", args, cwd, options);
+  let material = options.encryptionMaterial || await readEncryptionMaterial(selected);
+  if (!material && selected?.id) {
+    const status = await runJoshRoom(["encryption", "status", "--dimension", selected.id], cwd);
+    material = await readEncryptionMaterial({ ...selected, ...status });
+  }
+  if (!material && !(selected?.encryption_domain_id || selected?.encryptionDomainId)
+    && !(selected?.key_generation || selected?.keyGeneration)) {
+    return runOperation(options.title || "Running Josh Room operation…", args, cwd, options);
+  }
+  if (!material) throw new Error("Selected MinIO encryption material is unavailable; initialize or import it first.");
+  return runOperation(options.title || "Running Josh Room operation…", args, cwd, {
+    ...options,
+    dimension: selected,
+    encryptionMaterial: material,
+  });
+}
+
+function selectedDimension(item) {
+  return item?.dimension || item;
+}
+
+async function migrateEncryption(item) {
+  assertWorkspaceTrusted("migrate encryption");
+  const cwd = activeWorkspace();
+  const dimension = selectedDimension(item);
+  const id = dimension?.id || dimension?.dimension_id;
+  if (!id || nativeRegistry.providerKey(dimension.provider) !== "minio") {
+    throw new Error("Choose a MinIO Dimension before migrating encryption.");
+  }
+  const plan = await runSelectedEncryption(
+    ["encryption", "migrate", "--dimension", id], cwd, dimension,
+    { title: "Planning MinIO encryption migration…", action: "migrate encryption" },
+  );
+  if (plan.status === "committed" || plan.journal_status === "committed") return plan.status || "committed";
+  const confirmed = await vscode.window.showWarningMessage(
+    `Migrate the legacy encryption domain for ${dimension.display_name || id}? Existing JAT payloads remain unchanged.`,
+    { modal: true },
+    "Migrate",
+  );
+  if (confirmed !== "Migrate") return "cancelled";
+  const result = await runSelectedEncryption(
+    ["encryption", "resume", "--dimension", id], cwd, dimension,
+    { title: "Migrating MinIO encryption…", action: "migrate encryption" },
+  );
+  await roomsProvider?.refresh();
+  return result.status || result.journal_status || "migrated";
+}
+
+async function resumeEncryption(item) {
+  assertWorkspaceTrusted("resume encryption migration");
+  const cwd = activeWorkspace();
+  const dimension = selectedDimension(item);
+  const id = dimension?.id || dimension?.dimension_id;
+  if (!id || nativeRegistry.providerKey(dimension.provider) !== "minio") {
+    throw new Error("Choose a MinIO Dimension before resuming encryption.");
+  }
+  const result = await runSelectedEncryption(
+    ["encryption", "resume", "--dimension", id], cwd, dimension,
+    { title: "Resuming MinIO encryption migration…", action: "resume encryption migration" },
+  );
+  await roomsProvider?.refresh();
+  return result.status || result.journal_status || "resumed";
+}
+
+async function exportRecovery(item) {
+  assertWorkspaceTrusted("export recovery material");
+  const dimension = selectedDimension(item);
+  const domain = dimension?.encryption_domain_id || dimension?.encryptionDomainId;
+  if (!domain || nativeRegistry.providerKey(dimension.provider) !== "minio") {
+    throw new Error("Choose a ready MinIO Dimension before exporting recovery material.");
+  }
+  const output = await vscode.window.showSaveDialog({
+    title: "Export MinIO recovery identity",
+    defaultUri: vscode.Uri.file(path.join(activeWorkspace(), "josh-room-recovery.identity")),
+    filters: { "Age identity": ["identity", "txt"] },
+  });
+  if (!output) return "cancelled";
+  const recovery = await extensionContext?.secrets?.get?.(recoverySecretKey(domain));
+  if (!recovery) throw new Error("Recovery material is unavailable for the selected Dimension.");
+  const outputPath = path.resolve(output.fsPath);
+  const temporary = path.join(path.dirname(outputPath), `.josh-room-recovery-${process.pid}-${Date.now()}`);
+  try {
+    fs.writeFileSync(temporary, String(recovery).endsWith("\n") ? String(recovery) : `${recovery}\n`, { mode: 0o600, flag: "wx" });
+    fs.chmodSync(temporary, 0o600);
+    fs.renameSync(temporary, outputPath);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+  await vscode.window.showInformationMessage(`Recovery identity exported to ${output.fsPath}.`);
+  return "exported";
+}
+
+async function importRecovery(item) {
+  assertWorkspaceTrusted("import recovery material");
+  const dimension = selectedDimension(item);
+  const recovery = (await vscode.window.showOpenDialog({
+    title: "Choose MinIO recovery identity",
+    defaultUri: vscode.Uri.file(activeWorkspace()),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    openLabel: "Use recovery identity",
+  }))?.[0]?.fsPath;
+  if (!recovery) return "cancelled";
+  return connectEncryption(dimension, { recoveryHandoff: recovery });
 }
 
 async function configureStorageBucket({ provider, connectionId, dimensionId, connectionMetadata = {}, credentials, cwd }) {
@@ -2788,7 +3060,8 @@ class HierarchyRoomsProvider {
     treeItem.contextValue = item.kind === "connection"
       ? item.state === "expired" ? "provider-connection-expired"
         : item.state === "connected" ? "provider-connection-connected" : "provider-connection"
-      : syntheticDimension ? "dimension-synthetic" : item.kind;
+      : syntheticDimension ? "dimension-synthetic"
+        : item.kind === "dimension" && item.encryption_state ? `dimension-${item.encryption_state}` : item.kind;
     treeItem.description = item.description || "";
     treeItem.iconPath = new vscode.ThemeIcon(
       item.kind === "provider" ? "cloud"
@@ -2797,7 +3070,9 @@ class HierarchyRoomsProvider {
             : item.kind === "room" ? "archive" : "history",
     );
     if (item.kind === "dimension") {
-      treeItem.command = { command: "joshRoom.selectDimension", title: "Select Storage", arguments: [item] };
+      treeItem.command = item.action
+        ? { ...item.action, arguments: [item] }
+        : { command: "joshRoom.selectDimension", title: "Select Storage", arguments: [item] };
     }
     if (item.kind === "connection") {
       const command = item.state === "expired" || item.state === "disconnected"
@@ -3073,6 +3348,7 @@ async function verifyLegacyLink(cwd, context) {
 }
 
 async function linkRoom(preferredProject) {
+  assertWorkspaceTrusted("link a Room");
   const cwd = activeWorkspace();
   const context = await explicitRoomContext(preferredProject, "Josh: Link Existing Folder");
   if (!context) return "cancelled";
@@ -3085,18 +3361,25 @@ async function linkRoom(preferredProject) {
   }
   const args = ["link", "--project", context.project_id, "--snapshot", context.snapshot_id];
   if (verifiedFingerprint) args.push("--workspace-fingerprint", verifiedFingerprint);
-  const result = await runOperation("Linking saved Room...", routeItemArgs(args, context), cwd);
+  const routed = routeItemArgs(args, context);
+  const result = nativeRegistry.providerKey(context.provider || context.dimension?.provider) === "minio"
+    ? await runSelectedEncryption(routed, cwd, context.dimension || context, { title: "Linking saved Room…", action: "link a Room" })
+    : await runOperation("Linking saved Room...", routed, cwd);
   await resetNativeBaseline(result);
   if (roomsProvider) await roomsProvider.refresh();
   return "linked";
 }
 
 async function repairRoom(preferredProject) {
+  assertWorkspaceTrusted("repair a Room");
   const cwd = activeWorkspace();
   const context = await explicitRoomContext(preferredProject, "Josh: Repair Room Ledger");
   if (!context) return "cancelled";
   const args = ["repair", "--project", context.project_id, "--snapshot", context.snapshot_id];
-  const result = await runOperation("Repairing Room ledger...", routeItemArgs(args, context), cwd);
+  const routed = routeItemArgs(args, context);
+  const result = nativeRegistry.providerKey(context.provider || context.dimension?.provider) === "minio"
+    ? await runSelectedEncryption(routed, cwd, context.dimension || context, { title: "Repairing Room ledger…", action: "repair a Room" })
+    : await runOperation("Repairing Room ledger...", routed, cwd);
   await resetNativeBaseline(result);
   if (roomsProvider) await roomsProvider.refresh();
   return "repaired";
@@ -3188,6 +3471,15 @@ function activateNative(context) {
     treeDataProvider: new JatToolsProvider(),
   });
   context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
+  if (context.secrets?.onDidChange) {
+    context.subscriptions.push(context.secrets.onDidChange((event) => {
+      if (!event?.key || event.key.startsWith(ENCRYPTION_SECRET_PREFIX) || event.key.startsWith(RECOVERY_SECRET_PREFIX)) {
+        roomsProvider.roots = undefined;
+        roomsProvider.emitter.fire(undefined);
+        refreshRoomStatus();
+      }
+    }));
+  }
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
     const relative = relativeWorkspacePath(event.document.uri);
     if (!relative) return;
@@ -3213,6 +3505,11 @@ function activateNative(context) {
   register(context, "joshRoom.connectCloudflare", connectCloudflare);
   register(context, "joshRoom.reconnectCloudflare", connectCloudflare);
   register(context, "joshRoom.connectEncryption", connectEncryption);
+  register(context, "joshRoom.initializeEncryption", connectEncryption);
+  register(context, "joshRoom.migrateEncryption", migrateEncryption);
+  register(context, "joshRoom.resumeEncryption", resumeEncryption);
+  register(context, "joshRoom.exportRecovery", exportRecovery);
+  register(context, "joshRoom.importRecovery", importRecovery);
   register(context, "joshRoom.connectStorage", connectStorage);
   register(context, "joshRoom.reconnectStorage", (item) => connectStorage(item));
   register(context, "joshRoom.editConnection", editConnection);
@@ -3232,30 +3529,8 @@ function activateNative(context) {
   register(context, "joshRoom.jatServe", jatServe);
   register(context, "joshRoom.jatExport", jatExport);
   register(context, "joshRoom.jatCopy", jatCopy);
-  const runtimePreparation = vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Preparing Josh Room runtime…", cancellable: true },
-    async (progress, token) => {
-      const reporter = createVisualReporter("Preparing Josh Room runtime", "generic", progress);
-      token?.onCancellationRequested?.(() => setRuntimeLifecycle("CANCELLED", "Runtime preparation cancelled; choose Retry to start again"));
-      try {
-        const ready = await startRuntimeReadiness(context, reporter);
-        reporter.finish();
-        return ready;
-      } catch (error) {
-        reporter.fail(error);
-        throw error;
-      } finally {
-        reporter.dispose();
-      }
-    },
-  );
-  runtimePreparation.then(() => {
-    startDirtyTracking(context).catch((error) => {
-      outputChannel.warn("Unable to index saved Room: " + error.message);
-      setRoomDirty(true);
-    });
-    return roomsProvider.refresh();
-  }).catch((error) => outputChannel.appendLine(`error: ${error.message || String(error)}`));
+  // Activation only registers native UI. Runtime, storage, auth, and key
+  // reads begin after an explicit command or tree load action.
 }
 
 module.exports.activate = activateNative;
@@ -3463,6 +3738,13 @@ Object.assign(module.exports.__test__, {
   addStorage,
   connectCloudflare,
   connectEncryption,
+  runSelectedEncryption,
+  migrateEncryption,
+  resumeEncryption,
+  exportRecovery,
+  importRecovery,
+  encryptionSecretKey,
+  recoverySecretKey,
   connectStorage,
   disconnectStorage,
   editStorageSettings,
@@ -3475,6 +3757,7 @@ Object.assign(module.exports.__test__, {
   RoomDragAndDropController,
   roomLabel,
   runJoshRoom,
+  runOperation,
   chooseLocalFallback,
   localRuntimeState,
   initializeManagedRuntime,

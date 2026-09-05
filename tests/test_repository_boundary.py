@@ -90,7 +90,11 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
         "joshRoom.jatBuild", "joshRoom.jatInspect", "joshRoom.jatExtract", "joshRoom.jatRestore",
         "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
+        "joshRoom.initializeEncryption", "joshRoom.migrateEncryption", "joshRoom.resumeEncryption",
+        "joshRoom.exportRecovery", "joshRoom.importRecovery",
     }
+    assert package["extensionKind"] == ["workspace"]
+    assert package["capabilities"]["untrustedWorkspaces"]["supported"] is False
     extension = (ROOT / "vscode-extension/extension.js").read_text()
     assert "josh-room" in extension
     assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
@@ -204,13 +208,22 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
 
 def test_vscode_extension_root_and_template_copies_are_byte_identical():
     for name in (
-        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "runtime.js",
+        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js",
         "runtime/manifest.json", "runtime/controller/robot.yaml", "runtime/controller/conda.yaml",
         "runtime/controller/environment_linux_amd64_freeze.yaml", "media/room.svg",
     ):
         assert (ROOT / "vscode-extension" / name).read_bytes() == (
             ROOT / "templates/room/vscode-extension" / name
         ).read_bytes()
+    root_controller = ROOT / "vscode-extension/runtime/controller"
+    template_controller = ROOT / "templates/room/vscode-extension/runtime/controller"
+    # This pre-existing JAT-owned module is intentionally outside Task 4's write scope.
+    baseline_controller_mismatches = {Path("josh_room/jat.py")}
+    for module in root_controller.rglob("*.py"):
+        relative = module.relative_to(root_controller)
+        if relative in baseline_controller_mismatches:
+            continue
+        assert (template_controller / relative).read_bytes() == module.read_bytes()
 
 
 def test_oauth_room_requires_no_host_setup_mount():

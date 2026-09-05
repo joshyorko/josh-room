@@ -243,6 +243,32 @@ test("buildProviderTree renders a disconnected connection as unavailable", () =>
   assert.deepEqual(connection.children[0].children, []);
 });
 
+test("buildProviderTree preserves native encryption states and exposes contextual actions", () => {
+  const tree = buildProviderTree({
+    dimensions: [
+      { id: "ready", display_name: "Ready", provider: "minio", encryption_state: "ready", projects: [] },
+      { id: "new", display_name: "New", provider: "minio", encryption_state: "uninitialized", projects: [] },
+      { id: "old", display_name: "Old", provider: "minio", encryption_state: "legacy", projects: [] },
+      { id: "resume", display_name: "Resume", provider: "minio", encryption_state: "resumable", projects: [] },
+      { id: "unsafe", display_name: "Unsafe", provider: "minio", encryption_state: "insecure", projects: [] },
+      { id: "failed", display_name: "Failed", provider: "minio", encryption_state: "failed", projects: [] },
+    ],
+  });
+
+  const dimensions = tree[0].children[0].children;
+  assert.deepEqual(dimensions.map((item) => item.state), [
+    "ready", "uninitialized", "legacy", "resumable", "insecure", "failed",
+  ]);
+  assert.deepEqual(dimensions.map((item) => item.action?.command), [
+    undefined,
+    "joshRoom.initializeEncryption",
+    "joshRoom.migrateEncryption",
+    "joshRoom.resumeEncryption",
+    "joshRoom.initializeEncryption",
+    "joshRoom.refresh",
+  ]);
+});
+
 test("buildProviderTree accepts worker connection and bucket records without exposing credentials", () => {
   const tree = buildProviderTree({
     providers: [{
