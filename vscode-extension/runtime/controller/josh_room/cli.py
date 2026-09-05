@@ -215,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     encryption_initialize = encryption_commands.add_parser("initialize")
     encryption_initialize.add_argument("--dimension", required=True)
     encryption_initialize.add_argument("--recovery-recipient", action="append", dest="recovery_recipients")
+    encryption_initialize.add_argument("--recovery-handoff", type=Path)
     _json_option(encryption_initialize)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -362,7 +363,7 @@ def main(argv=None):
                             if requested_dimension != "r2":
                                 raise
                     ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
-                elif _requires_encryption(args) and not runtime_loaded and not _encryption_material_ready():
+                elif _requires_encryption(args) and args.command != "dimensions" and not runtime_loaded and not _encryption_material_ready():
                     raise _encryption_authorization_required()
                 result = dispatch(args, instance)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
@@ -416,6 +417,8 @@ def _requires_oauth(args) -> bool:
             return any(dimension.provider == "r2" for dimension in registry.dimensions.values())
         except ValueError:
             return getattr(args, "backend", "r2") == "r2"
+    if getattr(args, "snapshot_command", None) == "copy" and _copy_has_minio_dimension(args):
+        return False
     if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
@@ -442,9 +445,13 @@ def _requires_oauth(args) -> bool:
 
 
 def _requires_encryption(args) -> bool:
+    if args.command == "dimensions":
+        return getattr(args, "with_hierarchy", False) and _dimensions_have_provider(args, "minio")
     if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
         return False
     if args.command == "snapshot" and getattr(args, "snapshot_command", None) not in {"create", "copy"}:
+        return False
+    if getattr(args, "snapshot_command", None) == "copy":
         return False
     if args.command == "snapshots" and getattr(args, "snapshots_command", None) not in {"list", "remove"}:
         return False
@@ -473,6 +480,10 @@ def _requires_encryption(args) -> bool:
 def _uses_minio_encryption(args) -> bool:
     if args.command == "encryption":
         return False
+    if args.command == "dimensions":
+        return False
+    if getattr(args, "snapshot_command", None) == "copy":
+        return False
     if not _requires_encryption(args):
         return False
     try:
@@ -487,6 +498,12 @@ def _selected_encryption_environment(args, instance: Path):
     selected = _effective_dimension(args)
     backend = _backend_for_args(args, instance)
     material = resolve_encryption_material(selected, backend)
+    with _encryption_material_environment(material):
+        yield material
+
+
+@contextmanager
+def _encryption_material_environment(material):
     previous = {
         name: os.environ.get(name)
         for name in ("JOSH_ROOM_IDENTITY", "JOSH_ROOM_ENCRYPTION_MATERIAL", "JOSH_ROOM_SELECTED_RECIPIENTS", "JOSH_ROOM_SELECTED_DOMAIN")
@@ -498,7 +515,7 @@ def _selected_encryption_environment(args, instance: Path):
     )
     os.environ["JOSH_ROOM_SELECTED_DOMAIN"] = material.encryption_domain_id
     try:
-        yield material
+        yield
     finally:
         for name, value in previous.items():
             if value is None:
@@ -529,6 +546,57 @@ def _copy_source_dimension(args) -> str | None:
     if not status.get("ok") or status.get("state") != "clean" or not status.get("dimension_id"):
         return None
     return status["dimension_id"]
+
+
+def _copy_dimension_ids(args) -> list[str]:
+    return [value for value in (_copy_source_dimension(args), getattr(args, "destination_dimension", None)) if value]
+
+
+def _copy_has_minio_dimension(args) -> bool:
+    dimensions = _copy_dimension_ids(args)
+    try:
+        registry = DimensionRegistry(private_config() or {})
+        return any(registry.select(value).provider == "minio" for value in dimensions)
+    except ValueError:
+        return "minio" in dimensions
+
+
+def _reject_minio_copy(args):
+    dimensions = _copy_dimension_ids(args)
+    if not dimensions:
+        return
+    try:
+        registry = DimensionRegistry(private_config() or {})
+        selected = [registry.select(value) for value in dimensions]
+    except ValueError:
+        selected = []
+    if any(dimension.provider == "minio" for dimension in selected) or "minio" in dimensions:
+        raise EncryptionStateError(
+            "copy across encryption domains is not supported yet",
+            error_code="unsupported-mixed-domain",
+            state="unsupported-mixed-domain",
+            dimension_id=dimensions[0],
+            dimension_ids=dimensions,
+        )
+
+
+def _dimensions_have_provider(args, provider: str) -> bool:
+    try:
+        registry = DimensionRegistry(private_config() or {})
+        if getattr(args, "dimension", None):
+            return registry.select(args.dimension).provider == provider
+        return any(dimension.provider == provider for dimension in registry.dimensions.values())
+    except ValueError:
+        return getattr(args, "backend", None) == provider
+
+
+def _marker_dimension(args) -> str | None:
+    if getattr(args, "command", None) not in {"link", "repair"} or getattr(args, "dimension", None):
+        return None
+    status = local_status(args.workspace)
+    if status.get("ok") and status.get("dimension_id"):
+        return status["dimension_id"]
+    return None
 
 
 def _bucket_target(args, config):
@@ -606,6 +674,7 @@ def dispatch(args, instance: Path) -> dict:
                 dimension,
                 backend,
                 recovery_recipients=recipients,
+                recovery_handoff=args.recovery_handoff,
             )
             os.environ["JOSH_ROOM_IDENTITY"] = str(material.identity)
             os.environ["JOSH_ROOM_ENCRYPTION_MATERIAL"] = str(material.identity)
@@ -793,7 +862,7 @@ def dispatch(args, instance: Path) -> dict:
                 return {
                     "ok": True,
                     "dimensions": [
-                        _dimension_hierarchy(instance, dimension, _backend(dimension.provider, instance, dimension_id))
+                        _dimension_hierarchy_with_encryption(instance, dimension)
                         for dimension_id, dimension in dimensions
                     ],
                 }
@@ -909,6 +978,7 @@ def dispatch(args, instance: Path) -> dict:
         return {"ok": True, "dimension_id": dimension_id, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
         if args.snapshot_command == "copy":
+            _reject_minio_copy(args)
             identity = _identity()
             recipients = _recipients()
             source_project = args.project
@@ -1091,6 +1161,15 @@ def _dimension_hierarchy(instance, dimension, backend):
     return {**_dimension_metadata(dimension.dimension_id, dimension), "rooms": rooms}
 
 
+def _dimension_hierarchy_with_encryption(instance, dimension):
+    backend = _backend(dimension.provider, instance, dimension.dimension_id)
+    if dimension.provider != "minio":
+        return _dimension_hierarchy(instance, dimension, backend)
+    material = resolve_encryption_material(dimension, backend, allow_initialize=False)
+    with _encryption_material_environment(material):
+        return _dimension_hierarchy(instance, dimension, backend)
+
+
 def _connection_credentials(payload):
     if not isinstance(payload, dict):
         raise TypeError("connection credentials input must be an object")
@@ -1145,6 +1224,9 @@ def _effective_dimension(args):
     registry = DimensionRegistry(config)
     if requested:
         return registry.select(requested)
+    marker = _marker_dimension(args)
+    if marker:
+        return registry.select(marker)
     if backend == "local":
         return None
     if backend != "r2":

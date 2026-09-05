@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from josh_room import auth as auth_module
+from josh_room import cli
 from josh_room.cli import build_parser
 from josh_room.config import DimensionConfig
 from josh_room.encryption_domain import (
@@ -19,15 +20,19 @@ RECOVERY_RECIPIENT = "age1qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpquu
 DOMAIN_ID = "00000000-0000-4000-8000-000000000001"
 
 
-def dimension(provider="minio", dimension_id="archive"):
+def dimension(provider="minio", dimension_id="archive", **overrides):
+    values = {
+        "dimension_id": dimension_id,
+        "display_name": "Archive",
+        "provider": provider,
+        "endpoint": "http://127.0.0.1:9000" if provider == "minio" else "https://r2.example.invalid",
+        "bucket": "archive-bucket",
+        "credential_profile": "archive-profile",
+        "catalog_key": "catalog.jroom.age",
+    }
+    values.update(overrides)
     return DimensionConfig(
-        dimension_id=dimension_id,
-        display_name="Archive",
-        provider=provider,
-        endpoint="http://127.0.0.1:9000" if provider == "minio" else "https://r2.example.invalid",
-        bucket="archive-bucket",
-        credential_profile="archive-profile",
-        catalog_key="catalog.jroom.age",
+        **values,
     )
 
 
@@ -172,6 +177,154 @@ def test_r2_resolution_keeps_legacy_cloudflare_identity_path(monkeypatch, tmp_pa
 
     assert auth_module.resolve_encryption_material(dimension(provider="r2"), backend) is None
     assert backend.calls == []
+
+
+def test_dimensions_hierarchy_resolves_minio_before_reading_a_legacy_catalog(tmp_path, monkeypatch, capsys):
+    config = {"dimensions": {"archive": dimension().to_private()}}
+    backend = FakeBackend(catalog=b"legacy-catalog")
+    monkeypatch.setattr(cli, "private_config", lambda: config)
+    monkeypatch.setattr(cli, "_backend", lambda *_args: backend)
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+
+    assert cli.main(["dimensions", "list", "--dimension", "archive", "--with-hierarchy", "--json"]) == 2
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["error_code"] == "legacy-encryption-migration-required"
+
+
+def test_minio_copy_fails_closed_before_reading_mixed_domains_or_cloudflare(tmp_path, monkeypatch, capsys):
+    config = {
+        "dimensions": {
+            "archive": dimension().to_private(),
+            "cloud": dimension(provider="r2", dimension_id="cloud", bucket="cloud-bucket").to_private(),
+        },
+    }
+    events = []
+    monkeypatch.setattr(cli, "private_config", lambda: config)
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "ensure_runtime_session", lambda **_kwargs: events.append("cloudflare"))
+    monkeypatch.setattr(cli, "_backend", lambda *_args: pytest.fail("mixed-domain copy must fail before backend reads"))
+
+    assert cli.main([
+        "snapshot", "copy", "demo", "--source-dimension", "archive",
+        "--destination-dimension", "cloud", "--destination-room", "copied", "--json",
+    ]) == 2
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["error_code"] == "unsupported-mixed-domain"
+    assert events == []
+
+
+def test_marker_derived_operation_selects_the_marker_dimension(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    from josh_room.workspace_state import workspace_fingerprint, write_workspace_marker
+
+    write_workspace_marker(
+        workspace,
+        dimension_id="archive",
+        project_id="demo",
+        display_name="Demo",
+        snapshot_id="snapshot-one",
+        workspace_fingerprint=workspace_fingerprint(workspace),
+    )
+    config = {
+        "default_dimension": "cloud",
+        "dimensions": {
+            "archive": dimension().to_private(),
+            "cloud": dimension(provider="r2", dimension_id="cloud", bucket="cloud-bucket").to_private(),
+        },
+    }
+    monkeypatch.setattr(cli, "private_config", lambda: config)
+    args = build_parser().parse_args(["link", "--workspace", str(workspace), "--project", "demo", "--snapshot", "snapshot-one"])
+
+    assert cli._effective_dimension(args).dimension_id == "archive"
+
+
+def test_ensure_minio_domain_rejects_configured_domain_mismatch(tmp_path, monkeypatch):
+    configured = "00000000-0000-4000-8000-000000000002"
+    backend = FakeBackend(control=make_keyset().to_json())
+
+    with pytest.raises(RuntimeError) as failure:
+        auth_module.ensure_minio_domain(
+            dimension(encryption_domain_id=configured),
+            backend,
+            recovery_recipients=[RECOVERY_RECIPIENT],
+            identity_path=tmp_path / "handoff",
+        )
+
+    assert failure.value.result["error_code"] == "encryption-domain-mismatch"
+
+
+def test_ensure_minio_domain_rejects_mismatched_conditional_race_winner(tmp_path, monkeypatch):
+    configured = "00000000-0000-4000-8000-000000000002"
+    winner = make_keyset()
+    backend = FakeBackend()
+    backend.conflict = True
+    backend.race_winner = winner
+    monkeypatch.setattr("josh_room.crypto.generate_identity", lambda path: identity(path, "AGE-SECRET-KEY-loser"))
+    monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda _path: OPERATIONAL_RECIPIENT)
+    monkeypatch.setattr("josh_room.auth.store_encryption_identity", lambda *_args: None)
+
+    with pytest.raises(RuntimeError) as failure:
+        auth_module.ensure_minio_domain(
+            dimension(encryption_domain_id=configured),
+            backend,
+            recovery_recipients=[RECOVERY_RECIPIENT],
+            identity_path=tmp_path / "loser",
+        )
+
+    assert failure.value.result["error_code"] == "encryption-domain-mismatch"
+
+
+def test_recovery_handoff_derives_public_recipient_without_remote_recovery_private_identity(tmp_path, monkeypatch):
+    recovery = identity(tmp_path / "recovery", "AGE-SECRET-KEY-recovery")
+    operational = tmp_path / "operational"
+    backend = FakeBackend()
+    monkeypatch.setattr("josh_room.crypto.generate_identity", lambda path: identity(path, "AGE-SECRET-KEY-operational"))
+    monkeypatch.setattr(
+        "josh_room.crypto.derive_recipient",
+        lambda path: RECOVERY_RECIPIENT if Path(path) == recovery else OPERATIONAL_RECIPIENT,
+    )
+    monkeypatch.setattr("josh_room.auth.store_encryption_identity", lambda *_args: None)
+
+    material = auth_module.ensure_minio_domain(
+        dimension(),
+        backend,
+        recovery_handoff=recovery,
+        identity_path=operational,
+    )
+    keyset_body = json.loads(backend.control)
+
+    assert material.identity == operational
+    assert keyset_body["recovery_recipients"] == [RECOVERY_RECIPIENT]
+    assert "AGE-SECRET-KEY-recovery" not in backend.control.decode()
+    assert recovery.read_text() == "AGE-SECRET-KEY-recovery\n"
+    assert operational.read_text() == "AGE-SECRET-KEY-operational\n"
+    args = build_parser().parse_args([
+        "encryption", "initialize", "--dimension", "archive",
+        "--recovery-handoff", str(recovery), "--json",
+    ])
+    assert args.recovery_handoff == recovery
+
+
+def test_failed_identity_generation_removes_private_candidate(tmp_path, monkeypatch):
+    candidate = tmp_path / "candidate"
+
+    def fail_after_writing(path):
+        identity(path)
+        raise RuntimeError("synthetic key generation failure")
+
+    monkeypatch.setattr("josh_room.crypto.generate_identity", fail_after_writing)
+    with pytest.raises(RuntimeError, match="synthetic key generation failure"):
+        auth_module.ensure_minio_domain(
+            dimension(),
+            FakeBackend(),
+            recovery_recipients=[RECOVERY_RECIPIENT],
+            identity_path=candidate,
+        )
+
+    assert not candidate.exists()
 
 
 def test_configured_minio_command_uses_private_handoff_without_cloudflare_session(tmp_path, monkeypatch, capsys):

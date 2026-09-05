@@ -591,7 +591,7 @@ def test_copy_source_folder_uses_resolved_marker_dimension_for_oauth(tmp_path, m
     ])
 
     assert _requires_oauth(source_folder_args) is False
-    assert _requires_oauth(destination_r2_args) is True
+    assert _requires_oauth(destination_r2_args) is False
 
 
 def test_v2_snapshot_records_origin_project_for_cross_room_hydration():

@@ -470,12 +470,14 @@ def load_runtime_session() -> bool:
 class EncryptionStateError(RuntimeError):
     """A machine-readable encryption state prevents unsafe implicit migration."""
 
-    def __init__(self, message: str, *, error_code: str, state: str, dimension_id: str):
+    def __init__(self, message: str, *, error_code: str, state: str, dimension_id: str, dimension_ids=None):
         self.result = {
             "error_code": error_code,
             "encryption_state": state,
             "dimension_id": dimension_id,
         }
+        if dimension_ids is not None:
+            self.result["dimension_ids"] = list(dimension_ids)
         super().__init__(message)
 
 
@@ -549,11 +551,46 @@ def _keyset_from_backend(dimension, backend):
         ) from error
 
 
+def _assert_keyset_matches_dimension(dimension, keyset):
+    if dimension.encryption_domain_id and dimension.encryption_domain_id != keyset.encryption_domain_id:
+        raise EncryptionStateError(
+            "Dimension encryption domain does not match remote keyset",
+            error_code="encryption-domain-mismatch",
+            state="failed",
+            dimension_id=dimension.dimension_id,
+        )
+    return keyset
+
+
+def _resolve_recovery_recipients(recovery_recipients, recovery_handoff):
+    if recovery_handoff is None:
+        value = os.environ.get("JOSH_ROOM_RECOVERY_HANDOFF")
+        recovery_handoff = Path(value) if value else None
+    if recovery_handoff is not None and recovery_recipients:
+        raise ValueError("recovery recipients and recovery handoff are ambiguous")
+    if recovery_handoff is None:
+        return list(recovery_recipients or [])
+    path = Path(recovery_handoff)
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 16 * 1024 or mode & 0o077:
+            raise ValueError
+    except (OSError, ValueError) as error:
+        raise ValueError("recovery handoff is unsafe") from error
+    from .crypto import derive_recipient
+
+    try:
+        return [derive_recipient(path)]
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError("recovery handoff is invalid") from error
+
+
 def resolve_encryption_material(
     dimension,
     backend,
     *,
     recovery_recipients=None,
+    recovery_handoff: Path | None = None,
     identity_path: Path | None = None,
     allow_initialize: bool = True,
     occupied=(),
@@ -570,15 +607,10 @@ def resolve_encryption_material(
         raise ValueError("unsupported encryption provider")
     keyset = _keyset_from_backend(dimension, backend)
     if keyset is not None:
-        if dimension.encryption_domain_id and dimension.encryption_domain_id != keyset.encryption_domain_id:
-            raise EncryptionStateError(
-                "Dimension encryption domain does not match remote keyset",
-                error_code="encryption-domain-mismatch",
-                state="failed",
-                dimension_id=dimension.dimension_id,
-            )
+        _assert_keyset_matches_dimension(dimension, keyset)
         return _material_for_keyset(keyset, identity_path)
-    if not allow_initialize or not recovery_recipients:
+    handoff = recovery_handoff or os.environ.get("JOSH_ROOM_RECOVERY_HANDOFF")
+    if not allow_initialize or not recovery_recipients and not handoff:
         catalog, _catalog_etag = backend.read_catalog()
         if catalog is not None:
             raise EncryptionStateError(
@@ -597,6 +629,7 @@ def resolve_encryption_material(
         dimension,
         backend,
         recovery_recipients=recovery_recipients,
+        recovery_handoff=handoff,
         identity_path=identity_path,
         occupied=occupied,
     )
@@ -606,7 +639,8 @@ def ensure_minio_domain(
     dimension,
     backend,
     *,
-    recovery_recipients,
+    recovery_recipients=None,
+    recovery_handoff: Path | None = None,
     identity_path: Path | None = None,
     occupied=(),
 ) -> EncryptionMaterial:
@@ -615,6 +649,7 @@ def ensure_minio_domain(
         raise ValueError("MinIO encryption initialization requires a MinIO Dimension")
     existing = _keyset_from_backend(dimension, backend)
     if existing is not None:
+        _assert_keyset_matches_dimension(dimension, existing)
         return _material_for_keyset(existing, identity_path)
     catalog, _catalog_etag = backend.read_catalog()
     if catalog is not None:
@@ -624,6 +659,7 @@ def ensure_minio_domain(
             state="legacy",
             dimension_id=dimension.dimension_id,
         )
+    recovery_recipients = _resolve_recovery_recipients(recovery_recipients, recovery_handoff)
     if not recovery_recipients:
         raise EncryptionStateError(
             "MinIO encryption initialization requires public recovery recipients",
@@ -635,7 +671,13 @@ def ensure_minio_domain(
 
     candidate_path = Path(identity_path) if identity_path else _runtime_root() / f".enrollment-{uuid.uuid4().hex}.identity"
     candidate_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    generate_identity(candidate_path)
+    candidate_existed = candidate_path.exists()
+    try:
+        generate_identity(candidate_path)
+    except BaseException:
+        if not candidate_existed:
+            candidate_path.unlink(missing_ok=True)
+        raise
     try:
         operational_identity = candidate_path.read_text()
         candidate = EncryptionKeyset.create(
@@ -659,6 +701,7 @@ def ensure_minio_domain(
             winner = _keyset_from_backend(dimension, backend)
             if winner is None:
                 raise RuntimeError("MinIO keyset race outcome is unknown") from error
+            _assert_keyset_matches_dimension(dimension, winner)
             candidate_path.unlink(missing_ok=True)
         if winner is candidate:
             return _material_for_keyset(
@@ -681,13 +724,7 @@ def encryption_status(dimension, backend) -> dict:
         }
     keyset = _keyset_from_backend(dimension, backend)
     if keyset is not None:
-        if dimension.encryption_domain_id and dimension.encryption_domain_id != keyset.encryption_domain_id:
-            raise EncryptionStateError(
-                "Dimension encryption domain does not match remote keyset",
-                error_code="encryption-domain-mismatch",
-                state="failed",
-                dimension_id=dimension.dimension_id,
-            )
+        _assert_keyset_matches_dimension(dimension, keyset)
         return {
             "state": "ready",
             "provider": dimension.provider,
