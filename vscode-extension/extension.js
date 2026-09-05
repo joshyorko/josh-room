@@ -738,6 +738,8 @@ function parseControllerOutput(output) {
 
 function sanitizeRuntimeLine(line) {
   let value = String(line).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").trim();
+  value = value.replace(/\bAGE-SECRET-KEY-[A-Za-z0-9_-]+/g, "[REDACTED AGE IDENTITY]");
+  value = value.replace(/\bage1[0-9a-z]{20,}/g, "[REDACTED AGE RECIPIENT]");
   value = value.replace(/(bearer\s+)[^\s]+/ig, "$1[REDACTED]");
   value = value.replace(/((?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|stdin|argv|env)\s*[:=]\s*)[^\s,]+/ig, "$1[REDACTED]");
   value = value.replace(/https?:\/\/[^\s]+/ig, (match) => {
@@ -887,7 +889,10 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => streamJat(line, "warn")),
       );
     }
+    let cleaned = false;
     const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
       if (cleanup.timer) clearTimeout(cleanup.timer);
       for (const follower of followers) follower.dispose();
       fs.rmSync(progressDirectory, { recursive: true, force: true });
@@ -930,6 +935,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); stream("stderr", chunk); });
     const cancellation = cancellationToken?.onCancellationRequested(() => {
       cancelled = true;
+      cleanup();
       terminateChild(child);
     });
     child.on("error", (error) => {
@@ -987,6 +993,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     if (options.timeoutMs > 0) {
       cleanup.timer = setTimeout(() => {
         cancelled = true;
+        cleanup();
         terminateChild(child);
       }, options.timeoutMs);
       cleanup.timer.unref?.();
@@ -2174,7 +2181,15 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
   fs.writeFileSync(progressPath, "", { mode: 0o600 });
   environment.JOSH_ROOM_PROGRESS_FILE = progressPath;
   const launch = buildTerminalLaunch(runtime, args, environment, process.platform, receiptPath);
-  const terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment });
+  let terminal;
+  try {
+    terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment });
+  } catch (error) {
+    credentialsCleanup();
+    encryptionCleanup();
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
+    throw error;
+  }
   const followers = [];
   let latestLog = "";
   let progressReporter;
@@ -2193,7 +2208,10 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     followLogFile(path.join(jatRoot, "output", "stdout.log"), (line) => stream(line)),
     followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
   );
+  let stopped = false;
   const stopFollowing = () => {
+    if (stopped) return;
+    stopped = true;
     for (const follower of followers) follower.dispose();
     progressReporter?.dispose();
     credentialsCleanup();
@@ -2285,6 +2303,9 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     }
     return "started";
   } catch (error) {
+    stopFollowing();
+    terminal.dispose();
+    terminalClosed.dispose();
     progressActive = false;
     const detail = latestLog || error.message || String(error);
     progressReporter?.fail(error);
@@ -2397,6 +2418,7 @@ module.exports.__test__ = {
 
 const nativeRegistry = require("./registry");
 let selectedDimensionId;
+let lastKnownCatalog;
 
 function dimensionList(catalog) {
   if (Array.isArray(catalog && catalog.dimensions)) return catalog.dimensions;
@@ -2561,7 +2583,7 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
           );
           if (controller.token.isCancellationRequested) return "cancelled";
           if (result.status === "authorized") {
-            if (roomsProvider) await roomsProvider.refresh();
+            if (roomsProvider) await roomsProvider.setCatalog(await loadCatalog(cwd, "Refreshing Dimensions and Rooms..."));
             await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
             reporter.finish();
             return "connected";
@@ -2838,6 +2860,7 @@ async function configureStorageBucket({ provider, connectionId, dimensionId, con
 }
 
 async function addStorage() {
+  assertWorkspaceTrusted("add storage");
   const cwd = activeWorkspace();
   const providerChoice = await vscode.window.showQuickPick([
     { label: "Cloudflare R2", provider: "r2" },
@@ -2916,6 +2939,7 @@ async function addStorage() {
 }
 
 async function connectStorage(item) {
+  assertWorkspaceTrusted("connect storage");
   const connection = item?.connection || item;
   if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
     return connectCloudflare(item);
@@ -2925,6 +2949,7 @@ async function connectStorage(item) {
 }
 
 async function editConnection(item, { reconnect = false } = {}) {
+  assertWorkspaceTrusted("edit storage connection");
   const connection = item?.connection || item;
   if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
     return connectCloudflare(item);
@@ -3110,27 +3135,22 @@ class HierarchyRoomsProvider {
     return this.roots && this.roots.length ? this.roots : [{ kind: "empty" }];
   }
 
-  async refresh() {
-    if (runtimeLifecycle.state !== "RUNTIME_READY") {
-      this.state = "runtime";
-      this.emitter.fire(undefined);
-      await startRuntimeReadiness(extensionContext);
-    }
-    this.state = "loading";
+  async setCatalog(catalog) {
+    lastKnownCatalog = catalog;
+    this.roots = nativeRegistry.buildProviderTree(catalog || {});
+    this.state = "ready";
+    await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", this.roots.length === 0);
     this.emitter.fire(undefined);
-    try {
-      const catalog = await loadCatalog(activeWorkspace(), "Refreshing Dimensions and Rooms...");
-      this.roots = nativeRegistry.buildProviderTree(catalog);
-      this.state = "ready";
-      await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", this.roots.length === 0);
-      refreshRoomStatus();
-      this.emitter.fire(undefined);
-      return catalog;
-    } catch (error) {
-      this.state = "error";
-      this.emitter.fire(undefined);
-      throw error;
+  }
+
+  async refresh() {
+    if (lastKnownCatalog) {
+      await this.setCatalog(lastKnownCatalog);
+    } else {
+      this.state = "initial";
     }
+    this.emitter.fire(undefined);
+    return lastKnownCatalog;
   }
 }
 
@@ -3687,7 +3707,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
       loaded.push(Object.assign(dimension, { state: "error", load_error: failure }));
     }
   }
-  return Object.assign({}, catalog, {
+  const loadedCatalog = Object.assign({}, catalog, {
     dimensions: loaded,
     ...(connections ? { connections } : {}),
     offer_synthetic_r2: offerSyntheticR2,
@@ -3695,12 +3715,15 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
     encryption_state: encryptionState,
     projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions: loaded }),
   });
+  lastKnownCatalog = loadedCatalog;
+  return loadedCatalog;
 }
 
 loadNativeCatalog = loadNativeCatalogWithSnapshots;
 loadCatalog = loadNativeCatalogWithSnapshots;
 
 async function editStorageSettings(item) {
+  assertWorkspaceTrusted("edit storage settings");
   const selected = item && item.dimension ? item.dimension : item;
   const catalog = selected ? undefined : await loadCatalog(activeWorkspace(), "Loading storage...");
   const dimension = selected || await chooseDimension(catalog, "Edit Settings");
