@@ -753,6 +753,11 @@ function sanitizeRuntimeLine(line) {
   return value.slice(0, 240);
 }
 
+function sanitizeProgressEvent(event) {
+  if (!event || typeof event !== "object") return event;
+  return { ...event, message: sanitizeRuntimeLine(event.message) };
+}
+
 const CONTROLLER_DIAGNOSTIC_LIMIT = 4096;
 
 function sanitizeControllerText(value) {
@@ -876,7 +881,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   }
   return new Promise((resolve, reject) => {
     environment.JOSH_ROOM_RESULT_FILE = resultPath;
-    const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(event))];
+    const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(sanitizeProgressEvent(event)))];
     if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
       const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
       const streamJat = (line, severity = "info") => {
@@ -1108,6 +1113,7 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
     animation = undefined;
   };
   const publish = (event) => {
+    event = sanitizeProgressEvent(event);
     const state = tracker.update(event);
     latestState = state;
     const display = formatProgressDisplay(title, kind, state, 0, Date.now() - startedAt);

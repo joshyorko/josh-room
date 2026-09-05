@@ -82,6 +82,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   const infoResponses = [];
   const warningResponses = [];
   const progressCalls = [];
+  const progressReports = [];
   const logLines = [];
   const treeViewCalls = [];
   const statusItem = {
@@ -125,8 +126,9 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
         }
       },
       MarkdownString: class MarkdownString {
-        appendCodeblock() {}
-        appendMarkdown() {}
+        constructor() { this.value = ""; }
+        appendCodeblock(value) { this.value += value; }
+        appendMarkdown(value) { this.value += value; }
       },
       DataTransferItem: class DataTransferItem {
         constructor(value) {
@@ -212,7 +214,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
             },
           };
           progressCalls.push({ options, token });
-          return task({ report() {} }, token);
+          return task({ report: (value) => progressReports.push(value) }, token);
         },
         createStatusBarItem: () => statusItem,
         createOutputChannel: () => outputChannel,
@@ -257,6 +259,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     infoResponses,
     warningResponses,
     progressCalls,
+    progressReports,
     logLines,
     treeViewCalls,
   };
@@ -3796,6 +3799,34 @@ test("JAT stdout and stderr log lines redact private age material before output"
 
   await extension.__test__.runJoshRoom(["hydrate", "room"], root);
   assert.equal(logLines.some((line) => line.includes(identity) || line.includes(recipient)), false);
+});
+
+test("structured progress events redact private age material before every visual sink", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-progress-redaction-test-"));
+  const { vscode, statusItem, logLines, progressReports } = createVscodeMock(root);
+  const identity = "AGE-SECRET-KEY-1Qprogress-private-material";
+  const recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq";
+  const spawnHarness = createSpawnHarness(({ options, child }) => {
+    fs.writeFileSync(options.env.JOSH_ROOM_PROGRESS_FILE, JSON.stringify({
+      format_version: 1,
+      stage: "encrypt",
+      percent: 42,
+      message: `Encrypting ${identity} for ${recipient}`,
+    }) + "\n");
+    setTimeout(() => child.closeWith({ stdout: JSON.stringify({ ok: true }) }), 60);
+    return { autoClose: false };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ appendLine: (line) => logLines.push(line), info: (line) => logLines.push(line), warn() {}, error() {}, show() {} });
+
+  await extension.__test__.runOperation("Loading progress", ["projects", "list"], root);
+
+  const sinks = [progressReports, statusItem, logLines];
+  assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(identity)), false);
+  assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(recipient)), false);
+  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE IDENTITY]")), true);
+  assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE RECIPIENT]")), true);
 });
 
 test("non-JSON controller failures sanitize bounded stdout and stderr before rethrowing", async () => {
