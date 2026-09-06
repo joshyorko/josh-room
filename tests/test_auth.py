@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import subprocess
 import time
 from io import BytesIO
 from pathlib import Path
@@ -86,6 +88,18 @@ def test_worker_request_uses_official_authority_without_override(monkeypatch):
     auth._request("/session/synthetic")
 
     assert captured[0][0].full_url == "https://josh-room-auth.joshua-yorko.workers.dev/session/synthetic"
+
+
+def test_start_oauth_session_surfaces_advertised_non_sensitive_contract(monkeypatch):
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: {
+        "sessionId": "session-one", "authorizationUrl": "https://example.invalid/auth",
+        "purpose": "encryption", "capabilities": ["encryption"],
+    })
+
+    assert start_oauth_session("encryption") == {
+        "session_id": "session-one", "authorization_url": "https://example.invalid/auth",
+        "expires_in": 600, "purpose": "encryption", "capabilities": ["encryption"],
+    }
 
 
 def test_worker_request_passes_a_scoped_system_trust_context(monkeypatch):
@@ -777,6 +791,208 @@ def test_wait_oauth_session_reports_encryption_authorization_without_cloudflare_
         ("auth", "Waiting for browser approval (0s elapsed)"),
         ("auth", "Validating Josh Room encryption authorization (2s elapsed)"),
     ]
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("purpose", None), ("purpose", "synthetic-invalid-purpose"),
+    ("capabilities", "encryption"), ("capabilities", ["encryption", "synthetic-invalid-capability"]),
+    ("capabilities", [17]),
+])
+def test_start_preserves_invalid_metadata_signal_without_echoing_unknown_values(field, value, monkeypatch):
+    response = {"sessionId": "synthetic-session", "authorizationUrl": "https://dash.cloudflare.com/oauth2/auth", field: value}
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: response)
+    result = auth.start_oauth_session("encryption")
+    assert result.get("invalid_metadata") is True
+    assert field not in result
+    assert "synthetic-invalid" not in json.dumps(result)
+
+
+def test_authorized_commented_identity_is_normalized_for_legacy_handoff(tmp_path, monkeypatch):
+    identity = f"# created: synthetic\n\n{TEST_IDENTITY}\n# trailing comment\n"
+    session = {
+        "status": "authorized",
+        "purpose": "encryption",
+        "capabilities": ["encryption"],
+        "ageIdentity": identity,
+        "ageRecipients": ["age1daily", "age1recovery"],
+    }
+    handoff = tmp_path / "private" / "source.identity"
+    handoff.parent.mkdir(mode=0o700)
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: session)
+
+    assert poll_oauth_session("session-one", purpose="encryption", legacy_source_handoff=handoff) == {
+        "status": "authorized",
+        "purpose": "encryption",
+    }
+    assert handoff.read_text() == TEST_IDENTITY + "\n"
+    assert handoff.stat().st_mode & 0o777 == 0o600
+
+
+def test_legacy_handoff_rejects_unsupported_broker_without_mutating_runtime(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    existing = runtime / "session.json"
+    existing.write_text("existing")
+    handoff = tmp_path / "private" / "source.identity"
+    handoff.parent.mkdir(mode=0o700)
+    session = {
+        "status": "authorized",
+        "purpose": "r2",
+        "capabilities": ["encryption", "r2"],
+        "ageIdentity": TEST_IDENTITY,
+        "ageRecipients": ["age1daily", "age1recovery"],
+    }
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: session)
+
+    with pytest.raises(RuntimeError, match="encryption-only"):
+        poll_oauth_session("session-one", purpose="encryption", legacy_source_handoff=handoff)
+    assert not handoff.exists()
+    assert existing.read_text() == "existing"
+
+
+def test_legacy_handoff_requires_a_private_parent(tmp_path, monkeypatch):
+    handoff = tmp_path / "private" / "source.identity"
+    handoff.parent.mkdir(mode=0o755)
+    session = {
+        "status": "authorized", "purpose": "encryption", "capabilities": ["encryption"],
+        "ageIdentity": TEST_IDENTITY, "ageRecipients": ["age1daily", "age1recovery"],
+    }
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: session)
+    with pytest.raises(RuntimeError, match="private"):
+        poll_oauth_session("session-one", purpose="encryption", legacy_source_handoff=handoff)
+
+
+def test_cancel_can_preserve_unrelated_runtime_session(monkeypatch, tmp_path):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    runtime.mkdir(parents=True)
+    (runtime / "session.json").write_text("existing")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: {"status": "canceled"})
+
+    assert auth.cancel_oauth_session("session-one", preserve_runtime_session=True) == {"status": "canceled"}
+    assert (runtime / "session.json").read_text() == "existing"
+
+
+@pytest.mark.parametrize(("field", "value", "category"), [
+    ("ageIdentity", None, "identity missing"),
+    ("ageIdentity", 17, "identity type"),
+    ("ageIdentity", TEST_IDENTITY + "\n" + TEST_IDENTITY, "identity multiple"),
+    ("ageRecipients", "not-a-list", "recipient type"),
+    ("ageRecipients", ["one"], "recipient count"),
+    ("ageRecipients", ["", "two"], "recipient value"),
+])
+def test_runtime_auth_material_errors_are_categorized_without_echoing_values(field, value, category, monkeypatch):
+    session = {"status": "authorized", "ageIdentity": TEST_IDENTITY, "ageRecipients": ["one", "two"]}
+    session[field] = value
+    with pytest.raises(RuntimeError, match=category) as error:
+        auth._write_runtime(session, purpose="encryption")
+    assert str(value) not in str(error.value) if value is not None else True
+
+
+@pytest.mark.parametrize("purpose", ["r2", "encryption"])
+def test_real_broker_identity_preserves_recipient_agreement_for_r2_and_legacy_source(purpose, tmp_path, monkeypatch):
+    age_keygen = shutil.which("age-keygen")
+    if age_keygen is None:
+        pytest.skip("age-keygen unavailable")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    for name in ("JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_PROFILE", "JOSH_ROOM_IDENTITY"):
+        monkeypatch.setenv(name, "")
+    identities = []
+    recipients = []
+    for name in ("daily", "recovery"):
+        path = tmp_path / f"{name}.identity"
+        subprocess.run([age_keygen, "-o", str(path)], check=True, capture_output=True, text=True)
+        identities.append(path.read_text())
+        recipients.append(next(line.removeprefix("# public key: ") for line in identities[-1].splitlines() if line.startswith("# public key: ")))
+    handoff = tmp_path / "private" / "source.identity"
+    handoff.parent.mkdir(mode=0o700)
+    session = {
+        "status": "authorized", "purpose": purpose,
+        "capabilities": ["encryption", "r2"] if purpose == "r2" else ["encryption"],
+        "ageIdentity": identities[0], "ageRecipients": recipients,
+    }
+    r2_session = {**session, "purpose": "r2", "capabilities": ["encryption", "r2"],
+                  "accessKeyId": "synthetic-access", "secretAccessKey": "synthetic-secret",
+                  "sessionToken": "synthetic-session", "endpoint": "https://r2.example.invalid",
+                  "bucket": "synthetic-bucket"}
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: r2_session)
+    assert poll_oauth_session("real-age-r2", purpose="r2") == {"status": "authorized"}
+    assert auth.r2_session_state() == "connected"
+    runtime_paths = auth._runtime_paths()
+    before = {path: path.read_bytes() for path in runtime_paths}
+    assert json.loads(runtime_paths[2].read_text())["age_recipients"] == recipients
+    identity_path = runtime_paths[1]
+
+    if purpose == "encryption":
+        monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: session)
+        assert poll_oauth_session("real-age-legacy", purpose="encryption", legacy_source_handoff=handoff) == {
+            "status": "authorized", "purpose": "encryption",
+        }
+        identity_path = handoff
+        assert {path: path.read_bytes() for path in runtime_paths} == before
+    assert identity_path.stat().st_mode & 0o777 == 0o600
+    assert len(identity_path.read_text().splitlines()) == 1
+    derived = subprocess.run([age_keygen, "-y", str(identity_path)], check=True, capture_output=True, text=True)
+    assert derived.stdout.strip() == recipients[0]
+
+
+@pytest.mark.parametrize("unsafe", ["existing", "symlink", "symlink-parent"])
+def test_legacy_source_handoff_never_overwrites_or_follows_links(unsafe, tmp_path, monkeypatch):
+    parent = tmp_path / "private"
+    target = tmp_path / "existing"
+    target.write_text("synthetic existing data")
+    if unsafe == "symlink-parent":
+        actual = tmp_path / "actual-private"
+        actual.mkdir(mode=0o700)
+        parent.symlink_to(actual, target_is_directory=True)
+    else:
+        parent.mkdir(mode=0o700)
+    handoff = parent / "source.identity"
+    if unsafe == "existing":
+        handoff.write_text("synthetic existing handoff")
+    elif unsafe == "symlink":
+        handoff.symlink_to(target)
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: {
+        "status": "authorized", "purpose": "encryption", "capabilities": ["encryption"],
+        "ageIdentity": TEST_IDENTITY, "ageRecipients": ["synthetic-daily", "synthetic-recovery"],
+    })
+    with pytest.raises(RuntimeError):
+        poll_oauth_session("synthetic", purpose="encryption", legacy_source_handoff=handoff)
+    assert target.read_text() == "synthetic existing data"
+    if unsafe == "existing":
+        assert handoff.read_text() == "synthetic existing handoff"
+    elif unsafe == "symlink-parent":
+        assert not handoff.exists()
+
+
+@pytest.mark.parametrize("outcome", ["denied", "timeout", "invalid", "write-failure", "interrupted-write"])
+def test_legacy_source_failure_preserves_all_existing_r2_runtime_files(outcome, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    auth._runtime_root().mkdir(parents=True, mode=0o700)
+    for path in auth._runtime_paths():
+        path.write_text("synthetic existing " + path.name)
+    before = {path: path.read_bytes() for path in auth._runtime_paths()}
+    handoff = tmp_path / "private" / "source.identity"
+    handoff.parent.mkdir(mode=0o700)
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: {
+        "status": "denied" if outcome == "denied" else "authorized",
+        "purpose": "encryption", "capabilities": ["encryption"],
+        "ageIdentity": "synthetic-invalid" if outcome == "invalid" else TEST_IDENTITY,
+        "ageRecipients": ["synthetic-daily", "synthetic-recovery"],
+    })
+    if outcome in {"write-failure", "interrupted-write"}:
+        def fail_sync(_fd):
+            if outcome == "interrupted-write":
+                raise KeyboardInterrupt
+            raise OSError("synthetic fsync failure")
+        monkeypatch.setattr(auth.os, "fsync", fail_sync)
+    with pytest.raises((RuntimeError, ValueError, KeyboardInterrupt)):
+        auth.wait_oauth_session("synthetic", timeout=0 if outcome == "timeout" else 1,
+                                purpose="encryption", legacy_source_handoff=handoff)
+    assert not handoff.exists()
+    assert {path: path.read_bytes() for path in auth._runtime_paths()} == before
 
 
 def test_extension_runtime_credentials_support_profile_scoped_secretstorage_handoff(tmp_path, monkeypatch):

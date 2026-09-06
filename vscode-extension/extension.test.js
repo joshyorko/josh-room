@@ -4065,6 +4065,138 @@ test("SecretStorage changes invalidate the native Dimension tree", () => {
   assert.equal(provider.roots, undefined);
 });
 
+test("legacy migration retrieves the broker-managed source without R2 routing or manual export", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-legacy-broker-"));
+  const { vscode, statusItem, quickPickResponses, quickPickCalls, openDialogCalls, openExternalCalls, warningCalls, logLines } = createVscodeMock(root);
+  const calls = [];
+  let sourceHandoff;
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    calls.push(args);
+    if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "legacy" }) };
+    if (args[0] === "auth" && args[1] === "start") return { stdout: JSON.stringify({ ok: true, purpose: "encryption", session_id: "synthetic-legacy-session", authorization_url: "https://broker.example.invalid/authorize" }) };
+    if (args[0] === "auth" && args[1] === "wait") {
+      sourceHandoff = args[args.indexOf("--legacy-source-handoff") + 1];
+      fs.writeFileSync(sourceHandoff, "AGE-SECRET-KEY-synthetic-broker-source\n", { mode: 0o600, flag: "wx" });
+      return { stdout: JSON.stringify({ ok: true, status: "authorized", purpose: "encryption" }) };
+    }
+    if (args[0] === "encryption" && args[1] === "migrate") return { stdout: JSON.stringify({ ok: true, status: "planned", read_only: true, requires_confirmation: true, source_catalog_etag: "synthetic-broker-preview-v1" }) };
+    throw new Error("unexpected synthetic broker operation");
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ info: (line) => logLines.push(line), error: (line) => logLines.push(line), warn: (line) => logLines.push(line), show() {} });
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => key === "josh-room.recovery.v1" ? "AGE-SECRET-KEY-synthetic-destination-recovery\n" : undefined,
+    store: async () => { throw new Error("cancelled preview must not persist a source identity"); },
+  } });
+  quickPickResponses.push({ source: "broker" });
+  assert.equal(await extension.__test__.migrateEncryption({ id: "selected-minio", provider: "minio" }), "cancelled");
+  assert.ok(calls.some((args) => args[0] === "auth" && args[1] === "wait"));
+  assert.ok(quickPickCalls[0].items.some((item) => item.source === "file"));
+  assert.equal(openExternalCalls.length, 1);
+  assert.equal(openDialogCalls.length, 0);
+  for (const args of calls.filter((args) => args[0] === "auth")) {
+    assert.equal(args[args.indexOf("--purpose") + 1], "encryption");
+    assert.equal(args.includes("--dimension"), false);
+  }
+  const plan = calls.find((args) => args[0] === "encryption" && args[1] === "migrate");
+  assert.equal(plan[plan.indexOf("--dimension") + 1], "selected-minio");
+  assert.equal(plan[plan.indexOf("--source-identity") + 1], sourceHandoff);
+  assert.notEqual(plan[plan.indexOf("--recovery-handoff") + 1], sourceHandoff);
+  assert.equal(fs.existsSync(sourceHandoff), false);
+  assert.equal(fs.existsSync(plan[plan.indexOf("--recovery-handoff") + 1]), false);
+  assert.equal(warningCalls.length, 1);
+  assert.equal(calls.some((args) => args[0] === "encryption" && args[1] === "resume"), false);
+  assert.doesNotMatch(logLines.join("\n"), /AGE-SECRET-KEY|josh-room-legacy-source-/);
+});
+
+for (const consent of [false, true]) {
+  test(`pre-purpose legacy broker requires explicit R2-source consent: ${consent}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-pre-purpose-broker-"));
+    const { vscode, statusItem, quickPickResponses, openDialogCalls, openExternalCalls, warningCalls } = createVscodeMock(root);
+    let starts = 0;
+    let handoff;
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "legacy", encryption_domain_id: "synthetic-domain" }) };
+      if (args[0] === "auth" && args[1] === "start") {
+        starts += 1;
+        return { stdout: JSON.stringify({ ok: true, session_id: `synthetic-${starts}`,
+          authorization_url: `https://dash.cloudflare.com/oauth2/auth?scope=workers-r2.read+workers-r2.write&state=synthetic-${starts}` }) };
+      }
+      if (args[0] === "auth" && args[1] === "cancel") return { stdout: JSON.stringify({ ok: true, status: "canceled" }) };
+      if (args[0] === "auth" && args[1] === "wait") {
+        handoff = args[args.indexOf("--legacy-source-handoff") + 1];
+        fs.writeFileSync(handoff, "AGE-SECRET-KEY-synthetic-broker-source\n", { mode: 0o600, flag: "wx" });
+        return { stdout: JSON.stringify({ ok: true, status: "authorized", purpose: "r2" }) };
+      }
+      if (args[0] === "encryption" && args[1] === "migrate") return { stdout: JSON.stringify({ ok: true,
+        status: "planned", read_only: true, requires_confirmation: true, source_catalog_etag: "synthetic-preview" }) };
+      throw new Error("Unexpected legacy broker operation");
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    quickPickResponses.push({ source: "broker" });
+    if (consent) vscode.warningResponses.push("Authorize Legacy Broker");
+    assert.equal(await extension.__test__.migrateEncryption({ id: "selected-minio", provider: "minio" }), "cancelled");
+    assert.match(warningCalls[0][0], /R2 read\/write/);
+    assert.equal(warningCalls[0][1].modal, true);
+    const authCalls = spawnHarness.calls.filter((call) => call.args[0] === "auth");
+    assert.ok(authCalls.every((call) => !call.args.includes("--dimension")));
+    assert.ok(authCalls.filter((call) => call.args[1] === "cancel").every((call) => call.args.includes("--preserve-runtime-session")));
+    assert.equal(openDialogCalls.length, 0);
+    if (consent) {
+      assert.equal(starts, 2);
+      const wait = authCalls.find((call) => call.args[1] === "wait").args;
+      assert.equal(wait[wait.indexOf("--purpose") + 1], "r2");
+      assert.ok(wait.includes("--legacy-r2-source"));
+      assert.equal(openExternalCalls.length, 1);
+      assert.equal(fs.existsSync(handoff), false);
+      assert.equal(warningCalls.length, 2);
+      const plan = spawnHarness.calls.find((call) => call.args[0] === "encryption" && call.args[1] === "migrate").args;
+      assert.equal(plan[plan.indexOf("--dimension") + 1], "selected-minio");
+    } else {
+      assert.equal(starts, 1);
+      assert.equal(openExternalCalls.length, 0);
+      assert.equal(authCalls.some((call) => call.args[1] === "wait"), false);
+    }
+  });
+}
+
+for (const outcome of ["unsupported", "invalid-metadata", "denied", "cancelled"]) {
+  test(`legacy broker ${outcome} flow never plans and preserves existing R2 session`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-legacy-broker-exit-"));
+    const { vscode, statusItem, quickPickResponses, openDialogCalls, openExternalCalls } = createVscodeMock(root);
+    let sourceHandoff;
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "legacy", encryption_domain_id: "synthetic-domain" }) };
+      if (args[0] === "auth" && args[1] === "start") return { stdout: JSON.stringify({ ok: true,
+        purpose: outcome === "invalid-metadata" ? undefined : outcome === "unsupported" ? "r2" : "encryption",
+        ...(outcome === "invalid-metadata" ? { invalid_metadata: true } : {}),
+        session_id: "synthetic-legacy-session", authorization_url: "https://broker.example.invalid/authorize?scope=workers-r2.read+workers-r2.write" }) };
+      if (args[0] === "auth" && args[1] === "wait") {
+        sourceHandoff = args[args.indexOf("--legacy-source-handoff") + 1];
+        return { stdout: JSON.stringify({ ok: true, status: "denied" }) };
+      }
+      if (args[0] === "auth" && args[1] === "cancel") return { stdout: JSON.stringify({ ok: true, status: "canceled" }) };
+      throw new Error("unexpected synthetic broker operation");
+    });
+    if (outcome === "cancelled") vscode.env.openExternal = async () => { throw Object.assign(new Error("cancelled"), { code: "ABORT_ERR" }); };
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    quickPickResponses.push({ source: "broker" });
+    const operation = extension.__test__.migrateEncryption({ id: "selected-minio", provider: "minio" });
+    if (outcome === "cancelled") assert.equal(await operation, "cancelled");
+    else await assert.rejects(operation, outcome === "invalid-metadata" ? /invalid protocol metadata/ : outcome === "unsupported" ? /encryption-only/ : /denied/);
+    const cancel = spawnHarness.calls.find((call) => call.args[0] === "auth" && call.args[1] === "cancel");
+    assert.ok(cancel);
+    assert.ok(cancel.args.includes("--preserve-runtime-session"));
+    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "encryption" && call.args[1] !== "status"), false);
+    assert.equal(openDialogCalls.length, 0);
+    if (["unsupported", "invalid-metadata"].includes(outcome)) assert.equal(openExternalCalls.length, 0);
+    if (sourceHandoff) assert.equal(fs.existsSync(path.dirname(sourceHandoff)), false);
+  });
+}
+
 test("migration uses one modal plan confirmation, native progress, and output logs", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-migration-ux-test-"));
   const { vscode, statusItem, warningCalls, progressCalls, logLines, openDialogResponses } = createVscodeMock(root);
@@ -4092,6 +4224,7 @@ test("migration uses one modal plan confirmation, native progress, and output lo
   const source = path.join(root, "synthetic-source.identity");
   fs.writeFileSync(source, "AGE-SECRET-KEY-synthetic-source\n", { mode: 0o600 });
   openDialogResponses.push([{ fsPath: source }]);
+  vscode.quickPickResponses.push({ source: "file" });
   assert.equal(await extension.__test__.migrateEncryption({
     id: "backup", provider: "minio", encryption_domain_id: "domain-a", key_generation: 7,
   }), "committed");
@@ -4138,7 +4271,7 @@ test("migration imports separate bounded source and recovery handoffs before pla
   extension.__test__.setOutputChannelForTests({ info: (line) => logLines.push(line), warn() {}, error() {}, show() {}, appendLine: (line) => logLines.push(line) });
   extension.__test__.setExtensionContextForTests({ secrets: { get: async () => undefined, store: async () => {} } });
   openDialogResponses.push([{ fsPath: source }], [{ fsPath: recovery }]);
-  quickPickResponses.push({ action: "import" });
+  quickPickResponses.push({ source: "file" }, { action: "import" });
   vscode.warningResponses.push("Migrate");
   assert.equal(await extension.__test__.migrateEncryption({ id: "synthetic-dimension", provider: "minio" }), "committed");
   assert.match(openDialogCalls[0].title, /old|source/i);
@@ -4172,6 +4305,7 @@ for (const stage of ["source", "recovery", "confirmation", "failure"]) {
     const extension = loadExtension(vscode, spawnHarness.spawn);
     extension.__test__.setStatusItem(statusItem);
     extension.__test__.setExtensionContextForTests({ secrets: { get: async (key) => key === "josh-room.recovery.v1" && ["confirmation", "failure"].includes(stage) ? "AGE-SECRET-KEY-synthetic-recovery\n" : undefined } });
+    quickPickResponses.push({ source: "file" });
     if (stage !== "source") openDialogResponses.push([{ fsPath: source }]);
     if (stage === "recovery") quickPickResponses.push(undefined);
     const operation = extension.__test__.migrateEncryption({ id: "synthetic-dimension", provider: "minio" });
@@ -4195,6 +4329,7 @@ for (const invalid of [{ read_only: false }, { requires_confirmation: false }, {
     const extension = loadExtension(vscode, spawnHarness.spawn);
     extension.__test__.setStatusItem(statusItem);
     openDialogResponses.push([{ fsPath: source }]);
+    vscode.quickPickResponses.push({ source: "file" });
     await assert.rejects(extension.__test__.migrateEncryption({ id: "synthetic-dimension", provider: "minio" }), /read-only.*preview/i);
     assert.equal(warningCalls.length, 0);
     assert.equal(spawnHarness.calls.some((call) => call.args[1] === "resume"), false);

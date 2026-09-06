@@ -105,22 +105,52 @@ def _validate_purpose(purpose: str) -> str:
 def start_oauth_session(purpose: str = "r2") -> dict:
     purpose = _validate_purpose(purpose)
     started = _request("/session/start", method="POST", body={"purpose": purpose})
-    return {
+    result = {
         "session_id": started["sessionId"],
         "authorization_url": started["authorizationUrl"],
         "expires_in": int(started.get("expiresIn", 600)),
     }
+    if isinstance(started.get("purpose"), str) and started["purpose"] in _AUTH_PURPOSES:
+        result["purpose"] = started["purpose"]
+    elif "purpose" in started:
+        result["invalid_metadata"] = True
+    if isinstance(started.get("capabilities"), list) and all(
+        isinstance(value, str) and value in _AUTH_PURPOSES for value in started["capabilities"]
+    ):
+        result["capabilities"] = list(dict.fromkeys(started["capabilities"]))
+    elif "capabilities" in started:
+        result["invalid_metadata"] = True
+    return result
 
 
-def poll_oauth_session(session_id: str, dimension_id: str | None = None, purpose: str | None = None) -> dict:
+def _validate_source_handoff_mode(purpose: str | None, handoff: Path | None, legacy_r2_source: bool) -> None:
+    if legacy_r2_source:
+        if handoff is None or purpose != "r2":
+            raise ValueError("legacy R2 source requires a legacy source handoff and r2 purpose")
+    elif handoff is not None and purpose != "encryption":
+        raise ValueError("legacy source handoff requires encryption purpose")
+
+
+def poll_oauth_session(
+    session_id: str,
+    dimension_id: str | None = None,
+    purpose: str | None = None,
+    legacy_source_handoff: Path | None = None,
+    legacy_r2_source: bool = False,
+) -> dict:
+    _validate_source_handoff_mode(purpose, legacy_source_handoff, legacy_r2_source)
     session = _request(f"/session/{session_id}")
     status = session.get("status")
     if status == "pending":
         return {"status": "pending"}
     if status != "authorized":
-        _clear_runtime_session()
+        if legacy_source_handoff is None:
+            _clear_runtime_session()
         label = "Josh Room encryption authorization" if purpose == "encryption" else "Cloudflare authorization"
         raise RuntimeError(f"{label} {status or 'failed'}")
+    if legacy_source_handoff is not None:
+        _write_legacy_source_handoff(session, legacy_source_handoff, legacy_r2_source=legacy_r2_source)
+        return {"status": "authorized", "purpose": "r2" if legacy_r2_source else "encryption"}
     if purpose is None:
         _write_runtime(session, dimension_id=dimension_id)
     else:
@@ -128,16 +158,18 @@ def poll_oauth_session(session_id: str, dimension_id: str | None = None, purpose
     return {"status": "authorized"}
 
 
-def cancel_oauth_session(session_id: str) -> dict:
+def cancel_oauth_session(session_id: str, preserve_runtime_session: bool = False) -> dict:
     try:
         result = _request(f"/session/{session_id}/cancel", method="POST")
     except HTTPError as error:
-        _clear_runtime_session()
+        if not preserve_runtime_session:
+            _clear_runtime_session()
         if error.code == 404:
             return {"status": "canceled", "stale": True}
         raise
     if result.get("status") == "canceled":
-        _clear_runtime_session()
+        if not preserve_runtime_session:
+            _clear_runtime_session()
         return result
     return result
 
@@ -187,14 +219,23 @@ def wait_oauth_session(
     poll_interval: int = 2,
     dimension_id: str | None = None,
     purpose: str | None = None,
+    legacy_source_handoff: Path | None = None,
+    legacy_r2_source: bool = False,
 ) -> dict:
+    _validate_source_handoff_mode(purpose, legacy_source_handoff, legacy_r2_source)
     deadline = time.monotonic() + timeout
     started_at = time.monotonic()
     validation_label = "Josh Room encryption authorization" if purpose == "encryption" else "Cloudflare session"
     authorization_label = "Josh Room encryption authorization" if purpose == "encryption" else "Cloudflare authorization"
     try:
         while time.monotonic() < deadline:
-            result = poll_oauth_session(session_id, dimension_id=dimension_id, purpose=purpose)
+            result = poll_oauth_session(
+                session_id,
+                dimension_id=dimension_id,
+                purpose=purpose,
+                legacy_source_handoff=legacy_source_handoff,
+                legacy_r2_source=legacy_r2_source,
+            )
             if result["status"] != "pending":
                 report_progress("auth", f"Validating {validation_label} ({int(time.monotonic() - started_at)}s elapsed)")
                 return result
@@ -203,9 +244,11 @@ def wait_oauth_session(
             if remaining > 0 and poll_interval > 0:
                 time.sleep(min(poll_interval, remaining))
     except KeyboardInterrupt:
-        _clear_runtime_session()
+        if legacy_source_handoff is None:
+            _clear_runtime_session()
         raise
-    _clear_runtime_session()
+    if legacy_source_handoff is None:
+        _clear_runtime_session()
     raise RuntimeError(f"{authorization_label} timed out")
 
 
@@ -215,6 +258,35 @@ def _valid_identity(value: str) -> bool:
     except (TypeError, ValueError):
         return False
     return True
+
+
+def _normalize_identity(value: object) -> str:
+    if value is None:
+        raise ValueError("identity missing")
+    if not isinstance(value, str):
+        raise TypeError("identity type invalid")
+    if len(value) > 16 * 1024:
+        raise ValueError("identity format invalid")
+    candidates = [line.strip() for line in value.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not candidates:
+        raise ValueError("identity missing")
+    if len(candidates) != 1:
+        raise ValueError("identity multiple")
+    try:
+        validate_operational_identity(candidates[0])
+    except (TypeError, ValueError) as error:
+        raise ValueError("identity format invalid") from error
+    return candidates[0]
+
+
+def _validate_recipients(value: object) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError("recipient type invalid")
+    if any(not item for item in value):
+        raise ValueError("recipient value invalid")
+    if len(value) < 2 or len(set(value)) < 2:
+        raise ValueError("recipient count invalid")
+    return value
 
 
 def _read_runtime() -> tuple[str, tuple[str, ...]]:
@@ -372,21 +444,61 @@ def _session_purpose(session: dict, purpose: str | None) -> str:
     return "r2"
 
 
-def _write_runtime(session: dict, dimension_id: str | None = None, purpose: str | None = None) -> None:
-    purpose = _session_purpose(session, purpose)
-    age_identity = session.get("ageIdentity")
-    age_recipients = session.get("ageRecipients")
-    if not isinstance(age_identity, str) or not _valid_identity(age_identity) \
-            or not isinstance(age_recipients, list) \
-            or len(age_recipients) < 2 \
-            or len({value for value in age_recipients if isinstance(value, str) and value}) < 2 \
-            or any(not isinstance(value, str) or not value for value in age_recipients):
-        raise RuntimeError("Cloudflare authorization did not provide complete encryption material")
-    include_r2 = purpose == "r2"
-    if include_r2 and not all(isinstance(session.get(name), str) and session[name] for name in (
+def _validate_r2_storage_material(session: dict) -> None:
+    if not all(isinstance(session.get(name), str) and session[name] for name in (
         "accessKeyId", "secretAccessKey", "sessionToken", "endpoint", "bucket",
     )):
         raise RuntimeError("Cloudflare authorization did not provide complete R2 storage material")
+
+
+def _write_legacy_source_handoff(session: dict, path: Path, *, legacy_r2_source: bool = False) -> None:
+    if legacy_r2_source:
+        if ("purpose" in session and session["purpose"] != "r2") or (
+            "capabilities" in session and session["capabilities"] not in (["encryption", "r2"], ["r2", "encryption"])
+        ):
+            raise RuntimeError("authorization broker legacy R2 source purpose/capabilities contract is invalid")
+        _validate_r2_storage_material(session)
+    elif session.get("purpose") != "encryption" or session.get("capabilities") != ["encryption"]:
+        raise RuntimeError("authorization broker lacks encryption-only capability")
+    identity = _normalize_identity(session.get("ageIdentity"))
+    _validate_recipients(session.get("ageRecipients"))
+    path = Path(path)
+    parent = path.parent
+    try:
+        if parent.is_symlink() or not parent.is_dir() or stat.S_IMODE(parent.stat().st_mode) != 0o700:
+            raise RuntimeError("legacy source handoff parent is not private")
+        if path.is_symlink() or path.exists():
+            raise RuntimeError("legacy source handoff already exists")
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except (OSError, RuntimeError) as error:
+        if isinstance(error, RuntimeError):
+            raise
+        raise RuntimeError("legacy source handoff is unsafe") from error
+    complete = False
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(identity + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        path.chmod(0o600)
+        complete = True
+    except (OSError, ValueError) as error:
+        raise RuntimeError("legacy source handoff could not be written") from error
+    finally:
+        if not complete:
+            path.unlink(missing_ok=True)
+
+
+def _write_runtime(session: dict, dimension_id: str | None = None, purpose: str | None = None) -> None:
+    purpose = _session_purpose(session, purpose)
+    try:
+        age_identity = _normalize_identity(session.get("ageIdentity"))
+        age_recipients = _validate_recipients(session.get("ageRecipients"))
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"Cloudflare authorization encryption material {error}") from error
+    include_r2 = purpose == "r2"
+    if include_r2:
+        _validate_r2_storage_material(session)
 
     root = _runtime_root()
     root.mkdir(parents=True, exist_ok=True)

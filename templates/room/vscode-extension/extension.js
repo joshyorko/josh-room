@@ -922,7 +922,7 @@ function sanitizeControllerText(value) {
 
 function sanitizeControllerArgv(argv) {
   const sanitized = [];
-  const sensitiveFlag = /^-{1,2}(?:source-identity|recovery-handoff|material-handoff|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|bearer)(?:$|[-_=])/i;
+  const sensitiveFlag = /^-{1,2}(?:legacy-source-handoff|source-identity|recovery-handoff|material-handoff|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|bearer)(?:$|[-_=])/i;
   const sensitiveAssignment = /^(?:[a-z_][a-z0-9_]*(?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)\s*=/i;
   for (let index = 0; index < argv.length; index += 1) {
     const value = String(argv[index]);
@@ -2715,7 +2715,6 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   if (purpose === "encryption" || nativeRegistry.providerKey(dimension?.provider) === "minio") {
     throw new Error("MinIO encryption is initialized by Josh Room; Cloudflare is R2-only.");
   }
-  const authPurpose = "r2";
   if (!dimension) {
     const catalog = await loadCatalog(cwd, "Loading storage...");
     dimension = dimensionList(catalog).find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
@@ -2723,6 +2722,25 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || "r2";
   if (!targetDimensionId) throw new Error("Choose an R2 Dimension before connecting Cloudflare.");
   selectedDimensionId = targetDimensionId;
+  return authorizeCloudflareBroker(cwd, { timeoutMs, targetDimensionId });
+}
+
+function hasLegacyR2Scopes(value) {
+  try {
+    const url = new URL(value);
+    const scopes = new Set((url.searchParams.get("scope") || "").split(/\s+/).filter(Boolean));
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password
+      && scopes.size === 2 && scopes.has("workers-r2.read") && scopes.has("workers-r2.write");
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function authorizeCloudflareBroker(cwd, { timeoutMs = 600000, targetDimensionId, legacySourceHandoff } = {}) {
+  let authPurpose = legacySourceHandoff ? "encryption" : "r2";
+  let legacyR2Source = false;
+  const title = legacySourceHandoff ? "Retrieving legacy source identity" : "Connecting Cloudflare";
+  const dimensionArgs = targetDimensionId ? ["--dimension", targetDimensionId] : [];
   activeAuthAttempt?.cancel();
   const attempt = {
     controller: undefined,
@@ -2735,40 +2753,71 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
     return await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: "Connecting Cloudflare...",
+        title: `${title}...`,
         cancellable: true,
       },
       async (progress, parentToken) => {
         const controller = createCancellationController(parentToken);
         attempt.controller = controller;
-        const reporter = createVisualReporter("Connecting Cloudflare", operationKind(["auth", "start"]), progress);
+        const reporter = createVisualReporter(title, operationKind(["auth", "start"]), progress);
         let sessionId;
         try {
-          const started = await runJoshRoom(
-            ["auth", "start", "--dimension", targetDimensionId, "--purpose", authPurpose], cwd, controller.token, reporter,
+          let started = await runJoshRoom(
+            ["auth", "start", ...dimensionArgs, "--purpose", authPurpose], cwd, controller.token, reporter,
           );
-          if (controller.token.isCancellationRequested) return "cancelled";
-          const authorizationUrl = started.authorization_url || started.authorizationUrl;
+          let authorizationUrl = started.authorization_url || started.authorizationUrl;
           sessionId = started.session_id || started.sessionId;
+          if (controller.token.isCancellationRequested) throw cancellationError();
+          if (started.invalid_metadata) throw new Error("The authorization broker returned invalid protocol metadata.");
           if (!authorizationUrl || !sessionId) {
             throw new Error("Cloudflare connection did not return an authorization session.");
+          }
+          if (legacySourceHandoff && started.purpose !== "encryption") {
+            if (started.purpose !== undefined || started.capabilities !== undefined || !hasLegacyR2Scopes(authorizationUrl)) {
+              throw new Error("The configured authorization broker did not advertise encryption-only legacy identity retrieval. Check the broker version before retrying.");
+            }
+            const consent = await vscode.window.showWarningMessage(
+              "Your existing authorization broker uses the legacy R2 sign-in flow to return the old identity. "
+                + "It requests R2 read/write permission. Josh Room will use this grant only to retrieve the legacy source identity; "
+                + "it will not perform storage operations, change your R2 connection, or initialize MinIO encryption.",
+              { modal: true }, "Authorize Legacy Broker",
+            );
+            if (consent !== "Authorize Legacy Broker" || controller.token.isCancellationRequested) throw cancellationError();
+            await runJoshRoom(["auth", "cancel", sessionId, "--preserve-runtime-session"], cwd, undefined, reporter);
+            sessionId = undefined;
+            if (controller.token.isCancellationRequested) throw cancellationError();
+            authPurpose = "r2";
+            legacyR2Source = true;
+            started = await runJoshRoom(["auth", "start", "--purpose", authPurpose], cwd, controller.token, reporter);
+            sessionId = started.session_id || started.sessionId;
+            authorizationUrl = started.authorization_url || started.authorizationUrl;
+            if (controller.token.isCancellationRequested) throw cancellationError();
+            if (started.invalid_metadata || !sessionId || !hasLegacyR2Scopes(authorizationUrl) || (started.purpose !== undefined && started.purpose !== "r2")) {
+              throw new Error("The legacy broker did not provide the expected R2 source authorization session.");
+            }
           }
           const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
           if (opened === false) {
             throw new Error("Could not open Cloudflare authorization in your local browser.");
           }
 
-          if (controller.token.isCancellationRequested) return "cancelled";
+          if (controller.token.isCancellationRequested) throw cancellationError();
           const result = await runJoshRoom(
-            ["auth", "wait", sessionId, "--dimension", targetDimensionId,
+            ["auth", "wait", sessionId, ...dimensionArgs,
               "--purpose", authPurpose,
+              ...(legacySourceHandoff ? ["--legacy-source-handoff", legacySourceHandoff] : []),
+              ...(legacyR2Source ? ["--legacy-r2-source"] : []),
               "--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000)))],
             cwd, controller.token, reporter,
           );
-          if (controller.token.isCancellationRequested) return "cancelled";
+          if (controller.token.isCancellationRequested) throw cancellationError();
           if (result.status === "authorized") {
-            if (roomsProvider) await roomsProvider.setCatalog(await loadCatalog(cwd, "Refreshing Dimensions and Rooms..."));
-            await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
+            if (legacySourceHandoff) {
+              readPrivateRecoveryFile(legacySourceHandoff, "legacy source identity");
+            } else {
+              if (roomsProvider) await roomsProvider.setCatalog(await loadCatalog(cwd, "Refreshing Dimensions and Rooms..."));
+              await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
+            }
             reporter.finish();
             return "connected";
           }
@@ -2781,13 +2830,13 @@ async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
             outputChannel?.warn("Cloudflare authorization failed; invalidating the pending attempt.");
           }
           if (sessionId) {
-            await runJoshRoom(["auth", "cancel", sessionId], cwd)
-              .catch((cancelError) => outputChannel?.warn(`Unable to invalidate Cloudflare authorization: ${cancelError.message}`));
+            await runJoshRoom(["auth", "cancel", sessionId, ...(legacySourceHandoff ? ["--preserve-runtime-session"] : [])], cwd)
+              .catch((cancelError) => outputChannel?.warn(`Unable to invalidate Cloudflare authorization: ${userFacingError(cancelError)}`));
           }
           if (cancelled) {
-            await runJoshRoom(
-              ["auth", "status", "--dimension", targetDimensionId], cwd,
-            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled Cloudflare authorization: ${statusError.message}`));
+            if (!legacySourceHandoff) await runJoshRoom(
+              ["auth", "status", ...dimensionArgs], cwd,
+            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled Cloudflare authorization: ${userFacingError(statusError)}`));
             return "cancelled";
           }
           reporter.fail(error);
@@ -2934,6 +2983,39 @@ function selectedDimension(item) {
   return item?.dimension || item;
 }
 
+async function prepareLegacySourceHandoff(cwd) {
+  const choice = await vscode.window.showQuickPick([
+    { label: "Authorize Cloudflare-managed legacy identity", source: "broker", description: "Retrieve the old identity from the existing authorization broker" },
+    { label: "Use a local identity backup", source: "file", description: "Choose an existing old source identity file" },
+  ], {
+    title: "Josh: Legacy Source Identity",
+    placeHolder: "Where is the identity that encrypted this legacy catalog?",
+    ignoreFocusOut: true,
+  });
+  if (!choice) return undefined;
+  if (choice.source === "file") {
+    const selected = (await vscode.window.showOpenDialog({
+      title: "Choose the old source identity that encrypted this MinIO catalog",
+      canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+      openLabel: "Use old source identity",
+    }))?.[0]?.fsPath;
+    return selected ? materializeRecoveryValue(readPrivateRecoveryFile(selected, "old source identity")) : undefined;
+  }
+  if (choice.source !== "broker") throw new Error("Choose a supported legacy identity source.");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-legacy-source-"));
+  fs.chmodSync(directory, 0o700);
+  const filename = path.join(directory, "source.identity");
+  const cleanup = () => fs.rmSync(directory, { recursive: true, force: true });
+  let ready = false;
+  try {
+    if (await authorizeCloudflareBroker(cwd, { legacySourceHandoff: filename }) !== "connected") return undefined;
+    ready = true;
+    return { path: filename, cleanup };
+  } finally {
+    if (!ready) cleanup();
+  }
+}
+
 async function migrateEncryption(item, { resume = false } = {}) {
   assertWorkspaceTrusted("migrate encryption");
   const cwd = activeWorkspace();
@@ -2958,13 +3040,8 @@ async function migrateEncryption(item, { resume = false } = {}) {
       if (code !== "legacy-source-identity-required") throw error;
     }
   }
-  const selected = (await vscode.window.showOpenDialog({
-    title: "Choose the old source identity that encrypted this MinIO catalog",
-    canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
-    openLabel: "Use old source identity",
-  }))?.[0]?.fsPath;
-  if (!selected) return "cancelled";
-  const source = materializeRecoveryValue(readPrivateRecoveryFile(selected, "old source identity"));
+  const source = await prepareLegacySourceHandoff(cwd);
+  if (!source) return "cancelled";
   let recovery;
   try {
     if (!status.encryption_domain_id) {
