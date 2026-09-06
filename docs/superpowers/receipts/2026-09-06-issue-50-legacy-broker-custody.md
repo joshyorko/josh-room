@@ -26,8 +26,8 @@ source identity path.
 - Broker source retrieval writes only a private temporary old-identity handoff.
   It does not initialize MinIO, relabel the destination as R2, alter existing R2
   session/configuration files, or retain returned storage credentials. Source and
-  destination recovery handoffs remain separate and are cleaned on every exit,
-  including interrupted writes.
+  destination recovery handoffs remain separate and are cleaned after success,
+  error, or cancellation, including interrupted writes.
 - Planning remains read-only; execution still requires the separate migration
   confirmation and matching source-catalog ETag. Ordinary MinIO operations and
   new MinIO keysets remain independent of Cloudflare.
@@ -41,8 +41,25 @@ source identity path.
   `git diff --check` passed. The tracked-source scanner's existing synthetic
   redaction-test false positive is not a credential; no scan rule was weakened.
 
-Installed native broker/backup-to-preview acceptance and published-asset checks
-are separate release gates, not implied by these local results.
+## Installed candidate acceptance
+
+The unmodified installed 0.1.21 candidate passed in Code Insiders with its native
+Node extension host, actual controller, real age, and controlled loopback broker/S3
+fixtures. Candidate SHA256:
+`98328832459a5b6b6646c1cd1837cb8cc1be536c83615188f269ec262410568a`.
+
+One browser context connected MinIO and R2, then completed three real registered
+migration-command flows: modern encryption-only broker, existing local backup,
+and pre-purpose broker with explicit R2-scope consent and a fresh authorization.
+Each reached the read-only preview and returned cancelled. Every source/recovery
+handoff was removed; all four existing R2 runtime files remained byte-identical.
+The S3 fixture recorded zero write attempts. No controller, runtime, or VS Code
+API was mocked. A companion command forwarded the real cached Dimension node to
+the registered migration callback and observed its completion.
+
+The preservation baseline was taken only after new R2 sign-in completed; merely
+observing cached session files could otherwise capture the previous grant.
+Published assets and downloaded-release installation are verified separately.
 
 Skipped suite gates remain private first-run, live MinIO storage, live R2 storage,
 the unavailable full JAT/Hauler vertical, secure-room registry/tool acceptance,
