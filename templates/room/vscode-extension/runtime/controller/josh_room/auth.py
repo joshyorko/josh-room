@@ -540,6 +540,14 @@ def _material_for_keyset(keyset: EncryptionKeyset, identity_path: Path | None = 
     return material
 
 
+def _normalize_generated_identity(value: str) -> str:
+    """Keep age-keygen comments out of the keyset while validating one key."""
+    identity_lines = [line for line in value.splitlines() if not line.startswith("#")]
+    if len(identity_lines) != 1:
+        raise ValueError("operational identity is invalid")
+    return validate_operational_identity(identity_lines[0])
+
+
 def _keyset_from_backend(dimension, backend):
     _validate_minio_backend_transport(dimension, backend)
     body, _etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
@@ -705,7 +713,8 @@ def ensure_minio_domain(
             candidate_path.unlink(missing_ok=True)
         raise
     try:
-        operational_identity = candidate_path.read_text()
+        operational_identity = _normalize_generated_identity(candidate_path.read_text())
+        _write_encryption_identity(candidate_path, operational_identity)
         candidate = EncryptionKeyset.create(
             provider=dimension.provider,
             endpoint=dimension.endpoint,

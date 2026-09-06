@@ -65,6 +65,368 @@ function context(root) {
   return { globalStorageUri: { fsPath: root } };
 }
 
+function cancellationSource() {
+  const listeners = new Set();
+  return {
+    token: {
+      isCancellationRequested: false,
+      onCancellationRequested(listener) {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    },
+    cancel() {
+      this.token.isCancellationRequested = true;
+      for (const listener of listeners) listener();
+    },
+    listeners,
+  };
+}
+
+function controllerFixture() {
+  const archive = Buffer.from("synthetic-controller-archive");
+  const artifact = "sha256:" + "f".repeat(64);
+  const pin = {
+    asset: "controller.rcca",
+    url: "https://github.com/joshyorko/josh-room/releases/download/test/controller.rcca",
+    sha256: digest(archive), size: archive.length,
+  };
+  return { archive, artifact, manifest: manifestFor(Buffer.from("rcc"), {
+    controller: { environment_artifact: { digest: artifact, archive: pin } },
+  }) };
+}
+
+const cancelledError = { name: "AbortError", code: "ABORT_ERR" };
+
+test("pre-cancelled runtime preparation does not create storage or invoke seams", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cancel-before-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  source.cancel();
+  const runtime = require("./runtime");
+  const target = context(path.join(root, "absent"));
+  const { manifest } = controllerFixture();
+  const rcc = { executable: process.execPath, version: "v18.19.2" };
+  const options = { cancellationToken: source.token, runJson: async () => ({}), download: async () => {} };
+  for (const prepare of [
+    () => runtime.ensureManagedRcc(target, manifest, options),
+    () => runtime.ensureControllerRuntime(target, manifest, rcc, options),
+    () => runtime.ensureJatRuntime(target, manifest, rcc, options),
+    () => runtime.ensureJatSource(target, {}, options),
+    () => runtime.prepareLocalController(target, rcc, "robot.yaml", options),
+    () => runtime.verifyLocalFallback(target, rcc, "robot.yaml", {}, options),
+    () => runtime.buildLocalJatArtifact(target, rcc, "robot.yaml", options),
+  ]) await assert.rejects(prepare(), cancelledError);
+  assert.equal(fs.existsSync(target.globalStorageUri.fsPath), false);
+  assert.equal(source.listeners.size, 0);
+});
+
+test("controller download cancellation cleans staging and a retry verifies before import", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-controller-cancel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const { manifest, archive, artifact } = controllerFixture();
+  const rcc = { executable: process.execPath, version: "v18.19.2" };
+  let imports = 0;
+  const runJson = async () => { imports += 1; return { artifactDigest: artifact, verification: { valid: true } }; };
+  await assert.rejects(ensureControllerRuntime(context(root), manifest, rcc, {
+    cancellationToken: source.token,
+    download: async (_url, destination, options) => {
+      assert.equal(options?.cancellationToken, source.token);
+      fs.writeFileSync(destination, archive);
+      source.cancel();
+    },
+    runJson,
+  }), cancelledError);
+  const archiveRoot = path.join(root, "runtime", "controller-artifact");
+  assert.deepEqual(fs.readdirSync(archiveRoot), []);
+  assert.equal(imports, 0);
+  const events = [];
+  const options = {
+    download: async (_url, destination) => {
+      assert.match(events.at(-1).message, /Downloading.*controller/i);
+      fs.writeFileSync(destination, archive);
+    },
+    onProgress: (event) => events.push(event), runJson,
+  };
+  await ensureControllerRuntime(context(root), manifest, rcc, options);
+  assert.ok(events.some((event) => /Verifying.*controller/i.test(event.message)));
+  events.length = 0;
+  await ensureControllerRuntime(context(root), manifest, rcc, options);
+  assert.ok(events.some((event) => /Verifying.*cached.*controller/i.test(event.message)));
+  assert.ok(events.some((event) => event.phase === "reuse"));
+  assert.equal(events.some((event) => /Downloading/i.test(event.message)), false);
+});
+
+test("HTTPS download aborts a redirected active response, removes partials and permits retry", { timeout: 5000 }, async (t) => {
+  const http = require("node:http");
+  const https = require("node:https");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-http-cancel-"));
+  const source = cancellationSource();
+  const binary = Buffer.from("synthetic-rcc-download");
+  let complete = false;
+  let requestClosed = false;
+  const server = http.createServer((request, response) => {
+    if (request.url !== "/redirected") {
+      response.writeHead(302, { location: "https://example.invalid/redirected" });
+      response.end();
+      return;
+    }
+    response.writeHead(200);
+    response.write(binary.subarray(0, 5));
+    if (complete) response.end(binary.subarray(5));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.mock.method(https, "get", (_url, options, callback) => {
+    const request = http.get(`http://127.0.0.1:${server.address().port}${_url.pathname}`, options, (response) => {
+      callback(response);
+      if (!complete && response.statusCode === 200) response.once("data", () => source.cancel());
+    });
+    if (_url.pathname === "/redirected") request.once("close", () => { requestClosed = true; });
+    return request;
+  });
+  await assert.rejects(ensureManagedRcc(context(root), manifestFor(binary), {
+    cancellationToken: source.token, verifyVersion: async () => {},
+  }), cancelledError);
+  assert.equal(requestClosed, true);
+  assert.equal(source.listeners.size, 0);
+  assert.deepEqual(fs.readdirSync(path.join(root, "runtime", "rcc", "v18.19.2", "linux-x64")), []);
+  complete = true;
+  const result = await ensureManagedRcc(context(root), manifestFor(binary), { verifyVersion: async () => {} });
+  assert.deepEqual(fs.readFileSync(result.executable), binary);
+});
+
+test("RCC version cancellation does not promote the binary or report readiness", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-version-cancel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const binary = Buffer.from("synthetic-rcc");
+  const phases = [];
+  await assert.rejects(ensureManagedRcc(context(root), manifestFor(binary), {
+    cancellationToken: source.token,
+    download: async (_url, destination) => fs.writeFileSync(destination, binary),
+    verifyVersion: async (_executable, _version, options) => {
+      assert.equal(options?.cancellationToken, source.token);
+      source.cancel();
+    },
+    onProgress: (event) => phases.push(event.message),
+  }), cancelledError);
+  assert.deepEqual(fs.readdirSync(path.join(root, "runtime", "rcc", "v18.19.2", "linux-x64")), []);
+  assert.equal(phases.includes("Managed RCC ready"), false);
+});
+
+test("local RCC cancellation waits for a real subprocess and its child to exit", { skip: process.platform === "win32", timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-process-cancel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "rcc");
+  fs.writeFileSync(executable, `#!${process.execPath}
+const { spawn } = require('node:child_process');
+const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 150)); console.log('ready'); setTimeout(() => process.exit(0), 1500);"], { stdio: ['ignore', 'pipe', 'pipe'] });
+process.on('SIGTERM', () => {});
+child.stdout.once('data', () => process.stderr.write('ready ' + process.pid + ' ' + child.pid + '\\n'));
+child.on('close', () => { console.log('{"vars":[]}'); process.exit(0); });
+`, { mode: 0o700 });
+  const source = cancellationSource();
+  let pids;
+  const start = Date.now();
+  await assert.rejects(require("./runtime").prepareLocalController(context(root), { executable }, path.join(root, "robot.yaml"), {
+    cancellationToken: source.token,
+    onOutput: (stream, chunk) => {
+      const match = /ready (\d+) (\d+)/.exec(chunk);
+      if (stream === "stderr" && match) { pids = match.slice(1).map(Number); source.cancel(); }
+    },
+  }), cancelledError);
+  assert.ok(pids);
+  for (const pid of pids) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  assert.ok(Date.now() - start < 1400, "cancellation should stop the child before its natural exit");
+  assert.equal(source.listeners.size, 0);
+});
+
+test("RCC stdout JSON remains private while stderr progress is forwarded", { skip: process.platform === "win32" }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-output-private-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "rcc");
+  fs.writeFileSync(executable, `#!${process.execPath}\nconsole.error('Preparing environment'); console.log(JSON.stringify([{key:'SYNTHETIC_PRIVATE_VALUE', value:'fixture-only'}]));\n`, { mode: 0o700 });
+  const output = [];
+  const result = await require("./runtime").prepareLocalController(context(root), { executable }, path.join(root, "robot.yaml"), {
+    onOutput: (stream, chunk) => output.push({ stream, chunk }),
+  });
+  assert.equal(result[0].value, "fixture-only");
+  assert.ok(output.some(({ chunk }) => chunk.includes("Preparing environment")));
+  assert.equal(output.some(({ stream }) => stream === "stdout"), false);
+});
+
+test("warm fallback cancellation propagates instead of authorizing a rebuild", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-warm-cancel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const runtime = require("./runtime");
+  const expected = { schema_version: 1, mode: "local-build-fallback" };
+  await runtime.writeLocalFallbackRecord(context(root), expected);
+  await assert.rejects(runtime.verifyLocalFallback(context(root), { executable: process.execPath }, "robot.yaml", expected, {
+    cancellationToken: source.token,
+    runJson: async (_executable, _args, options) => {
+      assert.equal(options?.cancellationToken, source.token);
+      source.cancel();
+      throw Object.assign(new Error("cancelled"), cancelledError);
+    },
+  }), cancelledError);
+});
+
+test("cancelling a cached artifact probe cannot fall through to archive import", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-probe-cancel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const { manifest, archive } = controllerFixture();
+  const archiveRoot = path.join(root, "runtime", "controller-artifact");
+  fs.mkdirSync(archiveRoot, { recursive: true });
+  fs.writeFileSync(path.join(archiveRoot, "controller.rcca"), archive);
+  const calls = [];
+  await assert.rejects(ensureControllerRuntime(context(root), manifest, { executable: process.execPath, version: "v18.19.2" }, {
+    cancellationToken: source.token,
+    runJson: async (_executable, args) => {
+      calls.push(args);
+      source.cancel();
+      throw new Error("artifact is not local and no provider was supplied");
+    },
+  }), cancelledError);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].includes("--artifact"), true);
+});
+
+test("controller does not claim cached materialization reuse when RCC must import it", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-reuse-progress-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { manifest, archive, artifact } = controllerFixture();
+  const archiveRoot = path.join(root, "runtime", "controller-artifact");
+  fs.mkdirSync(archiveRoot, { recursive: true });
+  fs.writeFileSync(path.join(archiveRoot, "controller.rcca"), archive);
+  const events = [];
+  await ensureControllerRuntime(context(root), manifest, { executable: process.execPath, version: "v18.19.2" }, {
+    onProgress: (event) => events.push(event),
+    runJson: async (_executable, args) => {
+      if (args.includes("--artifact")) throw new Error("artifact is not local and no provider was supplied");
+      return { artifactDigest: artifact, verification: { valid: true } };
+    },
+  });
+  assert.equal(events.some((event) => event.phase === "reuse"), false);
+  assert.ok(events.some((event) => event.phase === "import"));
+});
+
+test("local JAT publish cancellation releases its lock and skips verification on retryable cancellation", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-publish-cancel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const runtime = require("./runtime");
+  const artifact = "sha256:" + "a".repeat(64);
+  const calls = [];
+  await assert.rejects(runtime.buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
+    cancellationToken: source.token,
+    runJson: async (_executable, args, options) => {
+      assert.equal(options.cancellationToken, source.token);
+      calls.push(args);
+      source.cancel();
+      return { artifactDigest: artifact };
+    },
+  }), cancelledError);
+  assert.equal(calls.length, 1);
+  assert.equal(fs.existsSync(path.join(root, "runtime", "local-jat-build.lock")), false);
+  const result = await runtime.buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
+    runJson: async () => ({ artifactDigest: artifact, exitCode: 0 }),
+  });
+  assert.equal(result.artifact, artifact);
+});
+
+test("cancelling a JAT lock waiter leaves the other builder's lock intact", { timeout: 2000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-lock-cancel-"));
+  const lock = path.join(root, "runtime", "local-jat-build.lock");
+  fs.mkdirSync(lock, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const timer = setTimeout(() => source.cancel(), 20);
+  t.after(() => clearTimeout(timer));
+  await assert.rejects(require("./runtime").buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
+    cancellationToken: source.token,
+    runJson: async () => { throw new Error("must not start a second builder"); },
+  }), cancelledError);
+  assert.equal(fs.existsSync(lock), true);
+});
+
+test("RCC version cancellation kills a real child that ignores SIGTERM before settling", { skip: process.platform === "win32", timeout: 5000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-version-child-cancel-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  let pid;
+  const binary = Buffer.from(`#!${process.execPath}\nprocess.on('SIGTERM', () => {}); console.error('ready ' + process.pid); setTimeout(() => console.log('v18.19.2'), 3000);\n`);
+  await assert.rejects(ensureManagedRcc(context(root), manifestFor(binary), {
+    cancellationToken: source.token,
+    download: async (_url, destination) => fs.writeFileSync(destination, binary),
+    onOutput: (_stream, chunk) => {
+      const match = /ready (\d+)/.exec(chunk);
+      if (match) { pid = Number(match[1]); source.cancel(); }
+    },
+  }), cancelledError);
+  assert.ok(pid);
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  assert.deepEqual(fs.readdirSync(path.join(root, "runtime", "rcc", "v18.19.2", "linux-x64")), []);
+  assert.equal(source.listeners.size, 0);
+});
+
+test("invalid RCC stdout never appears in surfaced JSON errors", { skip: process.platform === "win32" }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-json-error-private-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "rcc");
+  fs.writeFileSync(executable, `#!${process.execPath}\nconsole.log('SYNTHETIC_PRIVATE_VALUE invalid JSON');\n`, { mode: 0o700 });
+  await assert.rejects(require("./runtime").prepareLocalController(context(root), { executable }, path.join(root, "robot.yaml")), (error) => {
+    assert.match(error.message, /invalid JSON/);
+    assert.equal(error.message.includes("SYNTHETI"), false);
+    return true;
+  });
+});
+
+test("JAT cancellation covers archive, source, acquire and Hauler verification without leaving staging", async (t) => {
+  for (const stage of ["archive", "source", "acquire", "hauler"]) await t.test(stage, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-seam-cancel-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const source = cancellationSource();
+    const gitSha = "a".repeat(40);
+    const archive = Buffer.from("synthetic-jat-artifact");
+    const artifact = "sha256:" + "b".repeat(64);
+    const sourceArchive = zlib.gzipSync(Buffer.concat([tarMember("source/robot.yaml", "tasks: {}\n"), Buffer.alloc(1024)]));
+    const manifest = manifestFor(Buffer.from("rcc"), { jat: {
+      git_sha: gitSha,
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + gitSha, sha256: digest(sourceArchive) },
+      environment_artifact: { digest: artifact, archive: {
+        asset: "jat.rcca", url: "https://github.com/joshyorko/josh-all-the-things/releases/download/test/jat.rcca", sha256: digest(archive), size: archive.length,
+      } },
+    } });
+    const calls = [];
+    await assert.rejects(ensureJatRuntime(context(root), manifest, { executable: process.execPath, version: "v18.19.2" }, {
+      cancellationToken: source.token,
+      download: async (url, destination, options) => {
+        assert.equal(options.cancellationToken, source.token);
+        const current = url.endsWith("jat.rcca") ? "archive" : "source";
+        calls.push(current);
+        fs.writeFileSync(destination, current === "archive" ? archive : sourceArchive);
+        if (current === stage) source.cancel();
+      },
+      runJson: async (_executable, args, options) => {
+        assert.equal(options.cancellationToken, source.token);
+        const current = args[1] === "acquire" ? "acquire" : "hauler";
+        calls.push(current);
+        if (current === stage) source.cancel();
+        return { artifactDigest: artifact, verification: { valid: true }, exitCode: 0 };
+      },
+    }), cancelledError);
+    assert.deepEqual(calls, ["archive", "source", "acquire", "hauler"].slice(0, ["archive", "source", "acquire", "hauler"].indexOf(stage) + 1));
+    for (const directory of ["jat-artifact", "jat"]) {
+      const target = path.join(root, "runtime", directory);
+      if (fs.existsSync(target)) assert.equal(fs.readdirSync(target).some((entry) => entry.startsWith(".")), false);
+    }
+  });
+});
+
 test("resolvePlatform accepts only the first supported Linux mapping", () => {
   assert.equal(resolvePlatform("linux", "x64"), "linux-x64");
   assert.equal(resolvePlatform("win32", "x64"), "win32-x64");

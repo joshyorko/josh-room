@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -39,6 +39,7 @@
     "onCommand:joshRoom.remove",
     "onCommand:joshRoom.serve",
     "onCommand:joshRoom.refresh",
+    "onCommand:joshRoom.prepare",
     "onCommand:joshRoom.showLogs",
     "onCommand:joshRoom.clearLocalFallback",
     "onCommand:joshRoom.jatBuild",
@@ -165,6 +166,12 @@
         "title": "Josh: Refresh Rooms",
         "icon": "$(refresh)"
       },
+
+      {
+        "command": "joshRoom.prepare",
+        "title": "Josh: Load Storage / Prepare Runtime",
+        "icon": "$(cloud-download)"
+      },
       {
         "command": "joshRoom.showLogs",
         "title": "Josh: Show Logs",
@@ -247,7 +254,8 @@
         { "command": "joshRoom.new", "when": "view == joshRoom.rooms", "group": "navigation@1" },
         { "command": "joshRoom.addStorage", "when": "view == joshRoom.rooms", "group": "navigation@2" },
         { "command": "joshRoom.save", "when": "view == joshRoom.rooms", "group": "navigation@2" },
-        { "command": "joshRoom.refresh", "when": "view == joshRoom.rooms", "group": "navigation@3" }
+        { "command": "joshRoom.refresh", "when": "view == joshRoom.rooms", "group": "navigation@3" },
+        { "command": "joshRoom.prepare", "when": "view == joshRoom.rooms", "group": "4_load" }
       ],
       "view/item/context": [
         { "command": "joshRoom.connectStorage", "when": "view == joshRoom.rooms && viewItem == provider-connection", "group": "inline@1" },

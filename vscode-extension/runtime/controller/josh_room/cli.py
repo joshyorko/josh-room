@@ -12,6 +12,8 @@ from pathlib import Path
 from . import r2 as _r2
 from .auth import (
     EncryptionStateError,
+    _keyset_from_backend,
+    _resolve_recovery_recipients,
     _valid_identity,
     cancel_oauth_session,
     encryption_status,
@@ -37,7 +39,7 @@ from .config import (
     save_private_config,
 )
 from .crypto import CryptoError, _managed_executable, decrypt, generate_identity
-from .encryption_domain import KEYSET_CONTROL_KEY
+from .encryption_domain import validate_recipient
 from .jat import (
     _jat_contract,
     run_build,
@@ -59,7 +61,13 @@ from .minio import create_bucket as create_minio_bucket
 from .minio import list_buckets as list_minio_buckets
 from .operations import (
     _material_recipients,
+    _migration_result,
+    _new_journal,
+    _read_journal,
     _read_remote_catalog,
+    _safe_journal_update,
+    _validate_journal_identity,
+    _validate_journal_mapping_set,
     copy_snapshot_stream,
     create_snapshot,
     hydrate,
@@ -224,6 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
         encryption_action.add_argument("--dimension", required=True)
         if action in {"migrate", "resume"}:
             encryption_action.add_argument("--source-identity", type=Path)
+            encryption_action.add_argument("--expected-catalog-etag", help="require the source catalog version shown in the confirmed preview")
             encryption_action.add_argument("--recovery-recipient", action="append", dest="recovery_recipients")
             encryption_action.add_argument("--recovery-handoff", type=Path)
         _json_option(encryption_action)
@@ -738,42 +747,63 @@ def dispatch(args, instance: Path) -> dict:
         if args.encryption_command in {"migrate", "resume"}:
             if dimension.provider != "minio":
                 raise ValueError("encryption migration is only available for MinIO Dimensions")
-            def resolve_destination(identity_path):
-                return ensure_minio_domain(
-                    dimension,
-                    backend,
-                    recovery_recipients=args.recovery_recipients or _recipients(),
-                    recovery_handoff=args.recovery_handoff,
-                    identity_path=identity_path,
-                    preserve_identity_path=True,
-                    allow_legacy_migration=True,
-                )
-            with _scoped_encryption_material(instance, resolve_destination) as material:
-                if args.encryption_command == "resume":
-                    recovered = reconcile_encryption_migration(
-                        instance,
-                        destination_backend=backend,
-                        destination_material=material,
-                        destination_dimension=dimension,
+            if args.expected_catalog_etag is not None:
+                _body, observed_etag = backend.read_catalog()
+                _check_migration_catalog_etag(args, observed_etag)
+            with ExitStack() as stack:
+                material = None
+                keyset = _keyset_from_backend(dimension, backend)
+                if keyset is not None:
+                    def resolve_existing(identity_path):
+                        return resolve_encryption_material(
+                            dimension, backend, identity_path=identity_path, allow_initialize=False,
+                        )
+                    material = stack.enter_context(_scoped_encryption_material(instance, resolve_existing))
+                journal, _journal_etag = _read_journal(backend)
+                if material is not None and journal is not None and journal.get("status") == "committed":
+                    catalog, catalog_etag = _read_remote_catalog(
+                        backend, material.identity, instance,
+                        dimension.dimension_id, material.encryption_domain_id,
                     )
-                    if recovered is not None:
-                        return recovered
-                with _legacy_migration_identity(args, instance) as source_identity:
-                    keyset_body, _keyset_etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
-                    catalog = None
-                    catalog_etag = None
-                    if keyset_body is not None:
+                    if catalog_etag is not None:
+                        return {
+                            **_migration_result(journal, catalog),
+                            "read_only": True, "requires_confirmation": False,
+                        }
+                # A published cutover can be reconciled with destination authority
+                # alone. Resolving an existing keyset above must never enroll one.
+                if args.encryption_command == "resume" and material is not None:
+                    can_reconcile = True
+                    if journal is not None and journal.get("status") == "ready-to-commit":
+                        # This state can precede catalog publication. Probe without
+                        # allowing reconciliation to mark the journal conflicted
+                        # before the legacy prerequisites have been checked.
                         try:
-                            catalog, catalog_etag = _read_remote_catalog(
-                                backend,
-                                material.identity,
-                                instance,
-                                dimension.dimension_id,
-                                material.encryption_domain_id,
+                            _read_remote_catalog(
+                                backend, material.identity, instance,
+                                dimension.dimension_id, material.encryption_domain_id,
                             )
-                        except (OSError, RuntimeError, TypeError, ValueError):
-                            pass
-                    if catalog is None:
+                        except CryptoError:
+                            can_reconcile = False
+                    if can_reconcile:
+                        recovered = reconcile_encryption_migration(
+                            instance,
+                            destination_backend=backend,
+                            destination_material=material,
+                            destination_dimension=dimension,
+                        )
+                        if recovered is not None:
+                            return recovered
+                with _legacy_migration_identity(args, instance) as source_identity:
+                    encrypted_catalog, _etag = backend.read_catalog()
+                    if encrypted_catalog is None:
+                        raise EncryptionStateError(
+                            "MinIO encryption migration requires an existing legacy catalog",
+                            error_code="legacy-catalog-missing",
+                            state="uninitialized",
+                            dimension_id=dimension.dimension_id,
+                        )
+                    try:
                         catalog, catalog_etag = _read_remote_catalog(
                             backend,
                             source_identity,
@@ -781,26 +811,75 @@ def dispatch(args, instance: Path) -> dict:
                             dimension.dimension_id,
                             None,
                         )
-                    if catalog is None:
+                    except CryptoError as error:
+                        raise _legacy_source_identity_error(args) from error
+                    _check_migration_catalog_etag(args, catalog_etag)
+                    if catalog_etag is None:
                         raise EncryptionStateError(
                             "MinIO encryption migration requires an existing legacy catalog",
                             error_code="legacy-catalog-missing",
                             state="uninitialized",
                             dimension_id=dimension.dimension_id,
                         )
-                    if args.encryption_command == "migrate":
-                        plan = plan_encryption_migration(
-                            catalog,
-                            backend,
-                            backend,
-                            source_dimension=dimension,
-                            destination_dimension=dimension,
-                            source_domain_id=catalog.encryption_domain_id,
-                            destination_material=material,
-                            source_catalog_revision=catalog.body["revision"],
-                            source_catalog_etag=catalog_etag,
+                    recipients = _migration_recovery_recipients(args) if material is None else []
+                    active_journal = journal is not None and journal.get("status") in {
+                        "planned", "running", "interrupted", "ready-to-commit", "cutover-published",
+                    }
+                    if active_journal:
+                        _validate_journal_identity(
+                            journal, catalog, backend, dimension, backend, dimension,
+                            catalog.encryption_domain_id,
+                            material.encryption_domain_id if material else dimension.encryption_domain_id,
+                            None, material.key_generation if material else 1, catalog_etag,
                         )
-                        return {"ok": True, **plan}
+                        _validate_journal_mapping_set(catalog, journal)
+                    # The operations planner persists its journal. Build only a
+                    # preview and check disk here, before destination enrollment.
+                    plan = _new_journal(
+                        catalog, backend, backend, dimension, dimension,
+                        catalog.encryption_domain_id,
+                        material.encryption_domain_id if material else dimension.encryption_domain_id,
+                        None, material.key_generation if material else 1, None,
+                        source_catalog_etag=catalog_etag,
+                        journal_exists=journal is not None,
+                    )
+                    instance.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    if shutil.disk_usage(instance).free < plan["temporary_disk_bytes"]:
+                        raise EncryptionStateError(
+                            "insufficient temporary disk for encryption migration",
+                            error_code="encryption-migration-insufficient-disk",
+                            state="legacy",
+                            dimension_id=dimension.dimension_id,
+                        )
+                    if args.encryption_command == "migrate":
+                        if active_journal:
+                            plan = dict(journal)
+                        return {
+                            "ok": True, **plan, "journal_status": plan["status"],
+                            "journal_exists": journal is not None,
+                            "source_catalog_etag": catalog_etag,
+                            "read_only": True, "requires_confirmation": True,
+                        }
+                    if material is None:
+                        def resolve_destination(identity_path):
+                            return ensure_minio_domain(
+                                dimension, backend, recovery_recipients=recipients,
+                                identity_path=identity_path, preserve_identity_path=True,
+                                allow_legacy_migration=True,
+                            )
+                        material = stack.enter_context(_scoped_encryption_material(instance, resolve_destination))
+                    if journal is not None and journal.get("status") in {"cancelled", "conflict", "failed"}:
+                        plan_encryption_migration(
+                            catalog, backend, backend,
+                            source_dimension=dimension, destination_dimension=dimension,
+                            source_domain_id=catalog.encryption_domain_id,
+                            destination_material=material, source_catalog_etag=catalog_etag,
+                        )
+                    elif active_journal and journal.get("status") == "ready-to-commit":
+                        # Destination-only recovery returned no committed catalog;
+                        # the validated legacy catalog still owns the bucket.
+                        # Retain verified mappings and retry publication on resume.
+                        _safe_journal_update(backend, journal, _journal_etag, "interrupted")
                     return migrate_encryption(
                         instance,
                         catalog,
@@ -1510,29 +1589,83 @@ def _identity_environment():
         path.unlink(missing_ok=True)
 
 
+def _check_migration_catalog_etag(args, observed_etag):
+    expected = getattr(args, "expected_catalog_etag", None)
+    if expected is not None and expected != observed_etag:
+        raise EncryptionStateError(
+            "source catalog changed since the migration preview; review a fresh plan before confirming",
+            error_code="encryption-migration-conflict",
+            state="conflict",
+            dimension_id=args.dimension,
+        )
+
+
+def _legacy_source_identity_error(args, *, required=False):
+    return EncryptionStateError(
+        "legacy migration requires --source-identity with the old source age identity"
+        if required else "legacy migration source identity is unsafe, invalid, or cannot decrypt the legacy catalog",
+        error_code="legacy-source-identity-required" if required else "legacy-source-identity-invalid",
+        state="legacy",
+        dimension_id=args.dimension,
+    )
+
+
+def _migration_recovery_recipients(args):
+    handoff = args.recovery_handoff or os.environ.get("JOSH_ROOM_RECOVERY_HANDOFF")
+    recipients = args.recovery_recipients or ([] if handoff else _recipients())
+    try:
+        recipients = _resolve_recovery_recipients(recipients, handoff)
+        for recipient in recipients:
+            validate_recipient(recipient, "recovery recipient")
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        raise EncryptionStateError(
+            "migration recovery material is unsafe, invalid, or ambiguous; provide recovery recipients or a separate recovery handoff",
+            error_code="encryption-recovery-invalid",
+            state="uninitialized",
+            dimension_id=args.dimension,
+        ) from error
+    if not recipients:
+        raise EncryptionStateError(
+            "MinIO encryption initialization requires public recovery recipients or a separate recovery handoff",
+            error_code="encryption-initialization-required",
+            state="uninitialized",
+            dimension_id=args.dimension,
+        )
+    return recipients
+
+
 @contextmanager
 def _legacy_migration_identity(args, instance: Path):
+    def valid_identity(value):
+        if not isinstance(value, str):
+            return False
+        return _valid_identity("\n".join(
+            line.strip() for line in value.splitlines() if line.strip() and not line.lstrip().startswith("#")
+        ))
+
     explicit = getattr(args, "source_identity", None)
     value = str(explicit) if explicit else os.environ.get("JOSH_ROOM_IDENTITY")
     if value:
         path = Path(value)
         try:
             if path.is_symlink() or not path.is_file() or path.stat().st_size > 16 * 1024 \
-                    or path.stat().st_mode & 0o077 or not _valid_identity(path.read_text()):
+                    or path.stat().st_mode & 0o077 or not valid_identity(path.read_text()):
                 raise ValueError
         except (OSError, ValueError) as error:
-            raise ValueError("legacy migration source identity is unsafe") from error
+            raise _legacy_source_identity_error(args) from error
         yield path
         return
     profile = (_configured() or {}).get("age_identity_profile")
     if not profile:
-        raise ValueError("legacy migration requires an explicit source identity")
+        raise _legacy_source_identity_error(args, required=True)
     try:
         identity = lookup_keyring_value(profile, "age-identity")
     except (OSError, RuntimeError, ValueError) as error:
-        raise ValueError("legacy migration source identity is unavailable") from error
-    if not _valid_identity(identity):
-        raise ValueError("legacy migration source identity is invalid")
+        raise _legacy_source_identity_error(args, required=True) from error
+    if not identity:
+        raise _legacy_source_identity_error(args, required=True)
+    if not valid_identity(identity):
+        raise _legacy_source_identity_error(args)
     instance.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".legacy-migration-", dir=instance)
     path = Path(name)

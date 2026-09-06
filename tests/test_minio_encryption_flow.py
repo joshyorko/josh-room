@@ -120,6 +120,41 @@ def test_fresh_minio_bucket_enrolls_a_keyset_without_a_catalog(tmp_path, monkeyp
     assert material.identity.read_text().strip() == synthetic_identity("operational")
 
 
+def test_minio_enrollment_accepts_age_keygen_comments_but_rejects_multiple_identities(tmp_path, monkeypatch):
+    backend = FakeBackend()
+    generated = tmp_path / "generated"
+    value = synthetic_identity("operational")
+
+    def generate(path):
+        path.write_text(f"# created: synthetic\n# public key: synthetic\n{value}\n")
+        path.chmod(0o600)
+
+    monkeypatch.setattr("josh_room.crypto.generate_identity", generate)
+    monkeypatch.setattr("josh_room.crypto.derive_recipient", lambda _path: OPERATIONAL_RECIPIENT)
+    monkeypatch.setattr("josh_room.auth.store_encryption_identity", lambda *_args: None)
+
+    material = auth_module.resolve_encryption_material(
+        dimension(), backend, recovery_recipients=[RECOVERY_RECIPIENT], identity_path=generated,
+    )
+
+    assert material.keyset.operational_identity == value
+    assert material.identity.read_text() == value + "\n"
+
+    backend = FakeBackend()
+
+    def generate_multiple(path):
+        path.write_text(f"{value}\n{value}\n")
+        path.chmod(0o600)
+
+    monkeypatch.setattr("josh_room.crypto.generate_identity", generate_multiple)
+
+    with pytest.raises(ValueError, match="operational identity"):
+        auth_module.resolve_encryption_material(
+            dimension(), backend, recovery_recipients=[RECOVERY_RECIPIENT], identity_path=tmp_path / "multiple",
+        )
+    assert backend.control is None
+
+
 def test_minio_enrollment_discards_losing_identity_after_a_conditional_race(tmp_path, monkeypatch):
     winner = make_keyset(identity_value="AGE-SECRET-KEY-winner")
     backend = FakeBackend()
