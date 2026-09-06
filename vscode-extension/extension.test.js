@@ -4338,6 +4338,45 @@ for (const invalid of [{ read_only: false }, { requires_confirmation: false }, {
   });
 }
 
+for (const valid of [true, false]) {
+  test(`Dimension adoption preview discloses and binds the physical catalog: ${valid}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-adoption-preview-"));
+    const { vscode, statusItem, openDialogResponses, warningCalls } = createVscodeMock(root);
+    const source = path.join(root, "source.identity");
+    fs.writeFileSync(source, "AGE-SECRET-KEY-synthetic-source\n", { mode: 0o600 });
+    const spawnHarness = createSpawnHarness(({ args }) => ({ stdout: JSON.stringify(args[1] === "status"
+      ? { ok: true, state: "legacy", encryption_domain_id: "synthetic-domain" }
+      : args[1] === "migrate" ? {
+        ok: true, status: "planned", read_only: true, requires_confirmation: true,
+        source_catalog_etag: "synthetic-etag", dimension_adoption_required: true,
+        source_dimension: "historic-dimension", destination_dimension: "selected-minio",
+        source_bucket: "synthetic-bucket", destination_bucket: "synthetic-bucket",
+        source_endpoint_authority: "127.0.0.1:9000",
+        destination_endpoint_authority: "127.0.0.1:9000",
+        source_storage_binding: valid ? "a".repeat(64) : undefined,
+      } : { ok: true, status: "committed" }) }));
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    vscode.quickPickResponses.push({ source: "file" });
+    openDialogResponses.push([{ fsPath: source }]);
+    vscode.warningResponses.push("Migrate");
+    const operation = extension.__test__.migrateEncryption({ id: "selected-minio", provider: "minio" });
+    if (!valid) {
+      await assert.rejects(operation, /adoption.*binding/i);
+      assert.equal(warningCalls.length, 0);
+      assert.equal(spawnHarness.calls.some((call) => call.args[1] === "resume"), false);
+    } else {
+      assert.equal(await operation, "committed");
+      assert.match(warningCalls[0][0], /historic-dimension/);
+      assert.match(warningCalls[0][0], /selected-minio/);
+      assert.match(warningCalls[0][0], /synthetic-bucket/);
+      assert.match(warningCalls[0][0], /127\.0\.0\.1:9000/);
+      const args = spawnHarness.calls.find((call) => call.args[1] === "resume").args;
+      assert.equal(args[args.indexOf("--expected-source-binding") + 1], "a".repeat(64));
+    }
+  });
+}
+
 test("committed migration resume needs no old identity or confirmation", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-committed-resume-"));
   const { vscode, statusItem, openDialogCalls, warningCalls } = createVscodeMock(root);

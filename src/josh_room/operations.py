@@ -444,6 +444,45 @@ def _encrypt_catalog(catalog: Catalog, recipients: list[str], instance: Path) ->
         path.unlink(missing_ok=True)
 
 
+def _legacy_migration_storage_scope(backend, dimension):
+    config = getattr(backend, "config", None)
+    fields = ("endpoint", "bucket", "catalog_key", "dimension_id")
+    if dimension.provider != "minio" or config is None or any(
+        getattr(config, field, None) != getattr(dimension, field, None) for field in fields
+    ):
+        raise ValueError("legacy catalog storage binding does not match the selected Dimension")
+    return {"provider": "minio", **{field: getattr(dimension, field) for field in fields},
+            "expected_encryption_domain_id": dimension.encryption_domain_id}
+
+
+def _read_legacy_migration_catalog(backend, identity_value, instance: Path, dimension):
+    """Read only the selected MinIO catalog, retaining its historical logical ID."""
+    _legacy_migration_storage_scope(backend, dimension)
+    encrypted, etag = backend.read_catalog()
+    if encrypted is None:
+        return Catalog.empty(dimension.dimension_id), None
+    with tempfile.NamedTemporaryFile(prefix=".legacy-catalog-read.", delete=False) as handle:
+        path = Path(handle.name)
+        handle.write(encrypted)
+    try:
+        body = json.loads(decrypt(path, [Path(identity_value)]))
+        if not isinstance(body, dict):
+            raise TypeError("legacy catalog is invalid")
+        source_id = body.get("dimension_id")
+        catalog = Catalog.from_body(body, source_id if source_id is not None else dimension.dimension_id)
+        if catalog.dimension_id != dimension.dimension_id and catalog.encryption_domain_id is not None:
+            raise ValueError("catalog encryption domain mismatch: native domains cannot be adopted by legacy migration")
+        return catalog, etag
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def _legacy_migration_source_binding(backend, dimension, catalog, etag):
+    scope = _legacy_migration_storage_scope(backend, dimension)
+    body = {"storage": scope, "catalog": catalog.body, "catalog_etag": etag}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _selected_identity(identity: Path, selected_material: EncryptionMaterial | None) -> Path:
     return Path(selected_material.identity) if selected_material else Path(identity)
 
@@ -719,7 +758,7 @@ def _publish_journal(backend, journal, etag=None):
     return backend.replace_control(MIGRATION_JOURNAL_KEY, body, etag)
 
 
-def _new_journal(source_catalog, source_backend, destination_backend, source_dimension, destination_dimension, source_domain_id, destination_domain_id, source_generation, destination_generation, migration_id, source_catalog_etag=None, journal_exists=False):
+def _new_journal(source_catalog, source_backend, destination_backend, source_dimension, destination_dimension, source_domain_id, destination_domain_id, source_generation, destination_generation, migration_id, source_catalog_etag=None, journal_exists=False, source_storage_binding=None):
     seen = {}
     for project in source_catalog.body["projects"].values():
         for snapshot in project["snapshots"].values():
@@ -750,6 +789,7 @@ def _new_journal(source_catalog, source_backend, destination_backend, source_dim
         "destination_key_generation": destination_generation,
         "source_catalog_revision": source_catalog.body["revision"],
         "source_catalog_etag": source_catalog_etag,
+        **({"source_storage_binding": source_storage_binding} if source_storage_binding is not None else {}),
         "room_count": len(source_catalog.body["projects"]),
         "snapshot_count": sum(len(project["snapshots"]) for project in source_catalog.body["projects"].values()),
         "object_count": len(seen),
@@ -791,6 +831,7 @@ def plan_encryption_migration(
     source_catalog_revision=None,
     source_catalog_etag=None,
     migration_id=None,
+    source_storage_binding=None,
 ):
     """Create and persist a non-secret, unique-object migration plan."""
     destination_domain_id = _domain_value(destination_material, destination_domain_id)
@@ -814,6 +855,7 @@ def plan_encryption_migration(
         migration_id,
         source_catalog_etag,
         existing is not None,
+        source_storage_binding=source_storage_binding,
     )
     if existing is None:
         _publish_journal(destination_backend, journal)
@@ -1031,6 +1073,7 @@ def migrate_encryption(
     source_catalog_etag=None,
     destination_catalog_etag=None,
     resume=False,
+    source_storage_binding=None,
 ):
     """Re-encrypt exact verified envelopes and conditionally publish one catalog."""
     instance = Path(instance)
@@ -1050,6 +1093,7 @@ def migrate_encryption(
             destination_generation=destination_generation,
             destination_material=destination_material,
             source_catalog_etag=source_catalog_etag,
+            source_storage_binding=source_storage_binding,
         )
         journal, journal_etag = _read_journal(destination_backend)
     elif resume and journal.get("status") not in {"planned", "running", "interrupted", "ready-to-commit", "cutover-published"}:
@@ -1085,6 +1129,8 @@ def migrate_encryption(
             _generation_value(destination_material, destination_generation),
             source_catalog_etag,
         )
+        if source_storage_binding is not None and journal.get("source_storage_binding") != source_storage_binding:
+            raise CatalogConflict("migration source storage binding mismatch")
         _validate_journal_mapping_set(source_catalog, journal)
     except BaseException as error:
         _record_migration_failure(destination_backend, journal, journal_etag, error)

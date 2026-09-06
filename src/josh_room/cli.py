@@ -60,10 +60,12 @@ from .minio import check_bucket_access as check_minio_bucket
 from .minio import create_bucket as create_minio_bucket
 from .minio import list_buckets as list_minio_buckets
 from .operations import (
+    _legacy_migration_source_binding,
     _material_recipients,
     _migration_result,
     _new_journal,
     _read_journal,
+    _read_legacy_migration_catalog,
     _read_remote_catalog,
     _safe_journal_update,
     _validate_journal_identity,
@@ -238,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
         if action in {"migrate", "resume"}:
             encryption_action.add_argument("--source-identity", type=Path)
             encryption_action.add_argument("--expected-catalog-etag", help="require the source catalog version shown in the confirmed preview")
+            encryption_action.add_argument("--expected-source-binding", help="confirm the legacy Dimension adoption and selected physical catalog shown in the preview")
             encryption_action.add_argument("--recovery-recipient", action="append", dest="recovery_recipients")
             encryption_action.add_argument("--recovery-handoff", type=Path)
         _json_option(encryption_action)
@@ -809,12 +812,11 @@ def dispatch(args, instance: Path) -> dict:
                             dimension_id=dimension.dimension_id,
                         )
                     try:
-                        catalog, catalog_etag = _read_remote_catalog(
+                        catalog, catalog_etag = _read_legacy_migration_catalog(
                             backend,
                             source_identity,
                             instance,
-                            dimension.dimension_id,
-                            None,
+                            dimension,
                         )
                     except CryptoError as error:
                         raise _legacy_source_identity_error(args) from error
@@ -826,13 +828,44 @@ def dispatch(args, instance: Path) -> dict:
                             state="uninitialized",
                             dimension_id=dimension.dimension_id,
                         )
+                    source_dimension = catalog.dimension_id
+                    adoption = source_dimension != dimension.dimension_id
+                    source_binding = None
+                    actual_binding = _legacy_migration_source_binding(backend, dimension, catalog, catalog_etag) \
+                        if adoption or args.expected_source_binding is not None else None
+                    if args.expected_source_binding is not None and args.expected_source_binding != actual_binding:
+                        raise EncryptionStateError(
+                            "the selected storage or catalog changed since the adoption preview",
+                            error_code="legacy-dimension-adoption-confirmation-required",
+                            state="legacy", dimension_id=dimension.dimension_id,
+                        )
+                    if adoption:
+                        known_source = DimensionRegistry(config).get(source_dimension)
+                        if known_source is not None and (known_source.provider != "minio" or any(
+                            getattr(known_source, field) != getattr(dimension, field)
+                            for field in ("endpoint", "bucket", "catalog_key")
+                        )):
+                            raise ValueError("legacy source Dimension belongs to a different storage binding")
+                        source_binding = actual_binding
+                        if journal is not None and journal.get("status") in {"planned", "running", "interrupted", "ready-to-commit", "cutover-published"} \
+                                and journal.get("source_storage_binding") != source_binding:
+                            raise ValueError("migration journal source storage binding mismatch")
+                        if args.encryption_command == "resume" and args.expected_source_binding is None \
+                                and not (journal is not None and journal.get("source_storage_binding") == source_binding):
+                            raise EncryptionStateError(
+                                "legacy Dimension adoption requires confirmation of the selected storage binding from a fresh preview",
+                                error_code="legacy-dimension-adoption-confirmation-required",
+                                state="legacy", dimension_id=dimension.dimension_id,
+                            )
+                    else:
+                        source_dimension = dimension
                     recipients = _migration_recovery_recipients(args) if material is None else []
                     active_journal = journal is not None and journal.get("status") in {
                         "planned", "running", "interrupted", "ready-to-commit", "cutover-published",
                     }
                     if active_journal:
                         _validate_journal_identity(
-                            journal, catalog, backend, dimension, backend, dimension,
+                            journal, catalog, backend, source_dimension, backend, dimension,
                             catalog.encryption_domain_id,
                             material.encryption_domain_id if material else dimension.encryption_domain_id,
                             None, material.key_generation if material else 1, catalog_etag,
@@ -841,12 +874,13 @@ def dispatch(args, instance: Path) -> dict:
                     # The operations planner persists its journal. Build only a
                     # preview and check disk here, before destination enrollment.
                     plan = _new_journal(
-                        catalog, backend, backend, dimension, dimension,
+                        catalog, backend, backend, source_dimension, dimension,
                         catalog.encryption_domain_id,
                         material.encryption_domain_id if material else dimension.encryption_domain_id,
                         None, material.key_generation if material else 1, None,
                         source_catalog_etag=catalog_etag,
                         journal_exists=journal is not None,
+                        source_storage_binding=source_binding,
                     )
                     instance.mkdir(parents=True, exist_ok=True, mode=0o700)
                     if shutil.disk_usage(instance).free < plan["temporary_disk_bytes"]:
@@ -863,6 +897,8 @@ def dispatch(args, instance: Path) -> dict:
                             "ok": True, **plan, "journal_status": plan["status"],
                             "journal_exists": journal is not None,
                             "source_catalog_etag": catalog_etag,
+                            "dimension_adoption_required": adoption,
+                            **({"source_binding_verification": "authenticated-selected-catalog-read"} if adoption else {}),
                             "read_only": True, "requires_confirmation": True,
                         }
                     if material is None:
@@ -876,9 +912,10 @@ def dispatch(args, instance: Path) -> dict:
                     if journal is not None and journal.get("status") in {"cancelled", "conflict", "failed"}:
                         plan_encryption_migration(
                             catalog, backend, backend,
-                            source_dimension=dimension, destination_dimension=dimension,
+                            source_dimension=source_dimension, destination_dimension=dimension,
                             source_domain_id=catalog.encryption_domain_id,
                             destination_material=material, source_catalog_etag=catalog_etag,
+                            source_storage_binding=source_binding,
                         )
                     elif active_journal and journal.get("status") == "ready-to-commit":
                         # Destination-only recovery returned no committed catalog;
@@ -890,7 +927,7 @@ def dispatch(args, instance: Path) -> dict:
                         catalog,
                         source_backend=backend,
                         destination_backend=backend,
-                        source_dimension=dimension,
+                        source_dimension=source_dimension,
                         destination_dimension=dimension,
                         source_identity=source_identity,
                         source_material=None,
@@ -898,6 +935,7 @@ def dispatch(args, instance: Path) -> dict:
                         source_catalog_etag=catalog_etag,
                         destination_catalog_etag=catalog_etag,
                         resume=True,
+                        source_storage_binding=source_binding,
                     )
         raise EncryptionStateError(
             "encryption migration actions are handled by the migration workflow",

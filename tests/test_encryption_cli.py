@@ -3,13 +3,14 @@
 import json
 import os
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from test_encryption_migration import FakeStore, _envelope, _snapshot
 
-from josh_room import auth, cli, crypto
+from josh_room import auth, cli, crypto, operations
 from josh_room.catalog import Catalog
 from josh_room.config import DimensionConfig
 from josh_room.encryption_domain import KEYSET_CONTROL_KEY, MIGRATION_JOURNAL_KEY
@@ -40,7 +41,9 @@ def migration(tmp_path, monkeypatch):
         endpoint="http://127.0.0.1:9000", bucket="synthetic-bucket",
         credential_profile="synthetic-profile", catalog_key="catalog.jroom.age",
     )
-    monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: SimpleNamespace(select=lambda _id: dimension))
+    monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: SimpleNamespace(
+        select=lambda _id: dimension, get=lambda _id: dimension if _id == dimension.dimension_id else None,
+    ))
     source = crypto.generate_identity(tmp_path / "source.identity")
     recovery = crypto.generate_identity(tmp_path / "recovery.identity")
     source_recipient = crypto.derive_recipient(source)
@@ -174,6 +177,148 @@ def test_preview_is_repeatable_and_execution_accepts_separate_handoffs(migration
     assert crypto.decrypt(copied, [migration.recovery]) == migration.envelope
     assert migration.source.is_file() and migration.recovery.is_file()
     assert not list(migration.instance.glob(".josh-room-encryption-*"))
+
+
+def _rename_legacy_catalog_fixture(migration, *, domain=None):
+    body = json.loads(json.dumps(migration.catalog.body))
+    body["dimension_id"] = "historic-dimension"
+    if domain is not None:
+        body["encryption_domain_id"] = domain
+    migration.catalog = Catalog.from_body(body)
+    target = migration.source.parent / "historic-catalog.age"
+    crypto.encrypt(json.dumps(body).encode(), [crypto.derive_recipient(migration.source), crypto.derive_recipient(migration.recovery)], target)
+    migration.backend.catalog_body = target.read_bytes()
+
+
+def test_legacy_dimension_adoption_previews_mapping_without_changing_ordinary_reads(migration, capsys):
+    _rename_legacy_catalog_fixture(migration)
+    before = migration.backend.catalog_body
+    recovery_before = migration.recovery.read_bytes()
+    with pytest.raises(ValueError, match="catalog Dimension mismatch"):
+        operations._read_remote_catalog(migration.backend, migration.source, migration.instance, "archive")
+    code, plan = invoke("migrate", migration, capsys)
+    assert code == 0
+    assert plan["source_dimension"] == "historic-dimension"
+    assert plan["destination_dimension"] == "archive"
+    assert plan["dimension_adoption_required"] is True
+    assert plan["source_bucket"] == plan["destination_bucket"] == "synthetic-bucket"
+    assert plan["source_binding_verification"] == "authenticated-selected-catalog-read"
+    assert len(plan["source_storage_binding"]) == 64
+    assert plan["read_only"] is True
+    assert migration.backend.controls == {}
+    assert migration.backend.puts == []
+    assert migration.backend.catalog_body == before
+    assert migration.recovery.read_bytes() == recovery_before
+
+
+def test_adoption_requires_confirmed_storage_binding_before_enrollment(migration, capsys):
+    _rename_legacy_catalog_fixture(migration)
+    for extra in [(), ("--expected-source-binding", "0" * 64)]:
+        code, result = invoke("resume", migration, capsys, extra=extra)
+        assert code == 2
+        assert result["error_code"] == "legacy-dimension-adoption-confirmation-required"
+        assert migration.backend.controls == {}
+        assert migration.backend.puts == []
+        assert migration.backend.catalog_puts == 0
+
+
+def test_confirmed_adoption_retains_source_provenance_and_exact_recovery_envelope(migration, capsys):
+    _rename_legacy_catalog_fixture(migration)
+    recovery_before = migration.recovery.read_bytes()
+    code, plan = invoke("migrate", migration, capsys)
+    assert code == 0
+    code, result = invoke("resume", migration, capsys, extra=(
+        "--expected-catalog-etag", plan["source_catalog_etag"],
+        "--expected-source-binding", plan["source_storage_binding"],
+    ))
+    assert code == 0
+    assert result["status"] == "committed"
+    journal = json.loads(migration.backend.controls[MIGRATION_JOURNAL_KEY][0])
+    assert journal["source_dimension"] == "historic-dimension"
+    assert journal["destination_dimension"] == "archive"
+    assert journal["source_storage_binding"] == plan["source_storage_binding"]
+    published = migration.source.parent / "published-catalog.age"
+    published.write_bytes(migration.backend.catalog_body)
+    catalog = Catalog.from_body(json.loads(crypto.decrypt(published, [migration.recovery])), "archive")
+    assert catalog.encryption_domain_id
+    copied = migration.source.parent / "adopted-object.age"
+    copied.write_bytes(migration.backend.puts[0][1])
+    assert crypto.decrypt(copied, [migration.recovery]) == migration.envelope
+    assert migration.recovery.read_bytes() == recovery_before
+
+
+def test_adoption_rejects_domain_bound_foreign_catalog_without_writes(migration, capsys):
+    _rename_legacy_catalog_fixture(migration, domain="11111111-1111-4111-8111-111111111111")
+    code, result = invoke("migrate", migration, capsys)
+    assert code == 2
+    assert "domain" in result["error"]
+    assert migration.backend.controls == {}
+    assert migration.backend.puts == []
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("bucket", "wrong-bucket"), ("endpoint", "http://127.0.0.1:9001"), ("catalog_key", "other-catalog.age"),
+])
+def test_adoption_rejects_backend_outside_selected_storage_binding(field, value, migration, capsys):
+    _rename_legacy_catalog_fixture(migration)
+    migration.backend.config = replace(migration.dimension, **{field: value})
+    code, result = invoke("migrate", migration, capsys)
+    assert code == 2
+    assert "storage binding" in result["error"]
+    assert migration.backend.controls == {}
+
+
+def test_adoption_rejects_known_source_dimension_in_another_bucket(migration, capsys, monkeypatch):
+    _rename_legacy_catalog_fixture(migration)
+    foreign = replace(migration.dimension, dimension_id="historic-dimension", bucket="foreign-bucket")
+    monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: SimpleNamespace(
+        select=lambda _id: migration.dimension, get=lambda _id: foreign if _id == "historic-dimension" else migration.dimension,
+    ))
+    code, result = invoke("migrate", migration, capsys)
+    assert code == 2
+    assert "storage binding" in result["error"]
+    assert migration.backend.controls == {}
+
+
+@pytest.mark.parametrize("change", [
+    {"bucket": "copied-bucket"},
+    {"encryption_domain_id": "11111111-1111-4111-8111-111111111111"},
+])
+def test_confirmed_adoption_cannot_switch_target_binding_with_identical_catalog_and_etag(change, migration, capsys, monkeypatch):
+    _rename_legacy_catalog_fixture(migration)
+    code, plan = invoke("migrate", migration, capsys)
+    assert code == 0
+    changed = replace(migration.dimension, **change)
+    migration.backend.config = changed
+    monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: SimpleNamespace(
+        select=lambda _id: changed, get=lambda _id: changed if _id == "archive" else None,
+    ))
+    code, result = invoke("resume", migration, capsys, extra=(
+        "--expected-catalog-etag", plan["source_catalog_etag"],
+        "--expected-source-binding", plan["source_storage_binding"],
+    ))
+    assert code == 2
+    assert result["error_code"] == "legacy-dimension-adoption-confirmation-required"
+    assert migration.backend.controls == {}
+    assert migration.backend.puts == []
+
+
+def test_interrupted_adoption_resumes_with_the_recorded_source_binding(migration, capsys):
+    _rename_legacy_catalog_fixture(migration)
+    code, plan = invoke("migrate", migration, capsys)
+    assert code == 0
+    migration.backend.fail_put_after = 0
+    with pytest.raises(KeyboardInterrupt):
+        invoke("resume", migration, capsys, extra=("--expected-source-binding", plan["source_storage_binding"]))
+    capsys.readouterr()
+    migration.backend.fail_put_after = None
+    code, result = invoke("resume", migration, capsys)
+    assert code == 0
+    assert result["status"] == "committed"
+    assert migration.backend.catalog_puts == 1
+    journal = json.loads(migration.backend.controls[MIGRATION_JOURNAL_KEY][0])
+    assert journal["source_dimension"] == "historic-dimension"
+    assert journal["source_storage_binding"] == plan["source_storage_binding"]
 
 
 @pytest.mark.parametrize("status", ["ready-to-commit", "cutover-published"])
