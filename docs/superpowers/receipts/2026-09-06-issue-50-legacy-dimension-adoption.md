@@ -41,7 +41,19 @@ and recovery backup files are retained.
 - Independent bounded review found no P1/P2 issue, including the configured
   expected-domain binding guard.
 
-Installed realistic-fixture and published-asset acceptance are separate gates.
+## Installed candidate
+
+Candidate VSIX SHA256:
+`d6f7f93d66abd89ecba0af6ad484e7fcbb744b6daffcfd4045be7147633f035f`.
+Cold and warm native Code Insiders startup passed. The installed realistic
+fixture used a non-empty v2 catalog with embedded ID `historic-dimension`, a
+local configured ID `configured-local`, and the same authenticated MinIO bucket.
+All modern-broker, pre-purpose-broker and local-backup flows reached a preview
+disclosing that mapping and one Room/JAT/object, then cancelled. Original catalog
+and recovery backup bytes remained unchanged; all handoffs were removed and all
+four R2 runtime files stayed byte-identical. S3 write attempts: zero.
+
+Published assets and downloaded-release installation are verified separately.
 No live storage write, migration, key replacement, metadata rename, JAT payload
 mutation, or infrastructure change was performed during diagnosis.
 
