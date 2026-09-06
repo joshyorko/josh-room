@@ -202,6 +202,8 @@ def build_parser() -> argparse.ArgumentParser:
     auth_poll.add_argument("session_id")
     auth_poll.add_argument("--dimension")
     auth_poll.add_argument("--purpose", choices=("encryption", "r2"))
+    auth_poll.add_argument("--legacy-source-handoff", type=Path)
+    auth_poll.add_argument("--legacy-r2-source", action="store_true", help="explicit legacy R2 source custody; requires --legacy-source-handoff and --purpose r2")
     _json_option(auth_poll)
     auth_wait = auth_commands.add_parser("wait", help="wait for one OAuth session in this process")
     auth_wait.add_argument("session_id")
@@ -209,9 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
     auth_wait.add_argument("--purpose", choices=("encryption", "r2"))
     auth_wait.add_argument("--timeout", type=int, default=600)
     auth_wait.add_argument("--poll-interval", type=int, default=2)
+    auth_wait.add_argument("--legacy-source-handoff", type=Path)
+    auth_wait.add_argument("--legacy-r2-source", action="store_true", help="explicit legacy R2 source custody; requires --legacy-source-handoff and --purpose r2")
     _json_option(auth_wait)
     auth_cancel = auth_commands.add_parser("cancel", help="invalidate one pending OAuth session")
     auth_cancel.add_argument("session_id")
+    auth_cancel.add_argument("--preserve-runtime-session", action="store_true")
     _json_option(auth_cancel)
     auth_status = auth_commands.add_parser("status")
     auth_status.add_argument("--dimension")
@@ -908,6 +913,10 @@ def dispatch(args, instance: Path) -> dict:
             kwargs = {"dimension_id": args.dimension}
             if args.purpose is not None:
                 kwargs["purpose"] = args.purpose
+            if getattr(args, "legacy_source_handoff", None) is not None:
+                kwargs["legacy_source_handoff"] = args.legacy_source_handoff
+            if args.legacy_r2_source:
+                kwargs["legacy_r2_source"] = True
             return {"ok": True, **poll_oauth_session(args.session_id, **kwargs)}
         if args.auth_command == "wait":
             kwargs = {
@@ -917,8 +926,14 @@ def dispatch(args, instance: Path) -> dict:
             }
             if args.purpose is not None:
                 kwargs["purpose"] = args.purpose
+            if args.legacy_source_handoff is not None:
+                kwargs["legacy_source_handoff"] = args.legacy_source_handoff
+            if args.legacy_r2_source:
+                kwargs["legacy_r2_source"] = True
             return {"ok": True, **wait_oauth_session(args.session_id, **kwargs)}
         if args.auth_command == "cancel":
+            if args.preserve_runtime_session:
+                return {"ok": True, **cancel_oauth_session(args.session_id, preserve_runtime_session=True)}
             return {"ok": True, **cancel_oauth_session(args.session_id)}
         if args.auth_command == "logout":
             return {"ok": True, **logout_runtime_session(args.purpose), "logged_out": True, "dimension_id": args.dimension}

@@ -353,6 +353,68 @@ def test_native_auth_commands_delegate_to_existing_worker_session_helpers(tmp_pa
     }
 
 
+def test_legacy_auth_wait_parser_requires_encryption_and_propagates_handoff(tmp_path, monkeypatch):
+    calls = {}
+    monkeypatch.setattr(cli, "wait_oauth_session", lambda session_id, **kwargs: calls.update({"id": session_id, **kwargs}) or {"status": "authorized", "purpose": "encryption"})
+
+    args = build_parser().parse_args([
+        "auth", "wait", "session-one", "--purpose", "encryption",
+        "--legacy-source-handoff", str(tmp_path / "source.identity"), "--json",
+    ])
+    result = cli.dispatch(args, tmp_path)
+
+    assert result == {"ok": True, "status": "authorized", "purpose": "encryption"}
+    assert calls == {
+        "id": "session-one", "timeout": 600, "poll_interval": 2, "dimension_id": None,
+        "purpose": "encryption", "legacy_source_handoff": tmp_path / "source.identity",
+    }
+
+
+@pytest.mark.parametrize("operation", ["poll", "wait"])
+def test_cli_explicit_legacy_r2_source_writes_only_identity_and_sanitized_receipt(operation, tmp_path, monkeypatch, capsys):
+    from josh_room import auth
+
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(auth, "_write_runtime", lambda *_args, **_kwargs: pytest.fail("source handoff wrote runtime"))
+    identity = synthetic_identity("cli-legacy-source")
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: {
+        "status": "authorized", "accessKeyId": "synthetic-access", "secretAccessKey": "synthetic-secret",
+        "sessionToken": "synthetic-token", "endpoint": "https://r2.example.invalid", "bucket": "synthetic-bucket",
+        "ageIdentity": f"# synthetic broker comment\n{identity}\n", "ageRecipients": ["synthetic-daily", "synthetic-recovery"],
+    })
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    handoff = parent / "source.identity"
+    receipt = tmp_path / "receipt.json"
+    monkeypatch.setenv("JOSH_ROOM_RESULT_FILE", str(receipt))
+    try:
+        assert main(["auth", operation, "synthetic", "--purpose", "r2", "--legacy-source-handoff", str(handoff),
+                     "--legacy-r2-source", "--json"]) == 0
+        output = capsys.readouterr()
+        assert json.loads(output.out) == {"ok": True, "status": "authorized", "purpose": "r2"}
+        assert json.loads(receipt.read_text()) == {"ok": True, "status": "authorized", "purpose": "r2"}
+        assert handoff.read_text() == identity + "\n"
+        assert stat.S_IMODE(handoff.stat().st_mode) == 0o600
+        assert identity not in output.err and "synthetic-secret" not in output.err
+    finally:
+        handoff.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("operation", ["poll", "wait"])
+@pytest.mark.parametrize("options", [[], ["--purpose", "r2"], ["--purpose", "encryption", "--legacy-source-handoff", "synthetic"]])
+def test_cli_rejects_invalid_legacy_r2_source_combinations_before_request(operation, options, tmp_path, monkeypatch, capsys):
+    from josh_room import auth
+
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.delenv("JOSH_ROOM_RESULT_FILE", raising=False)
+    monkeypatch.setattr(auth, "_request", lambda *_args, **_kwargs: pytest.fail("invalid mode requested broker"))
+
+    assert main(["auth", operation, "synthetic", "--legacy-r2-source", *options, "--json"]) == 2
+    assert "legacy R2 source requires" in json.loads(capsys.readouterr().out)["error"]
+
+
 def test_runtime_default_r2_is_oauth_routed_before_dimension_resolution(tmp_path, monkeypatch):
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
     args = build_parser().parse_args(["snapshot", "create", "demo", "--dimension", "r2"])
