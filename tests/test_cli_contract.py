@@ -752,13 +752,15 @@ def test_resume_reconciles_published_cutover_before_legacy_identity(monkeypatch,
     monkeypatch.setattr(cli, "DimensionRegistry", lambda _config: SimpleNamespace(select=lambda _name: dimension))
     monkeypatch.setattr(cli, "_backend", lambda *_args: object())
 
-    def ensure(_dimension, _backend, **kwargs):
+    def resolve(_dimension, _backend, **kwargs):
         identity_path = kwargs["identity_path"]
         identity_path.write_text("AGE-SECRET-KEY-synthetic\n")
         identity_path.chmod(0o600)
         return SimpleNamespace(**{**material.__dict__, "identity": identity_path})
 
-    monkeypatch.setattr(cli, "ensure_minio_domain", ensure)
+    monkeypatch.setattr(cli, "_keyset_from_backend", lambda *_args: material.keyset)
+    monkeypatch.setattr(cli, "resolve_encryption_material", resolve)
+    monkeypatch.setattr(cli, "_read_journal", lambda *_args: (None, None))
     monkeypatch.setattr(cli, "reconcile_encryption_migration", lambda *_args, **_kwargs: {"ok": True, "status": "committed"}, raising=False)
     monkeypatch.setattr(cli, "_legacy_migration_identity", lambda *_args, **_kwargs: pytest.fail("restart reconciliation must not require the legacy identity"))
 

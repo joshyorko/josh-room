@@ -27,9 +27,11 @@ let dirtyTrackingGeneration = 0;
 const dirtyBuffers = new Set();
 let activeAuthAttempt;
 let managedRuntimePromise;
+let runtimePreparation;
 let managedJatPromise;
+let jatPreparation;
 let runtimeReadinessOverride;
-let runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
+let runtimeLifecycle = { state: "UNINITIALIZED", message: "Select to prepare the runtime and load storage" };
 let testRuntime;
 const CREDENTIALS_SECRET = "josh-room.credentials.v1";
 const ENCRYPTION_SECRET_PREFIX = "josh-room.encryption.v1:";
@@ -309,7 +311,7 @@ function isCancellationError(error) {
 }
 
 function userFacingError(error) {
-  const message = error?.message || String(error);
+  const message = sanitizeControllerText(error?.message || String(error));
   if (/fingerprint|workspace path|path binding/i.test(message)) {
     return "This folder no longer matches the selected Room. Use Link Existing Folder, Enter to restore, or Save as New.";
   }
@@ -427,13 +429,15 @@ function fallbackIdentity(manifest, rcc, controllerRoot, jatArtifactDigest) {
   };
 }
 
-async function localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot) {
+async function localRuntimeState(context, manifest, rcc, jat, error, progressReporter, controllerRoot, cancellationToken) {
+  if (cancellationToken?.isCancellationRequested) throw cancellationError();
+  const options = runtimeProgressOptions(progressReporter, cancellationToken);
   progressReporter?.event({ stage: "runtime", message: `LOCAL BUILD FALLBACK: ${error.message}` });
   progressReporter?.event({ stage: "runtime", message: "Building controller environment locally; JAT remains lazy until a JAT operation" });
-  const jatRoot = jat?.jatRoot || await managedRuntime.ensureJatSource(context, manifest.jat);
+  const jatRoot = jat?.jatRoot || await managedRuntime.ensureJatSource(context, manifest.jat, options);
   const identityBase = fallbackIdentity(manifest, rcc, controllerRoot);
   const warm = await managedRuntime.verifyLocalFallback(
-    context, rcc, path.join(controllerRoot, "robot.yaml"), identityBase,
+    context, rcc, path.join(controllerRoot, "robot.yaml"), identityBase, options,
   );
   const marker = managedRuntime.readLocalFallbackRecord(context);
   const localJatDigest = marker?.jat_artifact_digest || jat?.artifact;
@@ -443,37 +447,19 @@ async function localRuntimeState(context, manifest, rcc, jat, error, progressRep
   if (warm) {
     progressReporter?.event({ stage: "runtime", message: "Reusing verified LOCAL BUILD FALLBACK controller environment" });
   } else {
-    if (await chooseLocalFallback(error) !== "build") throw new Error("Local runtime build cancelled");
+    if (await chooseLocalFallback(error) !== "build" || cancellationToken?.isCancellationRequested) throw cancellationError();
     await managedRuntime.prepareLocalController(
       context,
       rcc,
       path.join(controllerRoot, "robot.yaml"),
-      {
-        onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-        onOutput: (stream, chunk) => {
-          if (stream !== "stderr") return;
-          const sanitized = sanitizeRuntimeLine(chunk);
-          if (!sanitized) return;
-          outputChannel?.appendLine(`${new Date().toISOString()} RCC ${stream}: ${sanitized}`);
-          progressReporter?.event({ stage: "runtime", message: sanitized });
-        },
-      },
+      options,
     );
     if (error.fallbackReason === "environment-compatibility") {
       localJat = await managedRuntime.buildLocalJatArtifact(
         context,
         rcc,
         path.join(jatRoot, "robot.yaml"),
-        {
-          onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-          onOutput: (stream, chunk) => {
-            if (stream !== "stderr") return;
-            const sanitized = sanitizeRuntimeLine(chunk);
-            if (!sanitized) return;
-            outputChannel?.appendLine(`${new Date().toISOString()} RCC ${stream}: ${sanitized}`);
-            progressReporter?.event({ stage: "runtime", message: sanitized });
-          },
-        },
+        options,
       );
     }
     readyIdentity = fallbackIdentity(manifest, rcc, controllerRoot, localJat?.artifact || jat?.artifact);
@@ -499,37 +485,101 @@ async function localRuntimeState(context, manifest, rcc, jat, error, progressRep
   };
 }
 
-function startRuntimeReadiness(context, progressReporter) {
-  if (managedRuntimePromise) return managedRuntimePromise;
-  setRuntimeLifecycle("RCC_RESOLVING", "Resolving managed RCC");
-  const source = runtimeReadinessOverride || initializeManagedRuntime(context, progressReporter);
-  managedRuntimePromise = Promise.resolve(source).then((state) => {
-    setRuntimeLifecycle("RUNTIME_READY", "Managed runtime ready; cached artifacts reused when available");
-    return state || testRuntime;
-  }).catch((error) => {
-    setRuntimeLifecycle("FAILED", `Josh Room runtime unavailable: ${error.message}`);
-    managedRuntimePromise = undefined;
-    throw error;
+async function startRuntimeReadiness(context, progressReporter, cancellationToken) {
+  if (cancellationToken?.isCancellationRequested) throw cancellationError();
+  if (!managedRuntimePromise) {
+    const preparation = { controller: createCancellationController(), consumers: new Set(), latest: undefined };
+    runtimePreparation = preparation;
+    const reporter = { event(event) {
+      const safe = sanitizeProgressEvent(event);
+      preparation.latest = safe;
+      setRuntimeLifecycle("RCC_RESOLVING", safe.message);
+      for (const consumer of preparation.consumers) {
+        if (!consumer.token?.isCancellationRequested) consumer.reporter?.event(safe);
+      }
+    } };
+    setRuntimeLifecycle("RCC_RESOLVING", "Resolving managed RCC");
+    // Defer initialization until the first consumer is attached.
+    managedRuntimePromise = Promise.resolve().then(() => runtimeReadinessOverride
+      || initializeManagedRuntime(context, reporter, preparation.controller.token)).then((state) => {
+      if (preparation.controller.token.isCancellationRequested) throw cancellationError();
+      setRuntimeLifecycle("RUNTIME_READY", "Managed runtime ready; cached artifacts reused when available");
+      return state || testRuntime;
+    }).catch((error) => {
+      const cancelled = isCancellationError(error);
+      setRuntimeLifecycle(cancelled ? "CANCELLED" : "FAILED", cancelled
+        ? "Runtime preparation cancelled. Select Retry to continue."
+        : `Josh Room runtime unavailable: ${sanitizeControllerText(error.message)}`);
+      managedRuntimePromise = undefined;
+      throw error;
+    }).finally(() => {
+      preparation.controller.dispose();
+      if (runtimePreparation === preparation) runtimePreparation = undefined;
+    });
+  }
+  const preparation = runtimePreparation;
+  const consumer = { token: cancellationToken, reporter: progressReporter };
+  preparation?.consumers.add(consumer);
+  if (preparation?.latest) progressReporter?.event(preparation.latest);
+  else if (!preparation) progressReporter?.event({ stage: "runtime", message: "Reusing ready managed runtime" });
+  const subscription = cancellationToken?.onCancellationRequested(() => {
+    if (preparation && [...preparation.consumers].every((entry) => entry.token?.isCancellationRequested)) {
+      preparation.controller.cancel();
+    }
   });
-  return managedRuntimePromise;
+  try {
+    const state = await managedRuntimePromise;
+    if (cancellationToken?.isCancellationRequested) throw cancellationError();
+    return state;
+  } finally {
+    subscription?.dispose();
+    preparation?.consumers.delete(consumer);
+  }
 }
 
-async function initializeManagedRuntime(context, progressReporter) {
+function runtimeProgressOptions(progressReporter, cancellationToken) {
+  let pending = "";
+  let discardLine = false;
+  return {
+    cancellationToken,
+    onProgress: (event) => progressReporter?.event(sanitizeProgressEvent({ stage: "runtime", message: event.message })),
+    onOutput(stream, chunk) {
+      // RCC stdout contains structured results and environment values.
+      if (stream !== "stderr") return;
+      let text = String(chunk);
+      if (discardLine) {
+        const newline = text.indexOf("\n");
+        if (newline < 0) return;
+        text = text.slice(newline + 1);
+        discardLine = false;
+      }
+      const lines = (pending + text).split(/\r?\n/);
+      pending = lines.pop() || "";
+      if (pending.length > 4096) { pending = ""; discardLine = true; }
+      for (const line of lines) {
+        if (line.length > 4096 || /^\s*[\[{"}]/.test(line)) continue;
+        const message = sanitizeRuntimeLine(line);
+        if (!message) continue;
+        outputChannel?.appendLine(`${new Date().toISOString()} RCC stderr: ${message}`);
+        progressReporter?.event({ stage: "runtime", message });
+      }
+    },
+  };
+}
+
+async function initializeManagedRuntime(context, progressReporter, cancellationToken) {
   const manifest = managedRuntime.readManifest();
   setStatus("$(sync~spin) Josh Room", "Preparing managed runtime…");
   progressReporter?.event({ stage: "runtime", message: "Resolving managed RCC" });
-  const rcc = await managedRuntime.ensureManagedRcc(context, manifest, {
-    onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-  });
+  const options = runtimeProgressOptions(progressReporter, cancellationToken);
+  const rcc = await managedRuntime.ensureManagedRcc(context, manifest, options);
   const controllerRoot = controllerRootFor(context, manifest);
   progressReporter?.event({ stage: "runtime", message: "Preparing Josh Room controller environment" });
   let controller;
   try {
-    controller = await managedRuntime.ensureControllerRuntime(context, manifest, rcc, {
-      onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-    });
+    controller = await managedRuntime.ensureControllerRuntime(context, manifest, rcc, options);
   } catch (error) {
-    if (managedRuntime.localFallbackReason(error)) return localRuntimeState(context, manifest, rcc, undefined, error, progressReporter, controllerRoot);
+    if (managedRuntime.localFallbackReason(error)) return localRuntimeState(context, manifest, rcc, undefined, error, progressReporter, controllerRoot, cancellationToken);
     throw error;
   }
   return {
@@ -547,37 +597,63 @@ function operationNeedsJat(args) {
   return args[0] === "snapshot" && args[1] === "create";
 }
 
-async function ensureJatForState(context, state, progressReporter) {
+async function ensureJatForState(context, state, progressReporter, cancellationToken) {
+  if (cancellationToken?.isCancellationRequested) throw cancellationError();
   if (state.mode === "local-build-fallback" || state.jat?.artifact) return state.jat;
   if (!managedJatPromise) {
-    progressReporter?.event({ stage: "runtime", message: "Preparing JAT runtime for this operation" });
-    managedJatPromise = managedRuntime.ensureJatRuntime(context, state.manifest, state.rcc, {
-      onProgress: (event) => progressReporter?.event({ stage: "runtime", message: event.message }),
-      onOutput: (stream, chunk) => {
-        const sanitized = sanitizeRuntimeLine(chunk);
-        if (!sanitized) return;
-        outputChannel?.appendLine(`${new Date().toISOString()} RCC ${stream}: ${sanitized}`);
-        progressReporter?.event({ stage: "runtime", message: sanitized });
-      },
+    const preparation = { controller: createCancellationController(), consumers: new Set(), latest: undefined };
+    jatPreparation = preparation;
+    const reporter = { event(event) {
+      preparation.latest = sanitizeProgressEvent(event);
+      for (const consumer of preparation.consumers) {
+        if (!consumer.token?.isCancellationRequested) consumer.reporter?.event(preparation.latest);
+      }
+    } };
+    managedJatPromise = Promise.resolve().then(() => {
+      reporter.event({ stage: "runtime", message: "Preparing JAT runtime for this operation" });
+      return managedRuntime.ensureJatRuntime(context, state.manifest, state.rcc,
+        runtimeProgressOptions(reporter, preparation.controller.token));
     }).then((jat) => {
+      if (preparation.controller.token.isCancellationRequested) throw cancellationError();
       state.jat = jat;
       return jat;
     }).catch((error) => {
       managedJatPromise = undefined;
       throw error;
+    }).finally(() => {
+      preparation.controller.dispose();
+      if (jatPreparation === preparation) jatPreparation = undefined;
     });
   }
-  return managedJatPromise;
+  const preparation = jatPreparation;
+  const consumer = { token: cancellationToken, reporter: progressReporter };
+  preparation?.consumers.add(consumer);
+  if (preparation?.latest) progressReporter?.event(preparation.latest);
+  const subscription = cancellationToken?.onCancellationRequested(() => {
+    if (preparation && [...preparation.consumers].every((entry) => entry.token?.isCancellationRequested)) {
+      preparation.controller.cancel();
+    }
+  });
+  try {
+    const jat = await managedJatPromise;
+    if (cancellationToken?.isCancellationRequested) throw cancellationError();
+    return jat;
+  } finally {
+    subscription?.dispose();
+    preparation?.consumers.delete(consumer);
+  }
 }
 
-async function runtimeFor(cwd, args = [], progressReporter) {
+async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
+  if (cancellationToken?.isCancellationRequested) throw cancellationError();
   if (testRuntime) {
     setRuntimeLifecycle("RUNTIME_READY", "Managed runtime ready");
     return testRuntime;
   }
   if (!extensionContext) throw new Error("Josh Room extension runtime is not activated");
-  const state = await startRuntimeReadiness(extensionContext);
-  if (operationNeedsJat(args)) await ensureJatForState(extensionContext, state, progressReporter);
+  const state = await startRuntimeReadiness(extensionContext, progressReporter, cancellationToken);
+  if (operationNeedsJat(args)) await ensureJatForState(extensionContext, state, progressReporter, cancellationToken);
+  if (cancellationToken?.isCancellationRequested) throw cancellationError();
   const localFallback = state.mode === "local-build-fallback";
   return {
     command: state.rcc.executable,
@@ -698,14 +774,14 @@ function installationRecoverySecretKey() {
   return INSTALLATION_RECOVERY_SECRET;
 }
 
-function readPrivateRecoveryFile(filename) {
+function readPrivateRecoveryFile(filename, label = "recovery identity") {
   const target = path.resolve(filename);
   const stat = fs.lstatSync(target);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 || (stat.mode & 0o077) !== 0) {
-    throw new Error("recovery identity must be a private regular file");
+    throw new Error(`${label} must be a private regular file (owner-only permissions)`);
   }
   const value = fs.readFileSync(target, "utf8");
-  if (!value.trim()) throw new Error("recovery identity is empty");
+  if (!value.trim()) throw new Error(`${label} is empty`);
   return value.endsWith("\n") ? value : `${value}\n`;
 }
 
@@ -846,7 +922,7 @@ function sanitizeControllerText(value) {
 
 function sanitizeControllerArgv(argv) {
   const sanitized = [];
-  const sensitiveFlag = /^-{1,2}(?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|bearer)(?:$|[-_=])/i;
+  const sensitiveFlag = /^-{1,2}(?:source-identity|recovery-handoff|material-handoff|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|bearer)(?:$|[-_=])/i;
   const sensitiveAssignment = /^(?:[a-z_][a-z0-9_]*(?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)\s*=/i;
   for (let index = 0; index < argv.length; index += 1) {
     const value = String(argv[index]);
@@ -884,6 +960,14 @@ function resultDiagnostic(result) {
   return [...new Set(diagnostics.filter(Boolean))].join(" ").slice(-CONTROLLER_DIAGNOSTIC_LIMIT);
 }
 
+function controllerErrorText(value, depth = 0) {
+  if (depth > 8) return "";
+  if (typeof value === "string" || typeof value === "number") return sanitizeControllerText(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return [...new Set(["message", "error", "code", "error_code", "state"]
+    .map((key) => controllerErrorText(value[key], depth + 1)).filter(Boolean))].join(" · ").slice(0, CONTROLLER_DIAGNOSTIC_LIMIT);
+}
+
 function redactResultDiagnostics(value, key = "", inDiagnostic = false) {
   if (/^argv$/i.test(key) && Array.isArray(value)) return sanitizeControllerArgv(value);
   const diagnosticContext = inDiagnostic || /error|message|diagnostic|stdout|stderr/i.test(key);
@@ -902,7 +986,7 @@ function controllerFailure(result, { controllerExitStatus, controllerStderr } = 
   const jat = result?.jat && typeof result.jat === "object" ? result.jat : {};
   const jatExitStatus = jat.exit_status ?? jat.exitStatus ?? result?.exit_status;
   const safeStderr = sanitizeControllerText(controllerStderr);
-  const baseMessage = sanitizeControllerText(result?.error) || "Josh Room operation failed.";
+  const baseMessage = controllerErrorText(result?.error) || controllerErrorText(result?.message) || "Josh Room operation failed.";
   let message = String(baseMessage);
   if (diagnostic && message.includes(diagnostic)) {
     const parts = message.split(diagnostic);
@@ -941,7 +1025,8 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   let credentialsCleanup = () => {};
   let encryptionCleanup = () => {};
   try {
-    runtime = await runtimeFor(cwd, args, progressReporter);
+    runtime = await runtimeFor(cwd, args, progressReporter, cancellationToken);
+    if (cancellationToken?.isCancellationRequested) throw cancellationError();
     environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
@@ -1034,9 +1119,8 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       }
       const receiptExit = receipt && (receipt.exitCode ?? receipt.exit_code ?? receipt.exit);
       if (receiptExit !== undefined && Number(receiptExit) !== 0) {
-        const detail = sanitizeControllerText(
-          receipt.compatibility || receipt.error || receipt.message || `RCC controller exited with status ${receiptExit}`,
-        );
+        const detail = controllerErrorText(receipt.error) || controllerErrorText(receipt.message)
+          || controllerErrorText(receipt.compatibility) || `RCC controller exited with status ${receiptExit}`;
         cleanup();
         const failure = new Error(String(detail));
         failure.receipt_exit_status = Number(receiptExit);
@@ -1089,7 +1173,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
 }
 
 async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options = {}) {
-  outputChannel?.info(`START · controller ${args.join(" ")}`);
+  outputChannel?.info(`START · controller ${sanitizeControllerArgv(args).join(" ")}`);
   try {
     const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options);
     const { stdout, runtime } = execution;
@@ -1138,13 +1222,14 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
         controllerStderr: error.stderr,
       });
     }
-    outputChannel?.error(error.message || String(error));
+    outputChannel?.error(sanitizeControllerText(error.message || String(error)));
     outputChannel?.show(true);
     throw error;
   }
 }
 
-function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionMaterial, dimension, timeoutMs } = {}) {
+function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionMaterial, dimension, timeoutMs, cancellationToken, progressReporter } = {}) {
+  if (progressReporter) return runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin, { encryptionMaterial, timeoutMs });
   const operationId = ++activeOperationId;
   const displayTitle = title.replace(/…$/, "");
   return vscode.window.withProgress(
@@ -1216,7 +1301,7 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
     },
     fail: (error) => {
       stopAnimation();
-      const rawMessage = error?.message || String(error);
+      const rawMessage = sanitizeControllerText(error?.message || String(error));
       const message = userFacingError(error);
       outputChannel?.error(`FAILED · ${title} · ${rawMessage}`);
       if (activeOperationId === operationId) setStatus(`$(error) ${title} failed`, message);
@@ -2428,7 +2513,8 @@ function register(context, command, operation) {
     try {
       return await operation(...args);
     } catch (error) {
-      await vscode.window.showErrorMessage(error.message || String(error));
+      if (isCancellationError(error)) return "cancelled";
+      await vscode.window.showErrorMessage(userFacingError(error));
       return "failed";
     }
   }));
@@ -2811,7 +2897,7 @@ async function connectEncryption(item, options = {}) {
       if (domain) await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, prepared.value);
       if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), prepared.value);
       selectedDimensionId = dimensionIdValue;
-      roomsProvider && await roomsProvider.refresh();
+      roomsProvider && await roomsProvider.reload();
       await vscode.window.showInformationMessage("MinIO encryption is ready. Cloudflare R2 was not connected.");
       return "initialized";
     } finally {
@@ -2848,7 +2934,7 @@ function selectedDimension(item) {
   return item?.dimension || item;
 }
 
-async function migrateEncryption(item) {
+async function migrateEncryption(item, { resume = false } = {}) {
   assertWorkspaceTrusted("migrate encryption");
   const cwd = activeWorkspace();
   const dimension = selectedDimension(item);
@@ -2856,39 +2942,74 @@ async function migrateEncryption(item) {
   if (!id || nativeRegistry.providerKey(dimension.provider) !== "minio") {
     throw new Error("Choose a MinIO Dimension before migrating encryption.");
   }
-  const plan = await runSelectedEncryption(
-    ["encryption", "migrate", "--dimension", id], cwd, dimension,
-    { title: "Planning MinIO encryption migration…", action: "migrate encryption" },
-  );
-  if (plan.status === "committed" || plan.journal_status === "committed") return plan.status || "committed";
-  const confirmed = await vscode.window.showWarningMessage(
-    `Migrate the legacy encryption domain for ${dimension.display_name || id}? Existing JAT payloads remain unchanged.`,
-    { modal: true },
-    "Migrate",
-  );
-  if (confirmed !== "Migrate") return "cancelled";
-  const result = await runSelectedEncryption(
-    ["encryption", "resume", "--dimension", id], cwd, dimension,
-    { title: "Migrating MinIO encryption…", action: "migrate encryption" },
-  );
-  await roomsProvider?.refresh();
-  return result.status || result.journal_status || "migrated";
+  const status = await runOperation("Checking MinIO encryption…", ["encryption", "status", "--dimension", id], cwd);
+  if (status.state === "uninitialized") throw new Error("This MinIO bucket has no legacy catalog. Use Initialize MinIO Encryption instead.");
+  // An already published cutover only needs destination authority. The CLI
+  // validates this state before requiring an old source key.
+  if (resume || status.state === "ready") {
+    try {
+      const existing = await runOperation("Checking encryption migration…", ["encryption", resume ? "resume" : "migrate", "--dimension", id], cwd);
+      if (existing.status === "committed" || existing.journal_status === "committed") {
+        await roomsProvider?.reload();
+        return "committed";
+      }
+    } catch (error) {
+      const code = error.result?.error_code || error.result?.error?.code;
+      if (code !== "legacy-source-identity-required") throw error;
+    }
+  }
+  const selected = (await vscode.window.showOpenDialog({
+    title: "Choose the old source identity that encrypted this MinIO catalog",
+    canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+    openLabel: "Use old source identity",
+  }))?.[0]?.fsPath;
+  if (!selected) return "cancelled";
+  const source = materializeRecoveryValue(readPrivateRecoveryFile(selected, "old source identity"));
+  let recovery;
+  try {
+    if (!status.encryption_domain_id) {
+      const prepared = await prepareRecoveryHandoff(cwd);
+      if (!prepared) return "cancelled";
+      try { recovery = materializeRecoveryValue(prepared.value); }
+      finally { prepared.cleanup(); }
+    }
+    const handoffs = ["--dimension", id, "--source-identity", source.path];
+    if (recovery) handoffs.push("--recovery-handoff", recovery.path);
+    const plan = await runOperation("Planning MinIO encryption migration…", ["encryption", "migrate", ...handoffs], cwd);
+    if (plan.status === "committed" || plan.journal_status === "committed") {
+      await roomsProvider?.reload();
+      return "committed";
+    }
+    if (plan.read_only !== true || plan.requires_confirmation !== true
+      || typeof plan.source_catalog_etag !== "string" || !plan.source_catalog_etag) {
+      throw new Error("A read-only migration preview with a source catalog version is required before confirmation.");
+    }
+    const count = (value) => Number.isSafeInteger(value) && value >= 0 ? String(value) : "unknown";
+    const confirmed = await vscode.window.showWarningMessage(
+      `Migrate the legacy encryption domain for ${dimension.display_name || id}? `
+        + `${count(plan.room_count)} Rooms, ${count(plan.snapshot_count)} JATs, ${count(plan.object_count)} unique encrypted objects. `
+        + `${formatHaulerSize(plan.total_bytes) || "Unknown size"}; temporary disk: ${formatHaulerSize(plan.temporary_disk_bytes) || "unknown"}. `
+        + "This replaces the outer encryption and catalog. Existing JAT payloads remain unchanged.",
+      { modal: true }, "Migrate",
+    );
+    if (confirmed !== "Migrate") return "cancelled";
+    const result = await runOperation("Migrating MinIO encryption…", ["encryption", "resume", ...handoffs,
+      "--expected-catalog-etag", plan.source_catalog_etag], cwd);
+    if (recovery && extensionContext?.secrets?.store) {
+      await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, recovery.value);
+      const domain = result.encryption_domain_id || result.destination_encryption_domain_id;
+      if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), recovery.value);
+    }
+    await roomsProvider?.reload();
+    return result.status || result.journal_status || "migrated";
+  } finally {
+    recovery?.cleanup();
+    source.cleanup();
+  }
 }
 
 async function resumeEncryption(item) {
-  assertWorkspaceTrusted("resume encryption migration");
-  const cwd = activeWorkspace();
-  const dimension = selectedDimension(item);
-  const id = dimension?.id || dimension?.dimension_id;
-  if (!id || nativeRegistry.providerKey(dimension.provider) !== "minio") {
-    throw new Error("Choose a MinIO Dimension before resuming encryption.");
-  }
-  const result = await runSelectedEncryption(
-    ["encryption", "resume", "--dimension", id], cwd, dimension,
-    { title: "Resuming MinIO encryption migration…", action: "resume encryption migration" },
-  );
-  await roomsProvider?.refresh();
-  return result.status || result.journal_status || "resumed";
+  return migrateEncryption(item, { resume: true });
 }
 
 async function exportRecovery(item) {
@@ -3003,7 +3124,7 @@ async function configureStorageBucket({ provider, connectionId, dimensionId, con
   );
   await runOperation(`Adding ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Dimension...`, dimensionArgs, cwd, commandOptions);
   selectedDimensionId = dimensionIdValue;
-  if (roomsProvider) await roomsProvider.refresh();
+  if (roomsProvider) await roomsProvider.reload();
   await vscode.window.showInformationMessage(
     `Connected ${provider === "r2" ? "Cloudflare R2" : "MinIO"} bucket ${bucket}. ${provider === "minio" ? "Credentials were handed to the secure backend." : "Cloudflare authorization remains local to this Room."}`,
   );
@@ -3127,7 +3248,7 @@ async function editConnection(item, { reconnect = false } = {}) {
     connection.credential_profile || `josh-room-${connectionId}`,
     { "access-key-id": accessKey, "secret-access-key": secretKey },
   );
-  if (roomsProvider) await roomsProvider.refresh();
+  if (roomsProvider) await roomsProvider.reload();
   return reconnect ? "connected" : "updated";
 }
 
@@ -3187,11 +3308,13 @@ class HierarchyRoomsProvider {
     if (item.kind === "runtime") {
       const treeItem = new vscode.TreeItem(item.label, vscode.TreeItemCollapsibleState.None);
       treeItem.description = item.description || "";
-      treeItem.iconPath = new vscode.ThemeIcon(item.failed ? "error" : "sync~spin");
-      treeItem.command = { command: "joshRoom.refresh", title: item.failed ? "Retry runtime preparation" : "Show runtime progress" };
+      treeItem.iconPath = new vscode.ThemeIcon(item.busy ? "sync~spin" : item.failed ? "error" : "cloud-download");
+      treeItem.command = item.busy
+        ? { command: "joshRoom.showLogs", title: "Show runtime progress" }
+        : { command: "joshRoom.prepare", title: item.label };
       return treeItem;
     }
-    const emptyKind = ["load", "loading", "empty", "error"].includes(item.kind);
+    const emptyKind = ["load", "loading", "empty", "error", "cancelled"].includes(item.kind);
     if (item.kind === "dimension-error") {
       const treeItem = new vscode.TreeItem(
         item.label || "Could not load bucket — Retry",
@@ -3206,11 +3329,13 @@ class HierarchyRoomsProvider {
         : action === "reconnect" ? "joshRoom.reconnectStorage"
           : action === "authorize" ? "joshRoom.connectEncryption"
             : action === "migrate" ? "joshRoom.migrateEncryption"
-              : action === "resume" ? "joshRoom.resumeEncryption" : "joshRoom.refresh";
+              : action === "resume" ? "joshRoom.resumeEncryption" : "joshRoom.prepare";
       treeItem.command = {
         command,
         title: item.label || "Retry",
-        ...(command === "joshRoom.refresh" ? {} : { arguments: [item.connection || item.dimension] }),
+        ...(command === "joshRoom.prepare" ? {} : { arguments: [
+          action === "edit" || action === "reconnect" ? item.connection : item.dimension,
+        ] }),
       };
       return treeItem;
     }
@@ -3220,10 +3345,11 @@ class HierarchyRoomsProvider {
         loading: "Loading Storage...",
         empty: "No storage connected",
         error: "Could not load storage - click to retry",
+        cancelled: "Storage loading cancelled — Retry",
       };
       const treeItem = new vscode.TreeItem(labels[item.kind], vscode.TreeItemCollapsibleState.None);
       treeItem.iconPath = new vscode.ThemeIcon(item.kind === "loading" ? "sync~spin" : item.kind === "error" ? "error" : "cloud-download");
-      treeItem.command = { command: item.kind === "empty" ? "joshRoom.addStorage" : "joshRoom.refresh", title: labels[item.kind] };
+      treeItem.command = { command: item.kind === "empty" ? "joshRoom.addStorage" : item.kind === "loading" ? "joshRoom.showLogs" : "joshRoom.prepare", title: labels[item.kind] };
       return treeItem;
     }
     const hasChildren = Array.isArray(item.children) && item.children.length > 0;
@@ -3275,15 +3401,21 @@ class HierarchyRoomsProvider {
   getChildren(item) {
     if (item) return item.children || [];
     if (runtimeLifecycle.state !== "RUNTIME_READY") {
+      const idle = runtimeLifecycle.state === "UNINITIALIZED";
+      const cancelled = runtimeLifecycle.state === "CANCELLED";
+      const failed = runtimeLifecycle.state === "FAILED";
       return [{
         kind: "runtime",
-        label: runtimeLifecycle.state === "FAILED" ? "Josh Room runtime unavailable — Retry" : "Preparing Josh Room runtime…",
+        label: idle ? "Load Storage / Prepare Runtime" : cancelled ? "Runtime preparation cancelled — Retry"
+          : failed ? "Josh Room runtime unavailable — Retry" : "Preparing Josh Room runtime…",
         description: runtimeLifecycle.message,
-        failed: runtimeLifecycle.state === "FAILED",
+        failed,
+        busy: !idle && !cancelled && !failed,
       }];
     }
     if (this.state === "loading") return [{ kind: "loading" }];
     if (this.state === "error") return [{ kind: "error" }];
+    if (this.state === "cancelled") return [{ kind: "cancelled" }];
     if (this.state === "initial") return [{ kind: "load" }];
     return this.roots && this.roots.length ? this.roots : [{ kind: "empty" }];
   }
@@ -3304,6 +3436,40 @@ class HierarchyRoomsProvider {
     }
     this.emitter.fire(undefined);
     return lastKnownCatalog;
+  }
+
+  async reload() {
+    assertWorkspaceTrusted("load storage");
+    if (this.loading) return this.loading;
+    const cwd = activeWorkspace();
+    this.state = "loading";
+    this.emitter.fire(undefined);
+    this.loading = vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Loading Josh Room storage…", cancellable: true },
+      async (progress, cancellationToken) => {
+        const progressReporter = createVisualReporter("Loading Josh Room storage", operationKind(["dimensions", "list"]), progress);
+        try {
+          const catalog = await loadCatalog(cwd, "Loading Josh Room storage…", { cancellationToken, progressReporter });
+          if (cancellationToken.isCancellationRequested) throw cancellationError();
+          await this.setCatalog(catalog);
+          progressReporter.finish();
+          return catalog;
+        } catch (error) {
+          this.state = isCancellationError(error) ? "cancelled" : "error";
+          if (!isCancellationError(error)) progressReporter.fail(error);
+          else setStatus("$(archive) Josh Room", "Storage loading cancelled — select Retry");
+          this.emitter.fire(undefined);
+          throw error;
+        } finally {
+          progressReporter.dispose();
+        }
+      },
+    );
+    try {
+      return await this.loading;
+    } finally {
+      this.loading = undefined;
+    }
   }
 }
 
@@ -3695,6 +3861,9 @@ function activateNative(context) {
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
+  register(context, "joshRoom.prepare", () => roomsProvider.reload());
+  register(context, "joshRoom.showLogs", () => outputChannel.show(true));
+  register(context, "joshRoom.clearLocalFallback", clearLocalFallback);
   register(context, "joshRoom.jatBuild", jatBuild);
   register(context, "joshRoom.jatInspect", jatInspect);
   register(context, "joshRoom.jatExtract", jatExtract);
@@ -3710,8 +3879,8 @@ module.exports.activate = activateNative;
 
 function dimensionLoadFailure(error) {
   const result = error && error.result || {};
-  const diagnostic = result.error || error?.message || "unknown storage error";
-  const code = result.error_code || "dimension-load-failed";
+  const diagnostic = controllerErrorText(result.error) || error?.message || "unknown storage error";
+  const code = result.error_code || result.error?.code || "dimension-load-failed";
   if (/resumable|resume/i.test(code + " " + diagnostic)) {
     return {
       code,
@@ -3778,12 +3947,13 @@ function dimensionLoadFailure(error) {
   };
 }
 
-async function loadDimensionHierarchy(cwd, dimension, title) {
+async function loadDimensionHierarchy(cwd, dimension, title, options) {
   const id = dimension.id || dimension.dimension_id;
   const listed = await runOperation(
     title || "Loading your Rooms...",
     nativeRegistry.dimensionArgs(["dimensions", "list", "--with-hierarchy"], id),
     cwd,
+    options,
   );
   const records = dimensionList(listed);
   const hierarchy = records.find((candidate) => (candidate.id || candidate.dimension_id) === id) || records[0];
@@ -3794,16 +3964,17 @@ async function loadDimensionHierarchy(cwd, dimension, title) {
   return Object.assign({}, dimension, hierarchy, { catalog_complete: true });
 }
 
-async function loadNativeCatalogWithSnapshots(cwd, title) {
-  const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd);
+async function loadNativeCatalogWithSnapshots(cwd, title, options = {}) {
+  const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd, options);
   const dimensions = dimensionList(catalog);
   let connections = catalog.connections;
   let connectionLookupFailed = false;
   if (!connections && (!dimensions.length || dimensions.some((dimension) => dimension.connection_id || dimension.connectionId))) {
     try {
-      const listedConnections = await runOperation(title || "Loading your Rooms...", providerTools.connectionCommand("list"), cwd);
+      const listedConnections = await runOperation(title || "Loading your Rooms...", providerTools.connectionCommand("list"), cwd, options);
       connections = listedConnections.connections || connections;
     } catch (error) {
+      if (isCancellationError(error)) throw error;
       connectionLookupFailed = true;
       outputChannel && outputChannel.warn("Unable to load provider connections: " + error.message);
     }
@@ -3818,8 +3989,9 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
     title || "Loading your Rooms...",
     ["auth", "status", "--dimension", authDimensionId],
     cwd,
-    { cancellable: false },
+    { ...options, cancellable: false },
   ).catch((error) => {
+    if (isCancellationError(error)) throw error;
     outputChannel && outputChannel.warn("Cloudflare connection state unavailable: " + error.message);
     return { state: "missing", encryption_state: "missing", r2_state: "missing" };
   }) : { state: "missing", encryption_state: "missing", r2_state: "missing" };
@@ -3871,10 +4043,11 @@ async function loadNativeCatalogWithSnapshots(cwd, title) {
       continue;
     }
     try {
-      loaded.push(await loadDimensionHierarchy(cwd, dimension, title));
+      loaded.push(await loadDimensionHierarchy(cwd, dimension, title, options));
     } catch (error) {
+      if (isCancellationError(error)) throw error;
       const failure = dimensionLoadFailure(error);
-      outputChannel && outputChannel.warn("Unable to load Dimension " + id + ": " + (error.result?.error || error.message));
+      outputChannel && outputChannel.warn("Unable to load Dimension " + id + ": " + (controllerErrorText(error.result?.error) || error.message));
       const result = error && error.result && typeof error.result === "object" ? error.result : {};
       const propagated = {};
       for (const key of ["encryption_state", "encryption_domain_id", "key_generation", "error_code", "authorization_required", "authorization_purpose", "journal_status"]) {

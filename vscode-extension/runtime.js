@@ -1,10 +1,10 @@
 const childProcess = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
-const http = require("http");
 const https = require("https");
 const os = require("os");
 const path = require("path");
+const { pipeline, finished } = require("stream/promises");
 
 const DIGEST = /^[0-9a-f]{64}$/;
 const VERSION = /^v\d+\.\d+\.\d+$/;
@@ -57,19 +57,51 @@ function localArtifactMissing(error) {
   return /artifact is not local|no provider was supplied/i.test(error?.message || String(error));
 }
 
+function cancellationError() {
+  return Object.assign(new Error("Josh Room runtime preparation cancelled"), { name: "AbortError", code: "ABORT_ERR" });
+}
+
+function throwIfCancelled(options = {}) {
+  if (options.cancellationToken?.isCancellationRequested) throw cancellationError();
+}
+
+async function cancellableCall(operation, args, options) {
+  throwIfCancelled(options);
+  try {
+    const result = await operation(...args, options);
+    throwIfCancelled(options);
+    return result;
+  } catch (error) {
+    throwIfCancelled(options);
+    throw error;
+  }
+}
+
+function runtimeCommand(options) {
+  return (executable, args, commandOptions) => cancellableCall(options.runJson || runJsonCommand,
+    [executable, args], { ...commandOptions, cancellationToken: options.cancellationToken });
+}
+
 async function acquirePinnedArtifact({
-  rccExecutable, artifactDigest, archivePath, archiveCached, runJson, cwd, environment, onProgress, onOutput, label,
+  rccExecutable, artifactDigest, archivePath, archiveCached, runJson, cwd, environment, onProgress, onOutput, label, cancellationToken,
 }) {
-  const options = { cwd, env: environment, onOutput };
+  const options = { cwd, env: environment, onOutput, cancellationToken };
+  throwIfCancelled(options);
   if (archiveCached) {
-    onProgress?.({ phase: "reuse", message: `Reusing cached ${label} materialization` });
+    onProgress?.({ phase: "verify", message: `Checking cached ${label} materialization` });
     try {
-      return await runJson(
+      const acquired = await runJson(
         rccExecutable,
         ["env", "acquire", "--artifact", artifactDigest, "--permissive-local", "--json"],
         options,
       );
+      if (acquired.artifactDigest === artifactDigest && acquired.verification?.valid === true) {
+        onProgress?.({ phase: "reuse", message: `Reusing cached ${label} materialization` });
+      }
+      throwIfCancelled(options);
+      return acquired;
     } catch (error) {
+      throwIfCancelled(options);
       if (!localArtifactMissing(error)) throw error;
     }
   }
@@ -180,37 +212,43 @@ function localFallbackRecordMatches(record, expected) {
 }
 
 async function verifyLocalFallback(context, rccRuntime, controllerRobot, expected, options = {}) {
+  throwIfCancelled(options);
   const record = readLocalFallbackRecord(context);
   if (!localFallbackRecordMatches(record, expected)) return false;
   const environment = { ...process.env, ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
-  const runJson = options.runJson || runJsonCommand;
+  const runJson = runtimeCommand(options);
   try {
+    options.onProgress?.({ phase: "reuse", message: "Verifying cached local controller environment" });
     const result = await runJson(
       rccRuntime.executable,
       ["--no-build", "ht", "vars", "--robot", controllerRobot, "--json"],
-      { cwd: privatePaths(context).storageRoot, env: environment },
+      { cwd: privatePaths(context).storageRoot, env: environment, onOutput: options.onOutput },
     );
     if (result === undefined || result.error !== undefined) return false;
     const artifact = record.jat_artifact_digest;
     if (!artifact) return true;
     await fs.promises.mkdir(privatePaths(context).logsRoot, { recursive: true, mode: 0o700 });
     const receiptFile = path.join(privatePaths(context).logsRoot, `local-jat-warm-${process.pid}-${Date.now()}.json`);
+    options.onProgress?.({ phase: "reuse", message: "Verifying cached local JAT artifact" });
     const verified = await runJson(
       rccRuntime.executable,
       ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
-      { cwd: privatePaths(context).storageRoot, env: environment, receiptFile },
+      { cwd: privatePaths(context).storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
     );
     const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
     return verified !== undefined && verified.error === undefined && verified.artifactDigest === artifact && exitCode === 0;
-  } catch (_error) {
+  } catch (error) {
+    throwIfCancelled(options);
+    if (error.code === "ABORT_ERR" || error.name === "AbortError") throw error;
     return false;
   }
 }
 
 async function prepareLocalController(context, rccRuntime, controllerRobot, options = {}) {
+  throwIfCancelled(options);
   const environment = { ...process.env, ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
   options.onProgress?.({ phase: "local-controller", message: "Building controller environment locally" });
-  const runJson = options.runJson || runJsonCommand;
+  const runJson = runtimeCommand(options);
   const result = await runJson(
     rccRuntime.executable,
     ["ht", "vars", "-r", controllerRobot, "--json"],
@@ -221,7 +259,8 @@ async function prepareLocalController(context, rccRuntime, controllerRobot, opti
 }
 
 async function buildLocalJatArtifact(context, rccRuntime, jatRobot, options = {}) {
-  const release = await acquireProcessLock(path.join(privatePaths(context).runtimeRoot, "local-jat-build.lock"));
+  throwIfCancelled(options);
+  const release = await acquireProcessLock(path.join(privatePaths(context).runtimeRoot, "local-jat-build.lock"), options);
   try {
     return await buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options);
   } finally {
@@ -230,9 +269,10 @@ async function buildLocalJatArtifact(context, rccRuntime, jatRobot, options = {}
 }
 
 async function buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options = {}) {
+  throwIfCancelled(options);
   const paths = privatePaths(context);
   const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
-  const runJson = options.runJson || runJsonCommand;
+  const runJson = runtimeCommand(options);
   options.onProgress?.({ phase: "local-jat", message: "Building local JAT artifact once" });
   const published = await runJson(
     rccRuntime.executable,
@@ -275,10 +315,12 @@ async function clearLocalFallbackRecord(context) {
   await fs.promises.rm(localFallbackRecordPath(context), { force: true });
 }
 
-async function acquireProcessLock(filename, timeoutMs = 30 * 60 * 1000) {
+async function acquireProcessLock(filename, options = {}, timeoutMs = 30 * 60 * 1000) {
+  throwIfCancelled(options);
   await fs.promises.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + timeoutMs;
   while (true) {
+    throwIfCancelled(options);
     try {
       await fs.promises.mkdir(filename, { recursive: false, mode: 0o700 });
       return async () => fs.promises.rm(filename, { recursive: true, force: true });
@@ -302,6 +344,7 @@ async function ensureFreeSpace(root, requiredBytes, label) {
 }
 
 async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options = {}) {
+  throwIfCancelled(options);
   const manifest = readManifest(manifestSource);
   const platform = options.platform || resolvePlatform();
   const pin = manifest.rcc.platforms[platform];
@@ -315,45 +358,51 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
   const executable = path.join(paths.runtimeRoot, "rcc", manifest.rcc.version, platform, "rcc");
   const directory = path.dirname(executable);
   await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
-  const verifyVersion = options.verifyVersion || verifyRccVersion;
-  const download = options.download || downloadFile;
+  const verifyVersion = (executable, expected) => cancellableCall(options.verifyVersion || verifyRccVersion, [executable, expected], options);
+  const download = (url, destination) => cancellableCall(options.download || downloadFile, [url, destination], options);
   const report = (message, extra = {}) => options.onProgress?.({ phase: message, message, ...extra });
   report("Resolving managed RCC");
 
   if (await isRegularFile(executable)) {
-    const observed = await sha256File(executable);
+    const observed = await sha256File(executable, options);
     if (observed !== pin.sha256) {
       throw new Error(`cached RCC checksum does not match ${manifest.rcc.version}`);
     }
     await verifyVersion(executable, manifest.rcc.version);
     report("Reusing cached verified RCC");
+    throwIfCancelled(options);
     return { executable, storageRoot: paths.storageRoot, platform, version: manifest.rcc.version };
   }
   if (await pathExists(executable)) {
     throw new Error(`managed RCC path is not a regular file: ${executable}`);
   }
 
+  throwIfCancelled(options);
   const temporaryDirectory = await fs.promises.mkdtemp(path.join(directory, ".rcc-download-"));
   const temporary = path.join(temporaryDirectory, pin.asset);
   try {
     report("Downloading RCC");
     await download(pin.url, temporary);
     report("Verifying RCC SHA256");
-    const observed = await sha256File(temporary);
+    const observed = await sha256File(temporary, options);
     if (observed !== pin.sha256) {
       throw new Error(`downloaded RCC checksum mismatch: expected ${pin.sha256}, got ${observed}`);
     }
     await fs.promises.chmod(temporary, 0o700);
+    await verifyVersion(temporary, manifest.rcc.version);
+    throwIfCancelled(options);
     await fs.promises.rename(temporary, executable);
   } finally {
     await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
   }
-  await verifyVersion(executable, manifest.rcc.version);
+  throwIfCancelled(options);
   report("Managed RCC ready");
+  throwIfCancelled(options);
   return { executable, storageRoot: paths.storageRoot, platform, version: manifest.rcc.version };
 }
 
 async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {}) {
+  throwIfCancelled(options);
   const manifest = readManifest(manifestSource);
   const platform = options.platform || resolvePlatform();
   const jat = manifest.jat;
@@ -373,14 +422,14 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   const paths = privatePaths(context);
   await fs.promises.mkdir(paths.jatArtifactRoot, { recursive: true, mode: 0o700 });
   const archivePath = path.join(paths.jatArtifactRoot, archivePin.asset);
-  const download = options.download || downloadFile;
+  const download = (url, destination) => cancellableCall(options.download || downloadFile, [url, destination], options);
   let archiveCached = false;
   if (await isRegularFile(archivePath)) {
     archiveCached = true;
     if (archivePin.size !== undefined && (await fs.promises.stat(archivePath)).size !== archivePin.size) {
       throw new Error("cached JAT environment archive size mismatch");
     }
-    const observed = await sha256File(archivePath);
+    const observed = await sha256File(archivePath, options);
     if (observed !== archivePin.sha256) {
       throw new Error("cached JAT environment archive checksum mismatch");
     }
@@ -389,6 +438,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   } else {
     await ensureFreeSpace(paths.jatArtifactRoot, archivePin.size, "JAT Environment Artifact");
     options.onProgress?.({ phase: "jat-artifact", message: "Downloading JAT Environment Artifact" });
+    throwIfCancelled(options);
     const temporaryDirectory = await fs.promises.mkdtemp(path.join(paths.jatArtifactRoot, ".download-"));
     const temporary = path.join(temporaryDirectory, archivePin.asset);
     try {
@@ -396,25 +446,26 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
       if (archivePin.size !== undefined && (await fs.promises.stat(temporary)).size !== archivePin.size) {
         throw new Error("downloaded JAT environment archive size mismatch");
       }
-      const observed = await sha256File(temporary);
       options.onProgress?.({ phase: "jat-artifact", message: "Verifying JAT Environment Artifact" });
+      const observed = await sha256File(temporary, options);
       if (observed !== archivePin.sha256) {
         throw new Error(`downloaded JAT environment checksum mismatch: expected ${archivePin.sha256}, got ${observed}`);
       }
       await fs.promises.chmod(temporary, 0o600);
+      throwIfCancelled(options);
       await fs.promises.rename(temporary, archivePath);
     } finally {
       await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
     }
   }
   const ensureSource = options.ensureSource || ensureJatSource;
-  const jatRoot = await ensureSource(context, jat, options);
+  const jatRoot = await cancellableCall(ensureSource, [context, jat], options);
   const environment = {
     ...process.env,
     ROBOCORP_HOME: paths.rccHome,
     RCC_HOLOTREE_MODE: "private",
   };
-  const runJson = options.runJson || runJsonCommand;
+  const runJson = runtimeCommand(options);
   let acquired;
   try {
     acquired = await acquirePinnedArtifact({
@@ -428,6 +479,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
       onProgress: options.onProgress,
       onOutput: options.onOutput,
       label: "JAT Environment Artifact",
+      cancellationToken: options.cancellationToken,
     });
   } catch (error) {
     throw compatibilityError(error);
@@ -441,6 +493,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
     throw error;
   }
   options.onProgress?.({ phase: "compatibility", message: "Checking host/artifact compatibility" });
+  throwIfCancelled(options);
   await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
   const receiptFile = path.join(paths.logsRoot, "jat-artifact-receipt.json");
   const executed = await runJson(
@@ -452,6 +505,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
     throw new Error("acquired JAT environment failed Hauler version verification");
   }
   options.onProgress?.({ phase: "holotree", message: "Materializing JAT Holotree" });
+  throwIfCancelled(options);
   return {
     artifact: artifact.digest,
     archive: archivePath,
@@ -461,6 +515,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
 }
 
 async function ensureControllerRuntime(context, manifestSource, rccRuntime, options = {}) {
+  throwIfCancelled(options);
   const manifest = readManifest(manifestSource);
   const platform = options.platform || resolvePlatform();
   const artifact = selectControllerArtifact(manifest.controller, platform);
@@ -480,38 +535,43 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   const paths = privatePaths(context);
   await fs.promises.mkdir(paths.controllerArtifactRoot, { recursive: true, mode: 0o700 });
   const archivePath = path.join(paths.controllerArtifactRoot, archivePin.asset);
-  const download = options.download || downloadFile;
+  const download = (url, destination) => cancellableCall(options.download || downloadFile, [url, destination], options);
   let archiveCached = false;
   if (await isRegularFile(archivePath)) {
     archiveCached = true;
+    options.onProgress?.({ phase: "controller-artifact", message: "Verifying cached controller Environment Artifact" });
     if (archivePin.size !== undefined && (await fs.promises.stat(archivePath)).size !== archivePin.size) {
       throw new Error("cached controller environment archive size mismatch");
     }
-    if (await sha256File(archivePath) !== archivePin.sha256) {
+    if (await sha256File(archivePath, options) !== archivePin.sha256) {
       throw new Error("cached controller environment archive checksum mismatch");
     }
   } else if (await pathExists(archivePath)) {
     throw new Error(`controller environment archive is not a regular file: ${archivePath}`);
   } else {
     await ensureFreeSpace(paths.controllerArtifactRoot, archivePin.size, "Josh Room controller environment artifact");
+    throwIfCancelled(options);
     const temporaryDirectory = await fs.promises.mkdtemp(path.join(paths.controllerArtifactRoot, ".download-"));
     const temporary = path.join(temporaryDirectory, archivePin.asset);
     try {
+      options.onProgress?.({ phase: "controller-artifact", message: "Downloading controller Environment Artifact" });
       await download(archivePin.url, temporary);
+      options.onProgress?.({ phase: "controller-artifact", message: "Verifying controller Environment Artifact" });
       if (archivePin.size !== undefined && (await fs.promises.stat(temporary)).size !== archivePin.size) {
         throw new Error("downloaded controller environment archive size mismatch");
       }
-      if (await sha256File(temporary) !== archivePin.sha256) {
+      if (await sha256File(temporary, options) !== archivePin.sha256) {
         throw new Error("downloaded controller environment checksum mismatch");
       }
       await fs.promises.chmod(temporary, 0o600);
+      throwIfCancelled(options);
       await fs.promises.rename(temporary, archivePath);
     } finally {
       await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
     }
   }
   const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
-  const runJson = options.runJson || runJsonCommand;
+  const runJson = runtimeCommand(options);
   let acquired;
   try {
     acquired = await acquirePinnedArtifact({
@@ -525,6 +585,7 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
       onProgress: options.onProgress,
       onOutput: options.onOutput,
       label: "controller Environment Artifact",
+      cancellationToken: options.cancellationToken,
     });
   } catch (error) {
     throw compatibilityError(error);
@@ -584,68 +645,137 @@ async function pathExists(filename) {
   }
 }
 
-function sha256File(filename) {
-  return new Promise((resolve, reject) => {
-    const digest = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filename);
+async function sha256File(filename, options = {}) {
+  throwIfCancelled(options);
+  const digest = crypto.createHash("sha256");
+  const stream = fs.createReadStream(filename);
+  const completion = finished(stream);
+  const subscription = options.cancellationToken?.onCancellationRequested(() => stream.destroy(cancellationError()));
+  try {
+    if (options.cancellationToken?.isCancellationRequested) stream.destroy(cancellationError());
     stream.on("data", (chunk) => digest.update(chunk));
-    stream.on("error", reject);
-    stream.on("end", () => resolve(digest.digest("hex")));
-  });
+    await completion;
+    throwIfCancelled(options);
+    return digest.digest("hex");
+  } finally {
+    subscription?.dispose();
+  }
 }
 
-function downloadFile(url, destination, redirects = 0) {
-  if (redirects > 5) return Promise.reject(new Error("runtime download redirected too many times"));
+async function downloadFile(url, destination, options = {}, redirects = 0) {
+  throwIfCancelled(options);
+  if (redirects > 5) throw new Error("runtime download redirected too many times");
   let parsed;
   try {
     parsed = new URL(url);
   } catch (error) {
-    return Promise.reject(new Error(`runtime download URL is invalid: ${error.message}`));
+    throw new Error(`runtime download URL is invalid: ${error.message}`);
   }
-  if (parsed.protocol !== "https:") return Promise.reject(new Error("runtime downloads require HTTPS"));
-  const client = parsed.protocol === "https:" ? https : http;
-  return new Promise((resolve, reject) => {
-    const request = client.get(parsed, { headers: { "User-Agent": "Josh-Room-VSCode" } }, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        response.resume();
-        downloadFile(new URL(response.headers.location, parsed).toString(), destination, redirects + 1)
-          .then(resolve, reject);
-        return;
-      }
-      if (response.statusCode !== 200) {
-        response.resume();
-        reject(new Error(`runtime download returned HTTP ${response.statusCode}`));
-        return;
-      }
-      const output = fs.createWriteStream(destination, { mode: 0o600 });
-      response.pipe(output);
-      output.on("finish", () => output.close(resolve));
-      output.on("error", (error) => {
-        output.destroy();
-        reject(error);
-      });
-    });
+  if (parsed.protocol !== "https:") throw new Error("runtime downloads require HTTPS");
+  let request;
+  let response;
+  let output;
+  const received = new Promise((resolve, reject) => {
+    request = https.get(parsed, { headers: { "User-Agent": "Josh-Room-VSCode" } }, resolve);
     request.on("error", reject);
+  });
+  const closed = new Promise((resolve) => request.once("close", resolve));
+  const cancel = () => {
+    request.destroy(cancellationError());
+    response?.destroy(cancellationError());
+    output?.destroy(cancellationError());
+  };
+  const subscription = options.cancellationToken?.onCancellationRequested(cancel);
+  let failed = true;
+  try {
+    if (options.cancellationToken?.isCancellationRequested) cancel();
+    response = await received;
+    throwIfCancelled(options);
+    if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+      const location = new URL(response.headers.location, parsed).toString();
+      response.destroy();
+      await closed;
+      return await downloadFile(location, destination, options, redirects + 1);
+    }
+    if (response.statusCode !== 200) throw new Error(`runtime download returned HTTP ${response.statusCode}`);
+    output = fs.createWriteStream(destination, { mode: 0o600 });
+    await pipeline(response, output);
+    throwIfCancelled(options);
+    failed = false;
+  } catch (error) {
+    throwIfCancelled(options);
+    throw error;
+  } finally {
+    subscription?.dispose();
+    response?.destroy();
+    request.destroy();
+    await closed;
+    if (output) {
+      output.destroy();
+      await finished(output).catch(() => {});
+      if (failed) await fs.promises.rm(destination, { force: true });
+    }
+  }
+}
+
+function runCapturedCommand(executable, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    throwIfCancelled(options);
+    const child = childProcess.spawn(executable, args, {
+      cwd: options.cwd,
+      env: options.env,
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let spawnError;
+    let cancelled = false;
+    let killTimer;
+    let treeStopped = Promise.resolve();
+    const killGroup = (signal) => {
+      if (!child.pid) return;
+      try { process.kill(-child.pid, signal); } catch (error) {
+        if (error.code !== "ESRCH") child.kill(signal);
+      }
+    };
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      if (process.platform === "win32" && child.pid) {
+        treeStopped = new Promise((done) => {
+          const killer = childProcess.spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+          killer.on("error", () => child.kill());
+          killer.on("close", done);
+        });
+      } else {
+        killGroup("SIGTERM");
+        killTimer = setTimeout(() => killGroup("SIGKILL"), 1000);
+      }
+    };
+    // RCC stdout can contain environment JSON. Only stderr is eligible for UI sanitization.
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); options.onOutput?.("stderr", chunk.toString()); });
+    child.on("error", (error) => { spawnError = error; });
+    child.on("close", async (code) => {
+      subscription?.dispose();
+      clearTimeout(killTimer);
+      if (cancelled && process.platform !== "win32") killGroup("SIGKILL");
+      await treeStopped;
+      if (cancelled || options.cancellationToken?.isCancellationRequested) reject(cancellationError());
+      else if (spawnError) reject(spawnError);
+      else resolve({ stdout, stderr, code });
+    });
+    const subscription = options.cancellationToken?.onCancellationRequested(cancel);
+    if (options.cancellationToken?.isCancellationRequested) cancel();
   });
 }
 
-function verifyRccVersion(executable, expected) {
-  return new Promise((resolve, reject) => {
-    const child = childProcess.spawn(executable, ["version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let output = "";
-    child.stdout.on("data", (chunk) => { output += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { output += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0 || !output.includes(expected)) {
-        reject(new Error(`managed RCC failed version verification for ${expected}`));
-        return;
-      }
-      resolve();
-    });
-  });
+async function verifyRccVersion(executable, expected, options = {}) {
+  const { stdout, stderr, code } = await runCapturedCommand(executable, ["version"], options);
+  if (code !== 0 || !(stdout + stderr).includes(expected)) {
+    throw new Error(`managed RCC failed version verification for ${expected}`);
+  }
 }
 
 function parseJsonOutput(output) {
@@ -669,46 +799,31 @@ function parseJsonOutput(output) {
   }
 }
 
-function runJsonCommand(executable, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = childProcess.spawn(executable, args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); options.onOutput?.("stdout", chunk.toString()); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); options.onOutput?.("stderr", chunk.toString()); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (options.receiptFile && fs.existsSync(options.receiptFile)) {
-        try {
-          resolve(JSON.parse(fs.readFileSync(options.receiptFile, "utf8")));
-          return;
-        } catch (error) {
-          reject(new Error(`managed RCC returned an invalid receipt: ${error.message}`));
-          return;
-        }
-      }
-      try {
-        resolve(parseJsonOutput(stdout));
-      } catch (error) {
-        if (code !== 0 && !stdout.trim()) {
-          reject(new Error(stderr || `managed RCC exited with status ${code}`));
-          return;
-        }
-        if (!stdout.trim()) {
-          reject(new Error("managed RCC returned no JSON result"));
-          return;
-        }
-        reject(new Error(`managed RCC returned invalid JSON: ${error.message}`));
-      }
-    });
-  });
+async function runJsonCommand(executable, args, options = {}) {
+  const { stdout, stderr, code } = await runCapturedCommand(executable, args, options);
+  throwIfCancelled(options);
+  if (options.receiptFile && fs.existsSync(options.receiptFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(options.receiptFile, "utf8"));
+    } catch (_error) {
+      throw new Error("managed RCC returned an invalid receipt");
+    }
+  }
+  try {
+    return parseJsonOutput(stdout);
+  } catch (_error) {
+    if (code !== 0 && !stdout.trim()) {
+      throw new Error(stderr || `managed RCC exited with status ${code}`);
+    }
+    if (!stdout.trim()) {
+      throw new Error("managed RCC returned no JSON result");
+    }
+    throw new Error("managed RCC returned invalid JSON");
+  }
 }
 
 async function ensureJatSource(context, jat, options = {}) {
+  throwIfCancelled(options);
   const paths = privatePaths(context);
   const source = jat.source_archive;
   if (!source || typeof source.asset !== "string" || typeof source.url !== "string"
@@ -721,23 +836,28 @@ async function ensureJatSource(context, jat, options = {}) {
   const target = path.join(paths.jatRoot, jat.git_sha);
   const marker = path.join(target, ".josh-room-source");
   if (await isRegularFile(marker) && (await fs.promises.readFile(marker, "utf8")).trim() === jat.git_sha) {
+    throwIfCancelled(options);
     return target;
   }
   if (await pathExists(target)) {
     throw new Error(`JAT source target is not a verified directory: ${target}`);
   }
+  throwIfCancelled(options);
   await fs.promises.mkdir(paths.jatRoot, { recursive: true, mode: 0o700 });
+  throwIfCancelled(options);
   const temporaryDirectory = await fs.promises.mkdtemp(path.join(paths.jatRoot, ".source-"));
   const archivePath = path.join(temporaryDirectory, source.asset);
-  const download = options.download || downloadFile;
+  const download = (url, destination) => cancellableCall(options.download || downloadFile, [url, destination], options);
   try {
     await download(source.url, archivePath);
-    if (await sha256File(archivePath) !== source.sha256) {
+    if (await sha256File(archivePath, options) !== source.sha256) {
       throw new Error("downloaded JAT source checksum mismatch");
     }
     const staged = path.join(temporaryDirectory, "source");
-    await extractGzipTar(archivePath, staged);
+    await extractGzipTar(archivePath, staged, options);
+    throwIfCancelled(options);
     await fs.promises.writeFile(path.join(staged, ".josh-room-source"), `${jat.git_sha}\n`, { mode: 0o600 });
+    throwIfCancelled(options);
     await fs.promises.rename(staged, target);
   } finally {
     await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
@@ -745,12 +865,15 @@ async function ensureJatSource(context, jat, options = {}) {
   return target;
 }
 
-async function extractGzipTar(archivePath, destination) {
+async function extractGzipTar(archivePath, destination, options = {}) {
+  throwIfCancelled(options);
   const zlib = require("zlib");
   const compressed = await fs.promises.readFile(archivePath);
+  throwIfCancelled(options);
   const content = zlib.gunzipSync(compressed);
   await fs.promises.mkdir(destination, { recursive: true, mode: 0o700 });
   for (let offset = 0; offset + 512 <= content.length;) {
+    throwIfCancelled(options);
     const header = content.subarray(offset, offset + 512);
     if (header.every((byte) => byte === 0)) break;
     const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
@@ -769,6 +892,7 @@ async function extractGzipTar(archivePath, destination) {
         await fs.promises.mkdir(target, { recursive: true, mode: 0o700 });
       } else if (type === 0 || type === 48) {
         await fs.promises.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+        throwIfCancelled(options);
         await fs.promises.writeFile(target, content.subarray(offset + 512, offset + 512 + size), { mode: 0o600 });
       } else {
         throw new Error("JAT source archive contains an unsupported entry type");

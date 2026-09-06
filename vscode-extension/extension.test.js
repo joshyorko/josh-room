@@ -312,6 +312,37 @@ function loadExtensionWithRealProcesses(vscodeMock) {
   }
 }
 
+function stubRuntimeAcquisition(t, extension, acquire) {
+  extension.__test__.setRuntimeForTests(undefined);
+  const runtime = require("./runtime");
+  const originals = { ensureManagedRcc: runtime.ensureManagedRcc, ensureControllerRuntime: runtime.ensureControllerRuntime };
+  t.after(() => Object.assign(runtime, originals));
+  let starts = 0;
+  runtime.ensureManagedRcc = async (_context, _manifest, options) => {
+    starts += 1;
+    options.onProgress?.({ message: "Downloading RCC" });
+    return { executable: "/synthetic/managed-rcc", version: "v18.19.3" };
+  };
+  runtime.ensureControllerRuntime = async (_context, _manifest, _rcc, options) => {
+    options.onProgress?.({ message: "Importing controller Environment Artifact" });
+    options.onOutput?.("stdout", '{"private":"synthetic-private-result"}\n');
+    options.onOutput?.("stderr", "RCC importing environment\nBearer synthetic-");
+    options.onOutput?.("stderr", "runtime-token\n");
+    await acquire?.(options, starts);
+    return { artifact: "sha256:" + "b".repeat(64) };
+  };
+  return { get starts() { return starts; } };
+}
+
+function activateTestExtension(extension, root, vscode, values = new Map()) {
+  const context = {
+    extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async (key) => values.get(key), store: async (key, value) => values.set(key, value) },
+  };
+  extension.activate(context);
+  return context;
+}
+
 test("extension backend commands use the managed RCC controller boundary", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-command-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
@@ -2257,10 +2288,204 @@ test("fresh activation gates all storage calls behind runtime readiness", async 
   const roomsView = treeViewCalls.find((view) => view.id === "joshRoom.rooms").options.treeDataProvider;
   const pending = roomsView.getChildren();
   assert.equal(pending[0].kind, "runtime");
-  assert.match(pending[0].label, /Preparing Josh Room runtime/);
+  assert.equal(roomsView.getTreeItem(pending[0]).command.command, "joshRoom.prepare");
   assert.deepEqual(spawnHarness.calls, []);
   release({});
   await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("fresh activation exposes an actionable idle runtime load without starting storage or runtime", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-idle-runtime-load-test-"));
+  const { vscode, statusItem, commandCallbacks, treeViewCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => {
+    throw new Error("activation must not invoke the controller");
+  });
+  let secretReads = 0;
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({
+    extensionPath: root,
+    globalStorageUri: { fsPath: root },
+    subscriptions: [],
+    secrets: { get: async () => { secretReads += 1; return undefined; } },
+  });
+
+  assert.equal(spawnHarness.calls.length, 0);
+  assert.equal(secretReads, 0);
+  const provider = treeViewCalls.find((view) => view.id === "joshRoom.rooms").options.treeDataProvider;
+  const row = provider.getChildren()[0];
+  assert.equal(row.kind, "runtime");
+  assert.equal(row.label, "Load Storage / Prepare Runtime");
+  assert.equal(row.failed, false);
+  const treeItem = provider.getTreeItem(row);
+  assert.equal(treeItem.iconPath.id, "cloud-download");
+  assert.deepEqual(treeItem.command, {
+    command: "joshRoom.prepare",
+    title: "Load Storage / Prepare Runtime",
+  });
+  assert.equal(typeof commandCallbacks.get("joshRoom.prepare"), "function");
+});
+
+test("registered prepare action starts once, reports sanitized runtime progress and publishes the loaded tree", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-prepare-action-"));
+  const { vscode, commandCallbacks, treeViewCalls, progressReports, logLines, progressCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.deepEqual(args.slice(args.indexOf("--") + 1), ["python", "-m", "josh_room", "dimensions", "list", "--json"]);
+    return { stdout: JSON.stringify({ ok: true, connections: [], dimensions: [{ id: "minio-bucket", provider: "minio", projects: [] }] }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const acquisition = stubRuntimeAcquisition(t, extension, () => pending);
+  activateTestExtension(extension, root, vscode);
+  const provider = treeViewCalls[0].options.treeDataProvider;
+  assert.equal(acquisition.starts, 0);
+  const command = provider.getTreeItem(provider.getChildren()[0]).command.command;
+  assert.equal(command, "joshRoom.prepare");
+  const first = commandCallbacks.get(command)();
+  const second = commandCallbacks.get(command)();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(acquisition.starts, 1);
+  assert.equal(spawnHarness.calls.length, 0);
+  assert.equal(provider.getTreeItem(provider.getChildren()[0]).iconPath.id, "sync~spin");
+  assert.equal(progressCalls.length, 1);
+  assert.match(JSON.stringify(progressReports), /Downloading RCC/);
+  assert.match(JSON.stringify(progressReports), /RCC importing environment/);
+  assert.doesNotMatch(JSON.stringify([progressReports, logLines]), /synthetic-private-result|synthetic-|runtime-token/);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(spawnHarness.calls.length, 1);
+  assert.equal(provider.getChildren()[0].id, "minio");
+  assert.equal(provider.state, "ready");
+  await commandCallbacks.get("joshRoom.refresh")();
+  assert.equal(spawnHarness.calls.length, 1);
+  await commandCallbacks.get("joshRoom.prepare")();
+  assert.equal(acquisition.starts, 1);
+  assert.equal(spawnHarness.calls.length, 2);
+});
+
+test("runtime failure and cancellation expose real retry actions without starting catalog commands", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-prepare-retry-"));
+  const { vscode, commandCallbacks, treeViewCalls, progressCalls } = createVscodeMock(root);
+  const extras = withWindowExtras(vscode);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true, connections: [], dimensions: [{ id: "bucket", provider: "minio", projects: [] }] }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  let cancelObserved = false;
+  stubRuntimeAcquisition(t, extension, async (options, starts) => {
+    if (starts === 1) throw new Error("synthetic acquisition failure");
+    if (starts === 2) await new Promise((_resolve, reject) => {
+      options.cancellationToken?.onCancellationRequested(() => {
+        cancelObserved = true;
+        reject(Object.assign(new Error("cancelled"), { code: "ABORT_ERR" }));
+      });
+    });
+  });
+  activateTestExtension(extension, root, vscode);
+  const prepare = commandCallbacks.get("joshRoom.prepare");
+  assert.equal(typeof prepare, "function");
+  assert.equal(await prepare(), "failed");
+  const provider = treeViewCalls[0].options.treeDataProvider;
+  assert.match(provider.getChildren()[0].label, /unavailable.*Retry/);
+  assert.equal(provider.getTreeItem(provider.getChildren()[0]).command.command, "joshRoom.prepare");
+  const cancelled = prepare();
+  await new Promise((resolve) => setImmediate(resolve));
+  progressCalls.at(-1).token.cancel();
+  assert.equal(await cancelled, "cancelled");
+  assert.equal(cancelObserved, true);
+  assert.match(provider.getChildren()[0].label, /cancelled.*Retry/i);
+  assert.notEqual(provider.getTreeItem(provider.getChildren()[0]).iconPath.id, "sync~spin");
+  assert.equal(spawnHarness.calls.length, 0);
+  assert.equal(extras.errorCalls.length, 1);
+  await prepare();
+  assert.equal(provider.getChildren()[0].id, "minio");
+});
+
+test("cancelling one runtime consumer preserves preparation needed by another", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-shared-runtime-"));
+  const { vscode, progressCalls, progressReports } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  let sharedToken;
+  const acquisition = stubRuntimeAcquisition(t, extension, (options) => { sharedToken = options.cancellationToken; return pending; });
+  activateTestExtension(extension, root, vscode);
+  const first = extension.__test__.runOperation("First load", ["dimensions", "list"], root);
+  const rejection = assert.rejects(first, { code: "ABORT_ERR" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = extension.__test__.runOperation("Second load", ["dimensions", "list"], root);
+  await new Promise((resolve) => setImmediate(resolve));
+  progressCalls[0].token.cancel();
+  assert.equal(sharedToken?.isCancellationRequested, false);
+  release();
+  await Promise.all([rejection, second]);
+  assert.equal(acquisition.starts, 1);
+  assert.equal(spawnHarness.calls.length, 1);
+  assert.match(JSON.stringify(progressReports), /Importing controller Environment Artifact/);
+});
+
+test("cancelling one JAT consumer preserves preparation and progress for another", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-shared-jat-"));
+  const { vscode, progressCalls, progressReports } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  stubRuntimeAcquisition(t, extension);
+  const runtime = require("./runtime");
+  const original = runtime.ensureJatRuntime;
+  t.after(() => { runtime.ensureJatRuntime = original; });
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  let sharedToken;
+  let starts = 0;
+  runtime.ensureJatRuntime = async (_context, _manifest, _rcc, options) => {
+    starts += 1;
+    sharedToken = options.cancellationToken;
+    options.onProgress({ message: "Importing JAT runtime" });
+    await pending;
+    return { artifact: "sha256:" + "c".repeat(64), jatRoot: path.join(root, "jat") };
+  };
+  activateTestExtension(extension, root, vscode);
+  const first = extension.__test__.runOperation("First JAT", ["doctor"], root);
+  const rejection = assert.rejects(first, { code: "ABORT_ERR" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = extension.__test__.runOperation("Second JAT", ["doctor"], root);
+  await new Promise((resolve) => setImmediate(resolve));
+  progressCalls[0].token.cancel();
+  const cancelledSharedWork = sharedToken.isCancellationRequested;
+  release();
+  await Promise.all([rejection, second]);
+  assert.equal(cancelledSharedWork, false);
+  assert.equal(starts, 1);
+  assert.equal(spawnHarness.calls.length, 1);
+  assert.ok(progressReports.filter((report) => /Importing JAT runtime/.test(report.message)).length >= 2);
+});
+
+test("runtime acquisition failures redact stderr in logs, progress and native errors", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-error-redaction-"));
+  const { vscode, commandCallbacks, logLines, progressReports, statusItem } = createVscodeMock(root);
+  const extras = withWindowExtras(vscode);
+  const extension = loadExtension(vscode, () => { throw new Error("controller must not start"); });
+  stubRuntimeAcquisition(t, extension, () => { throw new Error("RCC failed: Bearer synthetic-runtime-leak\npassword=synthetic-password-leak"); });
+  activateTestExtension(extension, root, vscode);
+  assert.equal(await commandCallbacks.get("joshRoom.prepare")(), "failed");
+  assert.equal(extras.errorCalls.length, 1);
+  const visible = JSON.stringify({ logLines, progressReports, errors: extras.errorCalls, tooltip: statusItem.tooltip });
+  assert.doesNotMatch(visible, /synthetic-runtime-leak|synthetic-password-leak/);
+  assert.match(visible, /RCC failed/);
+});
+
+test("prepare in an untrusted workspace does not resolve runtime or read secrets", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-prepare-trust-"));
+  const { vscode, commandCallbacks } = createVscodeMock(root);
+  const extras = withWindowExtras(vscode);
+  vscode.workspace.isTrusted = false;
+  const extension = loadExtension(vscode, () => { throw new Error("untrusted controller access"); });
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [], secrets: { get() { throw new Error("untrusted secret access"); } } });
+  const prepare = commandCallbacks.get("joshRoom.prepare");
+  assert.equal(typeof prepare, "function");
+  assert.equal(await prepare(), "failed");
+  assert.match(JSON.stringify(extras.errorCalls), /Workspace Trust/);
 });
 
 test("local fallback prompt requires explicit Build Locally and supports Show Logs then Cancel", async () => {
@@ -2445,6 +2670,86 @@ test("MinIO Add Storage asks for concrete settings without invoking Cloudflare O
   const addCall = spawnHarness.calls.find((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add");
   assert.ok(addCall);
   assert.equal(addCall.args[addCall.args.indexOf("--connection") + 1], "home");
+});
+
+for (const action of ["add", "edit", "reconnect"]) {
+  test(`explicit MinIO ${action} replaces the synthetic R2 cache with authoritative storage`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-storage-reload-"));
+    const { vscode, treeViewCalls, commandCallbacks, inputBoxResponses, quickPickResponses } = createVscodeMock(root);
+    const connection = { id: "synthetic-connection", provider: "minio", endpoint: "https://minio.example.invalid" };
+    let reloads = 0;
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[0] === "dimensions" && args[1] === "list") {
+        reloads += 1;
+        return { stdout: JSON.stringify({ ok: true, connections: [connection], dimensions: [{ id: "minio-synthetic-connection-rooms", connection_id: connection.id, provider: "minio", projects: [] }] }) };
+      }
+      if (args[0] === "provider" && args[1] === "connection") return { stdout: JSON.stringify({ ok: true, connections: [], connection }) };
+      if (args[0] === "provider" && args[1] === "bucket") return { stdout: JSON.stringify({ ok: true, buckets: ["rooms"], accessible: true }) };
+      if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+      throw new Error("No Cloudflare command is expected");
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    activateTestExtension(extension, root, vscode);
+    const provider = treeViewCalls[0].options.treeDataProvider;
+    await provider.setCatalog({ dimensions: [{ id: "r2", provider: "r2", synthetic: true }] });
+    inputBoxResponses.push(connection.endpoint, "synthetic-access", "synthetic-secret");
+    quickPickResponses.push({ provider: "minio" }, { bucket: "rooms" });
+    await commandCallbacks.get(action === "add" ? "joshRoom.addStorage" : action === "edit" ? "joshRoom.editConnection" : "joshRoom.reconnectStorage")(connection);
+    assert.equal(reloads, 1);
+    assert.deepEqual(provider.getChildren().map((node) => node.id), ["minio"]);
+    assert.equal(provider.getChildren()[0].children[0].children[0].id, "minio-synthetic-connection-rooms");
+  });
+}
+
+test("registry error nodes route storage actions to connections and encryption actions to Dimensions", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-action-routing-"));
+  const { vscode, treeViewCalls, commandCallbacks } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.equal(args[0], "encryption");
+    assert.equal(args[args.indexOf("--dimension") + 1], "selected-bucket");
+    return { stdout: JSON.stringify({ ok: true, state: "legacy", status: "committed" }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  activateTestExtension(extension, root, vscode);
+  const provider = treeViewCalls[0].options.treeDataProvider;
+  for (const [action, command, target] of [
+    ["edit", "joshRoom.editConnection", "storage-connection"],
+    ["reconnect", "joshRoom.reconnectStorage", "storage-connection"],
+    ["authorize", "joshRoom.connectEncryption", "selected-bucket"],
+    ["migrate", "joshRoom.migrateEncryption", "selected-bucket"],
+    ["resume", "joshRoom.resumeEncryption", "selected-bucket"],
+    ["retry", "joshRoom.prepare", undefined],
+  ]) {
+    const catalog = { connections: [{ id: "storage-connection", provider: "minio", endpoint: "https://minio.example.invalid" }], dimensions: [{ id: "selected-bucket", provider: "minio", connection_id: "storage-connection", load_error: { action, label: "Retry synthetic error" } }] };
+    const node = buildProviderTree(catalog)[0].children[0].children[0].children[0];
+    assert.equal(node.kind, "dimension-error");
+    assert.notEqual(node.dimension.id, node.connection.id);
+    const treeItem = provider.getTreeItem(node);
+    assert.equal(treeItem.command.command, command);
+    assert.equal(treeItem.command.arguments?.[0]?.id, target);
+    if (action === "migrate") await commandCallbacks.get(command)(...treeItem.command.arguments);
+  }
+  assert.equal(spawnHarness.calls[0].args[1], "status");
+});
+
+test("structured controller failures retain meaningful nested messages, codes and state with redaction", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-structured-error-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ code: 1, stdout: JSON.stringify({ ok: false, error: {
+    code: "legacy-source-identity-required", state: "legacy", message: { message: "Import the old source identity. token=synthetic-error-secret" },
+    credentials: { value: "never-render-this" },
+  } }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  await assert.rejects(extension.__test__.runJoshRoom(["encryption", "migrate", "--dimension", "bucket"], root), (error) => {
+    assert.match(error.message, /Import the old source identity/);
+    assert.match(error.message, /legacy-source-identity-required/);
+    assert.match(error.message, /legacy/);
+    assert.doesNotMatch(error.message, /\[object Object\]|synthetic-error-secret|never-render-this/);
+    assert.equal(error.result.error.code, "legacy-source-identity-required");
+    assert.equal(error.result.error.state, "legacy");
+    return true;
+  });
 });
 
 test("MinIO Add Storage offers an existing connection and a new connection when one reusable connection exists", async () => {
@@ -3762,14 +4067,17 @@ test("SecretStorage changes invalidate the native Dimension tree", () => {
 
 test("migration uses one modal plan confirmation, native progress, and output logs", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-migration-ux-test-"));
-  const { vscode, statusItem, warningCalls, progressCalls, logLines } = createVscodeMock(root);
+  const { vscode, statusItem, warningCalls, progressCalls, logLines, openDialogResponses } = createVscodeMock(root);
   const extras = withWindowExtras(vscode);
   const values = new Map([[
     "josh-room.encryption.v1:domain-a:7",
     JSON.stringify({ identity: "AGE-SECRET-KEY-operational\n" }),
   ]]);
   const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "encryption" && args[1] === "migrate") return { stdout: JSON.stringify({ ok: true, status: "planned", mappings: 2 }) };
+    if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "ready", encryption_domain_id: "domain-a", key_generation: 7 }) };
+    if (args[0] === "encryption" && args[1] === "migrate") return { stdout: JSON.stringify(args.includes("--source-identity")
+      ? { ok: true, status: "planned", read_only: true, requires_confirmation: true, source_catalog_etag: "synthetic-preview-v1", mappings: 2 }
+      : { ok: false, error_code: "legacy-source-identity-required", error: "Old source identity required" }) };
     if (args[0] === "encryption" && args[1] === "resume") return { stdout: JSON.stringify({ ok: true, status: "committed" }) };
     throw new Error(`unexpected command: ${args.join(" ")}`);
   });
@@ -3781,14 +4089,132 @@ test("migration uses one modal plan confirmation, native progress, and output lo
     store: async (key, value) => values.set(key, value),
   } });
   vscode.warningResponses.push("Migrate");
+  const source = path.join(root, "synthetic-source.identity");
+  fs.writeFileSync(source, "AGE-SECRET-KEY-synthetic-source\n", { mode: 0o600 });
+  openDialogResponses.push([{ fsPath: source }]);
   assert.equal(await extension.__test__.migrateEncryption({
     id: "backup", provider: "minio", encryption_domain_id: "domain-a", key_generation: 7,
   }), "committed");
   assert.equal(warningCalls.length, 1);
   assert.equal(warningCalls[0][1].modal, true);
-  assert.equal(progressCalls.length, 2);
+  assert.ok(progressCalls.some((call) => /Planning MinIO/.test(call.options.title)));
+  assert.ok(progressCalls.some((call) => /Migrating MinIO/.test(call.options.title)));
   assert.ok(logLines.some((line) => /START|DONE/.test(line)));
   assert.equal(extras.errorCalls.length, 0);
+});
+
+test("migration imports separate bounded source and recovery handoffs before planning and cleans them after confirmation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-migration-prerequisites-"));
+  const { vscode, statusItem, openDialogResponses, openDialogCalls, quickPickResponses, warningCalls, logLines } = createVscodeMock(root);
+  const source = path.join(root, "synthetic-source.identity");
+  const recovery = path.join(root, "synthetic-recovery.identity");
+  fs.writeFileSync(source, "AGE-SECRET-KEY-synthetic-source\n", { mode: 0o600 });
+  fs.writeFileSync(recovery, "AGE-SECRET-KEY-synthetic-recovery\n", { mode: 0o600 });
+  const observed = [];
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    if (args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "legacy" }) };
+    const oldKey = args[args.indexOf("--source-identity") + 1];
+    const recoveryKey = args[args.indexOf("--recovery-handoff") + 1];
+    assert.equal(args[args.indexOf("--dimension") + 1], "synthetic-dimension");
+    assert.notEqual(oldKey, source);
+    assert.notEqual(recoveryKey, recovery);
+    assert.notEqual(oldKey, recoveryKey);
+    assert.equal(fs.readFileSync(oldKey, "utf8"), "AGE-SECRET-KEY-synthetic-source\n");
+    assert.equal(fs.readFileSync(recoveryKey, "utf8"), "AGE-SECRET-KEY-synthetic-recovery\n");
+    assert.equal(fs.statSync(oldKey).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(recoveryKey).mode & 0o777, 0o600);
+    assert.equal(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL, undefined);
+    observed.push([oldKey, recoveryKey]);
+    if (args[1] === "migrate") {
+      assert.equal(warningCalls.length, 0);
+      return { stdout: JSON.stringify({ ok: true, status: "planned", read_only: true, requires_confirmation: true, source_catalog_etag: "synthetic-preview-v1", room_count: 2, snapshot_count: 3, object_count: 2, total_bytes: 4096, temporary_disk_bytes: 6144 }) };
+    }
+    assert.equal(args[1], "resume");
+    assert.equal(warningCalls.length, 1);
+    return { stdout: JSON.stringify({ ok: true, status: "committed" }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ info: (line) => logLines.push(line), warn() {}, error() {}, show() {}, appendLine: (line) => logLines.push(line) });
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async () => undefined, store: async () => {} } });
+  openDialogResponses.push([{ fsPath: source }], [{ fsPath: recovery }]);
+  quickPickResponses.push({ action: "import" });
+  vscode.warningResponses.push("Migrate");
+  assert.equal(await extension.__test__.migrateEncryption({ id: "synthetic-dimension", provider: "minio" }), "committed");
+  assert.match(openDialogCalls[0].title, /old|source/i);
+  assert.match(openDialogCalls[1].title, /recovery/i);
+  assert.match(warningCalls[0][0], /2.*Room/);
+  assert.match(warningCalls[0][0], /3.*JAT/);
+  assert.equal(observed.length, 2);
+  const executionArgs = spawnHarness.calls.find((call) => call.args[1] === "resume").args;
+  assert.equal(executionArgs[executionArgs.indexOf("--expected-catalog-etag") + 1], "synthetic-preview-v1");
+  for (const handoff of observed.flat()) assert.equal(fs.existsSync(handoff), false);
+  assert.doesNotMatch(logLines.join("\n"), /AGE-SECRET|synthetic-source.identity|synthetic-recovery.identity/);
+  assert.equal(fs.existsSync(source), true);
+  assert.equal(fs.existsSync(recovery), true);
+});
+
+for (const stage of ["source", "recovery", "confirmation", "failure"]) {
+  test(`migration ${stage} exit does not execute cutover and removes source handoff`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-migration-cancel-"));
+    const { vscode, statusItem, openDialogResponses, quickPickResponses } = createVscodeMock(root);
+    const source = path.join(root, "synthetic-source.identity");
+    fs.writeFileSync(source, "AGE-SECRET-KEY-synthetic-source\n", { mode: 0o600 });
+    let handoff;
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "legacy" }) };
+      assert.equal(args[1], "migrate");
+      assert.ok(args.includes("--source-identity"));
+      handoff = args[args.indexOf("--source-identity") + 1];
+      assert.equal(fs.readFileSync(handoff, "utf8"), "AGE-SECRET-KEY-synthetic-source\n");
+      return { stdout: JSON.stringify(stage === "failure" ? { ok: false, error: { code: "invalid-source", message: "Import the correct old source identity" } } : { ok: true, status: "planned", read_only: true, requires_confirmation: true, source_catalog_etag: "synthetic-preview-v1" }) };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    extension.__test__.setExtensionContextForTests({ secrets: { get: async (key) => key === "josh-room.recovery.v1" && ["confirmation", "failure"].includes(stage) ? "AGE-SECRET-KEY-synthetic-recovery\n" : undefined } });
+    if (stage !== "source") openDialogResponses.push([{ fsPath: source }]);
+    if (stage === "recovery") quickPickResponses.push(undefined);
+    const operation = extension.__test__.migrateEncryption({ id: "synthetic-dimension", provider: "minio" });
+    if (stage === "failure") await assert.rejects(operation, /correct old source identity/);
+    else assert.equal(await operation, "cancelled");
+    assert.equal(spawnHarness.calls.length, ["source", "recovery"].includes(stage) ? 1 : 2);
+    if (handoff) assert.equal(fs.existsSync(handoff), false);
+    assert.equal(fs.existsSync(source), true);
+  });
+}
+
+for (const invalid of [{ read_only: false }, { requires_confirmation: false }, { source_catalog_etag: undefined }]) {
+  test(`migration rejects an unsafe preview contract: ${JSON.stringify(invalid)}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-invalid-preview-"));
+    const { vscode, statusItem, openDialogResponses, warningCalls } = createVscodeMock(root);
+    const source = path.join(root, "synthetic-source.identity");
+    fs.writeFileSync(source, "AGE-SECRET-KEY-synthetic-source\n", { mode: 0o600 });
+    const spawnHarness = createSpawnHarness(({ args }) => ({ stdout: JSON.stringify(args[1] === "status"
+      ? { ok: true, state: "legacy", encryption_domain_id: "synthetic-domain" }
+      : { ok: true, status: "planned", read_only: true, requires_confirmation: true, source_catalog_etag: "synthetic-preview-v1", ...invalid }) }));
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    openDialogResponses.push([{ fsPath: source }]);
+    await assert.rejects(extension.__test__.migrateEncryption({ id: "synthetic-dimension", provider: "minio" }), /read-only.*preview/i);
+    assert.equal(warningCalls.length, 0);
+    assert.equal(spawnHarness.calls.some((call) => call.args[1] === "resume"), false);
+    const handoff = spawnHarness.calls[1].args;
+    assert.equal(fs.existsSync(handoff[handoff.indexOf("--source-identity") + 1]), false);
+  });
+}
+
+test("committed migration resume needs no old identity or confirmation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-committed-resume-"));
+  const { vscode, statusItem, openDialogCalls, warningCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => ({ stdout: JSON.stringify(args[1] === "status"
+    ? { ok: true, state: "ready", encryption_domain_id: "synthetic-domain" }
+    : { ok: true, status: "committed", read_only: true, requires_confirmation: false }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  assert.equal(await extension.__test__.resumeEncryption({ id: "synthetic-dimension", provider: "minio" }), "committed");
+  assert.equal(openDialogCalls.length, 0);
+  assert.equal(warningCalls.length, 0);
+  assert.equal(spawnHarness.calls.length, 2);
 });
 
 test("recovery export uses only the native save dialog", async () => {
@@ -3965,6 +4391,29 @@ test("bare age identities are redacted from controller diagnostics", async () =>
   await operation;
   assert.equal(logLines.some((line) => line.includes(secret)), false);
   assert.equal(logLines.some((line) => line.includes(recipient)), false);
+});
+
+test("failed RCC receipts extract nested errors instead of stringifying compatibility metadata", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-structured-rcc-receipt-"));
+  const { vscode, statusItem, logLines } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    fs.writeFileSync(args[args.indexOf("--receipt-file") + 1], JSON.stringify({
+      exitCode: 1, compatibility: { supported: true },
+      error: { code: "process-failed", message: "Synthetic permission denied: Bearer synthetic-receipt-token" },
+    }));
+    return { code: 1, stdout: "" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ info() {}, error: (line) => logLines.push(line), show() {} });
+  extension.__test__.setRuntimeForTests({ command: "/test/rcc", args: (args, receipt) => [...args, "--receipt-file", receipt], env: {} });
+  await assert.rejects(extension.__test__.runOperation("Loading synthetic bucket", ["dimensions", "list"], root), (error) => {
+    assert.match(error.message, /Synthetic permission denied/);
+    assert.doesNotMatch(error.message, /\[object Object\]|synthetic-receipt-token/);
+    assert.equal(error.receipt_exit_status, 1);
+    return true;
+  });
+  assert.doesNotMatch(logLines.join("\n"), /\[object Object\]|synthetic-receipt-token/);
 });
 
 test("receipt failures redact private age material and do not retain the raw receipt", async () => {
