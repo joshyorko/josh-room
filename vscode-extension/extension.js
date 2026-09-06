@@ -1119,9 +1119,8 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       }
       const receiptExit = receipt && (receipt.exitCode ?? receipt.exit_code ?? receipt.exit);
       if (receiptExit !== undefined && Number(receiptExit) !== 0) {
-        const detail = sanitizeControllerText(
-          receipt.compatibility || receipt.error || receipt.message || `RCC controller exited with status ${receiptExit}`,
-        );
+        const detail = controllerErrorText(receipt.error) || controllerErrorText(receipt.message)
+          || controllerErrorText(receipt.compatibility) || `RCC controller exited with status ${receiptExit}`;
         cleanup();
         const failure = new Error(String(detail));
         failure.receipt_exit_status = Number(receiptExit);

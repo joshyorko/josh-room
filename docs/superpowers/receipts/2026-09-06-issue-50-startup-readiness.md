@@ -23,7 +23,7 @@ activation or cache-only refresh.
 ## Local verification
 
 - Full Python suite with real age/age-keygen: 435 passed, 6 skipped.
-- Full Node suite: 218 passed, 2 skipped; also passed under release Node 22.
+- Full Node suite: 219 passed, 2 skipped; also passed under release Node 22.
 - Ruff, JSON parsing, tracked shell syntax, source/template/controller parity,
   packaged-source parity, Python distribution build, VSIX build, and
   `git diff --check` passed.

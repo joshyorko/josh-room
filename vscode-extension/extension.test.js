@@ -4393,6 +4393,29 @@ test("bare age identities are redacted from controller diagnostics", async () =>
   assert.equal(logLines.some((line) => line.includes(recipient)), false);
 });
 
+test("failed RCC receipts extract nested errors instead of stringifying compatibility metadata", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-structured-rcc-receipt-"));
+  const { vscode, statusItem, logLines } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    fs.writeFileSync(args[args.indexOf("--receipt-file") + 1], JSON.stringify({
+      exitCode: 1, compatibility: { supported: true },
+      error: { code: "process-failed", message: "Synthetic permission denied: Bearer synthetic-receipt-token" },
+    }));
+    return { code: 1, stdout: "" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests({ info() {}, error: (line) => logLines.push(line), show() {} });
+  extension.__test__.setRuntimeForTests({ command: "/test/rcc", args: (args, receipt) => [...args, "--receipt-file", receipt], env: {} });
+  await assert.rejects(extension.__test__.runOperation("Loading synthetic bucket", ["dimensions", "list"], root), (error) => {
+    assert.match(error.message, /Synthetic permission denied/);
+    assert.doesNotMatch(error.message, /\[object Object\]|synthetic-receipt-token/);
+    assert.equal(error.receipt_exit_status, 1);
+    return true;
+  });
+  assert.doesNotMatch(logLines.join("\n"), /\[object Object\]|synthetic-receipt-token/);
+});
+
 test("receipt failures redact private age material and do not retain the raw receipt", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-receipt-redaction-test-"));
   const { vscode, statusItem, logLines } = createVscodeMock(root);
