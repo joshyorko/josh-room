@@ -33,6 +33,21 @@ activation or cache-only refresh.
 
 ## Acceptance boundaries
 
+The final candidate VSIX SHA256 is
+`bbde096583b5c0d5eb28aa1cf4c96ee35913683747af86459f759bb3d9015485`.
+It passed in an isolated Code Insiders web workbench with its native Node
+extension host, unmodified installed extension source, and real pinned runtime
+acquisition. Cold startup showed RCC/controller download and import; a distinct
+extension-host process reused the same private disk cache on warm startup.
+Both reached the ready storage tree.
+
+The separate synthetic loopback S3 phase used the actual packaged controller
+and age. It loaded a saved connection and Room/JAT hierarchy, exercised generic
+error retry and connection editing, and cancelled at the old source-identity
+prerequisite. The previously observed object-stringification receipt defect
+was fixed and did not recur. The fixture recorded zero storage-write attempts.
+This is not live MinIO acceptance.
+
 Installed candidate and released-VSIX acceptance are recorded separately from
 the local suites. Real existing non-empty MinIO read/open remains operator-owned.
 No live MinIO/R2 migration, rotation, deletion, storage write, JAT payload
