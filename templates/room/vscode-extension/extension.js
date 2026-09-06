@@ -3061,9 +3061,22 @@ async function migrateEncryption(item, { resume = false } = {}) {
       || typeof plan.source_catalog_etag !== "string" || !plan.source_catalog_etag) {
       throw new Error("A read-only migration preview with a source catalog version is required before confirmation.");
     }
+    const adoption = plan.dimension_adoption_required === true;
+    if (adoption && (typeof plan.source_storage_binding !== "string" || !/^[a-f0-9]{64}$/.test(plan.source_storage_binding)
+      || typeof plan.source_dimension !== "string" || !plan.source_dimension
+      || plan.source_dimension === id || plan.destination_dimension !== id
+      || typeof plan.source_bucket !== "string" || !plan.source_bucket || plan.source_bucket !== plan.destination_bucket
+      || typeof plan.source_endpoint_authority !== "string" || !plan.source_endpoint_authority || plan.source_endpoint_authority !== plan.destination_endpoint_authority)) {
+      throw new Error("A verified Dimension adoption mapping and storage binding are required before confirmation.");
+    }
+    const adoptionNotice = adoption
+      ? `Adopt catalog Dimension ${plan.source_dimension} as ${id} in bucket ${plan.destination_bucket} at ${plan.destination_endpoint_authority}. `
+        + "The original Dimension identity is retained in the migration journal. "
+      : "";
     const count = (value) => Number.isSafeInteger(value) && value >= 0 ? String(value) : "unknown";
     const confirmed = await vscode.window.showWarningMessage(
       `Migrate the legacy encryption domain for ${dimension.display_name || id}? `
+        + adoptionNotice
         + `${count(plan.room_count)} Rooms, ${count(plan.snapshot_count)} JATs, ${count(plan.object_count)} unique encrypted objects. `
         + `${formatHaulerSize(plan.total_bytes) || "Unknown size"}; temporary disk: ${formatHaulerSize(plan.temporary_disk_bytes) || "unknown"}. `
         + "This replaces the outer encryption and catalog. Existing JAT payloads remain unchanged.",
@@ -3071,7 +3084,8 @@ async function migrateEncryption(item, { resume = false } = {}) {
     );
     if (confirmed !== "Migrate") return "cancelled";
     const result = await runOperation("Migrating MinIO encryption…", ["encryption", "resume", ...handoffs,
-      "--expected-catalog-etag", plan.source_catalog_etag], cwd);
+      "--expected-catalog-etag", plan.source_catalog_etag,
+      ...(adoption ? ["--expected-source-binding", plan.source_storage_binding] : [])], cwd);
     if (recovery && extensionContext?.secrets?.store) {
       await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, recovery.value);
       const domain = result.encryption_domain_id || result.destination_encryption_domain_id;
