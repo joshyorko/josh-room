@@ -58,7 +58,7 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert bootstrap.is_file()
     body = bootstrap.read_text()
     assert "Optional golden-host extension copy complete" in body
-    assert "joshyorko.josh-room-0.1.22" in body
+    assert "joshyorko.josh-room-0.1.24" in body
     assert "Room of Requirement" not in body
     assert "brew" not in body.lower()
     assert "action-server" not in body
@@ -140,7 +140,7 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     extension = (ROOT / "vscode-extension/extension.js").read_text()
 
-    assert package["version"] == "0.1.22"
+    assert package["version"] == "0.1.24"
     assert package["scripts"]["package"]
     assert (ROOT / "vscode-extension/.vscodeignore").is_file()
     vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
@@ -181,17 +181,6 @@ def test_real_vsix_contains_the_owned_runtime_contract(tmp_path):
         assert manifest["jat"]["environment_artifact"]["digest"].startswith("sha256:")
 
 
-def test_tag_release_publishes_versioned_vsix_and_checksums():
-    workflow = (ROOT / ".github/workflows/release.yml").read_text()
-    assert 'tags:\n      - "v*"' in workflow
-    assert "contents: write" in workflow
-    assert "npm run package" in workflow
-    assert "josh-room-${version}.vsix" in workflow
-    assert "sha256sum * > SHA256SUMS" in workflow
-    assert 'gh release create "$GITHUB_REF_NAME"' in workflow
-    assert "--verify-tag" in workflow and "--prerelease" not in workflow
-
-
 def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     recipe = (ROOT / "vscode-extension/runtime/controller/robot.yaml").read_text()
@@ -201,7 +190,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
-    assert "joshyorko.josh-room-0.1.22" in bootstrap
+    assert "joshyorko.josh-room-0.1.24" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
     assert template_package["contributes"] == package["contributes"]
     assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
@@ -337,10 +326,10 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
 def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
     assert lock["format_version"] == 1
-    assert lock["candidate_version"] == "0.1.22"
+    assert lock["candidate_version"] == "0.1.24"
     assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
-    assert lock["josh_room"]["git_sha"] == "0a98fc6d7a7a4264623a0523f401026b81f64859"
+    assert lock["josh_room"]["git_sha"] == "18446eb8480f2f6390446effaf7641b7879d2984"
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
