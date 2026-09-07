@@ -1629,7 +1629,11 @@ async function saveRoom(options = {}) {
   if (path.resolve(source) === path.resolve(cwd)) {
     await startDirtyTracking(extensionContext);
   }
-  await roomsProvider?.refresh();
+  try {
+    await roomsProvider?.reload();
+  } catch (_error) {
+    await vscode.window.showWarningMessage("Room saved, but storage refresh did not finish. Use Refresh to reload the list; you do not need to save again.");
+  }
   return "saved";
 }
 
@@ -2967,11 +2971,8 @@ async function runSelectedEncryption(args, cwd, dimension, options = {}) {
     const status = await runJoshRoom(["encryption", "status", "--dimension", selected.id], cwd);
     material = await readEncryptionMaterial({ ...selected, ...status });
   }
-  if (!material && !(selected?.encryption_domain_id || selected?.encryptionDomainId)
-    && !(selected?.key_generation || selected?.keyGeneration)) {
-    return runOperation(options.title || "Running Josh Room operation…", args, cwd, options);
-  }
-  if (!material) throw new Error("Selected MinIO encryption material is unavailable; initialize or import it first.");
+  // SecretStorage is an optional cache. The controller validates and resolves
+  // the selected bucket keyset, including after migration or on a fresh host.
   return runOperation(options.title || "Running Josh Room operation…", args, cwd, {
     ...options,
     dimension: selected,
@@ -3951,7 +3952,7 @@ function activateNative(context) {
   register(context, "joshRoom.repair", repairRoom);
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.serve", serveRoom);
-  register(context, "joshRoom.refresh", () => roomsProvider.refresh());
+  register(context, "joshRoom.refresh", () => roomsProvider.reload());
   register(context, "joshRoom.prepare", () => roomsProvider.reload());
   register(context, "joshRoom.showLogs", () => outputChannel.show(true));
   register(context, "joshRoom.clearLocalFallback", clearLocalFallback);

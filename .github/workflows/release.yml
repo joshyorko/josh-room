@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,18 +26,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "joshyorko/josh-room"
           version=$(node -p "require('./vscode-extension/package.json').version")
           test "${GITHUB_REF_NAME}" = "v${version}-standalone-vsix"
           test "$(node -p "require('./templates/room/vscode-extension/package.json').version")" = "$version"
           test "$(jq -r .extension_version vscode-extension/runtime/manifest.json)" = "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Build Python and VSIX artifacts
+      - name: Verify staged tested VSIX
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,targetCommitish,tagName | \
+            jq -e --arg sha "$GITHUB_SHA" --arg tag "$GITHUB_REF_NAME" \
+              '.isDraft == true and .targetCommitish == $sha and .tagName == $tag'
+          mkdir -p dist
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern "josh-room-${version}.vsix" --dir dist
+          python scripts/verify_release_candidate.py \
+            --candidate "dist/josh-room-${version}.vsix" --tag "$GITHUB_REF_NAME"
+      - name: Build Python artifacts and checksums
         shell: bash
         run: |
           set -euo pipefail
           uv build
-          version="${{ steps.version.outputs.version }}"
-          (cd vscode-extension && npm run package -- --out "../dist/josh-room-${version}.vsix")
           (cd dist && sha256sum * > SHA256SUMS)
       - uses: actions/upload-artifact@v7
         with:
@@ -46,7 +65,17 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ steps.version.outputs.version }}"
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --verify-tag \
-            --title "Josh Room v${version} standalone VSIX" \
-            --notes $'Install josh-room-'"${version}"$'.vsix directly from this release. SHA256SUMS contains checksums for every attached artifact.\n\nKnown acceptance limit: real existing non-empty MinIO read/open validation was not run by this release workflow and remains Josh\'s operator-owned post-release check. No live MinIO migration, rotation, deletion, storage write, or JAT payload mutation was performed.'
+          # Never upload over the tested VSIX. Only ancillary artifacts are new.
+          gh release upload "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY"
+          # Re-download immediately before publication to detect draft-asset drift.
+          verify_dir=$(mktemp -d)
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern "josh-room-${version}.vsix" --dir "$verify_dir"
+          python scripts/verify_release_candidate.py \
+            --candidate "$verify_dir/josh-room-${version}.vsix" --tag "$GITHUB_REF_NAME"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,targetCommitish,tagName | \
+            jq -e --arg sha "$GITHUB_SHA" --arg tag "$GITHUB_REF_NAME" \
+              '.isDraft == true and .targetCommitish == $sha and .tagName == $tag'
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

@@ -235,6 +235,28 @@ def test_explicit_legacy_migration_can_enroll_destination_keyset_over_existing_c
     assert any(call[0] == "create_control" for call in backend.calls)
 
 
+@pytest.mark.parametrize("handoff", [False, True])
+def test_ordinary_minio_operation_never_enrolls_from_ambient_recovery(tmp_path, monkeypatch, handoff):
+    backend = FakeBackend()
+    recovery = identity(tmp_path / "recovery", "AGE-SECRET-KEY-recovery")
+    monkeypatch.setenv("JOSH_ROOM_RECOVERY_HANDOFF", str(recovery))
+    monkeypatch.delenv("JOSH_ROOM_ENCRYPTION_MATERIAL", raising=False)
+    if handoff:
+        monkeypatch.setenv("JOSH_ROOM_ENCRYPTION_MATERIAL", str(tmp_path / "operation.identity"))
+    monkeypatch.setattr(cli, "_effective_dimension", lambda _args: dimension())
+    monkeypatch.setattr(cli, "_backend_for_args", lambda *_args: backend)
+    monkeypatch.setattr(auth_module, "ensure_minio_domain", lambda *_args, **_kwargs: pytest.fail("ordinary operation attempted enrollment"))
+    args = build_parser().parse_args(["projects", "list", "--dimension", "archive"])
+
+    with (
+        pytest.raises(auth_module.EncryptionStateError, match="uninitialized"),
+        cli._selected_encryption_environment(args, tmp_path / "instance"),
+    ):
+        pytest.fail("uninitialized operation must not execute")
+    assert backend.control is None
+    assert all(call[0] != "create_control" for call in backend.calls)
+
+
 def test_existing_keyset_uses_domain_and_generation_scoped_cache(tmp_path, monkeypatch):
     keyset = make_keyset()
     backend = FakeBackend(control=keyset.to_json())

@@ -531,12 +531,12 @@ def _selected_encryption_environment(args, instance: Path):
     backend = _backend_for_args(args, instance)
     handoff = os.environ.get("JOSH_ROOM_ENCRYPTION_MATERIAL")
     if handoff:
-        material = resolve_encryption_material(selected, backend, identity_path=Path(handoff))
+        material = resolve_encryption_material(selected, backend, identity_path=Path(handoff), allow_initialize=False)
         with _encryption_material_environment(material):
             yield material
         return
     def resolve_selected(identity_path):
-        return resolve_encryption_material(selected, backend, identity_path=identity_path)
+        return resolve_encryption_material(selected, backend, identity_path=identity_path, allow_initialize=False)
 
     with _scoped_encryption_material(instance, resolve_selected) as material, _encryption_material_environment(material):
         yield material

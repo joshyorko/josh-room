@@ -797,6 +797,48 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   assert.match(spawnHarness.calls.at(-1).args.join(" "), /--dimension backup/);
 });
 
+for (const forceCreate of [false, true]) for (const refreshFailure of [false, true]) test(`${forceCreate ? "New" : "Save"} Room uses a migrated MinIO keyset without an extension cache; refresh failure=${refreshFailure}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-migrated-save-"));
+  const source = path.join(root, "source");
+  fs.mkdirSync(source);
+  const dimension = { id: "backup", display_name: "Backup", provider: "minio", encryption_state: "ready", encryption_domain_id: "11111111-1111-4111-8111-111111111111", key_generation: 1, rooms: [] };
+  const { vscode, statusItem, openExternalCalls, warningCalls } = createVscodeMock(root);
+  let saved = false;
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    if (args[0] === "dimensions" && saved && refreshFailure) return { code: 1, stdout: JSON.stringify({ ok: false, error: "synthetic storage unavailable" }) };
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{ ...dimension, rooms: saved ? [{ id: "test-room", display_name: "Test Room", snapshots: [{ snapshot_id: "new-jat" }] }] : [] }] }) };
+    if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, ...dimension, state: "ready" }) };
+    if (args[0] === "snapshot" && args[1] === "create") {
+      assert.equal(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL, undefined);
+      assert.equal(args[args.indexOf("--dimension") + 1], "backup");
+      saved = true;
+      return { stdout: JSON.stringify({ ok: true, project_id: "test-room", ciphertext_size: 1024 }) };
+    }
+    throw new Error(`Unexpected controller operation: ${args[0]} ${args[1]}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async () => undefined, store: async () => { throw new Error("must not enroll"); } } });
+  extension.__test__.setSelectedDimensionId(undefined);
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(provider);
+  vscode.openDialogResponses.push([{ fsPath: source }]);
+  vscode.inputBoxResponses.push("Test Room");
+  if (!forceCreate) vscode.quickPickResponses.push({ create: true });
+  vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+  assert.equal(await extension.__test__.saveRoom({ forceCreate }), "saved");
+  assert.equal(spawnHarness.calls.filter(({ args }) => args[0] === "snapshot").length, 1);
+  if (refreshFailure) {
+    assert.equal(provider.state, "error");
+    assert.ok(warningCalls.some(([message]) => /saved.*refresh/i.test(message)));
+  } else {
+    const room = provider.roots[0].children[0].children[0].children[0];
+    assert.equal(room.id, "test-room");
+    assert.equal(room.children[0].id, "new-jat");
+  }
+  assert.deepEqual(openExternalCalls, []);
+});
+
 test("Save Room to a fresh MinIO Dimension authorizes encryption once and preserves the target", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-minio-auth-test-"));
   const source = path.join(root, "source-room");
@@ -2330,9 +2372,11 @@ test("fresh activation exposes an actionable idle runtime load without starting 
 test("registered prepare action starts once, reports sanitized runtime progress and publishes the loaded tree", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-prepare-action-"));
   const { vscode, commandCallbacks, treeViewCalls, progressReports, logLines, progressCalls } = createVscodeMock(root);
+  let catalogReads = 0;
   const spawnHarness = createSpawnHarness(({ args }) => {
     assert.deepEqual(args.slice(args.indexOf("--") + 1), ["python", "-m", "josh_room", "dimensions", "list", "--json"]);
-    return { stdout: JSON.stringify({ ok: true, connections: [], dimensions: [{ id: "minio-bucket", provider: "minio", projects: [] }] }) };
+    catalogReads += 1;
+    return { stdout: JSON.stringify({ ok: true, connections: [], dimensions: [{ id: "minio-bucket", provider: "minio", projects: catalogReads > 1 ? [{ id: "new-room", display_name: "New Room", snapshots: [{ snapshot_id: "new-jat" }] }] : [] }] }) };
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   let release;
@@ -2359,10 +2403,13 @@ test("registered prepare action starts once, reports sanitized runtime progress 
   assert.equal(provider.getChildren()[0].id, "minio");
   assert.equal(provider.state, "ready");
   await commandCallbacks.get("joshRoom.refresh")();
-  assert.equal(spawnHarness.calls.length, 1);
+  assert.equal(spawnHarness.calls.length, 2);
+  const room = provider.getChildren()[0].children[0].children[0].children[0];
+  assert.equal(room.id, "new-room");
+  assert.equal(room.children[0].id, "new-jat");
   await commandCallbacks.get("joshRoom.prepare")();
   assert.equal(acquisition.starts, 1);
-  assert.equal(spawnHarness.calls.length, 2);
+  assert.equal(spawnHarness.calls.length, 3);
 });
 
 test("runtime failure and cancellation expose real retry actions without starting catalog commands", async (t) => {
