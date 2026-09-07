@@ -54,7 +54,7 @@ def test_verifies_exact_candidate_without_modifying_archive(tmp_path):
     assert candidate.read_bytes() == before
 
 
-@pytest.mark.parametrize("failure", ["missing", "checksum", "source", "missing-source", "tag", "version", "extra-member"])
+@pytest.mark.parametrize("failure", ["missing", "checksum", "source", "missing-source", "unpackaged-source", "tag", "version", "extra-member"])
 def test_rejects_candidate_or_source_drift_without_rebuilding(tmp_path, failure):
     root, candidate, pin = fixture(tmp_path)
     tag = "v0.1.24-standalone-vsix"
@@ -66,6 +66,8 @@ def test_rejects_candidate_or_source_drift_without_rebuilding(tmp_path, failure)
         (root / "vscode-extension/extension.js").write_text("changed")
     elif failure == "missing-source":
         (root / "vscode-extension/extension.js").unlink()
+    elif failure == "unpackaged-source":
+        (root / "vscode-extension/new-runtime.js").write_text("required source")
     elif failure == "tag":
         tag = "v0.1.25-standalone-vsix"
     elif failure == "version":
@@ -91,7 +93,7 @@ def workflow_step(name):
     )
 
 
-@pytest.mark.parametrize("failure", [None, "checksum", "source", "not-draft", "wrong-source-sha", "missing-download", "changed-before-publish"])
+@pytest.mark.parametrize("failure", [None, "checksum", "source", "not-draft", "wrong-source-sha", "missing-download", "changed-before-publish", "changed-after-publish"])
 def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
     root, candidate, _pin = fixture(tmp_path)
     (root / "scripts").mkdir()
@@ -110,12 +112,14 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
             stream.write(json.dumps(args) + "\\n")
         failure = os.environ["SCENARIO"]
         if args[:2] == ["release", "view"]:
-            print(json.dumps({"isDraft": failure != "not-draft", "targetCommitish": "wrong" if failure == "wrong-source-sha" else os.environ["GITHUB_SHA"], "tagName": os.environ["GITHUB_REF_NAME"]}))
+            print(json.dumps({"isDraft": failure != "not-draft" and not (root / "published").exists(), "targetCommitish": "wrong" if failure == "wrong-source-sha" else os.environ["GITHUB_SHA"], "tagName": os.environ["GITHUB_REF_NAME"]}))
         elif args[:2] == ["release", "download"]:
             if failure == "missing-download": sys.exit(1)
             target = pathlib.Path(args[args.index("--dir") + 1]) / args[args.index("--pattern") + 1]
             shutil.copyfile(os.environ["CANDIDATE"], target)
             if failure == "changed-before-publish" and any(json.loads(line)[:2] == ["release", "download"] for line in previous):
+                target.write_bytes(target.read_bytes() + b"changed")
+            if failure == "changed-after-publish" and (root / "published").exists():
                 target.write_bytes(target.read_bytes() + b"changed")
         elif args[:2] == ["release", "upload"]:
             assert "--clobber" not in args
@@ -142,7 +146,7 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
             (root / "dist" / name).write_text("synthetic ancillary artifact")
         result = subprocess.run(["bash", "-c", workflow_step("Publish GitHub release")], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert (result.returncode == 0) == (failure is None), result.stderr
-    assert (root / "published").exists() == (failure is None)
+    assert (root / "published").exists() == (failure in [None, "changed-after-publish"])
     assert candidate.read_bytes() == before
     calls = [json.loads(line) for line in (root / "gh-calls.jsonl").read_text().splitlines()]
     assert all(call[:2] in [["release", action] for action in ["view", "download", "upload", "edit"]] for call in calls)

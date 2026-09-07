@@ -1,6 +1,7 @@
 """Verify an immutable tested VSIX against its pin and the release checkout."""
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import re
@@ -21,6 +22,18 @@ def verify(root: Path, candidate: Path, tag: str) -> dict:
     if observed != expected:
         raise ValueError("candidate checksum does not match tested archive")
     source_root = (root / "vscode-extension").resolve()
+    ignore_file = source_root / ".vscodeignore"
+    ignores = ignore_file.read_text().splitlines() if ignore_file.exists() else []
+    if any(pattern.startswith("!") for pattern in ignores):
+        raise ValueError("promotion verifier does not support negated ignore patterns")
+    expected_sources = {
+        path.relative_to(source_root).as_posix()
+        for path in source_root.rglob("*") if path.is_file()
+        and path.name not in {".vscodeignore", ".gitignore"}
+        and not any(fnmatch.fnmatch(path.relative_to(source_root).as_posix(), pattern)
+                    for pattern in ignores if pattern and not pattern.startswith("#"))
+    }
+    observed_sources = set()
     count = 0
     with zipfile.ZipFile(candidate) as archive:
         names = archive.namelist()
@@ -40,7 +53,10 @@ def verify(root: Path, candidate: Path, tag: str) -> dict:
                 raise ValueError("unsafe packaged source path")
             if source.read_bytes() != archive.read(name):
                 raise ValueError(f"packaged source differs: {relative}")
+            observed_sources.add(relative)
             count += 1
+        if observed_sources != expected_sources:
+            raise ValueError("archive/source file inventory differs")
         package = json.loads(archive.read("extension/package.json"))
         runtime = json.loads(archive.read("extension/runtime/manifest.json"))
         if package["version"] != version or runtime["extension_version"] != version:
