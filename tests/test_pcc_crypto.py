@@ -712,3 +712,56 @@ def test_production_normalizer_asset_dedupe_to_real_age_prepared_outbox(tmp_path
     state = "".join(path.read_text() for path in outbox.prepared.directory.glob("*.json"))
     assert asset_body.decode() not in state
     assert str(tmp_path) not in state
+
+def test_encrypt_prepare_rejects_queue_document_identity_mismatch(tmp_path: Path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    event = _event("session-segment")
+    _prepare_queue(outbox, event)
+    profile = _profile()
+    passthrough = tmp_path / "passthrough-age"
+    passthrough.write_text("#!/bin/sh\ncat\n")
+    passthrough.chmod(passthrough.stat().st_mode | stat.S_IXUSR)
+
+    mismatches = []
+    session_changed = copy.deepcopy(event.document)
+    session_changed["session_id"] = "other-session"
+    mismatches.append(session_changed)
+    checkpoint_changed = copy.deepcopy(event.document)
+    checkpoint_changed["checkpoint"] = dict(checkpoint_changed["checkpoint"])
+    checkpoint_changed["checkpoint"]["end"] += 1
+    mismatches.append(checkpoint_changed)
+    kind_changed = copy.deepcopy(event.document)
+    kind_changed["kind"] = "session-final"
+    mismatches.append(kind_changed)
+
+    for document in mismatches:
+        candidate = NormalizationEvent("session-segment", document)
+        with pytest.raises(CryptoError) as error:
+            encrypt_and_prepare(
+                candidate,
+                outbox,
+                "worker-one",
+                profile,
+                lambda _: _recipient_set(),
+                age_executable=passthrough,
+            )
+        assert error.value.code in {CryptoErrorCode.OUTBOX_PRECONDITION, CryptoErrorCode.MANIFEST_MISMATCH}
+
+
+def test_encrypt_prepare_rejects_queue_workspace_metadata_mismatch(tmp_path: Path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    event = _event("session-segment")
+    _prepare_queue(outbox, event)
+    queue_path = outbox.queue_directory / f"{event.document['event_id']}.json"
+    record = json.loads(queue_path.read_text())
+    record["metadata"]["workspace_id"] = "workspace-other"
+    queue_path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")))
+    with pytest.raises(CryptoError) as error:
+        encrypt_and_prepare(
+            event,
+            outbox,
+            "worker-one",
+            _profile(),
+            lambda _: _recipient_set(),
+        )
+    assert error.value.code is CryptoErrorCode.OUTBOX_PRECONDITION

@@ -267,6 +267,60 @@ def _profile_binding(document: Mapping[str, Any], profile: CaptureProfile) -> di
     return {"id": profile.profile_id, "workspace_id": profile.workspace_id}
 
 
+def _validate_queue_binding(
+    event: NormalizationEvent,
+    document: Mapping[str, Any],
+    queued: Any,
+    profile: CaptureProfile,
+) -> None:
+    """Bind the #8 queue record to the exact normalized #9 event."""
+
+    if (
+        queued.event_id != document.get("event_id")
+        or queued.event_id not in queued.event_ids
+        or queued.session_id != document.get("session_id", queued.session_id)
+        or (
+            "checkpoint" in document
+            and queued.checkpoint != document["checkpoint"]
+        )
+        or event.kind != document.get("kind")
+    ):
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+    metadata = queued.metadata
+    expected_workspace = document.get("workspace_id", profile.workspace_id)
+    if "workspace_id" in metadata and metadata["workspace_id"] != expected_workspace:
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if "object_kind" in metadata and metadata["object_kind"] != document.get("kind"):
+        _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+    if "destination_class" in metadata and metadata["destination_class"] != profile.destination.kind:
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+    source = document.get("source")
+    if isinstance(source, Mapping):
+        for metadata_key, document_key in (
+            ("source_surface", "surface"),
+            ("source_adapter", "adapter"),
+            ("source_adapter_version", "adapter_version"),
+        ):
+            if metadata_key in metadata and document_key in source and metadata[metadata_key] != source[document_key]:
+                _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+
+    capture = document.get("capture")
+    expected_capture: Mapping[str, object] = capture if isinstance(capture, Mapping) else {
+        "policy_decision": "allow",
+        "status": "complete",
+    }
+    for metadata_key, document_key in (
+        ("policy_decision", "policy_decision"),
+        ("capture_status", "status"),
+        ("sensitivity", "sensitivity"),
+    ):
+        if metadata_key in metadata and document_key in expected_capture and metadata[metadata_key] != expected_capture[document_key]:
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+
+
 def _references(document: Mapping[str, Any]) -> dict[str, Any]:
     kind = document["kind"]
     if kind == "session-segment":
@@ -824,6 +878,7 @@ def encrypt_and_prepare(
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
     if queued is None or queued.owner != owner:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    _validate_queue_binding(event, document, queued, profile)
     if queued.resume_state in {
         QueueState.PREPARED_ENCRYPTED,
         QueueState.OBJECT_UPLOADED,
