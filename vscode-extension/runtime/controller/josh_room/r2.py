@@ -8,9 +8,15 @@ import stat
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows runtime
+    _fcntl = None
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
@@ -370,26 +376,37 @@ class R2Backend(ObjectStore):
             raise R2EvidenceError("source-unavailable") from error
 
     def put_evidence_stream(self, source, size: int, ciphertext_sha256: str) -> R2EvidenceReceipt:
-        """Stream a ciphertext reader; the supplied digest is independently read back."""
+        """Stage and independently hash a ciphertext reader before publication."""
         if type(size) is not int or size < 0:
             raise ValueError("evidence size is invalid")
         if not _DIGEST.fullmatch(ciphertext_sha256):
             raise ValueError("invalid evidence ciphertext digest")
         if not hasattr(source, "read"):
             raise TypeError("evidence source is not readable")
+        staged = tempfile.TemporaryFile(mode="w+b")
+        observed = hashlib.sha256()
+        total = 0
+        try:
+            while True:
+                chunk = source.read(min(self.config.multipart_chunk_size, 1024 * 1024))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > self.config.max_bytes:
+                    raise R2EvidenceReadbackMismatch(published=False)
+                observed.update(chunk)
+                staged.write(chunk)
+            if total != size or observed.hexdigest() != ciphertext_sha256:
+                raise R2EvidenceReadbackMismatch(published=False)
 
-        def factory():
-            try:
-                source.seek(0)
-            except (AttributeError, OSError, ValueError):
-                if getattr(factory, "used", False):
-                    raise R2EvidenceRetryable("source-not-rewindable")
-            factory.used = True
-            return source
+            def factory():
+                staged.seek(0)
+                return staged
 
-        factory.used = False
-        factory.owns_source = False
-        return self._put_evidence(evidence_object_key(ciphertext_sha256), factory, size, ciphertext_sha256)
+            factory.owns_source = False
+            return self._put_evidence(evidence_object_key(ciphertext_sha256), factory, size, ciphertext_sha256)
+        finally:
+            staged.close()
     def get_evidence_bytes(self, key: str, expected_size: int | None = None) -> bytes:
         digest = validate_evidence_object_key(key)
         try:
@@ -577,10 +594,20 @@ class R2Backend(ObjectStore):
             try:
                 index_size = self._verify_evidence_remote(index_key, queued.index_id, None)
             except ValueError as error:
-                raise R2EvidenceReadbackMismatch(published=False) from error
-            index = R2EvidenceReceipt(index_key, queued.index_id, index_size, R2EvidenceMetrics(index_size, 1, 0, True, True))
+                if index_ciphertext is None:
+                    raise R2EvidenceReadbackMismatch(published=False) from error
+                if isinstance(index_ciphertext, Path):
+                    index = self.put_evidence_index_file(index_ciphertext)
+                else:
+                    index = self.put_evidence_index_bytes(index_ciphertext)
+                if index.ciphertext_sha256 != queued.index_id:
+                    raise R2EvidenceOutboxPrecondition()
+                outbox.publish_index(event_id, owner, index_id=index.ciphertext_sha256)
+            else:
+                index = R2EvidenceReceipt(index_key, queued.index_id, index_size, R2EvidenceMetrics(index_size, 1, 0, True, True))
         else:
             if index_ciphertext is None:
+                evidence = replace(evidence, metrics=replace(evidence.metrics, orphaned=True), recovery="uploaded-unindexed")
                 return R2EvidencePublication(evidence, None, False)
             if isinstance(index_ciphertext, Path):
                 index = self.put_evidence_index_file(index_ciphertext)
@@ -650,7 +677,7 @@ class R2Backend(ObjectStore):
                         R2EvidenceMetrics(size, 1, retries, True, True, False, _latency_ms(started)),
                     )
                 if not _is_retryable(error) or attempt + 1 >= max(1, self.config.max_attempts):
-                    raise self._map_evidence_error(error, retries=retries) from error
+                    raise self._map_evidence_error(error, retries=retries, published=False) from error
                 retries += 1
             except ValueError as error:
                 raise R2EvidenceReadbackMismatch(published=True, retries=retries) from error
@@ -663,10 +690,10 @@ class R2Backend(ObjectStore):
                             if self._evidence_final_exists(key):
                                 raise R2EvidenceConflict(retries=retries) from mismatch
                         except (ClientError, BotoCoreError, TimeoutError) as readback_error:
-                            raise self._map_evidence_error(readback_error, retries=retries) from readback_error
-                        raise self._map_evidence_error(error, retries=retries) from error
+                            raise self._map_evidence_error(readback_error, retries=retries, published=False) from readback_error
+                        raise self._map_evidence_error(error, retries=retries, published=False) from error
                     except (ClientError, BotoCoreError, TimeoutError) as readback_error:
-                        raise self._map_evidence_error(readback_error, retries=retries) from readback_error
+                        raise self._map_evidence_error(readback_error, retries=retries, published=False) from readback_error
                     return R2EvidenceReceipt(
                         key,
                         digest,
@@ -684,25 +711,32 @@ class R2Backend(ObjectStore):
                 time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
         raise R2EvidenceRetryable(retries=retries)
 
-    def _evidence_state_path(self, digest: str) -> Path | None:
-        if self.receipt_dir is None:
-            return None
-        return self.receipt_dir / "evidence-multipart" / f"{digest}.json"
+    def _evidence_state_path(self, digest: str) -> Path:
+        root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence-state"
+        return root / f"{digest}.json"
+
+    @contextmanager
+    def _evidence_lock(self, digest: str):
+        root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence"
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock_path = root / f".{digest}.lock"
+        if lock_path.is_symlink() or lock_path.exists() and not stat.S_ISREG(lock_path.lstat().st_mode):
+            raise R2EvidenceError("multipart-lock-unavailable")
+        try:
+            handle = lock_path.open("a+b")
+        except OSError as error:
+            raise R2EvidenceError("multipart-lock-unavailable") from error
+        with handle:
+            if _fcntl is None:
+                raise R2EvidenceError("multipart-lock-unsupported")
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
 
     def _load_evidence_state(self, key: str, digest: str, size: int) -> dict:
         path = self._evidence_state_path(digest)
-        if path is None:
-            return {
-                "version": 1,
-                "key": key,
-                "sha256": digest,
-                "size": size,
-                "claim_key": evidence_claim_key(digest),
-                "fence": secrets.token_hex(16),
-                "stage": "claiming",
-                "upload_id": None,
-                "parts": [],
-            }
         try:
             raw = path.read_bytes()
         except FileNotFoundError:
@@ -733,13 +767,18 @@ class R2Backend(ObjectStore):
         if not isinstance(state, dict) or set(state) != required:
             raise R2EvidenceConflict("multipart-state-invalid")
         if (
-            state["version"] != 1
-            or not isinstance(state["fence"], str)
-            or not re.fullmatch(r"[0-9a-f]{32}", state["fence"])
+            type(state["version"]) is not int
+            or type(state["key"]) is not str
+            or state["key"] != key
+            or type(state["sha256"]) is not str
             or state["sha256"] != digest
             or type(state["size"]) is not int
             or state["size"] != size
+            or type(state["claim_key"]) is not str
             or state["claim_key"] != evidence_claim_key(digest)
+            or type(state["fence"]) is not str
+            or not re.fullmatch(r"[0-9a-f]{32}", state["fence"])
+            or type(state["stage"]) is not str
             or state["stage"] not in {"claiming", "claimed", "uploading", "completing"}
             or state["upload_id"] is not None and (not isinstance(state["upload_id"], str) or len(state["upload_id"]) > 2048)
             or not isinstance(state["parts"], list)
@@ -763,24 +802,42 @@ class R2Backend(ObjectStore):
 
     def _save_evidence_state(self, state: dict) -> None:
         path = self._evidence_state_path(state["sha256"])
-        if path is None:
-            return
         encoded = json.dumps(state, separators=(",", ":"), sort_keys=True).encode()
         if len(encoded) > _MAX_EVIDENCE_STATE_BYTES:
             raise R2EvidenceError("multipart-state-bounded")
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
-            temporary.write_bytes(encoded)
+            with temporary.open("wb") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, path)
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            descriptor = os.open(path.parent, flags)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except OSError as error:
+            raise R2EvidenceError("multipart-state-unavailable") from error
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _clear_evidence_state(self, digest: str) -> None:
+    def _clear_evidence_state(self, digest: str) -> bool:
         path = self._evidence_state_path(digest)
-        if path is not None:
+        try:
             path.unlink(missing_ok=True)
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            descriptor = os.open(path.parent, flags)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except OSError:
+            return False
+        return True
 
     def _read_evidence_claim(self, claim_key: str, digest: str, size: int) -> dict | None:
         try:
@@ -877,6 +934,10 @@ class R2Backend(ObjectStore):
         self._save_evidence_state(state)
 
     def _put_evidence_multipart(self, key, source_factory, size, digest, started):
+        with self._evidence_lock(digest):
+            return self._put_evidence_multipart_locked(key, source_factory, size, digest, started)
+
+    def _put_evidence_multipart_locked(self, key, source_factory, size, digest, started):
         retries = 0
         max_attempts = max(1, self.config.max_attempts)
         try:
@@ -1087,9 +1148,9 @@ class R2Backend(ObjectStore):
         return observed_size
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
-        if isinstance(error, TimeoutError) or code in {"408", "RequestTimeout"}:
+        if isinstance(error, TimeoutError) or error.__class__.__name__ in {"ReadTimeoutError", "ConnectTimeoutError"} or code in {"408", "RequestTimeout"}:
             return R2EvidenceTimeout(published=published, retries=retries)
-        if code in {"429", "SlowDown", "Throttling"}:
+        if code in {"429", "SlowDown", "Throttling", "TooManyRequests"}:
             return R2EvidenceRateLimited(published=published, retries=retries)
         if code in {"ExpiredToken", "InvalidToken", "TokenRefreshRequired", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"}:
             return R2EvidenceCredentialFailure(published=published, retries=retries)

@@ -273,10 +273,20 @@ def test_outbox_uploaded_indexed_committed_and_unindexed_recovery(tmp_path):
     outbox.prepare_encrypted(event_id, "worker-one", b"durable ciphertext", metadata={"object_kind": "session-segment"})
     uploaded = store.publish_outbox_evidence(outbox, event_id, "worker-one", index_ciphertext=None)
     assert not uploaded.committed
+    assert uploaded.evidence.metrics.orphaned
+    assert uploaded.evidence.recovery == "uploaded-unindexed"
     assert outbox.inspect_record(event_id).state is QueueState.OBJECT_UPLOADED
     committed = store.publish_outbox_evidence(outbox, event_id, "worker-one", index_ciphertext=b"independently encrypted index")
     assert committed.committed
     assert outbox.inspect_record(event_id).state is QueueState.COMMITTED
+def test_stream_digest_mismatch_does_not_poison_final_key():
+    fake = EvidenceS3()
+    store = backend(fake)
+    with pytest.raises(R2EvidenceReadbackMismatch) as failure:
+        store.put_evidence_stream(io.BytesIO(b"actual"), 6, "0" * 64)
+    assert not failure.value.published
+    assert not fake.objects
+
 
 
 def test_readback_mismatch_is_typed_and_not_hidden_by_etag(tmp_path):
