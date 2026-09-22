@@ -12,6 +12,7 @@ from josh_room.pcc_outbox import (
     CaptureGap,
     LeaseConflict,
     PccOutbox,
+    PreparedFileRecord,
     QueueState,
 )
 
@@ -118,6 +119,138 @@ def test_full_durable_transition_flow_keeps_prepared_and_delivery_stages_distinc
     inspected = outbox.inspect()
     assert inspected.quarantined_count == 0
     assert inspected.records[0].state is QueueState.COMMITTED
+
+
+def _prepared_source(tmp_path, name="ciphertext.age", body=b"synthetic-ciphertext"):
+    source = tmp_path / name
+    with source.open("wb") as handle:
+        handle.write(body)
+        handle.flush()
+        __import__("os").fsync(handle.fileno())
+    source.chmod(0o600)
+    return source, body
+
+
+def test_file_backed_preparation_publishes_ciphertext_only_state_without_loading_bytes(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    receipt = _enqueue(outbox, "event-file")
+    outbox.claim("worker-one")
+    outbox.transition(receipt.event_id, "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+    source, body = _prepared_source(tmp_path, body=b"SYNTHETIC-CIPHERTEXT-MARKER")
+
+    prepared_queue = outbox.prepare_encrypted_file(
+        receipt.event_id,
+        "worker-one",
+        source,
+        metadata={"content_type": "application/vnd.josh.codex-session-segment+json"},
+    )
+    prepared = outbox.prepared.inspect_record(receipt.event_id)
+    assert isinstance(prepared, PreparedFileRecord)
+    assert prepared.ciphertext_file == "event-file.age"
+    ciphertext_path = outbox.prepared.directory / prepared.ciphertext_file
+    assert ciphertext_path.read_bytes() == body
+    assert ciphertext_path.stat().st_mode & 0o777 == 0o600
+    assert prepared_queue.state is QueueState.PREPARED_ENCRYPTED
+    assert prepared_queue.ciphertext_sha256 == hashlib.sha256(body).hexdigest()
+    assert prepared_queue.ciphertext_size == len(body)
+    assert not source.exists()
+
+    state = (outbox.prepared.directory / "event-file.json").read_text()
+    assert "ciphertext_b64" not in state
+    assert "SYNTHETIC-CIPHERTEXT-MARKER" not in state
+    assert str(source) not in state
+    assert "content_sha256" not in state
+    assert "content_size" not in state
+    assert "event-file.age" in state
+
+
+def test_file_backed_preparation_rejects_plaintext_identity_metadata(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    receipt = _enqueue(outbox, "event-file")
+    outbox.claim("worker-one")
+    outbox.transition(receipt.event_id, "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+    source, _body = _prepared_source(tmp_path)
+    with pytest.raises(ValueError):
+        outbox.prepare_encrypted_file(
+            receipt.event_id,
+            "worker-one",
+            source,
+            metadata={"content_sha256": "a" * 64, "content_size": 10},
+        )
+    assert source.exists()
+    assert not list(outbox.prepared.directory.glob("*.age"))
+
+
+def test_file_backed_prepared_state_reconciles_after_queue_publication_crash(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    source, body = _prepared_source(tmp_path, body=b"recoverable-ciphertext")
+    metadata = {"content_type": "application/vnd.josh.codex-session-segment+json"}
+    prepared = PreparedFileRecord(
+        "event-recover",
+        "event-recover.age",
+        metadata,
+        hashlib.sha256(body).hexdigest(),
+        len(body),
+    )
+    outbox.prepared.publish_file(prepared, source)
+    recovered = outbox.reconcile_prepared(
+        "event-recover",
+        session_id="session-synthetic",
+        checkpoint=_checkpoint(),
+        metadata=metadata,
+    )
+    assert recovered.state is QueueState.PREPARED_ENCRYPTED
+    assert outbox.inspect_record("event-recover").ciphertext_sha256 == prepared.ciphertext_sha256
+    assert (outbox.prepared.directory / prepared.ciphertext_file).read_bytes() == body
+
+
+def test_file_backed_publication_failure_removes_unpublished_ciphertext(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    receipt = _enqueue(outbox, "event-file")
+    outbox.claim("worker-one")
+    outbox.transition(receipt.event_id, "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+    source, _body = _prepared_source(tmp_path)
+
+    def fail_publish(_path, _body):
+        raise outbox_module.OutboxStorageError("publication-failed", pending_preserved=False)
+
+    outbox.prepared._publisher.publish = fail_publish
+    with pytest.raises(outbox_module.OutboxStorageError):
+        outbox.prepare_encrypted_file(receipt.event_id, "worker-one", source)
+    assert source.exists() or not list(outbox.prepared.directory.glob("*.age"))
+    assert not (outbox.prepared.directory / "event-file.json").exists()
+
+
+def test_file_backed_metadata_fsync_failure_cleans_both_halves_for_retry(tmp_path, monkeypatch):
+    root = tmp_path / "outbox"
+    outbox = PccOutbox(root)
+    receipt = _enqueue(outbox, "event-file")
+    outbox.claim("worker-one")
+    outbox.transition(receipt.event_id, "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+    source, body = _prepared_source(tmp_path, body=b"recoverable-ciphertext")
+    original_sync = outbox_module._sync_directory
+    calls = [0]
+
+    def fail_metadata_sync(directory, **kwargs):
+        calls[0] += 1
+        if calls[0] == 2:
+            raise OSError("synthetic metadata directory fsync failure")
+        return original_sync(directory, **kwargs)
+
+    monkeypatch.setattr(outbox_module, "_sync_directory", fail_metadata_sync)
+    with pytest.raises(outbox_module.OutboxStorageError):
+        outbox.prepare_encrypted_file(receipt.event_id, "worker-one", source)
+
+    assert not (outbox.prepared.directory / "event-file.age").exists()
+    assert not (outbox.prepared.directory / "event-file.json").exists()
+    assert outbox.inspect_record(receipt.event_id).state is QueueState.SOURCE_SNAPSHOTTED
+
+    monkeypatch.setattr(outbox_module, "_sync_directory", original_sync)
+    retry_source = tmp_path / "retry.age"
+    retry_source.write_bytes(body)
+    retry_source.chmod(0o600)
+    prepared = outbox.prepare_encrypted_file(receipt.event_id, "worker-one", retry_source)
+    assert prepared.state is QueueState.PREPARED_ENCRYPTED
 
 
 def test_uploaded_before_index_is_recoverable_and_retry_is_idempotent(tmp_path):
