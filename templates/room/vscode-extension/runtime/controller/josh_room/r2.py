@@ -3,8 +3,10 @@ import io
 import json
 import os
 import re
+import secrets
 import stat
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,10 +38,15 @@ class R2PublicationError(RuntimeError):
         super().__init__(message)
 EVIDENCE_OBJECT_PREFIX = "evidence/objects/sha256/"
 EVIDENCE_INDEX_PREFIX = "evidence/index/v1/"
+EVIDENCE_CLAIM_PREFIX = "evidence/claims/v1/"
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _EVIDENCE_OBJECT_KEY = re.compile(r"^evidence/objects/sha256/([0-9a-f]{64})$")
 _EVIDENCE_INDEX_KEY = re.compile(r"^evidence/index/v1/([0-9a-f]{2})/([0-9a-f]{64})\.age$")
+_EVIDENCE_CLAIM_KEY = re.compile(r"^evidence/claims/v1/([0-9a-f]{64})$")
 _MAX_EVIDENCE_INDEX_PAGE = 1000
+_MAX_EVIDENCE_CLAIM_BYTES = 4096
+_MAX_EVIDENCE_STATE_BYTES = 1024 * 1024
+_MAX_EVIDENCE_PARTS = 10_000
 
 
 class R2EvidenceError(R2PublicationError):
@@ -60,8 +67,28 @@ class R2EvidenceError(R2PublicationError):
 
 
 class R2EvidenceConflict(R2EvidenceError):
+    def __init__(self, code: str = "immutable-conflict", *, retries: int = 0):
+        super().__init__(code, retries=retries)
+
+
+class R2EvidenceTimeout(R2EvidenceError):
+    def __init__(self, *, published: bool = False, retries: int = 0):
+        super().__init__("timeout", published=published, retries=retries)
+
+
+class R2EvidenceRateLimited(R2EvidenceError):
+    def __init__(self, *, published: bool = False, retries: int = 0):
+        super().__init__("rate-limited", published=published, retries=retries)
+
+
+class R2EvidenceCredentialFailure(R2EvidenceError):
+    def __init__(self, *, published: bool = False, retries: int = 0):
+        super().__init__("credentials", published=published, retries=retries)
+
+
+class R2EvidenceAmbiguous(R2EvidenceError):
     def __init__(self, *, retries: int = 0):
-        super().__init__("immutable-conflict", retries=retries)
+        super().__init__("ambiguous-complete", published=True, retries=retries)
 
 
 class R2EvidenceReadbackMismatch(R2EvidenceError):
@@ -208,6 +235,17 @@ def validate_evidence_object_key(key: str) -> str:
     match = _EVIDENCE_OBJECT_KEY.fullmatch(key)
     if not match:
         raise ValueError("invalid evidence object key")
+    return match.group(1)
+def evidence_claim_key(ciphertext_sha256: str) -> str:
+    if not isinstance(ciphertext_sha256, str) or not _DIGEST.fullmatch(ciphertext_sha256):
+        raise ValueError("invalid evidence claim digest")
+    return f"{EVIDENCE_CLAIM_PREFIX}{ciphertext_sha256}"
+
+
+def validate_evidence_claim_key(key: str) -> str:
+    match = _EVIDENCE_CLAIM_KEY.fullmatch(key)
+    if not match:
+        raise ValueError("invalid evidence claim key")
     return match.group(1)
 
 
@@ -620,8 +658,15 @@ class R2Backend(ObjectStore):
                 if attempt + 1 >= max(1, self.config.max_attempts):
                     try:
                         self._verify_evidence_remote(key, digest, size)
-                    except (ValueError, ClientError, BotoCoreError, TimeoutError) as mismatch:
-                        raise self._duplicate_readback_failure(mismatch, retries) from mismatch
+                    except ValueError as mismatch:
+                        try:
+                            if self._evidence_final_exists(key):
+                                raise R2EvidenceConflict(retries=retries) from mismatch
+                        except (ClientError, BotoCoreError, TimeoutError) as readback_error:
+                            raise self._map_evidence_error(readback_error, retries=retries) from readback_error
+                        raise self._map_evidence_error(error, retries=retries) from error
+                    except (ClientError, BotoCoreError, TimeoutError) as readback_error:
+                        raise self._map_evidence_error(readback_error, retries=retries) from readback_error
                     return R2EvidenceReceipt(
                         key,
                         digest,
@@ -639,35 +684,264 @@ class R2Backend(ObjectStore):
                 time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
         raise R2EvidenceRetryable(retries=retries)
 
+    def _evidence_state_path(self, digest: str) -> Path | None:
+        if self.receipt_dir is None:
+            return None
+        return self.receipt_dir / "evidence-multipart" / f"{digest}.json"
+
+    def _load_evidence_state(self, key: str, digest: str, size: int) -> dict:
+        path = self._evidence_state_path(digest)
+        if path is None:
+            return {
+                "version": 1,
+                "key": key,
+                "sha256": digest,
+                "size": size,
+                "claim_key": evidence_claim_key(digest),
+                "fence": secrets.token_hex(16),
+                "stage": "claiming",
+                "upload_id": None,
+                "parts": [],
+            }
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            raw = b""
+        except OSError as error:
+            raise R2EvidenceError("multipart-state-unavailable") from error
+        if not raw:
+            state = {
+                "version": 1,
+                "key": key,
+                "sha256": digest,
+                "size": size,
+                "claim_key": evidence_claim_key(digest),
+                "fence": secrets.token_hex(16),
+                "stage": "claiming",
+                "upload_id": None,
+                "parts": [],
+            }
+            self._save_evidence_state(state)
+            return state
+        if len(raw) > _MAX_EVIDENCE_STATE_BYTES:
+            raise R2EvidenceConflict("multipart-state-bounded")
+        try:
+            state = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise R2EvidenceConflict("multipart-state-invalid") from error
+        required = {"version", "key", "sha256", "size", "claim_key", "fence", "stage", "upload_id", "parts"}
+        if not isinstance(state, dict) or set(state) != required:
+            raise R2EvidenceConflict("multipart-state-invalid")
+        if (
+            state["version"] != 1
+            or not isinstance(state["fence"], str)
+            or not re.fullmatch(r"[0-9a-f]{32}", state["fence"])
+            or state["sha256"] != digest
+            or type(state["size"]) is not int
+            or state["size"] != size
+            or state["claim_key"] != evidence_claim_key(digest)
+            or state["stage"] not in {"claiming", "claimed", "uploading", "completing"}
+            or state["upload_id"] is not None and (not isinstance(state["upload_id"], str) or len(state["upload_id"]) > 2048)
+            or not isinstance(state["parts"], list)
+            or len(state["parts"]) > _MAX_EVIDENCE_PARTS
+        ):
+            raise R2EvidenceConflict("multipart-state-invalid")
+        seen: set[int] = set()
+        for part in state["parts"]:
+            if (
+                not isinstance(part, dict)
+                or set(part) != {"PartNumber", "ETag"}
+                or type(part["PartNumber"]) is not int
+                or not 1 <= part["PartNumber"] <= _MAX_EVIDENCE_PARTS
+                or part["PartNumber"] in seen
+                or not isinstance(part["ETag"], str)
+                or not 0 < len(part["ETag"]) <= 4096
+            ):
+                raise R2EvidenceConflict("multipart-state-invalid")
+            seen.add(part["PartNumber"])
+        return state
+
+    def _save_evidence_state(self, state: dict) -> None:
+        path = self._evidence_state_path(state["sha256"])
+        if path is None:
+            return
+        encoded = json.dumps(state, separators=(",", ":"), sort_keys=True).encode()
+        if len(encoded) > _MAX_EVIDENCE_STATE_BYTES:
+            raise R2EvidenceError("multipart-state-bounded")
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(encoded)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _clear_evidence_state(self, digest: str) -> None:
+        path = self._evidence_state_path(digest)
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+    def _read_evidence_claim(self, claim_key: str, digest: str, size: int) -> dict | None:
+        try:
+            response = self.client.get_object(Bucket=self.config.bucket, Key=claim_key)
+        except ClientError as error:
+            if _not_found(error):
+                return None
+            raise
+        body = response["Body"].read(_MAX_EVIDENCE_CLAIM_BYTES + 1)
+        if len(body) > _MAX_EVIDENCE_CLAIM_BYTES:
+            raise R2EvidenceConflict("claim-bounded")
+        try:
+            claim = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise R2EvidenceConflict("claim-invalid") from error
+        if (
+            not isinstance(claim, dict)
+            or set(claim) != {"version", "sha256", "size", "fence"}
+            or claim["version"] != 1
+            or claim["sha256"] != digest
+            or type(claim["size"]) is not int
+            or claim["size"] != size
+            or not isinstance(claim["fence"], str)
+            or not re.fullmatch(r"[0-9a-f]{32}", claim["fence"])
+        ):
+            raise R2EvidenceConflict("claim-conflict")
+        return claim
+
+    def _claim_evidence_multipart(self, key: str, digest: str, size: int) -> dict:
+        state = self._load_evidence_state(key, digest, size)
+        claim_key = state["claim_key"]
+        claim = {
+            "version": 1,
+            "sha256": digest,
+            "size": size,
+            "fence": state["fence"],
+        }
+        body = json.dumps(claim, separators=(",", ":"), sort_keys=True).encode()
+        try:
+            self.client.put_object(
+                Bucket=self.config.bucket,
+                Key=claim_key,
+                Body=body,
+                ContentLength=len(body),
+                IfNoneMatch="*",
+                Metadata={"sha256": digest, "size": str(size)},
+            )
+        except ClientError as error:
+            if not _is_precondition(error):
+                raise
+            existing = self._read_evidence_claim(claim_key, digest, size)
+            if existing is None or existing["fence"] != state["fence"]:
+                raise R2EvidenceConflict("claim-conflict") from error
+        except (BotoCoreError, TimeoutError) as error:
+            existing = self._read_evidence_claim(claim_key, digest, size)
+            if existing is None:
+                raise self._map_evidence_error(error, published=False) from error
+            if existing["fence"] != state["fence"]:
+                raise R2EvidenceConflict("claim-conflict") from error
+        state["stage"] = "claimed"
+        self._save_evidence_state(state)
+        return state
+
+    def _evidence_final_exists(self, key: str) -> bool:
+        try:
+            self.client.head_object(Bucket=self.config.bucket, Key=key)
+        except ClientError as error:
+            if _not_found(error):
+                return False
+            raise
+        return True
+
+    def _verify_evidence_or_absent(self, key: str, digest: str, size: int) -> bool:
+        try:
+            self._verify_evidence_remote(key, digest, size)
+        except ValueError:
+            if self._evidence_final_exists(key):
+                raise R2EvidenceReadbackMismatch(published=True)
+            return False
+        return True
+
+    def _reset_evidence_upload(self, state: dict, key: str, retries: int) -> None:
+        upload_id = state.get("upload_id")
+        if upload_id is None:
+            return
+        try:
+            self._abort_evidence_upload(key, upload_id, retries)
+        except R2EvidenceAbortFailure:
+            self._save_evidence_state(state)
+            raise
+        state["upload_id"] = None
+        state["parts"] = []
+        state["stage"] = "claimed"
+        self._save_evidence_state(state)
+
     def _put_evidence_multipart(self, key, source_factory, size, digest, started):
         retries = 0
         max_attempts = max(1, self.config.max_attempts)
-        for _upload_attempt in range(max_attempts):
-            source = None
-            upload_id = None
-            parts = []
-            committed = False
-            try:
-                try:
-                    upload_id = self.client.create_multipart_upload(
-                        Bucket=self.config.bucket,
-                        Key=key,
-                        Metadata={"sha256": digest},
-                    )["UploadId"]
-                except (ClientError, BotoCoreError, TimeoutError) as error:
-                    if not _is_retryable(error) or retries + 1 >= max_attempts:
-                        raise self._map_evidence_error(error, retries=retries, published=False) from error
-                    retries += 1
-                    time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
-                    continue
-                source = source_factory()
-                part_number = 1
-                while True:
-                    chunk = source.read(self.config.multipart_chunk_size)
-                    if not chunk:
+        try:
+            if self._verify_evidence_or_absent(key, digest, size):
+                self._clear_evidence_state(digest)
+                return R2EvidenceReceipt(
+                    key,
+                    digest,
+                    size,
+                    R2EvidenceMetrics(size, 0, 0, True, True, False, _latency_ms(started)),
+                )
+        except R2EvidenceReadbackMismatch as error:
+            self._clear_evidence_state(digest)
+            raise R2EvidenceConflict(retries=retries) from error
+        except (ClientError, BotoCoreError, TimeoutError) as error:
+            raise self._map_evidence_error(error, published=False) from error
+
+        try:
+            state = self._claim_evidence_multipart(key, digest, size)
+        except (ClientError, BotoCoreError, TimeoutError) as error:
+            raise self._map_evidence_error(error, published=False) from error
+        upload_id = state.get("upload_id")
+        source = None
+        committed = False
+        preserve_state = False
+        try:
+            if upload_id is None:
+                state["stage"] = "claimed"
+                self._save_evidence_state(state)
+                for attempt in range(max_attempts):
+                    try:
+                        upload_id = self.client.create_multipart_upload(
+                            Bucket=self.config.bucket,
+                            Key=key,
+                            Metadata={"sha256": digest},
+                        )["UploadId"]
+                        if not isinstance(upload_id, str) or not upload_id:
+                            raise ValueError("multipart upload id is invalid")
+                        state["upload_id"] = upload_id
+                        state["parts"] = []
+                        state["stage"] = "uploading"
+                        self._save_evidence_state(state)
                         break
-                    if part_number > 10_000:
-                        raise R2EvidenceError("multipart-part-limit")
+                    except (ClientError, BotoCoreError, TimeoutError) as error:
+                        retries += 1
+                        if not _is_retryable(error) or attempt + 1 >= max_attempts:
+                            raise self._map_evidence_error(error, retries=retries, published=False) from error
+                        time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
+                if upload_id is None:
+                    raise R2EvidenceRetryable(retries=retries)
+
+            source = source_factory()
+            prior_parts = {part["PartNumber"]: part for part in state["parts"]}
+            parts: list[dict] = []
+            part_number = 1
+            observed_size = 0
+            while True:
+                chunk = source.read(self.config.multipart_chunk_size)
+                if not chunk:
+                    break
+                observed_size += len(chunk)
+                if part_number > _MAX_EVIDENCE_PARTS:
+                    raise R2EvidenceError("multipart-part-limit")
+                prior = prior_parts.get(part_number)
+                if prior is None:
                     part_retries = 0
                     while True:
                         try:
@@ -678,90 +952,106 @@ class R2Backend(ObjectStore):
                                 PartNumber=part_number,
                                 Body=chunk,
                             )
+                            etag = result["ETag"]
+                            if not isinstance(etag, str) or not etag:
+                                raise ValueError("multipart part token is invalid")
+                            prior = {"ETag": etag, "PartNumber": part_number}
+                            prior_parts[part_number] = prior
+                            state["parts"] = [prior_parts[number] for number in sorted(prior_parts)]
+                            state["stage"] = "uploading"
+                            self._save_evidence_state(state)
                             break
                         except (ClientError, BotoCoreError, TimeoutError) as error:
-                            if not _is_retryable(error) or retries + 1 >= max_attempts:
-                                raise self._map_evidence_error(error, retries=retries, published=False) from error
                             retries += 1
                             part_retries += 1
+                            if not _is_retryable(error) or retries >= max_attempts:
+                                raise self._map_evidence_error(error, retries=retries, published=False) from error
                             time.sleep(min(0.01 * (2 ** min(part_retries - 1, 4)), 0.1))
-                    parts.append({"ETag": result["ETag"], "PartNumber": part_number})
-                    part_number += 1
+                parts.append({"ETag": prior["ETag"], "PartNumber": part_number})
+                report_progress("upload", f"Uploading encrypted evidence • {_percent(observed_size, size)}%", current=observed_size, total=size)
+                part_number += 1
+            if observed_size != size:
+                raise R2EvidenceReadbackMismatch(published=False, retries=retries)
+
+            state["stage"] = "completing"
+            state["parts"] = parts
+            self._save_evidence_state(state)
+            for attempt in range(max_attempts):
                 try:
                     self.client.complete_multipart_upload(
                         Bucket=self.config.bucket,
                         Key=key,
                         UploadId=upload_id,
                         MultipartUpload={"Parts": parts},
-                        IfNoneMatch="*",
                     )
                 except (ClientError, BotoCoreError, TimeoutError) as error:
-                    if isinstance(error, ClientError) and _is_precondition(error):
-                        try:
-                            self._verify_evidence_remote(key, digest, size)
-                        except (ValueError, ClientError, BotoCoreError, TimeoutError) as mismatch:
-                            raise self._duplicate_readback_failure(mismatch, retries) from mismatch
-                        self._abort_evidence_upload(key, upload_id, retries)
-                        upload_id = None
-                        committed = True
-                        return R2EvidenceReceipt(
-                            key,
-                            digest,
-                            size,
-                            R2EvidenceMetrics(size, len(parts), retries, True, True, False, _latency_ms(started)),
-                            "duplicate-conflict-verified",
-                        )
-                    if error.__class__.__name__ == "ParamValidationError":
-                        raise R2EvidenceMultipartConditionalUnsupported(retries=retries) from error
-                    if isinstance(error, ClientError) and str(error.response.get("Error", {}).get("Code")) in {
-                        "NotImplemented",
-                        "InvalidRequest",
-                        "UnsupportedHeader",
-                        "InvalidArgument",
-                    }:
-                        raise R2EvidenceMultipartConditionalUnsupported(retries=retries) from error
                     if not _is_retryable(error):
-                        raise self._map_evidence_error(error, retries=retries) from error
+                        raise self._map_evidence_error(error, retries=retries, published=False) from error
+                    retries += 1
                     try:
-                        self._verify_evidence_remote(key, digest, size)
-                    except (ValueError, ClientError, BotoCoreError, TimeoutError) as mismatch:
-                        self._abort_evidence_upload(key, upload_id, retries)
-                        upload_id = None
-                        if retries + 1 >= max_attempts:
-                            raise self._duplicate_readback_failure(mismatch, retries) from mismatch
-                        retries += 1
-                        continue
+                        if self._verify_evidence_or_absent(key, digest, size):
+                            committed = True
+                            self._clear_evidence_state(digest)
+                            return R2EvidenceReceipt(
+                                key,
+                                digest,
+                                size,
+                                R2EvidenceMetrics(size, len(parts), retries, False, True, False, _latency_ms(started)),
+                                "ambiguous-complete-verified",
+                            )
+                    except R2EvidenceReadbackMismatch as mismatch:
+                        committed = True
+                        self._clear_evidence_state(digest)
+                        raise mismatch
+                    if attempt + 1 >= max_attempts:
+                        code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
+                        if code in {"429", "SlowDown", "Throttling"}:
+                            raise self._map_evidence_error(error, retries=retries, published=False) from error
+                        preserve_state = True
+                        raise R2EvidenceAmbiguous(retries=retries) from error
+                    time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
+                    continue
+                try:
+                    if not self._verify_evidence_or_absent(key, digest, size):
+                        preserve_state = True
+                        raise R2EvidenceAmbiguous(retries=retries)
+                except R2EvidenceReadbackMismatch:
                     committed = True
-                    return R2EvidenceReceipt(
-                        key,
-                        digest,
-                        size,
-                        R2EvidenceMetrics(size, len(parts), retries, True, True, False, _latency_ms(started)),
-                        "ambiguous-complete-verified",
-                    )
-                self._verify_evidence_remote(key, digest, size)
+                    self._clear_evidence_state(digest)
+                    raise
                 committed = True
+                self._clear_evidence_state(digest)
                 return R2EvidenceReceipt(
                     key,
                     digest,
                     size,
                     R2EvidenceMetrics(size, len(parts), retries, False, True, False, _latency_ms(started)),
                 )
-            except ValueError as error:
-                raise R2EvidenceReadbackMismatch(published=True, retries=retries) from error
-            except (ClientError, BotoCoreError, TimeoutError) as error:
-                if error.__class__.__name__ == "ParamValidationError":
-                    raise R2EvidenceMultipartConditionalUnsupported(retries=retries) from error
-                raise self._map_evidence_error(error, retries=retries) from error
-            finally:
-                if source is not None and getattr(source_factory, "owns_source", True):
-                    try:
-                        source.close()
-                    except (AttributeError, OSError):
-                        pass
-                if upload_id is not None and not committed:
-                    self._abort_evidence_upload(key, upload_id, retries)
-        raise R2EvidenceRetryable(retries=retries)
+            preserve_state = True
+            raise R2EvidenceAmbiguous(retries=retries)
+        except R2EvidenceAmbiguous:
+            preserve_state = True
+            raise
+        except R2EvidenceError:
+            if upload_id is not None and not committed:
+                self._reset_evidence_upload(state, key, retries)
+            raise
+        except ValueError as error:
+            if upload_id is not None and not committed:
+                self._reset_evidence_upload(state, key, retries)
+            raise R2EvidenceReadbackMismatch(published=False, retries=retries) from error
+        except (ClientError, BotoCoreError, TimeoutError) as error:
+            if upload_id is not None and not committed:
+                self._reset_evidence_upload(state, key, retries)
+            raise self._map_evidence_error(error, retries=retries, published=False) from error
+        finally:
+            if source is not None and getattr(source_factory, "owns_source", True):
+                try:
+                    source.close()
+                except (AttributeError, OSError):
+                    pass
+            if preserve_state:
+                self._save_evidence_state(state)
 
     def _abort_evidence_upload(self, key: str, upload_id: str, retries: int) -> None:
         try:
@@ -797,8 +1087,12 @@ class R2Backend(ObjectStore):
         return observed_size
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
-        if code in {"ExpiredToken", "InvalidToken", "TokenRefreshRequired"}:
-            return R2EvidenceRetryable("credentials-expired", published=published, retries=retries)
+        if isinstance(error, TimeoutError) or code in {"408", "RequestTimeout"}:
+            return R2EvidenceTimeout(published=published, retries=retries)
+        if code in {"429", "SlowDown", "Throttling"}:
+            return R2EvidenceRateLimited(published=published, retries=retries)
+        if code in {"ExpiredToken", "InvalidToken", "TokenRefreshRequired", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"}:
+            return R2EvidenceCredentialFailure(published=published, retries=retries)
         if _is_retryable(error):
             return R2EvidenceRetryable("retry-exhausted", published=published, retries=retries)
         return R2EvidenceError("publication-unknown", published=published, retries=retries)

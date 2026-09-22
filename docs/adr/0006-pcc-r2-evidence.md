@@ -15,13 +15,24 @@ after object publication; an uploaded-but-unindexed object remains recoverable f
 Index discovery lists only the fixed index prefix, uses bounded `ListObjectsV2` pages, and
 deduplicates keys so ordering and duplicate pages/notifications do not affect consumers.
 
-Multipart failures abort when possible and retain the durable ciphertext so a later attempt
-can safely restart. Incomplete multipart uploads should also be covered by an R2 lifecycle
-rule (the current Cloudflare documentation says R2's default is seven days after
-initiation). The configured part size must follow the provider's current minimum in live
-configuration; fake-client tests may use smaller chunks for speed. Bucket Lock is optional:
-it protects selected evidence from deletion but can also block operator deletion or
-historical re-encryption until retention expires.
+Multipart evidence first verifies the final key. If it is absent, the writer creates the
+digest-derived fence `evidence/claims/v1/<ciphertext-sha256>` with `PutObject`
+`If-None-Match: *`. Its body contains only a protocol version, digest, exact size, and an
+opaque random fence token; no repository, session, path, profile, or other human identifier
+is present. Only a process holding the matching local fence state may complete that MPU.
+`CompleteMultipartUpload` is deliberately unconditional because R2 does not document a
+conditional completion header. The fence object is retained as a bounded immutable claim;
+a writer that has lost its local claim state reports a public-safe conflict rather than
+stealing or replacing the claim. A resumed writer reuses its local upload id and completed
+part tokens when present, and recreates an aborted/expired MPU under the same fence.
+State is atomic, mode-0600, digest-keyed, and bounded to 10,000 parts.
+
+After any ambiguous completion, the writer stream-reads the final object and verifies the
+exact SHA-256 and size. A verified final object is never rewritten. Ambiguous state is
+retained for bounded retry; failed known MPUs are aborted when possible while the durable
+#8 ciphertext remains available. Typed public-safe outcomes distinguish timeout, rate
+limit, credential, claim/immutable conflict, ambiguous completion, readback mismatch, and
+abort failure.
 
 ## Cloudflare baseline consulted (2026-09-22)
 
@@ -49,9 +60,7 @@ historical re-encryption until retention expires.
 - [Bucket locks](https://developers.cloudflare.com/r2/buckets/bucket-locks/index.md), last
   updated 2026-04-30: prefix rules can retain objects for a duration or indefinitely and
   take precedence over lifecycle deletion.
-- [R2 S3 extensions](https://developers.cloudflare.com/r2/api/s3/extensions/index.md), last
-  updated 2026-06-08: destination conditional headers exist for `CopyObject` as a beta
-  extension; this implementation does not silently substitute that path for multipart
-  completion. If a live endpoint rejects the multipart conditional request, the typed
-  `multipart-conditional-create-unsupported` outcome is a NEEDS_SOL gate rather than a
-  weakened immutability claim.
+- [R2 conditional extensions](https://developers.cloudflare.com/r2/api/s3/extensions/index.md),
+  last updated 2026-06-08: destination conditional headers exist for `CopyObject` as a
+  beta extension. This implementation does not substitute that path for multipart
+  completion; digest-derived `PutObject` fencing is the provider-supported race guard.

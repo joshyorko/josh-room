@@ -7,6 +7,7 @@ from botocore.exceptions import ClientError
 
 from josh_room.pcc_outbox import PccOutbox, QueueState
 from josh_room.r2 import (
+    EVIDENCE_CLAIM_PREFIX,
     EVIDENCE_INDEX_PREFIX,
     EVIDENCE_OBJECT_PREFIX,
     R2Backend,
@@ -14,8 +15,10 @@ from josh_room.r2 import (
     R2EvidenceAbortFailure,
     R2EvidenceConflict,
     R2EvidenceReadbackMismatch,
+    evidence_claim_key,
     evidence_index_key,
     evidence_object_key,
+    validate_evidence_claim_key,
     validate_evidence_index_key,
     validate_evidence_object_key,
 )
@@ -65,9 +68,11 @@ class EvidenceS3:
         upload_id = f"upload-{self.next_upload}"
         self.multipart[upload_id] = {"key": kwargs["Key"], "parts": {}}
         return {"UploadId": upload_id}
-
     def upload_part(self, **kwargs):
         self.calls.append(("upload_part", kwargs))
+        if getattr(self, "crash_on_part", False):
+            self.crash_on_part = False
+            raise KeyboardInterrupt()
         if self.part_errors:
             raise self.part_errors.pop(0)
         body = kwargs["Body"].read() if hasattr(kwargs["Body"], "read") else kwargs["Body"]
@@ -111,12 +116,11 @@ class EvidenceS3:
         else:
             response["IsTruncated"] = False
         return response
-
-
-def backend(fake, threshold=8, chunk=4):
+def backend(fake, threshold=8, chunk=4, receipt_dir=None):
     return R2Backend(
         R2Config("https://example.invalid", "synthetic", "test", multipart_threshold=threshold, multipart_chunk_size=chunk, max_attempts=3),
         client=fake,
+        receipt_dir=receipt_dir,
     )
 
 
@@ -126,11 +130,15 @@ def test_dedicated_validators_are_opaque_and_do_not_change_workspace_keys():
     index_key = evidence_index_key(digest)
     assert object_key.startswith(EVIDENCE_OBJECT_PREFIX)
     assert index_key.startswith(EVIDENCE_INDEX_PREFIX)
+    claim_key = evidence_claim_key(digest)
+    assert claim_key.startswith(EVIDENCE_CLAIM_PREFIX)
     assert validate_evidence_object_key(object_key) == digest
     assert validate_evidence_index_key(index_key) == digest
+    assert validate_evidence_claim_key(claim_key) == digest
     for forbidden in ("repo", "project", "session", "source", "profile", "device"):
         assert forbidden not in object_key
         assert forbidden not in index_key
+        assert forbidden not in claim_key
     with pytest.raises(ValueError):
         validate_evidence_object_key("objects/sha256/" + digest)
 
@@ -149,7 +157,7 @@ def test_single_put_duplicate_and_full_readback_ignore_etag(tmp_path):
     assert fake.objects[first.key]["body"] == source.read_bytes()
 
 
-def test_multipart_stream_uses_conditional_create_and_abort_restart(tmp_path):
+def test_multipart_stream_uses_digest_claim_and_unconditional_completion(tmp_path):
     fake = EvidenceS3()
     store = backend(fake, threshold=2, chunk=4)
     payload = b"0123456789"
@@ -158,7 +166,11 @@ def test_multipart_stream_uses_conditional_create_and_abort_restart(tmp_path):
     source.chmod(0o600)
     receipt = store.put_evidence_file(source)
     complete = next(kwargs for name, kwargs in fake.calls if name == "complete_multipart_upload")
-    assert complete["IfNoneMatch"] == "*"
+    assert "IfNoneMatch" not in complete
+    claim = next(kwargs for name, kwargs in fake.calls if name == "put_object" and kwargs["Key"].startswith(EVIDENCE_CLAIM_PREFIX))
+    assert claim["IfNoneMatch"] == "*"
+    assert validate_evidence_claim_key(claim["Key"]) == receipt.ciphertext_sha256
+    assert b"repo" not in claim["Body"] and b"session" not in claim["Body"]
     assert receipt.metrics.parts == 3
     assert store.get_evidence_bytes(receipt.key) == payload
 
@@ -186,6 +198,39 @@ def test_conflicting_object_is_not_accepted_after_precondition(tmp_path):
     fake.objects[key] = {"body": b"wrong"}
     with pytest.raises(R2EvidenceConflict):
         store.put_evidence_file(source)
+
+
+def test_multipart_claim_conflict_is_typed_and_does_not_complete(tmp_path):
+    fake = EvidenceS3()
+    store = backend(fake, threshold=2, chunk=4)
+    payload = b"conflicting payload"
+    digest = hashlib.sha256(payload).hexdigest()
+    claim_key = evidence_claim_key(digest)
+    fake.objects[claim_key] = {
+        "body": b'{"fence":"00000000000000000000000000000000","sha256":"' + digest.encode() + b'","size":19,"version":1}'
+    }
+    source = tmp_path / "ciphertext.age"
+    source.write_bytes(payload)
+    source.chmod(0o600)
+    with pytest.raises(R2EvidenceConflict, match="claim-conflict"):
+        store.put_evidence_file(source)
+    assert not any(name == "complete_multipart_upload" for name, _ in fake.calls)
+
+
+def test_multipart_parts_resume_from_bounded_state_after_crash(tmp_path):
+    fake = EvidenceS3()
+    store = backend(fake, threshold=2, chunk=4, receipt_dir=tmp_path)
+    payload = b"0123456789"
+    source = tmp_path / "ciphertext.age"
+    source.write_bytes(payload)
+    source.chmod(0o600)
+    fake.crash_on_part = True
+    with pytest.raises(KeyboardInterrupt):
+        store.put_evidence_file(source)
+    assert list((tmp_path / "evidence-multipart").glob("*.json"))
+    receipt = store.put_evidence_file(source)
+    assert receipt.ciphertext_size == len(payload)
+    assert store.get_evidence_bytes(receipt.key) == payload
 
 
 def test_abort_failure_is_typed_and_source_remains_durable(tmp_path):
