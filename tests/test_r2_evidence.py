@@ -20,7 +20,6 @@ from josh_room.r2 import (
     evidence_index_key,
     evidence_object_key,
     validate_evidence_claim_key,
-    validate_evidence_index_key,
     validate_evidence_object_key,
 )
 

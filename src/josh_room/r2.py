@@ -8,10 +8,12 @@ import stat
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
+
+from botocore.exceptions import BotoCoreError, ClientError
 
 try:
     import fcntl as _fcntl
@@ -22,7 +24,6 @@ try:
     import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover - POSIX runtime
     _msvcrt = None
-from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
 from .encryption_domain import (
@@ -385,7 +386,7 @@ class R2Backend(ObjectStore):
             before = os.fstat(source.fileno())
             if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077 or before.st_nlink != 1:
                 raise ValueError("source-private")
-            staged = tempfile.TemporaryFile(mode="w+b")
+            staged = tempfile.TemporaryFile(mode="w+b")  # noqa: SIM115 - snapshot lifetime spans the publication call
             digest = hashlib.sha256()
             size = 0
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
@@ -416,7 +417,7 @@ class R2Backend(ObjectStore):
             raise ValueError("invalid evidence ciphertext digest")
         if not hasattr(source, "read"):
             raise TypeError("evidence source is not readable")
-        staged = tempfile.TemporaryFile(mode="w+b")
+        staged = tempfile.TemporaryFile(mode="w+b")  # noqa: SIM115 - staged reader lifetime spans the publication call
         observed = hashlib.sha256()
         total = 0
         try:
@@ -574,7 +575,7 @@ class R2Backend(ObjectStore):
         """Drive #8's uploaded -> indexed -> committed seam without catalog writes."""
         try:
             queued = outbox.inspect_record(event_id)
-        except Exception as error:  # noqa: BLE001 - no untrusted outbox detail crosses the boundary
+        except Exception as error:
             raise R2EvidenceOutboxPrecondition() from error
         if queued is None:
             raise R2EvidenceOutboxPrecondition()
@@ -1217,7 +1218,7 @@ class R2Backend(ObjectStore):
                     except R2EvidenceReadbackMismatch as mismatch:
                         committed = True
                         self._clear_evidence_state(digest, key)
-                        raise mismatch
+                        raise
                     if attempt + 1 >= max_attempts:
                         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
                         if code in {"429", "SlowDown", "Throttling"}:
@@ -1271,7 +1272,7 @@ class R2Backend(ObjectStore):
     def _abort_evidence_upload(self, key: str, upload_id: str, retries: int) -> None:
         try:
             self.client.abort_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id)
-        except Exception as error:  # noqa: BLE001 - provider-specific abort failures are typed
+        except Exception as error:
             raise R2EvidenceAbortFailure(retries=retries) from error
 
     def _verify_evidence_remote(self, key: str, digest: str, size: int | None) -> int:
