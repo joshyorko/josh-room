@@ -1502,6 +1502,49 @@ class PccOutbox:
             self._publish_record_unlocked(updated)
             return updated
 
+    def _require_prepared_publication_unlocked(self, record: QueueRecord) -> None:
+        prepared = self.prepared._records_unlocked().get(record.event_id)
+        if prepared is None:
+            raise OutboxStorageError("prepared-record-unavailable", pending_preserved=True)
+        if (
+            prepared.ciphertext_sha256 != record.ciphertext_sha256
+            or prepared.ciphertext_size != record.ciphertext_size
+        ):
+            raise OutboxStorageError("prepared-record-conflict", pending_preserved=True)
+
+    def release(self, event_id: str, owner: str) -> QueueRecord:
+        """Release a live owner after durable prepared publication."""
+
+        event_id = _identifier(event_id)
+        owner = _identifier(owner)
+        with _exclusive_file_lock(self._lock_path):
+            record = self._must_read_unlocked(event_id)
+            if record.owner is None:
+                if (
+                    record.state is not QueueState.PREPARED_ENCRYPTED
+                    or record.resume_state is not QueueState.PREPARED_ENCRYPTED
+                ):
+                    raise LeaseConflict()
+                self._require_prepared_publication_unlocked(record)
+                return record
+            self._require_claim(record, owner)
+            if (
+                record.state not in {QueueState.CLAIMED, QueueState.PREPARED_ENCRYPTED}
+                or record.resume_state is not QueueState.PREPARED_ENCRYPTED
+            ):
+                raise InvalidTransition()
+            self._require_prepared_publication_unlocked(record)
+            released = QueueRecord(
+                **{
+                    **record.__dict__,
+                    "state": QueueState.PREPARED_ENCRYPTED,
+                    "owner": None,
+                    "lease_until": None,
+                }
+            )
+            self._publish_record_unlocked(released)
+            return released
+
     def reconcile_prepared(
         self,
         event_id: str,
