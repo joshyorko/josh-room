@@ -18,12 +18,13 @@ import stat
 import sys
 import tempfile
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Mapping, TextIO
+from typing import BinaryIO, Iterator, Mapping, TextIO
 from .adapter_contract import AdapterError
 from .codex_adapter import CodexHookFacts, CodexRoots, canonicalize_hook_path
-from .pcc_outbox import PccOutbox, QueueState
+from .pcc_outbox import PccOutbox, QueueState, _exclusive_file_lock
 
 UPSTREAM_CODEX_COMMIT = "0a73d55b80afd2aa88051848bd28524d132fd01e"
 UPSTREAM_CODEX_DATE = "2026-09-22"
@@ -270,7 +271,32 @@ def _config_path(config_path: Path | str | None) -> Path:
         raise HookBoundaryError("config-path-invalid")
     if path.exists() and path.is_symlink():
         raise HookBoundaryError("config-path-invalid")
+    _validate_config_security(path)
     return path
+
+
+def _validate_config_security(path: Path) -> None:
+    current = path
+    for _ in range(32):
+        if current.is_symlink():
+            raise HookBoundaryError("config-untrusted")
+        if current.exists():
+            try:
+                info = current.lstat()
+            except OSError:
+                raise HookBoundaryError("config-untrusted") from None
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                raise HookBoundaryError("config-untrusted")
+            if info.st_mode & 0o022 and not (stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX):
+                raise HookBoundaryError("config-untrusted")
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+
+def _config_lock(path: Path) -> Path:
+    return path.parent / f".{path.name}.josh-room.lock"
 
 
 def _trusted_file(path: Path) -> tuple[Path, str]:
@@ -468,6 +494,14 @@ def _read_receipt() -> dict[str, object] | None:
     if not path.exists() or path.is_symlink():
         return None
     try:
+        info = path.lstat()
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            return None
+        if info.st_mode & 0o022:
+            return None
+    except OSError:
+        return None
+    try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
@@ -481,7 +515,7 @@ def _remove_receipt() -> None:
         raise HookBoundaryError("receipt-write-failed") from None
 
 
-def codex_hook_status(config_path: Path | str | None = None) -> dict[str, object]:
+def _codex_hook_status_locked(config_path: Path | str | None = None) -> dict[str, object]:
     try:
         path = _config_path(config_path)
         text, parsed, exists = _read_config(path)
@@ -491,8 +525,14 @@ def codex_hook_status(config_path: Path | str | None = None) -> dict[str, object
         expected_commands = {str(commands["command"])} | _owned_commands(text, blocks)
         conflicts = _unowned_conflict(parsed, expected_commands)
         receipt = _read_receipt()
-        events: dict[str, object] = {}
+        receipt_commands = receipt.get("commands") if isinstance(receipt, dict) else None
+        executable_stale = (
+            not isinstance(receipt_commands, dict)
+            or receipt_commands.get("interpreter_sha256") != commands.get("interpreter_sha256")
+            or receipt_commands.get("script_sha256") != commands.get("script_sha256")
+        ) if receipt is not None else False
         states: list[str] = []
+        events: dict[str, object] = {}
         for event in SUPPORTED_EVENTS:
             matching = [block for block_event, start, end in blocks if block_event == event for block in [text[start:end]]]
             if not matching:
@@ -507,6 +547,8 @@ def codex_hook_status(config_path: Path | str | None = None) -> dict[str, object
             overall = "partial"
         elif conflicts:
             overall = "conflict"
+        elif executable_stale:
+            overall = "stale"
         elif any(state == "disabled" for state in states):
             overall = "disabled"
         elif any(state in {"modified", "stale"} for state in states):
@@ -534,6 +576,8 @@ def codex_hook_status(config_path: Path | str | None = None) -> dict[str, object
         }
         if conflicts:
             result["diagnostics"] = ["conflicting-josh-room-hook"]
+        elif executable_stale:
+            result["diagnostics"] = ["stale-executable"]
         elif not markers_well_formed:
             result["diagnostics"] = ["partial-installation"]
         elif any(state == "untrusted" for state in states):
@@ -543,7 +587,16 @@ def codex_hook_status(config_path: Path | str | None = None) -> dict[str, object
         return {"ok": False, "tool": "codex", "state": error.code, "diagnostics": [error.code]}
 
 
-def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, object]:
+def codex_hook_status(config_path: Path | str | None = None) -> dict[str, object]:
+    try:
+        path = _config_path(config_path)
+        with _exclusive_file_lock(_config_lock(path)):
+            return _codex_hook_status_locked(path)
+    except HookBoundaryError as error:
+        return {"ok": False, "tool": "codex", "state": error.code, "diagnostics": [error.code]}
+
+
+def _install_locked(config_path: Path | str | None, *, repair: bool) -> dict[str, object]:
     path = _config_path(config_path)
     text, parsed, existed = _read_config(path)
     original_text = text
@@ -557,7 +610,7 @@ def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, objec
         raise HookBoundaryError("conflicting-josh-room-hook")
     if blocks and not repair:
         if all(sum(1 for block_event, _start, _end in blocks if block_event == event) == 1 and text[next(start for block_event, start, _end in blocks if block_event == event):next(end for block_event, _start, end in blocks if block_event == event)] == expected[event] for event in SUPPORTED_EVENTS):
-            return codex_hook_status(path)
+            return _codex_hook_status_locked(path)
         raise HookBoundaryError("stale-installation")
     if repair and blocks:
         for _event, start, end in reversed(blocks):
@@ -573,6 +626,9 @@ def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, objec
         tomllib.loads(text)
     except tomllib.TOMLDecodeError:
         raise HookBoundaryError("config-merge-failed") from None
+    current_text, _current_parsed, current_exists = _read_config(path)
+    if current_exists != existed or current_text != original_text:
+        raise HookBoundaryError("config-conflict")
     original_sha = hashlib.sha256(original_text.encode("utf-8")).hexdigest()
     original_mode = stat.S_IMODE(path.stat().st_mode) if existed else 0o600
     _write_config(path, text, existed=existed, mode=original_mode)
@@ -583,12 +639,36 @@ def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, objec
         "original_exists": existed,
         "original_mode": original_mode,
         "original_size": len(original_text.encode("utf-8")),
+        "original_final_newline": original_text.endswith("\n"),
         "blocks": {event: hashlib.sha256(expected[event].encode("utf-8")).hexdigest() for event in SUPPORTED_EVENTS},
         "commands": {key: value for key, value in commands.items() if key.endswith("sha256")},
         "upstream_commit": UPSTREAM_CODEX_COMMIT,
     }
-    _write_receipt(receipt)
-    return codex_hook_status(path)
+    try:
+        _write_receipt(receipt)
+    except Exception as error:
+        try:
+            if existed:
+                _write_config(path, original_text, existed=True, mode=original_mode)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if isinstance(error, HookBoundaryError):
+            raise
+        raise HookBoundaryError("receipt-write-failed") from None
+    return _codex_hook_status_locked(path)
+
+
+def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, object]:
+    path = _config_path(config_path)
+    try:
+        with _exclusive_file_lock(_config_lock(path)):
+            return _install_locked(path, repair=repair)
+    except HookBoundaryError:
+        raise
+    except Exception:
+        raise HookBoundaryError("config-write-failed") from None
 
 
 def install_codex_hooks(config_path: Path | str | None = None, *, repair: bool = False) -> dict[str, object]:
@@ -602,49 +682,72 @@ def repair_codex_hooks(config_path: Path | str | None = None) -> dict[str, objec
     return install_codex_hooks(config_path, repair=True)
 
 
-def remove_codex_hooks(config_path: Path | str | None = None) -> dict[str, object]:
+def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[str, object]:
     try:
         path = _config_path(config_path)
         text, parsed, exists = _read_config(path)
         blocks, well_formed = _blocks(text)
+        receipt = _read_receipt()
         if not well_formed:
             raise HookBoundaryError("partial-installation")
-        receipt = _read_receipt()
-        if not blocks:
-            if receipt is not None:
-                _remove_receipt()
-            return codex_hook_status(path)
-        if receipt is None:
-            commands = _commands()
-            expected = {event: _render_block(event, commands) for event in SUPPORTED_EVENTS}
-            if any(text[start:end] != expected.get(event) for event, start, end in blocks):
-                raise HookBoundaryError("ownership-uncertain")
-        elif receipt.get("config_path") != str(path):
+        if not isinstance(receipt, dict):
+            raise HookBoundaryError("ownership-uncertain")
+        required = {
+            "version", "config_path", "original_exists", "original_mode",
+            "original_size", "original_final_newline", "blocks", "commands",
+        }
+        if (
+            receipt.get("version") != 1
+            or set(receipt) < required
+            or receipt.get("config_path") != str(path)
+            or type(receipt.get("original_exists")) is not bool
+            or type(receipt.get("original_mode")) is not int
+            or type(receipt.get("original_size")) is not int
+            or type(receipt.get("original_final_newline")) is not bool
+        ):
+            raise HookBoundaryError("ownership-uncertain")
+        receipt_blocks = receipt.get("blocks")
+        if not isinstance(receipt_blocks, dict) or set(receipt_blocks) != set(SUPPORTED_EVENTS):
+            raise HookBoundaryError("ownership-uncertain")
+        if len(blocks) != len(SUPPORTED_EVENTS) or {event for event, _start, _end in blocks} != set(SUPPORTED_EVENTS):
             raise HookBoundaryError("ownership-uncertain")
         for event, start, end in reversed(blocks):
-            if receipt is not None:
-                expected_hash = (receipt.get("blocks") or {}).get(event) if isinstance(receipt.get("blocks"), dict) else None
-                if expected_hash and hashlib.sha256(text[start:end].encode("utf-8")).hexdigest() != expected_hash:
-                    raise HookBoundaryError("owned-hook-modified")
+            expected_hash = receipt_blocks.get(event)
+            if (
+                not isinstance(expected_hash, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+                or hashlib.sha256(text[start:end].encode("utf-8")).hexdigest() != expected_hash
+            ):
+                raise HookBoundaryError("owned-hook-modified")
             text = text[:start] + text[end:]
+        original_size = receipt["original_size"]
         if (
             exists
-            and isinstance(receipt, dict)
             and receipt.get("original_exists") is True
-            and isinstance(receipt.get("original_size"), int)
-            and len(text.encode("utf-8")) == receipt["original_size"] + 1
-            and text.endswith("\n")
+            and isinstance(original_size, int)
+            and len(text.encode("utf-8")) > original_size
         ):
-            text = text[:-1]
-        if exists and not text.strip() and receipt is not None and receipt.get("original_exists") is False:
+            extra = len(text.encode("utf-8")) - original_size
+            if text.endswith("\n" * extra):
+                text = text[:-extra]
+        if exists and not text.strip() and receipt.get("original_exists") is False:
             path.unlink(missing_ok=True)
         else:
             tomllib.loads(text) if text.strip() else None
             _write_config(path, text, existed=exists, mode=stat.S_IMODE(path.stat().st_mode) if exists else 0o600)
         _remove_receipt()
-        return codex_hook_status(path)
+        return _codex_hook_status_locked(path)
     except (HookBoundaryError, OSError, tomllib.TOMLDecodeError):
         return {"ok": False, "tool": "codex", "state": "remove-failed", "diagnostics": ["remove-failed"]}
+
+
+def remove_codex_hooks(config_path: Path | str | None = None) -> dict[str, object]:
+    try:
+        path = _config_path(config_path)
+        with _exclusive_file_lock(_config_lock(path)):
+            return _remove_codex_hooks_locked(path)
+    except HookBoundaryError as error:
+        return {"ok": False, "tool": "codex", "state": error.code, "diagnostics": [error.code]}
 
 
 __all__ = [

@@ -1112,10 +1112,35 @@ def canonicalize_hook_path(roots: CodexRoots, facts: CodexHookFacts) -> tuple[st
     if not isinstance(roots, CodexRoots) or not isinstance(facts, CodexHookFacts):
         return None
     adapter = CodexTranscriptAdapter(roots, hook_facts=facts)
-    candidate = adapter._candidate_from_path(facts.transcript_path, facts.session_id, facts)
-    if candidate is None:
+    raw_path = facts.transcript_path.expanduser()
+    if not raw_path.is_absolute():
+        raw_path = facts.cwd / raw_path
+    raw_path = Path(os.path.abspath(os.fspath(raw_path)))
+    if not adapter._raw_path_is_safe(raw_path):
         return None
-    return candidate.source_id, candidate.representation
+    try:
+        canonical = raw_path.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+    root_name = adapter._root_name(canonical)
+    if root_name is None or not canonical.is_file() or canonical.name.startswith("."):
+        return None
+    representation = adapter._representation(canonical, root_name)
+    if representation is None:
+        return None
+    name = canonical.name
+    suffix = ".jsonl.zst" if name.endswith(".jsonl.zst") else ".jsonl" if name.endswith(".jsonl") else ""
+    stem = name[: -len(suffix)] if suffix else ""
+    if not stem.startswith("rollout-"):
+        return None
+    token = _COPY_SUFFIX.sub("", stem.removeprefix("rollout-"))
+    if token != facts.session_id:
+        return None
+    root = adapter._roots.active if root_name == "active" else adapter._roots.archived
+    path_key = canonical.relative_to(root).as_posix()
+    if path_key.endswith(".zst"):
+        path_key = path_key.removesuffix(".zst")
+    return _source_id(facts.session_id, path_key), representation
 
 
 __all__ = [

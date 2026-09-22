@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import josh_room.pcc_hooks as hooks
 from josh_room.codex_adapter import CodexRoots
 from josh_room.pcc_hooks import (
     codex_hook_main,
@@ -77,6 +78,20 @@ def test_machine_entrypoint_fails_open_on_deep_or_oversized_json():
     deep = ("[" * 5000) + ("]" * 5000)
     assert codex_hook_main(io.BytesIO(deep.encode("ascii"))) == 0
     assert codex_hook_main(io.BytesIO(b"{" + b'"n":' + b"9" * 65530)) == 0
+
+def test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    original = 'model = "synthetic"'
+    config.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("JOSH_ROOM_HOOK_RECEIPT", str(tmp_path / "receipt.json"))
+    monkeypatch.setattr(
+        hooks,
+        "_write_receipt",
+        lambda _receipt: (_ for _ in ()).throw(hooks.HookBoundaryError("receipt-write-failed")),
+    )
+    assert install_codex_hooks(config)["state"] == "receipt-write-failed"
+    assert config.read_text(encoding="utf-8") == original
+
 
 
 def test_install_preserves_unrelated_hooks_and_remove_rolls_back(tmp_path, monkeypatch):
