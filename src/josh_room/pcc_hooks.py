@@ -813,6 +813,8 @@ def _install_locked(config_path: Path | str | None, *, repair: bool) -> dict[str
         text += "\n"
     if text and not text.endswith("\n\n"):
         text += "\n"
+    for event in SUPPORTED_EVENTS:
+        text += expected[event]
     try:
         tomllib.loads(text)
     except tomllib.TOMLDecodeError:
