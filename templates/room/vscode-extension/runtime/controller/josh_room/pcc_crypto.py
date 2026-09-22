@@ -275,10 +275,12 @@ def _validate_queue_binding(
 ) -> None:
     """Bind the #8 queue record to the exact normalized #9 event."""
 
+    document_session = document.get("session_id")
     if (
         queued.event_id != document.get("event_id")
         or queued.event_id not in queued.event_ids
-        or queued.session_id != document.get("session_id", queued.session_id)
+        or not isinstance(document_session, str)
+        or queued.session_id != document_session
         or (
             "checkpoint" in document
             and queued.checkpoint != document["checkpoint"]
@@ -288,36 +290,38 @@ def _validate_queue_binding(
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
 
     metadata = queued.metadata
-    expected_workspace = document.get("workspace_id", profile.workspace_id)
-    if "workspace_id" in metadata and metadata["workspace_id"] != expected_workspace:
+    expected_workspace = document.get("workspace_id")
+    if not isinstance(expected_workspace, str) or metadata.get("workspace_id") != expected_workspace:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
-    if "object_kind" in metadata and metadata["object_kind"] != document.get("kind"):
+    if metadata.get("object_kind") != document.get("kind"):
         _fail(CryptoErrorCode.MANIFEST_MISMATCH)
-    if "destination_class" in metadata and metadata["destination_class"] != profile.destination.kind:
+    if metadata.get("destination_class") != profile.destination.kind:
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if profile.destination.binding_id is not None and metadata.get("destination_binding_id") != profile.destination.binding_id:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
 
     source = document.get("source")
-    if isinstance(source, Mapping):
-        for metadata_key, document_key in (
-            ("source_surface", "surface"),
-            ("source_adapter", "adapter"),
-            ("source_adapter_version", "adapter_version"),
-        ):
-            if metadata_key in metadata and document_key in source and metadata[metadata_key] != source[document_key]:
-                _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+    if not isinstance(source, Mapping):
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    for metadata_key, document_key in (
+        ("source_surface", "surface"),
+        ("source_adapter", "adapter"),
+        ("source_adapter_version", "adapter_version"),
+    ):
+        if metadata.get(metadata_key) != source.get(document_key):
+            _fail(CryptoErrorCode.MANIFEST_MISMATCH)
 
     capture = document.get("capture")
-    expected_capture: Mapping[str, object] = capture if isinstance(capture, Mapping) else {
-        "policy_decision": "allow",
-        "status": "complete",
-    }
+    if not isinstance(capture, Mapping):
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
     for metadata_key, document_key in (
         ("policy_decision", "policy_decision"),
         ("capture_status", "status"),
-        ("sensitivity", "sensitivity"),
     ):
-        if metadata_key in metadata and document_key in expected_capture and metadata[metadata_key] != expected_capture[document_key]:
+        if metadata.get(metadata_key) != capture.get(document_key):
             _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if "sensitivity" in capture and metadata.get("sensitivity") != capture["sensitivity"]:
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
 
 
 
@@ -830,7 +834,7 @@ def _prepared_metadata(
         capture = {"status": "complete", "policy_decision": "allow"}
     # Deliberately omit content_sha256/content_size.  Those values belong in
     # the encrypted manifest and are not public delivery metadata.
-    return {
+    result = {
         "object_kind": kind,
         "content_type": content_type,
         "destination_class": profile.destination.kind,
@@ -838,6 +842,9 @@ def _prepared_metadata(
         "capture_status": capture.get("status"),
         "policy_decision": capture.get("policy_decision"),
     }
+    if profile.destination.binding_id is not None:
+        result["destination_binding_id"] = profile.destination.binding_id
+    return result
 
 
 def encrypt_and_prepare(
@@ -886,7 +893,7 @@ def encrypt_and_prepare(
     } or queued.state is QueueState.COMMITTED:
         if queued.ciphertext_sha256 is None or queued.ciphertext_size is None:
             _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
-        if queued.metadata.get("object_kind") != document["kind"]:
+        if "object_kind" in queued.metadata and queued.metadata["object_kind"] != document["kind"]:
             _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
         return PreparedReceipt(event_id, document["kind"], queued.ciphertext_sha256, queued.ciphertext_size)
     if queued.resume_state is not QueueState.SOURCE_SNAPSHOTTED:

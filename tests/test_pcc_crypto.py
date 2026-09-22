@@ -494,6 +494,11 @@ def _prepare_queue(outbox: PccOutbox, event: NormalizationEvent, number: int = 1
             "source_adapter": source_adapter,
             "source_adapter_version": source_adapter_version,
             "object_kind": event.kind,
+            "destination_class": "private-r2",
+            "destination_binding_id": "binding-synthetic",
+            "policy_decision": "allow",
+            "capture_status": "complete",
+            "sensitivity": "normal",
         },
     )
     outbox.claim("worker-one")
