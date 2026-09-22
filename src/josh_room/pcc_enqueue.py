@@ -12,8 +12,9 @@ import hashlib
 import os
 import re
 import stat
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .pcc_outbox import PccOutbox, QueueReceipt

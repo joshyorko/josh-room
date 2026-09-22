@@ -30,7 +30,7 @@ def _home() -> Path:
     try:
         import pwd
         return Path(pwd.getpwuid(os.getuid()).pw_dir)
-    except Exception:
+    except (ImportError, KeyError, AttributeError, OSError):
         return Path.home()
 
 
@@ -118,15 +118,16 @@ def process(payload: object) -> dict[str, object]:
             policy_decision="local-only",
         )
         return {"ok": True, "accepted": receipt.state is not QueueState.CAPTURE_GAP, "event_id": event_id, "state": receipt.state.value}
-    except Exception:
+    except (ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError):
         return {"ok": True, "accepted": False, "diagnostic": "capture-gap"}
 
 
 def main(stream=None) -> int:
     try:
         raw = (stream or sys.stdin.buffer).read(_MAX + 1)
-        if len(raw) > _MAX: return 0
+        if len(raw) > _MAX:
+            return 0
         process(json.loads(raw.decode("utf-8")))
-    except Exception:
-        pass
+    except (AttributeError, OSError, RecursionError, TypeError, UnicodeError, ValueError):
+        return 0
     return 0

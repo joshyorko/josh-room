@@ -4,8 +4,8 @@ import io
 import json
 import subprocess
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
 
 import josh_room.pcc_hooks as hooks
 from josh_room.codex_adapter import CodexRoots
@@ -97,7 +97,7 @@ def test_installed_entrypoint_latency_and_hostile_cwd_environment(tmp_path):
     encoded = json.dumps(payload).encode("utf-8")
     for _ in range(32):
         started = time.perf_counter()
-        result = subprocess.run(command, input=encoded, cwd=hostile_cwd, env=env, capture_output=True, timeout=1)
+        result = subprocess.run(command, input=encoded, cwd=hostile_cwd, env=env, capture_output=True, timeout=1, check=False)
         durations.append((time.perf_counter() - started) * 1000)
         assert result.returncode == 0
         assert result.stdout == b""

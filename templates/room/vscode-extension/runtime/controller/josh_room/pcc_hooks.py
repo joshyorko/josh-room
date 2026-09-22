@@ -18,10 +18,10 @@ import stat
 import sys
 import tempfile
 import tomllib
-from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterator, Mapping, TextIO
+from typing import BinaryIO, TextIO
 
 from .adapter_contract import AdapterError
 from .codex_adapter import CodexHookFacts, CodexRoots, canonicalize_hook_path
@@ -117,7 +117,7 @@ def _validate_event(payload: object) -> tuple[str, dict[str, object]]:
     }[event]
     if set(payload) != fields:
         raise HookBoundaryError("invalid-input")
-    session_id = _bounded_string(payload.get("session_id"), identifier=True)
+    _bounded_string(payload.get("session_id"), identifier=True)
     _validate_path(payload.get("cwd"))
     _validate_path(payload.get("transcript_path"), allow_none=True)
     if event == "SubagentStop":
@@ -294,11 +294,12 @@ def _validate_config_security(path: Path) -> None:
                 info = None
         except OSError:
             raise HookBoundaryError("config-untrusted") from None
+        if info is not None and (
+            (current != path and not stat.S_ISDIR(info.st_mode))
+            or (current == path and not stat.S_ISREG(info.st_mode))
+        ):
+            raise HookBoundaryError("config-untrusted")
         if info is not None:
-            if current != path and not stat.S_ISDIR(info.st_mode):
-                raise HookBoundaryError("config-untrusted")
-            if current == path and not stat.S_ISREG(info.st_mode):
-                raise HookBoundaryError("config-untrusted")
             if hasattr(os, "getuid") and info.st_uid != os.getuid() and not (
                 info.st_uid == 0
                 and (
@@ -566,7 +567,7 @@ def _receipt_path(config_path: Path | str | None = None) -> Path:
             if lock_info is not None and receipt_info.st_ino == lock_info.st_ino and receipt_info.st_dev == lock_info.st_dev:
                 raise HookBoundaryError("receipt-path-invalid")
         except FileNotFoundError:
-            pass
+            receipt_info = config_info = lock_info = None
         except OSError:
             raise HookBoundaryError("receipt-path-invalid") from None
     _validate_config_security(path)
@@ -600,12 +601,12 @@ def _restore_file(path: Path, snapshot: tuple[bool, bytes, int]) -> None:
     existed, content, mode = snapshot
     if not existed:
         try:
-            if path.exists() or path.is_symlink():
-                if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
-                    raise HookBoundaryError("receipt-path-invalid")
-                path.unlink()
+            info = path.lstat()
         except FileNotFoundError:
             return
+        if path.is_symlink() or not stat.S_ISREG(info.st_mode):
+            raise HookBoundaryError("receipt-path-invalid")
+        path.unlink()
         return
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -750,14 +751,14 @@ def _install_locked(config_path: Path | str | None, *, repair: bool) -> dict[str
     expected_commands = {str(commands["command"])} | _owned_commands(text, blocks)
     if _unowned_conflict(parsed, expected_commands):
         raise HookBoundaryError("conflicting-josh-room-hook")
+    if blocks and not repair and all(sum(1 for block_event, _start, _end in blocks if block_event == event) == 1 and text[next(start for block_event, start, _end in blocks if block_event == event):next(end for block_event, _start, end in blocks if block_event == event)] == expected[event] for event in SUPPORTED_EVENTS):
+        return _codex_hook_status_locked(path)
     if blocks and not repair:
-        if all(sum(1 for block_event, _start, _end in blocks if block_event == event) == 1 and text[next(start for block_event, start, _end in blocks if block_event == event):next(end for block_event, _start, end in blocks if block_event == event)] == expected[event] for event in SUPPORTED_EVENTS):
-            return _codex_hook_status_locked(path)
         raise HookBoundaryError("stale-installation")
     if repair and blocks:
         for _event, start, end in reversed(blocks):
             text = text[:start] + text[end:]
-        parsed = tomllib.loads(text) if text.strip() else {}
+        tomllib.loads(text) if text.strip() else None
     if text and not text.endswith("\n"):
         text += "\n"
     if text and not text.endswith("\n\n"):
@@ -790,18 +791,22 @@ def _install_locked(config_path: Path | str | None, *, repair: bool) -> dict[str
     }
     try:
         _write_receipt(receipt)
-    except Exception as error:
+    except (AttributeError, ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError) as error:
         try:
             if existed:
                 _write_config(path, original_text, existed=True, mode=original_mode)
             else:
-                if path.exists() or path.is_symlink():
-                    if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
-                        raise HookBoundaryError("config-write-failed")
+                try:
+                    info = path.lstat()
+                except FileNotFoundError:
+                    info = None
+                if info is not None and (path.is_symlink() or not stat.S_ISREG(info.st_mode)):
+                    raise HookBoundaryError("config-write-failed")
+                if info is not None:
                     path.unlink()
             _restore_file(receipt_path, receipt_snapshot)
-        except Exception:
-            raise HookBoundaryError("receipt-write-failed") from None
+        except (AttributeError, ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError) as rollback_error:
+            raise HookBoundaryError("receipt-write-failed") from rollback_error
         if isinstance(error, HookBoundaryError):
             raise
         raise HookBoundaryError("receipt-write-failed") from None
@@ -815,7 +820,7 @@ def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, objec
             return _install_locked(path, repair=repair)
     except HookBoundaryError:
         raise
-    except Exception:
+    except (AttributeError, ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError):
         raise HookBoundaryError("config-write-failed") from None
 
 
@@ -891,13 +896,13 @@ def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[st
                 tomllib.loads(text) if text.strip() else None
                 _write_config(path, text, existed=exists, mode=original_config_mode)
             _remove_receipt(path)
-        except Exception:
+        except (AttributeError, ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError) as error:
             try:
                 if exists:
                     _write_config(path, original_config_text, existed=True, mode=original_config_mode)
                 _restore_file(receipt_path, receipt_snapshot)
-            except Exception:
-                pass
+            except (AttributeError, ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError) as rollback_error:
+                raise HookBoundaryError("remove-failed") from rollback_error
             raise
         return _codex_hook_status_locked(path)
     except (HookBoundaryError, OSError, tomllib.TOMLDecodeError):
@@ -914,12 +919,12 @@ def remove_codex_hooks(config_path: Path | str | None = None) -> dict[str, objec
 
 
 __all__ = [
-    "HookBoundaryError",
-    "HookRuntimeResult",
     "MAX_HOOK_INPUT_BYTES",
     "SUPPORTED_EVENTS",
     "UPSTREAM_CODEX_COMMIT",
     "UPSTREAM_CODEX_DATE",
+    "HookBoundaryError",
+    "HookRuntimeResult",
     "codex_hook_main",
     "codex_hook_status",
     "install_codex_hooks",
