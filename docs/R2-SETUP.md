@@ -22,6 +22,14 @@ The fixed encrypted catalog key is `catalog.jroom.age`; immutable objects use
 semantics, multipart abort cleanup, streamed read-back, and digest/size
 verification. Catalog updates use conditional ETag writes and record
 unreferenced-object receipts when publication fails.
+The PCC evidence lane is separate from the workspace object validator. Its immutable
+objects use `evidence/objects/sha256/<ciphertext-digest>` and its encrypted index events
+use `evidence/index/v1/<digest-shard>/<ciphertext-digest>.age`. Single-part evidence uses
+direct conditional `PutObject`; multipart evidence verifies the final key first, then
+fences the final-key hash with `evidence/claims/v1/<sha256(protocol || final-key)>` before unconditional
+completion. Claim/upload/part state is local, bounded, and mode-0600; an ambiguous
+completion is accepted only after exact streamed SHA-256/size read-back. A missing local
+claim state is a conflict, never permission to steal a claim.
 
 Generic S3 behavior is covered by synthetic fake-client tests. A live gate must
 separately prove private R2 create, read-back, conditional catalog update, and
@@ -32,6 +40,8 @@ Cloudflare temporary credentials for the S3-compatible large-object data plane.
 The official hosted Josh Room authority is used by default; set
 `JOSH_ROOM_AUTH_URL` only when overriding it for a self-hosted or custom
 deployment.
+PCC evidence live vertical for issue #11: **SKIPPED — private R2 credentials unavailable**.
+The synthetic fake-client proofs do not claim live R2 evidence.
 
 R2 is a concrete provider backend, and each physical R2 bucket / Dimension is
 one encryption domain. Cloudflare remains the R2-only authority for OAuth and

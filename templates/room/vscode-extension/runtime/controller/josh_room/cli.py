@@ -9,6 +9,7 @@ import tempfile
 from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 
+from . import device as _device
 from . import r2 as _r2
 from .auth import (
     EncryptionStateError,
@@ -81,6 +82,14 @@ from .operations import (
     remove_snapshot,
     repair_workspace,
     serve_snapshot,
+)
+from .pcc_hooks import (
+    codex_hook_main,
+    codex_hook_status,
+    install_codex_hooks,
+    process_codex_hook,
+    remove_codex_hooks,
+    repair_codex_hooks,
 )
 from .progress import report_progress
 from .tls import initialize_system_trust
@@ -250,6 +259,18 @@ def build_parser() -> argparse.ArgumentParser:
     encryption_initialize.add_argument("--recovery-handoff", type=Path)
     encryption_initialize.add_argument("--material-handoff", type=Path)
     _json_option(encryption_initialize)
+    harvest = commands.add_parser("harvest")
+    harvest_commands = harvest.add_subparsers(dest="harvest_command", required=True)
+    harvest_hooks = harvest_commands.add_parser("hooks")
+    harvest_hook_commands = harvest_hooks.add_subparsers(dest="harvest_hooks_command", required=True)
+    for action in ("install", "status", "repair", "remove"):
+        hook_action = harvest_hook_commands.add_parser(action)
+        hook_action.add_argument("--tool", required=True, choices=("codex",))
+        _json_option(hook_action)
+    hook = commands.add_parser("hook")
+    hook_commands = hook.add_subparsers(dest="hook_command", required=True)
+    hook_codex = hook_commands.add_parser("codex")
+    _json_option(hook_codex)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(status)
@@ -371,19 +392,44 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--profile", required=True)
     setup.add_argument("--age-profile", required=True)
     _json_option(setup)
+    device = commands.add_parser("device", help="secure device enrollment and recipient authority")
+    device_commands = device.add_subparsers(dest="device_command", required=True)
+    device_inspect = device_commands.add_parser("inspect")
+    device_inspect.add_argument("--profile")
+    _json_option(device_inspect)
+    device_doctor = device_commands.add_parser("doctor")
+    _json_option(device_doctor)
+    for action in ("setup", "enroll"):
+        device_enroll = device_commands.add_parser(action, help="stdin carries credentials and age identity")
+        device_enroll.add_argument("--profile")
+        device_enroll.add_argument("--credential-profile", "--r2-credential-profile", dest="credential_profile")
+        device_enroll.add_argument("--age-profile")
+        device_enroll.add_argument("--recovery-profile")
+        device_enroll.add_argument("--device-id")
+        _json_option(device_enroll)
+    device_rotate = device_commands.add_parser("rotate-new-writes", help="activate a recipient set for new writes")
+    device_rotate.add_argument("--profile", required=True)
+    device_rotate.add_argument("--credential-profile")
+    _json_option(device_rotate)
+    device_remove = device_commands.add_parser("remove-local", help="remove local enrollment and native-store secrets")
+    device_remove.add_argument("--profile")
+    _json_option(device_remove)
     return parser
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:2] == ["hook", "codex"]:
+        return codex_hook_main()
     initialize_system_trust()
     args = build_parser().parse_args(argv)
     instance = _instance_root()
     try:
         runtime_loaded = False
         scoped_minio = _uses_minio_encryption(args)
-        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption"} or scoped_minio else _identity_environment()
+        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
         with identity_context:
-            if args.command not in {"auth", "setup", "encryption"} and not scoped_minio:
+            if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook"} and not scoped_minio:
                 runtime_loaded = load_runtime_session()
             with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext():
                 if _requires_oauth(args):
@@ -712,6 +758,23 @@ def _bucket_operation(args, config):
 
 
 def dispatch(args, instance: Path) -> dict:
+    if args.command == "hook":
+        if args.hook_command != "codex":
+            raise ValueError("unsupported hook")
+        return process_codex_hook(json.load(sys.stdin))
+    if args.command == "harvest":
+        if args.harvest_command != "hooks" or args.tool != "codex":
+            raise ValueError("unsupported harvest hook")
+        action = args.harvest_hooks_command
+        if action == "install":
+            return install_codex_hooks()
+        if action == "status":
+            return codex_hook_status()
+        if action == "repair":
+            return repair_codex_hooks()
+        if action == "remove":
+            return remove_codex_hooks()
+        raise ValueError("unsupported harvest hook action")
     if args.command == "encryption":
         if args.encryption_command == "recovery":
             if args.recovery_command != "generate":
@@ -1431,6 +1494,53 @@ def dispatch(args, instance: Path) -> dict:
         }
         save_private_config(config)
         return {"ok": True, "profile": args.profile, "age_profile": args.age_profile, "stored": True}
+    if args.command == "device":
+        action = args.device_command
+        if action == "inspect":
+            return _device.inspect(profile=args.profile)
+        if action == "doctor":
+            return _device.doctor()
+        if action == "remove-local":
+            return _device.remove_local(profile=args.profile)
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("device input must be a JSON object on stdin")
+        if action in {"setup", "enroll"}:
+            profile = args.profile or payload.get("profile")
+            credential_profile = args.credential_profile or payload.get("credential-profile") or payload.get("credential_profile") or payload.get("r2-credential-profile")
+            recipients = payload.get("age-recipients", payload.get("recipients"))
+            if not profile or not credential_profile or recipients is None:
+                raise ValueError("device enrollment input requires profile, credential profile, and recipients")
+            raw_credentials = payload.get("credentials", payload)
+            if not isinstance(raw_credentials, dict):
+                raise ValueError("device credentials are invalid")
+            credentials = {
+                field: raw_credentials[field]
+                for field in ("access-key-id", "secret-access-key", "session-token")
+                if field in raw_credentials
+            }
+            return _device.enroll(
+                profile=profile,
+                credential_profile=credential_profile,
+                recipients=recipients,
+                credentials=credentials,
+                age_identity=payload.get("age-identity"),
+                age_profile=args.age_profile or payload.get("age-profile") or payload.get("age_profile"),
+                recovery_identity=payload.get("recovery-identity") or payload.get("recovery_identity"),
+                recovery_profile=args.recovery_profile or payload.get("recovery-profile") or payload.get("recovery_profile"),
+                device_id=args.device_id or payload.get("device-id") or payload.get("device_id"),
+                issued_at=payload.get("issued-at") or payload.get("issued_at"),
+            )
+        if action == "rotate-new-writes":
+            recipients = payload.get("age-recipients", payload.get("recipients"))
+            if recipients is None:
+                raise ValueError("rotation input requires recipients")
+            return _device.rotate_new_writes(
+                profile=args.profile,
+                recipients=recipients,
+                credential_profile=args.credential_profile or payload.get("credential-profile") or payload.get("credential_profile"),
+            )
+        raise ValueError("unsupported device action")
     raise ValueError("unsupported command")
 
 
@@ -1596,10 +1706,22 @@ def _jat_root() -> Path:
     return Path(value) if value else Path.home() / ".local/share/josh-room/josh-all-the-things"
 
 
+def _selected_device_profile() -> str | None:
+    configured = _configured()
+    value = os.environ.get("JOSH_ROOM_DEVICE_PROFILE") or configured.get("device_profile")
+    return value if isinstance(value, str) and value else None
+
 def _recipients() -> list[str]:
+    configured = _configured()
+    selected_profile = _selected_device_profile()
+    active = _device.active_recipients(profile=selected_profile)
+    if active:
+        return active
     selected = os.environ.get("JOSH_ROOM_SELECTED_RECIPIENTS")
     if selected:
         return [item for item in selected.split(",") if item]
+    environment = [item for item in os.environ.get("JOSH_ROOM_RECIPIENTS", "").split(",") if item]
+    return environment or list(configured.get("age_recipients", []))
     environment = [item for item in os.environ.get("JOSH_ROOM_RECIPIENTS", "").split(",") if item]
     return environment or list(_configured().get("age_recipients", []))
 
@@ -1620,7 +1742,10 @@ def _identity_environment():
     if existing:
         yield
         return
-    profile = _configured().get("age_identity_profile")
+    selected_profile = _selected_device_profile()
+    profile = _device.active_age_profile(profile=selected_profile)
+    if not profile and selected_profile is None:
+        profile = _configured().get("age_identity_profile")
     if not profile:
         yield
         return
@@ -1708,7 +1833,10 @@ def _legacy_migration_identity(args, instance: Path):
             raise _legacy_source_identity_error(args) from error
         yield path
         return
-    profile = (_configured() or {}).get("age_identity_profile")
+    selected_profile = _selected_device_profile()
+    profile = _device.active_age_profile(profile=selected_profile)
+    if not profile and selected_profile is None:
+        profile = (_configured() or {}).get("age_identity_profile")
     if not profile:
         raise _legacy_source_identity_error(args, required=True)
     try:
@@ -1848,6 +1976,10 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
                 catalog_ok = False
     record("catalog", catalog_ok, "Create the first snapshot or verify that the encrypted private R2 catalog is readable.")
 
+    hook_report = codex_hook_status()
+    hook_ok = hook_report.get("state") == "healthy" and hook_report.get("trust") == "trusted"
+    hook_detail = hook_report.get("state", "unavailable")
+    record("codex-hooks", hook_ok, "Run josh-room harvest hooks install --tool codex and trust the installed hooks in Codex.", detail=hook_detail)
     executable = None if ide == "terminal" else ("code-insiders" if ide == "vscode-insiders" else "code")
     record("ide", extension_mode or executable is None or shutil.which(executable), f"Install {executable} or use --ide terminal.")
     result = {
