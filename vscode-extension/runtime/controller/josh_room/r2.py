@@ -247,10 +247,23 @@ def validate_evidence_object_key(key: str) -> str:
     if not match:
         raise ValueError("invalid evidence object key")
     return match.group(1)
-def evidence_claim_key(ciphertext_sha256: str) -> str:
+def evidence_claim_key(ciphertext_sha256: str, final_key: str | None = None) -> str:
     if not isinstance(ciphertext_sha256, str) or not _DIGEST.fullmatch(ciphertext_sha256):
         raise ValueError("invalid evidence claim digest")
-    return f"{EVIDENCE_CLAIM_PREFIX}{ciphertext_sha256}"
+    final_key = evidence_object_key(ciphertext_sha256) if final_key is None else final_key
+    try:
+        if final_key.startswith(EVIDENCE_OBJECT_PREFIX):
+            if validate_evidence_object_key(final_key) != ciphertext_sha256:
+                raise ValueError("invalid evidence claim object")
+        elif final_key.startswith(EVIDENCE_INDEX_PREFIX):
+            if validate_evidence_index_key(final_key) != ciphertext_sha256:
+                raise ValueError("invalid evidence claim index")
+        else:
+            raise ValueError("invalid evidence claim final key")
+    except (AttributeError, TypeError) as error:
+        raise ValueError("invalid evidence claim final key") from error
+    claim_digest = hashlib.sha256(b"josh-room-pcc-claim-v1\0" + final_key.encode()).hexdigest()
+    return f"{EVIDENCE_CLAIM_PREFIX}{claim_digest}"
 
 
 def validate_evidence_claim_key(key: str) -> str:
@@ -743,9 +756,11 @@ class R2Backend(ObjectStore):
             state_stat = path.lstat()
             if stat.S_ISLNK(state_stat.st_mode) or not stat.S_ISREG(state_stat.st_mode) or stat.S_IMODE(state_stat.st_mode) & 0o077:
                 raise R2EvidenceError("multipart-state-unavailable")
-    def _evidence_state_path(self, digest: str) -> Path:
+    def _evidence_state_path(self, digest: str, final_key: str | None = None) -> Path:
         root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence-state"
-        return root / f"{digest}.json"
+        identity = final_key or digest
+        state_id = hashlib.sha256(b"josh-room-pcc-state-v1\0" + identity.encode()).hexdigest()
+        return root / f"{state_id}.json"
 
     @contextmanager
     def _evidence_lock(self, digest: str):
@@ -754,6 +769,11 @@ class R2Backend(ObjectStore):
         if root.is_symlink() or root.exists() and not root.is_dir():
             raise R2EvidenceError("multipart-lock-unavailable")
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.receipt_dir is not None:
+            try:
+                os.chmod(self.receipt_dir, 0o700)
+            except OSError as error:
+                raise R2EvidenceError("multipart-lock-unavailable") from error
         try:
             os.chmod(root, 0o700)
         except OSError as error:
@@ -789,8 +809,7 @@ class R2Backend(ObjectStore):
 
     def _load_evidence_state(self, key: str, digest: str, size: int) -> dict:
         self._validate_receipt_root()
-        path = self._evidence_state_path(digest)
-        self._validate_evidence_state_storage(path)
+        path = self._evidence_state_path(digest, key)
         try:
             raw = path.read_bytes()
         except FileNotFoundError:
@@ -803,7 +822,7 @@ class R2Backend(ObjectStore):
                 "key": key,
                 "sha256": digest,
                 "size": size,
-                "claim_key": evidence_claim_key(digest),
+                "claim_key": evidence_claim_key(digest, key),
                 "fence": secrets.token_hex(16),
                 "stage": "claiming",
                 "upload_id": None,
@@ -829,7 +848,7 @@ class R2Backend(ObjectStore):
             or type(state["size"]) is not int
             or state["size"] != size
             or type(state["claim_key"]) is not str
-            or state["claim_key"] != evidence_claim_key(digest)
+            or state["claim_key"] != evidence_claim_key(digest, key)
             or type(state["fence"]) is not str
             or not re.fullmatch(r"[0-9a-f]{32}", state["fence"])
             or type(state["stage"]) is not str
@@ -856,7 +875,7 @@ class R2Backend(ObjectStore):
 
     def _save_evidence_state(self, state: dict) -> None:
         self._validate_receipt_root()
-        path = self._evidence_state_path(state["sha256"])
+        path = self._evidence_state_path(state["sha256"], state["key"])
         encoded = json.dumps(state, separators=(",", ":"), sort_keys=True).encode()
         if len(encoded) > _MAX_EVIDENCE_STATE_BYTES:
             raise R2EvidenceError("multipart-state-bounded")
@@ -887,8 +906,8 @@ class R2Backend(ObjectStore):
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _clear_evidence_state(self, digest: str) -> bool:
-        path = self._evidence_state_path(digest)
+    def _clear_evidence_state(self, digest: str, final_key: str | None = None) -> bool:
+        path = self._evidence_state_path(digest, final_key)
         try:
             path.unlink(missing_ok=True)
             flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -1004,7 +1023,7 @@ class R2Backend(ObjectStore):
         max_attempts = max(1, self.config.max_attempts)
         try:
             if self._verify_evidence_or_absent(key, digest, size):
-                self._clear_evidence_state(digest)
+                self._clear_evidence_state(digest, key)
                 return R2EvidenceReceipt(
                     key,
                     digest,
@@ -1012,7 +1031,7 @@ class R2Backend(ObjectStore):
                     R2EvidenceMetrics(size, 0, 0, True, True, False, _latency_ms(started)),
                 )
         except R2EvidenceReadbackMismatch as error:
-            self._clear_evidence_state(digest)
+            self._clear_evidence_state(digest, key)
             raise R2EvidenceConflict(retries=retries) from error
         except (ClientError, BotoCoreError, TimeoutError) as error:
             raise self._map_evidence_error(error, published=False) from error
@@ -1127,7 +1146,7 @@ class R2Backend(ObjectStore):
                     try:
                         if self._verify_evidence_or_absent(key, digest, size):
                             committed = True
-                            self._clear_evidence_state(digest)
+                            self._clear_evidence_state(digest, key)
                             return R2EvidenceReceipt(
                                 key,
                                 digest,
@@ -1137,7 +1156,7 @@ class R2Backend(ObjectStore):
                             )
                     except R2EvidenceReadbackMismatch as mismatch:
                         committed = True
-                        self._clear_evidence_state(digest)
+                        self._clear_evidence_state(digest, key)
                         raise mismatch
                     if attempt + 1 >= max_attempts:
                         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
@@ -1153,10 +1172,10 @@ class R2Backend(ObjectStore):
                         raise R2EvidenceAmbiguous(retries=retries)
                 except R2EvidenceReadbackMismatch:
                     committed = True
-                    self._clear_evidence_state(digest)
+                    self._clear_evidence_state(digest, key)
                     raise
                 committed = True
-                self._clear_evidence_state(digest)
+                self._clear_evidence_state(digest, key)
                 return R2EvidenceReceipt(
                     key,
                     digest,

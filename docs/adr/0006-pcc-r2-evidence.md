@@ -16,10 +16,12 @@ Index discovery lists only the fixed index prefix, uses bounded `ListObjectsV2` 
 deduplicates keys so ordering and duplicate pages/notifications do not affect consumers.
 
 Multipart evidence first verifies the final key. If it is absent, the writer creates the
-digest-derived fence `evidence/claims/v1/<ciphertext-sha256>` with `PutObject`
-`If-None-Match: *`. Its body contains only a protocol version, digest, exact size, and an
-opaque random fence token; no repository, session, path, profile, or other human identifier
-is present. Only a process holding the matching local fence state may complete that MPU.
+final-key-bound fence `evidence/claims/v1/<sha256(protocol || final-key)>` with `PutObject`
+`If-None-Match: *`. Its body contains only a protocol version, ciphertext digest, exact size,
+and an opaque random fence token; no repository, session, path, profile, or other human
+identifier is present. Object and index final keys with the same ciphertext digest therefore
+cannot share a claim. Only a process holding the matching local fence state may complete that
+MPU.
 `CompleteMultipartUpload` is deliberately unconditional because R2 does not document a
 conditional completion header. The fence object is retained as a bounded immutable claim;
 a writer that has lost its local claim state reports a public-safe conflict rather than

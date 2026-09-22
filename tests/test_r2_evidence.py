@@ -1,6 +1,6 @@
 import hashlib
 import io
-from pathlib import Path
+import threading
 
 import pytest
 from botocore.exceptions import ClientError
@@ -39,16 +39,18 @@ class EvidenceS3:
         self.complete_error = None
         self.abort_error = None
         self.list_pages = None
+        self.lock = threading.Lock()
 
     def put_object(self, **kwargs):
         self.calls.append(("put_object", kwargs))
-        if self.put_errors:
-            raise self.put_errors.pop(0)
-        key = kwargs["Key"]
-        if kwargs.get("IfNoneMatch") == "*" and key in self.objects:
-            raise error("412")
-        body = kwargs["Body"].read() if hasattr(kwargs["Body"], "read") else kwargs["Body"]
-        self.objects[key] = {"body": body, "metadata": kwargs.get("Metadata", {})}
+        with self.lock:
+            if self.put_errors:
+                raise self.put_errors.pop(0)
+            key = kwargs["Key"]
+            if kwargs.get("IfNoneMatch") == "*" and key in self.objects:
+                raise error("412")
+            body = kwargs["Body"].read() if hasattr(kwargs["Body"], "read") else kwargs["Body"]
+            self.objects[key] = {"body": body, "metadata": kwargs.get("Metadata", {})}
 
     def head_object(self, **kwargs):
         self.calls.append(("head_object", kwargs))
@@ -130,15 +132,18 @@ def test_dedicated_validators_are_opaque_and_do_not_change_workspace_keys():
     index_key = evidence_index_key(digest)
     assert object_key.startswith(EVIDENCE_OBJECT_PREFIX)
     assert index_key.startswith(EVIDENCE_INDEX_PREFIX)
-    claim_key = evidence_claim_key(digest)
-    assert claim_key.startswith(EVIDENCE_CLAIM_PREFIX)
-    assert validate_evidence_object_key(object_key) == digest
-    assert validate_evidence_index_key(index_key) == digest
-    assert validate_evidence_claim_key(claim_key) == digest
+    object_claim = evidence_claim_key(digest, object_key)
+    index_claim = evidence_claim_key(digest, index_key)
+    assert object_claim.startswith(EVIDENCE_CLAIM_PREFIX)
+    assert index_claim.startswith(EVIDENCE_CLAIM_PREFIX)
+    assert object_claim != index_claim
+    assert validate_evidence_claim_key(object_claim) == object_claim.rsplit("/", 1)[1]
+    assert validate_evidence_claim_key(index_claim) == index_claim.rsplit("/", 1)[1]
     for forbidden in ("repo", "project", "session", "source", "profile", "device"):
         assert forbidden not in object_key
         assert forbidden not in index_key
-        assert forbidden not in claim_key
+        assert forbidden not in object_claim
+        assert forbidden not in index_claim
     with pytest.raises(ValueError):
         validate_evidence_object_key("objects/sha256/" + digest)
 
@@ -169,7 +174,7 @@ def test_multipart_stream_uses_digest_claim_and_unconditional_completion(tmp_pat
     assert "IfNoneMatch" not in complete
     claim = next(kwargs for name, kwargs in fake.calls if name == "put_object" and kwargs["Key"].startswith(EVIDENCE_CLAIM_PREFIX))
     assert claim["IfNoneMatch"] == "*"
-    assert validate_evidence_claim_key(claim["Key"]) == receipt.ciphertext_sha256
+    assert validate_evidence_claim_key(claim["Key"]) == claim["Key"].rsplit("/", 1)[1]
     assert b"repo" not in claim["Body"] and b"session" not in claim["Body"]
     assert receipt.metrics.parts == 3
     assert store.get_evidence_bytes(receipt.key) == payload
@@ -231,6 +236,34 @@ def test_multipart_parts_resume_from_bounded_state_after_crash(tmp_path):
     receipt = store.put_evidence_file(source)
     assert receipt.ciphertext_size == len(payload)
     assert store.get_evidence_bytes(receipt.key) == payload
+
+
+def test_concurrent_claim_fence_allows_distinct_digests_and_one_same_key(tmp_path):
+    fake = EvidenceS3()
+    barrier = threading.Barrier(2)
+    payload = b"concurrent payload"
+    results = []
+    failures = []
+
+    def publish(index, body):
+        source = tmp_path / f"source-{index}.age"
+        source.write_bytes(body)
+        source.chmod(0o600)
+        store = backend(fake, threshold=2, chunk=4, receipt_dir=tmp_path / f"state-{index}")
+        barrier.wait()
+        try:
+            results.append(store.put_evidence_file(source))
+        except R2EvidenceConflict as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=publish, args=(index, payload)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(results) + len(failures) == 2
+    assert results
+    assert all(item.key == results[0].key for item in results)
 
 
 def test_abort_failure_is_typed_and_source_remains_durable(tmp_path):
