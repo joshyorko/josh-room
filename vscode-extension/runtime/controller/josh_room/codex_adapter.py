@@ -862,8 +862,12 @@ class CodexTranscriptAdapter:
         try:
             if use_descriptor_walk:
                 directory_flags = os.O_RDONLY | os.O_DIRECTORY | nofollow
-                current = os.open(root, directory_flags)
+                root_parts = root.parts
+                current = os.open(os.sep, directory_flags)
                 descriptors.append(current)
+                for component in root_parts[1:]:
+                    current = os.open(component, directory_flags, dir_fd=current)
+                    descriptors.append(current)
                 for component in relative.parts[:-1]:
                     current = os.open(component, directory_flags, dir_fd=current)
                     descriptors.append(current)
