@@ -323,7 +323,13 @@ def _config_lock(path: Path) -> Path:
     return path.parent / f".{path.name}.josh-room.lock"
 
 
-_RUNTIME_MODULES = ("hook_runtime.py", "pcc_enqueue.py", "pcc_outbox.py")
+_RUNTIME_MODULES = (
+    "hook_runtime.py",
+    "pcc_enqueue.py",
+    "pcc_outbox.py",
+    "adapter_contract.py",
+    "codex_adapter.py",
+)
 
 
 def _trusted_file(path: Path) -> tuple[Path, str]:

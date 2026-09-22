@@ -176,3 +176,19 @@ def test_install_preserves_unrelated_hooks_and_remove_rolls_back(tmp_path, monke
     assert all(event["count"] == 1 for event in codex_hook_status(config)["events"].values())
     assert remove_codex_hooks(config)["state"] == "missing"
     assert config.read_text(encoding="utf-8") == original
+
+
+def test_status_detects_stale_runtime_manifest(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    receipt_path = tmp_path / "receipt.json"
+    config.write_text('model = "synthetic"\n', encoding="utf-8")
+    monkeypatch.setenv("JOSH_ROOM_HOOK_RECEIPT", str(receipt_path))
+    assert install_codex_hooks(config)["state"] == "healthy"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    files = receipt["commands"]["runtime_manifest"]["files"]
+    assert {"adapter_contract", "codex_adapter"} <= set(files)
+    files["codex_adapter"]["sha256"] = "0" * 64
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    status = codex_hook_status(config)
+    assert status["state"] == "stale"
+    assert status["diagnostics"] == ["stale-runtime"]
