@@ -471,6 +471,90 @@ def test_commit_clears_ownership_and_lease(tmp_path):
     assert committed.lease_until is None
 
 
+def test_owner_release_preserves_prepared_state_and_allows_immediate_drain(tmp_path):
+    now = [100.0]
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: now[0], lease_seconds=10)
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    prepared = outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+
+    released = outbox.release(receipt.event_id, "run-owner")
+    assert released.state is QueueState.PREPARED_ENCRYPTED
+    assert released.resume_state is QueueState.PREPARED_ENCRYPTED
+    assert released.owner is None
+    assert released.lease_until is None
+    assert released.ciphertext_sha256 == prepared.ciphertext_sha256
+    assert released.ciphertext_size == prepared.ciphertext_size
+    assert outbox.release(receipt.event_id, "run-owner") == released
+
+    drained = outbox.claim("drain-owner")
+    assert drained is not None
+    assert drained.state is QueueState.CLAIMED
+    assert drained.resume_state is QueueState.PREPARED_ENCRYPTED
+
+
+def test_release_publication_failure_keeps_owner_for_crash_recovery(tmp_path, monkeypatch):
+    now = [100.0]
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: now[0], lease_seconds=10)
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+
+    def fail_queue_publication(_record):
+        raise outbox_module.OutboxStorageError("publication-failed", pending_preserved=True)
+
+    original_publish = outbox._publish_record_unlocked
+    monkeypatch.setattr(outbox, "_publish_record_unlocked", fail_queue_publication)
+    with pytest.raises(outbox_module.OutboxStorageError):
+        outbox.release(receipt.event_id, "run-owner")
+
+    pending = outbox.inspect_record(receipt.event_id)
+    assert pending is not None
+    assert pending.state is QueueState.PREPARED_ENCRYPTED
+    assert pending.resume_state is QueueState.PREPARED_ENCRYPTED
+    assert pending.owner == "run-owner"
+    monkeypatch.setattr(outbox, "_publish_record_unlocked", original_publish)
+    now[0] = 200.0
+    recovered = outbox.takeover(receipt.event_id, "drain-owner")
+    assert recovered.owner == "drain-owner"
+    assert recovered.resume_state is QueueState.PREPARED_ENCRYPTED
+
+
+def test_release_rejects_live_owner_conflict_without_clearing_lease(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+
+    with pytest.raises(LeaseConflict):
+        outbox.release(receipt.event_id, "drain-owner")
+
+    pending = outbox.inspect_record(receipt.event_id)
+    assert pending is not None
+    assert pending.owner == "run-owner"
+    assert pending.lease_until is not None
+
+
+def test_release_fails_closed_when_prepared_publication_is_missing(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+    outbox.prepared._path(receipt.event_id).unlink()
+
+    with pytest.raises(outbox_module.OutboxStorageError):
+        outbox.release(receipt.event_id, "run-owner")
+
+    pending = outbox.inspect_record(receipt.event_id)
+    assert pending is not None
+    assert pending.owner == "run-owner"
+    assert pending.resume_state is QueueState.PREPARED_ENCRYPTED
+
+
 def test_orphan_prepared_record_can_be_reconciled_without_plaintext(tmp_path):
     root = tmp_path / "outbox"
     outbox = PccOutbox(root)
