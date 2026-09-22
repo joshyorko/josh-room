@@ -378,6 +378,57 @@ class PreparedRecord:
 
 
 @dataclass(frozen=True)
+class PreparedFileRecord:
+    event_id: str
+    ciphertext_file: str
+    metadata: dict[str, object]
+    ciphertext_sha256: str
+    ciphertext_size: int
+
+    def __post_init__(self) -> None:
+        _identifier(self.event_id)
+        if self.ciphertext_file != f"{self.event_id}.age":
+            raise ValueError("prepared ciphertext file")
+        if not isinstance(self.metadata, Mapping) or "content_sha256" in self.metadata or "content_size" in self.metadata:
+            raise ValueError("prepared metadata")
+        _validate_metadata(self.metadata)
+        if (
+            not isinstance(self.ciphertext_sha256, str)
+            or not _DIGEST.fullmatch(self.ciphertext_sha256)
+            or type(self.ciphertext_size) is not int
+            or not 0 <= self.ciphertext_size <= _MAX_CIPHERTEXT_BYTES
+        ):
+            raise ValueError("prepared ciphertext metadata")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "event_id": self.event_id,
+            "ciphertext_file": self.ciphertext_file,
+            "ciphertext_sha256": self.ciphertext_sha256,
+            "ciphertext_size": self.ciphertext_size,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, body: object) -> PreparedFileRecord:
+        if not isinstance(body, dict) or set(body) != {
+            "event_id",
+            "ciphertext_file",
+            "ciphertext_sha256",
+            "ciphertext_size",
+            "metadata",
+        }:
+            raise ValueError("prepared file fields")
+        return cls(
+            body["event_id"],
+            body["ciphertext_file"],
+            _validate_metadata(body["metadata"]),
+            body["ciphertext_sha256"],
+            body["ciphertext_size"],
+        )
+
+
+@dataclass(frozen=True)
 class Diagnostic:
     code: str
 
@@ -429,6 +480,9 @@ def _validate_metadata(value: object) -> dict[str, object]:
         raise TypeError("public metadata is invalid")
     allowed = {
         "workspace_id",
+        "object_kind",
+        "destination_class",
+        "recipient_set_fingerprint",
         "source_surface",
         "source_adapter",
         "source_adapter_version",
@@ -447,8 +501,16 @@ def _validate_metadata(value: object) -> dict[str, object]:
         raise ValueError("public metadata contains an unsupported field")
     result: dict[str, object] = {}
     for key, item in value.items():
-        if key in {"workspace_id", "source_surface", "source_adapter", "source_adapter_version", "index_id"}:
+        if key in {"workspace_id", "object_kind", "source_surface", "source_adapter", "source_adapter_version", "index_id"}:
             result[key] = _identifier(item)
+        elif key == "destination_class":
+            if item not in {"local-only", "private-r2"}:
+                raise ValueError("public metadata destination is invalid")
+            result[key] = item
+        elif key == "recipient_set_fingerprint":
+            if not isinstance(item, str) or not _DIGEST.fullmatch(item):
+                raise ValueError("public metadata recipient fingerprint is invalid")
+            result[key] = item
         elif key == "content_type":
             if not isinstance(item, str) or len(item) > 128 or not _MIME.fullmatch(item):
                 raise ValueError("public metadata content type is invalid")
@@ -580,16 +642,66 @@ class PreparedOutbox:
     def _path(self, event_id: str) -> Path:
         return self.directory / f"{_identifier(event_id)}.json"
 
+    def _ciphertext_path(self, event_id: str) -> Path:
+        return self.directory / f"{_identifier(event_id)}.age"
+
     def _publish_unlocked(self, record: PreparedRecord) -> None:
         body = json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
         self._publisher.publish(self._path(record.event_id), body)
 
+    def _publish_file_unlocked(self, record: PreparedFileRecord, source: Path) -> None:
+        target = self._ciphertext_path(record.event_id)
+        record_path = self._path(record.event_id)
+        try:
+            if source.is_symlink() or not stat.S_ISREG(source.lstat().st_mode) or stat.S_IMODE(source.lstat().st_mode) & 0o077:
+                raise ValueError("prepared source is not private")
+            digest = hashlib.sha256()
+            size = 0
+            with source.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    size += len(chunk)
+            if digest.hexdigest() != record.ciphertext_sha256 or size != record.ciphertext_size:
+                raise ValueError("prepared ciphertext metadata")
+            if target.exists() or target.is_symlink():
+                raise OutboxStorageError("prepared-record-conflict")
+            if record_path.exists() or record_path.is_symlink():
+                raise OutboxStorageError("prepared-record-conflict")
+            os.replace(source, target)
+            target.chmod(0o600)
+            with target.open("rb") as handle:
+                os.fsync(handle.fileno())
+            _sync_directory(self.directory)
+            body = json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            try:
+                self._publisher.publish(record_path, body)
+            except OutboxStorageError:
+                # The metadata publisher may fail after rename but before its
+                # directory fsync.  Remove both halves of that unpublished
+                # handoff so the queue remains retryable instead of leaving a
+                # prepared-record-conflict that blocks the next attempt.
+                try:
+                    record_path.unlink(missing_ok=True)
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+        except OutboxStorageError:
+            raise
+        except (OSError, TypeError, ValueError) as error:
+            target.unlink(missing_ok=True)
+            raise OutboxStorageError("publication-failed", pending_preserved=False) from error
+
     def _quarantine_unlocked(self, path: Path) -> None:
         target_directory = self.root / "quarantine"
         _ensure_directory(target_directory)
-        target = target_directory / f"prepared-corrupt-{uuid.uuid4().hex}.json"
+        target = target_directory / f"prepared-corrupt-{uuid.uuid4().hex}{path.suffix if path.suffix in {'.json', '.age'} else '.json'}"
         try:
             os.replace(path, target)
+            if path.suffix == ".json":
+                ciphertext = path.with_suffix(".age")
+                if ciphertext.exists() or ciphertext.is_symlink():
+                    os.replace(ciphertext, target.with_suffix(".age"))
         except OSError as error:
             raise OutboxStorageError("prepared-record-unmovable") from error
 
@@ -600,6 +712,72 @@ class PreparedOutbox:
             if root_created or directory_created:
                 _sync_directory(self.root)
             self._publish_unlocked(record)
+
+    def publish_file(self, record: PreparedFileRecord, source: Path) -> None:
+        if not isinstance(record, PreparedFileRecord):
+            raise TypeError("prepared file record")
+        source = Path(source)
+        with _exclusive_file_lock(self._lock_path):
+            root_created = _ensure_directory(self.root)
+            directory_created = _ensure_directory(self.directory)
+            if root_created or directory_created:
+                _sync_directory(self.root)
+            self._publish_file_unlocked(record, source)
+
+    def preserve_capture_gap_ciphertext(self, event_id: str, source: Path) -> Path:
+        """Keep encrypted work durable when prepared-byte quota is exhausted.
+
+        This is deliberately separate from prepared state: the queue record is
+        the authoritative capture-gap receipt, while the ciphertext remains
+        available for an operator/reconciler to inspect or retry.  The method
+        never accepts or creates plaintext.
+        """
+
+        _identifier(event_id)
+        source = Path(source)
+        with _exclusive_file_lock(self._lock_path):
+            quarantine_directory = self.root / "quarantine"
+            _ensure_directory(self.root)
+            _ensure_directory(self.directory)
+            _ensure_directory(quarantine_directory)
+            try:
+                mode = source.lstat().st_mode
+                if source.is_symlink() or not stat.S_ISREG(mode) or stat.S_IMODE(mode) & 0o077:
+                    raise ValueError("capture-gap ciphertext is not private")
+                digest = hashlib.sha256()
+                size = 0
+                with source.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                        size += len(chunk)
+                if size > _MAX_CIPHERTEXT_BYTES:
+                    raise ValueError("capture-gap ciphertext is too large")
+                target = quarantine_directory / f"capture-gap-{digest.hexdigest()}.age"
+                if target.exists() or target.is_symlink():
+                    if target.is_symlink() or not stat.S_ISREG(target.lstat().st_mode):
+                        raise ValueError("capture-gap ciphertext conflict")
+                    existing_digest = hashlib.sha256()
+                    with target.open("rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            existing_digest.update(chunk)
+                    existing = existing_digest.hexdigest()
+                    if existing != digest.hexdigest():
+                        raise OutboxStorageError("capture-gap-conflict", pending_preserved=True)
+                    source.unlink()
+                    return target
+                os.replace(source, target)
+                target.chmod(0o600)
+                with target.open("rb") as handle:
+                    os.fsync(handle.fileno())
+                _sync_directory(quarantine_directory)
+                return target
+            except OutboxStorageError:
+                raise
+            except (OSError, TypeError, ValueError) as error:
+                raise OutboxStorageError(
+                    "capture-gap-preserve-failed",
+                    pending_preserved=source.is_file() and not source.is_symlink(),
+                ) from error
 
     def inspect_record(self, event_id: str) -> PreparedRecord | None:
         with _exclusive_file_lock(self._lock_path):
@@ -616,6 +794,20 @@ class PreparedOutbox:
                 self._quarantine_unlocked(path)
                 raise OutboxStorageError("prepared-record-corrupt") from error
             try:
+                if isinstance(body, dict) and "ciphertext_file" in body:
+                    record = PreparedFileRecord.from_dict(body)
+                    ciphertext = self._ciphertext_path(record.event_id)
+                    if not ciphertext.is_file() or ciphertext.is_symlink():
+                        raise ValueError("prepared ciphertext is unavailable")
+                    digest = hashlib.sha256()
+                    size = 0
+                    with ciphertext.open("rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                            size += len(chunk)
+                    if digest.hexdigest() != record.ciphertext_sha256 or size != record.ciphertext_size:
+                        raise ValueError("prepared ciphertext metadata")
+                    return record
                 return PreparedRecord.from_dict(body)
             except (TypeError, ValueError) as error:
                 self._quarantine_unlocked(path)
@@ -630,7 +822,21 @@ class PreparedOutbox:
                 if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
                     raise ValueError("prepared record is not regular")
                 body = json.loads(path.read_text(encoding="utf-8"))
-                record = PreparedRecord.from_dict(body)
+                if isinstance(body, dict) and "ciphertext_file" in body:
+                    record = PreparedFileRecord.from_dict(body)
+                    ciphertext = self._ciphertext_path(record.event_id)
+                    if not ciphertext.is_file() or ciphertext.is_symlink():
+                        raise ValueError("prepared ciphertext is unavailable")
+                    digest = hashlib.sha256()
+                    size = 0
+                    with ciphertext.open("rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                            size += len(chunk)
+                    if digest.hexdigest() != record.ciphertext_sha256 or size != record.ciphertext_size:
+                        raise ValueError("prepared ciphertext metadata")
+                else:
+                    record = PreparedRecord.from_dict(body)
             except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
                 raise OutboxStorageError("prepared-record-corrupt") from error
             result[record.event_id] = record
@@ -900,13 +1106,42 @@ class PccOutbox:
                         if prepared_path.is_symlink() or not stat.S_ISREG(prepared_path.lstat().st_mode):
                             raise ValueError("prepared record is not regular")
                         prepared_body = json.loads(prepared_path.read_text(encoding="utf-8"))
-                        prepared_record = PreparedRecord.from_dict(prepared_body)
+                        if isinstance(prepared_body, dict) and "ciphertext_file" in prepared_body:
+                            prepared_record = PreparedFileRecord.from_dict(prepared_body)
+                            ciphertext = self.prepared._ciphertext_path(prepared_record.event_id)
+                            if not ciphertext.is_file() or ciphertext.is_symlink():
+                                raise ValueError("prepared ciphertext is unavailable")
+                            digest = hashlib.sha256()
+                            size = 0
+                            with ciphertext.open("rb") as handle:
+                                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                                    digest.update(chunk)
+                                    size += len(chunk)
+                            if digest.hexdigest() != prepared_record.ciphertext_sha256 or size != prepared_record.ciphertext_size:
+                                raise ValueError("prepared ciphertext metadata")
+                        else:
+                            prepared_record = PreparedRecord.from_dict(prepared_body)
                     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
                         self.prepared._quarantine_unlocked(prepared_path)
                         quarantined += 1
                         diagnostics.append(Diagnostic("prepared-record-corrupt"))
                     else:
                         prepared_ids.add(prepared_record.event_id)
+                # A crash after ciphertext publication but before its metadata
+                # publication must remain visible and must never be mistaken
+                # for a valid prepared object.  Quarantine the orphan without
+                # reading or echoing its contents.
+                for ciphertext_path in self.prepared.directory.glob("*.age"):
+                    event_id = ciphertext_path.stem
+                    if event_id not in prepared_ids:
+                        try:
+                            if ciphertext_path.is_symlink() or not stat.S_ISREG(ciphertext_path.lstat().st_mode):
+                                raise ValueError("prepared ciphertext is not regular")
+                            self.prepared._quarantine_unlocked(ciphertext_path)
+                        except (OSError, ValueError, OutboxStorageError):
+                            pass
+                        quarantined += 1
+                        diagnostics.append(Diagnostic("prepared-ciphertext-orphan"))
                 queue_ids = {record.event_id for record in records}
                 return Inspection(records, diagnostics, quarantined, partial_count, sorted(prepared_ids - queue_ids))
         except (OutboxStorageError, OSError):
@@ -1132,6 +1367,79 @@ class PccOutbox:
             self._publish_record_unlocked(updated)
             return updated
 
+    def prepare_encrypted_file(
+        self,
+        event_id: str,
+        owner: str,
+        ciphertext_path: Path,
+        *,
+        metadata: Mapping[str, object] | None = None,
+    ) -> QueueRecord:
+        """Atomically hand a fsynced ciphertext file into prepared state."""
+
+        event_id = _identifier(event_id)
+        ciphertext_path = Path(ciphertext_path)
+        metadata = _validate_metadata(metadata or {})
+        if "content_sha256" in metadata or "content_size" in metadata:
+            raise ValueError("file-backed prepared metadata cannot contain plaintext identity")
+        try:
+            if ciphertext_path.is_symlink() or not stat.S_ISREG(ciphertext_path.lstat().st_mode):
+                raise ValueError("ciphertext file is invalid")
+            if stat.S_IMODE(ciphertext_path.lstat().st_mode) & 0o077:
+                raise ValueError("ciphertext file is not private")
+            digest = hashlib.sha256()
+            size = 0
+            with ciphertext_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                    size += len(chunk)
+            if size > _MAX_CIPHERTEXT_BYTES:
+                raise ValueError("ciphertext file is too large")
+        except (OSError, ValueError) as error:
+            if isinstance(error, ValueError):
+                raise
+            raise OutboxStorageError("prepared-record-unavailable") from error
+        prepared = PreparedFileRecord(event_id, f"{event_id}.age", metadata, digest.hexdigest(), size)
+        with _exclusive_file_lock(self._lock_path):
+            record = self._must_read_unlocked(event_id)
+            self._require_claim(record, _identifier(owner))
+            if record.resume_state is not QueueState.SOURCE_SNAPSHOTTED:
+                if record.resume_state in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
+                    return record
+                raise InvalidTransition()
+            prepared_body = json.dumps(prepared.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            current_queue_bytes = sum(self._path(item.event_id).stat().st_size for item in self._safe_records_unlocked()[0])
+            current_path = self._path(record.event_id)
+            current_record_body = current_path.stat().st_size
+            prepared_bytes = self._prepared_bytes_unlocked()
+            updated = QueueRecord(
+                **{
+                    **record.__dict__,
+                    "state": QueueState.PREPARED_ENCRYPTED,
+                    "resume_state": QueueState.PREPARED_ENCRYPTED,
+                    "failure_code": None,
+                    "ciphertext_sha256": prepared.ciphertext_sha256,
+                    "ciphertext_size": prepared.ciphertext_size,
+                }
+            )
+            updated_body = json.dumps(updated.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+            if current_queue_bytes - current_record_body + len(updated_body) + prepared_bytes + size + len(prepared_body) > self.max_bytes:
+                gap = QueueRecord(
+                    **{
+                        **record.__dict__,
+                        "state": QueueState.CAPTURE_GAP,
+                        "owner": None,
+                        "lease_until": None,
+                        "resume_state": QueueState.SOURCE_SNAPSHOTTED,
+                        "failure_code": "prepared-byte-quota",
+                    }
+                )
+                self._publish_record_unlocked(gap)
+                return gap
+            self.prepared._publish_file_unlocked(prepared, ciphertext_path)
+            self._publish_record_unlocked(updated)
+            return updated
+
     def reconcile_prepared(
         self,
         event_id: str,
@@ -1155,7 +1463,22 @@ class PccOutbox:
             try:
                 if prepared_path.is_symlink() or not stat.S_ISREG(prepared_path.lstat().st_mode):
                     raise ValueError("prepared record is not regular")
-                prepared = PreparedRecord.from_dict(json.loads(prepared_path.read_text(encoding="utf-8")))
+                prepared_body = json.loads(prepared_path.read_text(encoding="utf-8"))
+                if isinstance(prepared_body, dict) and "ciphertext_file" in prepared_body:
+                    prepared = PreparedFileRecord.from_dict(prepared_body)
+                    ciphertext = self.prepared._ciphertext_path(event_id)
+                    if not ciphertext.is_file() or ciphertext.is_symlink():
+                        raise ValueError("prepared ciphertext is unavailable")
+                    digest = hashlib.sha256()
+                    size = 0
+                    with ciphertext.open("rb") as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                            size += len(chunk)
+                    if digest.hexdigest() != prepared.ciphertext_sha256 or size != prepared.ciphertext_size:
+                        raise ValueError("prepared ciphertext metadata")
+                else:
+                    prepared = PreparedRecord.from_dict(prepared_body)
             except FileNotFoundError as error:
                 raise OutboxError("prepared record not found") from error
             except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as error:
