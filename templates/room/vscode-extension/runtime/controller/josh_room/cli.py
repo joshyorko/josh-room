@@ -56,6 +56,7 @@ from .jat import (
 )
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
+from .pcc_outbox import PccOutbox
 from .keyring import store_value as store_keyring_value
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
@@ -93,8 +94,9 @@ from .pcc_hooks import (
     remove_codex_hooks,
     repair_codex_hooks,
 )
-from .progress import report_progress
+from .harvest import HarvestController
 from .tls import initialize_system_trust
+from .progress import report_progress
 from .workspace_state import local_status
 
 R2Backend = _r2.R2Backend
