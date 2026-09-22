@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import sys
 from pathlib import Path
@@ -37,8 +36,7 @@ os.chdir(_safe_home)
 # an absolute path to the installed Josh Room package, never the event cwd.
 _PACKAGE_PARENT = str(Path(__file__).resolve().parent.parent)
 sys.path[:] = [_PACKAGE_PARENT, *[item for item in sys.path[1:] if item and Path(item).is_absolute()]]
-
-codex_hook_main = importlib.import_module("josh_room.hook_runtime").main
+codex_hook_main = __import__("josh_room.hook_runtime", fromlist=["main"]).main
 
 
 if __name__ == "__main__":
