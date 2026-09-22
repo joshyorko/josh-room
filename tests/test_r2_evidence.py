@@ -279,6 +279,24 @@ def test_outbox_uploaded_indexed_committed_and_unindexed_recovery(tmp_path):
     committed = store.publish_outbox_evidence(outbox, event_id, "worker-one", index_ciphertext=b"independently encrypted index")
     assert committed.committed
     assert outbox.inspect_record(event_id).state is QueueState.COMMITTED
+def test_index_published_recovery_republishes_missing_supplied_index(tmp_path):
+    fake = EvidenceS3()
+    store = backend(fake)
+    outbox = PccOutbox(tmp_path / "outbox")
+    event_id = "event-index-recovery"
+    checkpoint = {"source": "synthetic", "representation": "active-jsonl", "start": 0, "end": 1, "prefix_sha256": "c" * 64}
+    outbox.enqueue(event_id=event_id, session_id="session-index", checkpoint=checkpoint, metadata={"object_kind": "session-segment"})
+    outbox.claim("worker-one")
+    outbox.transition(event_id, "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(event_id, "worker-one", b"durable ciphertext", metadata={"object_kind": "session-segment"})
+    store.publish_outbox_evidence(outbox, event_id, "worker-one", index_ciphertext=None)
+    index_ciphertext = b"recovery index"
+    index_id = hashlib.sha256(index_ciphertext).hexdigest()
+    outbox.publish_index(event_id, "worker-one", index_id=index_id)
+    recovered = store.publish_outbox_evidence(outbox, event_id, "worker-one", index_ciphertext=index_ciphertext)
+    assert recovered.committed
+    assert outbox.inspect_record(event_id).state is QueueState.COMMITTED
+
 def test_stream_digest_mismatch_does_not_poison_final_key():
     fake = EvidenceS3()
     store = backend(fake)
