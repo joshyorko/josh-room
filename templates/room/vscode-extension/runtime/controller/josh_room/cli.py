@@ -56,13 +56,13 @@ from .jat import (
 )
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
-from .pcc_outbox import PccOutbox
 from .keyring import store_value as store_keyring_value
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
 from .minio import check_bucket_access as check_minio_bucket
 from .minio import create_bucket as create_minio_bucket
 from .minio import list_buckets as list_minio_buckets
+from .pcc_outbox import PccOutbox
 from .operations import (
     _legacy_migration_source_binding,
     _material_recipients,
@@ -94,9 +94,8 @@ from .pcc_hooks import (
     remove_codex_hooks,
     repair_codex_hooks,
 )
-from .harvest import HarvestController
-from .tls import initialize_system_trust
 from .progress import report_progress
+from .tls import initialize_system_trust
 from .workspace_state import local_status
 
 R2Backend = _r2.R2Backend
