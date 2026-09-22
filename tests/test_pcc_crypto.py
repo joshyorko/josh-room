@@ -357,6 +357,25 @@ def test_asset_stream_digest_and_size_mismatch_fails_and_cleans_output(tmp_path:
     assert not list(tmp_path.glob(".*"))
 
 
+def test_asset_bytes_are_one_stream_chunk_for_file_backed_encryption(tmp_path: Path):
+    event = _event("session-asset")
+    output = tmp_path / "asset.age"
+    recipients = resolve_recipients(_profile(), lambda _: _recipient_set())
+    passthrough = tmp_path / "passthrough-age"
+    passthrough.write_text("#!/bin/sh\ncat\n")
+    passthrough.chmod(passthrough.stat().st_mode | stat.S_IXUSR)
+
+    stream_encrypt(
+        event,
+        recipients,
+        output,
+        profile=_profile(),
+        payload=b"synthetic asset payload\n",
+        age_executable=passthrough,
+    )
+    assert read_decrypted_envelope(output).document == event.document
+
+
 def test_age_failure_cancellation_and_cleanup_are_fail_closed(tmp_path: Path):
     fake_age = tmp_path / "fake-age"
     fake_age.write_text("#!/bin/sh\nexit 17\n")

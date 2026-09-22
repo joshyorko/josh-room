@@ -470,7 +470,7 @@ def _check_cancel(cancel_check: Callable[[], bool] | None) -> None:
 
 class _IteratorReader:
     def __init__(self, chunks: Sequence[bytes] | Any, cancel_check: Callable[[], bool] | None):
-        self._iterator = iter(chunks)
+        self._iterator = iter((chunks,)) if isinstance(chunks, bytes) else iter(chunks)
         self._pending = b""
         self._cancel_check = cancel_check
         self.digest = hashlib.sha256()
