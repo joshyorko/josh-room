@@ -25,8 +25,7 @@ for _key in tuple(os.environ):
         del os.environ[_key]
 
 try:
-    import pwd
-
+    pwd = __import__("pwd")
     _safe_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
 except (ImportError, KeyError, AttributeError, OSError):
     _safe_home = Path.home()
