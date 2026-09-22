@@ -544,7 +544,11 @@ def _unowned_conflict(
     owned_counts: Mapping[str, int] | None = None,
 ) -> bool:
     seen_owned: dict[str, int] = {}
-    for event in SUPPORTED_EVENTS:
+    hooks = parsed.get("hooks", {})
+    event_names = hooks.keys() if isinstance(hooks, dict) else ()
+    for event in event_names:
+        if not isinstance(event, str):
+            continue
         for group in _event_values(parsed, event):
             for handler in group.get("hooks", []) if isinstance(group.get("hooks", []), list) else []:
                 if not isinstance(handler, dict) or handler.get("type") != "command":

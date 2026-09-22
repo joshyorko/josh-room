@@ -310,10 +310,27 @@ def test_unowned_same_command_conflicts_with_install(tmp_path):
     config = tmp_path / "config.toml"
     command = json.dumps(hooks._commands()["command"])
     config.write_text(
-        "[[hooks.Stop]]\nmatcher = \"*\"\n"
-        "[[hooks.Stop.hooks]]\ntype = \"command\"\n"
+        "[[hooks.PreToolUse]]\nmatcher = \"*\"\n"
+        "[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n"
         f"command = {command}\n",
         encoding="utf-8",
     )
     result = install_codex_hooks(config)
     assert result["state"] == "conflicting-josh-room-hook"
+
+
+def test_remove_refuses_unowned_duplicate_canonical_command(tmp_path, monkeypatch):
+    config = tmp_path / "config.toml"
+    receipt = tmp_path / "receipt.json"
+    config.write_text('model = "synthetic"\n', encoding="utf-8")
+    monkeypatch.setenv("JOSH_ROOM_HOOK_RECEIPT", str(receipt))
+    assert install_codex_hooks(config)["state"] == "healthy"
+    command = json.dumps(hooks._commands()["command"])
+    with config.open("a", encoding="utf-8") as handle:
+        handle.write(
+            "\n[[hooks.PreToolUse]]\nmatcher = \"*\"\n"
+            "[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n"
+            f"command = {command}\n"
+        )
+    assert remove_codex_hooks(config)["state"] == "conflicting-josh-room-hook"
+    assert hooks.MARKER_PREFIX + "Stop" in config.read_text(encoding="utf-8")
