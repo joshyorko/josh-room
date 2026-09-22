@@ -92,7 +92,7 @@ def test_installed_entrypoint_latency_and_hostile_cwd_environment(tmp_path):
         "JOSH_ROOM_CODEX_ARCHIVED_ROOT": str(roots.archived),
         "JOSH_ROOM_HOOK_OUTBOX": str(outbox),
     }
-    command = [sys.executable, "-I", "-S", str(Path(__file__).parents[1] / "src/josh_room/hook_entrypoint.py")]
+    command = [sys.executable, "-I", str(Path(__file__).parents[1] / "src/josh_room/hook_entrypoint.py")]
     durations = []
     encoded = json.dumps(payload).encode("utf-8")
     for _ in range(32):
@@ -101,7 +101,7 @@ def test_installed_entrypoint_latency_and_hostile_cwd_environment(tmp_path):
         durations.append((time.perf_counter() - started) * 1000)
         assert result.returncode == 0
         assert result.stdout == b""
-    assert sorted(durations)[int(len(durations) * 0.95) - 1] < 1000
+    assert sorted(durations)[int(len(durations) * 0.95) - 1] < 250
     assert max(durations) < 1000
     records = list((outbox / "queue").glob("*.json"))
     assert len(records) == 1

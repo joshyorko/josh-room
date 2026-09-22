@@ -277,7 +277,7 @@ def _config_path(config_path: Path | str | None) -> Path:
 
 def _validate_config_security(path: Path) -> None:
     current = path
-    for _ in range(32):
+    while True:
         if current.is_symlink():
             raise HookBoundaryError("config-untrusted")
         if current.exists():
@@ -285,6 +285,8 @@ def _validate_config_security(path: Path) -> None:
                 info = current.lstat()
             except OSError:
                 raise HookBoundaryError("config-untrusted") from None
+            if current == path and not stat.S_ISREG(info.st_mode):
+                raise HookBoundaryError("config-untrusted")
             if hasattr(os, "getuid") and info.st_uid != os.getuid() and not (
                 info.st_uid == 0
                 and (
@@ -327,8 +329,8 @@ def _commands() -> dict[str, object]:
     script, script_digest = _trusted_file(Path(__file__).with_name("hook_entrypoint.py").resolve())
     if any(any(ord(char) < 0x20 or ord(char) == 0x7F for char in str(path)) for path in (interpreter, script)):
         raise HookBoundaryError("executable-untrusted")
-    posix = f"{shlex.quote(str(interpreter))} -I -S {shlex.quote(str(script))}"
-    windows = f'"{str(interpreter).replace(chr(34), chr(92) + chr(34))}" -I -S "{str(script).replace(chr(34), chr(92) + chr(34))}"'
+    posix = f"{shlex.quote(str(interpreter))} -I {shlex.quote(str(script))}"
+    windows = f'"{str(interpreter).replace(chr(34), chr(92) + chr(34))}" -I "{str(script).replace(chr(34), chr(92) + chr(34))}"'
     return {
         "interpreter": str(interpreter),
         "interpreter_sha256": interpreter_digest,
@@ -478,26 +480,33 @@ def _write_config(path: Path, text: str, *, existed: bool, mode: int | None = No
         raise HookBoundaryError("config-write-failed") from None
 
 
-def _receipt_path() -> Path:
+def _receipt_path(config_path: Path | str | None = None) -> Path:
     explicit = os.environ.get("JOSH_ROOM_HOOK_RECEIPT")
     if explicit:
         path = Path(explicit)
     else:
         state_home = os.environ.get("XDG_STATE_HOME")
-        path = (Path(state_home) if state_home else _home() / ".local" / "state") / "josh-room" / "hooks-codex.json"
-    if not path.is_absolute():
+        base = (Path(state_home) if state_home else _home() / ".local" / "state") / "josh-room"
+        identity = hashlib.sha256(str(Path(config_path).resolve(strict=False)).encode()).hexdigest()[:24] if config_path is not None else "default"
+        path = base / f"hooks-codex-{identity}.json"
+    if config_path is not None and path.resolve(strict=False) == Path(config_path).resolve(strict=False):
         raise HookBoundaryError("receipt-path-invalid")
+    _validate_config_security(path)
     return path
 
 
 def _write_receipt(receipt: Mapping[str, object]) -> None:
-    path = _receipt_path()
+    config_path = receipt.get("config_path")
+    path = _receipt_path(config_path if isinstance(config_path, str) else None)
+    existing = _read_receipt()
+    if isinstance(existing, dict) and existing.get("config_path") != config_path:
+        raise HookBoundaryError("receipt-collision")
     _write_config(path, json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n", existed=path.exists(), mode=0o600)
 
 
-def _read_receipt() -> dict[str, object] | None:
-    path = _receipt_path()
-    if not path.exists() or path.is_symlink():
+def _read_receipt(config_path: Path | str | None = None) -> dict[str, object] | None:
+    path = _receipt_path(config_path)
+    if not path.exists() or path.is_symlink() or not path.is_file():
         return None
     try:
         info = path.lstat()
@@ -511,12 +520,16 @@ def _read_receipt() -> dict[str, object] | None:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return value if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        return None
+    if config_path is not None and value.get("config_path") != str(Path(config_path)):
+        return None
+    return value
 
 
-def _remove_receipt() -> None:
+def _remove_receipt(config_path: Path | str | None = None) -> None:
     try:
-        _receipt_path().unlink(missing_ok=True)
+        _receipt_path(config_path).unlink(missing_ok=True)
     except OSError:
         raise HookBoundaryError("receipt-write-failed") from None
 
@@ -530,7 +543,7 @@ def _codex_hook_status_locked(config_path: Path | str | None = None) -> dict[str
         blocks, markers_well_formed = _blocks(text)
         expected_commands = {str(commands["command"])} | _owned_commands(text, blocks)
         conflicts = _unowned_conflict(parsed, expected_commands)
-        receipt = _read_receipt()
+        receipt = _read_receipt(path)
         receipt_commands = receipt.get("commands") if isinstance(receipt, dict) else None
         executable_stale = (
             not isinstance(receipt_commands, dict)
@@ -692,8 +705,9 @@ def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[st
     try:
         path = _config_path(config_path)
         text, parsed, exists = _read_config(path)
+        original_config_text = text
         blocks, well_formed = _blocks(text)
-        receipt = _read_receipt()
+        receipt = _read_receipt(path)
         if not well_formed:
             raise HookBoundaryError("partial-installation")
         if not blocks:
@@ -738,12 +752,19 @@ def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[st
             extra = len(text.encode("utf-8")) - original_size
             if text.endswith("\n" * extra):
                 text = text[:-extra]
-        if exists and not text.strip() and receipt.get("original_exists") is False:
-            path.unlink(missing_ok=True)
-        else:
-            tomllib.loads(text) if text.strip() else None
-            _write_config(path, text, existed=exists, mode=stat.S_IMODE(path.stat().st_mode) if exists else 0o600)
-        _remove_receipt()
+        try:
+            if exists and not text.strip() and receipt.get("original_exists") is False:
+                path.unlink(missing_ok=True)
+            else:
+                tomllib.loads(text) if text.strip() else None
+                _write_config(path, text, existed=exists, mode=stat.S_IMODE(path.stat().st_mode) if exists else 0o600)
+            _remove_receipt(path)
+        except Exception:
+            try:
+                _write_config(path, original_config_text, existed=exists, mode=stat.S_IMODE(path.stat().st_mode) if exists else 0o600)
+            except Exception:
+                pass
+            raise
         return _codex_hook_status_locked(path)
     except (HookBoundaryError, OSError, tomllib.TOMLDecodeError):
         return {"ok": False, "tool": "codex", "state": "remove-failed", "diagnostics": ["remove-failed"]}

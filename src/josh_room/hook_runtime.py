@@ -16,7 +16,7 @@ from pathlib import Path
 _MAX = 64 * 1024
 _EVENTS = ("Stop", "SubagentStop", "SessionEnd")
 _EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
-_ADAPTER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_ADAPTER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _FIELDS = {
     "Stop": {"session_id", "turn_id", "transcript_path", "cwd", "hook_event_name", "model", "permission_mode", "stop_hook_active", "last_assistant_message"},
     "SubagentStop": {"session_id", "turn_id", "transcript_path", "agent_transcript_path", "cwd", "hook_event_name", "model", "permission_mode", "stop_hook_active", "agent_id", "agent_type", "last_assistant_message"},
@@ -72,13 +72,20 @@ def _validate(payload: object) -> tuple[str, dict[str, object]]:
 
 
 def _roots() -> tuple[Path, Path]:
-    active = os.environ.get("JOSH_ROOM_CODEX_ACTIVE_ROOT")
-    archived = os.environ.get("JOSH_ROOM_CODEX_ARCHIVED_ROOT")
-    if active and archived:
-        return Path(active).resolve(strict=False), Path(archived).resolve(strict=False)
-    home = Path(os.environ.get("CODEX_HOME", _home() / ".codex"))
-    if not home.is_absolute(): home = _home() / ".codex"
-    return (home / "sessions").resolve(strict=False), (home / "archived_sessions").resolve(strict=False)
+    active_value = os.environ.get("JOSH_ROOM_CODEX_ACTIVE_ROOT")
+    archived_value = os.environ.get("JOSH_ROOM_CODEX_ARCHIVED_ROOT")
+    if active_value and archived_value:
+        active, archived = Path(active_value), Path(archived_value)
+    else:
+        home = Path(os.environ.get("CODEX_HOME", _home() / ".codex"))
+        if not home.is_absolute(): home = _home() / ".codex"
+        active, archived = home / "sessions", home / "archived_sessions"
+    if not active.is_absolute() or not archived.is_absolute():
+        raise ValueError("source-not-contained")
+    active, archived = active.resolve(strict=False), archived.resolve(strict=False)
+    if active == archived:
+        raise ValueError("source-not-contained")
+    return active, archived
 
 
 def _source(event: str, payload: dict[str, object]) -> tuple[str, str]:
@@ -97,18 +104,23 @@ def _source(event: str, payload: dict[str, object]) -> tuple[str, str]:
         current = root
         for part in relative.parts:
             current /= part
-            if current.is_symlink(): raise ValueError("source-not-contained")
+            if current.is_symlink():
+                raise ValueError("source-not-contained")
         canonical = raw.resolve(strict=False)
-        try: path_key = canonical.relative_to(root).as_posix()
-        except ValueError: raise ValueError("source-not-contained") from None
+        try:
+            path_key = canonical.relative_to(root).as_posix()
+        except ValueError:
+            raise ValueError("source-not-contained") from None
         name = canonical.name
         suffix = ".jsonl.zst" if name.endswith(".jsonl.zst") else ".jsonl" if name.endswith(".jsonl") else ""
         stem = name[:-len(suffix)] if suffix else ""
-        token = stem.removeprefix("rollout-")
-        if token.endswith("-copy"): token = token[:-5]
+        token = re.sub(r"-copy(?:-[0-9]+)?$", "", stem.removeprefix("rollout-"))
         if not stem.startswith("rollout-") or token != payload["session_id"] or not canonical.is_file():
             raise ValueError("source-not-contained")
-        if path_key.endswith(".zst"): path_key = path_key.removesuffix(".zst")
+        if suffix == ".jsonl.zst" and root == active:
+            raise ValueError("source-not-contained")
+        if path_key.endswith(".zst"):
+            path_key = path_key.removesuffix(".zst")
         source = "codex-" + hashlib.sha256(f"session:{payload['session_id']}|path:{path_key}".encode()).hexdigest()[:32]
         representation = "active-jsonl" if suffix == ".jsonl" and root == active else "archived-jsonl" if suffix == ".jsonl" else "compressed-jsonl-zst"
         return source, representation

@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 # A Codex event cwd may contain sitecustomize.py, .env files, PATH shims, or a
-# PYTHONPATH import hijack.  The installer invokes this file with -I -S as an
-# additional boundary; keep only operator-selected Josh/Codex state paths.
+# PYTHONPATH import hijack.  The installer invokes this file with isolated -I;
+# keep only operator-selected Josh/Codex state paths.
 _ALLOWED_ENV = {
     "HOME",
     "CODEX_HOME",

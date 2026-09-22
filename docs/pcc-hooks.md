@@ -19,7 +19,7 @@ The configuration uses the upstream command-hook shape:
 matcher = "*"
 [[hooks.Stop.hooks]]
 type = "command"
-command = "/absolute/python -I -S /absolute/hook_entrypoint.py"
+command = "/absolute/python -I /absolute/hook_entrypoint.py"
 timeout = 1
 async = true
 ```
