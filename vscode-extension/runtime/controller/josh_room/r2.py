@@ -816,7 +816,10 @@ class R2Backend(ObjectStore):
         root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence"
         if root.is_symlink() or root.exists() and not root.is_dir():
             raise R2EvidenceError("multipart-lock-unavailable")
-        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        except OSError as error:
+            raise R2EvidenceError("multipart-lock-unavailable") from error
         if self.receipt_dir is not None:
             try:
                 os.chmod(self.receipt_dir, 0o700)
