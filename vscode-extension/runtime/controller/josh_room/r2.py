@@ -598,9 +598,12 @@ class R2Backend(ObjectStore):
             except ValueError as error:
                 raise R2EvidenceOutboxPrecondition() from error
             try:
+                self._verify_evidence_remote(evidence_key, queued.ciphertext_sha256, queued.ciphertext_size)
                 index_size = self._verify_evidence_remote(index_key, queued.index_id, None)
             except ValueError as error:
                 raise R2EvidenceReadbackMismatch(published=False) from error
+            except (ClientError, BotoCoreError, TimeoutError) as error:
+                raise self._map_evidence_error(error, published=True) from error
             return R2EvidencePublication(
                 R2EvidenceReceipt(evidence_key, queued.ciphertext_sha256, queued.ciphertext_size, R2EvidenceMetrics(queued.ciphertext_size, 0, 0, True, True)),
                 R2EvidenceReceipt(index_key, queued.index_id, index_size, R2EvidenceMetrics(index_size, 1, 0, True, True)),
@@ -645,6 +648,8 @@ class R2Backend(ObjectStore):
                 if index.ciphertext_sha256 != queued.index_id:
                     raise R2EvidenceOutboxPrecondition()
                 outbox.publish_index(event_id, owner, index_id=index.ciphertext_sha256)
+            except (ClientError, BotoCoreError, TimeoutError) as error:
+                raise self._map_evidence_error(error, published=True) from error
             else:
                 index = R2EvidenceReceipt(index_key, queued.index_id, index_size, R2EvidenceMetrics(index_size, 1, 0, True, True))
         else:
