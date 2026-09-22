@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
+import json
+import time
 
 import josh_room.pcc_hooks as hooks
 from josh_room.codex_adapter import CodexRoots
@@ -45,6 +46,29 @@ def test_runtime_is_bounded_and_deduplicates_without_transcript_read(tmp_path):
     assert first["accepted"] is True
     assert second["event_id"] == first["event_id"]
     assert len(list((tmp_path / "outbox" / "queue").glob("*.json"))) == 1
+def test_runtime_latency_and_hostile_environment_boundary(tmp_path, monkeypatch):
+    payload, roots = _fixture(tmp_path)
+    payload["last_assistant_message"] = "TRANSCRIPT-SENTINEL"
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "malicious-codex-home"))
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "malicious-imports"))
+    monkeypatch.setenv("PATH", str(tmp_path / "shadow-bin"))
+    durations = []
+    for _ in range(32):
+        started = time.perf_counter()
+        result = process_codex_hook(payload, outbox_root=tmp_path / "outbox", roots=roots)
+        durations.append((time.perf_counter() - started) * 1000)
+        assert result["accepted"] is True
+    p95 = sorted(durations)[int(len(durations) * 0.95) - 1]
+    assert p95 < 250
+    assert max(durations) < 1000
+    records = list((tmp_path / "outbox" / "queue").glob("*.json"))
+    assert len(records) == 1
+    queued = json.loads(records[0].read_text(encoding="utf-8"))
+    serialized = json.dumps(queued, sort_keys=True)
+    assert "TRANSCRIPT-SENTINEL" not in serialized
+    assert str(payload["transcript_path"]) not in serialized
+
+
 
 
 def test_runtime_rejects_path_escape_and_malformed_closed_input(tmp_path):
