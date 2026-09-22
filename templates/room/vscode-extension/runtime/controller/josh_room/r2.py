@@ -3,8 +3,8 @@ import io
 import json
 import os
 import re
+import stat
 import tempfile
-import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -251,19 +251,84 @@ class R2Backend(ObjectStore):
         with path.open("rb") as source:
             return self._put_stream(key, source, size, digest)
 
+    def _put_stream(self, key: str, source, size: int, digest: str) -> ObjectRef:
+        if size < self.config.multipart_threshold:
+            try:
+                self.client.put_object(Bucket=self.config.bucket, Key=key, Body=source, ContentLength=size, IfNoneMatch="*", Metadata={"sha256": digest})
+            except ClientError as error:
+                if not _is_precondition(error):
+                    raise
+                report_progress("verify", "Encrypted Room already exists; verifying R2 object")
+                self._verify_remote(key, digest, size)
+                return ObjectRef(key, digest, size)
+        else:
+            upload_id = self.client.create_multipart_upload(Bucket=self.config.bucket, Key=key, Metadata={"sha256": digest})["UploadId"]
+            parts = []
+            try:
+                part_number = 1
+                while True:
+                    chunk = source.read(self.config.multipart_chunk_size)
+                    if not chunk:
+                        break
+                    parts.append({"ETag": self.client.upload_part(Bucket=self.config.bucket, Key=key, UploadId=upload_id, PartNumber=part_number, Body=chunk)["ETag"], "PartNumber": part_number})
+                    uploaded = min(part_number * self.config.multipart_chunk_size, size)
+                    report_progress("upload", f"Uploading encrypted Room • {_percent(uploaded, size)}%", current=uploaded, total=size)
+                    part_number += 1
+                try:
+                    self.client.complete_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id, MultipartUpload={"Parts": parts}, IfNoneMatch="*")
+                except ClientError as error:
+                    if not _is_precondition(error):
+                        raise
+                    report_progress("verify", "Encrypted Room already exists; verifying R2 object")
+                    self._verify_remote(key, digest, size)
+                    return ObjectRef(key, digest, size)
+            except BaseException:  # noqa: BLE001 - abort multipart on cancellation as well as SDK errors
+                try:
+                    self.client.abort_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id)
+                finally:
+                    raise
+        report_progress("upload", "Encrypted Room uploaded • 100%", current=size, total=size)
+        report_progress("verify", "Verifying encrypted R2 object")
+        self._verify_remote(key, digest, size)
+        return ObjectRef(key, digest, size)
     def put_evidence_file(self, path: Path) -> R2EvidenceReceipt:
-        """Stream a durable ciphertext file into the opaque evidence namespace."""
-        path = Path(path)
+        """Stream a durable ciphertext file without reopening a path after validation."""
+        source, size, digest = self._snapshot_evidence_file(path)
+        def factory():
+            return source
+        factory.owns_source = False
         try:
-            mode = path.lstat().st_mode
-        except OSError as error:
+            return self._put_evidence(evidence_object_key(digest), factory, size, digest)
+        finally:
+            source.close()
+
+    def _snapshot_evidence_file(self, path: Path):
+        source = None
+        descriptor = -1
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(os.fspath(Path(path)), flags)
+            source = os.fdopen(descriptor, "rb")
+            descriptor = -1
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077:
+                raise ValueError("source-private")
+            digest = hashlib.sha256()
+            size = 0
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+                size += len(chunk)
+            after = os.fstat(source.fileno())
+            if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns) or size != before.st_size:
+                raise ValueError("source-changed")
+            source.seek(0)
+            return source, size, digest.hexdigest()
+        except (OSError, ValueError) as error:
+            if source is not None:
+                source.close()
+            elif descriptor >= 0:
+                os.close(descriptor)
             raise R2EvidenceError("source-unavailable") from error
-        if path.is_symlink() or not path.is_file() or mode & 0o077:
-            raise R2EvidenceError("source-unavailable")
-        size = path.stat().st_size
-        digest = _file_digest(path)
-        key = evidence_object_key(digest)
-        return self._put_evidence(key, lambda: path.open("rb"), size, digest)
 
     def put_evidence_stream(self, source, size: int, ciphertext_sha256: str) -> R2EvidenceReceipt:
         """Stream a ciphertext reader; the supplied digest is independently read back."""
@@ -328,18 +393,15 @@ class R2Backend(ObjectStore):
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
-
     def put_evidence_index_file(self, path: Path) -> R2EvidenceReceipt:
-        path = Path(path)
+        source, size, digest = self._snapshot_evidence_file(path)
+        def factory():
+            return source
+        factory.owns_source = False
         try:
-            mode = path.lstat().st_mode
-        except OSError as error:
-            raise R2EvidenceError("source-unavailable") from error
-        if path.is_symlink() or not path.is_file() or mode & 0o077:
-            raise R2EvidenceError("source-unavailable")
-        size = path.stat().st_size
-        digest = _file_digest(path)
-        return self._put_evidence(evidence_index_key(digest), lambda: path.open("rb"), size, digest)
+            return self._put_evidence(evidence_index_key(digest), factory, size, digest)
+        finally:
+            source.close()
 
     def put_evidence_index_bytes(self, ciphertext: bytes) -> R2EvidenceReceipt:
         if not isinstance(ciphertext, bytes):
@@ -382,7 +444,7 @@ class R2Backend(ObjectStore):
             try:
                 response = self.client.list_objects_v2(**kwargs)
             except (BotoCoreError, ClientError, TimeoutError) as error:
-                raise self._map_evidence_error(error) from error
+                raise self._map_evidence_error(error, published=False) from error
             pages += 1
             for item in response.get("Contents", ()) or ():
                 key = item.get("Key")
@@ -424,11 +486,35 @@ class R2Backend(ObjectStore):
             queued = outbox.inspect_record(event_id)
         except Exception as error:  # noqa: BLE001 - no untrusted outbox detail crosses the boundary
             raise R2EvidenceOutboxPrecondition() from error
-        if queued is None or queued.owner != owner:
+        if queued is None:
             raise R2EvidenceOutboxPrecondition()
+        state = getattr(queued.state, "value", queued.state)
+        resume = getattr(queued.resume_state, "value", queued.resume_state)
+        if queued.object_key is not None:
+            try:
+                if validate_evidence_object_key(queued.object_key) != queued.ciphertext_sha256:
+                    raise ValueError("object identity")
+            except ValueError as error:
+                raise R2EvidenceOutboxPrecondition() from error
         if queued.ciphertext_sha256 is None or queued.ciphertext_size is None:
             raise R2EvidenceOutboxPrecondition()
         evidence_key = evidence_object_key(queued.ciphertext_sha256)
+        if state == "committed":
+            if queued.index_id is None:
+                raise R2EvidenceOutboxPrecondition()
+            try:
+                self._verify_evidence_remote(evidence_key, queued.ciphertext_sha256, queued.ciphertext_size)
+                index_key = evidence_index_key(queued.index_id)
+                self._verify_evidence_remote(index_key, queued.index_id, None)
+            except ValueError as error:
+                raise R2EvidenceReadbackMismatch(published=False) from error
+            return R2EvidencePublication(
+                R2EvidenceReceipt(evidence_key, queued.ciphertext_sha256, queued.ciphertext_size, R2EvidenceMetrics(queued.ciphertext_size, 0, 0, True, True)),
+                R2EvidenceReceipt(index_key, queued.index_id, 0, R2EvidenceMetrics(0, 0, 0, True, True)),
+                True,
+            )
+        if queued.owner != owner:
+            raise R2EvidenceOutboxPrecondition()
         prepared = outbox.prepared.inspect_record(event_id)
         if prepared is None:
             raise R2EvidenceOutboxPrecondition()
@@ -439,11 +525,21 @@ class R2Backend(ObjectStore):
             evidence = self.put_evidence_stream(io.BytesIO(prepared.ciphertext), prepared.ciphertext_size, prepared.ciphertext_sha256)
         if evidence.key != evidence_key:
             raise R2EvidenceOutboxPrecondition()
-        state = getattr(queued.state, "value", queued.state)
-        if state not in {"object-uploaded", "index-published", "committed"}:
-            queued = outbox.mark_uploaded(event_id, owner, object_key=evidence.key, ciphertext_size=evidence.ciphertext_size)
+        stage = resume if state in {"claimed", "retryable-failure", "capture-gap"} else state
+        if stage not in {"object-uploaded", "index-published"}:
+            outbox.mark_uploaded(event_id, owner, object_key=evidence.key, ciphertext_size=evidence.ciphertext_size)
+            stage = "object-uploaded"
         index = None
-        if state not in {"index-published", "committed"}:
+        if stage == "index-published":
+            if queued.index_id is None:
+                raise R2EvidenceOutboxPrecondition()
+            index_key = evidence_index_key(queued.index_id)
+            try:
+                self._verify_evidence_remote(index_key, queued.index_id, None)
+            except ValueError as error:
+                raise R2EvidenceReadbackMismatch(published=False) from error
+            index = R2EvidenceReceipt(index_key, queued.index_id, 0, R2EvidenceMetrics(0, 0, 0, True, True))
+        else:
             if index_ciphertext is None:
                 return R2EvidencePublication(evidence, None, False)
             if isinstance(index_ciphertext, Path):
@@ -451,8 +547,7 @@ class R2Backend(ObjectStore):
             else:
                 index = self.put_evidence_index_bytes(index_ciphertext)
             outbox.publish_index(event_id, owner, index_id=index.ciphertext_sha256)
-        if state != "committed":
-            outbox.commit(event_id, owner)
+        outbox.commit(event_id, owner)
         return R2EvidencePublication(evidence, index, True)
 
     def _put_evidence(
@@ -553,7 +648,7 @@ class R2Backend(ObjectStore):
                     )["UploadId"]
                 except (ClientError, BotoCoreError, TimeoutError) as error:
                     if not _is_retryable(error) or retries + 1 >= max_attempts:
-                        raise self._map_evidence_error(error, retries=retries) from error
+                        raise self._map_evidence_error(error, retries=retries, published=False) from error
                     retries += 1
                     time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
                     continue
@@ -578,7 +673,7 @@ class R2Backend(ObjectStore):
                             break
                         except (ClientError, BotoCoreError, TimeoutError) as error:
                             if not _is_retryable(error) or retries + 1 >= max_attempts:
-                                raise self._map_evidence_error(error, retries=retries) from error
+                                raise self._map_evidence_error(error, retries=retries, published=False) from error
                             retries += 1
                             part_retries += 1
                             time.sleep(min(0.01 * (2 ** min(part_retries - 1, 4)), 0.1))
@@ -609,6 +704,13 @@ class R2Backend(ObjectStore):
                             "duplicate-conflict-verified",
                         )
                     if error.__class__.__name__ == "ParamValidationError":
+                        raise R2EvidenceMultipartConditionalUnsupported(retries=retries) from error
+                    if isinstance(error, ClientError) and str(error.response.get("Error", {}).get("Code")) in {
+                        "NotImplemented",
+                        "InvalidRequest",
+                        "UnsupportedHeader",
+                        "InvalidArgument",
+                    }:
                         raise R2EvidenceMultipartConditionalUnsupported(retries=retries) from error
                     if not _is_retryable(error):
                         raise self._map_evidence_error(error, retries=retries) from error
@@ -684,53 +786,13 @@ class R2Backend(ObjectStore):
         if total != observed_size or observed.hexdigest() != digest:
             raise ValueError("evidence object digest mismatch")
 
-    def _map_evidence_error(self, error, *, retries: int = 0):
+    def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
         if code in {"ExpiredToken", "InvalidToken", "TokenRefreshRequired"}:
-            return R2EvidenceRetryable("credentials-expired", retries=retries)
+            return R2EvidenceRetryable("credentials-expired", published=published, retries=retries)
         if _is_retryable(error):
-            return R2EvidenceRetryable("retry-exhausted", retries=retries)
-        return R2EvidenceError("publication-unknown", published=True, retries=retries)
-        if size < self.config.multipart_threshold:
-            try:
-                self.client.put_object(Bucket=self.config.bucket, Key=key, Body=source, ContentLength=size, IfNoneMatch="*", Metadata={"sha256": digest})
-            except ClientError as error:
-                if not _is_precondition(error):
-                    raise
-                report_progress("verify", "Encrypted Room already exists; verifying R2 object")
-                self._verify_remote(key, digest, size)
-                return ObjectRef(key, digest, size)
-        else:
-            upload_id = self.client.create_multipart_upload(Bucket=self.config.bucket, Key=key, Metadata={"sha256": digest})["UploadId"]
-            parts = []
-            try:
-                part_number = 1
-                while True:
-                    chunk = source.read(self.config.multipart_chunk_size)
-                    if not chunk:
-                        break
-                    parts.append({"ETag": self.client.upload_part(Bucket=self.config.bucket, Key=key, UploadId=upload_id, PartNumber=part_number, Body=chunk)["ETag"], "PartNumber": part_number})
-                    uploaded = min(part_number * self.config.multipart_chunk_size, size)
-                    report_progress("upload", f"Uploading encrypted Room • {_percent(uploaded, size)}%", current=uploaded, total=size)
-                    part_number += 1
-                try:
-                    self.client.complete_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id, MultipartUpload={"Parts": parts}, IfNoneMatch="*")
-                except ClientError as error:
-                    if not _is_precondition(error):
-                        raise
-                    report_progress("verify", "Encrypted Room already exists; verifying R2 object")
-                    self._verify_remote(key, digest, size)
-                    return ObjectRef(key, digest, size)
-            except BaseException:  # noqa: BLE001 - abort multipart on cancellation as well as SDK errors
-                try:
-                    self.client.abort_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id)
-                finally:
-                    raise
-        report_progress("upload", "Encrypted Room uploaded • 100%", current=size, total=size)
-        report_progress("verify", "Verifying encrypted R2 object")
-        self._verify_remote(key, digest, size)
-        return ObjectRef(key, digest, size)
-
+            return R2EvidenceRetryable("retry-exhausted", published=published, retries=retries)
+        return R2EvidenceError("publication-unknown", published=published, retries=retries)
     def get_bytes(self, key: str, expected_digest: str | None = None, expected_size: int | None = None) -> bytes:
         self._validate_object_key(key, expected_digest)
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)

@@ -244,3 +244,21 @@ def test_readback_mismatch_is_typed_and_not_hidden_by_etag(tmp_path):
     fake.objects[key] = {"body": b"tampered"}
     with pytest.raises(R2EvidenceReadbackMismatch):
         store.get_evidence_bytes(key, expected_size=len(source.read_bytes()))
+
+
+def test_outbox_retry_from_uploaded_stage_does_not_rewind_or_repeat_mark_uploaded(tmp_path):
+    fake = EvidenceS3()
+    store = backend(fake)
+    outbox = PccOutbox(tmp_path / "outbox")
+    event_id = "event-retry"
+    checkpoint = {"source": "synthetic", "representation": "active-jsonl", "start": 0, "end": 1, "prefix_sha256": "b" * 64}
+    outbox.enqueue(event_id=event_id, session_id="session-retry", checkpoint=checkpoint, metadata={"object_kind": "session-segment"})
+    outbox.claim("worker-one")
+    outbox.transition(event_id, "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(event_id, "worker-one", b"durable retry ciphertext", metadata={"object_kind": "session-segment"})
+    store.publish_outbox_evidence(outbox, event_id, "worker-one", index_ciphertext=None)
+    outbox.retry(event_id, "worker-one", reason_code="index-timeout")
+    outbox.claim("worker-two")
+    result = store.publish_outbox_evidence(outbox, event_id, "worker-two", index_ciphertext=b"retry index ciphertext")
+    assert result.committed
+    assert outbox.inspect_record(event_id).state is QueueState.COMMITTED
