@@ -753,19 +753,32 @@ class R2Backend(ObjectStore):
                 if stat.S_ISLNK(current_stat.st_mode) or not stat.S_ISDIR(current_stat.st_mode):
                     raise R2EvidenceError("multipart-state-unavailable")
             current = current.parent
-        if root.is_symlink() or root.exists() and stat.S_IMODE(root.lstat().st_mode) & 0o077:
+        if root.is_symlink() or root.exists() and not root.is_dir():
             raise R2EvidenceError("multipart-state-unavailable")
+        if root.exists():
+            try:
+                os.chmod(root, 0o700)
+            except OSError as error:
+                raise R2EvidenceError("multipart-state-unavailable") from error
 
     def _validate_evidence_state_storage(self, path: Path) -> None:
         parent = path.parent
         if parent.exists():
             parent_stat = parent.lstat()
-            if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode) or stat.S_IMODE(parent_stat.st_mode) & 0o077:
+            if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
                 raise R2EvidenceError("multipart-state-unavailable")
+            try:
+                os.chmod(parent, 0o700)
+            except OSError as error:
+                raise R2EvidenceError("multipart-state-unavailable") from error
         if path.exists() or path.is_symlink():
             state_stat = path.lstat()
-            if stat.S_ISLNK(state_stat.st_mode) or not stat.S_ISREG(state_stat.st_mode) or stat.S_IMODE(state_stat.st_mode) & 0o077:
+            if stat.S_ISLNK(state_stat.st_mode) or not stat.S_ISREG(state_stat.st_mode):
                 raise R2EvidenceError("multipart-state-unavailable")
+            try:
+                os.chmod(path, 0o600)
+            except OSError as error:
+                raise R2EvidenceError("multipart-state-unavailable") from error
     @staticmethod
     def _sync_evidence_directory(directory: Path) -> None:
         if os.name != "posix":
@@ -777,10 +790,19 @@ class R2Backend(ObjectStore):
         finally:
             os.close(descriptor)
 
+    def _evidence_destination_fingerprint(self) -> str:
+        identity = {
+            "provider": self.__class__.__module__,
+            "endpoint": getattr(self.config, "endpoint", ""),
+            "bucket": getattr(self.config, "bucket", ""),
+            "dimension": getattr(self.config, "dimension_id", None),
+        }
+        return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
     def _evidence_state_path(self, digest: str, final_key: str | None = None) -> Path:
         root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence-state"
         identity = final_key or digest
-        state_id = hashlib.sha256(b"josh-room-pcc-state-v1\0" + identity.encode()).hexdigest()
+        state_id = hashlib.sha256(b"josh-room-pcc-state-v2\0" + self._evidence_destination_fingerprint().encode() + b"\0" + identity.encode()).hexdigest()
         return root / f"{state_id}.json"
 
     @contextmanager
@@ -799,7 +821,8 @@ class R2Backend(ObjectStore):
             os.chmod(root, 0o700)
         except OSError as error:
             raise R2EvidenceError("multipart-lock-unavailable") from error
-        lock_path = root / f".{digest}.lock"
+        lock_id = hashlib.sha256(b"josh-room-pcc-lock-v2\0" + self._evidence_destination_fingerprint().encode() + b"\0" + digest.encode()).hexdigest()
+        lock_path = root / f".{lock_id}.lock"
         if lock_path.is_symlink() or lock_path.exists() and not stat.S_ISREG(lock_path.lstat().st_mode):
             raise R2EvidenceError("multipart-lock-unavailable")
         try:

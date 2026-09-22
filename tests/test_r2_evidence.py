@@ -13,6 +13,7 @@ from josh_room.r2 import (
     R2Backend,
     R2Config,
     R2EvidenceAbortFailure,
+    R2EvidenceConflict,
     R2EvidenceError,
     R2EvidenceReadbackMismatch,
     evidence_claim_key,
