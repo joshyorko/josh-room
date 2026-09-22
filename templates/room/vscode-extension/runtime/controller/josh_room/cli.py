@@ -62,7 +62,6 @@ from .minio import MinioBackend, MinioConfig
 from .minio import check_bucket_access as check_minio_bucket
 from .minio import create_bucket as create_minio_bucket
 from .minio import list_buckets as list_minio_buckets
-from .pcc_outbox import PccOutbox
 from .operations import (
     _legacy_migration_source_binding,
     _material_recipients,
@@ -86,6 +85,7 @@ from .operations import (
     repair_workspace,
     serve_snapshot,
 )
+from .pcc_outbox import PccOutbox
 from .pcc_hooks import (
     codex_hook_main,
     codex_hook_status,

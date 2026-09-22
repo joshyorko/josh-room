@@ -205,7 +205,7 @@ class HarvestController:
                 code = getattr(code, "value", code)
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code=str(code))
-                except Exception:  # noqa: S110 - preserve original lifecycle failure
+                except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": str(code)})
         return _envelope(
@@ -229,7 +229,7 @@ class HarvestController:
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code="not-prepared")
-                except Exception:  # noqa: S110 - preserve original lifecycle failure
+                except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": "not-prepared"})
                 continue
@@ -247,7 +247,7 @@ class HarvestController:
                 code = getattr(code, "value", code)
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code=str(code))
-                except Exception:  # noqa: S110 - preserve original lifecycle failure
+                except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": str(code)})
         return _envelope(ok=not failures, command="drain", delivered=delivered, failures=failures, rescanned=False)
@@ -297,4 +297,4 @@ def dump_result(result: Mapping[str, object]) -> str:
     return json.dumps(dict(result), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-__all__ = ["HarvestController", "HarvestError", "SCHEMA", "SCHEMA_VERSION", "dump_result"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "HarvestController", "HarvestError", "dump_result"]
