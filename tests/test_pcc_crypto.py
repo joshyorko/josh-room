@@ -43,6 +43,11 @@ from josh_room.session_normalizer import (
     SessionNormalizer,
 )
 
+
+@pytest.fixture(autouse=True)
+def _local_only_contract(monkeypatch):
+    monkeypatch.setattr("josh_room.device.require_prepare_upload", lambda: None)
+
 ROOT = Path(__file__).parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "session_evidence"
 DAILY_RECIPIENT = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"

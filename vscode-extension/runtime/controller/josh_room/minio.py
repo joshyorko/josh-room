@@ -37,7 +37,10 @@ def client_for_connection(connection: ConnectionConfig):
         raise RuntimeError("MinIO connection is disconnected; reconnect before use")
     import boto3
 
-    credentials = lookup(connection.credential_profile, allow_runtime=False)
+    from .device import active_credential_profile
+
+    credential_profile = active_credential_profile() or connection.credential_profile
+    credentials = lookup(credential_profile, allow_runtime=False)
     verify = connection.option("ca_bundle") or connection.option("verify_tls", True)
     return boto3.client(
         "s3",

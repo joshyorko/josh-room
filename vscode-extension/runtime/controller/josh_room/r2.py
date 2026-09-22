@@ -203,7 +203,10 @@ def client_for_config(config: R2Config):
     import boto3
     from botocore.config import Config
 
-    credentials = lookup(config.credential_profile, allow_runtime=True)
+    from .device import active_credential_profile
+
+    credential_profile = active_credential_profile() or config.credential_profile
+    credentials = lookup(credential_profile, allow_runtime=True)
     return boto3.client(
         "s3",
         endpoint_url=config.endpoint,
@@ -573,6 +576,9 @@ class R2Backend(ObjectStore):
         index_ciphertext: bytes | Path | None,
     ) -> R2EvidencePublication:
         """Drive #8's uploaded -> indexed -> committed seam without catalog writes."""
+        from .device import require_prepare_upload
+
+        require_prepare_upload()
         try:
             queued = outbox.inspect_record(event_id)
         except Exception as error:
