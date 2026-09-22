@@ -1,0 +1,81 @@
+{
+  "$schema": "https://josh-room.invalid/schemas/capture-policy-v1.schema.json",
+  "schema": "josh-room.capture-policy",
+  "schema_version": { "major": 1, "minor": 0 },
+  "r2_bindings": {
+    "personal-r2": { "scope": "personal", "credential_profile_ref": "synthetic-personal-r2" },
+    "oss-r2": { "scope": "oss", "credential_profile_ref": "synthetic-oss-r2" }
+  },
+  "profiles": {
+    "personal": {
+      "profile_id": "profile-personal",
+      "workspace_id": "workspace-personal",
+      "allowed_sources": ["codex.session-metadata", "codex.transcript"],
+      "capture_mode": "transcript-and-assets",
+      "triggers": ["manual", "session-end", "stop", "subagent-stop", "reconcile"],
+      "destination": { "kind": "private-r2", "binding_id": "personal-r2" },
+      "recipient_set_ref": "recipient-set-personal",
+      "limits": { "per_record_bytes": 1048576, "per_asset_bytes": 8388608, "per_session_bytes": 67108864, "local_outbox_bytes": 268435456, "retention_days": 365 },
+      "allow_rules": [
+        { "workspace_id": "workspace-personal", "repository": { "host": "github.com", "namespace": "sample-owner", "name": "sample-repo" } }
+      ],
+      "deny_rules": [
+        { "workspace_id": "workspace-personal", "repository": { "host": "github.com", "namespace": "sample-owner", "name": "blocked-repo" }, "reason_code": "synthetic-deny" }
+      ],
+      "downstream_memory": true,
+      "policy_version": "1.0",
+      "provenance": "private-host-config"
+    },
+    "work": {
+      "profile_id": "profile-work",
+      "workspace_id": "workspace-work",
+      "allowed_sources": ["codex.session-metadata", "codex.transcript"],
+      "capture_mode": "transcript",
+      "triggers": ["manual", "session-end"],
+      "destination": { "kind": "local-only" },
+      "recipient_set_ref": "recipient-set-work",
+      "limits": { "per_record_bytes": 524288, "per_asset_bytes": 1048576, "per_session_bytes": 16777216, "local_outbox_bytes": 67108864, "retention_days": 30 },
+      "allow_rules": [
+        { "workspace_id": "workspace-work", "repository": { "host": "git.example.invalid", "namespace": "sample-team", "name": "sample-work" } }
+      ],
+      "deny_rules": [],
+      "downstream_memory": false,
+      "policy_version": "1.0",
+      "provenance": "private-host-config"
+    },
+    "oss": {
+      "profile_id": "profile-oss",
+      "workspace_id": "workspace-oss",
+      "allowed_sources": ["codex.session-metadata", "codex.transcript"],
+      "capture_mode": "transcript",
+      "triggers": ["manual", "session-end", "reconcile"],
+      "destination": { "kind": "private-r2", "binding_id": "oss-r2" },
+      "recipient_set_ref": "recipient-set-oss",
+      "limits": { "per_record_bytes": 524288, "per_asset_bytes": 2097152, "per_session_bytes": 33554432, "local_outbox_bytes": 134217728, "retention_days": 180 },
+      "allow_rules": [
+        { "workspace_id": "workspace-oss", "repository": { "host": "github.com", "namespace": "sample-community", "name": "sample-project" } }
+      ],
+      "deny_rules": [],
+      "downstream_memory": true,
+      "policy_version": "1.0",
+      "provenance": "private-host-config"
+    },
+    "homelab": {
+      "profile_id": "profile-homelab",
+      "workspace_id": "workspace-homelab",
+      "allowed_sources": ["codex.session-metadata", "codex.transcript"],
+      "capture_mode": "metadata-only",
+      "triggers": ["manual", "session-end"],
+      "destination": { "kind": "local-only" },
+      "recipient_set_ref": "recipient-set-homelab",
+      "limits": { "per_record_bytes": 262144, "per_asset_bytes": 524288, "per_session_bytes": 8388608, "local_outbox_bytes": 33554432, "retention_days": 90 },
+      "allow_rules": [
+        { "workspace_id": "workspace-homelab", "repository": { "host": "git.example.invalid", "namespace": "sample-lab", "name": "sample-room" } }
+      ],
+      "deny_rules": [],
+      "downstream_memory": false,
+      "policy_version": "1.0",
+      "provenance": "private-host-config"
+    }
+  }
+}

@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/capture-policy-v1.schema.json",
+  "title": "Josh Room Capture Policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schema", "schema_version", "r2_bindings", "profiles"],
+  "properties": {
+    "$schema": { "const": "https://josh-room.invalid/schemas/capture-policy-v1.schema.json" },
+    "schema": { "const": "josh-room.capture-policy" },
+    "schema_version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": {
+        "major": { "type": "integer", "const": 1 },
+        "minor": { "type": "integer", "const": 0 }
+      }
+    },
+    "r2_bindings": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/r2-binding" }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["personal", "work", "oss", "homelab"],
+      "properties": {
+        "personal": { "$ref": "#/$defs/profile" },
+        "work": { "$ref": "#/$defs/profile" },
+        "oss": { "$ref": "#/$defs/profile" },
+        "homelab": { "$ref": "#/$defs/profile" }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+    },
+    "profile-name": {
+      "enum": ["personal", "work", "oss", "homelab"]
+    },
+    "scope": {
+      "$ref": "#/$defs/profile-name"
+    },
+    "logical-source": {
+      "type": "string",
+      "pattern": "^codex\\.[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$",
+      "maxLength": 96,
+      "not": { "pattern": "(access|auth|bearer|cookie|credential|identity|key|password|secret|token)" }
+    },
+    "trigger": {
+      "enum": ["manual", "session-end", "stop", "subagent-stop", "reconcile"]
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "namespace", "name"],
+      "properties": {
+        "host": { "type": "string", "pattern": "^[a-z0-9.-]{1,253}$" },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+          "maxLength": 128,
+          "not": { "pattern": "(^|/)(\\.|\\.\\.)(/|$)" }
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$",
+          "not": { "enum": [".", ".."] }
+        }
+      }
+    },
+    "match-rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "repository"],
+      "properties": {
+        "workspace_id": { "$ref": "#/$defs/identifier" },
+        "repository": { "$ref": "#/$defs/repository" }
+      }
+    },
+    "deny-rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "repository", "reason_code"],
+      "properties": {
+        "workspace_id": { "$ref": "#/$defs/identifier" },
+        "repository": { "$ref": "#/$defs/repository" },
+        "reason_code": { "type": "string", "pattern": "^[a-z][a-z0-9.-]{2,63}$" }
+      }
+    },
+    "r2-binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "credential_profile_ref"],
+      "properties": {
+        "scope": { "$ref": "#/$defs/scope" },
+        "credential_profile_ref": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "destination": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "local-only" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "binding_id"],
+          "properties": {
+            "kind": { "const": "private-r2" },
+            "binding_id": { "$ref": "#/$defs/identifier" }
+          }
+        }
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "$comment": "Private policy loading rejects decimal JSON number tokens such as 1.0 for these integer fields.",
+      "additionalProperties": false,
+      "required": ["per_record_bytes", "per_asset_bytes", "per_session_bytes", "local_outbox_bytes", "retention_days"],
+      "properties": {
+        "per_record_bytes": { "type": "integer", "minimum": 1 },
+        "per_asset_bytes": { "type": "integer", "minimum": 1 },
+        "per_session_bytes": { "type": "integer", "minimum": 1 },
+        "local_outbox_bytes": { "type": "integer", "minimum": 1 },
+        "retention_days": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id", "workspace_id", "allowed_sources", "capture_mode", "triggers",
+        "destination", "recipient_set_ref", "limits", "allow_rules", "deny_rules",
+        "downstream_memory", "policy_version", "provenance"
+      ],
+      "properties": {
+        "profile_id": { "$ref": "#/$defs/identifier" },
+        "workspace_id": { "$ref": "#/$defs/identifier" },
+        "allowed_sources": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/logical-source" } },
+        "capture_mode": { "enum": ["metadata-only", "transcript", "transcript-and-assets"] },
+        "triggers": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/trigger" } },
+        "destination": { "$ref": "#/$defs/destination" },
+        "recipient_set_ref": { "$ref": "#/$defs/identifier" },
+        "limits": { "$ref": "#/$defs/limits" },
+        "allow_rules": { "type": "array", "items": { "$ref": "#/$defs/match-rule" } },
+        "deny_rules": { "type": "array", "items": { "$ref": "#/$defs/deny-rule" } },
+        "downstream_memory": { "type": "boolean" },
+        "policy_version": { "type": "string", "pattern": "^1\\.0$" },
+        "provenance": { "const": "private-host-config" }
+      }
+    }
+  }
+}
