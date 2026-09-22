@@ -505,12 +505,12 @@ class R2Backend(ObjectStore):
             try:
                 self._verify_evidence_remote(evidence_key, queued.ciphertext_sha256, queued.ciphertext_size)
                 index_key = evidence_index_key(queued.index_id)
-                self._verify_evidence_remote(index_key, queued.index_id, None)
+                index_size = self._verify_evidence_remote(index_key, queued.index_id, None)
             except ValueError as error:
                 raise R2EvidenceReadbackMismatch(published=False) from error
             return R2EvidencePublication(
                 R2EvidenceReceipt(evidence_key, queued.ciphertext_sha256, queued.ciphertext_size, R2EvidenceMetrics(queued.ciphertext_size, 0, 0, True, True)),
-                R2EvidenceReceipt(index_key, queued.index_id, 0, R2EvidenceMetrics(0, 0, 0, True, True)),
+                R2EvidenceReceipt(index_key, queued.index_id, index_size, R2EvidenceMetrics(index_size, 1, 0, True, True)),
                 True,
             )
         if queued.owner != owner:
@@ -570,6 +570,12 @@ class R2Backend(ObjectStore):
             return self._put_evidence_single(key, source_factory, size, digest, started)
         return self._put_evidence_multipart(key, source_factory, size, digest, started)
 
+    def _duplicate_readback_failure(self, error, retries: int):
+        if _is_retryable(error):
+            return R2EvidenceRetryable("duplicate-readback-retry", published=True, retries=retries)
+        if isinstance(error, ValueError):
+            return R2EvidenceConflict(retries=retries)
+        return R2EvidenceReadbackMismatch(published=True, retries=retries)
     def _put_evidence_single(self, key, source_factory, size, digest, started):
         retries = 0
         for attempt in range(max(1, self.config.max_attempts)):
@@ -595,8 +601,8 @@ class R2Backend(ObjectStore):
                 if _is_precondition(error):
                     try:
                         self._verify_evidence_remote(key, digest, size)
-                    except ValueError as mismatch:
-                        raise R2EvidenceConflict(retries=retries) from mismatch
+                    except (ValueError, ClientError, BotoCoreError, TimeoutError) as mismatch:
+                        raise self._duplicate_readback_failure(mismatch, retries) from mismatch
                     return R2EvidenceReceipt(
                         key,
                         digest,
@@ -612,8 +618,8 @@ class R2Backend(ObjectStore):
                 if attempt + 1 >= max(1, self.config.max_attempts):
                     try:
                         self._verify_evidence_remote(key, digest, size)
-                    except ValueError:
-                        raise self._map_evidence_error(error, retries=retries) from error
+                    except (ValueError, ClientError, BotoCoreError, TimeoutError) as mismatch:
+                        raise self._duplicate_readback_failure(mismatch, retries) from mismatch
                     return R2EvidenceReceipt(
                         key,
                         digest,
@@ -761,7 +767,7 @@ class R2Backend(ObjectStore):
         except Exception as error:  # noqa: BLE001 - provider-specific abort failures are typed
             raise R2EvidenceAbortFailure(retries=retries) from error
 
-    def _verify_evidence_remote(self, key: str, digest: str, size: int | None) -> None:
+    def _verify_evidence_remote(self, key: str, digest: str, size: int | None) -> int:
         try:
             head = self.client.head_object(Bucket=self.config.bucket, Key=key)
         except ClientError as error:
@@ -786,6 +792,7 @@ class R2Backend(ObjectStore):
         if total != observed_size or observed.hexdigest() != digest:
             raise ValueError("evidence object digest mismatch")
 
+        return observed_size
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
         if code in {"ExpiredToken", "InvalidToken", "TokenRefreshRequired"}:
