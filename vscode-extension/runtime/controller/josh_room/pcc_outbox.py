@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from .pcc_enqueue import enqueue_trigger
 
 try:
     import fcntl as _fcntl
@@ -942,6 +943,28 @@ class PccOutbox:
         return records, diagnostics, quarantined
 
     def enqueue(
+        self,
+        *,
+        event_id: str,
+        session_id: str,
+        checkpoint: Mapping[str, object],
+        is_final: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        policy_decision: str = "allow",
+        diagnostic_detail: object | None = None,
+    ) -> QueueReceipt:
+        return enqueue_trigger(
+            self,
+            event_id=event_id,
+            session_id=session_id,
+            checkpoint=checkpoint,
+            is_final=is_final,
+            metadata=metadata,
+            policy_decision=policy_decision,
+            diagnostic_detail=diagnostic_detail,
+        )
+
+    def _enqueue_authority(
         self,
         *,
         event_id: str,

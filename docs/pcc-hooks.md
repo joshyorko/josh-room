@@ -19,7 +19,7 @@ The configuration uses the upstream command-hook shape:
 matcher = "*"
 [[hooks.Stop.hooks]]
 type = "command"
-command = "/absolute/python -I /absolute/hook_entrypoint.py"
+command = "/absolute/python -I -S /absolute/hook_entrypoint.py"
 timeout = 1
 async = true
 ```
@@ -36,6 +36,9 @@ supported lifecycle events `Stop`, `SubagentStop`, and `SessionEnd`, with
 closed command payload fields and `SessionEnd`'s one-second default/three-
 second maximum timeout. The installed command uses a one-second upstream
 limit but is designed to complete below 250 ms and fail open below one second.
+The receipt also contains a bounded runtime manifest (interpreter, entrypoint,
+`hook_runtime`, `pcc_enqueue`, and `pcc_outbox` hashes). Status reports
+`stale-runtime` when any installed hot-path file changes.
 
 Hooks are a trigger source, not the only recovery mechanism. Missed events,
 crashes, and source transitions are recovered by #6 reconciliation.

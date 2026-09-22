@@ -12,6 +12,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from .pcc_enqueue import canonical_source, enqueue_trigger
 
 _MAX = 64 * 1024
 _EVENTS = ("Stop", "SubagentStop", "SessionEnd")
@@ -89,42 +90,8 @@ def _roots() -> tuple[Path, Path]:
 
 
 def _source(event: str, payload: dict[str, object]) -> tuple[str, str]:
-    value = payload.get("agent_transcript_path") if event == "SubagentStop" and payload.get("agent_transcript_path") is not None else payload.get("transcript_path")
-    if value is None:
-        return "codex-hook", "unknown"
     active, archived = _roots()
-    raw = Path(value)
-    if not raw.is_absolute(): raw = Path(payload["cwd"]) / raw
-    raw = Path(os.path.abspath(raw))
-    for root in (active, archived):
-        try:
-            relative = raw.relative_to(root)
-        except ValueError:
-            continue
-        current = root
-        for part in relative.parts:
-            current /= part
-            if current.is_symlink():
-                raise ValueError("source-not-contained")
-        canonical = raw.resolve(strict=False)
-        try:
-            path_key = canonical.relative_to(root).as_posix()
-        except ValueError:
-            raise ValueError("source-not-contained") from None
-        name = canonical.name
-        suffix = ".jsonl.zst" if name.endswith(".jsonl.zst") else ".jsonl" if name.endswith(".jsonl") else ""
-        stem = name[:-len(suffix)] if suffix else ""
-        token = re.sub(r"-copy(?:-[0-9]+)?$", "", stem.removeprefix("rollout-"))
-        if not stem.startswith("rollout-") or token != payload["session_id"] or not canonical.is_file():
-            raise ValueError("source-not-contained")
-        if suffix == ".jsonl.zst" and root == active:
-            raise ValueError("source-not-contained")
-        if path_key.endswith(".zst"):
-            path_key = path_key.removesuffix(".zst")
-        source = "codex-" + hashlib.sha256(f"session:{payload['session_id']}|path:{path_key}".encode()).hexdigest()[:32]
-        representation = "active-jsonl" if suffix == ".jsonl" and root == active else "archived-jsonl" if suffix == ".jsonl" else "compressed-jsonl-zst"
-        return source, representation
-    raise ValueError("source-not-contained")
+    return canonical_source(event, payload, active, archived)
 
 
 def _outbox() -> Path:
@@ -140,7 +107,8 @@ def process(payload: object) -> dict[str, object]:
         source, representation = _source(event, payload)
         event_id = "codex-" + hashlib.sha256("|".join((event, str(payload["session_id"]), str(payload.get("turn_id", "")), str(payload.get("agent_id", "")), source)).encode()).hexdigest()[:32]
         from .pcc_outbox import PccOutbox, QueueState
-        receipt = PccOutbox(_outbox()).enqueue(
+        receipt = enqueue_trigger(
+            PccOutbox(_outbox()),
             event_id=event_id,
             session_id=str(payload["session_id"]),
             checkpoint={"source": source, "representation": representation, "start": 0, "end": 0, "prefix_sha256": _EMPTY_DIGEST},
