@@ -1,0 +1,31 @@
+{
+  "adapter": {"name": "synthetic", "version": "1"},
+  "approved_root": "synthetic-root",
+  "checkpoint": {
+    "logical_source": "codex.transcript",
+    "next_byte_offset": 0,
+    "next_record_index": 0,
+    "observed_size": 9,
+    "prefix_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "representation": "active-jsonl",
+    "session_id": "session-one",
+    "source_id": "source-one"
+  },
+  "estimated_bytes": 9,
+  "estimated_records": 2,
+  "event_id": "event-one",
+  "limits": {
+    "max_asset_bytes": 4096,
+    "max_open_bytes": 64,
+    "max_open_records": 128,
+    "max_record_bytes": 8
+  },
+  "logical_source": "codex.transcript",
+  "material": {"authority_ref": "material-authority", "decision": "allow", "reason_codes": ["synthetic-material-allow"]},
+  "policy": {"authority_ref": "policy-authority", "decision": "allow", "reason_codes": ["synthetic-policy-allow"]},
+  "representation": "active-jsonl",
+  "session_id": "session-one",
+  "source_id": "source-one",
+  "status": "ready",
+  "transitioned_from": null
+}
