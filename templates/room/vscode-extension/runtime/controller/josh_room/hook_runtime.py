@@ -34,10 +34,22 @@ def _home() -> Path:
         return Path.home()
 
 
-def _text(value: object, *, nullable: bool = False, identifier: bool = False) -> str | None:
+def _text(
+    value: object,
+    *,
+    nullable: bool = False,
+    identifier: bool = False,
+    free_text: bool = False,
+) -> str | None:
     if value is None and nullable:
         return None
-    if type(value) is not str or not value or len(value.encode("utf-8")) > 4096 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+    if type(value) is not str or not value or len(value.encode("utf-8")) > 4096:
+        raise ValueError("invalid-input")
+    allowed_controls = {"\t", "\n", "\r"} if free_text else set()
+    if any(
+        (ord(char) < 0x20 and char not in allowed_controls) or ord(char) == 0x7F
+        for char in value
+    ):
         raise ValueError("invalid-input")
     if identifier and _ADAPTER_ID.fullmatch(value) is None:
         raise ValueError("invalid-input")
@@ -65,7 +77,7 @@ def _validate(payload: object) -> tuple[str, dict[str, object]]:
     if event in {"Stop", "SubagentStop"}:
         _text(payload["turn_id"], identifier=True); _text(payload["model"]); _text(payload["permission_mode"])
         if type(payload["stop_hook_active"]) is not bool: raise ValueError("invalid-input")
-        _text(payload["last_assistant_message"], nullable=True)
+        _text(payload["last_assistant_message"], nullable=True, free_text=True)
     if event == "SubagentStop":
         _text(payload["agent_id"], identifier=True); _text(payload["agent_type"])
     if event == "SessionEnd" and payload["reason"] != "other":

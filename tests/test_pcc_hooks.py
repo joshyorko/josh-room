@@ -73,6 +73,18 @@ def test_runtime_latency_and_hostile_environment_boundary(tmp_path, monkeypatch)
 
 
 
+def test_runtime_accepts_multiline_assistant_message_without_storing_content(tmp_path):
+    payload, roots = _fixture(tmp_path)
+    payload["last_assistant_message"] = "line one\n\tline two\r\n"
+    result = process_codex_hook(payload, outbox_root=tmp_path / "outbox", roots=roots)
+    assert result["accepted"] is True
+    records = list((tmp_path / "outbox" / "queue").glob("*.json"))
+    assert len(records) == 1
+    serialized = records[0].read_text(encoding="utf-8")
+    assert "line one" not in serialized
+    assert "\\tline two" not in serialized
+
+
 
 def test_installed_entrypoint_latency_and_hostile_cwd_environment(tmp_path):
     payload, roots = _fixture(tmp_path)

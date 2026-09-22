@@ -78,12 +78,22 @@ def _home() -> Path:
         return Path.home()
 
 
-def _bounded_string(value: object, *, allow_none: bool = False, identifier: bool = False) -> str | None:
+def _bounded_string(
+    value: object,
+    *,
+    allow_none: bool = False,
+    identifier: bool = False,
+    free_text: bool = False,
+) -> str | None:
     if value is None and allow_none:
         return None
     if type(value) is not str or not value or len(value.encode("utf-8", "strict")) > MAX_STRING_BYTES:
         raise HookBoundaryError("invalid-input")
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+    allowed_controls = {"\t", "\n", "\r"} if free_text else set()
+    if any(
+        (ord(char) < 0x20 and char not in allowed_controls) or ord(char) == 0x7F
+        for char in value
+    ):
         raise HookBoundaryError("invalid-input")
     if identifier and _HOOK_ID.fullmatch(value) is None:
         raise HookBoundaryError("invalid-input")
@@ -128,7 +138,7 @@ def _validate_event(payload: object) -> tuple[str, dict[str, object]]:
         _bounded_string(payload.get("permission_mode"))
         if type(payload.get("stop_hook_active")) is not bool:
             raise HookBoundaryError("invalid-input")
-        _bounded_string(payload.get("last_assistant_message"), allow_none=True)
+        _bounded_string(payload.get("last_assistant_message"), allow_none=True, free_text=True)
     if event == "SubagentStop":
         _bounded_string(payload.get("agent_id"), identifier=True)
         _bounded_string(payload.get("agent_type"))
