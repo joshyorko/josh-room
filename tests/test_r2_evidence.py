@@ -265,6 +265,7 @@ def test_concurrent_claim_fence_allows_distinct_digests_and_one_same_key(tmp_pat
     assert len(results) + len(failures) == 2
     assert results
     assert all(item.key == results[0].key for item in results)
+    assert len([call for call in fake.calls if call[0] == "complete_multipart_upload"]) == 1
 
 
 def test_multipart_state_symlink_is_rejected(tmp_path):
