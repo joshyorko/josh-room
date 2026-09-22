@@ -588,8 +588,10 @@ class R2Backend(ObjectStore):
             if queued.index_id is None:
                 raise R2EvidenceOutboxPrecondition()
             try:
-                self._verify_evidence_remote(evidence_key, queued.ciphertext_sha256, queued.ciphertext_size)
                 index_key = evidence_index_key(queued.index_id)
+            except ValueError as error:
+                raise R2EvidenceOutboxPrecondition() from error
+            try:
                 index_size = self._verify_evidence_remote(index_key, queued.index_id, None)
             except ValueError as error:
                 raise R2EvidenceReadbackMismatch(published=False) from error
@@ -618,7 +620,10 @@ class R2Backend(ObjectStore):
         if stage == "index-published":
             if queued.index_id is None:
                 raise R2EvidenceOutboxPrecondition()
-            index_key = evidence_index_key(queued.index_id)
+            try:
+                index_key = evidence_index_key(queued.index_id)
+            except ValueError as error:
+                raise R2EvidenceOutboxPrecondition() from error
             try:
                 index_size = self._verify_evidence_remote(index_key, queued.index_id, None)
             except ValueError as error:
@@ -826,7 +831,10 @@ class R2Backend(ObjectStore):
         if lock_path.is_symlink() or lock_path.exists() and not stat.S_ISREG(lock_path.lstat().st_mode):
             raise R2EvidenceError("multipart-lock-unavailable")
         try:
-            handle = lock_path.open("a+b")
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(lock_path, flags, 0o600)
+            os.chmod(lock_path, 0o600)
+            handle = os.fdopen(descriptor, "r+b")
         except OSError as error:
             raise R2EvidenceError("multipart-lock-unavailable") from error
         with handle:
@@ -1489,29 +1497,33 @@ def _percent(current: int, total: int) -> int:
     return 100 if total <= 0 else min(100, int(current * 100 / total))
 
 
+def _provider_code(error: BaseException) -> str:
+    if not isinstance(error, ClientError):
+        return ""
+    code = str(error.response.get("Error", {}).get("Code"))
+    status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    if status is not None and str(status) in {"401", "403", "404", "408", "409", "412", "425", "429", "500", "502", "503", "504"}:
+        return str(status)
+    return code
+
+
 def _is_precondition(error: ClientError) -> bool:
-    return str(error.response.get("Error", {}).get("Code")) in {"409", "412", "PreconditionFailed", "ConditionalRequestConflict"}
+    return _provider_code(error) in {"409", "412", "PreconditionFailed", "ConditionalRequestConflict"}
 
 
 def _not_found(error: ClientError) -> bool:
-    return str(error.response.get("Error", {}).get("Code")) in {"404", "NoSuchKey", "NotFound"}
+    return _provider_code(error) in {"404", "NoSuchKey", "NotFound"}
+
+
 def _is_stale_multipart_error(error: BaseException) -> bool:
-    if not isinstance(error, ClientError):
-        return False
-    return str(error.response.get("Error", {}).get("Code")) in {"NoSuchUpload", "InvalidUploadId", "NoSuchUploadId"}
-
-
+    return _provider_code(error) in {"404", "NoSuchUpload", "InvalidUploadId", "NoSuchUploadId"}
 
 
 def _is_retryable(error: BaseException) -> bool:
     if isinstance(error, TimeoutError):
         return True
     if isinstance(error, ClientError):
-        code = str(error.response.get("Error", {}).get("Code"))
-        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        if status is not None:
-            code = code or str(status)
-        return code in {
+        return _provider_code(error) in {
             "408",
             "425",
             "429",
