@@ -490,10 +490,14 @@ def _queue_checkpoint(event_number: int = 1) -> dict[str, object]:
 
 def _prepare_queue(outbox: PccOutbox, event: NormalizationEvent, number: int = 1) -> None:
     source = event.document.get("source")
+    capture = event.document.get("capture")
     source_surface = source.get("surface", "cli") if isinstance(source, dict) else "cli"
     source_adapter = source.get("adapter", "codex.transcript") if isinstance(source, dict) else "codex.transcript"
     source_adapter_version = source.get("adapter_version", "1") if isinstance(source, dict) else "1"
-    outbox.enqueue(
+    capture_status = capture.get("status", "complete") if isinstance(capture, dict) else "complete"
+    policy_decision = capture.get("policy_decision", "allow") if isinstance(capture, dict) else "allow"
+    sensitivity = capture.get("sensitivity", "unknown") if isinstance(capture, dict) else "unknown"
+    receipt = outbox.enqueue(
         event_id=event.document["event_id"],
         session_id=event.document.get("session_id", "session-synthetic"),
         checkpoint=event.document.get("checkpoint", _queue_checkpoint(number)),
@@ -505,9 +509,9 @@ def _prepare_queue(outbox: PccOutbox, event: NormalizationEvent, number: int = 1
             "object_kind": event.kind,
             "destination_class": "private-r2",
             "destination_binding_id": "binding-synthetic",
-            "policy_decision": "allow",
-            "capture_status": "complete",
-            "sensitivity": "normal",
+            "policy_decision": policy_decision,
+            "capture_status": capture_status,
+            "sensitivity": sensitivity,
         },
     )
     outbox.claim("worker-one")
