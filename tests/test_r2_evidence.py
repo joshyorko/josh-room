@@ -24,6 +24,12 @@ from josh_room.r2 import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _local_only_evidence(monkeypatch):
+    """Direct fake-provider contracts do not represent production R2 authority."""
+    monkeypatch.setattr("josh_room.device.require_prepare_upload", lambda: None)
+
+
 def error(code):
     return ClientError({"Error": {"Code": code, "Message": code}}, "Evidence")
 
