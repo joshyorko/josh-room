@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import josh_room.pcc_hooks as hooks
@@ -15,6 +16,7 @@ from josh_room.pcc_hooks import (
     install_codex_hooks,
     process_codex_hook,
     remove_codex_hooks,
+    repair_codex_hooks,
 )
 
 
@@ -235,3 +237,65 @@ def test_status_detects_stale_runtime_manifest(tmp_path, monkeypatch):
     status = codex_hook_status(config)
     assert status["state"] == "stale"
     assert status["diagnostics"] == ["stale-runtime"]
+
+
+def test_valid_subagent_and_session_end_final_coalescing(tmp_path):
+    payload, roots = _fixture(tmp_path)
+    outbox = tmp_path / "outbox"
+    assert process_codex_hook(payload, outbox_root=outbox, roots=roots)["accepted"] is True
+    subagent = dict(payload)
+    subagent.update({
+        "hook_event_name": "SubagentStop",
+        "agent_transcript_path": payload["transcript_path"],
+        "agent_id": "agent-1",
+        "agent_type": "worker",
+    })
+    assert process_codex_hook(subagent, outbox_root=outbox, roots=roots)["accepted"] is True
+    session_end = {
+        "session_id": payload["session_id"],
+        "transcript_path": payload["transcript_path"],
+        "cwd": payload["cwd"],
+        "hook_event_name": "SessionEnd",
+        "reason": "other",
+    }
+    final = process_codex_hook(session_end, outbox_root=outbox, roots=roots)
+    assert final["accepted"] is True
+    record = json.loads(next((outbox / "queue").glob("*.json")).read_text(encoding="utf-8"))
+    assert record["is_final"] is True
+    assert final["event_id"] == record["final_event_id"]
+    assert len(record["event_ids"]) == 3
+
+
+def test_stale_repair_and_command_windows_contract(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('model = "synthetic"\n', encoding="utf-8")
+    assert install_codex_hooks(config)["state"] == "healthy"
+    config.write_text(config.read_text(encoding="utf-8").replace(
+        'statusMessage = "Josh Room local trigger"',
+        'statusMessage = "changed"',
+    ), encoding="utf-8")
+    assert codex_hook_status(config)["state"] == "stale"
+    repaired = repair_codex_hooks(config)
+    assert repaired["state"] == "healthy"
+    windows = next(line for line in config.read_text(encoding="utf-8").splitlines() if line.startswith("commandWindows = "))
+    assert json.loads(windows.partition("=")[2].strip()) == hooks._commands()["commandWindows"]
+
+
+def test_concurrent_installed_duplicate_processes_coalesce(tmp_path):
+    payload, roots = _fixture(tmp_path)
+    outbox = tmp_path / "outbox"
+    env = {
+        "HOME": str(tmp_path),
+        "JOSH_ROOM_CODEX_ACTIVE_ROOT": str(roots.active),
+        "JOSH_ROOM_CODEX_ARCHIVED_ROOT": str(roots.archived),
+        "JOSH_ROOM_HOOK_OUTBOX": str(outbox),
+    }
+    command = [sys.executable, "-I", "-S", str(Path(__file__).parents[1] / "src/josh_room/hook_entrypoint.py")]
+    encoded = json.dumps(payload).encode()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(
+            lambda _: subprocess.run(command, input=encoded, cwd=tmp_path, env=env, capture_output=True, timeout=1, check=False),
+            range(4),
+        ))
+    assert all(result.returncode == 0 for result in results)
+    assert len(list((outbox / "queue").glob("*.json"))) == 1
