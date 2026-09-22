@@ -295,6 +295,7 @@ class R2Backend(ObjectStore):
         """Stream a durable ciphertext file without reopening a path after validation."""
         source, size, digest = self._snapshot_evidence_file(path)
         def factory():
+            source.seek(0)
             return source
         factory.owns_source = False
         try:
@@ -396,6 +397,7 @@ class R2Backend(ObjectStore):
     def put_evidence_index_file(self, path: Path) -> R2EvidenceReceipt:
         source, size, digest = self._snapshot_evidence_file(path)
         def factory():
+            source.seek(0)
             return source
         factory.owns_source = False
         try:
@@ -535,10 +537,10 @@ class R2Backend(ObjectStore):
                 raise R2EvidenceOutboxPrecondition()
             index_key = evidence_index_key(queued.index_id)
             try:
-                self._verify_evidence_remote(index_key, queued.index_id, None)
+                index_size = self._verify_evidence_remote(index_key, queued.index_id, None)
             except ValueError as error:
                 raise R2EvidenceReadbackMismatch(published=False) from error
-            index = R2EvidenceReceipt(index_key, queued.index_id, 0, R2EvidenceMetrics(0, 0, 0, True, True))
+            index = R2EvidenceReceipt(index_key, queued.index_id, index_size, R2EvidenceMetrics(index_size, 1, 0, True, True))
         else:
             if index_ciphertext is None:
                 return R2EvidencePublication(evidence, None, False)
