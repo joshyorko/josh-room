@@ -842,43 +842,68 @@ class CodexTranscriptAdapter:
         return _record_id(value) if isinstance(value, Mapping) else None
 
     @contextmanager
-    def _open_bytes(self, path: Path) -> Iterator[Any]:
+    def _open_path(self, path: Path) -> Iterator[Any]:
         if not self._raw_path_is_safe(path) or not path.is_file():
             raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source cannot be opened") from None
-        descriptor: int | None = None
+        root_name = self._root_name(path)
+        if root_name is None:
+            raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source cannot be opened") from None
+        root = self._roots.active if root_name == "active" else self._roots.archived
+        relative = path.relative_to(root)
+        binary = getattr(os, "O_BINARY", 0)
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        use_descriptor_walk = (
+            os.name == "posix"
+            and nofollow != 0
+            and getattr(os, "O_DIRECTORY", 0) != 0
+            and os.open in getattr(os, "supports_dir_fd", set())
+        )
+        descriptors: list[int] = []
         try:
-            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(path, flags)
+            if use_descriptor_walk:
+                directory_flags = os.O_RDONLY | os.O_DIRECTORY | nofollow
+                current = os.open(root, directory_flags)
+                descriptors.append(current)
+                for component in relative.parts[:-1]:
+                    current = os.open(component, directory_flags, dir_fd=current)
+                    descriptors.append(current)
+                descriptor = os.open(relative.parts[-1], os.O_RDONLY | binary | nofollow, dir_fd=current)
+            else:
+                descriptor = os.open(path, os.O_RDONLY | binary | nofollow)
+            descriptors.append(descriptor)
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                 raise OSError("source is not a regular file")
-            raw = os.fdopen(descriptor, "rb")
-            descriptor = None
-        except OSError:
-            if descriptor is not None:
-                os.close(descriptor)
-            raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source cannot be opened") from None
-        if path.name.endswith(".jsonl.zst"):
-            if zstandard is None:
-                raw.close()
-                raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "compressed source support is unavailable") from None
-            try:
-                decoder = zstandard.ZstdDecompressor(
-                    max_window_size=_MAX_ZSTD_WINDOW_BYTES // 1024,
-                )
-                reader = io.BufferedReader(decoder.stream_reader(raw))
-            except Exception as error:  # decoder failures are opaque
-                raw.close()
-                raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "compressed source is invalid") from error
-            try:
-                yield reader
-            finally:
-                reader.close()
-                raw.close()
-        else:
-            try:
+            with os.fdopen(descriptor, "rb") as raw:
+                descriptors.pop()
                 yield raw
-            finally:
-                raw.close()
+        except (OSError, TypeError, ValueError):
+            raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source cannot be opened") from None
+        finally:
+            for descriptor in reversed(descriptors):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+    @contextmanager
+    def _open_bytes(self, path: Path) -> Iterator[Any]:
+        with self._open_path(path) as raw:
+            if path.name.endswith(".jsonl.zst"):
+                if zstandard is None:
+                    raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "compressed source support is unavailable") from None
+                try:
+                    decoder = zstandard.ZstdDecompressor(
+                        max_window_size=_MAX_ZSTD_WINDOW_BYTES // 1024,
+                    )
+                    reader = io.BufferedReader(decoder.stream_reader(raw))
+                except Exception as error:  # decoder failures are opaque
+                    raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "compressed source is invalid") from error
+                try:
+                    yield reader
+                finally:
+                    reader.close()
+            else:
+                yield raw
 
     def _scan(self, candidate: _Candidate) -> _Snapshot:
         records: list[_RecordMeta] = []
