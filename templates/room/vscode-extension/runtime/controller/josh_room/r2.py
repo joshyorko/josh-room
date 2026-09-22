@@ -13,8 +13,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from botocore.exceptions import BotoCoreError, ClientError
-
 try:
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - Windows runtime
@@ -24,6 +22,8 @@ try:
     import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover - POSIX runtime
     _msvcrt = None
+
+from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
 from .encryption_domain import (
@@ -1215,7 +1215,7 @@ class R2Backend(ObjectStore):
                                 R2EvidenceMetrics(size, len(parts), retries, False, True, False, _latency_ms(started)),
                                 "ambiguous-complete-verified",
                             )
-                    except R2EvidenceReadbackMismatch as mismatch:
+                    except R2EvidenceReadbackMismatch:
                         committed = True
                         self._clear_evidence_state(digest, key)
                         raise
