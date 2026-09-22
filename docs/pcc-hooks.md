@@ -37,9 +37,9 @@ closed command payload fields and `SessionEnd`'s one-second default/three-
 second maximum timeout. The installed command uses a one-second upstream
 limit but is designed to complete below 250 ms and fail open below one second.
 The receipt also contains a bounded runtime manifest (interpreter, entrypoint,
-`hook_runtime`, `pcc_enqueue`, `pcc_outbox`, `adapter_contract`, and
-`codex_adapter` hashes). Status reports `stale-runtime` when any installed
-hot-path file changes.
+`hook_runtime`, `pcc_enqueue`, `pcc_outbox`, `adapter_contract`,
+`codex_adapter`, and `pcc_hooks` hashes). Status reports `stale-runtime` when
+any installed or CLI hook hot-path file changes.
 
 Hooks are a trigger source, not the only recovery mechanism. Missed events,
 crashes, and source transitions are recovered by #6 reconciliation.

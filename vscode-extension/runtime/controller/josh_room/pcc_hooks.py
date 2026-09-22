@@ -343,6 +343,7 @@ _RUNTIME_MODULES = (
     "pcc_outbox.py",
     "adapter_contract.py",
     "codex_adapter.py",
+    "pcc_hooks.py",
 )
 
 
@@ -687,7 +688,7 @@ def _codex_hook_status_locked(config_path: Path | str | None = None) -> dict[str
         commands = _commands()
         expected = {event: _render_block(event, commands) for event in SUPPORTED_EVENTS}
         blocks, markers_well_formed = _blocks(text)
-        expected_commands = {str(commands["command"])} | _owned_commands(text, blocks)
+        expected_commands = _owned_commands(text, blocks)
         conflicts = _unowned_conflict(parsed, expected_commands)
         receipt = _read_receipt(path)
         receipt_commands = receipt.get("commands") if isinstance(receipt, dict) else None
@@ -772,7 +773,7 @@ def _install_locked(config_path: Path | str | None, *, repair: bool) -> dict[str
     blocks, markers_well_formed = _blocks(text)
     if not markers_well_formed:
         raise HookBoundaryError("partial-installation")
-    expected_commands = {str(commands["command"])} | _owned_commands(text, blocks)
+    expected_commands = _owned_commands(text, blocks)
     if _unowned_conflict(parsed, expected_commands):
         raise HookBoundaryError("conflicting-josh-room-hook")
     if blocks and not repair and all(sum(1 for block_event, _start, _end in blocks if block_event == event) == 1 and text[next(start for block_event, start, _end in blocks if block_event == event):next(end for block_event, _start, end in blocks if block_event == event)] == expected[event] for event in SUPPORTED_EVENTS):

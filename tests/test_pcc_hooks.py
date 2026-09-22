@@ -236,7 +236,7 @@ def test_status_detects_stale_runtime_manifest(tmp_path, monkeypatch):
     assert install_codex_hooks(config)["state"] == "healthy"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     files = receipt["commands"]["runtime_manifest"]["files"]
-    assert {"adapter_contract", "codex_adapter"} <= set(files)
+    assert {"adapter_contract", "codex_adapter", "pcc_hooks"} <= set(files)
     files["codex_adapter"]["sha256"] = "0" * 64
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     status = codex_hook_status(config)
@@ -304,3 +304,16 @@ def test_concurrent_installed_duplicate_processes_coalesce(tmp_path):
         ))
     assert all(result.returncode == 0 for result in results)
     assert len(list((outbox / "queue").glob("*.json"))) == 1
+
+
+def test_unowned_same_command_conflicts_with_install(tmp_path):
+    config = tmp_path / "config.toml"
+    command = json.dumps(hooks._commands()["command"])
+    config.write_text(
+        "[[hooks.Stop]]\nmatcher = \"*\"\n"
+        "[[hooks.Stop.hooks]]\ntype = \"command\"\n"
+        f"command = {command}\n",
+        encoding="utf-8",
+    )
+    result = install_codex_hooks(config)
+    assert result["state"] == "conflicting-josh-room-hook"
