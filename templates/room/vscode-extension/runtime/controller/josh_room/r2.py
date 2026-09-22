@@ -697,8 +697,8 @@ class R2Backend(ObjectStore):
                     if isinstance(error, ClientError) and _is_precondition(error):
                         try:
                             self._verify_evidence_remote(key, digest, size)
-                        except ValueError as mismatch:
-                            raise R2EvidenceConflict(retries=retries) from mismatch
+                        except (ValueError, ClientError, BotoCoreError, TimeoutError) as mismatch:
+                            raise self._duplicate_readback_failure(mismatch, retries) from mismatch
                         self._abort_evidence_upload(key, upload_id, retries)
                         upload_id = None
                         committed = True
@@ -722,11 +722,11 @@ class R2Backend(ObjectStore):
                         raise self._map_evidence_error(error, retries=retries) from error
                     try:
                         self._verify_evidence_remote(key, digest, size)
-                    except ValueError:
+                    except (ValueError, ClientError, BotoCoreError, TimeoutError) as mismatch:
                         self._abort_evidence_upload(key, upload_id, retries)
                         upload_id = None
                         if retries + 1 >= max_attempts:
-                            raise self._map_evidence_error(error, retries=retries) from error
+                            raise self._duplicate_readback_failure(mismatch, retries) from mismatch
                         retries += 1
                         continue
                     committed = True
