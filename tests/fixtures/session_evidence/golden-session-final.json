@@ -1,0 +1,18 @@
+{
+  "schema_name": "codex-session-evidence",
+  "schema_version": {"major": 1, "minor": 0},
+  "kind": "session-final",
+  "event_id": "evt-final-001",
+  "session_id": "session-recovered-001",
+  "source": {"surface": "desktop", "adapter": "codex.transcript", "adapter_version": "1.0", "codex_version": "0.1-synthetic"},
+  "profile_id": "profile-personal",
+  "workspace_id": "workspace-synthetic",
+  "device_id": "device-001",
+  "checkpoint": {"source": "codex.transcript", "representation": "archived-jsonl", "start": 0, "end": 8, "prefix_sha256": "a222222222222222222222222222222222222222222222222222222222222222"},
+  "last_segment_sha256": "b222222222222222222222222222222222222222222222222222222222222222",
+  "record_count": 8,
+  "content_sha256": "c222222222222222222222222222222222222222222222222222222222222222",
+  "content_size": 512,
+  "capture": {"status": "recovered", "policy_decision": "allow", "sensitivity": "normal", "counters": {"redacted": 0, "blocked": 0}},
+  "observed_at": "2026-09-22T00:01:00Z"
+}

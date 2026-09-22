@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/session-evidence-index-event.schema.json",
+  "title": "Session Evidence Envelope v1 index event",
+  "type": "object",
+  "additionalProperties": true,
+  "patternProperties": {"(^|_)path$": false},
+  "required": ["schema_name", "schema_version", "kind", "event_id", "evidence_kind", "evidence_event_id", "content_sha256", "ciphertext_sha256", "ciphertext_size", "content_type", "discovery"],
+  "properties": {"schema_name": {"const": "codex-session-evidence"}, "schema_version": {"$ref": "#/$defs/version"}, "kind": {"const": "index-event"}, "event_id": {"$ref": "#/$defs/identifier"}, "session_id": {"$ref": "#/$defs/identifier"}, "thread_id": {"$ref": "#/$defs/identifier"}, "turn_id": {"$ref": "#/$defs/identifier"}, "profile_id": {"$ref": "#/$defs/identifier"}, "workspace_id": {"$ref": "#/$defs/identifier"}, "device_id": {"$ref": "#/$defs/identifier"}, "evidence_kind": {"enum": ["session-segment", "session-asset", "session-final"]}, "evidence_event_id": {"$ref": "#/$defs/identifier"}, "content_sha256": {"$ref": "#/$defs/digest"}, "ciphertext_sha256": {"$ref": "#/$defs/digest"}, "ciphertext_size": {"type": "integer", "minimum": 0}, "content_type": {"enum": ["application/vnd.josh.codex-session-segment+json", "application/vnd.josh.codex-session-asset", "application/vnd.josh.codex-session-final+json", "application/vnd.josh.codex-index-event+json"]}, "discovery": {"$ref": "#/$defs/discovery"}}
+  ,"$defs": {"version": {"type": "object", "additionalProperties": false, "required": ["major", "minor"], "properties": {"major": {"const": 1}, "minor": {"type": "integer", "minimum": 0}}}, "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]*$"}, "timestamp": {"type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"}, "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "discovery": {"type": "object", "additionalProperties": false, "required": ["state", "observed_at"], "properties": {"state": {"enum": ["discovered", "uploaded", "quarantined", "retracted"]}, "observed_at": {"$ref": "#/$defs/timestamp"}}}}
+}

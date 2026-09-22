@@ -1,0 +1,3 @@
+{
+  "schema_name": "codex-session-evidence", "schema_version": {"major": 1, "minor": 0}, "kind": "session-segment", "event_id": "evt-malformed-repo", "repository": {"remote": "https://user:secret@example.invalid/repo", "commit": "not-a-commit", "branch": "../main", "dirty": "maybe"}, "checkpoint": {"source": "codex.transcript", "representation": "active-jsonl", "start": 0, "end": 1, "prefix_sha256": "a111111111111111111111111111111111111111111111111111111111111111"}, "record_count": 0, "content_sha256": "b111111111111111111111111111111111111111111111111111111111111111", "content_size": 0, "records": [], "capture": {"status": "partial", "policy_decision": "allow", "sensitivity": "normal", "counters": {"redacted": 0, "blocked": 0}}
+}

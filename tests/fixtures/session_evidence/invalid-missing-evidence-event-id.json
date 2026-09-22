@@ -1,0 +1,3 @@
+{
+  "schema_name": "codex-session-evidence", "schema_version": {"major": 1, "minor": 0}, "kind": "index-event", "event_id": "idx-missing-evidence", "evidence_kind": "session-segment", "content_sha256": "b111111111111111111111111111111111111111111111111111111111111111", "ciphertext_sha256": "d111111111111111111111111111111111111111111111111111111111111111", "ciphertext_size": 900, "content_type": "application/vnd.josh.codex-session-segment+json", "discovery": {"state": "uploaded", "observed_at": "2026-09-22T00:02:00Z"}
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/session-evidence-session-asset.schema.json",
+  "title": "Session Evidence Envelope v1 session asset",
+  "type": "object",
+  "additionalProperties": true,
+  "patternProperties": {"(^|_)path$": false},
+  "required": ["schema_name", "schema_version", "kind", "event_id", "asset_id", "source_event_id", "sha256", "size", "media_category", "content_type", "capture"],
+  "properties": {
+    "schema_name": {"const": "codex-session-evidence"}, "schema_version": {"$ref": "#/$defs/version"}, "kind": {"const": "session-asset"}, "event_id": {"$ref": "#/$defs/identifier"}, "session_id": {"$ref": "#/$defs/identifier"}, "thread_id": {"$ref": "#/$defs/identifier"}, "turn_id": {"$ref": "#/$defs/identifier"}, "profile_id": {"$ref": "#/$defs/identifier"}, "workspace_id": {"$ref": "#/$defs/identifier"}, "device_id": {"$ref": "#/$defs/identifier"}, "asset_id": {"$ref": "#/$defs/identifier"}, "source_event_id": {"$ref": "#/$defs/identifier"}, "sha256": {"$ref": "#/$defs/digest"}, "size": {"type": "integer", "minimum": 0}, "media_category": {"enum": ["image", "audio", "video", "document", "archive", "other", "unknown"]}, "content_type": {"type": "string", "minLength": 1}, "capture": {"$ref": "#/$defs/capture"}
+  },
+  "$defs": {
+    "version": {"type": "object", "additionalProperties": false, "required": ["major", "minor"], "properties": {"major": {"const": 1}, "minor": {"type": "integer", "minimum": 0}}},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._~-]*$"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "capture": {"type": "object", "additionalProperties": false, "required": ["status", "policy_decision", "sensitivity", "counters"], "properties": {"status": {"enum": ["partial", "complete", "recovered", "quarantined"]}, "policy_decision": {"enum": ["allow", "deny", "local-only", "quarantine"]}, "sensitivity": {"enum": ["normal", "sensitive", "unknown"]}, "counters": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}}}}
+  }
+}
