@@ -94,6 +94,7 @@ def enqueue_trigger(
     metadata: Mapping[str, object] | None = None,
     policy_decision: str = "allow",
     diagnostic_detail: object | None = None,
+    lock_timeout: float | None = None,
 ) -> QueueReceipt:
     """Enqueue through the #8 authority without duplicating queue semantics."""
 
@@ -105,6 +106,7 @@ def enqueue_trigger(
         metadata=metadata,
         policy_decision=policy_decision,
         diagnostic_detail=diagnostic_detail,
+        lock_timeout=lock_timeout,
     )
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 from .pcc_enqueue import canonical_source, enqueue_trigger
 
 _MAX = 64 * 1024
+_LOCK_TIMEOUT_SECONDS = 0.2
 _EVENTS = ("Stop", "SubagentStop", "SessionEnd")
 _EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
 _ADAPTER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -128,6 +129,7 @@ def process(payload: object) -> dict[str, object]:
             is_final=event == "SessionEnd",
             metadata={"source_surface": "subagent" if event == "SubagentStop" else "unknown", "source_adapter": "codex-transcript", "source_adapter_version": "1", "object_kind": "trigger"},
             policy_decision="local-only",
+            lock_timeout=_LOCK_TIMEOUT_SECONDS,
         )
         return {"ok": True, "accepted": receipt.state is not QueueState.CAPTURE_GAP, "event_id": event_id, "state": receipt.state.value}
     except (ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError):

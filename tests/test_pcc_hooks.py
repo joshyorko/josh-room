@@ -72,6 +72,37 @@ def test_runtime_latency_and_hostile_environment_boundary(tmp_path, monkeypatch)
     assert str(payload["transcript_path"]) not in serialized
 
 
+def test_runtime_lock_timeout_fails_open_before_one_second(tmp_path):
+    payload, roots = _fixture(tmp_path)
+    outbox = tmp_path / "outbox"
+    lock = outbox / "state.lock"
+    outbox.mkdir()
+    holder_code = (
+        "import fcntl,time; "
+        f"handle=open({str(lock)!r}, 'a+b'); "
+        "fcntl.flock(handle.fileno(), fcntl.LOCK_EX); time.sleep(2)"
+    )
+    holder = subprocess.Popen([sys.executable, "-c", holder_code])
+    try:
+        time.sleep(0.1)
+        env = {
+            "HOME": str(tmp_path),
+            "JOSH_ROOM_CODEX_ACTIVE_ROOT": str(roots.active),
+            "JOSH_ROOM_CODEX_ARCHIVED_ROOT": str(roots.archived),
+            "JOSH_ROOM_HOOK_OUTBOX": str(outbox),
+        }
+        command = [sys.executable, "-I", "-S", str(Path(__file__).parents[1] / "src/josh_room/hook_entrypoint.py")]
+        started = time.perf_counter()
+        result = subprocess.run(command, input=json.dumps(payload).encode(), cwd=tmp_path, env=env, capture_output=True, timeout=1, check=False)
+        elapsed = time.perf_counter() - started
+    finally:
+        holder.terminate()
+        holder.wait(timeout=1)
+    assert elapsed < 1
+    assert result.returncode == 0
+    assert not list((outbox / "queue").glob("*.json"))
+
+
 
 def test_runtime_accepts_multiline_assistant_message_without_storing_content(tmp_path):
     payload, roots = _fixture(tmp_path)
