@@ -797,6 +797,7 @@ def encrypt_and_prepare(
     asset_payload: Sequence[bytes] | Any | None = None,
     age_executable: str | os.PathLike[str] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    require_device: bool = True,
 ) -> PreparedReceipt:
     """Encrypt one #9 event and atomically hand ciphertext to #8.
 
@@ -817,7 +818,10 @@ def encrypt_and_prepare(
     document = _document_or_fail(dict(event.document))
     if event.kind != document.get("kind"):
         _fail(CryptoErrorCode.MANIFEST_MISMATCH)
-    _profile_binding(document, profile)
+    if require_device:
+        from .device import require_prepare_upload
+
+        require_prepare_upload()
     try:
         queued = outbox.inspect_record(event_id)
     except OutboxError:

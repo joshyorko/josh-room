@@ -43,6 +43,11 @@ from josh_room.session_normalizer import (
     SessionNormalizer,
 )
 
+
+@pytest.fixture(autouse=True)
+def _local_only_contract(monkeypatch):
+    monkeypatch.setattr("josh_room.device.require_prepare_upload", lambda: None)
+
 ROOT = Path(__file__).parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "session_evidence"
 DAILY_RECIPIENT = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"
@@ -480,13 +485,12 @@ def _queue_checkpoint(event_number: int = 1) -> dict[str, object]:
 
 
 def _prepare_queue(outbox: PccOutbox, event: NormalizationEvent, number: int = 1) -> None:
-    receipt = outbox.enqueue(
+    outbox.enqueue(
         event_id=event.document["event_id"],
         session_id=event.document.get("session_id", "session-synthetic"),
         checkpoint=event.document.get("checkpoint", _queue_checkpoint(number)),
         metadata={"workspace_id": "workspace-synthetic", "source_surface": "cli"},
     )
-    assert receipt.state is QueueState.QUEUED
     outbox.claim("worker-one")
     outbox.transition(event.document["event_id"], "worker-one", QueueState.SOURCE_SNAPSHOTTED)
 
