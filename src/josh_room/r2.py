@@ -726,6 +726,13 @@ class R2Backend(ObjectStore):
                 time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
         raise R2EvidenceRetryable(retries=retries)
 
+    def _validate_receipt_root(self) -> None:
+        if self.receipt_dir is None:
+            return
+        root = self.receipt_dir
+        if root.is_symlink() or root.exists() and (not root.is_dir() or stat.S_IMODE(root.lstat().st_mode) & 0o077):
+            raise R2EvidenceError("multipart-state-unavailable")
+
     def _validate_evidence_state_storage(self, path: Path) -> None:
         parent = path.parent
         if parent.exists():
@@ -742,6 +749,7 @@ class R2Backend(ObjectStore):
 
     @contextmanager
     def _evidence_lock(self, digest: str):
+        self._validate_receipt_root()
         root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence"
         if root.is_symlink() or root.exists() and not root.is_dir():
             raise R2EvidenceError("multipart-lock-unavailable")
@@ -780,6 +788,7 @@ class R2Backend(ObjectStore):
                 _msvcrt.locking(handle.fileno(), _msvcrt.LK_UNLCK, 1)
 
     def _load_evidence_state(self, key: str, digest: str, size: int) -> dict:
+        self._validate_receipt_root()
         path = self._evidence_state_path(digest)
         self._validate_evidence_state_storage(path)
         try:
@@ -846,6 +855,7 @@ class R2Backend(ObjectStore):
         return state
 
     def _save_evidence_state(self, state: dict) -> None:
+        self._validate_receipt_root()
         path = self._evidence_state_path(state["sha256"])
         encoded = json.dumps(state, separators=(",", ":"), sort_keys=True).encode()
         if len(encoded) > _MAX_EVIDENCE_STATE_BYTES:
