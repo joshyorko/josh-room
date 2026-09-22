@@ -308,14 +308,18 @@ def _validate_queue_binding(
         return
     source = document.get("source")
     if not isinstance(source, Mapping):
-        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
-    for metadata_key, document_key in (
-        ("source_surface", "surface"),
-        ("source_adapter", "adapter"),
-        ("source_adapter_version", "adapter_version"),
-    ):
-        if metadata.get(metadata_key) != source.get(document_key):
-            _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+        if kind == "session-asset":
+            source = None
+        else:
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if source is not None:
+        for metadata_key, document_key in (
+            ("source_surface", "surface"),
+            ("source_adapter", "adapter"),
+            ("source_adapter_version", "adapter_version"),
+        ):
+            if metadata.get(metadata_key) != source.get(document_key):
+                _fail(CryptoErrorCode.MANIFEST_MISMATCH)
 
     capture = document.get("capture")
     if not isinstance(capture, Mapping):
@@ -884,9 +888,9 @@ def encrypt_and_prepare(
     document = _document_or_fail(dict(event.document))
     if event.kind != document.get("kind"):
         _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+    _profile_binding(document, profile)
     if require_device:
         from .device import require_prepare_upload
-
         require_prepare_upload()
     try:
         queued = outbox.inspect_record(event_id)
