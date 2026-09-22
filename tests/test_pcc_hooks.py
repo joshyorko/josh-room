@@ -54,10 +54,13 @@ def test_runtime_rejects_path_escape_and_malformed_closed_input(tmp_path):
 
 def test_install_preserves_unrelated_hooks_and_remove_rolls_back(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
+    wrong_config = tmp_path / "wrong.toml"
     original = 'model = "synthetic"\n\n[[hooks.PreToolUse]]\nmatcher = "Bash"\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "echo unrelated"\n'
     config.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("JOSH_ROOM_CODEX_CONFIG", str(wrong_config))
     monkeypatch.setenv("JOSH_ROOM_HOOK_RECEIPT", str(tmp_path / "receipt.json"))
     assert install_codex_hooks(config)["state"] == "healthy"
+    assert not wrong_config.exists()
     assert "echo unrelated" in config.read_text(encoding="utf-8")
     assert all(event["count"] == 1 for event in codex_hook_status(config)["events"].values())
     assert remove_codex_hooks(config)["state"] == "missing"

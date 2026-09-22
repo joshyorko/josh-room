@@ -263,6 +263,7 @@ def codex_hook_main(stream: BinaryIO | TextIO | None = None, *, roots: CodexRoot
 def _config_path(config_path: Path | str | None) -> Path:
     if config_path is not None:
         path = Path(config_path)
+    else:
         explicit = os.environ.get("JOSH_ROOM_CODEX_CONFIG")
         path = Path(explicit) if explicit else _home() / ".codex" / "config.toml"
     if not path.is_absolute():
@@ -394,6 +395,20 @@ def _state_for(parsed: Mapping[str, object], config_path: Path, event: str) -> t
     return "untrusted", None
 
 
+def _owned_commands(text: str, blocks: list[tuple[str, int, int]]) -> set[str]:
+    owned: set[str] = set()
+    for _event, start, end in blocks:
+        for line in text[start:end].splitlines():
+            if line.startswith("command = "):
+                try:
+                    value = json.loads(line.removeprefix("command = "))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, str):
+                    owned.add(value)
+    return owned
+
+
 def _unowned_conflict(parsed: Mapping[str, object], expected_commands: set[str]) -> bool:
     for event in SUPPORTED_EVENTS:
         for group in _event_values(parsed, event):
@@ -473,7 +488,7 @@ def codex_hook_status(config_path: Path | str | None = None) -> dict[str, object
         commands = _commands()
         expected = {event: _render_block(event, commands) for event in SUPPORTED_EVENTS}
         blocks, markers_well_formed = _blocks(text)
-        expected_commands = {str(commands["command"])}
+        expected_commands = {str(commands["command"])} | _owned_commands(text, blocks)
         conflicts = _unowned_conflict(parsed, expected_commands)
         receipt = _read_receipt()
         events: dict[str, object] = {}
@@ -537,7 +552,7 @@ def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, objec
     blocks, markers_well_formed = _blocks(text)
     if not markers_well_formed:
         raise HookBoundaryError("partial-installation")
-    expected_commands = {str(commands["command"])}
+    expected_commands = {str(commands["command"])} | _owned_commands(text, blocks)
     if _unowned_conflict(parsed, expected_commands):
         raise HookBoundaryError("conflicting-josh-room-hook")
     if blocks and not repair:
@@ -567,6 +582,7 @@ def _install(config_path: Path | str | None, *, repair: bool) -> dict[str, objec
         "config_path": str(path),
         "original_exists": existed,
         "original_mode": original_mode,
+        "original_size": len(original_text.encode("utf-8")),
         "blocks": {event: hashlib.sha256(expected[event].encode("utf-8")).hexdigest() for event in SUPPORTED_EVENTS},
         "commands": {key: value for key, value in commands.items() if key.endswith("sha256")},
         "upstream_commit": UPSTREAM_CODEX_COMMIT,
@@ -611,6 +627,15 @@ def remove_codex_hooks(config_path: Path | str | None = None) -> dict[str, objec
                 if expected_hash and hashlib.sha256(text[start:end].encode("utf-8")).hexdigest() != expected_hash:
                     raise HookBoundaryError("owned-hook-modified")
             text = text[:start] + text[end:]
+        if (
+            exists
+            and isinstance(receipt, dict)
+            and receipt.get("original_exists") is True
+            and isinstance(receipt.get("original_size"), int)
+            and len(text.encode("utf-8")) == receipt["original_size"] + 1
+            and text.endswith("\n")
+        ):
+            text = text[:-1]
         if exists and not text.strip() and receipt is not None and receipt.get("original_exists") is False:
             path.unlink(missing_ok=True)
         else:
