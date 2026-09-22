@@ -37,7 +37,7 @@ os.chdir(_safe_home)
 _PACKAGE_PARENT = str(Path(__file__).resolve().parent.parent)
 sys.path[:] = [_PACKAGE_PARENT, *[item for item in sys.path[1:] if item and Path(item).is_absolute()]]
 
-from josh_room.pcc_hooks import codex_hook_main  # noqa: E402
+from josh_room.hook_runtime import main as codex_hook_main  # noqa: E402
 
 
 if __name__ == "__main__":
