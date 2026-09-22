@@ -1,0 +1,10 @@
+{
+  "logical_source": "codex.transcript",
+  "next_byte_offset": 9,
+  "next_record_index": 2,
+  "observed_size": 9,
+  "prefix_digest": "4a05a721f55fc6d9c5e0fffe8fe0112400951e2319d1c2de05da190a299a8349",
+  "representation": "active-jsonl",
+  "session_id": "session-one",
+  "source_id": "source-one"
+}
