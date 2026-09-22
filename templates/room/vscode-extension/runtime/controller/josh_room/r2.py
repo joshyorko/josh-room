@@ -4,10 +4,11 @@ import json
 import os
 import re
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-
+from typing import Callable
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
@@ -25,6 +26,7 @@ from .s3 import check_bucket_access as _check_bucket_access
 from .s3 import create_bucket as _create_bucket
 from .s3 import list_buckets as _list_buckets
 
+
 OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
 
 
@@ -32,6 +34,93 @@ class R2PublicationError(RuntimeError):
     def __init__(self, message: str, *, published: bool):
         self.published = published
         super().__init__(message)
+EVIDENCE_OBJECT_PREFIX = "evidence/objects/sha256/"
+EVIDENCE_INDEX_PREFIX = "evidence/index/v1/"
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_EVIDENCE_OBJECT_KEY = re.compile(r"^evidence/objects/sha256/([0-9a-f]{64})$")
+_EVIDENCE_INDEX_KEY = re.compile(r"^evidence/index/v1/([0-9a-f]{2})/([0-9a-f]{64})\.age$")
+_MAX_EVIDENCE_INDEX_PAGE = 1000
+
+
+class R2EvidenceError(R2PublicationError):
+    """Public-safe failure for the dedicated encrypted evidence namespace."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        published: bool = False,
+        source_preserved: bool = True,
+        retries: int = 0,
+    ):
+        self.code = code
+        self.source_preserved = source_preserved
+        self.retries = retries
+        super().__init__(f"evidence operation failed: {code}", published=published)
+
+
+class R2EvidenceConflict(R2EvidenceError):
+    def __init__(self, *, retries: int = 0):
+        super().__init__("immutable-conflict", retries=retries)
+
+
+class R2EvidenceReadbackMismatch(R2EvidenceError):
+    def __init__(self, *, published: bool = True, retries: int = 0):
+        super().__init__("readback-mismatch", published=published, retries=retries)
+
+
+class R2EvidenceRetryable(R2EvidenceError):
+    def __init__(self, code: str = "retry-exhausted", *, published: bool = False, retries: int = 0):
+        super().__init__(code, published=published, retries=retries)
+
+
+class R2EvidenceAbortFailure(R2EvidenceError):
+    def __init__(self, *, retries: int = 0):
+        super().__init__("multipart-abort-failed", retries=retries)
+
+
+class R2EvidenceMultipartConditionalUnsupported(R2EvidenceError):
+    def __init__(self, *, retries: int = 0):
+        super().__init__("multipart-conditional-create-unsupported", retries=retries)
+
+
+class R2EvidenceOutboxPrecondition(R2EvidenceError):
+    def __init__(self):
+        super().__init__("outbox-precondition")
+
+
+@dataclass(frozen=True, slots=True)
+class R2EvidenceMetrics:
+    bytes: int = 0
+    parts: int = 0
+    retries: int = 0
+    duplicate: bool = False
+    readback_verified: bool = False
+    orphaned: bool = False
+    latency_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class R2EvidenceReceipt:
+    key: str
+    ciphertext_sha256: str
+    ciphertext_size: int
+    metrics: R2EvidenceMetrics
+    recovery: str = "none"
+
+
+@dataclass(frozen=True, slots=True)
+class R2EvidenceIndexRef:
+    key: str
+    ciphertext_sha256: str
+    ciphertext_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class R2EvidencePublication:
+    evidence: R2EvidenceReceipt
+    index: R2EvidenceReceipt | None
+    committed: bool
 
 
 class R2Conflict(R2PublicationError):
@@ -103,6 +192,32 @@ def check_bucket_access(config: R2Config, bucket: str, client=None) -> str:
     return _check_bucket_access(client or client_for_config(config), bucket, "Cloudflare R2", error_type=BucketAccessDenied, context=config.dimension_id)
 
 
+def evidence_object_key(ciphertext_sha256: str) -> str:
+    if not isinstance(ciphertext_sha256, str) or not _DIGEST.fullmatch(ciphertext_sha256):
+        raise ValueError("invalid evidence ciphertext digest")
+    return f"{EVIDENCE_OBJECT_PREFIX}{ciphertext_sha256}"
+
+
+def evidence_index_key(ciphertext_sha256: str) -> str:
+    if not isinstance(ciphertext_sha256, str) or not _DIGEST.fullmatch(ciphertext_sha256):
+        raise ValueError("invalid evidence index digest")
+    return f"{EVIDENCE_INDEX_PREFIX}{ciphertext_sha256[:2]}/{ciphertext_sha256}.age"
+
+
+def validate_evidence_object_key(key: str) -> str:
+    match = _EVIDENCE_OBJECT_KEY.fullmatch(key)
+    if not match:
+        raise ValueError("invalid evidence object key")
+    return match.group(1)
+
+
+def validate_evidence_index_key(key: str) -> str:
+    match = _EVIDENCE_INDEX_KEY.fullmatch(key)
+    if not match or match.group(1) != match.group(2)[:2]:
+        raise ValueError("invalid evidence index key")
+    return match.group(2)
+
+
 class R2Backend(ObjectStore):
     def __init__(self, config: R2Config, client=None, receipt_dir: Path | None = None):
         if hasattr(config, "verify_tls"):
@@ -136,7 +251,446 @@ class R2Backend(ObjectStore):
         with path.open("rb") as source:
             return self._put_stream(key, source, size, digest)
 
-    def _put_stream(self, key: str, source, size: int, digest: str) -> ObjectRef:
+    def put_evidence_file(self, path: Path) -> R2EvidenceReceipt:
+        """Stream a durable ciphertext file into the opaque evidence namespace."""
+        path = Path(path)
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise R2EvidenceError("source-unavailable") from error
+        if path.is_symlink() or not path.is_file() or mode & 0o077:
+            raise R2EvidenceError("source-unavailable")
+        size = path.stat().st_size
+        digest = _file_digest(path)
+        key = evidence_object_key(digest)
+        return self._put_evidence(key, lambda: path.open("rb"), size, digest)
+
+    def put_evidence_stream(self, source, size: int, ciphertext_sha256: str) -> R2EvidenceReceipt:
+        """Stream a ciphertext reader; the supplied digest is independently read back."""
+        if type(size) is not int or size < 0:
+            raise ValueError("evidence size is invalid")
+        if not _DIGEST.fullmatch(ciphertext_sha256):
+            raise ValueError("invalid evidence ciphertext digest")
+        if not hasattr(source, "read"):
+            raise TypeError("evidence source is not readable")
+
+        def factory():
+            try:
+                source.seek(0)
+            except (AttributeError, OSError, ValueError):
+                if getattr(factory, "used", False):
+                    raise R2EvidenceRetryable("source-not-rewindable")
+            factory.used = True
+            return source
+
+        factory.used = False
+        factory.owns_source = False
+        return self._put_evidence(evidence_object_key(ciphertext_sha256), factory, size, ciphertext_sha256)
+    def get_evidence_bytes(self, key: str, expected_size: int | None = None) -> bytes:
+        digest = validate_evidence_object_key(key)
+        try:
+            self._verify_evidence_remote(key, digest, expected_size)
+        except ValueError as error:
+            raise R2EvidenceReadbackMismatch() from error
+        response = self.client.get_object(Bucket=self.config.bucket, Key=key)
+        body = response["Body"].read(self.config.max_bytes + 1)
+        if len(body) != int(response.get("ContentLength", -1)) or len(body) > self.config.max_bytes:
+            raise R2EvidenceReadbackMismatch()
+        if hashlib.sha256(body).hexdigest() != digest:
+            raise R2EvidenceReadbackMismatch()
+        return body
+    def download_evidence_file(self, key: str, destination: Path, expected_size: int) -> None:
+        digest = validate_evidence_object_key(key)
+        try:
+            self._verify_evidence_remote(key, digest, expected_size)
+        except ValueError as error:
+            raise R2EvidenceReadbackMismatch() from error
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+        temporary = Path(temporary_name)
+        observed = hashlib.sha256()
+        total = 0
+        try:
+            response = self.client.get_object(Bucket=self.config.bucket, Key=key)
+            with os.fdopen(fd, "wb") as output:
+                while True:
+                    chunk = response["Body"].read(min(self.config.multipart_chunk_size, 1024 * 1024))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    observed.update(chunk)
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if total != expected_size or observed.hexdigest() != digest:
+                raise R2EvidenceReadbackMismatch()
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def put_evidence_index_file(self, path: Path) -> R2EvidenceReceipt:
+        path = Path(path)
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise R2EvidenceError("source-unavailable") from error
+        if path.is_symlink() or not path.is_file() or mode & 0o077:
+            raise R2EvidenceError("source-unavailable")
+        size = path.stat().st_size
+        digest = _file_digest(path)
+        return self._put_evidence(evidence_index_key(digest), lambda: path.open("rb"), size, digest)
+
+    def put_evidence_index_bytes(self, ciphertext: bytes) -> R2EvidenceReceipt:
+        if not isinstance(ciphertext, bytes):
+            raise TypeError("evidence index ciphertext must be bytes")
+        digest = hashlib.sha256(ciphertext).hexdigest()
+        return self._put_evidence(evidence_index_key(digest), lambda: io.BytesIO(ciphertext), len(ciphertext), digest)
+
+    publish_index_event = put_evidence_index_bytes
+
+    def get_evidence_index_bytes(self, key: str) -> bytes:
+        digest = validate_evidence_index_key(key)
+        try:
+            self._verify_evidence_remote(key, digest, None)
+        except ValueError as error:
+            raise R2EvidenceReadbackMismatch() from error
+        response = self.client.get_object(Bucket=self.config.bucket, Key=key)
+        body = response["Body"].read(self.config.max_bytes + 1)
+        if hashlib.sha256(body).hexdigest() != digest:
+            raise R2EvidenceReadbackMismatch()
+        return body
+
+    def discover_evidence_indexes(self, *, max_events: int = 1000, page_size: int = 100) -> list[R2EvidenceIndexRef]:
+        """Discover only encrypted index keys under the fixed, opaque prefix."""
+        if type(max_events) is not int or not 0 < max_events <= 100_000:
+            raise ValueError("evidence discovery bound is invalid")
+        if type(page_size) is not int or not 0 < page_size <= _MAX_EVIDENCE_INDEX_PAGE:
+            raise ValueError("evidence page size is invalid")
+        result: dict[str, R2EvidenceIndexRef] = {}
+        token = None
+        seen_tokens: set[str] = set()
+        pages = 0
+        while pages < max_events:
+            kwargs = {
+                "Bucket": self.config.bucket,
+                "Prefix": EVIDENCE_INDEX_PREFIX,
+                "MaxKeys": min(page_size, max_events - len(result)),
+            }
+            if token is not None:
+                kwargs["ContinuationToken"] = token
+            try:
+                response = self.client.list_objects_v2(**kwargs)
+            except (BotoCoreError, ClientError, TimeoutError) as error:
+                raise self._map_evidence_error(error) from error
+            pages += 1
+            for item in response.get("Contents", ()) or ():
+                key = item.get("Key")
+                if not isinstance(key, str):
+                    continue
+                try:
+                    digest = validate_evidence_index_key(key)
+                except ValueError:
+                    continue
+                size = item.get("Size")
+                if type(size) is not int or size < 0 or size > self.config.max_bytes:
+                    continue
+                result.setdefault(key, R2EvidenceIndexRef(key, digest, size))
+                if len(result) >= max_events:
+                    break
+            if len(result) >= max_events or not response.get("IsTruncated"):
+                break
+            next_token = response.get("NextContinuationToken")
+            if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
+                break
+            seen_tokens.add(next_token)
+            token = next_token
+        return sorted(result.values(), key=lambda item: item.key)
+
+    put_evidence = put_evidence_file
+    get_evidence = get_evidence_bytes
+    discover_index_events = discover_evidence_indexes
+
+    def publish_outbox_evidence(
+        self,
+        outbox,
+        event_id: str,
+        owner: str,
+        *,
+        index_ciphertext: bytes | Path | None,
+    ) -> R2EvidencePublication:
+        """Drive #8's uploaded -> indexed -> committed seam without catalog writes."""
+        try:
+            queued = outbox.inspect_record(event_id)
+        except Exception as error:  # noqa: BLE001 - no untrusted outbox detail crosses the boundary
+            raise R2EvidenceOutboxPrecondition() from error
+        if queued is None or queued.owner != owner:
+            raise R2EvidenceOutboxPrecondition()
+        if queued.ciphertext_sha256 is None or queued.ciphertext_size is None:
+            raise R2EvidenceOutboxPrecondition()
+        evidence_key = evidence_object_key(queued.ciphertext_sha256)
+        prepared = outbox.prepared.inspect_record(event_id)
+        if prepared is None:
+            raise R2EvidenceOutboxPrecondition()
+        if hasattr(prepared, "ciphertext_file"):
+            source = outbox.prepared.directory / prepared.ciphertext_file
+            evidence = self.put_evidence_file(source)
+        else:
+            evidence = self.put_evidence_stream(io.BytesIO(prepared.ciphertext), prepared.ciphertext_size, prepared.ciphertext_sha256)
+        if evidence.key != evidence_key:
+            raise R2EvidenceOutboxPrecondition()
+        state = getattr(queued.state, "value", queued.state)
+        if state not in {"object-uploaded", "index-published", "committed"}:
+            queued = outbox.mark_uploaded(event_id, owner, object_key=evidence.key, ciphertext_size=evidence.ciphertext_size)
+        index = None
+        if state not in {"index-published", "committed"}:
+            if index_ciphertext is None:
+                return R2EvidencePublication(evidence, None, False)
+            if isinstance(index_ciphertext, Path):
+                index = self.put_evidence_index_file(index_ciphertext)
+            else:
+                index = self.put_evidence_index_bytes(index_ciphertext)
+            outbox.publish_index(event_id, owner, index_id=index.ciphertext_sha256)
+        if state != "committed":
+            outbox.commit(event_id, owner)
+        return R2EvidencePublication(evidence, index, True)
+
+    def _put_evidence(
+        self,
+        key: str,
+        source_factory: Callable[[], object],
+        size: int,
+        digest: str,
+    ) -> R2EvidenceReceipt:
+        if type(size) is not int or size < 0 or size > self.config.max_bytes:
+            raise ValueError("evidence object exceeds maximum size")
+        if key.startswith(EVIDENCE_OBJECT_PREFIX):
+            if validate_evidence_object_key(key) != digest:
+                raise ValueError("invalid evidence object key")
+        else:
+            if validate_evidence_index_key(key) != digest:
+                raise ValueError("invalid evidence index key")
+        started = time.monotonic()
+        if size < self.config.multipart_threshold:
+            return self._put_evidence_single(key, source_factory, size, digest, started)
+        return self._put_evidence_multipart(key, source_factory, size, digest, started)
+
+    def _put_evidence_single(self, key, source_factory, size, digest, started):
+        retries = 0
+        for attempt in range(max(1, self.config.max_attempts)):
+            source = None
+            try:
+                source = source_factory()
+                self.client.put_object(
+                    Bucket=self.config.bucket,
+                    Key=key,
+                    Body=source,
+                    ContentLength=size,
+                    IfNoneMatch="*",
+                    Metadata={"sha256": digest},
+                )
+                self._verify_evidence_remote(key, digest, size)
+                return R2EvidenceReceipt(
+                    key,
+                    digest,
+                    size,
+                    R2EvidenceMetrics(size, 1, retries, False, True, False, _latency_ms(started)),
+                )
+            except ClientError as error:
+                if _is_precondition(error):
+                    try:
+                        self._verify_evidence_remote(key, digest, size)
+                    except ValueError as mismatch:
+                        raise R2EvidenceConflict(retries=retries) from mismatch
+                    return R2EvidenceReceipt(
+                        key,
+                        digest,
+                        size,
+                        R2EvidenceMetrics(size, 1, retries, True, True, False, _latency_ms(started)),
+                    )
+                if not _is_retryable(error) or attempt + 1 >= max(1, self.config.max_attempts):
+                    raise self._map_evidence_error(error, retries=retries) from error
+                retries += 1
+            except ValueError as error:
+                raise R2EvidenceReadbackMismatch(published=True, retries=retries) from error
+            except (BotoCoreError, TimeoutError) as error:
+                if attempt + 1 >= max(1, self.config.max_attempts):
+                    try:
+                        self._verify_evidence_remote(key, digest, size)
+                    except ValueError:
+                        raise self._map_evidence_error(error, retries=retries) from error
+                    return R2EvidenceReceipt(
+                        key,
+                        digest,
+                        size,
+                        R2EvidenceMetrics(size, 1, retries, True, True, False, _latency_ms(started)),
+                    )
+                retries += 1
+            finally:
+                if source is not None and getattr(source_factory, "owns_source", True):
+                    try:
+                        source.close()
+                    except (AttributeError, OSError):
+                        pass
+            if retries:
+                time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
+        raise R2EvidenceRetryable(retries=retries)
+
+    def _put_evidence_multipart(self, key, source_factory, size, digest, started):
+        retries = 0
+        max_attempts = max(1, self.config.max_attempts)
+        for _upload_attempt in range(max_attempts):
+            source = None
+            upload_id = None
+            parts = []
+            committed = False
+            try:
+                try:
+                    upload_id = self.client.create_multipart_upload(
+                        Bucket=self.config.bucket,
+                        Key=key,
+                        Metadata={"sha256": digest},
+                    )["UploadId"]
+                except (ClientError, BotoCoreError, TimeoutError) as error:
+                    if not _is_retryable(error) or retries + 1 >= max_attempts:
+                        raise self._map_evidence_error(error, retries=retries) from error
+                    retries += 1
+                    time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
+                    continue
+                source = source_factory()
+                part_number = 1
+                while True:
+                    chunk = source.read(self.config.multipart_chunk_size)
+                    if not chunk:
+                        break
+                    if part_number > 10_000:
+                        raise R2EvidenceError("multipart-part-limit")
+                    part_retries = 0
+                    while True:
+                        try:
+                            result = self.client.upload_part(
+                                Bucket=self.config.bucket,
+                                Key=key,
+                                UploadId=upload_id,
+                                PartNumber=part_number,
+                                Body=chunk,
+                            )
+                            break
+                        except (ClientError, BotoCoreError, TimeoutError) as error:
+                            if not _is_retryable(error) or retries + 1 >= max_attempts:
+                                raise self._map_evidence_error(error, retries=retries) from error
+                            retries += 1
+                            part_retries += 1
+                            time.sleep(min(0.01 * (2 ** min(part_retries - 1, 4)), 0.1))
+                    parts.append({"ETag": result["ETag"], "PartNumber": part_number})
+                    part_number += 1
+                try:
+                    self.client.complete_multipart_upload(
+                        Bucket=self.config.bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                        MultipartUpload={"Parts": parts},
+                        IfNoneMatch="*",
+                    )
+                except (ClientError, BotoCoreError, TimeoutError) as error:
+                    if isinstance(error, ClientError) and _is_precondition(error):
+                        try:
+                            self._verify_evidence_remote(key, digest, size)
+                        except ValueError as mismatch:
+                            raise R2EvidenceConflict(retries=retries) from mismatch
+                        self._abort_evidence_upload(key, upload_id, retries)
+                        upload_id = None
+                        committed = True
+                        return R2EvidenceReceipt(
+                            key,
+                            digest,
+                            size,
+                            R2EvidenceMetrics(size, len(parts), retries, True, True, False, _latency_ms(started)),
+                            "duplicate-conflict-verified",
+                        )
+                    if error.__class__.__name__ == "ParamValidationError":
+                        raise R2EvidenceMultipartConditionalUnsupported(retries=retries) from error
+                    if not _is_retryable(error):
+                        raise self._map_evidence_error(error, retries=retries) from error
+                    try:
+                        self._verify_evidence_remote(key, digest, size)
+                    except ValueError:
+                        self._abort_evidence_upload(key, upload_id, retries)
+                        upload_id = None
+                        if retries + 1 >= max_attempts:
+                            raise self._map_evidence_error(error, retries=retries) from error
+                        retries += 1
+                        continue
+                    committed = True
+                    return R2EvidenceReceipt(
+                        key,
+                        digest,
+                        size,
+                        R2EvidenceMetrics(size, len(parts), retries, True, True, False, _latency_ms(started)),
+                        "ambiguous-complete-verified",
+                    )
+                self._verify_evidence_remote(key, digest, size)
+                committed = True
+                return R2EvidenceReceipt(
+                    key,
+                    digest,
+                    size,
+                    R2EvidenceMetrics(size, len(parts), retries, False, True, False, _latency_ms(started)),
+                )
+            except ValueError as error:
+                raise R2EvidenceReadbackMismatch(published=True, retries=retries) from error
+            except (ClientError, BotoCoreError, TimeoutError) as error:
+                if error.__class__.__name__ == "ParamValidationError":
+                    raise R2EvidenceMultipartConditionalUnsupported(retries=retries) from error
+                raise self._map_evidence_error(error, retries=retries) from error
+            finally:
+                if source is not None and getattr(source_factory, "owns_source", True):
+                    try:
+                        source.close()
+                    except (AttributeError, OSError):
+                        pass
+                if upload_id is not None and not committed:
+                    self._abort_evidence_upload(key, upload_id, retries)
+        raise R2EvidenceRetryable(retries=retries)
+
+    def _abort_evidence_upload(self, key: str, upload_id: str, retries: int) -> None:
+        try:
+            self.client.abort_multipart_upload(Bucket=self.config.bucket, Key=key, UploadId=upload_id)
+        except Exception as error:  # noqa: BLE001 - provider-specific abort failures are typed
+            raise R2EvidenceAbortFailure(retries=retries) from error
+
+    def _verify_evidence_remote(self, key: str, digest: str, size: int | None) -> None:
+        try:
+            head = self.client.head_object(Bucket=self.config.bucket, Key=key)
+        except ClientError as error:
+            if _not_found(error):
+                raise ValueError("evidence object is unavailable") from error
+            raise
+        observed_size = int(head.get("ContentLength", -1))
+        if observed_size > self.config.max_bytes or size is not None and observed_size != size:
+            raise ValueError("evidence object size mismatch")
+        response = self.client.get_object(Bucket=self.config.bucket, Key=key)
+        body = response["Body"]
+        observed = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = body.read(min(self.config.multipart_chunk_size, 1024 * 1024))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > self.config.max_bytes:
+                raise ValueError("evidence object exceeds maximum size")
+            observed.update(chunk)
+        if total != observed_size or observed.hexdigest() != digest:
+            raise ValueError("evidence object digest mismatch")
+
+    def _map_evidence_error(self, error, *, retries: int = 0):
+        code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
+        if code in {"ExpiredToken", "InvalidToken", "TokenRefreshRequired"}:
+            return R2EvidenceRetryable("credentials-expired", retries=retries)
+        if _is_retryable(error):
+            return R2EvidenceRetryable("retry-exhausted", retries=retries)
+        return R2EvidenceError("publication-unknown", published=True, retries=retries)
         if size < self.config.multipart_threshold:
             try:
                 self.client.put_object(Bucket=self.config.bucket, Key=key, Body=source, ContentLength=size, IfNoneMatch="*", Metadata={"sha256": digest})
@@ -381,6 +935,32 @@ def _is_precondition(error: ClientError) -> bool:
 def _not_found(error: ClientError) -> bool:
     return str(error.response.get("Error", {}).get("Code")) in {"404", "NoSuchKey", "NotFound"}
 
+
+
+def _is_retryable(error: BaseException) -> bool:
+    if isinstance(error, TimeoutError):
+        return True
+    if isinstance(error, ClientError):
+        code = str(error.response.get("Error", {}).get("Code"))
+        return code in {
+            "408",
+            "425",
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "SlowDown",
+            "RequestTimeout",
+            "InternalError",
+            "ServiceUnavailable",
+            "Throttling",
+        }
+    return isinstance(error, BotoCoreError)
+
+
+def _latency_ms(started: float) -> int:
+    return max(0, int((time.monotonic() - started) * 1000))
 
 def _validate_control_key(key: str) -> None:
     if not is_control_key(key):
