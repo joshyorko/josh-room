@@ -371,6 +371,11 @@ class R2Backend(ObjectStore):
         descriptor = -1
         try:
             candidate = Path(path)
+            current = candidate.parent
+            while current != current.parent:
+                if current.is_symlink():
+                    raise ValueError("source-private")
+                current = current.parent
             if candidate.is_symlink():
                 raise ValueError("source-private")
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -938,7 +943,10 @@ class R2Backend(ObjectStore):
             raise R2EvidenceError("multipart-state-bounded")
         if path.parent.is_symlink() or path.parent.exists() and not path.parent.is_dir():
             raise R2EvidenceError("multipart-state-unavailable")
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        except OSError as error:
+            raise R2EvidenceError("multipart-state-unavailable") from error
         try:
             os.chmod(path.parent, 0o700)
         except OSError as error:
@@ -946,17 +954,20 @@ class R2Backend(ObjectStore):
         self._validate_evidence_state_storage(path)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
-            with temporary.open("wb") as handle:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
                 handle.write(encoded)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.chmod(temporary, 0o600)
             os.replace(temporary, path)
             self._sync_evidence_directory(path.parent)
         except OSError as error:
             raise R2EvidenceError("multipart-state-unavailable") from error
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _clear_evidence_state(self, digest: str, final_key: str | None = None) -> bool:
         self._validate_receipt_root()
