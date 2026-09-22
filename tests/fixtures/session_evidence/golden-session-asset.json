@@ -1,0 +1,13 @@
+{
+  "schema_name": "codex-session-evidence",
+  "schema_version": {"major": 1, "minor": 0},
+  "kind": "session-asset",
+  "event_id": "evt-asset-001",
+  "asset_id": "asset-image-001",
+  "source_event_id": "evt-cli-001",
+  "sha256": "c111111111111111111111111111111111111111111111111111111111111111",
+  "size": 42,
+  "media_category": "image",
+  "content_type": "image/png",
+  "capture": {"status": "complete", "policy_decision": "allow", "sensitivity": "normal", "counters": {"redacted": 0, "blocked": 0}}
+}
