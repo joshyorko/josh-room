@@ -1101,6 +1101,23 @@ def codex_transcript_adapter(roots: CodexRoots, **kwargs: object) -> CodexTransc
     return CodexTranscriptAdapter(roots, **kwargs)
 
 
+def canonicalize_hook_path(roots: CodexRoots, facts: CodexHookFacts) -> tuple[str, str] | None:
+    """Canonicalize a hook path using the adapter boundary without reading it.
+
+    This is deliberately limited to the same path containment, symlink,
+    representation, and session checks used by source resolution.  It only
+    performs metadata/stat operations; transcript bytes are never opened.
+    """
+
+    if not isinstance(roots, CodexRoots) or not isinstance(facts, CodexHookFacts):
+        return None
+    adapter = CodexTranscriptAdapter(roots, hook_facts=facts)
+    candidate = adapter._candidate_from_path(facts.transcript_path, facts.session_id, facts)
+    if candidate is None:
+        return None
+    return candidate.source_id, candidate.representation
+
+
 __all__ = [
     "APPROVED_REPRESENTATION_TRANSITIONS",
     "SUPPORTED_REPRESENTATIONS",
@@ -1110,5 +1127,6 @@ __all__ = [
     "CodexHookFacts",
     "CodexRoots",
     "CodexTranscriptAdapter",
+    "canonicalize_hook_path",
     "codex_transcript_adapter",
 ]

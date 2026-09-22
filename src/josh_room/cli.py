@@ -82,6 +82,14 @@ from .operations import (
     repair_workspace,
     serve_snapshot,
 )
+from .pcc_hooks import (
+    codex_hook_main,
+    codex_hook_status,
+    install_codex_hooks,
+    process_codex_hook,
+    remove_codex_hooks,
+    repair_codex_hooks,
+)
 from .progress import report_progress
 from .tls import initialize_system_trust
 from .workspace_state import local_status
@@ -250,6 +258,18 @@ def build_parser() -> argparse.ArgumentParser:
     encryption_initialize.add_argument("--recovery-handoff", type=Path)
     encryption_initialize.add_argument("--material-handoff", type=Path)
     _json_option(encryption_initialize)
+    harvest = commands.add_parser("harvest")
+    harvest_commands = harvest.add_subparsers(dest="harvest_command", required=True)
+    harvest_hooks = harvest_commands.add_parser("hooks")
+    harvest_hook_commands = harvest_hooks.add_subparsers(dest="harvest_hooks_command", required=True)
+    for action in ("install", "status", "repair", "remove"):
+        hook_action = harvest_hook_commands.add_parser(action)
+        hook_action.add_argument("--tool", required=True, choices=("codex",))
+        _json_option(hook_action)
+    hook = commands.add_parser("hook")
+    hook_commands = hook.add_subparsers(dest="hook_command", required=True)
+    hook_codex = hook_commands.add_parser("codex")
+    _json_option(hook_codex)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(status)
@@ -375,15 +395,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:2] == ["hook", "codex"]:
+        return codex_hook_main()
     initialize_system_trust()
     args = build_parser().parse_args(argv)
     instance = _instance_root()
     try:
         runtime_loaded = False
         scoped_minio = _uses_minio_encryption(args)
-        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption"} or scoped_minio else _identity_environment()
+        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "harvest", "hook"} or scoped_minio else _identity_environment()
         with identity_context:
-            if args.command not in {"auth", "setup", "encryption"} and not scoped_minio:
+            if args.command not in {"auth", "setup", "encryption", "harvest", "hook"} and not scoped_minio:
                 runtime_loaded = load_runtime_session()
             with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext():
                 if _requires_oauth(args):
@@ -712,6 +735,23 @@ def _bucket_operation(args, config):
 
 
 def dispatch(args, instance: Path) -> dict:
+    if args.command == "hook":
+        if args.hook_command != "codex":
+            raise ValueError("unsupported hook")
+        return process_codex_hook(json.load(sys.stdin))
+    if args.command == "harvest":
+        if args.harvest_command != "hooks" or args.tool != "codex":
+            raise ValueError("unsupported harvest hook")
+        action = args.harvest_hooks_command
+        if action == "install":
+            return install_codex_hooks()
+        if action == "status":
+            return codex_hook_status()
+        if action == "repair":
+            return repair_codex_hooks()
+        if action == "remove":
+            return remove_codex_hooks()
+        raise ValueError("unsupported harvest hook action")
     if args.command == "encryption":
         if args.encryption_command == "recovery":
             if args.recovery_command != "generate":
@@ -1848,6 +1888,10 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
                 catalog_ok = False
     record("catalog", catalog_ok, "Create the first snapshot or verify that the encrypted private R2 catalog is readable.")
 
+    hook_report = codex_hook_status()
+    hook_ok = hook_report.get("state") == "healthy" and hook_report.get("trust") == "trusted"
+    hook_detail = hook_report.get("state", "unavailable")
+    record("codex-hooks", hook_ok, "Run josh-room harvest hooks install --tool codex and trust the installed hooks in Codex.", detail=hook_detail)
     executable = None if ide == "terminal" else ("code-insiders" if ide == "vscode-insiders" else "code")
     record("ide", extension_mode or executable is None or shutil.which(executable), f"Install {executable} or use --ide terminal.")
     result = {
