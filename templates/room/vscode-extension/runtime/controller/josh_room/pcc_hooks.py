@@ -331,10 +331,14 @@ def _trusted_file(path: Path) -> tuple[Path, str]:
         if path.is_symlink() or not path.is_file():
             raise HookBoundaryError("executable-untrusted")
         info = path.stat()
-        if os.name != "nt" and hasattr(os, "getuid") and info.st_uid != os.getuid():
-            # Root-owned system Python is trusted; writable user files are not.
-            if not (info.st_uid == 0 and not (info.st_mode & 0o022)):
-                raise HookBoundaryError("executable-untrusted")
+        # Root-owned system Python is trusted; writable user files are not.
+        if (
+            os.name != "nt"
+            and hasattr(os, "getuid")
+            and info.st_uid != os.getuid()
+            and not (info.st_uid == 0 and not (info.st_mode & 0o022))
+        ):
+            raise HookBoundaryError("executable-untrusted")
         if os.name != "nt" and info.st_mode & 0o022:
             raise HookBoundaryError("executable-untrusted")
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -838,7 +842,7 @@ def repair_codex_hooks(config_path: Path | str | None = None) -> dict[str, objec
 def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[str, object]:
     try:
         path = _config_path(config_path)
-        text, parsed, exists = _read_config(path)
+        text, _, exists = _read_config(path)
         original_config_text = text
         blocks, well_formed = _blocks(text)
         receipt = _read_receipt(path)
@@ -896,7 +900,7 @@ def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[st
                 tomllib.loads(text) if text.strip() else None
                 _write_config(path, text, existed=exists, mode=original_config_mode)
             _remove_receipt(path)
-        except (AttributeError, ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError) as error:
+        except (AttributeError, ImportError, KeyError, OSError, RecursionError, RuntimeError, TypeError, UnicodeError, ValueError):
             try:
                 if exists:
                     _write_config(path, original_config_text, existed=True, mode=original_config_mode)
