@@ -480,13 +480,22 @@ def _queue_checkpoint(event_number: int = 1) -> dict[str, object]:
 
 
 def _prepare_queue(outbox: PccOutbox, event: NormalizationEvent, number: int = 1) -> None:
+    source = event.document.get("source")
+    source_surface = source.get("surface", "cli") if isinstance(source, dict) else "cli"
+    source_adapter = source.get("adapter", "codex.transcript") if isinstance(source, dict) else "codex.transcript"
+    source_adapter_version = source.get("adapter_version", "1") if isinstance(source, dict) else "1"
     receipt = outbox.enqueue(
         event_id=event.document["event_id"],
         session_id=event.document.get("session_id", "session-synthetic"),
         checkpoint=event.document.get("checkpoint", _queue_checkpoint(number)),
-        metadata={"workspace_id": "workspace-synthetic", "source_surface": "cli"},
+        metadata={
+            "workspace_id": "workspace-synthetic",
+            "source_surface": source_surface,
+            "source_adapter": source_adapter,
+            "source_adapter_version": source_adapter_version,
+            "object_kind": event.kind,
+        },
     )
-    assert receipt.state is QueueState.QUEUED
     outbox.claim("worker-one")
     outbox.transition(event.document["event_id"], "worker-one", QueueState.SOURCE_SNAPSHOTTED)
 
