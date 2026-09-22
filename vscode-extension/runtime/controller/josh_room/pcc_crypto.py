@@ -275,31 +275,37 @@ def _validate_queue_binding(
 ) -> None:
     """Bind the #8 queue record to the exact normalized #9 event."""
 
+    kind = document.get("kind")
     document_session = document.get("session_id")
     if (
         queued.event_id != document.get("event_id")
         or queued.event_id not in queued.event_ids
-        or not isinstance(document_session, str)
-        or queued.session_id != document_session
+        or event.kind != kind
+        or kind != "index-event"
+        and (not isinstance(document_session, str) or queued.session_id != document_session)
         or (
-            "checkpoint" in document
+            kind != "index-event"
+            and "checkpoint" in document
             and queued.checkpoint != document["checkpoint"]
         )
-        or event.kind != document.get("kind")
     ):
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
 
     metadata = queued.metadata
     expected_workspace = document.get("workspace_id")
-    if not isinstance(expected_workspace, str) or metadata.get("workspace_id") != expected_workspace:
+    if kind != "index-event" and (
+        not isinstance(expected_workspace, str) or metadata.get("workspace_id") != expected_workspace
+    ):
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
-    if metadata.get("object_kind") != document.get("kind"):
+    if metadata.get("object_kind") != kind:
         _fail(CryptoErrorCode.MANIFEST_MISMATCH)
     if metadata.get("destination_class") != profile.destination.kind:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
     if profile.destination.binding_id is not None and metadata.get("destination_binding_id") != profile.destination.binding_id:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
 
+    if kind == "index-event":
+        return
     source = document.get("source")
     if not isinstance(source, Mapping):
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
@@ -322,7 +328,6 @@ def _validate_queue_binding(
             _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
     if "sensitivity" in capture and metadata.get("sensitivity") != capture["sensitivity"]:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
-
 
 
 def _references(document: Mapping[str, Any]) -> dict[str, Any]:
