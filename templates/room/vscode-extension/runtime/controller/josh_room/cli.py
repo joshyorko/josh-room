@@ -85,7 +85,6 @@ from .operations import (
     repair_workspace,
     serve_snapshot,
 )
-from .pcc_outbox import PccOutbox
 from .pcc_hooks import (
     codex_hook_main,
     codex_hook_status,
@@ -94,6 +93,7 @@ from .pcc_hooks import (
     remove_codex_hooks,
     repair_codex_hooks,
 )
+from .pcc_outbox import PccOutbox
 from .progress import report_progress
 from .tls import initialize_system_trust
 from .workspace_state import local_status
