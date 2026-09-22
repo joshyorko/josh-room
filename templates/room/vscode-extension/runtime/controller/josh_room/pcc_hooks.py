@@ -523,21 +523,46 @@ def _owned_commands(text: str, blocks: list[tuple[str, int, int]]) -> set[str]:
                 if isinstance(value, str):
                     owned.add(value)
     return owned
+def _owned_command_counts(text: str, blocks: list[tuple[str, int, int]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for _event, start, end in blocks:
+        for line in text[start:end].splitlines():
+            if not line.startswith("command = "):
+                continue
+            try:
+                value = json.loads(line.removeprefix("command = "))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, str):
+                counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
-def _unowned_conflict(parsed: Mapping[str, object], expected_commands: set[str]) -> bool:
+def _unowned_conflict(
+    parsed: Mapping[str, object],
+    expected_commands: set[str],
+    owned_counts: Mapping[str, int] | None = None,
+) -> bool:
+    seen_owned: dict[str, int] = {}
     for event in SUPPORTED_EVENTS:
         for group in _event_values(parsed, event):
             for handler in group.get("hooks", []) if isinstance(group.get("hooks", []), list) else []:
                 if not isinstance(handler, dict) or handler.get("type") != "command":
                     continue
                 command = handler.get("command")
-                if not isinstance(command, str) or command in expected_commands:
+                if not isinstance(command, str):
+                    continue
+                if command in expected_commands:
+                    seen_owned[command] = seen_owned.get(command, 0) + 1
+                    if owned_counts is not None and seen_owned[command] > owned_counts.get(command, 0):
+                        return True
                     continue
                 lowered = command.lower()
                 if "josh-room" in lowered or "josh_room" in lowered:
                     return True
     return False
+
+
 
 
 def _write_config(path: Path, text: str, *, existed: bool, mode: int | None = None) -> None:
@@ -689,7 +714,7 @@ def _codex_hook_status_locked(config_path: Path | str | None = None) -> dict[str
         expected = {event: _render_block(event, commands) for event in SUPPORTED_EVENTS}
         blocks, markers_well_formed = _blocks(text)
         expected_commands = _owned_commands(text, blocks)
-        conflicts = _unowned_conflict(parsed, expected_commands)
+        conflicts = _unowned_conflict(parsed, expected_commands, _owned_command_counts(text, blocks))
         receipt = _read_receipt(path)
         receipt_commands = receipt.get("commands") if isinstance(receipt, dict) else None
         expected_manifest = commands.get("runtime_manifest")
@@ -774,7 +799,7 @@ def _install_locked(config_path: Path | str | None, *, repair: bool) -> dict[str
     if not markers_well_formed:
         raise HookBoundaryError("partial-installation")
     expected_commands = _owned_commands(text, blocks)
-    if _unowned_conflict(parsed, expected_commands):
+    if _unowned_conflict(parsed, expected_commands, _owned_command_counts(text, blocks)):
         raise HookBoundaryError("conflicting-josh-room-hook")
     if blocks and not repair and all(sum(1 for block_event, _start, _end in blocks if block_event == event) == 1 and text[next(start for block_event, start, _end in blocks if block_event == event):next(end for block_event, _start, end in blocks if block_event == event)] == expected[event] for event in SUPPORTED_EVENTS):
         return _codex_hook_status_locked(path)
@@ -788,8 +813,6 @@ def _install_locked(config_path: Path | str | None, *, repair: bool) -> dict[str
         text += "\n"
     if text and not text.endswith("\n\n"):
         text += "\n"
-    for event in SUPPORTED_EVENTS:
-        text += expected[event]
     try:
         tomllib.loads(text)
     except tomllib.TOMLDecodeError:
@@ -863,7 +886,7 @@ def repair_codex_hooks(config_path: Path | str | None = None) -> dict[str, objec
 def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[str, object]:
     try:
         path = _config_path(config_path)
-        text, _, exists = _read_config(path)
+        text, parsed, exists = _read_config(path)
         original_config_text = text
         blocks, well_formed = _blocks(text)
         receipt = _read_receipt(path)
@@ -874,6 +897,9 @@ def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[st
             raise HookBoundaryError("partial-installation")
         if not blocks:
             return _codex_hook_status_locked(path)
+        expected_commands = _owned_commands(text, blocks)
+        if _unowned_conflict(parsed, expected_commands, _owned_command_counts(text, blocks)):
+            raise HookBoundaryError("conflicting-josh-room-hook")
         if not isinstance(receipt, dict):
             raise HookBoundaryError("ownership-uncertain")
         required = {
