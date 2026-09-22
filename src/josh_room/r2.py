@@ -743,7 +743,14 @@ class R2Backend(ObjectStore):
         if self.receipt_dir is None:
             return
         root = self.receipt_dir
-        if root.is_symlink() or root.exists() and (not root.is_dir() or stat.S_IMODE(root.lstat().st_mode) & 0o077):
+        current = root
+        while current != current.parent:
+            if current.exists():
+                current_stat = current.lstat()
+                if stat.S_ISLNK(current_stat.st_mode) or not stat.S_ISDIR(current_stat.st_mode):
+                    raise R2EvidenceError("multipart-state-unavailable")
+            current = current.parent
+        if root.is_symlink() or root.exists() and stat.S_IMODE(root.lstat().st_mode) & 0o077:
             raise R2EvidenceError("multipart-state-unavailable")
 
     def _validate_evidence_state_storage(self, path: Path) -> None:
@@ -756,6 +763,17 @@ class R2Backend(ObjectStore):
             state_stat = path.lstat()
             if stat.S_ISLNK(state_stat.st_mode) or not stat.S_ISREG(state_stat.st_mode) or stat.S_IMODE(state_stat.st_mode) & 0o077:
                 raise R2EvidenceError("multipart-state-unavailable")
+    @staticmethod
+    def _sync_evidence_directory(directory: Path) -> None:
+        if os.name != "posix":
+            return
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        descriptor = os.open(directory, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
     def _evidence_state_path(self, digest: str, final_key: str | None = None) -> Path:
         root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence-state"
         identity = final_key or digest
@@ -895,12 +913,7 @@ class R2Backend(ObjectStore):
                 os.fsync(handle.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, path)
-            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            descriptor = os.open(path.parent, flags)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+            self._sync_evidence_directory(path.parent)
         except OSError as error:
             raise R2EvidenceError("multipart-state-unavailable") from error
         finally:
@@ -910,12 +923,7 @@ class R2Backend(ObjectStore):
         path = self._evidence_state_path(digest, final_key)
         try:
             path.unlink(missing_ok=True)
-            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            descriptor = os.open(path.parent, flags)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+            self._sync_evidence_directory(path.parent)
         except OSError:
             return False
         return True
@@ -1242,6 +1250,9 @@ class R2Backend(ObjectStore):
         return observed_size
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") if isinstance(error, ClientError) else None
+        if not code and status is not None:
+            code = str(status)
         if isinstance(error, TimeoutError) or error.__class__.__name__ in {"ReadTimeoutError", "ConnectTimeoutError"} or code in {"408", "RequestTimeout", "504", "GatewayTimeout"}:
             return R2EvidenceTimeout(published=published, retries=retries)
         if code in {"429", "SlowDown", "Throttling", "TooManyRequests"}:
