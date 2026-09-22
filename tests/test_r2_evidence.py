@@ -13,7 +13,7 @@ from josh_room.r2 import (
     R2Backend,
     R2Config,
     R2EvidenceAbortFailure,
-    R2EvidenceConflict,
+    R2EvidenceError,
     R2EvidenceReadbackMismatch,
     evidence_claim_key,
     evidence_index_key,
@@ -265,6 +265,23 @@ def test_concurrent_claim_fence_allows_distinct_digests_and_one_same_key(tmp_pat
     assert results
     assert all(item.key == results[0].key for item in results)
 
+
+def test_multipart_state_symlink_is_rejected(tmp_path):
+    fake = EvidenceS3()
+    store = backend(fake, threshold=2, chunk=4, receipt_dir=tmp_path / "state")
+    payload = b"state symlink"
+    source = tmp_path / "ciphertext.age"
+    source.write_bytes(payload)
+    source.chmod(0o600)
+    digest = hashlib.sha256(payload).hexdigest()
+    key = evidence_object_key(digest)
+    state_path = store._evidence_state_path(digest, key)
+    state_path.parent.mkdir(mode=0o700, parents=True)
+    target = state_path.with_suffix(".target")
+    target.write_text("{}")
+    state_path.symlink_to(target)
+    with pytest.raises(R2EvidenceError):
+        store.put_evidence_file(source)
 
 def test_abort_failure_is_typed_and_source_remains_durable(tmp_path):
     fake = EvidenceS3()

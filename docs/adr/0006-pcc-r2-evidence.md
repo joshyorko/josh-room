@@ -27,7 +27,7 @@ conditional completion header. The fence object is retained as a bounded immutab
 a writer that has lost its local claim state reports a public-safe conflict rather than
 stealing or replacing the claim. A resumed writer reuses its local upload id and completed
 part tokens when present, and recreates an aborted/expired MPU under the same fence.
-State is atomic, mode-0600, digest-keyed, and bounded to 10,000 parts.
+State is atomic, mode-0600, final-key-bound, and bounded to 10,000 parts.
 
 After any ambiguous completion, the writer stream-reads the final object and verifies the
 exact SHA-256 and size. A verified final object is never rewritten. Ambiguous state is
@@ -65,4 +65,5 @@ abort failure.
 - [R2 conditional extensions](https://developers.cloudflare.com/r2/api/s3/extensions/index.md),
   last updated 2026-06-08: destination conditional headers exist for `CopyObject` as a
   beta extension. This implementation does not substitute that path for multipart
-  completion; digest-derived `PutObject` fencing is the provider-supported race guard.
+  completion; protocol plus full-final-key-bound `PutObject` fencing is the provider-supported
+  race guard.

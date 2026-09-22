@@ -378,7 +378,7 @@ class R2Backend(ObjectStore):
             source = os.fdopen(descriptor, "rb")
             descriptor = -1
             before = os.fstat(source.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077:
+            if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077 or before.st_nlink != 1:
                 raise ValueError("source-private")
             staged = tempfile.TemporaryFile(mode="w+b")
             digest = hashlib.sha256()
@@ -624,6 +624,9 @@ class R2Backend(ObjectStore):
             except ValueError as error:
                 if index_ciphertext is None:
                     raise R2EvidenceReadbackMismatch(published=False) from error
+                candidate_digest = _file_digest(index_ciphertext) if isinstance(index_ciphertext, Path) else hashlib.sha256(index_ciphertext).hexdigest() if isinstance(index_ciphertext, bytes) else None
+                if candidate_digest != queued.index_id:
+                    raise R2EvidenceOutboxPrecondition()
                 if isinstance(index_ciphertext, Path):
                     index = self.put_evidence_index_file(index_ciphertext)
                 else:
@@ -828,6 +831,7 @@ class R2Backend(ObjectStore):
     def _load_evidence_state(self, key: str, digest: str, size: int) -> dict:
         self._validate_receipt_root()
         path = self._evidence_state_path(digest, key)
+        self._validate_evidence_state_storage(path)
         try:
             raw = path.read_bytes()
         except FileNotFoundError:
@@ -859,6 +863,7 @@ class R2Backend(ObjectStore):
             raise R2EvidenceConflict("multipart-state-invalid")
         if (
             type(state["version"]) is not int
+            or state["version"] != 1
             or type(state["key"]) is not str
             or state["key"] != key
             or type(state["sha256"]) is not str
@@ -920,7 +925,9 @@ class R2Backend(ObjectStore):
             temporary.unlink(missing_ok=True)
 
     def _clear_evidence_state(self, digest: str, final_key: str | None = None) -> bool:
+        self._validate_receipt_root()
         path = self._evidence_state_path(digest, final_key)
+        self._validate_evidence_state_storage(path)
         try:
             path.unlink(missing_ok=True)
             self._sync_evidence_directory(path.parent)
@@ -1251,7 +1258,7 @@ class R2Backend(ObjectStore):
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
         status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") if isinstance(error, ClientError) else None
-        if not code and status is not None:
+        if status is not None and str(status) in {"401", "403", "408", "429", "500", "502", "503", "504"}:
             code = str(status)
         if isinstance(error, TimeoutError) or error.__class__.__name__ in {"ReadTimeoutError", "ConnectTimeoutError"} or code in {"408", "RequestTimeout", "504", "GatewayTimeout"}:
             return R2EvidenceTimeout(published=published, retries=retries)
@@ -1478,6 +1485,9 @@ def _is_retryable(error: BaseException) -> bool:
         return True
     if isinstance(error, ClientError):
         code = str(error.response.get("Error", {}).get("Code"))
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if status is not None:
+            code = code or str(status)
         return code in {
             "408",
             "425",
