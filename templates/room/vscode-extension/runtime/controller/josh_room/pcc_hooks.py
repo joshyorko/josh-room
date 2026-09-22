@@ -576,7 +576,7 @@ def _write_receipt(receipt: Mapping[str, object]) -> None:
     config_path = receipt.get("config_path")
     config_value = config_path if isinstance(config_path, str) else None
     path = _receipt_path(config_value)
-    existing = _read_receipt(config_value)
+    existing = _read_receipt(config_value, verify_config=False)
     if isinstance(existing, dict) and existing.get("config_path") != config_path:
         raise HookBoundaryError("receipt-collision")
     _write_config(path, json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n", existed=path.exists(), mode=0o600)
@@ -624,7 +624,7 @@ def _restore_file(path: Path, snapshot: tuple[bool, bytes, int]) -> None:
 
 
 
-def _read_receipt(config_path: Path | str | None = None) -> dict[str, object] | None:
+def _read_receipt(config_path: Path | str | None = None, *, verify_config: bool = True) -> dict[str, object] | None:
     path = _receipt_path(config_path)
     if not path.exists() or path.is_symlink() or not path.is_file():
         return None
@@ -642,7 +642,7 @@ def _read_receipt(config_path: Path | str | None = None) -> dict[str, object] | 
         return None
     if not isinstance(value, dict):
         return None
-    if config_path is not None and value.get("config_path") != str(Path(config_path)):
+    if verify_config and config_path is not None and value.get("config_path") != str(Path(config_path)):
         return None
     return value
 
