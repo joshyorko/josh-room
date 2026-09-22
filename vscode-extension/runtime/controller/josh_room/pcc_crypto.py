@@ -6,6 +6,7 @@ contracts.  This module never logs or includes recipient values in errors.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -32,7 +33,17 @@ from .session_evidence import (
 from .session_normalizer import NormalizationEvent
 
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
-_RECIPIENT = re.compile(r"^age1[0-9a-z]{58}$")
+_NATIVE_RECIPIENT = re.compile(r"^age1[0-9a-z]{58}$")
+_PLUGIN_RECIPIENT = re.compile(r"^AGE-PLUGIN-[A-Za-z0-9][A-Za-z0-9._-]{0,4094}$")
+_SSH_RECIPIENT_TYPES = frozenset(
+    {
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+        "ssh-ed25519",
+        "ssh-rsa",
+    }
+)
 _REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$")
 _FORMAT = "josh-room.pcc-evidence"
 _FORMAT_VERSION = 1
@@ -107,13 +118,54 @@ def _fail(code: CryptoErrorCode) -> None:
 def _valid_recipient(value: object) -> bool:
     if not isinstance(value, str) or not value or len(value) > 4096:
         return False
-    if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+    if value != value.strip() or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
         return False
     return not value.upper().startswith("AGE-SECRET-KEY-")
 
 
-def _recipient_kind_supported(value: str) -> bool:
-    return bool(_RECIPIENT.fullmatch(value))
+def _canonicalize_recipient(value: object) -> str:
+    """Validate and canonicalize recipient forms supported by age itself."""
+
+    if not _valid_recipient(value):
+        _fail(CryptoErrorCode.RECIPIENT_INVALID)
+    assert isinstance(value, str)
+    if value.startswith("age1"):
+        if not _NATIVE_RECIPIENT.fullmatch(value):
+            _fail(CryptoErrorCode.RECIPIENT_INVALID)
+        try:
+            from .encryption_domain import validate_recipient
+
+            validate_recipient(value)
+        except (ImportError, TypeError, ValueError):
+            _fail(CryptoErrorCode.RECIPIENT_INVALID)
+        return value
+
+    parts = value.split()
+    if parts and parts[0] in _SSH_RECIPIENT_TYPES:
+        if len(parts) < 2:
+            _fail(CryptoErrorCode.RECIPIENT_INVALID)
+        try:
+            decoded = base64.b64decode(parts[1], validate=True)
+        except (ValueError, TypeError):
+            _fail(CryptoErrorCode.RECIPIENT_INVALID)
+        key_type = parts[0].encode("ascii")
+        if len(decoded) < 5 or int.from_bytes(decoded[:4], "big") != len(key_type):
+            _fail(CryptoErrorCode.RECIPIENT_INVALID)
+        if decoded[4 : 4 + len(key_type)] != key_type or len(decoded) <= 4 + len(key_type):
+            _fail(CryptoErrorCode.RECIPIENT_INVALID)
+        # SSH comments are not part of the recipient identity.  Removing them
+        # makes fingerprints stable without exposing host-config annotations.
+        return f"{parts[0]} {parts[1]}"
+
+    if value.startswith("AGE-PLUGIN-"):
+        if not _PLUGIN_RECIPIENT.fullmatch(value):
+            _fail(CryptoErrorCode.RECIPIENT_INVALID)
+        # Plugin-specific parsing belongs to the installed age plugin.  The
+        # bounded shape check above keeps this opaque value safe for argv and
+        # lets age report an unavailable/unsupported plugin at use time.
+        return value
+
+    _fail(CryptoErrorCode.RECIPIENT_UNSUPPORTED)
 
 
 def _recipient_reference(value: object) -> str:
@@ -164,9 +216,9 @@ def resolve_recipients(profile: CaptureProfile, resolver: RecipientResolver) -> 
         _fail(CryptoErrorCode.RECIPIENT_INVALID)
 
     roles = {
-        "daily": _as_sequence(recipient_set.daily_use),
-        "recovery": _as_sequence(recipient_set.recovery),
-        "additional": _as_sequence(recipient_set.additional),
+        "daily": tuple(_canonicalize_recipient(value) for value in _as_sequence(recipient_set.daily_use)),
+        "recovery": tuple(_canonicalize_recipient(value) for value in _as_sequence(recipient_set.recovery)),
+        "additional": tuple(_canonicalize_recipient(value) for value in _as_sequence(recipient_set.additional)),
     }
     if profile.destination.kind == "private-r2" and not roles["daily"]:
         _fail(CryptoErrorCode.RECIPIENT_DAILY_MISSING)
@@ -178,21 +230,6 @@ def resolve_recipients(profile: CaptureProfile, resolver: RecipientResolver) -> 
     flattened = [recipient for values in roles.values() for recipient in values]
     if len(flattened) != len(set(flattened)):
         _fail(CryptoErrorCode.RECIPIENT_DUPLICATE)
-    for recipient in flattened:
-        if not _valid_recipient(recipient):
-            _fail(CryptoErrorCode.RECIPIENT_INVALID)
-        if not _recipient_kind_supported(recipient):
-            _fail(CryptoErrorCode.RECIPIENT_UNSUPPORTED)
-        # Keep recipient validation at the host-owned encryption boundary.  A
-        # syntactically plausible value must not reach age and become a
-        # subprocess-specific failure with opaque diagnostics.
-        try:
-            from .encryption_domain import validate_recipient
-
-            validate_recipient(recipient)
-        except (ImportError, TypeError, ValueError):
-            _fail(CryptoErrorCode.RECIPIENT_INVALID)
-
     ordered = tuple(sorted(flattened))
     fingerprint_payload = {
         "reference": reference,
@@ -300,29 +337,26 @@ def _validate_resolved_recipients(recipients: ResolvedRecipients, profile: Captu
     if type(recipients.version) is not int or recipients.version < 1:
         _fail(CryptoErrorCode.RECIPIENT_INVALID)
     roles = {
-        "daily": _as_sequence(recipients.daily_use),
-        "recovery": _as_sequence(recipients.recovery),
-        "additional": _as_sequence(recipients.additional),
+        "daily": tuple(_canonicalize_recipient(value) for value in _as_sequence(recipients.daily_use)),
+        "recovery": tuple(_canonicalize_recipient(value) for value in _as_sequence(recipients.recovery)),
+        "additional": tuple(_canonicalize_recipient(value) for value in _as_sequence(recipients.additional)),
     }
     if profile.destination.kind == "private-r2" and (not roles["daily"] or not roles["recovery"]):
         _fail(CryptoErrorCode.RECIPIENT_INVALID)
     flattened = [recipient for values in roles.values() for recipient in values]
     if not flattened or len(flattened) != len(set(flattened)):
         _fail(CryptoErrorCode.RECIPIENT_INVALID)
-    for recipient in flattened:
-        if not _valid_recipient(recipient) or not _recipient_kind_supported(recipient):
-            _fail(CryptoErrorCode.RECIPIENT_INVALID)
-        try:
-            from .encryption_domain import validate_recipient
-
-            validate_recipient(recipient)
-        except (ImportError, TypeError, ValueError):
-            _fail(CryptoErrorCode.RECIPIENT_INVALID)
     ordered = tuple(sorted(flattened))
     expected_fingerprint = hashlib.sha256(
         canonical_json({"reference": reference, "version": recipients.version, "recipients": ordered})
     ).hexdigest()
-    if recipients.ordered != ordered or recipients.fingerprint != expected_fingerprint:
+    if (
+        tuple(recipients.daily_use) != roles["daily"]
+        or tuple(recipients.recovery) != roles["recovery"]
+        or tuple(recipients.additional) != roles["additional"]
+        or recipients.ordered != ordered
+        or recipients.fingerprint != expected_fingerprint
+    ):
         _fail(CryptoErrorCode.RECIPIENT_INVALID)
 
 

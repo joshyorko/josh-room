@@ -48,6 +48,11 @@ FIXTURES = ROOT / "tests" / "fixtures" / "session_evidence"
 DAILY_RECIPIENT = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"
 RECOVERY_RECIPIENT = "age1qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpquuzgag"
 EXTRA_RECIPIENT = "age1qvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsewmjt2"
+SSH_RECIPIENT = (
+    "ssh-ed25519 "
+    "AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "
+    "synthetic-key"
+)
 
 
 def _fixture(name: str) -> dict[str, object]:
@@ -147,6 +152,23 @@ def test_local_only_profile_accepts_one_valid_recipient_without_recovery_role():
         lambda _: _recipient_set(daily_use=(DAILY_RECIPIENT,), recovery=()),
     )
     assert resolved.ordered == (DAILY_RECIPIENT,)
+
+
+def test_supported_ssh_recipient_is_canonicalized_without_becoming_a_native_age_key():
+    profile = _profile()
+    resolved = resolve_recipients(
+        profile,
+        lambda _: _recipient_set(daily_use=(SSH_RECIPIENT,)),
+    )
+
+    canonical = SSH_RECIPIENT.rsplit(" ", 1)[0]
+    assert resolved.daily_use == (canonical,)
+    assert canonical in resolved.ordered
+    assert "synthetic-key" not in resolved.ordered
+    assert resolved.fingerprint == resolve_recipients(
+        profile,
+        lambda _: _recipient_set(daily_use=(canonical,)),
+    ).fingerprint
 
 
 @pytest.mark.parametrize(
