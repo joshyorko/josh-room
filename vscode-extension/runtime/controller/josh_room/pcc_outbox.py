@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from .pcc_enqueue import enqueue_trigger
+
 try:
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - exercised by the platform contract test
@@ -561,7 +563,9 @@ def _checkpoint_key(session_id: str, checkpoint: Mapping[str, object]) -> tuple[
 
 
 @contextmanager
-def _exclusive_file_lock(path: Path) -> Iterator[None]:
+def _exclusive_file_lock(path: Path, *, timeout: float | None = None) -> Iterator[None]:
+    if timeout is not None and (not _finite_number(timeout) or timeout < 0):
+        raise ValueError("lock timeout is invalid")
     try:
         if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
             raise OutboxStorageError("storage-unavailable")
@@ -573,7 +577,18 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
         raise OutboxStorageError("storage-unavailable") from error
     with handle:
         if _fcntl is not None:
-            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+            flags = _fcntl.LOCK_EX
+            deadline = None if timeout is None else time.monotonic() + float(timeout)
+            if deadline is not None:
+                flags |= _fcntl.LOCK_NB
+            while True:
+                try:
+                    _fcntl.flock(handle.fileno(), flags)
+                    break
+                except BlockingIOError:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise OutboxStorageError("lock-timeout", pending_preserved=True)
+                    time.sleep(0.005)
             try:
                 yield
             finally:
@@ -586,7 +601,16 @@ def _exclusive_file_lock(path: Path) -> Iterator[None]:
             handle.write(b"\0")
             handle.flush()
         handle.seek(0)
-        _msvcrt.locking(handle.fileno(), _msvcrt.LK_LOCK, 1)
+        deadline = None if timeout is None else time.monotonic() + float(timeout)
+        lock_mode = _msvcrt.LK_LOCK if deadline is None else _msvcrt.LK_NBLCK
+        while True:
+            try:
+                _msvcrt.locking(handle.fileno(), lock_mode, 1)
+                break
+            except OSError:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise OutboxStorageError("lock-timeout", pending_preserved=True)
+                time.sleep(0.005)
         try:
             yield
         finally:
@@ -956,6 +980,29 @@ class PccOutbox:
         policy_decision: str = "allow",
         diagnostic_detail: object | None = None,
     ) -> QueueReceipt:
+        return enqueue_trigger(
+            self,
+            event_id=event_id,
+            session_id=session_id,
+            checkpoint=checkpoint,
+            is_final=is_final,
+            metadata=metadata,
+            policy_decision=policy_decision,
+            diagnostic_detail=diagnostic_detail,
+        )
+
+    def _enqueue_authority(
+        self,
+        *,
+        event_id: str,
+        session_id: str,
+        checkpoint: Mapping[str, object],
+        is_final: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        policy_decision: str = "allow",
+        diagnostic_detail: object | None = None,
+        lock_timeout: float | None = None,
+    ) -> QueueReceipt:
         del diagnostic_detail  # Deliberately inert: enqueue never captures caller data.
         event_id = _identifier(event_id)
         session_id = _identifier(session_id)
@@ -972,7 +1019,7 @@ class PccOutbox:
         else:
             initial_state = QueueState.QUEUED
         try:
-            with _exclusive_file_lock(self._lock_path):
+            with _exclusive_file_lock(self._lock_path, timeout=lock_timeout):
                 self._ensure_layout()
                 records, _diagnostics, _quarantined = self._safe_records_unlocked()
                 key = _checkpoint_key(session_id, checkpoint)
@@ -1071,7 +1118,15 @@ class PccOutbox:
                         ),
                     )
                 return QueueReceipt(event_id, initial_state, is_final=is_final, sequence=sequence)
-        except (OutboxStorageError, OSError):
+        except OutboxStorageError as error:
+            if error.code == "lock-timeout":
+                return QueueReceipt(
+                    event_id,
+                    QueueState.CAPTURE_GAP,
+                    diagnostic=CaptureGap("lock-timeout", True),
+                )
+            return QueueReceipt(event_id, QueueState.CAPTURE_GAP, diagnostic=CaptureGap("storage-unavailable", False))
+        except OSError:
             return QueueReceipt(event_id, QueueState.CAPTURE_GAP, diagnostic=CaptureGap("storage-unavailable", False))
 
     def inspect_record(self, event_id: str) -> QueueRecord | None:
