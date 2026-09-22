@@ -1,0 +1,158 @@
+"""Reversible one-shot scheduler integration for PCC harvest."""
+from __future__ import annotations
+
+import os
+import platform
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+SCHEMA = "josh-room.scheduler"
+SCHEMA_VERSION = {"major": 1, "minor": 0}
+TASK_NAME = "JoshRoomPccHarvest"
+
+
+def _home() -> Path:
+    value = os.environ.get("HOME")
+    return Path(value) if value and Path(value).is_absolute() else Path.home()
+
+
+def _executable(value: str | os.PathLike[str] | None = None) -> str:
+    candidate = Path(value) if value is not None else Path(shutil.which("josh-room") or sys.argv[0])
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve()
+    return str(candidate.resolve(strict=False))
+
+
+def _envelope(*, ok: bool, action: str, **body: object) -> dict[str, object]:
+    result = {"schema": SCHEMA, "schema_version": dict(SCHEMA_VERSION), "ok": bool(ok), "action": action}
+    result.update(body)
+    return result
+
+
+def _platform(value: str | None = None) -> str:
+    name = (value or sys.platform).lower()
+    if name.startswith("linux"):
+        return "linux"
+    if name == "darwin":
+        return "macos"
+def _linux_paths(home: Path) -> tuple[Path, Path]:
+    base = home / ".config" / "systemd" / "user"
+    return base / "josh-room-pcc-harvest.service", base / "josh-room-pcc-harvest.timer"
+
+
+def _mac_path(home: Path) -> Path:
+    return home / "Library" / "LaunchAgents" / "dev.josh-room.pcc-harvest.plist"
+
+
+def _write_private(path: Path, content: str) -> bool:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
+        raise OSError("scheduler path is unavailable")
+    try:
+        if path.read_text(encoding="utf-8") == content and stat.S_IMODE(path.lstat().st_mode) == 0o600:
+            return False
+    except (OSError, UnicodeError):
+        pass
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _linux_content(executable: str, interval: int) -> tuple[str, str]:
+    service = f"[Unit]\nDescription=Josh Room PCC harvest\nRefuseManualStart=yes\n\n[Service]\nType=oneshot\nExecStart={executable} harvest run --offline\n"
+    timer = f"[Unit]\nDescription=Josh Room PCC harvest timer\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec={interval}s\nPersistent=true\nUnit=josh-room-pcc-harvest.service\n\n[Install]\nWantedBy=timers.target\n"
+    return service, timer
+
+
+def _mac_content(executable: str, interval: int) -> str:
+    escaped = executable.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.josh-room.pcc-harvest</string>
+  <key>ProgramArguments</key><array><string>{escaped}</string><string>harvest</string><string>run</string><string>--offline</string></array>
+  <key>StartInterval</key><integer>{interval}</integer>
+  <key>RunAtLoad</key><false/>
+  <key>ProcessType</key><string>Background</string>
+  <key>ThrottleInterval</key><integer>60</integer>
+</dict></plist>
+'''
+
+
+def _windows_command(executable: str) -> list[str]:
+    return ["schtasks", "/Create", "/TN", TASK_NAME, "/SC", "MINUTE", "/MO", "15", "/TR", f'"{executable}" harvest run --offline', "/F"]
+
+
+def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = None, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
+    if type(interval) is not int or not 60 <= interval <= 86400:
+        return _envelope(ok=False, action="install", error="invalid-interval")
+    selected, home, exe = _platform(platform_name), Path(home or _home()), _executable(executable)
+    if selected == "linux":
+        service, timer = _linux_paths(home)
+        service_body, timer_body = _linux_content(exe, interval)
+        service_changed = _write_private(service, service_body)
+        timer_changed = _write_private(timer, timer_body)
+        changed = service_changed or timer_changed
+        return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(service), str(timer)], executable=exe, overlap="systemd-oneshot")
+    if selected == "macos":
+        path = _mac_path(home)
+        changed = _write_private(path, _mac_content(exe, interval))
+        return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(path)], executable=exe, overlap="throttle-interval")
+    if selected == "windows":
+        process = subprocess.run(_windows_command(exe), capture_output=True, text=True, check=False)
+        return _envelope(ok=process.returncode == 0, action="install", platform=selected, installed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, executable=exe, overlap="task-single-instance", **({} if process.returncode == 0 else {"error": "scheduler-install-failed"}))
+    return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
+
+
+def status(*, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
+    selected, home = _platform(platform_name), Path(home or _home())
+    if selected == "linux":
+        paths = _linux_paths(home)
+        return _envelope(ok=True, action="status", platform=selected, installed=all(path.is_file() and not path.is_symlink() for path in paths), files=[str(path) for path in paths])
+    if selected == "macos":
+        path = _mac_path(home)
+        return _envelope(ok=True, action="status", platform=selected, installed=path.is_file() and not path.is_symlink(), files=[str(path)])
+    if selected == "windows":
+        process = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, check=False)
+        return _envelope(ok=True, action="status", platform=selected, installed=process.returncode == 0, task=TASK_NAME)
+    return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
+
+
+def remove(*, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
+    selected, home = _platform(platform_name), Path(home or _home())
+    if selected == "linux":
+        paths = _linux_paths(home)
+        for path in paths:
+            if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
+                return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
+        existed = any(path.exists() for path in paths)
+        for path in paths:
+            path.unlink(missing_ok=True)
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path) for path in paths])
+    if selected == "macos":
+        path = _mac_path(home)
+        if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
+            return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
+        existed = path.exists()
+        path.unlink(missing_ok=True)
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path)])
+    if selected == "windows":
+        process = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True, check=False)
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=process.returncode == 0, task=TASK_NAME)
+    return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
+
+
+__all__ = ["install", "status", "remove", "SCHEMA", "SCHEMA_VERSION"]

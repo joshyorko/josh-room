@@ -54,6 +54,7 @@ from .jat import (
 )
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
+from .pcc_outbox import PccOutbox
 from .keyring import store_value as store_keyring_value
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
@@ -91,8 +92,9 @@ from .pcc_hooks import (
     remove_codex_hooks,
     repair_codex_hooks,
 )
-from .progress import report_progress
+from .harvest import HarvestController
 from .tls import initialize_system_trust
+from .progress import report_progress
 from .workspace_state import local_status
 
 R2Backend = _r2.R2Backend
@@ -267,6 +269,29 @@ def build_parser() -> argparse.ArgumentParser:
         hook_action = harvest_hook_commands.add_parser(action)
         hook_action.add_argument("--tool", required=True, choices=("codex",))
         _json_option(hook_action)
+    for action in ("plan", "run", "drain", "status", "inspect", "retry", "quarantine", "discard", "reconcile"):
+        command = harvest_commands.add_parser(action)
+        command.add_argument("--outbox-root", type=Path)
+        if action in {"run", "drain", "reconcile"}:
+            command.add_argument("--limit", type=int, default=1 if action != "reconcile" else 1000)
+        if action == "run":
+            command.add_argument("--offline", action="store_true")
+        if action in {"plan", "inspect"}:
+            command.add_argument("event_id", nargs="?")
+        elif action in {"retry", "quarantine", "discard"}:
+            command.add_argument("event_id")
+        if action in {"retry", "quarantine"}:
+            command.add_argument("--reason", default=None)
+        _json_option(command)
+    schedule = harvest_commands.add_parser("schedule")
+    schedule_commands = schedule.add_subparsers(dest="schedule_command", required=True)
+    for action in ("install", "status", "remove"):
+        schedule_action = schedule_commands.add_parser(action)
+        schedule_action.add_argument("--interval", type=int, default=900)
+        schedule_action.add_argument("--platform", dest="platform_name")
+        schedule_action.add_argument("--home", type=Path)
+        schedule_action.add_argument("--executable")
+        _json_option(schedule_action)
     hook = commands.add_parser("hook")
     hook_commands = hook.add_subparsers(dest="hook_command", required=True)
     hook_codex = hook_commands.add_parser("codex")
@@ -757,13 +782,25 @@ def _bucket_operation(args, config):
     }
 
 
-def dispatch(args, instance: Path) -> dict:
-    if args.command == "hook":
-        if args.hook_command != "codex":
-            raise ValueError("unsupported hook")
-        return process_codex_hook(json.load(sys.stdin))
-    if args.command == "harvest":
-        if args.harvest_command != "hooks" or args.tool != "codex":
+def _harvest_outbox_root(value: Path | None) -> Path:
+    if value is not None:
+        if not value.is_absolute():
+            raise ValueError("outbox root must be absolute")
+        return value
+    explicit = os.environ.get("JOSH_ROOM_OUTBOX_ROOT") or os.environ.get("JOSH_ROOM_HOOK_OUTBOX")
+    if explicit:
+        root = Path(explicit)
+    else:
+        state_home = os.environ.get("XDG_STATE_HOME")
+        root = (Path(state_home) if state_home else Path.home() / ".local" / "state") / "josh-room" / "pcc-outbox"
+    if not root.is_absolute():
+        raise ValueError("outbox root must be absolute")
+    return root
+
+
+def _harvest_dispatch(args) -> dict:
+    if args.harvest_command == "hooks":
+        if args.tool != "codex":
             raise ValueError("unsupported harvest hook")
         action = args.harvest_hooks_command
         if action == "install":
@@ -775,6 +812,50 @@ def dispatch(args, instance: Path) -> dict:
         if action == "remove":
             return remove_codex_hooks()
         raise ValueError("unsupported harvest hook action")
+    if args.harvest_command == "schedule":
+        options = {
+            "interval": args.interval,
+            "platform_name": args.platform_name,
+            "home": args.home,
+            "executable": args.executable,
+        }
+        if args.schedule_command == "install":
+            return _scheduler.install(**options)
+        if args.schedule_command == "status":
+            return _scheduler.status(platform_name=args.platform_name, home=args.home)
+        if args.schedule_command == "remove":
+            return _scheduler.remove(platform_name=args.platform_name, home=args.home)
+        raise ValueError("unsupported schedule action")
+    controller = HarvestController(PccOutbox(_harvest_outbox_root(args.outbox_root)))
+    action = args.harvest_command
+    if action == "plan":
+        return controller.plan(args.event_id)
+    if action == "status":
+        return controller.status()
+    if action == "inspect":
+        return controller.inspect(args.event_id)
+    if action == "run":
+        return controller.run(limit=args.limit, offline=args.offline)
+    if action == "drain":
+        return controller.drain(limit=args.limit)
+    if action == "retry":
+        return controller.retry(args.event_id, args.reason or "operator-retry")
+    if action == "quarantine":
+        return controller.quarantine(args.event_id, args.reason or "operator-quarantine")
+    if action == "discard":
+        return controller.discard(args.event_id)
+    if action == "reconcile":
+        return controller.reconcile(limit=args.limit)
+    raise ValueError("unsupported harvest action")
+
+
+def dispatch(args, instance: Path) -> dict:
+    if args.command == "hook":
+        if args.hook_command != "codex":
+            raise ValueError("unsupported hook")
+        return process_codex_hook(json.load(sys.stdin))
+    if args.command == "harvest":
+        return _harvest_dispatch(args)
     if args.command == "encryption":
         if args.encryption_command == "recovery":
             if args.recovery_command != "generate":
