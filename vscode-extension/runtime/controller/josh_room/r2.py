@@ -13,16 +13,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-try:
-    import fcntl as _fcntl
-except ImportError:  # pragma: no cover - Windows runtime
-    _fcntl = None
-
-try:
-    import msvcrt as _msvcrt
-except ImportError:  # pragma: no cover - POSIX runtime
-    _msvcrt = None
-
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
@@ -39,6 +29,16 @@ from .s3 import BucketAccessDenied, BucketListForbidden
 from .s3 import check_bucket_access as _check_bucket_access
 from .s3 import create_bucket as _create_bucket
 from .s3 import list_buckets as _list_buckets
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows runtime
+    _fcntl = None
+
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - POSIX runtime
+    _msvcrt = None
 
 
 OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
