@@ -278,13 +278,17 @@ def test_manifest_validation_rejects_unknown_document_major_and_wrong_document_k
 
 def _event(kind: str) -> NormalizationEvent:
     if kind == "session-segment":
-        return NormalizationEvent(kind, _segment())
-    if kind == "session-final":
-        return NormalizationEvent(kind, _fixture("golden-session-final.json"))
-    if kind == "index-event":
-        return NormalizationEvent(kind, _fixture("golden-index-event.json"))
-    document = _fixture("golden-session-asset.json")
-    document.update({"profile_id": "profile-personal", "workspace_id": "workspace-synthetic"})
+        document = _segment()
+    elif kind == "session-final":
+        document = _fixture("golden-session-final.json")
+    elif kind == "index-event":
+        document = _fixture("golden-index-event.json")
+    else:
+        document = _fixture("golden-session-asset.json")
+        document.update({"profile_id": "profile-personal", "workspace_id": "workspace-synthetic"})
+    document["session_id"] = "session-synthetic"
+    if kind != "session-asset":
+        return NormalizationEvent(kind, document)
     payload = b"synthetic asset payload\n"
     document["sha256"] = __import__("hashlib").sha256(payload).hexdigest()
     document["size"] = len(payload)
