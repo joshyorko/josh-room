@@ -17,6 +17,11 @@ try:
     import fcntl as _fcntl
 except ImportError:  # pragma: no cover - Windows runtime
     _fcntl = None
+
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - POSIX runtime
+    _msvcrt = None
 from botocore.exceptions import BotoCoreError, ClientError
 
 from .config import DimensionConfig, resolve_dimension
@@ -349,30 +354,40 @@ class R2Backend(ObjectStore):
 
     def _snapshot_evidence_file(self, path: Path):
         source = None
+        staged = None
         descriptor = -1
         try:
+            candidate = Path(path)
+            if candidate.is_symlink():
+                raise ValueError("source-private")
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(os.fspath(Path(path)), flags)
+            descriptor = os.open(os.fspath(candidate), flags)
             source = os.fdopen(descriptor, "rb")
             descriptor = -1
             before = os.fstat(source.fileno())
             if not stat.S_ISREG(before.st_mode) or before.st_mode & 0o077:
                 raise ValueError("source-private")
+            staged = tempfile.TemporaryFile(mode="w+b")
             digest = hashlib.sha256()
             size = 0
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
                 digest.update(chunk)
+                staged.write(chunk)
                 size += len(chunk)
             after = os.fstat(source.fileno())
             if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns) or size != before.st_size:
                 raise ValueError("source-changed")
-            source.seek(0)
-            return source, size, digest.hexdigest()
+            staged.seek(0)
+            source.close()
+            source = None
+            return staged, size, digest.hexdigest()
         except (OSError, ValueError) as error:
             if source is not None:
                 source.close()
             elif descriptor >= 0:
                 os.close(descriptor)
+            if staged is not None:
+                staged.close()
             raise R2EvidenceError("source-unavailable") from error
 
     def put_evidence_stream(self, source, size: int, ciphertext_sha256: str) -> R2EvidenceReceipt:
@@ -711,6 +726,16 @@ class R2Backend(ObjectStore):
                 time.sleep(min(0.01 * (2 ** min(retries - 1, 4)), 0.1))
         raise R2EvidenceRetryable(retries=retries)
 
+    def _validate_evidence_state_storage(self, path: Path) -> None:
+        parent = path.parent
+        if parent.exists():
+            parent_stat = parent.lstat()
+            if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode) or stat.S_IMODE(parent_stat.st_mode) & 0o077:
+                raise R2EvidenceError("multipart-state-unavailable")
+        if path.exists() or path.is_symlink():
+            state_stat = path.lstat()
+            if stat.S_ISLNK(state_stat.st_mode) or not stat.S_ISREG(state_stat.st_mode) or stat.S_IMODE(state_stat.st_mode) & 0o077:
+                raise R2EvidenceError("multipart-state-unavailable")
     def _evidence_state_path(self, digest: str) -> Path:
         root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence-state"
         return root / f"{digest}.json"
@@ -718,7 +743,13 @@ class R2Backend(ObjectStore):
     @contextmanager
     def _evidence_lock(self, digest: str):
         root = self.receipt_dir / "evidence-multipart" if self.receipt_dir is not None else Path(tempfile.gettempdir()) / "josh-room-evidence"
+        if root.is_symlink() or root.exists() and not root.is_dir():
+            raise R2EvidenceError("multipart-lock-unavailable")
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(root, 0o700)
+        except OSError as error:
+            raise R2EvidenceError("multipart-lock-unavailable") from error
         lock_path = root / f".{digest}.lock"
         if lock_path.is_symlink() or lock_path.exists() and not stat.S_ISREG(lock_path.lstat().st_mode):
             raise R2EvidenceError("multipart-lock-unavailable")
@@ -727,16 +758,30 @@ class R2Backend(ObjectStore):
         except OSError as error:
             raise R2EvidenceError("multipart-lock-unavailable") from error
         with handle:
-            if _fcntl is None:
+            if _fcntl is not None:
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+                return
+            if _msvcrt is None:
                 raise R2EvidenceError("multipart-lock-unsupported")
-            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            _msvcrt.locking(handle.fileno(), _msvcrt.LK_LOCK, 1)
             try:
                 yield
             finally:
-                _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+                handle.seek(0)
+                _msvcrt.locking(handle.fileno(), _msvcrt.LK_UNLCK, 1)
 
     def _load_evidence_state(self, key: str, digest: str, size: int) -> dict:
         path = self._evidence_state_path(digest)
+        self._validate_evidence_state_storage(path)
         try:
             raw = path.read_bytes()
         except FileNotFoundError:
@@ -805,7 +850,14 @@ class R2Backend(ObjectStore):
         encoded = json.dumps(state, separators=(",", ":"), sort_keys=True).encode()
         if len(encoded) > _MAX_EVIDENCE_STATE_BYTES:
             raise R2EvidenceError("multipart-state-bounded")
+        if path.parent.is_symlink() or path.parent.exists() and not path.parent.is_dir():
+            raise R2EvidenceError("multipart-state-unavailable")
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError as error:
+            raise R2EvidenceError("multipart-state-unavailable") from error
+        self._validate_evidence_state_storage(path)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
             with temporary.open("wb") as handle:
@@ -1023,6 +1075,12 @@ class R2Backend(ObjectStore):
                             self._save_evidence_state(state)
                             break
                         except (ClientError, BotoCoreError, TimeoutError) as error:
+                            if _is_stale_multipart_error(error):
+                                state["upload_id"] = None
+                                state["parts"] = []
+                                state["stage"] = "claimed"
+                                self._save_evidence_state(state)
+                                raise R2EvidenceRetryable("multipart-expired", retries=retries) from error
                             retries += 1
                             part_retries += 1
                             if not _is_retryable(error) or retries >= max_attempts:
@@ -1046,6 +1104,13 @@ class R2Backend(ObjectStore):
                         MultipartUpload={"Parts": parts},
                     )
                 except (ClientError, BotoCoreError, TimeoutError) as error:
+                    if _is_stale_multipart_error(error):
+                        state["upload_id"] = None
+                        state["parts"] = []
+                        state["stage"] = "claimed"
+                        self._save_evidence_state(state)
+                        upload_id = None
+                        raise R2EvidenceRetryable("multipart-expired", retries=retries) from error
                     if not _is_retryable(error):
                         raise self._map_evidence_error(error, retries=retries, published=False) from error
                     retries += 1
@@ -1148,11 +1213,11 @@ class R2Backend(ObjectStore):
         return observed_size
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
-        if isinstance(error, TimeoutError) or error.__class__.__name__ in {"ReadTimeoutError", "ConnectTimeoutError"} or code in {"408", "RequestTimeout"}:
+        if isinstance(error, TimeoutError) or error.__class__.__name__ in {"ReadTimeoutError", "ConnectTimeoutError"} or code in {"408", "RequestTimeout", "504", "GatewayTimeout"}:
             return R2EvidenceTimeout(published=published, retries=retries)
         if code in {"429", "SlowDown", "Throttling", "TooManyRequests"}:
             return R2EvidenceRateLimited(published=published, retries=retries)
-        if code in {"ExpiredToken", "InvalidToken", "TokenRefreshRequired", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"}:
+        if code in {"401", "403", "Unauthorized", "Forbidden", "ExpiredToken", "InvalidToken", "TokenRefreshRequired", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"}:
             return R2EvidenceCredentialFailure(published=published, retries=retries)
         if _is_retryable(error):
             return R2EvidenceRetryable("retry-exhausted", published=published, retries=retries)
@@ -1360,6 +1425,11 @@ def _is_precondition(error: ClientError) -> bool:
 
 def _not_found(error: ClientError) -> bool:
     return str(error.response.get("Error", {}).get("Code")) in {"404", "NoSuchKey", "NotFound"}
+def _is_stale_multipart_error(error: BaseException) -> bool:
+    if not isinstance(error, ClientError):
+        return False
+    return str(error.response.get("Error", {}).get("Code")) in {"NoSuchUpload", "InvalidUploadId", "NoSuchUploadId"}
+
 
 
 
