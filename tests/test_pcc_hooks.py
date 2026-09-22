@@ -97,11 +97,16 @@ def test_runtime_lock_timeout_fails_open_before_one_second(tmp_path):
         started = time.perf_counter()
         result = subprocess.run(command, input=json.dumps(payload).encode(), cwd=tmp_path, env=env, capture_output=True, timeout=1, check=False)
         elapsed = time.perf_counter() - started
+        direct_started = time.perf_counter()
+        direct = process_codex_hook(payload, outbox_root=outbox, roots=roots)
+        direct_elapsed = time.perf_counter() - direct_started
     finally:
         holder.terminate()
         holder.wait(timeout=1)
     assert elapsed < 1
+    assert direct_elapsed < 1
     assert result.returncode == 0
+    assert direct["accepted"] is False
     assert not list((outbox / "queue").glob("*.json"))
 
 

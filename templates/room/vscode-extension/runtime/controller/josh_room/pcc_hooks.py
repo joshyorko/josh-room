@@ -25,6 +25,7 @@ from typing import BinaryIO, TextIO
 
 from .adapter_contract import AdapterError
 from .codex_adapter import CodexHookFacts, CodexRoots, canonicalize_hook_path
+from .pcc_enqueue import enqueue_trigger
 from .pcc_outbox import PccOutbox, QueueState, _exclusive_file_lock
 
 UPSTREAM_CODEX_COMMIT = "0a73d55b80afd2aa88051848bd28524d132fd01e"
@@ -33,6 +34,7 @@ SUPPORTED_EVENTS = ("Stop", "SubagentStop", "SessionEnd")
 MARKER_PREFIX = "# josh-room-pcc-hooks:v1:"
 MARKER_SUFFIX = "# josh-room-pcc-hooks:v1:end"
 MAX_HOOK_INPUT_BYTES = 64 * 1024
+_HOOK_LOCK_TIMEOUT_SECONDS = 0.2
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
 MAX_STRING_BYTES = 4096
 _HOOK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$")
@@ -223,7 +225,8 @@ def process_codex_hook(
         source_id, representation = _source_hint(event, checked, roots)
         event_id = _event_id(event, checked, source_id)
         outbox = PccOutbox(Path(outbox_root) if outbox_root is not None else _default_outbox_root())
-        receipt = outbox.enqueue(
+        receipt = enqueue_trigger(
+            outbox,
             event_id=event_id,
             session_id=str(checked["session_id"]),
             checkpoint={
@@ -241,6 +244,7 @@ def process_codex_hook(
                 "object_kind": "trigger",
             },
             policy_decision="local-only",
+            lock_timeout=_HOOK_LOCK_TIMEOUT_SECONDS,
         )
         if receipt.state is QueueState.CAPTURE_GAP:
             return HookRuntimeResult(False, "capture-gap", event_id, receipt.state.value).to_dict()
