@@ -285,7 +285,13 @@ def _validate_config_security(path: Path) -> None:
                 info = current.lstat()
             except OSError:
                 raise HookBoundaryError("config-untrusted") from None
-            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            if hasattr(os, "getuid") and info.st_uid != os.getuid() and not (
+                info.st_uid == 0
+                and (
+                    not (info.st_mode & 0o022)
+                    or (stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX)
+                )
+            ):
                 raise HookBoundaryError("config-untrusted")
             if info.st_mode & 0o022 and not (stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX):
                 raise HookBoundaryError("config-untrusted")
@@ -690,6 +696,8 @@ def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[st
         receipt = _read_receipt()
         if not well_formed:
             raise HookBoundaryError("partial-installation")
+        if not blocks:
+            return _codex_hook_status_locked(path)
         if not isinstance(receipt, dict):
             raise HookBoundaryError("ownership-uncertain")
         required = {

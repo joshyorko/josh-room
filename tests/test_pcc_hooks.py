@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import sys
+from pathlib import Path
 import time
 
 import josh_room.pcc_hooks as hooks
@@ -71,6 +74,42 @@ def test_runtime_latency_and_hostile_environment_boundary(tmp_path, monkeypatch)
 
 
 
+def test_installed_entrypoint_latency_and_hostile_cwd_environment(tmp_path):
+    payload, roots = _fixture(tmp_path)
+    payload["last_assistant_message"] = "TRANSCRIPT-SENTINEL"
+    hostile_cwd = tmp_path / "hostile-cwd"
+    hostile_cwd.mkdir()
+    (hostile_cwd / "sitecustomize.py").write_text("raise RuntimeError('hijack')", encoding="utf-8")
+    malicious_imports = tmp_path / "malicious-imports"
+    malicious_imports.mkdir()
+    outbox = tmp_path / "entrypoint-outbox"
+    env = {
+        "HOME": str(tmp_path),
+        "CODEX_HOME": str(tmp_path / "malicious-codex-home"),
+        "PYTHONPATH": str(malicious_imports),
+        "PATH": str(tmp_path / "shadow-bin"),
+        "JOSH_ROOM_CODEX_ACTIVE_ROOT": str(roots.active),
+        "JOSH_ROOM_CODEX_ARCHIVED_ROOT": str(roots.archived),
+        "JOSH_ROOM_HOOK_OUTBOX": str(outbox),
+    }
+    command = [sys.executable, "-I", "-S", str(Path(__file__).parents[1] / "src/josh_room/hook_entrypoint.py")]
+    durations = []
+    encoded = json.dumps(payload).encode("utf-8")
+    for _ in range(32):
+        started = time.perf_counter()
+        result = subprocess.run(command, input=encoded, cwd=hostile_cwd, env=env, capture_output=True, timeout=1)
+        durations.append((time.perf_counter() - started) * 1000)
+        assert result.returncode == 0
+        assert result.stdout == b""
+    assert sorted(durations)[int(len(durations) * 0.95) - 1] < 1000
+    assert max(durations) < 1000
+    records = list((outbox / "queue").glob("*.json"))
+    assert len(records) == 1
+    serialized = json.dumps(json.loads(records[0].read_text(encoding="utf-8")), sort_keys=True)
+    assert "TRANSCRIPT-SENTINEL" not in serialized
+    assert str(payload["transcript_path"]) not in serialized
+
+
 def test_runtime_rejects_path_escape_and_malformed_closed_input(tmp_path):
     payload, roots = _fixture(tmp_path)
     payload["transcript_path"] = str(tmp_path / "outside" / "rollout-session-1.jsonl")
@@ -102,6 +141,12 @@ def test_machine_entrypoint_fails_open_on_deep_or_oversized_json():
     deep = ("[" * 5000) + ("]" * 5000)
     assert codex_hook_main(io.BytesIO(deep.encode("ascii"))) == 0
     assert codex_hook_main(io.BytesIO(b"{" + b'"n":' + b"9" * 65530)) == 0
+
+def test_remove_without_owned_hooks_is_idempotent(tmp_path):
+    config = tmp_path / "config.toml"
+    config.write_text('model = "synthetic"\n', encoding="utf-8")
+    assert remove_codex_hooks(config)["state"] == "missing"
+
 
 def test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact(tmp_path, monkeypatch):
     config = tmp_path / "config.toml"
