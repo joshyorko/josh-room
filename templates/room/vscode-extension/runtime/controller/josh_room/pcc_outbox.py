@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - exercised by the platform contract tes
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _OBJECT_KEY = re.compile(r"^objects/sha256/([0-9a-f]{64})$")
+_EVIDENCE_OBJECT_KEY = re.compile(r"^evidence/objects/sha256/([0-9a-f]{64})$")
 _MIME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*/[A-Za-z0-9][A-Za-z0-9.+-]*$")
 _MAX_METADATA_BYTES = 16 * 1024
 _MAX_CIPHERTEXT_BYTES = 8 * 1024 * 1024 * 1024
@@ -259,7 +260,10 @@ class QueueRecord:
         if failure_code is not None:
             _identifier(failure_code)
         object_key = body["object_key"]
-        if object_key is not None and not _OBJECT_KEY.fullmatch(object_key):
+        if object_key is not None and (
+            not isinstance(object_key, str)
+            or not (_OBJECT_KEY.fullmatch(object_key) or _EVIDENCE_OBJECT_KEY.fullmatch(object_key))
+        ):
             raise ValueError("record object key")
         digest = body["ciphertext_sha256"]
         if digest is not None and not _DIGEST.fullmatch(digest):
@@ -1332,9 +1336,12 @@ class PccOutbox:
                 }
                 if "object_key" in details:
                     object_key = details["object_key"]
-                    if not isinstance(object_key, str) or not _OBJECT_KEY.fullmatch(object_key):
+                    if not isinstance(object_key, str):
                         raise ValueError("object key is invalid")
-                    object_digest = _OBJECT_KEY.fullmatch(object_key).group(1)
+                    key_match = _OBJECT_KEY.fullmatch(object_key) or _EVIDENCE_OBJECT_KEY.fullmatch(object_key)
+                    if key_match is None:
+                        raise ValueError("object key is invalid")
+                    object_digest = key_match.group(1)
                     if state is QueueState.OBJECT_UPLOADED and object_digest != record.ciphertext_sha256:
                         raise InvalidTransition()
                     updates["object_key"] = object_key

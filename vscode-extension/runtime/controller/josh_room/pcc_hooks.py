@@ -962,7 +962,11 @@ def _remove_codex_hooks_locked(config_path: Path | str | None = None) -> dict[st
                 raise HookBoundaryError("remove-failed") from rollback_error
             raise
         return _codex_hook_status_locked(path)
-    except (HookBoundaryError, OSError, tomllib.TOMLDecodeError):
+    except HookBoundaryError as error:
+        if error.code == "conflicting-josh-room-hook":
+            return {"ok": False, "tool": "codex", "state": error.code, "diagnostics": [error.code]}
+        return {"ok": False, "tool": "codex", "state": "remove-failed", "diagnostics": ["remove-failed"]}
+    except (OSError, tomllib.TOMLDecodeError):
         return {"ok": False, "tool": "codex", "state": "remove-failed", "diagnostics": ["remove-failed"]}
 
 

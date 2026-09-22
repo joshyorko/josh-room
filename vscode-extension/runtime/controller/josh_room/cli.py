@@ -9,6 +9,7 @@ import tempfile
 from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 
+from . import device as _device
 from . import r2 as _r2
 from .auth import (
     EncryptionStateError,
@@ -391,6 +392,28 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--profile", required=True)
     setup.add_argument("--age-profile", required=True)
     _json_option(setup)
+    device = commands.add_parser("device", help="secure device enrollment and recipient authority")
+    device_commands = device.add_subparsers(dest="device_command", required=True)
+    device_inspect = device_commands.add_parser("inspect")
+    device_inspect.add_argument("--profile")
+    _json_option(device_inspect)
+    device_doctor = device_commands.add_parser("doctor")
+    _json_option(device_doctor)
+    for action in ("setup", "enroll"):
+        device_enroll = device_commands.add_parser(action, help="stdin carries credentials and age identity")
+        device_enroll.add_argument("--profile")
+        device_enroll.add_argument("--credential-profile", "--r2-credential-profile", dest="credential_profile")
+        device_enroll.add_argument("--age-profile")
+        device_enroll.add_argument("--recovery-profile")
+        device_enroll.add_argument("--device-id")
+        _json_option(device_enroll)
+    device_rotate = device_commands.add_parser("rotate-new-writes", help="activate a recipient set for new writes")
+    device_rotate.add_argument("--profile", required=True)
+    device_rotate.add_argument("--credential-profile")
+    _json_option(device_rotate)
+    device_remove = device_commands.add_parser("remove-local", help="remove local enrollment and native-store secrets")
+    device_remove.add_argument("--profile")
+    _json_option(device_remove)
     return parser
 
 
@@ -404,9 +427,9 @@ def main(argv=None):
     try:
         runtime_loaded = False
         scoped_minio = _uses_minio_encryption(args)
-        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "harvest", "hook"} or scoped_minio else _identity_environment()
+        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
         with identity_context:
-            if args.command not in {"auth", "setup", "encryption", "harvest", "hook"} and not scoped_minio:
+            if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook"} and not scoped_minio:
                 runtime_loaded = load_runtime_session()
             with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext():
                 if _requires_oauth(args):
@@ -1471,6 +1494,53 @@ def dispatch(args, instance: Path) -> dict:
         }
         save_private_config(config)
         return {"ok": True, "profile": args.profile, "age_profile": args.age_profile, "stored": True}
+    if args.command == "device":
+        action = args.device_command
+        if action == "inspect":
+            return _device.inspect(profile=args.profile)
+        if action == "doctor":
+            return _device.doctor()
+        if action == "remove-local":
+            return _device.remove_local(profile=args.profile)
+        payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("device input must be a JSON object on stdin")
+        if action in {"setup", "enroll"}:
+            profile = args.profile or payload.get("profile")
+            credential_profile = args.credential_profile or payload.get("credential-profile") or payload.get("credential_profile") or payload.get("r2-credential-profile")
+            recipients = payload.get("age-recipients", payload.get("recipients"))
+            if not profile or not credential_profile or recipients is None:
+                raise ValueError("device enrollment input requires profile, credential profile, and recipients")
+            raw_credentials = payload.get("credentials", payload)
+            if not isinstance(raw_credentials, dict):
+                raise ValueError("device credentials are invalid")
+            credentials = {
+                field: raw_credentials[field]
+                for field in ("access-key-id", "secret-access-key", "session-token")
+                if field in raw_credentials
+            }
+            return _device.enroll(
+                profile=profile,
+                credential_profile=credential_profile,
+                recipients=recipients,
+                credentials=credentials,
+                age_identity=payload.get("age-identity"),
+                age_profile=args.age_profile or payload.get("age-profile") or payload.get("age_profile"),
+                recovery_identity=payload.get("recovery-identity") or payload.get("recovery_identity"),
+                recovery_profile=args.recovery_profile or payload.get("recovery-profile") or payload.get("recovery_profile"),
+                device_id=args.device_id or payload.get("device-id") or payload.get("device_id"),
+                issued_at=payload.get("issued-at") or payload.get("issued_at"),
+            )
+        if action == "rotate-new-writes":
+            recipients = payload.get("age-recipients", payload.get("recipients"))
+            if recipients is None:
+                raise ValueError("rotation input requires recipients")
+            return _device.rotate_new_writes(
+                profile=args.profile,
+                recipients=recipients,
+                credential_profile=args.credential_profile or payload.get("credential-profile") or payload.get("credential_profile"),
+            )
+        raise ValueError("unsupported device action")
     raise ValueError("unsupported command")
 
 
@@ -1636,10 +1706,22 @@ def _jat_root() -> Path:
     return Path(value) if value else Path.home() / ".local/share/josh-room/josh-all-the-things"
 
 
+def _selected_device_profile() -> str | None:
+    configured = _configured()
+    value = os.environ.get("JOSH_ROOM_DEVICE_PROFILE") or configured.get("device_profile")
+    return value if isinstance(value, str) and value else None
+
 def _recipients() -> list[str]:
+    configured = _configured()
+    selected_profile = _selected_device_profile()
+    active = _device.active_recipients(profile=selected_profile)
+    if active:
+        return active
     selected = os.environ.get("JOSH_ROOM_SELECTED_RECIPIENTS")
     if selected:
         return [item for item in selected.split(",") if item]
+    environment = [item for item in os.environ.get("JOSH_ROOM_RECIPIENTS", "").split(",") if item]
+    return environment or list(configured.get("age_recipients", []))
     environment = [item for item in os.environ.get("JOSH_ROOM_RECIPIENTS", "").split(",") if item]
     return environment or list(_configured().get("age_recipients", []))
 
@@ -1660,7 +1742,10 @@ def _identity_environment():
     if existing:
         yield
         return
-    profile = _configured().get("age_identity_profile")
+    selected_profile = _selected_device_profile()
+    profile = _device.active_age_profile(profile=selected_profile)
+    if not profile and selected_profile is None:
+        profile = _configured().get("age_identity_profile")
     if not profile:
         yield
         return
@@ -1748,7 +1833,10 @@ def _legacy_migration_identity(args, instance: Path):
             raise _legacy_source_identity_error(args) from error
         yield path
         return
-    profile = (_configured() or {}).get("age_identity_profile")
+    selected_profile = _selected_device_profile()
+    profile = _device.active_age_profile(profile=selected_profile)
+    if not profile and selected_profile is None:
+        profile = (_configured() or {}).get("age_identity_profile")
     if not profile:
         raise _legacy_source_identity_error(args, required=True)
     try:
