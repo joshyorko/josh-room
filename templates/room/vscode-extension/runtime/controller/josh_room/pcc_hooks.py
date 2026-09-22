@@ -21,7 +21,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Mapping, TextIO
-
+from .adapter_contract import AdapterError
 from .codex_adapter import CodexHookFacts, CodexRoots, canonicalize_hook_path
 from .pcc_outbox import PccOutbox, QueueState
 
@@ -232,7 +232,7 @@ def process_codex_hook(
         if receipt.state is QueueState.CAPTURE_GAP:
             return HookRuntimeResult(False, "capture-gap", event_id, receipt.state.value).to_dict()
         return HookRuntimeResult(True, None, event_id, receipt.state.value).to_dict()
-    except (HookBoundaryError, OSError, RuntimeError, TypeError, ValueError):
+    except (AdapterError, HookBoundaryError, OSError, RuntimeError, TypeError, ValueError):
         # Do not expose paths, JSON, exception text, or queue internals to Codex.
         return HookRuntimeResult(False, "capture-gap" if isinstance(payload, dict) else "invalid-input").to_dict()
 
@@ -245,7 +245,7 @@ def _read_one_json(stream: BinaryIO | TextIO) -> object:
         raise HookBoundaryError("oversized-input")
     try:
         return json.loads(bytes(raw).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError):
         raise HookBoundaryError("invalid-input") from None
 
 
@@ -254,7 +254,7 @@ def codex_hook_main(stream: BinaryIO | TextIO | None = None, *, roots: CodexRoot
 
     try:
         payload = _read_one_json(stream or sys.stdin.buffer)
-    except HookBoundaryError:
+    except (HookBoundaryError, OSError, UnicodeError, RecursionError, ValueError):
         return 0
     process_codex_hook(payload, roots=roots, outbox_root=outbox_root)
     return 0

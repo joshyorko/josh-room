@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
+import io
 from pathlib import Path
 
 from josh_room.codex_adapter import CodexRoots
 from josh_room.pcc_hooks import (
+    codex_hook_main,
     codex_hook_status,
     install_codex_hooks,
     process_codex_hook,
@@ -50,6 +51,32 @@ def test_runtime_rejects_path_escape_and_malformed_closed_input(tmp_path):
     payload["transcript_path"] = str(tmp_path / "outside" / "rollout-session-1.jsonl")
     assert process_codex_hook(payload, outbox_root=tmp_path / "outbox", roots=roots)["accepted"] is False
     assert process_codex_hook({"hook_event_name": "Stop"}, outbox_root=tmp_path / "outbox")["accepted"] is False
+
+
+def test_runtime_adapter_boundary_fail_open_for_unrepresentable_facts(tmp_path, monkeypatch):
+    payload, roots = _fixture(tmp_path)
+    payload["session_id"] = "session~1"
+    assert process_codex_hook(payload, outbox_root=tmp_path / "outbox", roots=roots)["accepted"] is False
+    payload, roots = _fixture(tmp_path / "subagent")
+    payload.update({
+        "hook_event_name": "SubagentStop",
+        "agent_transcript_path": payload["transcript_path"],
+        "agent_id": "agent-1",
+        "agent_type": "x" * 65,
+    })
+    payload.pop("turn_id", None)
+    payload["turn_id"] = "turn-1"
+    assert process_codex_hook(payload, outbox_root=tmp_path / "outbox2", roots=roots)["accepted"] is False
+    same = str(roots.active)
+    monkeypatch.setenv("JOSH_ROOM_CODEX_ACTIVE_ROOT", same)
+    monkeypatch.setenv("JOSH_ROOM_CODEX_ARCHIVED_ROOT", same)
+    assert process_codex_hook(_fixture(tmp_path / "equal")[0], outbox_root=tmp_path / "outbox3")["accepted"] is False
+
+
+def test_machine_entrypoint_fails_open_on_deep_or_oversized_json():
+    deep = ("[" * 5000) + ("]" * 5000)
+    assert codex_hook_main(io.BytesIO(deep.encode("ascii"))) == 0
+    assert codex_hook_main(io.BytesIO(b"{" + b'"n":' + b"9" * 65530)) == 0
 
 
 def test_install_preserves_unrelated_hooks_and_remove_rolls_back(tmp_path, monkeypatch):
