@@ -193,6 +193,52 @@ def test_stream_allowlists_visible_records_and_excludes_reasoning_auth_and_unkno
     assert all("secret" not in record.content.decode() for record in records)
 
 
+def test_nested_reasoning_content_is_not_emitted(tmp_path: Path):
+    _write_jsonl(tmp_path / "sessions" / "2026" / "09" / "22" / "rollout-session-1.jsonl", [
+        {"type": "session_meta", "payload": {"id": "session-1"}},
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "visible"},
+                    {"type": "reasoning", "text": "HIDDEN-REASONING"},
+                ],
+            },
+        },
+    ])
+    adapter = _adapter(tmp_path)
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.QUARANTINE
+    assert "HIDDEN-REASONING" not in result.to_json()
+
+
+def test_conflicting_schema_version_fields_quarantine(tmp_path: Path):
+    _write_jsonl(tmp_path / "sessions" / "2026" / "09" / "22" / "rollout-session-1.jsonl", [
+        {"type": "session_meta", "payload": {"id": "session-1"}},
+        {"schema_version": 1, "version": 99, "type": "session_meta", "payload": {"id": "session-1"}},
+    ])
+    adapter = _adapter(tmp_path)
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.QUARANTINE
+
+
+def test_issued_plan_retention_is_bounded(tmp_path: Path):
+    _rollout(tmp_path / "sessions")
+    adapter = _adapter(tmp_path)
+
+    for index in range(80):
+        event = replace(_event(), event_id=f"event-{index}")
+        adapter.plan(event, _gates())
+
+    assert len(adapter._issued) <= 64
+
+
 def test_unknown_record_kind_quarantines_instead_of_being_silently_omitted(tmp_path: Path):
     path = tmp_path / "sessions" / "2026" / "09" / "22" / "rollout-session-1.jsonl"
     _write_jsonl(path, [

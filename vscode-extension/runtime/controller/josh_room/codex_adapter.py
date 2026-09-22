@@ -71,6 +71,7 @@ _DEFAULT_MAX_OPEN_BYTES = 8 * 1024 * 1024
 _DEFAULT_MAX_OPEN_RECORDS = 10_000
 _MAX_ZSTD_WINDOW_BYTES = 8 * 1024 * 1024
 _MAX_LEDGER_ENTRIES = 32
+_MAX_ISSUED_PLANS = 64
 
 
 def _safe_json(value: Mapping[str, object]) -> bytes:
@@ -212,7 +213,6 @@ class _LedgerEntry:
 @dataclass(frozen=True, slots=True)
 class _IssuedPlan:
     plan_json: str
-    snapshot: _Snapshot
 
 
 def _record_id(record: Mapping[str, object]) -> str | None:
@@ -229,13 +229,17 @@ def _record_id(record: Mapping[str, object]) -> str | None:
 
 
 def _schema_is_unknown(record: Mapping[str, object]) -> bool:
-    version = record.get("schema_version", record.get("version"))
-    if version is None:
-        return False
-    if isinstance(version, Mapping):
-        major = version.get("major")
-        return not (type(major) is int and major == 1)
-    return not (type(version) is int and version == 1)
+    for name in ("schema_version", "version"):
+        if name not in record:
+            continue
+        version = record[name]
+        if isinstance(version, Mapping):
+            major = version.get("major")
+            if type(major) is not int or major != 1:
+                return True
+        elif type(version) is not int or version != 1:
+            return True
+    return False
 
 
 def _message_text(payload: Mapping[str, object]) -> str | None:
@@ -249,10 +253,15 @@ def _message_text(payload: Mapping[str, object]) -> str | None:
         parts: list[str] = []
         for item in content:
             if not isinstance(item, Mapping):
-                continue
+                return None
+            if item.get("type") not in {"text", "input_text", "output_text"}:
+                return None
+            if "encrypted_content" in item:
+                return None
             text = _bounded_text(item.get("text"))
-            if text is not None:
-                parts.append(text)
+            if text is None:
+                return None
+            parts.append(text)
         if parts:
             return "".join(parts)
     return None
@@ -461,7 +470,12 @@ class CodexTranscriptAdapter:
             status=status,
             transitioned_from=transitioned_from,
         )
-        self._issued[id(plan)] = _IssuedPlan(plan.to_json(), snapshot)
+        self._issued[id(plan)] = _IssuedPlan(plan.to_json())
+        while len(self._issued) > _MAX_ISSUED_PLANS:
+            oldest = next(iter(self._issued))
+            if oldest == id(plan):
+                break
+            self._issued.pop(oldest)
         return plan
 
     def open(self, plan: Plan, *, cancellation: CancellationToken | None = None) -> BoundedRecordStream:
@@ -696,7 +710,10 @@ class CodexTranscriptAdapter:
         if not raw_path.is_absolute() and facts is not None:
             raw_path = Path(facts.cwd) / raw_path
         raw = Path(os.path.abspath(os.fspath(raw_path)))
-        canonical = raw.resolve(strict=False)
+        try:
+            canonical = raw.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return None
         if not self._raw_path_is_safe(raw):
             return None
         root_name = self._root_name(canonical)
@@ -772,7 +789,10 @@ class CodexTranscriptAdapter:
                 if time.monotonic() - started > 1.0:
                     return found, True
                 try:
-                    path = Path(entry.path).resolve(strict=False)
+                    try:
+                        path = Path(entry.path).resolve(strict=False)
+                    except (OSError, RuntimeError):
+                        continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append((path, depth + 1))
                         continue
@@ -825,9 +845,17 @@ class CodexTranscriptAdapter:
     def _open_bytes(self, path: Path) -> Iterator[Any]:
         if not self._raw_path_is_safe(path) or not path.is_file():
             raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source cannot be opened") from None
+        descriptor: int | None = None
         try:
-            raw = path.open("rb")
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise OSError("source is not a regular file")
+            raw = os.fdopen(descriptor, "rb")
+            descriptor = None
         except OSError:
+            if descriptor is not None:
+                os.close(descriptor)
             raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source cannot be opened") from None
         if path.name.endswith(".jsonl.zst"):
             if zstandard is None:
