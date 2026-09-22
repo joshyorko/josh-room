@@ -56,7 +56,8 @@ def test_prepare_and_drain_never_prepare_in_drain(tmp_path):
     controller = HarvestController(outbox, prepare=prepare, publish=publish, owner_factory=lambda: "worker-1")
     result = controller.run(offline=True)
     assert result["ok"] is True
-    # The prepared lease remains held by #8 until its normal lease expiry.
+    # The #8 release seam makes prepared records immediately drainable.
     assert result["prepared"][0]["resume_state"] == QueueState.PREPARED_ENCRYPTED.value
+    assert outbox.inspect_record("event-1").owner is None
     assert controller.status()["prepared"] == 1
     assert calls == []
