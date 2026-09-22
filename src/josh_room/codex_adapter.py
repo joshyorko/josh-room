@@ -12,8 +12,9 @@ import io
 import json
 import os
 import re
+import stat
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,11 +63,14 @@ _JSONL_SUFFIXES = (".jsonl", ".jsonl.zst")
 _COPY_SUFFIX = re.compile(r"-copy(?:-[0-9]+)?$")
 _MAX_SESSION_SCAN_FILES = 128
 _MAX_SESSION_SCAN_BYTES = 64 * 1024 * 1024
+_MAX_SESSION_SCAN_LINES = 4096
 _MAX_SESSION_SCAN_DEPTH = 8
 _MAX_INLINE_VALUE_BYTES = 64 * 1024
 _DEFAULT_MAX_RECORD_BYTES = 512 * 1024
 _DEFAULT_MAX_OPEN_BYTES = 8 * 1024 * 1024
 _DEFAULT_MAX_OPEN_RECORDS = 10_000
+_MAX_ZSTD_WINDOW_BYTES = 8 * 1024 * 1024
+_MAX_LEDGER_ENTRIES = 32
 
 
 def _safe_json(value: Mapping[str, object]) -> bytes:
@@ -77,8 +81,9 @@ def _digest_prefix(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _source_id(session_id: str) -> str:
-    return "codex-" + hashlib.sha256(("session:" + session_id).encode("utf-8")).hexdigest()[:32]
+def _source_id(session_id: str, path_key: str) -> str:
+    identity = f"session:{session_id}|path:{path_key}"
+    return "codex-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
 
 
 def _safe_surface(value: object) -> str:
@@ -162,6 +167,7 @@ class CodexHookFacts:
 @dataclass(frozen=True, slots=True)
 class _Candidate:
     path: Path
+    path_key: str
     representation: str
     session_id: str
     source_id: str
@@ -184,9 +190,29 @@ class _Snapshot:
     prefix_digests: tuple[str, ...]
     boundaries: tuple[int, ...]
     stable_size: int
+    content_digest: str
+    content_prefix_digests: tuple[tuple[int, str], ...]
     malformed: bool
     unknown_major: bool
     unknown_kind: bool
+    incomplete: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _LedgerEntry:
+    source_id: str
+    path_key: str
+    representation: str
+    stable_size: int
+    content_digest: str
+    history: tuple[tuple[int, str], ...]
+    latest_checkpoint: Checkpoint | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _IssuedPlan:
+    plan_json: str
+    snapshot: _Snapshot
 
 
 def _record_id(record: Mapping[str, object]) -> str | None:
@@ -204,10 +230,12 @@ def _record_id(record: Mapping[str, object]) -> str | None:
 
 def _schema_is_unknown(record: Mapping[str, object]) -> bool:
     version = record.get("schema_version", record.get("version"))
+    if version is None:
+        return False
     if isinstance(version, Mapping):
         major = version.get("major")
-        return isinstance(major, int) and not isinstance(major, bool) and major != 1
-    return False
+        return not (type(major) is int and major == 1)
+    return not (type(version) is int and version == 1)
 
 
 def _message_text(payload: Mapping[str, object]) -> str | None:
@@ -315,7 +343,7 @@ def _safe_record(
 class CodexTranscriptAdapter:
     """A bounded filesystem-backed implementation of ``LogicalSourceAdapter``."""
 
-    __slots__ = ("_hook_facts", "_issued", "_roots", "declaration")
+    __slots__ = ("_hook_facts", "_issued", "_ledger", "_poisoned", "_replaced", "_roots", "declaration")
 
     def __init__(
         self,
@@ -342,6 +370,9 @@ class CodexTranscriptAdapter:
         object.__setattr__(self, "_roots", roots)
         object.__setattr__(self, "_hook_facts", hook_facts)
         object.__setattr__(self, "_issued", {})
+        object.__setattr__(self, "_ledger", {})
+        object.__setattr__(self, "_poisoned", set())
+        object.__setattr__(self, "_replaced", set())
         object.__setattr__(self, "declaration", declaration)
 
     def probe(self, request: ProbeRequest) -> ProbeResult:
@@ -382,12 +413,16 @@ class CodexTranscriptAdapter:
         candidate, ambiguous = self._select(event.session_id, prior_checkpoint, hook_facts=hook_facts)
         if candidate is None:
             raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source is not available")
-        snapshot = self._scan(candidate)
+        try:
+            snapshot = self._scan(candidate)
+        except AdapterError:
+            raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "source cannot be safely read") from None
         if (
             ambiguous
             or snapshot.malformed
             or snapshot.unknown_major
             or snapshot.unknown_kind
+            or snapshot.incomplete
             or policy.decision is Decision.QUARANTINE
             or material.decision is Decision.QUARANTINE
         ):
@@ -426,31 +461,45 @@ class CodexTranscriptAdapter:
             status=status,
             transitioned_from=transitioned_from,
         )
-        self._issued[id(plan)] = (plan, snapshot)
+        self._issued[id(plan)] = _IssuedPlan(plan.to_json(), snapshot)
         return plan
 
     def open(self, plan: Plan, *, cancellation: CancellationToken | None = None) -> BoundedRecordStream:
         if not isinstance(plan, Plan):
             raise AdapterError(AdapterErrorCode.INVALID_REQUEST, "plan required")
         issued = self._issued.get(id(plan))
-        if issued is None or issued[0] != plan:
+        if issued is None:
             raise AdapterError(AdapterErrorCode.INVALID_REQUEST, "plan is not issued by this adapter")
+        try:
+            if plan.to_json() != issued.plan_json:
+                raise AdapterError(AdapterErrorCode.INVALID_REQUEST, "plan is not issued by this adapter")
+        except AdapterError:
+            raise
+        except Exception:  # noqa: BLE001 - mutated plans fail closed
+            raise AdapterError(AdapterErrorCode.INVALID_REQUEST, "plan is not issued by this adapter") from None
         candidate, ambiguous = self._select(plan.session_id, plan.checkpoint)
         if candidate is None or ambiguous:
             raise AdapterError(AdapterErrorCode.SOURCE_REPLACED, "source is ambiguous")
-        snapshot = self._scan(candidate)
+        try:
+            snapshot = self._scan(candidate)
+        except AdapterError:
+            raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "source cannot be safely read") from None
         self._validate_resume(snapshot, plan.checkpoint)
         if plan.status.value != "ready":
             raise AdapterError(AdapterErrorCode.INVALID_REQUEST, "plan is not approved")
         if plan.representation != candidate.representation or plan.source_id != candidate.source_id:
             raise AdapterError(AdapterErrorCode.SOURCE_REPLACED, "source identity changed")
-        if plan.estimated_records != max(0, len(snapshot.records) - plan.checkpoint.next_record_index):
-            raise AdapterError(AdapterErrorCode.INVALID_REQUEST, "plan estimates are invalid")
+        start_index = plan.checkpoint.next_record_index
+        planned_end = start_index + plan.estimated_records
+        if len(snapshot.records) < planned_end:
+            raise AdapterError(AdapterErrorCode.SOURCE_TRUNCATED, "source is shorter than plan")
 
         def records() -> Iterator[SourceRecord]:
             current = self._scan(candidate)
             self._validate_resume(current, plan.checkpoint)
-            for index, item in enumerate(current.records[plan.checkpoint.next_record_index:], plan.checkpoint.next_record_index):
+            if len(current.records) < planned_end:
+                raise AdapterError(AdapterErrorCode.SOURCE_TRUNCATED, "source is shorter than plan")
+            for index, item in enumerate(current.records[start_index:planned_end], start_index):
                 yield SourceRecord(
                     logical_source=LogicalSourceName.TRANSCRIPT,
                     session_id=plan.session_id,
@@ -462,7 +511,7 @@ class CodexTranscriptAdapter:
         def checkpoint_factory(count: int, _bytes: int) -> Checkpoint:
             current = self._scan(candidate)
             index = plan.checkpoint.next_record_index + count
-            if index > len(current.records):
+            if index > planned_end or index > len(current.records):
                 raise AdapterError(AdapterErrorCode.SOURCE_TRUNCATED, "source is shorter than checkpoint")
             return self._checkpoint(
                 candidate,
@@ -483,13 +532,15 @@ class CodexTranscriptAdapter:
             raise AdapterError(AdapterErrorCode.SOURCE_REPLACED, "source is ambiguous")
         snapshot = self._scan(candidate)
         self._validate_resume(snapshot, checkpoint)
-        return self._checkpoint(
+        published = self._checkpoint(
             candidate,
             checkpoint.next_record_index,
             checkpoint.next_byte_offset,
             checkpoint.prefix_digest,
             snapshot.stable_size,
         )
+        self._remember_checkpoint(published)
+        return published
 
     def resolve(
         self,
@@ -506,9 +557,14 @@ class CodexTranscriptAdapter:
             raise AdapterError(AdapterErrorCode.INVALID_CHECKPOINT, "checkpoint required")
         candidate, ambiguous = self._select(session_id, prior_checkpoint, hook_facts=hook_facts)
         if candidate is None:
-            return ResolveResult(ResolveStatus.NOT_FOUND, session_id)
-        snapshot = self._scan(candidate)
-        if ambiguous or snapshot.malformed or snapshot.unknown_major or snapshot.unknown_kind:
+            return ResolveResult(ResolveStatus.QUARANTINE if ambiguous else ResolveStatus.NOT_FOUND, session_id)
+        try:
+            snapshot = self._scan(candidate)
+        except AdapterError:
+            return ResolveResult(ResolveStatus.QUARANTINE, session_id, candidate.representation)
+        if candidate.source_id in self._replaced:
+            return ResolveResult(ResolveStatus.CONFLICT, session_id, candidate.representation)
+        if ambiguous or snapshot.malformed or snapshot.unknown_major or snapshot.unknown_kind or snapshot.incomplete:
             return ResolveResult(ResolveStatus.QUARANTINE, session_id, candidate.representation)
         if prior_checkpoint is None:
             return ResolveResult(ResolveStatus.FOUND, session_id, candidate.representation)
@@ -547,6 +603,29 @@ class CodexTranscriptAdapter:
             prefix_digest=digest,
         )
 
+    def _remember_checkpoint(self, checkpoint: Checkpoint) -> None:
+        entry = self._ledger.get(checkpoint.source_id)
+        previous = None if entry is None else entry.latest_checkpoint
+        if previous is not None:
+            if checkpoint.next_record_index < previous.next_record_index:
+                raise AdapterError(AdapterErrorCode.SOURCE_CURSOR_INCONSISTENT, "checkpoint regressed")
+            if checkpoint.next_record_index == previous.next_record_index and (
+                checkpoint.next_byte_offset != previous.next_byte_offset
+                or checkpoint.prefix_digest != previous.prefix_digest
+                or checkpoint.observed_size < previous.observed_size
+            ):
+                raise AdapterError(AdapterErrorCode.SOURCE_CURSOR_INCONSISTENT, "checkpoint changed")
+        if entry is not None:
+            self._ledger[checkpoint.source_id] = _LedgerEntry(
+                entry.source_id,
+                entry.path_key,
+                entry.representation,
+                entry.stable_size,
+                entry.content_digest,
+                entry.history,
+                checkpoint,
+            )
+
     def _validate_resume(self, snapshot: _Snapshot, checkpoint: Checkpoint) -> None:
         if checkpoint.logical_source is not LogicalSourceName.TRANSCRIPT or checkpoint.session_id != snapshot.candidate.session_id:
             raise AdapterError(AdapterErrorCode.SOURCE_REPLACED, "checkpoint source changed")
@@ -559,8 +638,22 @@ class CodexTranscriptAdapter:
             raise AdapterError(AdapterErrorCode.SOURCE_REPRESENTATION_CHANGED, "representation transition is not approved")
         if checkpoint.next_record_index > len(snapshot.records) or checkpoint.next_byte_offset > snapshot.stable_size:
             raise AdapterError(AdapterErrorCode.SOURCE_TRUNCATED, "source is shorter than checkpoint")
-        if checkpoint.next_byte_offset not in snapshot.boundaries:
+        if checkpoint.next_record_index >= len(snapshot.boundaries):
+            raise AdapterError(AdapterErrorCode.SOURCE_CURSOR_INCONSISTENT, "record cursor is inconsistent")
+        if checkpoint.next_byte_offset != snapshot.boundaries[checkpoint.next_record_index]:
             raise AdapterError(AdapterErrorCode.SOURCE_CURSOR_INCONSISTENT, "byte cursor is inconsistent")
+        if checkpoint.observed_size < checkpoint.next_byte_offset:
+            raise AdapterError(AdapterErrorCode.SOURCE_CURSOR_INCONSISTENT, "observed size is inconsistent")
+        if checkpoint.observed_size > snapshot.stable_size:
+            raise AdapterError(AdapterErrorCode.SOURCE_TRUNCATED, "source is shorter than checkpoint")
+        ledger = self._ledger.get(checkpoint.source_id)
+        if (
+            ledger is not None
+            and ledger.latest_checkpoint is not None
+            and checkpoint.observed_size < ledger.stable_size
+            and checkpoint.observed_size != ledger.latest_checkpoint.observed_size
+        ):
+            raise AdapterError(AdapterErrorCode.SOURCE_CURSOR_INCONSISTENT, "observed size is inconsistent")
         if snapshot.prefix_digests[checkpoint.next_record_index] != checkpoint.prefix_digest:
             raise AdapterError(AdapterErrorCode.SOURCE_PREFIX_CHANGED, "source prefix changed")
 
@@ -572,11 +665,12 @@ class CodexTranscriptAdapter:
         hook_facts: CodexHookFacts | None = None,
     ) -> tuple[_Candidate | None, bool]:
         facts = hook_facts or self._hook_facts
+        hook_candidate = None
         if facts is not None and facts.session_id == session_id:
-            candidate = self._candidate_from_path(facts.transcript_path, session_id, facts)
-            if candidate is not None:
-                return candidate, False
-        candidates = self._fallback_candidates(session_id, facts)
+            hook_candidate = self._candidate_from_path(facts.transcript_path, session_id, facts)
+        candidates, search_incomplete = self._fallback_candidates(session_id, facts)
+        if hook_candidate is not None and all(item.path != hook_candidate.path for item in candidates):
+            candidates.append(hook_candidate)
         if not candidates:
             return None, False
         if prior_checkpoint is not None:
@@ -589,51 +683,86 @@ class CodexTranscriptAdapter:
                     continue
                 matching.append(candidate)
             if len(matching) == 1:
-                return matching[0], False
+                return matching[0], search_incomplete
             if len(candidates) == 1:
-                return candidates[0], False
-            return (matching[0] if matching else candidates[0]), len(matching) != 1
-        return candidates[0], len(candidates) > 1
+                return candidates[0], search_incomplete
+            return (matching[0] if matching else candidates[0]), len(matching) != 1 or search_incomplete
+        if hook_candidate is not None and len(candidates) == 1:
+            return hook_candidate, search_incomplete
+        return (hook_candidate or (candidates[0] if candidates else None)), len(candidates) > 1 or search_incomplete
 
     def _candidate_from_path(self, path: Path, session_id: str, facts: CodexHookFacts | None = None) -> _Candidate | None:
-        canonical = path.expanduser().resolve(strict=False)
+        raw_path = path.expanduser()
+        if not raw_path.is_absolute() and facts is not None:
+            raw_path = Path(facts.cwd) / raw_path
+        raw = Path(os.path.abspath(os.fspath(raw_path)))
+        canonical = raw.resolve(strict=False)
+        if not self._raw_path_is_safe(raw):
+            return None
         root_name = self._root_name(canonical)
         if root_name is None or not canonical.is_file() or canonical.name.startswith("."):
             return None
         representation = self._representation(canonical, root_name)
         if representation is None or not self._path_matches_session(canonical, session_id):
             return None
+        root = self._roots.active if root_name == "active" else self._roots.archived
+        path_key = canonical.relative_to(root).as_posix()
+        if path_key.endswith(".zst"):
+            path_key = path_key.removesuffix(".zst")
         return _Candidate(
             canonical,
+            path_key,
             representation,
             session_id,
-            _source_id(session_id),
+            _source_id(session_id, path_key),
             _safe_surface("unknown" if facts is None else facts.surface),
             None if facts is None else facts.subagent_type,
         )
 
-    def _fallback_candidates(self, session_id: str, facts: CodexHookFacts | None) -> list[_Candidate]:
+    def _raw_path_is_safe(self, raw: Path) -> bool:
+        for root in (self._roots.active, self._roots.archived):
+            try:
+                relative = raw.relative_to(root)
+            except ValueError:
+                continue
+            current = root
+            for part in relative.parts:
+                current /= part
+                try:
+                    if stat.S_ISLNK(current.lstat().st_mode):
+                        return False
+                except OSError:
+                    return False
+            return True
+        return False
+
+    def _fallback_candidates(self, session_id: str, facts: CodexHookFacts | None) -> tuple[list[_Candidate], bool]:
         candidates: list[_Candidate] = []
+        search_incomplete = False
         for root_name, root in (("active", self._roots.active), ("archived", self._roots.archived)):
-            for path in self._bounded_files(root):
+            paths, bounded = self._bounded_files(root)
+            search_incomplete = search_incomplete or bounded
+            for path in paths:
                 if not self._path_matches_session(path, session_id):
                     continue
                 candidate = self._candidate_from_path(path, session_id, facts)
                 if candidate is not None:
                     candidates.append(candidate)
-        return candidates
+        return candidates, search_incomplete
 
-    def _bounded_files(self, root: Path) -> Iterable[Path]:
+    def _bounded_files(self, root: Path) -> tuple[list[Path], bool]:
         if not root.is_dir():
-            return ()
+            return [], False
         found: list[Path] = []
         stack: list[tuple[Path, int]] = [(root, 0)]
         file_count = 0
         byte_count = 0
         started = time.monotonic()
+        bounded = False
         while stack and file_count < _MAX_SESSION_SCAN_FILES and byte_count < _MAX_SESSION_SCAN_BYTES:
             current, depth = stack.pop()
             if depth > _MAX_SESSION_SCAN_DEPTH:
+                bounded = True
                 continue
             try:
                 entries = sorted(os.scandir(current), key=lambda entry: entry.name)
@@ -641,7 +770,7 @@ class CodexTranscriptAdapter:
                 continue
             for entry in entries:
                 if time.monotonic() - started > 1.0:
-                    return found
+                    return found, True
                 try:
                     path = Path(entry.path).resolve(strict=False)
                     if entry.is_dir(follow_symlinks=False):
@@ -656,8 +785,11 @@ class CodexTranscriptAdapter:
                 file_count += 1
                 byte_count += min(size, _MAX_SESSION_SCAN_BYTES - byte_count)
                 if file_count >= _MAX_SESSION_SCAN_FILES or byte_count >= _MAX_SESSION_SCAN_BYTES:
+                    bounded = True
                     break
-        return found
+        if stack:
+            bounded = True
+        return found, bounded
 
     def _path_matches_session(self, path: Path, session_id: str) -> bool:
         name = path.name
@@ -679,7 +811,7 @@ class CodexTranscriptAdapter:
         try:
             with self._open_bytes(path) as handle:
                 line = handle.readline(_DEFAULT_MAX_RECORD_BYTES + 1)
-        except (OSError, AdapterError, EOFError):
+        except Exception:  # noqa: BLE001 - probing failures are treated as no candidate
             return None
         if not line.endswith(b"\n") or len(line) > _DEFAULT_MAX_RECORD_BYTES:
             return None
@@ -691,6 +823,8 @@ class CodexTranscriptAdapter:
 
     @contextmanager
     def _open_bytes(self, path: Path) -> Iterator[Any]:
+        if not self._raw_path_is_safe(path) or not path.is_file():
+            raise AdapterError(AdapterErrorCode.UNKNOWN_SOURCE, "source cannot be opened") from None
         try:
             raw = path.open("rb")
         except OSError:
@@ -699,7 +833,14 @@ class CodexTranscriptAdapter:
             if zstandard is None:
                 raw.close()
                 raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "compressed source support is unavailable") from None
-            reader = io.BufferedReader(zstandard.ZstdDecompressor().stream_reader(raw))
+            try:
+                decoder = zstandard.ZstdDecompressor(
+                    max_window_size=_MAX_ZSTD_WINDOW_BYTES // 1024,
+                )
+                reader = io.BufferedReader(decoder.stream_reader(raw))
+            except Exception as error:  # decoder failures are opaque
+                raw.close()
+                raise AdapterError(AdapterErrorCode.UNKNOWN_REPRESENTATION, "compressed source is invalid") from error
             try:
                 yield reader
             finally:
@@ -715,18 +856,26 @@ class CodexTranscriptAdapter:
         records: list[_RecordMeta] = []
         prefix_digests = [hashlib.sha256(b"").hexdigest()]
         boundaries = [0]
+        content_prefix_digests: list[tuple[int, str]] = [(0, hashlib.sha256(b"").hexdigest())]
         digest = hashlib.sha256()
         offset = 0
+        line_count = 0
         stable_size = 0
         malformed = False
         unknown_major = False
         unknown_kind = False
+        incomplete = False
         try:
             with self._open_bytes(candidate.path) as handle:
-                while len(records) < _MAX_SESSION_SCAN_FILES and stable_size <= _MAX_SESSION_SCAN_BYTES:
+                while (
+                    len(records) < _MAX_SESSION_SCAN_FILES
+                    and stable_size <= _MAX_SESSION_SCAN_BYTES
+                    and line_count < _MAX_SESSION_SCAN_LINES
+                ):
                     line = handle.readline(_DEFAULT_MAX_RECORD_BYTES + 1)
                     if not line:
                         break
+                    line_count += 1
                     if len(line) > _DEFAULT_MAX_RECORD_BYTES:
                         total = len(line)
                         complete = line.endswith(b"\n")
@@ -757,6 +906,7 @@ class CodexTranscriptAdapter:
                             }),
                             "asset",
                         ))
+                        content_prefix_digests.append((end, digest.hexdigest()))
                         if total > self.declaration.limits.max_record_bytes:
                             unknown_kind = True
                         boundaries.append(end)
@@ -768,6 +918,7 @@ class CodexTranscriptAdapter:
                     stable_size = end
                     offset = end
                     digest.update(line)
+                    content_prefix_digests.append((end, digest.hexdigest()))
                     try:
                         value = json.loads(line)
                     except (TypeError, ValueError):
@@ -797,20 +948,66 @@ class CodexTranscriptAdapter:
                     records.append(_RecordMeta(end - len(line), end, content, material_class))
                     boundaries.append(end)
                     prefix_digests.append(digest.hexdigest())
+                if (
+                    len(records) >= _MAX_SESSION_SCAN_FILES
+                    or stable_size >= _MAX_SESSION_SCAN_BYTES
+                    or line_count >= _MAX_SESSION_SCAN_LINES
+                ):
+                    incomplete = True
         except AdapterError:
             raise
         except Exception:  # noqa: BLE001 - parser/decompressor failures become quarantine
             malformed = True
-        return _Snapshot(
+        snapshot = _Snapshot(
             candidate,
             tuple(records),
             tuple(prefix_digests),
             tuple(boundaries),
             stable_size,
+            digest.hexdigest(),
+            tuple(content_prefix_digests),
             malformed,
             unknown_major,
             unknown_kind,
+            incomplete,
         )
+        previous = self._ledger.get(candidate.source_id)
+        poisoned = candidate.source_id in self._poisoned
+        if previous is not None:
+            previous_digest = dict(snapshot.content_prefix_digests).get(previous.stable_size)
+            if snapshot.stable_size < previous.stable_size or previous_digest != previous.content_digest:
+                self._poisoned.add(candidate.source_id)
+                self._replaced.add(candidate.source_id)
+                poisoned = True
+        if poisoned and not snapshot.malformed:
+            snapshot = _Snapshot(
+                snapshot.candidate,
+                snapshot.records,
+                snapshot.prefix_digests,
+                snapshot.boundaries,
+                snapshot.stable_size,
+                snapshot.content_digest,
+                snapshot.content_prefix_digests,
+                True,
+                snapshot.unknown_major,
+                snapshot.unknown_kind,
+                snapshot.incomplete,
+            )
+        self._ledger[candidate.source_id] = _LedgerEntry(
+            candidate.source_id,
+            candidate.path_key,
+            candidate.representation,
+            snapshot.stable_size,
+            snapshot.content_digest,
+            snapshot.content_prefix_digests,
+            None if previous is None else previous.latest_checkpoint,
+        )
+        while len(self._ledger) > _MAX_LEDGER_ENTRIES:
+            oldest = next(iter(self._ledger))
+            if oldest == candidate.source_id:
+                break
+            self._ledger.pop(oldest)
+        return snapshot
 
     @staticmethod
     def _is_excluded(record: Mapping[str, object]) -> bool:
@@ -834,7 +1031,7 @@ class CodexTranscriptAdapter:
     @staticmethod
     def _representation(path: Path, root_name: str) -> str | None:
         if path.name.endswith(".jsonl.zst"):
-            return "compressed-jsonl-zst" if root_name == "archived" else "active-jsonl"
+            return "compressed-jsonl-zst" if root_name == "archived" else None
         if path.name.endswith(".jsonl"):
             return "active-jsonl" if root_name == "active" else "archived-jsonl"
         return None

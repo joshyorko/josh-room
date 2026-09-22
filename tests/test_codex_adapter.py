@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import zstandard
 
 from josh_room.adapter_contract import (
+    AdapterError,
+    AdapterErrorCode,
     Decision,
     GateDecision,
     GateSet,
@@ -105,6 +108,47 @@ def test_fallback_quarantines_duplicate_session_candidates_without_timestamp_cho
     assert result.status is ResolveStatus.QUARANTINE
 
 
+def test_hook_fact_is_only_a_hint_and_duplicate_candidate_quarantines(tmp_path: Path):
+    first = _rollout(tmp_path / "sessions")
+    duplicate = first.with_name("rollout-session-1-copy.jsonl")
+    shutil.copyfile(first, duplicate)
+    adapter = _adapter(
+        tmp_path,
+        hook=CodexHookFacts(
+            session_id="session-1",
+            cwd=tmp_path,
+            transcript_path=first,
+            surface="cli",
+        ),
+    )
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.QUARANTINE
+
+
+def test_hook_symlink_is_rejected_even_when_it_resolves_inside_approved_root(tmp_path: Path):
+    source = _rollout(tmp_path / "outside")
+    link = tmp_path / "sessions" / "2026" / "09" / "22" / source.name
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(source)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    adapter = _adapter(
+        tmp_path,
+        hook=CodexHookFacts(
+            session_id="session-1",
+            cwd=tmp_path,
+            transcript_path=link,
+        ),
+    )
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.NOT_FOUND
+
+
 @pytest.mark.parametrize("surface", ["cli", "desktop", "vscode", "app-server", "subagent"])
 def test_provenance_surface_and_subagent_type_are_bounded_metadata(tmp_path: Path, surface: str):
     path = tmp_path / "sessions" / "2026" / "09" / "22" / "rollout-session-1.jsonl"
@@ -175,6 +219,64 @@ def test_unknown_major_schema_quarantines_instead_of_being_silently_omitted(tmp_
     assert result.status is ResolveStatus.QUARANTINE
 
 
+@pytest.mark.parametrize("field", ["version", "schema_version"])
+def test_scalar_schema_versions_quarantine_instead_of_being_accepted(tmp_path: Path, field: str):
+    path = tmp_path / "sessions" / "2026" / "09" / "22" / "rollout-session-1.jsonl"
+    _write_jsonl(path, [
+        {"type": "session_meta", "payload": {"id": "session-1"}},
+        {field: 99, "type": "session_meta", "payload": {"id": "session-1"}},
+    ])
+    adapter = _adapter(tmp_path)
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.QUARANTINE
+
+
+def test_scan_record_cap_quarantines_instead_of_treating_cap_as_eof(tmp_path: Path):
+    path = tmp_path / "sessions" / "2026" / "09" / "22" / "rollout-session-1.jsonl"
+    records = [{"type": "session_meta", "payload": {"id": "session-1"}}]
+    records.extend(
+        {"type": "response_item", "payload": {"type": "message", "role": "user", "text": str(index)}}
+        for index in range(129)
+    )
+    _write_jsonl(path, records)
+    adapter = _adapter(tmp_path)
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.QUARANTINE
+
+
+def test_fallback_scan_cap_quarantines_instead_of_guessing_first_candidate(tmp_path: Path):
+    target = _rollout(tmp_path / "sessions")
+    for index in range(127):
+        _write_jsonl(
+            tmp_path / "sessions" / "2026" / "09" / "22" / f"{target.stem}-extra-{index:03d}.jsonl",
+            [{"type": "session_meta", "payload": {"id": f"other-{index}"}}],
+        )
+    adapter = _adapter(tmp_path)
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.QUARANTINE
+
+
+def test_compressed_representation_under_active_root_is_rejected(tmp_path: Path):
+    source = _rollout(tmp_path / "archived_sessions")
+    source_bytes = source.read_bytes()
+    source.unlink()
+    compressed = tmp_path / "sessions" / source.relative_to(tmp_path / "archived_sessions")
+    compressed = compressed.with_suffix(compressed.suffix + ".zst")
+    compressed.parent.mkdir(parents=True, exist_ok=True)
+    compressed.write_bytes(zstandard.ZstdCompressor().compress(source_bytes))
+    adapter = _adapter(tmp_path)
+
+    result = adapter.resolve("session-1", None)
+
+    assert result.status is ResolveStatus.NOT_FOUND
+
+
 def test_incomplete_final_line_is_not_emitted_and_checkpoint_resumes_after_completion(tmp_path: Path):
     path = _rollout(tmp_path / "sessions")
     with path.open("ab") as handle:
@@ -214,6 +316,8 @@ def test_active_to_archived_and_plain_to_zstd_transitions_resume_without_duplica
     moved = adapter.resolve("session-1", checkpoint)
     assert moved.status is ResolveStatus.MOVED
     moved_plan = adapter.plan(_event(), _gates(), prior_checkpoint=checkpoint)
+    assert moved.checkpoint is not None
+    assert moved.checkpoint.source_id == checkpoint.source_id
     assert [record.record_index for record in adapter.open(moved_plan)] == [1, 2]
 
     zst_path = archived.with_suffix(archived.suffix + ".zst")
@@ -253,6 +357,62 @@ def test_replaced_source_fails_closed_on_resume_without_exposing_content(tmp_pat
 
     assert result.status is ResolveStatus.CONFLICT
     assert "forged" not in result.to_json()
+
+
+def test_same_prefix_suffix_replacement_fails_closed_on_resume(tmp_path: Path):
+    path = _rollout(tmp_path / "sessions")
+    adapter = _adapter(tmp_path)
+    stream = adapter.open(adapter.plan(_event(), _gates()))
+    assert next(stream).record_index == 0
+    checkpoint = adapter.checkpoint(stream.result)
+    original = path.read_bytes()
+    suffix = original[checkpoint.next_byte_offset:]
+    path.write_bytes(original[:checkpoint.next_byte_offset] + suffix.replace(b'"hi"', b'"by"', 1))
+
+    result = adapter.resolve("session-1", checkpoint)
+
+    assert result.status is ResolveStatus.CONFLICT
+
+
+def test_resume_rejects_cursor_index_offset_and_observed_size_forgery(tmp_path: Path):
+    _rollout(tmp_path / "sessions")
+    adapter = _adapter(tmp_path)
+    stream = adapter.open(adapter.plan(_event(), _gates()))
+    assert next(stream).record_index == 0
+    checkpoint = adapter.checkpoint(stream.result)
+
+    bad_offset = replace(checkpoint, next_record_index=0)
+    bad_size = replace(checkpoint, observed_size=checkpoint.next_byte_offset)
+
+    assert adapter.resolve("session-1", bad_offset).status is ResolveStatus.CONFLICT
+    assert adapter.resolve("session-1", bad_size).status is ResolveStatus.CONFLICT
+
+
+def test_checkpoint_publication_rejects_regression_but_allows_exact_repeat(tmp_path: Path):
+    adapter = _adapter(tmp_path)
+    _rollout(tmp_path / "sessions")
+    stream = adapter.open(adapter.plan(_event(), _gates()))
+    initial = stream.result
+    assert next(stream).record_index == 0
+    published = adapter.checkpoint(stream.result)
+
+    assert adapter.checkpoint(stream.result) == published
+    assert adapter.plan(_event(), _gates()).checkpoint.next_record_index == 0
+    with pytest.raises(AdapterError) as error:
+        adapter.checkpoint(initial)
+    assert error.value.code is AdapterErrorCode.SOURCE_CURSOR_INCONSISTENT
+
+
+def test_open_rejects_mutation_of_any_issued_plan_field(tmp_path: Path):
+    _rollout(tmp_path / "sessions")
+    adapter = _adapter(tmp_path)
+    plan = adapter.plan(_event(), _gates())
+    object.__setattr__(plan, "estimated_records", plan.estimated_records + 1)
+
+    with pytest.raises(AdapterError) as error:
+        adapter.open(plan)
+
+    assert error.value.code is AdapterErrorCode.INVALID_REQUEST
 
 
 def test_plain_and_compressed_duplicates_quarantine_even_with_same_prefix(tmp_path: Path):
