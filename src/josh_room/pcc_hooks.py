@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterator, Mapping, TextIO
+
 from .adapter_contract import AdapterError
 from .codex_adapter import CodexHookFacts, CodexRoots, canonicalize_hook_path
 from .pcc_outbox import PccOutbox, QueueState, _exclusive_file_lock

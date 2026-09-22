@@ -12,6 +12,7 @@ import os
 import re
 import sys
 from pathlib import Path
+
 from .pcc_enqueue import canonical_source, enqueue_trigger
 
 _MAX = 64 * 1024

@@ -1,7 +1,5 @@
 """Isolated executable used by the Codex command-hook configuration."""
 
-from __future__ import annotations
-
 import os
 import sys
 from pathlib import Path
