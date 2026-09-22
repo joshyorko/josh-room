@@ -482,6 +482,7 @@ def _validate_metadata(value: object) -> dict[str, object]:
         "workspace_id",
         "object_kind",
         "destination_class",
+        "destination_binding_id",
         "recipient_set_fingerprint",
         "source_surface",
         "source_adapter",
@@ -501,7 +502,7 @@ def _validate_metadata(value: object) -> dict[str, object]:
         raise ValueError("public metadata contains an unsupported field")
     result: dict[str, object] = {}
     for key, item in value.items():
-        if key in {"workspace_id", "object_kind", "source_surface", "source_adapter", "source_adapter_version", "index_id"}:
+        if key in {"workspace_id", "object_kind", "destination_binding_id", "source_surface", "source_adapter", "source_adapter_version", "index_id"}:
             result[key] = _identifier(item)
         elif key == "destination_class":
             if item not in {"local-only", "private-r2"}:
