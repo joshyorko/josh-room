@@ -508,13 +508,14 @@ class HarvestController:
                 repaired.append({"event_id": event_id, "state": "reconcile-failed", "code": code})
             else:
                 repaired.append({"event_id": record.event_id, "state": record.state.value})
-        ok = not any(item.get("state") == "reconcile-failed" for item in repaired)
+        diagnostics = [item.to_dict() for item in inspection.diagnostics]
+        ok = not any(item.get("state") == "reconcile-failed" for item in repaired) and not diagnostics
         return _envelope(
             ok=ok,
             command="reconcile",
             bounded=True,
             repaired=repaired,
-            diagnostics=[item.to_dict() for item in inspection.diagnostics],
+            diagnostics=diagnostics,
         )
 
 
