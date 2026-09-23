@@ -222,17 +222,25 @@ class HarvestController:
     def _publish_default(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
         if self.backend is None or not callable(getattr(self.backend, "publish_outbox_evidence", None)):
             raise HarvestError("provider-authority-unavailable")
-        if self.index_ciphertext is None:
+        index_event_id = record.metadata.get("index_event_id")
+        index_ciphertext = self.index_ciphertext
+        if isinstance(index_event_id, str):
+            try:
+                index_ciphertext = outbox.prepared_path(index_event_id)
+            except Exception as error:
+                raise HarvestError("index-builder-unavailable") from error
+        if index_ciphertext is None:
             raise HarvestError("index-builder-unavailable")
         result = self.backend.publish_outbox_evidence(
             outbox,
             record.event_id,
             owner,
-            index_ciphertext=self.index_ciphertext,
+            index_ciphertext=index_ciphertext,
         )
         return {
             "committed": bool(getattr(result, "committed", False)),
             "object_key": getattr(getattr(result, "object", None), "key", None),
+            "index_event_id": index_event_id,
         }
 
     def plan(self, event_id: str | None = None) -> dict[str, object]:
@@ -310,6 +318,8 @@ class HarvestController:
         owner = self.owner_factory()
         now = self.outbox.clock()
         for record in self.outbox.inspect().records:
+            if record.metadata.get("object_kind") == "index-event":
+                continue
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
                 continue
             if record.owner is not None and (record.lease_until is None or record.lease_until > now):

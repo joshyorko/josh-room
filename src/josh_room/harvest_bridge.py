@@ -13,6 +13,7 @@ import os
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import device
@@ -32,6 +33,7 @@ from .pcc_enqueue import enqueue_trigger
 from .pcc_outbox import PccOutbox, QueueRecord, QueueState
 from .policy import CaptureRequest, PolicyConfig, PolicyContext, decide
 from .policy_config import load_policy_config
+from .session_evidence import CONTENT_TYPES, ValidationDisposition, validate_document
 from .session_normalizer import (
     AssetReceipt,
     AssetSink,
@@ -39,6 +41,7 @@ from .session_normalizer import (
     NormalizationEvent,
     SessionNormalizer,
 )
+
 _MAX_CHILD_EVENTS = 64
 
 
@@ -250,6 +253,58 @@ class PreparedChild:
     receipt: PreparedReceipt
     ciphertext_path: Path
 
+_EVENT_CONTENT_TYPES = {
+    "session-segment": "application/vnd.josh.codex-session-segment+json",
+    "session-asset": "application/vnd.josh.codex-session-asset",
+    "session-final": "application/vnd.josh.codex-session-final+json",
+}
+
+
+def _index_event_id(evidence_event_id: str) -> str:
+    candidate = f"{evidence_event_id}.index"
+    if len(candidate) <= 128:
+        return candidate
+    return "idx-" + hashlib.sha256(evidence_event_id.encode("utf-8")).hexdigest()
+
+
+def _observed_at(document: Mapping[str, object]) -> str:
+    value = document.get("observed_at")
+    if isinstance(value, str) and value:
+        return value
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _index_document(event: NormalizationEvent, prepared: PreparedChild) -> tuple[str, dict[str, object]]:
+    evidence_kind = event.document.get("kind")
+    content_type = _EVENT_CONTENT_TYPES.get(evidence_kind)
+    content_sha256 = event.document.get("content_sha256")
+    if evidence_kind == "session-asset":
+        content_sha256 = event.document.get("sha256")
+    if (
+        not isinstance(evidence_kind, str)
+        or content_type not in CONTENT_TYPES
+        or not isinstance(content_sha256, str)
+        or len(content_sha256) != 64
+    ):
+        raise HarvestError("normalized-event-invalid")
+    document: dict[str, object] = {
+        "schema_name": "codex-session-evidence",
+        "schema_version": {"major": 1, "minor": 0},
+        "kind": "index-event",
+        "event_id": _index_event_id(prepared.event_id),
+        "evidence_kind": evidence_kind,
+        "evidence_event_id": prepared.event_id,
+        "content_sha256": content_sha256,
+        "ciphertext_sha256": prepared.receipt.ciphertext_sha256,
+        "ciphertext_size": prepared.receipt.ciphertext_size,
+        "content_type": content_type,
+        "discovery": {"state": "discovered", "observed_at": _observed_at(event.document)},
+    }
+    if validate_document(document).disposition is not ValidationDisposition.ACCEPTED:
+        raise HarvestError("normalized-event-invalid")
+    return str(document["event_id"]), document
+
+
 class HostHarvestBridge:
     """Prepare one trigger from explicit host roots and policy authority."""
 
@@ -333,6 +388,7 @@ class HostHarvestBridge:
             "capture_status": capture.get("status", "complete") if isinstance(capture, Mapping) else "complete",
             "sensitivity": event.document.get("sensitivity", "unknown"),
             "trigger": trigger,
+            "index_event_id": _index_event_id(event_id),
         }
         receipt = enqueue_trigger(
             outbox,
@@ -378,6 +434,71 @@ class HostHarvestBridge:
             raise
         return PreparedChild(event_id, prepared, outbox.prepared_path(event_id))
 
+    def _prepare_index_event(
+        self,
+        outbox: PccOutbox,
+        parent: QueueRecord,
+        owner: str,
+        evidence_event: NormalizationEvent,
+        evidence: PreparedChild,
+    ) -> PreparedChild:
+        event_id, document = _index_document(evidence_event, evidence)
+        binding_id = getattr(getattr(self.profile, "destination", None), "binding_id", None)
+        metadata = {
+            "object_kind": "index-event",
+            "policy_decision": "allow",
+            "destination_class": self.profile.destination.kind,
+            **({"destination_binding_id": binding_id} if binding_id is not None else {}),
+            "workspace_id": self.profile.workspace_id,
+            "content_type": "application/vnd.josh.codex-index-event+json",
+            "capture_status": "complete",
+            "sensitivity": "unknown",
+            "evidence_kind": document["evidence_kind"],
+            "evidence_event_id": document["evidence_event_id"],
+            "content_sha256": document["content_sha256"],
+            "ciphertext_sha256": document["ciphertext_sha256"],
+            "ciphertext_size": document["ciphertext_size"],
+        }
+        receipt = enqueue_trigger(
+            outbox,
+            event_id=event_id,
+            session_id=parent.session_id,
+            checkpoint=parent.checkpoint,
+            metadata=metadata,
+            policy_decision="allow",
+            coalesce=False,
+        )
+        if receipt.event_id != event_id or receipt.state is QueueState.CAPTURE_GAP:
+            raise HarvestError("child-lease-unavailable")
+        child = outbox.claim_specific(event_id, owner)
+        if child is None or child.session_id != parent.session_id or child.checkpoint != parent.checkpoint:
+            raise HarvestError("child-lease-unavailable")
+        if child.resume_state is QueueState.QUEUED:
+            outbox.transition(event_id, owner, QueueState.SOURCE_SNAPSHOTTED)
+        try:
+            prepared = encrypt_and_prepare(
+                NormalizationEvent("index-event", document),
+                outbox,
+                owner,
+                self.profile,
+                self._resolver,
+                age_executable=self.config.age_executable,
+                require_device=True,
+            )
+            path = outbox.prepared_path(event_id)
+            if prepared.ciphertext_size <= 0:
+                raise HarvestError("prepared-ciphertext-unavailable")
+            outbox.release(event_id, owner)
+        except Exception:
+            try:
+                current = outbox.inspect_record(event_id)
+                if current is not None and current.owner == owner and current.state in {QueueState.CLAIMED, QueueState.SOURCE_SNAPSHOTTED}:
+                    outbox.retry(event_id, owner, reason_code="prepare-failed")
+            except Exception:  # noqa: BLE001, S110
+                pass
+            raise
+        return PreparedChild(event_id, prepared, path)
+
     def prepare(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
         if self.profile.destination.kind != "private-r2":
             raise HarvestError("policy-denied")
@@ -416,11 +537,13 @@ class HostHarvestBridge:
         prepared_children: list[PreparedChild] = []
         try:
             for normalized in normalizer.normalize():
-                if len(child_ids) >= _MAX_CHILD_EVENTS:
+                if len(child_ids) + 2 > _MAX_CHILD_EVENTS:
                     raise HarvestError("child-limit")
-                child = self._prepare_event(outbox, record, owner, normalized, _event_checkpoint(normalized, stream.result.next_checkpoint), writer)
-                prepared_children.append(child)
-                child_ids.append(child.event_id)
+                checkpoint = _event_checkpoint(normalized, stream.result.next_checkpoint)
+                child = self._prepare_event(outbox, record, owner, normalized, checkpoint, writer)
+                index_child = self._prepare_index_event(outbox, record, owner, normalized, child)
+                prepared_children.extend((child, index_child))
+                child_ids.extend((child.event_id, index_child.event_id))
         except HarvestError:
             raise
         except Exception as error:

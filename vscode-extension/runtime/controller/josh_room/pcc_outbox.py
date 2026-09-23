@@ -499,7 +499,7 @@ def _validate_metadata(value: object) -> dict[str, object]:
     allowed = {
         "workspace_id", "object_kind", "destination_class", "destination_binding_id",
         "source_surface", "source_adapter", "source_adapter_version", "trigger",
-        "content_type", "content_sha256", "content_size", "evidence_kind", "evidence_event_id",
+        "index_event_id", "content_type", "content_sha256", "content_size", "evidence_kind", "evidence_event_id",
         "policy_decision", "capture_status", "sensitivity", "recipient_set_fingerprint",
         "ciphertext_sha256", "ciphertext_size", "object_key", "index_id",
     }
@@ -516,6 +516,7 @@ def _validate_metadata(value: object) -> dict[str, object]:
             "source_adapter_version",
             "evidence_kind",
             "evidence_event_id",
+            "index_event_id",
             "trigger",
         }:
             result[key] = _identifier(item)
