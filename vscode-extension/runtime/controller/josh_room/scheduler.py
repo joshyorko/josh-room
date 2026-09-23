@@ -539,8 +539,9 @@ def install(
             )
         if selected == "macos":
             path = _mac_path(home)
-            changed = context_changed or _write_private(path, _mac_content(exe, interval, home, context, context_id))
-            changed = _write_manifest(home, selected, exe, interval, context_id, context) or changed
+            plist_changed = _write_private(path, _mac_content(exe, interval, home, context, context_id))
+            manifest_changed = _write_manifest(home, selected, exe, interval, context_id, context)
+            changed = context_changed or plist_changed or manifest_changed
             activation = _activate(selected, home, (path,))
             error = _activation_error(activation)
             return _envelope(

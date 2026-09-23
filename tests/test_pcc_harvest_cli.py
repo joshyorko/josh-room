@@ -67,9 +67,6 @@ def _installed_scheduler(tmp_path: Path, platform_name: str) -> tuple[Path, ...]
         if platform_name == "linux"
         else (tmp_path / "Library" / "LaunchAgents" / "dev.josh-room.pcc-harvest.plist",)
     )
-    if platform_name != "linux":
-        native[0].parent.mkdir(parents=True)
-        native[0].write_text("plist", encoding="utf-8")
     return (*native, manifest, state)
 
 
@@ -78,6 +75,26 @@ def _native_scheduler_fixture(tmp_path: Path, platform_name: str) -> Path:
     path.write_text("#!/bin/sh\n", encoding="utf-8")
     path.chmod(0o700)
     return path
+
+def _mac_scheduler_inputs(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    executable = tmp_path / "josh-room"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    launcher = tmp_path / ".local" / "bin" / "josh-room"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
+    return executable, {
+        "profile": "synthetic",
+        "codex_active_root": tmp_path / "codex-active",
+        "codex_archived_root": tmp_path / "codex-archived",
+        "policy_config": tmp_path / "policy.json",
+        "config_home": tmp_path / "config",
+        "workspace_id": "workspace-synthetic",
+        "workspace_path": tmp_path,
+        "repository": "https://github.com/example/repo",
+        "path_kind": "worktree",
+    }
 
 
 @pytest.mark.parametrize(
@@ -241,6 +258,47 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path, monkeypatch):
     assert remove(platform_name="linux", home=tmp_path)["changed"] is True
     assert not state_path.exists()
     assert remove(platform_name="linux", home=tmp_path)["changed"] is False
+
+def _observe_mac_plist_before_bootstrap(tmp_path: Path, seen: list[tuple[Path, str, str]]):
+    def observe(_platform: str, _home: Path, files: tuple[Path, ...]) -> str:
+        path = files[0]
+        assert path.exists()
+        manifest_path = tmp_path / ".config" / "josh-room" / "pcc-harvest.scheduler.json"
+        context_id = json.loads(manifest_path.read_text(encoding="utf-8"))["context_id"]
+        plist = path.read_text(encoding="utf-8")
+        assert f"<string>{context_id}</string>" in plist
+        seen.append((path, context_id, plist))
+        return "not-attempted"
+
+    return observe
+
+
+def test_scheduler_macos_fresh_install_writes_plist_before_bootstrap(tmp_path, monkeypatch):
+    executable, context = _mac_scheduler_inputs(tmp_path)
+    seen: list[tuple[Path, str, str]] = []
+    monkeypatch.setattr(scheduler, "_activate", _observe_mac_plist_before_bootstrap(tmp_path, seen))
+
+    result = install(platform_name="darwin", home=tmp_path, executable=executable, **context)
+
+    assert result["ok"] is True and result["changed"] is True
+    assert len(seen) == 1
+    assert seen[0][0].exists()
+
+
+def test_scheduler_macos_changed_context_rewrites_plist_before_bootstrap(tmp_path, monkeypatch):
+    executable, context = _mac_scheduler_inputs(tmp_path)
+    seen: list[tuple[Path, str, str]] = []
+    monkeypatch.setattr(scheduler, "_activate", _observe_mac_plist_before_bootstrap(tmp_path, seen))
+
+    first = install(platform_name="darwin", home=tmp_path, executable=executable, **context)
+    changed_context = {**context, "workspace_id": "workspace-changed"}
+    second = install(platform_name="darwin", home=tmp_path, executable=executable, **changed_context)
+
+    assert first["ok"] is True and first["changed"] is True
+    assert second["ok"] is True and second["changed"] is True
+    assert len(seen) == 2
+    assert seen[0][1] != seen[1][1]
+    assert seen[1][1] in seen[1][2]
 
 def test_scheduler_native_definitions_are_path_free(tmp_path):
     executable = tmp_path / "room$tool"
