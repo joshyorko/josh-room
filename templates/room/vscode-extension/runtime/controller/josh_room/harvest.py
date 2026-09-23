@@ -6,8 +6,9 @@ CLI thin while making the state machine testable without credentials or a live p
 """
 from __future__ import annotations
 
-import time
+import json
 import secrets
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -222,7 +223,6 @@ class HarvestController:
 
     def plan(self, event_id: str | None = None) -> dict[str, object]:
         inspection = self.outbox.inspect(event_id)
-        records = [_record_public(record) for record in inspection.records]
         plans = []
         for record in inspection.records:
             state = record.state
