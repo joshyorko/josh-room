@@ -103,9 +103,8 @@ class SchedulerContext:
     def argv(self, executable: str, context_id: str | None = None) -> list[str]:
         """Return the public scheduler command for this context."""
         identifier = context_id or _context_identifier(self, executable)
-        executable_name = Path(executable).name
         return [
-            executable_name,
+            "josh-room",
             "harvest",
             "run",
             "--scheduler-context-id",
@@ -215,12 +214,19 @@ def _runtime_executable(value: str | os.PathLike[str]) -> str:
     return _executable(candidate)
 
 
-def load_context(context_id: str, *, home: Path | None = None, executable: str | os.PathLike[str] | None = None) -> SchedulerContext:
-    """Load and validate an installed scheduler context without exposing it."""
+def launch_context(
+    context_id: str,
+    *,
+    home: Path | None = None,
+    current_executable: str | os.PathLike[str] | None = None,
+    argv: list[str] | None = None,
+) -> SchedulerContext:
+    """Exec the protected executable when a trusted launcher starts a job."""
     selected_home = _trusted_home(home)
     context, stored_executable = _load_context_state(selected_home, _context_id(context_id))
-    if executable is not None and _runtime_executable(executable) != stored_executable:
-        raise ValueError("scheduler executable is not trusted")
+    runtime_executable = _runtime_executable(current_executable or sys.argv[0])
+    if runtime_executable != stored_executable:
+        os.execv(stored_executable, [stored_executable, *(sys.argv[1:] if argv is None else argv)])
     return context
 
 
@@ -571,4 +577,4 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         return _envelope(ok=process.returncode == 0, action="remove", platform=selected, removed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, **({} if process.returncode == 0 else {"error": "scheduler-remove-failed"}))
     return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
 
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "SchedulerContext", "install", "load_context", "remove", "status"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "SchedulerContext", "install", "launch_context", "load_context", "remove", "status"]

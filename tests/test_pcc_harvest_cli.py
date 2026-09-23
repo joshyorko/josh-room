@@ -14,7 +14,7 @@ from josh_room.scheduler import (
     _linux_content,
     _mac_content,
     _windows_command,
-    install,
+    launch_context,
     load_context,
     remove,
     status,
@@ -86,6 +86,15 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path):
     conflicting.chmod(0o700)
     with pytest.raises(ValueError, match="scheduler executable"):
         load_context(manifest["context_id"], home=tmp_path, executable=conflicting)
+    calls = []
+    monkeypatch.setattr("josh_room.scheduler.os.execv", lambda path, argv: calls.append((path, argv)))
+    launch_context(
+        manifest["context_id"],
+        home=tmp_path,
+        current_executable=conflicting,
+        argv=["harvest", "run", "--scheduler-context-id", manifest["context_id"]],
+    )
+    assert calls == [(str(executable), ["harvest", "run", "--scheduler-context-id", manifest["context_id"]])]
     service = (tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.service").read_text(encoding="utf-8")
     assert "--scheduler-context-id" in service
     assert "--codex-active-root" not in service and "--codex-archived-root" not in service
