@@ -218,12 +218,24 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
         paths = _linux_paths(home)
         manifest, fresh = _manifest_state(home)
         installed = all(path.is_file() and not path.is_symlink() for path in paths) and manifest
-        return _envelope(ok=installed and fresh, action="status", platform=selected, installed=installed, stale=installed and not fresh, files=[str(path) for path in paths])
+        active = False
+        if home == _home() and installed:
+            try:
+                active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "josh-room-pcc-harvest.timer"], check=False).returncode == 0
+            except OSError:
+                active = False
+        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh, files=[str(path) for path in paths])
     if selected == "macos":
         path = _mac_path(home)
         manifest, fresh = _manifest_state(home)
         installed = path.is_file() and not path.is_symlink() and manifest
-        return _envelope(ok=installed and fresh, action="status", platform=selected, installed=installed, stale=installed and not fresh, files=[str(path)])
+        active = False
+        if home == _home() and installed:
+            try:
+                active = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=False, capture_output=True).returncode == 0
+            except OSError:
+                active = False
+        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh, files=[str(path)])
     if selected == "windows":
         try:
             process = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, check=False)
