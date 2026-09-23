@@ -44,6 +44,10 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path, monkeypatch):
     executable = tmp_path / "josh-room"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o700)
+    launcher = tmp_path / ".local" / "bin" / "josh-room"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
     context = {
         "profile": "synthetic",
         "codex_active_root": tmp_path / "codex-active",
@@ -121,6 +125,7 @@ def test_scheduler_native_definitions_are_path_free(tmp_path):
     assert "$PROFILE" not in service and "$$PROFILE" not in service
     assert "--scheduler-context-id" in service
     assert "%h/.local/bin/josh-room" in service
+    assert "/usr/bin/env" in plist and "<string>josh-room</string>" in plist
 
 def test_scheduler_windows_is_truthfully_unsupported(tmp_path):
     assert install(platform_name="windows", home=tmp_path)["error"] == "scheduler-unsupported-platform"
@@ -128,10 +133,21 @@ def test_scheduler_windows_is_truthfully_unsupported(tmp_path):
     assert remove(platform_name="windows", home=tmp_path)["error"] == "scheduler-unsupported-platform"
 
 
+def test_scheduler_install_rejects_missing_launcher(tmp_path):
+    executable = tmp_path / "josh-room"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    result = install(platform_name="linux", home=tmp_path, executable=executable)
+    assert result["error"] == "scheduler-launcher-unavailable"
+
 def test_scheduler_install_rejects_missing_context(tmp_path):
     executable = tmp_path / "josh-room"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o700)
+    launcher = tmp_path / ".local" / "bin" / "josh-room"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
     result = install(platform_name="linux", home=tmp_path, executable=executable)
     assert result == {
         "schema": "josh-room.scheduler",

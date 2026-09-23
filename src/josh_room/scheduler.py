@@ -230,7 +230,7 @@ def launch_context(
     argv: list[str] | None = None,
 ) -> SchedulerContext:
     """Exec the protected executable when a trusted launcher starts a job."""
-    selected_home = _trusted_home(home)
+    _launcher(selected_home)
     context, stored_executable = _load_context_state(selected_home, _context_id(context_id))
     runtime_executable = _runtime_executable(current_executable or sys.argv[0])
     if runtime_executable != stored_executable:
@@ -268,6 +268,8 @@ def _executable(value: str | os.PathLike[str] | None = None) -> str:
     if status.st_mode & 0o022 or (os.name == "posix" and status.st_uid != os.getuid()):
         raise ValueError("scheduler executable is not trusted")
     return str(candidate)
+def _launcher(home: Path) -> str:
+    return _executable(home / ".local" / "bin" / "josh-room")
 def _executable_digest(path: str) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
@@ -386,7 +388,7 @@ def _xml_arg(value: str) -> str:
 def _mac_content(executable: str, interval: int, home: Path, context: SchedulerContext, context_id: str | None = None) -> str:
     del home
     argv = context.argv(executable, context_id)
-    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in ["$HOME/.local/bin/josh-room", *argv[1:]])
+    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in ["/usr/bin/env", "josh-room", *argv[1:]])
     path_value = "$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin"
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -431,8 +433,10 @@ def install(
         selected, home = _platform(platform_name), _trusted_home(home)
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", error="scheduler-path-invalid")
-    if selected in {"windows", "unsupported"}:
-        return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
+    try:
+        _launcher(home)
+    except (OSError, ValueError):
+        return _envelope(ok=False, action="install", platform=selected, error="scheduler-launcher-unavailable")
     try:
         exe = _executable(executable)
     except (OSError, ValueError):
