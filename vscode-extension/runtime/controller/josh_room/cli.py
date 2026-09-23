@@ -1004,6 +1004,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             return _scheduler.remove(platform_name=args.platform_name, home=args.home)
         raise ValueError("unsupported schedule action")
     outbox = PccOutbox(_harvest_outbox_root(args.outbox_root))
+    controller = HarvestController(outbox)
     action = args.harvest_command
     if action == "run":
         if args.offline and args.drain:

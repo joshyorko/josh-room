@@ -171,33 +171,71 @@ def load_host_policy(*, policy_config: Path | None, config_home: Path | None) ->
 
 
 def _checkpoint(record: QueueRecord) -> Checkpoint | None:
-    raw = record.checkpoint
+    raw = record.expanded_checkpoint if isinstance(record.expanded_checkpoint, Mapping) else record.checkpoint
+    expanded = raw is record.expanded_checkpoint
     try:
         representation = raw["representation"]
         source = raw["source"]
-        start = raw["start"]
-        end = raw["end"]
         prefix = raw["prefix_sha256"]
         if representation not in {"active-jsonl", "archived-jsonl", "compressed-jsonl-zst"}:
             return None
         if not all(isinstance(item, str) for item in (source, representation, prefix)):
             return None
-        if type(start) is not int or type(end) is not int or start != end or start < 0:
-            return None
         if len(prefix) != 64:
             return None
+        if expanded:
+            next_record_index = raw["next_record_index"]
+            next_byte_offset = raw["next_byte_offset"]
+            observed_size = raw["observed_size"]
+            if any(type(item) is not int or item < 0 for item in (next_record_index, next_byte_offset, observed_size)):
+                return None
+            if next_byte_offset != raw["end"] or observed_size < next_byte_offset:
+                return None
+        else:
+            start = raw["start"]
+            end = raw["end"]
+            if type(start) is not int or type(end) is not int or start != end or start < 0:
+                return None
+            next_record_index, next_byte_offset, observed_size = 0, end, end
         return Checkpoint(
             LogicalSourceName.TRANSCRIPT,
             record.session_id,
             source,
             representation,
-            0,
-            end,
-            end,
+            next_record_index,
+            next_byte_offset,
+            observed_size,
             prefix,
         )
     except Exception:  # noqa: BLE001 - malformed trigger checkpoint is not authority
         return None
+
+
+def _resume_state(outbox: PccOutbox, record: QueueRecord) -> tuple[Checkpoint | None, str | None]:
+    """Return the newest expanded source cursor before this trigger.
+
+    Hook triggers intentionally carry only a zero cursor.  The bridge instead
+    resumes from the prior trigger's durable expansion, preserving both the
+    adapter cursor and the evidence chain without replaying the prefix.
+    """
+    current = _checkpoint(record)
+    current_expanded = record.expanded_checkpoint if isinstance(record.expanded_checkpoint, Mapping) else None
+    if current_expanded is not None:
+        chain = current_expanded.get("chain_head_sha256")
+        return current, chain if isinstance(chain, str) else None
+    candidates = [
+        item for item in outbox.inspect().records
+        if item.session_id == record.session_id
+        and item.sequence < record.sequence
+        and isinstance(item.expanded_checkpoint, Mapping)
+        and _checkpoint(item) is not None
+    ]
+    if not candidates:
+        return current, None
+    predecessor = max(candidates, key=lambda item: item.sequence)
+    expanded = predecessor.expanded_checkpoint
+    chain = expanded.get("chain_head_sha256") if isinstance(expanded, Mapping) else None
+    return _checkpoint(predecessor), chain if isinstance(chain, str) else None
 
 
 def _event_checkpoint(event: NormalizationEvent, stream_checkpoint: Checkpoint) -> dict[str, object]:
@@ -506,7 +544,7 @@ class HostHarvestBridge:
         decision = self._decision(record)
         if decision.kind != "allow" or decision.destination_class != "private-r2":
             raise HarvestError("policy-denied")
-        prior = _checkpoint(record)
+        prior, previous_segment_sha256 = _resume_state(outbox, record)
         event = SourceEvent(record.event_id, LogicalSourceName.TRANSCRIPT, record.session_id, "codex-sessions")
         gates = GateSet(_PolicyGate(decision), _MaterialGate(decision))
         try:
@@ -544,12 +582,12 @@ class HostHarvestBridge:
             stream,
             context,
             prior_checkpoint=prior,
+            previous_segment_sha256=previous_segment_sha256,
             finalize=record.is_final,
             limits=capture_limits,
             asset_writer=writer if self.profile.capture_mode == "transcript-and-assets" else None,
         )
         child_ids: list[str] = []
-        prepared_children: list[PreparedChild] = []
         prepared_children: list[PreparedChild] = []
         try:
             for normalized in normalizer.normalize():
@@ -565,20 +603,28 @@ class HostHarvestBridge:
         except Exception as error:
             raise HarvestError("prepare-failed") from error
         latest = self.adapter.checkpoint(stream.result)
+        receipt = normalizer.receipt
+        if receipt is None:
+            raise HarvestError("prepare-failed")
         if not child_ids:
             try:
                 released = outbox.retry(record.event_id, owner, reason_code="empty-capture")
             except Exception as error:
                 raise HarvestError("prepare-failed") from error
             return {"expanded": False, "child_count": 0, "state": released.state.value}
+        expanded_checkpoint = {
+            "source": latest.source_id,
+            "representation": latest.representation,
+            "start": latest.next_byte_offset,
+            "end": latest.next_byte_offset,
+            "prefix_sha256": latest.prefix_digest,
+            "next_record_index": latest.next_record_index,
+            "next_byte_offset": latest.next_byte_offset,
+            "observed_size": latest.observed_size,
+            "chain_head_sha256": receipt.last_segment_sha256,
+        }
         try:
-            expanded = outbox.expand(record.event_id, owner, child_event_ids=child_ids, checkpoint={
-                "source": latest.source_id,
-                "representation": latest.representation,
-                "start": latest.next_byte_offset,
-                "end": latest.next_byte_offset,
-                "prefix_sha256": latest.prefix_digest,
-            })
+            expanded = outbox.expand(record.event_id, owner, child_event_ids=child_ids, checkpoint=expanded_checkpoint)
         except Exception as error:
             raise HarvestError("prepare-failed") from error
         return {"expanded": True, "child_count": len(child_ids), "child_event_ids": child_ids, "state": expanded.state.value}
