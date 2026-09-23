@@ -541,6 +541,16 @@ class HarvestController:
         if inspection.diagnostics:
             result["error"] = inspection.diagnostics[0].code
         return result
+    def inspect(self, event_id: str | None = None) -> dict[str, object]:
+        inspection = self.outbox.inspect(event_id)
+        return _envelope(
+            ok=not bool(inspection.diagnostics),
+            command="inspect",
+            metadata_only=True,
+            records=[_record_public(record) for record in inspection.records],
+            diagnostics=[item.to_dict() for item in inspection.diagnostics],
+        )
+
     def _claim_one(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
         return self.outbox.claim(owner), owner
@@ -730,6 +740,7 @@ class HarvestController:
             raise HarvestError("not-retryable")
         return self._transition(event_id, QueueState.RETRYABLE_FAILURE, reason)
 
+    def quarantine(self, event_id: str, reason: str = "operator-quarantine") -> dict[str, object]:
         record = self.outbox.inspect_record(event_id)
         if record is None or record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.POLICY_DENIED}:
             raise HarvestError("not-quarantinable")

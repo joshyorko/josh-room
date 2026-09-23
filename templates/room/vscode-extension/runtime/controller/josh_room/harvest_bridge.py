@@ -210,6 +210,11 @@ def _checkpoint(record: QueueRecord) -> Checkpoint | None:
     except Exception:  # noqa: BLE001 - malformed trigger checkpoint is not authority
         return None
 
+def _source_hint(record: QueueRecord) -> str | None:
+    raw = record.expanded_checkpoint if isinstance(record.expanded_checkpoint, Mapping) else record.checkpoint
+    value = raw.get("source") if isinstance(raw, Mapping) else None
+    return value if isinstance(value, str) and value else None
+
 
 def _resume_state(outbox: PccOutbox, record: QueueRecord) -> tuple[Checkpoint | None, str | None]:
     """Return the newest expanded source cursor before this trigger.
@@ -223,9 +228,13 @@ def _resume_state(outbox: PccOutbox, record: QueueRecord) -> tuple[Checkpoint | 
     if current_expanded is not None:
         chain = current_expanded.get("chain_head_sha256")
         return current, chain if isinstance(chain, str) else None
+    source_hint = _source_hint(record)
+    if source_hint is None:
+        return current, None
     candidates = [
         item for item in outbox.inspect().records
         if item.session_id == record.session_id
+        and _source_hint(item) == source_hint
         and item.sequence < record.sequence
         and isinstance(item.expanded_checkpoint, Mapping)
         and _checkpoint(item) is not None
@@ -603,9 +612,17 @@ class HostHarvestBridge:
         except Exception as error:
             raise HarvestError("prepare-failed") from error
         latest = self.adapter.checkpoint(stream.result)
-        receipt = normalizer.receipt
-        if receipt is None:
+        receipt_marker = object()
+        receipt = getattr(normalizer, "receipt", receipt_marker)
+        if receipt is receipt_marker:
+            chain_head_sha256 = None
+        elif receipt is None:
             raise HarvestError("prepare-failed")
+        else:
+            chain_head_sha256 = getattr(receipt, "last_segment_sha256", receipt_marker)
+            if chain_head_sha256 is receipt_marker:
+                raise HarvestError("prepare-failed")
+
         if not child_ids:
             try:
                 released = outbox.retry(record.event_id, owner, reason_code="empty-capture")
@@ -621,7 +638,7 @@ class HostHarvestBridge:
             "next_record_index": latest.next_record_index,
             "next_byte_offset": latest.next_byte_offset,
             "observed_size": latest.observed_size,
-            "chain_head_sha256": receipt.last_segment_sha256,
+            "chain_head_sha256": chain_head_sha256,
         }
         try:
             expanded = outbox.expand(record.event_id, owner, child_event_ids=child_ids, checkpoint=expanded_checkpoint)
