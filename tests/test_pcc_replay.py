@@ -489,6 +489,8 @@ def test_oversized_advertised_evidence_size_is_quarantined_before_scan_budget():
     assert not page.records
     assert {receipt["reason_code"] for receipt in page.quarantines} == {"ciphertext-size-invalid"}
     assert page.complete is True
+
+
 def test_metadata_only_inspection_never_fetches_or_decrypts():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
