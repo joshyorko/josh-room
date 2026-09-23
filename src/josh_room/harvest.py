@@ -314,9 +314,19 @@ class HarvestController:
     def _claim_one(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
         return self.outbox.claim(owner), owner
+    def _claim_prepare(self) -> tuple[QueueRecord | None, str]:
+        owner = self.owner_factory()
+        for record in self.outbox.inspect().records:
+            if record.metadata.get("object_kind") == "index-event":
+                continue
+            if record.state not in {QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP}:
+                continue
+            claimed = self.outbox.claim_specific(record.event_id, owner, takeover=record.owner is not None)
+            if claimed is not None:
+                return claimed, owner
+        return None, owner
     def _claim_prepared(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
-        now = self.outbox.clock()
         for record in self.outbox.inspect().records:
             if record.metadata.get("object_kind") == "index-event":
                 continue
@@ -351,7 +361,7 @@ class HarvestController:
             if max_seconds is not None and time.monotonic() - started >= max_seconds:
                 failures.append({"event_id": None, "code": "cancelled"})
                 break
-            record, owner = self._claim_one()
+            record, owner = self._claim_prepare()
             if record is None:
                 break
             try:
