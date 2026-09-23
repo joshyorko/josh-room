@@ -278,10 +278,11 @@ class HarvestController:
 
     def status(self) -> dict[str, object]:
         inspection = self.outbox.inspect()
-        counts = Counter(record.state.value for record in inspection.records)
+        visible_records = [record for record in inspection.records if record.metadata.get("object_kind") != "index-event"]
+        counts = Counter(record.state.value for record in visible_records)
         result = _envelope(
             ok=not any(item.code == "storage-unavailable" for item in inspection.diagnostics) and not any(
-                counts.get(state.value, 0) for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED)
+                counts.get(state.value, 0) for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED, QueueState.RETRYABLE_FAILURE)
             ),
             command="status",
             states={key: counts[key] for key in sorted(counts)},
@@ -289,9 +290,9 @@ class HarvestController:
             prepared=sum(counts.get(state.value, 0) for state in (QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED)),
             committed=counts.get(QueueState.COMMITTED.value, 0),
             quarantined=counts.get(QueueState.QUARANTINED.value, 0),
-            records=len(inspection.records),
-            oldest_sequence=min((record.sequence for record in inspection.records), default=None),
-            last_states=[record.state.value for record in inspection.records[-8:]],
+            records=len(visible_records),
+            oldest_sequence=min((record.sequence for record in visible_records), default=None),
+            last_states=[record.state.value for record in visible_records[-8:]],
             local_bytes=sum((record.ciphertext_size or 0) for record in inspection.records),
             scheduler="unknown",
             partial=inspection.partial_count,
