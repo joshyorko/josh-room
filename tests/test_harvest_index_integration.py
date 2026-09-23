@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import pytest
 from types import SimpleNamespace
 
 from josh_room import harvest_bridge as bridge_module
 from josh_room.adapter_contract import Checkpoint, LogicalSourceName, PlanStatus
-from josh_room.harvest import HarvestController
+from josh_room.harvest import HarvestController, HarvestError
 from josh_room.harvest_bridge import HostHarvestBridge, HostHarvestConfig, _Authority
 from josh_room.pcc_crypto import RecipientSet
 from josh_room.pcc_enqueue import enqueue_trigger
@@ -116,3 +117,46 @@ def test_bridge_prepares_evidence_and_index_and_drain_selects_event_path(tmp_pat
     assert drained["ok"] is True
     assert seen == [outbox.prepared_path(index_id)]
     assert outbox.inspect_record(evidence_id).state is QueueState.COMMITTED
+
+
+def test_publish_rejects_unlinked_index_file_before_backend_upload(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    checkpoint = {
+        "source": "synthetic",
+        "representation": "active-jsonl",
+        "start": 0,
+        "end": 1,
+        "prefix_sha256": "a" * 64,
+    }
+    outbox.enqueue(
+        event_id="event-unlinked-index",
+        session_id="session-unlinked-index",
+        checkpoint=checkpoint,
+        metadata={"object_kind": "session-segment"},
+    )
+    outbox.claim("worker-one")
+    outbox.transition("event-unlinked-index", "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(
+        "event-unlinked-index",
+        "worker-one",
+        b"evidence ciphertext",
+        metadata={"object_kind": "session-segment"},
+    )
+
+    calls = []
+
+    class Backend:
+        def publish_outbox_evidence(self, *args, **kwargs):
+            calls.append((args, kwargs))
+
+    controller = HarvestController(
+        outbox,
+        backend=Backend(),
+        index_ciphertext=b"unrelated encrypted index",
+    )
+    record = outbox.inspect_record("event-unlinked-index")
+    assert record is not None
+    with pytest.raises(HarvestError, match="index-builder-unavailable"):
+        controller._publish_default(outbox, record, "worker-one")
+    assert calls == []
+    assert outbox.inspect_record("event-unlinked-index").state is QueueState.PREPARED_ENCRYPTED

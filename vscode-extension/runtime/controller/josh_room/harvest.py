@@ -223,25 +223,24 @@ class HarvestController:
         if self.backend is None or not callable(getattr(self.backend, "publish_outbox_evidence", None)):
             raise HarvestError("provider-authority-unavailable")
         index_event_id = record.metadata.get("index_event_id")
-        index_ciphertext = self.index_ciphertext
-        if isinstance(index_event_id, str):
-            index_record = outbox.inspect_record(index_event_id)
-            if index_record is None:
-                raise HarvestError("index-builder-unavailable")
-            index_metadata = index_record.metadata
-            if (
-                index_metadata.get("evidence_event_id") != record.event_id
-                or index_metadata.get("evidence_kind") != record.metadata.get("object_kind")
-                or index_metadata.get("ciphertext_sha256") != record.ciphertext_sha256
-                or index_metadata.get("ciphertext_size") != record.ciphertext_size
-            ):
-                raise HarvestError("index-builder-unavailable")
-            try:
-                index_ciphertext = outbox.prepared_path(index_event_id)
-            except Exception as error:
-                raise HarvestError("index-builder-unavailable") from error
-        if index_ciphertext is None:
+        if not isinstance(index_event_id, str) or not index_event_id:
             raise HarvestError("index-builder-unavailable")
+        index_record = outbox.inspect_record(index_event_id)
+        if index_record is None:
+            raise HarvestError("index-builder-unavailable")
+        index_metadata = index_record.metadata
+        if (
+            index_metadata.get("object_kind") != "index-event"
+            or index_metadata.get("evidence_event_id") != record.event_id
+            or index_metadata.get("evidence_kind") != record.metadata.get("object_kind")
+            or index_metadata.get("ciphertext_sha256") != record.ciphertext_sha256
+            or index_metadata.get("ciphertext_size") != record.ciphertext_size
+        ):
+            raise HarvestError("index-builder-unavailable")
+        try:
+            index_ciphertext = outbox.prepared_path(index_event_id)
+        except Exception as error:
+            raise HarvestError("index-builder-unavailable") from error
         result = self.backend.publish_outbox_evidence(
             outbox,
             record.event_id,
