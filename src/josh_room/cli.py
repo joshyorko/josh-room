@@ -554,6 +554,10 @@ def main(argv=None):
             result.update(error.result)
     if getattr(args, "jsonl", False) and isinstance(result, dict) and "_jsonl_lines" in result:
         lines = tuple(result.pop("_jsonl_lines"))
+        record_count = len(result.pop("records", ()))
+        quarantine_count = len(result.pop("quarantines", ()))
+        result["records"] = record_count
+        result["quarantined"] = quarantine_count
         result = _bounded_json_result(result)
         _write_runtime_result(result)
         for line in lines:

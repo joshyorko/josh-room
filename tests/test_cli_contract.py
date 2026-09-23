@@ -259,6 +259,86 @@ def test_replay_inspect_uses_policy_bound_dimension_not_shared_credentials(tmp_p
     with pytest.raises(ValueError, match="destination-binding-mismatch"):
         cli._replay_dispatch(overridden, tmp_path)
     assert selected == [("r2", "personal-r2")]
+def test_replay_jsonl_large_page_keeps_success_exit_and_bounded_summary(tmp_path, monkeypatch, capsys):
+    profile = SimpleNamespace(
+        profile_id="profile-personal",
+        workspace_id="workspace-synthetic",
+        destination=SimpleNamespace(kind="private-r2", binding_id="personal-r2"),
+    )
+    policy = SimpleNamespace(profiles={"personal": profile})
+    records = [
+        {
+            "schema": "josh-room.pcc-replay",
+            "schema_version": {"major": 1, "minor": 0},
+            "type": "record",
+            "idempotency_key": f"{index:064x}",
+            "profile_id": profile.profile_id,
+            "workspace_id": profile.workspace_id,
+            "session": {},
+            "source": {},
+            "checkpoint": {},
+            "segment": {},
+            "record_index": 0,
+            "record": {"text": "x" * 4096},
+            "producer_trust": "untrusted",
+        }
+        for index in range(20)
+    ]
+
+    class Page:
+        cursor = None
+        complete = True
+        inspected_indexes = 0
+        quarantines = ()
+
+        def __init__(self):
+            self.records = tuple(records)
+            self.inspected_indexes = len(self.records)
+
+        def jsonl(self):
+            for record in self.records:
+                yield json.dumps(record, sort_keys=True, separators=(",", ":"))
+            yield json.dumps({
+                "schema": "josh-room.pcc-replay",
+                "schema_version": {"major": 1, "minor": 0},
+                "type": "summary",
+                "next_cursor": self.cursor,
+                "complete": self.complete,
+                "inspected_indexes": self.inspected_indexes,
+                "records": len(self.records),
+                "quarantined": len(self.quarantines),
+            }, sort_keys=True, separators=(",", ":"))
+
+    class Reader:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def export(self, **_kwargs):
+            return Page()
+
+    monkeypatch.delenv("JOSH_ROOM_RESULT_FILE", raising=False)
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_uses_minio_encryption", lambda _args: False)
+    monkeypatch.setattr(cli, "_requires_oauth", lambda _args: False)
+    monkeypatch.setattr(cli, "_requires_encryption", lambda _args: False)
+    monkeypatch.setattr(cli, "_identity_environment", lambda: cli.nullcontext())
+    monkeypatch.setattr(cli, "load_runtime_session", lambda: True)
+    monkeypatch.setattr(cli, "load_host_policy", lambda **_kwargs: policy)
+    monkeypatch.setattr(cli, "_harvest_backend", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "_replay_identity_paths", lambda _args: cli.nullcontext((tmp_path / "identity",)))
+    monkeypatch.setattr(cli, "ReplayReader", Reader)
+
+    result = main([
+        "replay", "export", "--profile", "personal", "--destination", "private-r2", "--jsonl",
+    ])
+    output = capsys.readouterr().out.splitlines()
+
+    assert result == 0
+    assert len(output) == len(records) + 1
+    assert len("\n".join(output)) > 64 * 1024
+    assert json.loads(output[-1])["records"] == len(records)
+
 def test_replay_inspect_rejects_workspace_override(tmp_path, monkeypatch, capsys):
     profile = SimpleNamespace(
         profile_id="profile-personal",

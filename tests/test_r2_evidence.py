@@ -443,9 +443,7 @@ def test_evidence_readback_bounds_body_read_by_declared_size_plus_one(index):
         body = store.get_evidence_bytes(receipt.key, expected_size=receipt.ciphertext_size)
 
     assert body == payload
-    assert read_sizes
-    assert read_sizes[-1] == len(payload) + 1
-    assert all(size <= len(payload) + 1 for size in read_sizes)
+    assert read_sizes == [len(payload) + 1]
 
 
 

@@ -449,7 +449,7 @@ class R2Backend(ObjectStore):
     def get_evidence_bytes(self, key: str, expected_size: int | None = None) -> bytes:
         digest = validate_evidence_object_key(key)
         try:
-            self._verify_evidence_remote(key, digest, expected_size)
+            self._verify_evidence_remote(key, digest, expected_size, verify_body=False)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
         if expected_size is not None and (
@@ -473,7 +473,7 @@ class R2Backend(ObjectStore):
     def download_evidence_file(self, key: str, destination: Path, expected_size: int) -> None:
         digest = validate_evidence_object_key(key)
         try:
-            self._verify_evidence_remote(key, digest, expected_size)
+            self._verify_evidence_remote(key, digest, expected_size, verify_body=False)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
         destination = Path(destination)
@@ -525,7 +525,7 @@ class R2Backend(ObjectStore):
         ):
             raise R2EvidenceReadbackMismatch()
         try:
-            self._verify_evidence_remote(key, digest, expected_size)
+            self._verify_evidence_remote(key, digest, expected_size, verify_body=False)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
@@ -1327,7 +1327,14 @@ class R2Backend(ObjectStore):
         except Exception as error:
             raise R2EvidenceAbortFailure(retries=retries) from error
 
-    def _verify_evidence_remote(self, key: str, digest: str, size: int | None) -> int:
+    def _verify_evidence_remote(
+        self,
+        key: str,
+        digest: str,
+        size: int | None,
+        *,
+        verify_body: bool = True,
+    ) -> int:
         try:
             head = self.client.head_object(Bucket=self.config.bucket, Key=key)
         except ClientError as error:
@@ -1337,6 +1344,8 @@ class R2Backend(ObjectStore):
         observed_size = int(head.get("ContentLength", -1))
         if observed_size > self.config.max_bytes or size is not None and observed_size != size:
             raise ValueError("evidence object size mismatch")
+        if not verify_body:
+            return observed_size
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
         body = response["Body"]
         observed = hashlib.sha256()
@@ -1351,7 +1360,6 @@ class R2Backend(ObjectStore):
             observed.update(chunk)
         if total != observed_size or observed.hexdigest() != digest:
             raise ValueError("evidence object digest mismatch")
-
         return observed_size
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""
