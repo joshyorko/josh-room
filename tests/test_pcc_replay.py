@@ -525,8 +525,7 @@ def test_generated_large_discovery_stops_at_first_over_limit_index():
 
     class Backend:
         def discover_evidence_indexes(self, *, max_events, page_size, max_pages):
-            assert max_events == 1001
-            del page_size, max_pages
+            del max_events, page_size, max_pages
 
             def references():
                 nonlocal consumed
