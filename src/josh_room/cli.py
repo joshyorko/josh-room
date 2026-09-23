@@ -95,8 +95,8 @@ from .pcc_hooks import (
     repair_codex_hooks,
 )
 from .policy import CaptureRequest, PolicyContext, decide
-from .pcc_outbox import PccOutbox
 from .progress import report_progress
+from .pcc_outbox import PccOutbox
 from .tls import initialize_system_trust
 from .workspace_state import local_status
 
