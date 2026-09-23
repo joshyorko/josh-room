@@ -287,6 +287,8 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         manifest.unlink(missing_ok=True)
         return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path), str(manifest)])
     if selected == "windows":
+        if os.name != "nt":
+            return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
         try:
             process = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True, check=False)
         except OSError:
