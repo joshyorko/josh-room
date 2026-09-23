@@ -1109,7 +1109,7 @@ def _replay_identity_paths(args):
         if not isinstance(age_profile, str) or not age_profile:
             raise ValueError
         identity = lookup_secure_value(age_profile, "age-identity")
-    except Exception as error:  # noqa: BLE001 - identity authority fails closed
+    except Exception as error:  # identity authority fails closed
         raise ValueError("identity-unavailable") from error
     temporary = None
     try:

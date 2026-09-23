@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .pcc_crypto import DecryptedEnvelope, decrypt_envelope, read_decrypted_envelope
+from .pcc_crypto import DecryptedEnvelope, decrypt_envelope
 from .r2 import evidence_object_key, validate_evidence_index_key
 from .session_evidence import (
     CURRENT_MAJOR,
@@ -92,7 +92,7 @@ class ReplayCursor:
         return encoded
 
     @classmethod
-    def decode(cls, value: str, *, profile_id: str, destination: str) -> "ReplayCursor":
+    def decode(cls, value: str, *, profile_id: str, destination: str) -> ReplayCursor:
         if not isinstance(value, str) or not value or len(value) > _MAX_CURSOR_BYTES:
             raise ReplayError("cursor-invalid")
         try:
@@ -280,7 +280,7 @@ class ReplayReader:
         if authorize is not None:
             try:
                 allowed = authorize(profile_id, destination)
-            except Exception:  # noqa: BLE001 - authorization fails closed
+            except Exception:
                 allowed = False
             if allowed is not True:
                 raise ReplayError("profile-boundary-denied")
@@ -356,7 +356,7 @@ class ReplayReader:
             raise ReplayError("ciphertext-too-large")
         try:
             body = self.backend.get_evidence_index_bytes(ref.key)
-        except Exception as error:  # noqa: BLE001 - provider details are not public
+        except Exception as error:
             raise ReplayError("index-read-failed") from error
         if not isinstance(body, bytes) or len(body) > self.limits.max_ciphertext_bytes:
             raise ReplayError("ciphertext-too-large")
@@ -374,7 +374,7 @@ class ReplayReader:
                 body = self.backend.get_evidence_bytes(key, expected_size=size)
             except TypeError:
                 body = self.backend.get_evidence_bytes(key)
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             raise ReplayError("evidence-read-failed") from error
         if not isinstance(body, bytes) or len(body) != size or hashlib.sha256(body).hexdigest() != digest:
             raise ReplayError("digest-mismatch")
@@ -399,7 +399,7 @@ class ReplayReader:
         try:
             try:
                 value = decrypt_envelope(temporary, self.identity_paths, age_executable=self.age_executable)
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
                 raise ReplayError("decrypt-failed") from error
             return _payload_from_envelope(value)
         finally:
@@ -655,7 +655,7 @@ class ReplayReader:
                         error.code,
                         cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
                     ))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 if ref.key in selected_keys:
                     quarantines.append(self._quarantine(
                         ref,
@@ -701,14 +701,14 @@ def export_jsonl(reader: ReplayReader, *, cursor: str | None = None, limit: int 
 __all__ = [
     "CURRENT_MAJOR",
     "CURRENT_MINOR",
+    "SCHEMA",
+    "SCHEMA_VERSION",
+    "QuarantineReceipt",
     "ReplayCursor",
     "ReplayError",
     "ReplayExporter",
     "ReplayLimits",
     "ReplayPage",
     "ReplayReader",
-    "QuarantineReceipt",
-    "SCHEMA",
-    "SCHEMA_VERSION",
     "export_jsonl",
 ]
