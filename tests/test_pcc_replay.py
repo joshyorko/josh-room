@@ -520,6 +520,46 @@ def test_index_cap_does_not_export_an_unverified_partial_set():
     assert page.complete is False
     assert page.inspected_indexes == 0
 
+def test_generated_large_discovery_stops_at_first_over_limit_index():
+    consumed = 0
+
+    class Backend:
+        def discover_evidence_indexes(self, *, max_events, page_size, max_pages):
+            assert max_events == 1001
+            del page_size, max_pages
+
+            def references():
+                nonlocal consumed
+                for index in range(100_000):
+                    consumed += 1
+                    digest = f"{index:064x}"
+                    yield {
+                        "key": evidence_index_key(digest),
+                        "ciphertext_sha256": digest,
+                        "ciphertext_size": 1,
+                    }
+
+            return references()
+
+        get_evidence_index_bytes = lambda *_args, **_kwargs: pytest.fail("bounded discovery fetched an index")
+        get_evidence_bytes = lambda *_args, **_kwargs: pytest.fail("bounded discovery fetched evidence")
+
+    page = ReplayReader(
+        Backend(),
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        limits=ReplayLimits(max_indexes=1000),
+        decryptor=lambda *_args, **_kwargs: pytest.fail("bounded discovery decrypted an index"),
+    ).export(limit=1)
+
+    assert consumed == 1001
+    assert page.records == ()
+    assert page.quarantines == ()
+    assert page.cursor is None
+    assert page.complete is False
+    assert page.inspected_indexes == 0
+
 def test_cumulative_scan_cap_returns_incomplete_without_fetching_evidence():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
