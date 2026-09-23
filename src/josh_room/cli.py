@@ -528,8 +528,15 @@ def _exit_code(result: dict) -> int:
         return 70
     if result.get("command") == "status":
         states = result.get("states", {})
-        if isinstance(states, dict) and any(states.get(value, 0) for value in ("queued", "retryable-failure")):
-            return 3
+        if isinstance(states, dict):
+            if states.get("capture-gap", 0):
+                return 5
+            if states.get("quarantined", 0):
+                return 4
+            if states.get("policy-denied", 0):
+                return 6
+            if any(states.get(value, 0) for value in ("queued", "retryable-failure")):
+                return 3
     return 2
 
 def _write_runtime_result(result):
