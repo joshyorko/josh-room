@@ -348,7 +348,7 @@ def _systemd_arg(value: str) -> str:
 
 def _linux_content(executable: str, interval: int, context: SchedulerContext, context_id: str | None = None) -> tuple[str, str]:
     argv = context.argv(executable, context_id)
-    command = " ".join(["/usr/bin/env", "--ignore-environment", "HOME=%h", "PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin", *(_systemd_arg(item) for item in argv)])
+    command = " ".join(["/usr/bin/env", "--ignore-environment", "HOME=%h", "PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin:/bin", *(_systemd_arg(item) for item in argv)])
     service = f"[Unit]\nDescription=Josh Room PCC harvest\nRefuseManualStart=yes\n\n[Service]\nType=oneshot\nExecStart={command}\n"
     timer = f"[Unit]\nDescription=Josh Room PCC harvest timer\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec={interval}s\nPersistent=true\nUnit=josh-room-pcc-harvest.service\n\n[Install]\nWantedBy=timers.target\n"
     return service, timer
@@ -357,14 +357,14 @@ def _xml_arg(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 def _mac_content(executable: str, interval: int, home: Path, context: SchedulerContext, context_id: str | None = None) -> str:
-    del home
     arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in context.argv(executable, context_id))
+    path_value = _xml_arg(f"{home}/.local/bin:{home}/bin:/usr/local/bin:/usr/bin:/bin")
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.josh-room.pcc-harvest</string>
   <key>ProgramArguments</key><array>{arguments}</array>
-  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/bin</string></dict>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>{path_value}</string></dict>
   <key>StartInterval</key><integer>{interval}</integer>
   <key>RunAtLoad</key><false/>
   <key>ProcessType</key><string>Background</string>
