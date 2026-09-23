@@ -29,8 +29,11 @@ def test_plan_status_inspect_are_content_free(tmp_path):
 
 
 def test_scheduler_install_status_remove_is_idempotent(tmp_path):
-    first = install(platform_name="linux", home=tmp_path, executable="/opt/josh-room")
-    second = install(platform_name="linux", home=tmp_path, executable="/opt/josh-room")
+    executable = tmp_path / "josh-room"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    first = install(platform_name="linux", home=tmp_path, executable=executable)
+    second = install(platform_name="linux", home=tmp_path, executable=executable)
     assert first["ok"] is True and first["changed"] is True
     assert second["ok"] is True and second["changed"] is False
     assert status(platform_name="linux", home=tmp_path)["installed"] is True
