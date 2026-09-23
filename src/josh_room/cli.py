@@ -927,9 +927,20 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         controller = _harvest_bridge_controller(args, outbox)
         return controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
     if action == "drain":
-        controller = _harvest_bridge_controller(args, outbox)
-        controller.backend = _harvest_backend(args, instance or _instance_root())
-        controller.index_ciphertext = _harvest_index_file(getattr(args, "index_file", None))
+        policy = load_host_policy(
+            policy_config=getattr(args, "policy_config", None),
+            config_home=getattr(args, "config_home", None),
+        )
+        profile = policy.profiles.get(args.profile)
+        if profile is None:
+            raise ValueError("profile-unavailable")
+        controller = HarvestController(
+            outbox,
+            backend=_harvest_backend(args, instance or _instance_root()),
+            index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
+            profile=profile,
+            policy_check=lambda _record: {"decision": "allow", "destination": profile.destination.kind},
+        )
         return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
     controller = HarvestController(outbox)
     if action == "plan":
