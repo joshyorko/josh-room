@@ -39,6 +39,7 @@ from .session_normalizer import (
     AssetSink,
     NormalizationContext,
     NormalizationEvent,
+    NormalizationLimits,
     SessionNormalizer,
 )
 
@@ -532,14 +533,23 @@ class HostHarvestBridge:
             policy_decision="allow",
             sensitivity="unknown",
         )
+        capture_limits = NormalizationLimits(
+            max_source_bytes=self.profile.limits.per_session_bytes,
+            max_record_bytes=self.profile.limits.per_record_bytes,
+            max_asset_bytes=self.profile.limits.per_asset_bytes,
+            max_session_bytes=self.profile.limits.per_session_bytes,
+            max_working_bytes=min(self.profile.limits.per_record_bytes, 2 * 1024 * 1024),
+        )
         normalizer = SessionNormalizer(
             stream,
             context,
             prior_checkpoint=prior,
             finalize=record.is_final,
+            limits=capture_limits,
             asset_writer=writer if self.profile.capture_mode == "transcript-and-assets" else None,
         )
         child_ids: list[str] = []
+        prepared_children: list[PreparedChild] = []
         prepared_children: list[PreparedChild] = []
         try:
             for normalized in normalizer.normalize():
