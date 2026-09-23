@@ -21,6 +21,21 @@ replay from the beginning. Idempotency keys are SHA-256 over stable
 profile/workspace/session/checkpoint/segment/plain-record identity; they never
 use listing order or ingestion time.
 
+
+Replay pages are limited to 8 indexes (default), each encrypted index/evidence
+object to 80 MiB, and each segment to 4 MiB, 128 records, and 32 asset refs.
+`max_indexes` bounds discovery at 1,000 by default and 10,000 maximum. Each
+export validates the entire discovered bounded set before returning a page, so
+segment, asset, and final links remain valid across cursor boundaries. If the
+discovery cap is exceeded, export emits no records and leaves the cursor
+unchanged; increase `--max-indexes` to continue. This full bounded scan repeats
+for each page.
+
+Index keys are content-addressed, not chronological. A cursor is a page
+position within the discovered set, not a watermark for future uploads. To
+include objects added during a paging run, replay from the beginning and
+deduplicate using the stable idempotency key.
+
 `inspect()` is metadata-only: it lists bounded index keys and ciphertext
 identities without decrypting or printing evidence. Export is the explicit
 consumer path. Decrypted strings, including transcript/tool text, remain inert

@@ -145,6 +145,43 @@ def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):
     emit(result, True)
     assert json.loads(capsys.readouterr().out) == result
 
+def test_replay_inspect_cli_is_metadata_only_without_age_identity(tmp_path, monkeypatch, capsys):
+    profile = SimpleNamespace(
+        profile_id="profile-personal",
+        workspace_id="workspace-synthetic",
+        destination=SimpleNamespace(kind="private-r2"),
+    )
+    policy = SimpleNamespace(profiles={"personal": profile})
+
+    class Backend:
+        def discover_evidence_indexes(self, *, max_events, page_size):
+            return []
+
+        def get_evidence_index_bytes(self, *_args, **_kwargs):
+            pytest.fail("metadata inspection fetched encrypted indexes")
+
+        def get_evidence_bytes(self, *_args, **_kwargs):
+            pytest.fail("metadata inspection fetched evidence")
+
+    monkeypatch.delenv("JOSH_ROOM_RESULT_FILE", raising=False)
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_uses_minio_encryption", lambda _args: False)
+    monkeypatch.setattr(cli, "_requires_oauth", lambda _args: False)
+    monkeypatch.setattr(cli, "_requires_encryption", lambda _args: False)
+    monkeypatch.setattr(cli, "_identity_environment", lambda: cli.nullcontext())
+    monkeypatch.setattr(cli, "load_runtime_session", lambda: True)
+    monkeypatch.setattr(cli, "load_host_policy", lambda **_kwargs: policy)
+    monkeypatch.setattr(cli, "_harvest_backend", lambda *_args, **_kwargs: Backend())
+    monkeypatch.setattr(cli, "_replay_identity_paths", lambda _args: pytest.fail("inspect requested an age identity"))
+
+    assert main(["replay", "inspect", "--profile", "personal", "--destination", "private-r2", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["metadata_only"] is True
+    assert result["indexes"] == []
+    assert result["complete"] is True
+
 
 @pytest.mark.parametrize("failure", [
     {
