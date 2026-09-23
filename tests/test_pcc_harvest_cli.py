@@ -118,7 +118,7 @@ def test_scheduler_native_definitions_are_path_free(tmp_path):
     command = _windows_command(str(executable), 900, context)
     for definition in (service, plist, " ".join(command)):
         assert str(tmp_path) not in definition
-    assert "$$PROFILE" in service
+    assert "$PROFILE" not in service and "$$PROFILE" not in service
     assert "--scheduler-context-id" in service
     assert "%h/.local/bin/josh-room" in service
 
