@@ -161,7 +161,8 @@ class HarvestController:
                 return False
             if current.get("decision") != "allow" or current.get("destination") != "private-r2":
                 return False
-        decision = record.metadata.get("policy_decision")
+        if self.profile is not None and getattr(getattr(self.profile, "destination", None), "kind", None) != "private-r2":
+            return False
         destination = record.metadata.get("destination_class")
         return decision == "allow" and destination == "private-r2"
 
