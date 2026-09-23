@@ -139,6 +139,7 @@ class HarvestController:
         recipient_resolver: Callable[[str], object] | None = None,
         backend: object | None = None,
         index_ciphertext: bytes | Path | None = None,
+        policy_check: Callable[[QueueRecord], Mapping[str, object]] | None = None,
     ) -> None:
         if not isinstance(outbox, PccOutbox):
             raise TypeError("outbox is required")
@@ -147,11 +148,19 @@ class HarvestController:
         self.recipient_resolver = recipient_resolver
         self.backend = backend
         self.index_ciphertext = index_ciphertext
+        self.policy_check = policy_check
         self.prepare = prepare or self._prepare_default
         self.publish = publish or self._publish_default
         self.owner_factory = owner_factory
 
     def _publication_allowed(self, record: QueueRecord) -> bool:
+        if self.policy_check is not None:
+            try:
+                current = self.policy_check(record)
+            except Exception:  # noqa: BLE001 - host policy failures fail closed
+                return False
+            if current.get("decision") != "allow" or current.get("destination") != "private-r2":
+                return False
         decision = record.metadata.get("policy_decision")
         destination = record.metadata.get("destination_class")
         return decision == "allow" and destination == "private-r2"
@@ -442,7 +451,17 @@ class HarvestController:
         return self._transition(event_id, QueueState.QUARANTINED, reason)
 
     def discard(self, event_id: str) -> dict[str, object]:
-        return self.quarantine(event_id, "operator-discard") | {"discard": "quarantined"}
+        return self.quarantine(event_id, "operator-discard") | {
+            "discard": "quarantined",
+            "discarded": False,
+            "evidence_deleted": False,
+        }
+    def retry_all(self, reason: str = "operator-retry") -> dict[str, object]:
+        results = []
+        for record in self.outbox.inspect().records:
+            if record.state in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP}:
+                results.append(self.retry(record.event_id, reason))
+        return _envelope(ok=True, command="retry-all", records=results)
 
     def reconcile(self, *, limit: int = 1000) -> dict[str, object]:
         if type(limit) is not int or not 0 < limit <= 10000:
