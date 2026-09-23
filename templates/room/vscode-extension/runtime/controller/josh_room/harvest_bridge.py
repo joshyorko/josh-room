@@ -399,6 +399,12 @@ class HostHarvestBridge:
         except Exception as error:
             raise HarvestError("prepare-failed") from error
         latest = self.adapter.checkpoint(stream.result)
+        if not child_ids:
+            try:
+                released = outbox.retry(record.event_id, owner, reason_code="empty-capture")
+            except Exception as error:
+                raise HarvestError("prepare-failed") from error
+            return {"expanded": False, "child_count": 0, "state": released.state.value}
         try:
             expanded = outbox.expand(record.event_id, owner, child_event_ids=child_ids, checkpoint={
                 "source": latest.source_id,

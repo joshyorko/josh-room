@@ -300,7 +300,7 @@ class HarvestController:
         # #8 owns lease release; trigger expansion is already terminal and
         # intentionally has no ciphertext to release on the parent record.
         current = self.outbox.inspect_record(record.event_id)
-        if current is not None and current.state is QueueState.TRIGGER_EXPANDED and current.owner is None:
+        if current is None or current.owner != owner:
             return
         release = getattr(self.outbox, "release", None)
         if callable(release):
