@@ -482,10 +482,12 @@ class HarvestController:
             raise HarvestError("not-retryable")
         return self._transition(event_id, QueueState.RETRYABLE_FAILURE, reason)
 
-    def quarantine(self, event_id: str, reason: str = "operator-quarantine") -> dict[str, object]:
         record = self.outbox.inspect_record(event_id)
         if record is None or record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.POLICY_DENIED}:
             raise HarvestError("not-quarantinable")
+        if record.state is QueueState.POLICY_DENIED:
+            updated = self.outbox.quarantine_operator(event_id, reason_code=reason)
+            return _envelope(ok=True, command="quarantine", record=_record_public(updated))
         return self._transition(event_id, QueueState.QUARANTINED, reason)
 
     def quarantine_list(self) -> dict[str, object]:

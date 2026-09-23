@@ -1807,3 +1807,20 @@ class PccOutbox:
             receipt = {"event_id": event_id, "kind": "operator-discard", "discarded": True, "evidence_deleted": False}
             self._publisher.publish(path, json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("utf-8"))
             return receipt
+    def quarantine_operator(self, event_id: str, *, reason_code: str = "operator-quarantine") -> QueueRecord:
+        event_id = _identifier(event_id)
+        reason_code = _identifier(reason_code)
+        with _exclusive_file_lock(self._lock_path):
+            self._ensure_layout()
+            record = self._must_read_unlocked(event_id)
+            if record.state is not QueueState.POLICY_DENIED:
+                raise InvalidTransition()
+            updated = QueueRecord(
+                **{
+                    **record.__dict__,
+                    "state": QueueState.QUARANTINED,
+                    "failure_code": reason_code,
+                }
+            )
+            self._publish_record_unlocked(updated)
+            return updated
