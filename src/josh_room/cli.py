@@ -954,10 +954,25 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         return controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
     if action == "drain":
         if not args.profile:
+            policy = load_host_policy(
+                policy_config=getattr(args, "policy_config", None),
+                config_home=getattr(args, "config_home", None),
+            )
+            def scheduled_policy(record):
+                workspace_id = record.metadata.get("workspace_id")
+                profiles = [
+                    profile for profile in policy.profiles.values()
+                    if profile.workspace_id == workspace_id
+                ]
+                if len(profiles) != 1:
+                    return {"decision": "deny", "destination": "local-only"}
+                profile = profiles[0]
+                return {"decision": "allow" if profile.destination.kind == "private-r2" else "deny", "destination": profile.destination.kind}
             controller = HarvestController(
                 outbox,
                 backend=_harvest_backend(args, instance or _instance_root()),
                 index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
+                policy_check=scheduled_policy,
             )
             return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
         policy = load_host_policy(
