@@ -399,21 +399,21 @@ class ReplayReader:
             raise ReplayError(_error_code(result, "index-invalid"))
         if document.get("kind") != "index-event":
             raise ReplayError("index-kind-mismatch")
-        if not self._producer_ok(manifest):
-            raise ReplayError("untrusted-producer")
         profile = manifest.get("profile")
         if not isinstance(profile, Mapping) or profile.get("id") != self.profile_id:
             raise ReplayError("profile-boundary-denied")
         manifest_workspace = profile.get("workspace_id")
         if self.workspace_id is not None and manifest_workspace != self.workspace_id:
             raise ReplayError("profile-boundary-denied")
+        if not self._producer_ok(manifest):
+            raise ReplayError("untrusted-producer")
         policy = manifest.get("policy")
         if not isinstance(policy, Mapping) or policy.get("decision") not in {"allow", "local-only"}:
             raise ReplayError("policy-mismatch")
         if policy.get("destination") is not None and policy.get("destination") != self.destination:
             raise ReplayError("policy-mismatch")
-        if document.get("ciphertext_sha256") != ref.ciphertext_sha256 or document.get("ciphertext_size") != ref.ciphertext_size:
-            raise ReplayError("digest-mismatch")
+        # The index ciphertext identity describes the evidence object, while
+        # ``ref`` identifies this encrypted index object itself.
         expected_kind = document.get("evidence_kind")
         expected_event = document.get("evidence_event_id")
         if not isinstance(expected_kind, str) or not isinstance(expected_event, str):
@@ -529,19 +529,20 @@ class ReplayReader:
                 document = item.document
                 digest = canonical_digest(document)
                 declared = document.get("previous_segment_sha256")
-                if declared != previous and not (declared is None and previous is None):
-                    failed.add(str(document.get("event_id")))
-                    quarantines.append(self._quarantine(item.index, "broken-chain", event_id=str(document.get("event_id"))))
-                    previous = digest
-                    continue
+                chain_bad = declared != previous and not (declared is None and previous is None)
                 refs = document.get("asset_refs", ())
-                if not isinstance(refs, list) or any(
+                missing_asset = not isinstance(refs, list) or any(
                     (session_id, ref.get("asset_id"), ref.get("sha256"), ref.get("size")) not in asset_keys
                     for ref in refs
                     if isinstance(ref, Mapping)
-                ):
+                )
+                if chain_bad:
+                    failed.add(str(document.get("event_id")))
+                    quarantines.append(self._quarantine(item.index, "broken-chain", event_id=str(document.get("event_id"))))
+                if missing_asset:
                     failed.add(str(document.get("event_id")))
                     quarantines.append(self._quarantine(item.index, "missing-asset", event_id=str(document.get("event_id"))))
+                if chain_bad or missing_asset:
                     previous = digest
                     continue
                 accepted.append(item)

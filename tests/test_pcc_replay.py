@@ -24,10 +24,11 @@ class FakeBackend:
         del page_size
         refs = []
         for item in self.entries[:max_events]:
+            digest = item["index_key"].rsplit("/", 1)[-1].removesuffix(".age")
             refs.append(
                 {
                     "key": item["index_key"],
-                    "ciphertext_sha256": hashlib.sha256(item["index_body"]).hexdigest(),
+                    "ciphertext_sha256": digest,
                     "ciphertext_size": len(item["index_body"]),
                 }
             )
@@ -115,7 +116,7 @@ def test_replay_emits_inert_records_and_stable_idempotency():
     second = reader([index_entry], mapping).export(limit=1)
     assert first.records[0]["record"]["text"] == "Synthetic public fixture"
     assert first.records[0]["idempotency_key"] == second.records[0]["idempotency_key"]
-    assert first.jsonl().__next__().startswith('{"checkpoint"')
+    assert json.loads(first.jsonl().__next__())["type"] == "record"
 
 
 def test_cursor_is_consumer_owned_and_replay_from_same_cursor_is_exact():
@@ -131,12 +132,14 @@ def test_cursor_is_consumer_owned_and_replay_from_same_cursor_is_exact():
     assert resumed.records == ()
     assert resumed.complete
 
-
 def test_cross_profile_and_untrusted_producer_quarantine_without_content():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
     wrong = entry(segment, index_profile="profile-work", object_profile="profile-work")
     untrusted = entry(segment, trusted=False)
+    untrusted["index_document"]["event_id"] = "idx-untrusted"
+    untrusted["index_body"] = b"index:untrusted"
+    untrusted["index_key"] = evidence_index_key(hashlib.sha256(untrusted["index_body"]).hexdigest())
     mapping = {
         wrong["index_body"]: wrong["index_envelope"],
         wrong["object_body"]: wrong["evidence_envelope"],
@@ -147,6 +150,7 @@ def test_cross_profile_and_untrusted_producer_quarantine_without_content():
     assert not page.records
     assert {item["reason_code"] for item in page.quarantines} == {"profile-boundary-denied", "untrusted-producer"}
     assert all("Synthetic public fixture" not in json.dumps(item) for item in page.quarantines)
+
 
 
 def test_bad_chain_and_missing_asset_are_quarantined():
@@ -179,14 +183,15 @@ def test_unknown_major_and_wrong_ciphertext_digest_quarantine():
     unknown_doc = dict(item["index_document"])
     unknown_doc["schema_version"] = {"major": 9, "minor": 0}
     unknown["index_envelope"] = envelope(unknown_doc)
+    unknown["index_body"] = b"index:unknown"
+    unknown["index_key"] = evidence_index_key(hashlib.sha256(unknown["index_body"]).hexdigest())
     bad = dict(item)
     bad["index_body"] = b"changed"
+    bad["index_key"] = evidence_index_key(hashlib.sha256(b"other").hexdigest())
     mapping = {
-        item["index_body"]: item["index_envelope"],
-        item["object_body"]: item["evidence_envelope"],
         unknown["index_body"]: unknown["index_envelope"],
         bad["index_body"]: item["index_envelope"],
-        bad["object_body"]: item["evidence_envelope"],
+        item["object_body"]: item["evidence_envelope"],
     }
     page = reader([unknown, bad], mapping).export(limit=2)
     assert {item["reason_code"] for item in page.quarantines} >= {"unknown_major", "digest-mismatch"}
