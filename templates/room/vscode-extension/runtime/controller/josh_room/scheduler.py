@@ -4,7 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import pwd
+try:
+    import pwd
+except ImportError:  # pragma: no cover - Windows
+    pwd = None
 import stat
 import subprocess
 import sys
@@ -17,6 +20,8 @@ TASK_NAME = "JoshRoomPccHarvest"
 
 
 def _home() -> Path:
+    if pwd is None:
+        return Path.home()
     try:
         return Path(pwd.getpwuid(os.getuid()).pw_dir)
     except (KeyError, OSError):
