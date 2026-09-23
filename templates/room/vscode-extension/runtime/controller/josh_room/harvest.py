@@ -168,6 +168,7 @@ class HarvestController:
             raise HarvestError("capture-authority-unavailable")
         event = NormalizationEvent(str(raw.get("kind")), dict(raw["document"]))
         destination = getattr(getattr(self.profile, "destination", None), "kind", None)
+        child_owner = owner
         if event.document.get("event_id") != record.event_id:
             from .pcc_enqueue import enqueue_trigger
 
@@ -233,7 +234,15 @@ class HarvestController:
                 action = "none"
             else:
                 action = "inspect"
-            plans.append(HarvestPlan(record.event_id, record.session_id, state.value, action, record.checkpoint, record.metadata).to_dict())
+            plan = HarvestPlan(record.event_id, record.session_id, state.value, action, record.checkpoint, record.metadata).to_dict()
+            plan.update({
+                "ready": action in {"prepare", "drain"},
+                "reasons": [] if action in {"prepare", "drain"} else [f"state:{state.value}"],
+                "limits": {"bounded": True},
+                "destination": record.metadata.get("destination_class"),
+                "policy_decision": record.metadata.get("policy_decision"),
+            })
+            plans.append(plan)
         return _envelope(
             ok=not bool(inspection.diagnostics),
             command="plan",
