@@ -280,7 +280,7 @@ class ReplayReader:
         if authorize is not None:
             try:
                 allowed = authorize(profile_id, destination)
-            except Exception:
+            except Exception:  # noqa: BLE001 - authorization fails closed
                 allowed = False
             if allowed is not True:
                 raise ReplayError("profile-boundary-denied")
@@ -655,7 +655,7 @@ class ReplayReader:
                         error.code,
                         cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
                     ))
-            except Exception:
+            except Exception:  # noqa: BLE001 - untrusted failures map to quarantine
                 if ref.key in selected_keys:
                     quarantines.append(self._quarantine(
                         ref,
