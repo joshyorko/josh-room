@@ -54,9 +54,9 @@ class QueueState(StrEnum):
     OBJECT_UPLOADED = "object-uploaded"
     INDEX_PUBLISHED = "index-published"
     TRIGGER_EXPANDED = "trigger-expanded"
-    COMMITTED = "committed"
     RETRYABLE_FAILURE = "retryable-failure"
     QUARANTINED = "quarantined"
+    POLICY_DENIED = "policy-denied"
     CAPTURE_GAP = "capture-gap"
 
 
