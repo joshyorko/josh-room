@@ -10,6 +10,7 @@ from josh_room.pcc_crypto import RecipientSet
 from josh_room.pcc_enqueue import enqueue_trigger
 from josh_room.pcc_outbox import PccOutbox, QueueState
 from josh_room.policy import CaptureProfile, Destination, Limits, PolicyConfig
+from josh_room.session_evidence import canonical_digest, canonical_json
 from josh_room.session_normalizer import NormalizationEvent
 
 
@@ -28,14 +29,15 @@ def test_bridge_prepares_evidence_and_index_and_drain_selects_event_path(tmp_pat
         policy_version="1.0", provenance="synthetic",
     )
     policy = PolicyConfig({"synthetic": profile}, {})
+    records = [{"record_type": "message", "role": "user", "text": "synthetic"}]
     document = {
         "schema_name": "codex-session-evidence", "schema_version": {"major": 1, "minor": 0},
         "kind": "session-segment", "event_id": "evidence-synthetic", "session_id": "session-synthetic",
         "source": {"surface": "unknown", "adapter": "codex-transcript", "adapter_version": "1"},
         "profile_id": profile.profile_id, "workspace_id": profile.workspace_id, "device_id": "device-synthetic",
         "checkpoint": {"source": "codex-hook", "representation": "unknown", "start": 0, "end": 0, "prefix_sha256": "0" * 64},
-        "record_count": 1, "content_sha256": "a" * 64, "content_size": 1,
-        "records": [{"record_type": "message", "role": "user", "text": "synthetic"}],
+        "record_count": 1, "content_sha256": canonical_digest(records), "content_size": len(canonical_json(records)),
+        "records": records,
         "asset_refs": [], "capture": {"status": "complete", "policy_decision": "allow", "sensitivity": "unknown", "counters": {}},
     }
     checkpoint = Checkpoint(LogicalSourceName.TRANSCRIPT, "session-synthetic", "codex-hook", "unknown", 0, 0, 0, "0" * 64)
@@ -61,7 +63,6 @@ def test_bridge_prepares_evidence_and_index_and_drain_selects_event_path(tmp_pat
         def normalize(self):
             return iter((NormalizationEvent("session-segment", document),))
 
-    recipients = RecipientSet("recipients-synthetic", 1, ("age1daily",), ("age1recovery",), ())
     monkeypatch.setattr(bridge_module, "CodexTranscriptAdapter", FakeAdapter)
     monkeypatch.setattr(bridge_module, "SessionNormalizer", FakeNormalizer)
     monkeypatch.setattr(bridge_module, "decide", lambda *_args, **_kwargs: SimpleNamespace(kind="allow", destination_class="private-r2", profile_name="synthetic", reason_codes=()))
@@ -73,6 +74,7 @@ def test_bridge_prepares_evidence_and_index_and_drain_selects_event_path(tmp_pat
         (),
     )
     monkeypatch.setattr(bridge_module, "_authority", lambda _name: _Authority(None, recipients, "device-synthetic", "synthetic"))
+    monkeypatch.setattr(bridge_module.device, "require_prepare_upload", lambda: None)
     age = tmp_path / "age"
     age.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
     age.chmod(0o700)
