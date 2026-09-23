@@ -6,7 +6,7 @@ CLI thin while making the state machine testable without credentials or a live p
 """
 from __future__ import annotations
 
-import json
+import time
 import secrets
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -306,13 +306,18 @@ class HarvestController:
         if callable(release):
             release(record.event_id, owner)
 
-    def run(self, *, limit: int = 1, offline: bool = False) -> dict[str, object]:
+    def run(self, *, limit: int = 1, offline: bool = False, max_seconds: float | None = None) -> dict[str, object]:
         if type(limit) is not int or not 0 < limit <= 1000:
             raise HarvestError("invalid-limit")
+        if max_seconds is not None and (not isinstance(max_seconds, (int, float)) or max_seconds <= 0):
+            raise HarvestError("invalid-max-seconds")
+        started = time.monotonic()
         prepared: list[dict[str, object]] = []
         failures: list[dict[str, object]] = []
-
         for _ in range(limit):
+            if max_seconds is not None and time.monotonic() - started >= max_seconds:
+                failures.append({"event_id": None, "code": "cancelled"})
+                break
             record, owner = self._claim_one()
             if record is None:
                 break
@@ -351,12 +356,18 @@ class HarvestController:
             remaining=self.status()["queued"],
         )
 
-    def drain(self, *, limit: int = 1) -> dict[str, object]:
+    def drain(self, *, limit: int = 1, max_seconds: float | None = None) -> dict[str, object]:
         if type(limit) is not int or not 0 < limit <= 1000:
             raise HarvestError("invalid-limit")
+        if max_seconds is not None and (not isinstance(max_seconds, (int, float)) or max_seconds <= 0):
+            raise HarvestError("invalid-max-seconds")
+        started = time.monotonic()
         delivered: list[dict[str, object]] = []
         failures: list[dict[str, object]] = []
         for _ in range(limit):
+            if max_seconds is not None and time.monotonic() - started >= max_seconds:
+                failures.append({"event_id": None, "code": "cancelled"})
+                break
             record, owner = self._claim_prepared()
             if record is None:
                 break

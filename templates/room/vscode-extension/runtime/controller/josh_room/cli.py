@@ -274,7 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
         command = harvest_commands.add_parser(action)
         command.add_argument("--outbox-root", type=Path)
         if action in {"run", "drain", "reconcile"}:
-            command.add_argument("--limit", type=int, default=1 if action != "reconcile" else 1000)
+            command.add_argument("--max-seconds", type=float)
         if action == "run":
             command.add_argument("--offline", action="store_true")
             command.add_argument("--tool", choices=("codex",), default="codex", help="host source tool")
@@ -888,14 +888,14 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
     action = args.harvest_command
     if action == "run":
         controller = _harvest_bridge_controller(args, outbox)
-        return controller.run(limit=args.limit, offline=args.offline)
+        return controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
     if action == "drain":
         controller = HarvestController(
             outbox,
             backend=_harvest_backend(args, instance or _instance_root()),
             index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
         )
-        return controller.drain(limit=args.limit)
+        return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
     controller = HarvestController(outbox)
     if action == "plan":
         return controller.plan(args.event_id)
