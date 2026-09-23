@@ -314,6 +314,30 @@ def _activate(platform_name: str, home: Path, files: tuple[Path, ...]) -> str:
             return "active"
     except (OSError, subprocess.CalledProcessError):
         return "activation-failed"
+
+
+def _native_error_text(error: subprocess.CalledProcessError) -> str:
+    output = getattr(error, "stderr", None)
+    if output is None:
+        output = getattr(error, "stdout", None)
+    if output is None:
+        output = getattr(error, "output", None)
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return str(output or "")
+
+
+def _is_absent_native_job(platform_name: str, error: subprocess.CalledProcessError) -> bool:
+    message = _native_error_text(error).casefold()
+    if platform_name == "linux":
+        return ("unit file" in message and "does not exist" in message) or (
+            "unit " in message and ("not loaded" in message or "not found" in message)
+        )
+    if platform_name == "macos":
+        return "could not find service" in message
+    return False
+
+
 def _deactivate(platform_name: str, home: Path) -> str:
     if home != _home():
         return "not-attempted"
@@ -324,8 +348,8 @@ def _deactivate(platform_name: str, home: Path) -> str:
         if platform_name == "macos":
             subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=True, capture_output=True)
             return "inactive"
-    except subprocess.CalledProcessError:
-        return "inactive"
+    except subprocess.CalledProcessError as error:
+        return "inactive" if _is_absent_native_job(platform_name, error) else "deactivation-failed"
     except OSError:
         return "deactivation-failed"
     return "unsupported"
@@ -562,7 +586,7 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         existed = any(path.exists() for path in paths) or manifest.exists() or (state is not None and state.exists())
         activation = _deactivate(selected, home)
         if activation == "deactivation-failed":
-            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
+            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-remove-failed")
         targets = (*paths, manifest) + ((state,) if state is not None else ())
         for path in targets:
             path.unlink(missing_ok=True)
@@ -574,7 +598,7 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         existed = path.exists() or manifest.exists() or (state is not None and state.exists())
         activation = _deactivate(selected, home)
         if activation == "deactivation-failed":
-            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
+            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-remove-failed")
         targets = (path, manifest) + ((state,) if state is not None else ())
         for target in targets:
             target.unlink(missing_ok=True)
