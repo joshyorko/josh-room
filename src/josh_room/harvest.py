@@ -38,7 +38,7 @@ def _public_mapping(value: object) -> dict[str, object]:
 _SAFE_CODES = frozenset({
     "device-unavailable", "capture-authority-unavailable", "normalization-event-required",
     "normalized-event-invalid", "child-lease-unavailable", "provider-authority-unavailable",
-    "provider-unavailable", "prepare-failed", "publish-failed", "not-prepared",
+    "provider-unavailable", "prepare-failed", "publish-failed", "not-prepared", "policy-denied",
 })
 
 
@@ -140,6 +140,11 @@ class HarvestController:
         self.prepare = prepare or self._prepare_default
         self.publish = publish or self._publish_default
         self.owner_factory = owner_factory
+
+    def _publication_allowed(self, record: QueueRecord) -> bool:
+        decision = record.metadata.get("policy_decision")
+        destination = record.metadata.get("destination_class")
+        return decision == "allow" and destination == "private-r2"
 
     def _prepare_default(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
         from .device import require_prepare_upload
@@ -320,6 +325,13 @@ class HarvestController:
                 except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": "not-prepared"})
+                continue
+            if not self._publication_allowed(record):
+                try:
+                    self.outbox.retry(record.event_id, owner, reason_code="policy-denied")
+                except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
+                    pass
+                failures.append({"event_id": record.event_id, "code": "policy-denied"})
                 continue
             try:
                 if self.publish is None:
