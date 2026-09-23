@@ -10,7 +10,10 @@ from josh_room.pcc_outbox import PccOutbox, QueueState
 from josh_room.scheduler import (
     SchedulerContext,
     _linux_content,
+    _mac_content,
+    _windows_command,
     install,
+    load_context,
     remove,
     status,
 )
@@ -55,23 +58,52 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path):
     assert second["ok"] is True and second["changed"] is False
     assert "context" not in first and "argv" not in first
     assert str(tmp_path) not in json.dumps(first)
-    manifest = json.loads((tmp_path / ".config" / "josh-room" / "pcc-harvest.scheduler.json").read_text(encoding="utf-8"))
-    assert manifest["context"]["profile"] == "synthetic"
+    manifest_path = tmp_path / ".config" / "josh-room" / "pcc-harvest.scheduler.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert "context" not in manifest
+    assert str(tmp_path) not in manifest_path.read_text(encoding="utf-8")
+    assert manifest["context_id"].startswith("ctx-")
+    state_path = tmp_path / ".local" / "state" / "josh-room" / "scheduler" / f"{manifest['context_id']}.json"
+    state_text = state_path.read_text(encoding="utf-8")
+    assert state_path.stat().st_mode & 0o777 == 0o600
     parsed = build_parser().parse_args(manifest["argv"][1:])
     assert parsed.harvest_command == "run"
-    assert parsed.profile == "synthetic"
-    assert parsed.codex_active_root == context["codex_active_root"]
-    assert parsed.codex_archived_root == context["codex_archived_root"]
-    assert parsed.policy_config == context["policy_config"]
-    assert parsed.config_home == context["config_home"]
-    assert parsed.workspace_id == "workspace-synthetic"
-    assert parsed.path_kind == "worktree"
+    assert parsed.scheduler_context_id == manifest["context_id"]
+    assert str(tmp_path) not in (tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.service").read_text(encoding="utf-8")
+    loaded = load_context(manifest["context_id"], home=tmp_path)
+    assert loaded.profile == "synthetic"
+    assert loaded.codex_active_root == str(context["codex_active_root"])
+    assert loaded.codex_archived_root == str(context["codex_archived_root"])
+    assert loaded.policy_config == str(context["policy_config"])
+    assert loaded.config_home == str(context["config_home"])
+    assert loaded.workspace_id == "workspace-synthetic"
+    assert loaded.path_kind == "worktree"
+    assert str(tmp_path) in state_text
     service = (tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.service").read_text(encoding="utf-8")
-    assert "--profile synthetic" in service
-    assert "--codex-active-root" in service and "--codex-archived-root" in service
+    assert "--scheduler-context-id" in service
+    assert "--codex-active-root" not in service and "--codex-archived-root" not in service
     assert status(platform_name="linux", home=tmp_path)["installed"] is True
     assert remove(platform_name="linux", home=tmp_path)["changed"] is True
+    assert not state_path.exists()
     assert remove(platform_name="linux", home=tmp_path)["changed"] is False
+
+def test_scheduler_native_definitions_are_path_free(tmp_path):
+    executable = tmp_path / "room$tool"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    context = SchedulerContext.from_values(
+        profile="$PROFILE",
+        codex_active_root=tmp_path / "$active",
+        codex_archived_root=tmp_path / "$archived",
+    )
+    service, _ = _linux_content(str(executable), 900, context)
+    plist = _mac_content(str(executable), 900, tmp_path, context)
+    command = _windows_command(str(executable), 900, context)
+    for definition in (service, plist, " ".join(command)):
+        assert str(tmp_path) not in definition
+    assert "$$PROFILE" not in service
+    assert "--scheduler-context-id" in service
+    assert "room$$tool" in service
 
 
 def test_scheduler_install_rejects_missing_context(tmp_path):
@@ -98,19 +130,6 @@ def test_scheduler_install_rejects_missing_context(tmp_path):
     assert remove(platform_name="linux", home=tmp_path)["changed"] is False
 
 
-def test_scheduler_systemd_argv_escapes_expansion(tmp_path):
-    executable = tmp_path / "room$tool"
-    executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    executable.chmod(0o700)
-    context = SchedulerContext.from_values(
-        profile="$PROFILE",
-        codex_active_root=tmp_path / "$active",
-        codex_archived_root=tmp_path / "$archived",
-    )
-    service, _ = _linux_content(str(executable), 900, context)
-    assert "$$PROFILE" in service
-    assert "$$active" in service and "$$archived" in service
-    assert "room$$tool" in service
 
 
 def test_prepare_and_drain_never_prepare_in_drain(tmp_path):

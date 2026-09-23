@@ -99,34 +99,20 @@ class SchedulerContext:
             age_executable=age,
         )
 
-    def argv(self, executable: str) -> list[str]:
-        result = [
-            executable,
+    def argv(self, executable: str, context_id: str | None = None) -> list[str]:
+        """Return the public scheduler command for this context."""
+        identifier = context_id or _context_identifier(self, executable)
+        executable_name = Path(executable).name
+        return [
+            executable_name,
             "harvest",
             "run",
+            "--scheduler-context-id",
+            identifier,
             "--drain",
             "--limit",
             "100",
-            "--profile",
-            self.profile,
-            "--codex-active-root",
-            self.codex_active_root,
-            "--codex-archived-root",
-            self.codex_archived_root,
         ]
-        for option, value in (
-            ("--policy-config", self.policy_config),
-            ("--config-home", self.config_home),
-            ("--workspace-id", self.workspace_id),
-            ("--workspace-path", self.workspace_path),
-            ("--repository", self.repository),
-        ):
-            if value is not None:
-                result.extend((option, value))
-        result.extend(("--path-kind", self.path_kind))
-        if self.age_executable is not None:
-            result.extend(("--age-executable", self.age_executable))
-        return result
 
     def to_dict(self) -> dict[str, str | None]:
         return {
@@ -145,20 +131,97 @@ class SchedulerContext:
 SCHEMA = "josh-room.scheduler"
 SCHEMA_VERSION = {"major": 1, "minor": 0}
 TASK_NAME = "JoshRoomPccHarvest"
+_STATE_RELATIVE = Path(".local") / "state" / "josh-room" / "scheduler"
+_CONTEXT_ID_PREFIX = "ctx-"
+_CONTEXT_ID_HEX_LENGTH = 32
+
+def _context_identifier(context: SchedulerContext, executable: str) -> str:
+    payload = json.dumps(
+        {"context": context.to_dict(), "executable": str(Path(executable))},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _CONTEXT_ID_PREFIX + hashlib.sha256(payload).hexdigest()[:_CONTEXT_ID_HEX_LENGTH]
+
+def _context_id(value: object) -> str:
+    result = str(value)
+    if (
+        not result.startswith(_CONTEXT_ID_PREFIX)
+        or len(result) != len(_CONTEXT_ID_PREFIX) + _CONTEXT_ID_HEX_LENGTH
+        or any(char not in "0123456789abcdef" for char in result[len(_CONTEXT_ID_PREFIX) :])
+    ):
+        raise ValueError("scheduler context is invalid")
+    return result
+
+def _state_path(home: Path, context_id: str) -> Path:
+    return home / _STATE_RELATIVE / f"{_context_id(context_id)}.json"
+
 def _manifest_path(home: Path) -> Path:
     return home / ".config" / "josh-room" / "pcc-harvest.scheduler.json"
 
-
-def _write_manifest(home: Path, platform_name: str, executable: str, interval: int, context: SchedulerContext) -> bool:
-    path = _manifest_path(home)
+def _write_context(
+    home: Path,
+    context_id: str,
+    platform_name: str,
+    executable: str,
+    interval: int,
+    context: SchedulerContext,
+) -> bool:
+    path = _state_path(home, context_id)
     body = json.dumps(
         {
+            "schema": SCHEMA,
+            "schema_version": dict(SCHEMA_VERSION),
+            "context_id": context_id,
             "platform": platform_name,
             "executable": executable,
             "executable_sha256": _executable_digest(executable),
             "interval": interval,
             "context": context.to_dict(),
-            "argv": context.argv(executable),
+        },
+        sort_keys=True,
+    ) + "\n"
+    return _write_private(path, body)
+
+def _load_context_state(home: Path, context_id: str) -> tuple[SchedulerContext, str]:
+    path = _state_path(home, context_id)
+    try:
+        status = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(status.st_mode):
+            raise ValueError("scheduler context is invalid")
+        if os.name == "posix" and (status.st_uid != os.getuid() or stat.S_IMODE(status.st_mode) != 0o600):
+            raise ValueError("scheduler context is invalid")
+        body = json.loads(path.read_text(encoding="utf-8"))
+        if body.get("schema") != SCHEMA or body.get("schema_version") != SCHEMA_VERSION or body.get("context_id") != context_id:
+            raise ValueError("scheduler context is invalid")
+        executable = _executable(body["executable"])
+        if body["executable_sha256"] != _executable_digest(executable):
+            raise ValueError("scheduler context is invalid")
+        context_body = body["context"]
+        if not isinstance(context_body, dict):
+            raise ValueError("scheduler context is invalid")
+        return SchedulerContext.from_values(**context_body), executable
+    except (OSError, KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("scheduler context is invalid") from error
+
+def load_context(context_id: str, *, home: Path | None = None) -> SchedulerContext:
+    """Load and validate an installed scheduler context without exposing it."""
+    selected_home = _trusted_home(home)
+    context, _ = _load_context_state(selected_home, _context_id(context_id))
+    return context
+
+
+
+def _write_manifest(home: Path, platform_name: str, executable: str, interval: int, context_id: str, context: SchedulerContext) -> bool:
+    path = _manifest_path(home)
+    body = json.dumps(
+        {
+            "platform": platform_name,
+            "context_id": context_id,
+            "interval": interval,
+            "executable_name": Path(executable).name,
+            "executable_sha256": _executable_digest(executable),
+            "argv": context.argv(executable, context_id),
         },
         sort_keys=True,
     ) + "\n"
@@ -248,8 +311,15 @@ def _mac_path(home: Path) -> Path:
     return home / "Library" / "LaunchAgents" / "dev.josh-room.pcc-harvest.plist"
 
 
+def _private_directory(path: Path) -> None:
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.is_symlink() or not path.is_dir():
+        raise OSError("scheduler path is unavailable")
+    if os.name == "posix":
+        os.chmod(path, 0o700)
+
 def _write_private(path: Path, content: str) -> bool:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _private_directory(path.parent)
     if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
         raise OSError("scheduler path is unavailable")
     try:
@@ -276,27 +346,25 @@ def _systemd_arg(value: str) -> str:
     return value.replace("%", "%%").replace("$", "$$").replace("\\", "\\\\").replace('"', '\\"').replace(" ", "\\x20").replace("\t", "\\x09")
 
 
-def _linux_content(executable: str, interval: int, context: SchedulerContext) -> tuple[str, str]:
-    argv = context.argv(executable)
-    command = " ".join(["/usr/bin/env", "--ignore-environment", "HOME=%h", "PATH=/usr/bin:/bin", *(_systemd_arg(item) for item in argv)])
+def _linux_content(executable: str, interval: int, context: SchedulerContext, context_id: str | None = None) -> tuple[str, str]:
+    argv = context.argv(executable, context_id)
+    command = " ".join(["/usr/bin/env", "--ignore-environment", "HOME=%h", "PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin", *(_systemd_arg(item) for item in argv)])
     service = f"[Unit]\nDescription=Josh Room PCC harvest\nRefuseManualStart=yes\n\n[Service]\nType=oneshot\nExecStart={command}\n"
     timer = f"[Unit]\nDescription=Josh Room PCC harvest timer\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec={interval}s\nPersistent=true\nUnit=josh-room-pcc-harvest.service\n\n[Install]\nWantedBy=timers.target\n"
     return service, timer
 
-
 def _xml_arg(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
-
-def _mac_content(executable: str, interval: int, home: Path, context: SchedulerContext) -> str:
-    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in context.argv(executable))
-    home_value = _xml_arg(str(home))
+def _mac_content(executable: str, interval: int, home: Path, context: SchedulerContext, context_id: str | None = None) -> str:
+    del home
+    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in context.argv(executable, context_id))
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.josh-room.pcc-harvest</string>
   <key>ProgramArguments</key><array>{arguments}</array>
-  <key>EnvironmentVariables</key><dict><key>HOME</key><string>{home_value}</string><key>PATH</key><string>/usr/bin:/bin</string></dict>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/bin</string></dict>
   <key>StartInterval</key><integer>{interval}</integer>
   <key>RunAtLoad</key><false/>
   <key>ProcessType</key><string>Background</string>
@@ -304,10 +372,9 @@ def _mac_content(executable: str, interval: int, home: Path, context: SchedulerC
 </dict></plist>
 '''
 
-
-def _windows_command(executable: str, interval: int, context: SchedulerContext) -> list[str]:
+def _windows_command(executable: str, interval: int, context: SchedulerContext, context_id: str | None = None) -> list[str]:
     minutes = max(1, (interval + 59) // 60)
-    task_command = subprocess.list2cmdline(context.argv(executable))
+    task_command = subprocess.list2cmdline(context.argv(executable, context_id))
     return ["schtasks", "/Create", "/TN", TASK_NAME, "/SC", "MINUTE", "/MO", str(minutes), "/TR", task_command, "/F"]
 
 
@@ -335,8 +402,6 @@ def install(
         selected, home = _platform(platform_name), _trusted_home(home)
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", error="scheduler-path-invalid")
-    if selected == "windows":
-        return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
     if selected not in {"linux", "macos", "windows"}:
         return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
     try:
@@ -359,26 +424,28 @@ def install(
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", platform=selected, error="scheduler-context-invalid")
     try:
+        context_id = _context_identifier(context, exe)
+        context_changed = _write_context(home, context_id, selected, exe, interval, context)
         if selected == "linux":
             service, timer = _linux_paths(home)
-            service_body, timer_body = _linux_content(exe, interval, context)
+            service_body, timer_body = _linux_content(exe, interval, context, context_id)
             service_changed = _write_private(service, service_body)
             timer_changed = _write_private(timer, timer_body)
-            manifest_changed = _write_manifest(home, selected, exe, interval, context)
-            changed = service_changed or timer_changed or manifest_changed
+            manifest_changed = _write_manifest(home, selected, exe, interval, context_id, context)
+            changed = context_changed or service_changed or timer_changed or manifest_changed
             activation = _activate(selected, home, (service, timer))
             return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, overlap="systemd-oneshot")
         if selected == "macos":
             path = _mac_path(home)
-            changed = _write_private(path, _mac_content(exe, interval, home, context))
-            changed = _write_manifest(home, selected, exe, interval, context) or changed
+            changed = context_changed or _write_private(path, _mac_content(exe, interval, home, context, context_id))
+            changed = _write_manifest(home, selected, exe, interval, context_id, context) or changed
             activation = _activate(selected, home, (path,))
             return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, overlap="throttle-interval")
         if selected == "windows":
-            process = subprocess.run(_windows_command(exe, interval, context), capture_output=True, text=True, check=False)
+            process = subprocess.run(_windows_command(exe, interval, context, context_id), capture_output=True, text=True, check=False)
             if process.returncode != 0:
                 return _envelope(ok=False, action="install", platform=selected, installed=False, changed=False, task=TASK_NAME, error="scheduler-install-failed")
-            changed = _write_manifest(home, selected, exe, interval, context)
+            changed = context_changed or _write_manifest(home, selected, exe, interval, context_id, context)
             return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, task=TASK_NAME, overlap="task-single-instance")
     except OSError:
         return _envelope(ok=False, action="install", platform=selected, error="scheduler-unavailable")
@@ -388,15 +455,21 @@ def _manifest_state(home: Path) -> tuple[bool, bool]:
     path = _manifest_path(home)
     try:
         body = json.loads(path.read_text(encoding="utf-8"))
-        executable = body["executable"]
-        digest = body["executable_sha256"]
-        context = body["context"]
+        context_id = _context_id(body["context_id"])
+        context, executable = _load_context_state(home, context_id)
         argv = body["argv"]
-        if not isinstance(context, dict) or not isinstance(argv, list) or argv != SchedulerContext.from_values(**context).argv(executable):
+        if not isinstance(argv, list) or argv != context.argv(executable, context_id):
             return False, False
-        return True, _executable_digest(executable) == digest
-    except (OSError, KeyError, TypeError, ValueError):
+        digest = body["executable_sha256"]
+        return True, digest == _executable_digest(executable)
+    except (OSError, KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError):
         return False, False
+def _manifest_context_id(home: Path) -> str | None:
+    try:
+        body = json.loads(_manifest_path(home).read_text(encoding="utf-8"))
+        return _context_id(body["context_id"])
+    except (OSError, KeyError, TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+        return None
 def status(*, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
     try:
 
@@ -442,33 +515,33 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         selected, home = _platform(platform_name), _trusted_home(home)
     except (OSError, ValueError):
         return _envelope(ok=False, action="remove", error="scheduler-path-invalid")
-    if selected == "windows":
-        return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
-
+    manifest = _manifest_path(home)
+    context_id = _manifest_context_id(home)
+    state = _state_path(home, context_id) if context_id is not None else None
     if selected == "linux":
         paths = _linux_paths(home)
         for path in paths:
             if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
                 return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
-        manifest = _manifest_path(home)
-        existed = any(path.exists() for path in paths) or manifest.exists()
+        existed = any(path.exists() for path in paths) or manifest.exists() or (state is not None and state.exists())
         activation = _deactivate(selected, home)
         if activation == "deactivation-failed":
             return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
-        for path in (*paths, manifest):
+        targets = (*paths, manifest) + ((state,) if state is not None else ())
+        for path in targets:
             path.unlink(missing_ok=True)
-        return _envelope(ok=activation != "deactivation-failed", action="remove", platform=selected, removed=True, changed=existed, activation=activation)
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, activation=activation)
     if selected == "macos":
         path = _mac_path(home)
         if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
-        manifest = _manifest_path(home)
-        existed = path.exists() or manifest.exists()
+        existed = path.exists() or manifest.exists() or (state is not None and state.exists())
         activation = _deactivate(selected, home)
         if activation == "deactivation-failed":
             return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
-        path.unlink(missing_ok=True)
-        manifest.unlink(missing_ok=True)
+        targets = (path, manifest) + ((state,) if state is not None else ())
+        for target in targets:
+            target.unlink(missing_ok=True)
         return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, activation=activation)
     if selected == "windows":
         if os.name != "nt":
@@ -477,8 +550,11 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
             process = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True, check=False)
         except OSError:
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unavailable")
+        if process.returncode == 0:
+            targets = (manifest,) + ((state,) if state is not None else ())
+            for target in targets:
+                target.unlink(missing_ok=True)
         return _envelope(ok=process.returncode == 0, action="remove", platform=selected, removed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, **({} if process.returncode == 0 else {"error": "scheduler-remove-failed"}))
     return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
 
-
-__all__ = ["SCHEMA", "SCHEMA_VERSION", "SchedulerContext", "install", "remove", "status"]
+__all__ = ["SCHEMA", "SCHEMA_VERSION", "SchedulerContext", "install", "load_context", "remove", "status"]

@@ -282,11 +282,12 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "run":
             command.add_argument("--offline", action="store_true")
             command.add_argument("--tool", choices=("codex",), default="codex", help="host source tool")
-            command.add_argument("--profile", required=True, help="host-owned capture/device profile")
+            command.add_argument("--profile", required=False, help="host-owned capture/device profile")
             command.add_argument("--policy-config", type=Path, help="explicit private policy file")
             command.add_argument("--config-home", type=Path, help="private XDG config home containing josh-room/policy.json")
-            command.add_argument("--codex-active-root", type=Path, required=True, help="explicit Codex active transcript root")
-            command.add_argument("--codex-archived-root", type=Path, required=True, help="explicit Codex archived transcript root")
+            command.add_argument("--codex-active-root", type=Path, required=False, help="explicit Codex active transcript root")
+            command.add_argument("--codex-archived-root", type=Path, required=False, help="explicit Codex archived transcript root")
+            command.add_argument("--scheduler-context-id", help="opaque installed scheduler context identifier")
             command.add_argument("--workspace-id")
             command.add_argument("--workspace-path")
             command.add_argument("--repository", help="host-observed repository remote (credential-free form)")
@@ -945,8 +946,26 @@ def _harvest_index_file(value: Path | None, default_root: Path | None = None) ->
         raise ValueError("index file is unavailable")
     return candidate
 
+def _load_scheduler_context(args) -> None:
+    context_id = getattr(args, "scheduler_context_id", None)
+    if not context_id:
+        return
+    context = _scheduler.load_context(context_id)
+    args.profile = context.profile
+    args.codex_active_root = Path(context.codex_active_root)
+    args.codex_archived_root = Path(context.codex_archived_root)
+    args.policy_config = Path(context.policy_config) if context.policy_config is not None else None
+    args.config_home = Path(context.config_home) if context.config_home is not None else None
+    args.workspace_id = context.workspace_id
+    args.workspace_path = context.workspace_path
+    args.repository = context.repository
+    args.path_kind = context.path_kind
+    args.age_executable = Path(context.age_executable) if context.age_executable is not None else None
+
 
 def _harvest_dispatch(args, instance: Path | None = None) -> dict:
+    if args.harvest_command == "run":
+        _load_scheduler_context(args)
     if args.harvest_command == "hooks":
         if args.tool != "codex":
             raise ValueError("unsupported harvest hook")
