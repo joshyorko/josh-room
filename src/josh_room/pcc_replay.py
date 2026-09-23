@@ -20,7 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .pcc_crypto import CryptoError, CryptoErrorCode, DecryptedEnvelope, decrypt_envelope
+from .pcc_crypto import (
+    CryptoError,
+    CryptoErrorCode,
+    DecryptedEnvelope,
+    decrypt_envelope,
+)
 from .r2 import (
     R2EvidenceError,
     R2EvidenceReadbackMismatch,
