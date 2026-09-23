@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+
 try:
     import pwd
 except ImportError:  # pragma: no cover - Windows
