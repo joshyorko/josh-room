@@ -63,6 +63,8 @@ def _envelope(*, ok: bool, command: str, **body: object) -> dict[str, object]:
         "command": command,
     }
     result.update(body)
+    if not result["ok"]:
+        result.setdefault("error", "operation-failed")
     return result
 
 
@@ -257,6 +259,9 @@ class HarvestController:
         return _envelope(
             ok=not bool(inspection.diagnostics),
             command="plan",
+            content_free=True,
+            source={"session_id": event_id, "checkpoints": len(plans)},
+            estimated={"records": 0, "bytes": 0},
             plans=plans,
             diagnostics=[item.to_dict() for item in inspection.diagnostics],
         )
@@ -275,7 +280,10 @@ class HarvestController:
             committed=counts.get(QueueState.COMMITTED.value, 0),
             quarantined=counts.get(QueueState.QUARANTINED.value, 0),
             records=len(inspection.records),
-            quarantined_files=inspection.quarantined_count,
+            oldest_sequence=min((record.sequence for record in inspection.records), default=None),
+            last_states=[record.state.value for record in inspection.records[-8:]],
+            local_bytes=sum((record.ciphertext_size or 0) for record in inspection.records),
+            scheduler="unknown",
             partial=inspection.partial_count,
             orphan_prepared=list(inspection.orphan_prepared or []),
             diagnostics=[item.to_dict() for item in inspection.diagnostics],
