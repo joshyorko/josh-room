@@ -34,7 +34,17 @@ def _public_mapping(value: object) -> dict[str, object]:
         item = value[key]
         if item is None or isinstance(item, (bool, int, float, str)):
             result[key] = item
-    return result
+
+_SAFE_CODES = frozenset({
+    "device-unavailable", "capture-authority-unavailable", "normalization-event-required",
+    "normalized-event-invalid", "child-lease-unavailable", "provider-authority-unavailable",
+    "provider-unavailable", "prepare-failed", "publish-failed", "not-prepared",
+})
+
+
+def _safe_code(value: object, fallback: str) -> str:
+    candidate = getattr(value, "value", value)
+    return candidate if isinstance(candidate, str) and candidate in _SAFE_CODES else fallback
 
 
 def _envelope(*, ok: bool, command: str, **body: object) -> dict[str, object]:
@@ -150,15 +160,19 @@ class HarvestController:
             child_id = event.document.get("event_id")
             if not isinstance(child_id, str):
                 raise HarvestError("normalized-event-invalid")
-            enqueue_trigger(
+            receipt = enqueue_trigger(
                 outbox,
                 event_id=child_id,
                 session_id=record.session_id,
                 checkpoint=record.checkpoint,
                 metadata={"object_kind": event.kind},
             )
-            if outbox.claim_specific(child_id, owner) is None:
+            if receipt.event_id != child_id or receipt.state is not QueueState.QUEUED:
                 raise HarvestError("child-lease-unavailable")
+            child = outbox.claim_specific(child_id, owner)
+            if child is None or child.session_id != record.session_id or child.checkpoint != record.checkpoint:
+                raise HarvestError("child-lease-unavailable")
+            outbox.transition(child_id, owner, QueueState.SOURCE_SNAPSHOTTED)
             child_owner = owner
         receipt = encrypt_and_prepare(
             event,
@@ -275,7 +289,7 @@ class HarvestController:
                 if outcome is not None:
                     prepared[-1]["prepare"] = _public_mapping(outcome)
             except Exception as error:  # noqa: BLE001 - callback details map to stable codes
-                code = getattr(error, "code", None) or ("device-unavailable" if error.__class__.__name__ == "DeviceError" else "prepare-failed")
+                code = _safe_code(error, "device-unavailable" if error.__class__.__name__ == "DeviceError" else "prepare-failed")
                 code = getattr(code, "value", code)
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code=str(code))
@@ -312,12 +326,18 @@ class HarvestController:
                     raise HarvestError("publisher-unavailable")
                 outcome = self.publish(self.outbox, record, owner)
                 current = self.outbox.inspect_record(record.event_id)
-                item = _record_public(current or record)
+                if current is None or current.state is not QueueState.COMMITTED:
+                    try:
+                        self.outbox.retry(record.event_id, owner, reason_code="publish-failed")
+                    except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
+                        pass
+                    raise HarvestError("publish-failed")
+                item = _record_public(current)
                 if outcome is not None:
                     item["publish"] = _public_mapping(outcome)
                 delivered.append(item)
             except Exception as error:  # noqa: BLE001 - provider details map to stable codes
-                code = getattr(error, "code", None) or ("provider-unavailable" if error.__class__.__name__ in {"R2EvidenceError", "R2EvidencePublicationError"} else "publish-failed")
+                code = _safe_code(error, "provider-unavailable" if error.__class__.__name__ in {"R2EvidenceError", "R2EvidencePublicationError"} else "publish-failed")
                 code = getattr(code, "value", code)
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code=str(code))
@@ -332,7 +352,7 @@ class HarvestController:
         if record is None:
             raise HarvestError("not-found")
         if record.owner is None:
-            claimed = self.outbox.claim(owner)
+            claimed = self.outbox.claim_specific(event_id, owner)
             if claimed is None or claimed.event_id != event_id:
                 raise HarvestError("lease-conflict")
         elif record.lease_until is None or record.lease_until <= self.outbox.clock():
@@ -373,13 +393,13 @@ class HarvestController:
                     },
                 )
             except OutboxError as error:
-                code = getattr(error, "code", "storage-unavailable")
-                repaired.append({"event_id": event_id, "state": "reconcile-failed", "code": str(code)})
+                code = _safe_code(error, "storage-unavailable")
+                repaired.append({"event_id": event_id, "state": "reconcile-failed", "code": code})
             else:
                 repaired.append({"event_id": record.event_id, "state": record.state.value})
+        ok = not any(item.get("state") == "reconcile-failed" for item in repaired)
         return _envelope(
-            ok=True,
-            command="reconcile",
+            ok=ok,
             bounded=True,
             repaired=repaired,
             diagnostics=[item.to_dict() for item in inspection.diagnostics],

@@ -91,8 +91,14 @@ def _systemd_arg(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace(" ", "\\x20").replace("\t", "\\x09")
 
 
+def _systemd_arg(value: str) -> str:
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in value):
+        raise ValueError("scheduler executable contains controls")
+    return value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"').replace(" ", "\\x20").replace("\t", "\\x09")
+
+
 def _linux_content(executable: str, interval: int) -> tuple[str, str]:
-    command = f"/usr/bin/env --ignore-environment HOME=%h PATH=/usr/bin:/bin {_systemd_arg(executable)} harvest run --offline"
+    command = f"/usr/bin/env --ignore-environment HOME=%h PATH=/usr/bin:/bin {_systemd_arg(executable)} harvest drain --limit 100"
     service = f"[Unit]\nDescription=Josh Room PCC harvest\nRefuseManualStart=yes\n\n[Service]\nType=oneshot\nExecStart={command}\n"
     timer = f"[Unit]\nDescription=Josh Room PCC harvest timer\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec={interval}s\nPersistent=true\nUnit=josh-room-pcc-harvest.service\n\n[Install]\nWantedBy=timers.target\n"
     return service, timer
@@ -104,7 +110,7 @@ def _mac_content(executable: str, interval: int) -> str:
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.josh-room.pcc-harvest</string>
-  <key>ProgramArguments</key><array><string>{escaped}</string><string>harvest</string><string>run</string><string>--offline</string></array>
+  <key>ProgramArguments</key><array><string>{escaped}</string><string>harvest</string><string>drain</string><string>--limit</string><string>100</string></array>
   <key>StartInterval</key><integer>{interval}</integer>
   <key>RunAtLoad</key><false/>
   <key>ProcessType</key><string>Background</string>
@@ -113,9 +119,10 @@ def _mac_content(executable: str, interval: int) -> str:
 '''
 
 
-def _windows_command(executable: str) -> list[str]:
-    task_command = subprocess.list2cmdline([executable, "harvest", "run", "--offline"])
-    return ["schtasks", "/Create", "/TN", TASK_NAME, "/SC", "MINUTE", "/MO", "15", "/TR", task_command, "/F"]
+def _windows_command(executable: str, interval: int) -> list[str]:
+    minutes = max(1, (interval + 59) // 60)
+    task_command = subprocess.list2cmdline([executable, "harvest", "drain", "--limit", "100"])
+    return ["schtasks", "/Create", "/TN", TASK_NAME, "/SC", "MINUTE", "/MO", str(minutes), "/TR", task_command, "/F"]
 
 
 def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = None, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
@@ -138,7 +145,7 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(path)], executable=exe, overlap="throttle-interval")
     if selected == "windows":
         try:
-            process = subprocess.run(_windows_command(exe), capture_output=True, text=True, check=False)
+            process = subprocess.run(_windows_command(exe, interval), capture_output=True, text=True, check=False)
         except OSError:
             return _envelope(ok=False, action="install", platform=selected, error="scheduler-unavailable")
         return _envelope(ok=process.returncode == 0, action="install", platform=selected, installed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, executable=exe, overlap="task-single-instance", **({} if process.returncode == 0 else {"error": "scheduler-install-failed"}))
