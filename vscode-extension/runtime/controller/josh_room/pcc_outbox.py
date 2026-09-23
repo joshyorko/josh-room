@@ -1171,7 +1171,10 @@ class PccOutbox:
     def inspect(self, event_id: str | None = None) -> Inspection:
         if event_id is not None:
             record = self.inspect_record(event_id)
-            return Inspection(records=[] if record is None else [record], diagnostics=[])
+            if record is None:
+                overall = self.inspect()
+                return Inspection([], overall.diagnostics, overall.quarantined_count, overall.partial_count, overall.orphan_prepared)
+            return Inspection(records=[record], diagnostics=[])
         try:
             with _exclusive_file_lock(self._lock_path):
                 self._ensure_layout()
@@ -1224,7 +1227,7 @@ class PccOutbox:
                             pass
                         quarantined += 1
                         diagnostics.append(Diagnostic("prepared-ciphertext-orphan"))
-                retained_quarantine = [path for path in self.quarantine_directory.iterdir() if path.is_file() and not path.is_symlink()]
+                retained_quarantine = [path for path in self.quarantine_directory.iterdir() if path.is_file() and not path.is_symlink() and path.name.startswith(("corrupt-", "prepared-"))]
                 if retained_quarantine:
                     diagnostics.append(Diagnostic("corrupt-record"))
                 queue_ids = {record.event_id for record in records}
@@ -1232,6 +1235,7 @@ class PccOutbox:
         except (OutboxStorageError, OSError):
             return Inspection([], [Diagnostic("storage-unavailable")])
 
+    def _now(self) -> float:
         value = self.clock()
         if not _finite_number(value) or value < 0:
             raise OutboxStorageError("clock-invalid")
