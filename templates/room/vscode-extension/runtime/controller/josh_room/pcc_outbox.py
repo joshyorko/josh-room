@@ -1038,7 +1038,15 @@ class PccOutbox:
                 self._ensure_layout()
                 records, _diagnostics, _quarantined = self._safe_records_unlocked()
                 key = _checkpoint_key(session_id, checkpoint)
-                existing = next((item for item in records if _checkpoint_key(item.session_id, item.checkpoint) == key), None) if coalesce else None
+                existing = next(
+                    (
+                        item
+                        for item in records
+                        if item.state in {QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP}
+                        and _checkpoint_key(item.session_id, item.checkpoint) == key
+                    ),
+                    None,
+                ) if coalesce else None
                 if existing is not None and existing.state is QueueState.TRIGGER_EXPANDED:
                     existing = None
                 event_owner = next((item for item in records if event_id in item.event_ids), None)

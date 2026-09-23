@@ -324,6 +324,14 @@ def build_parser() -> argparse.ArgumentParser:
         schedule_action.add_argument("--platform", dest="platform_name")
         schedule_action.add_argument("--home", type=Path)
         schedule_action.add_argument("--executable")
+        schedule_action.add_argument("--profile")
+        schedule_action.add_argument("--codex-active-root", type=Path)
+        schedule_action.add_argument("--codex-archived-root", type=Path)
+        schedule_action.add_argument("--policy-config", type=Path)
+        schedule_action.add_argument("--config-home", type=Path)
+        schedule_action.add_argument("--workspace-id")
+        schedule_action.add_argument("--workspace-path")
+        schedule_action.add_argument("--repository")
         _json_option(schedule_action)
     hook = commands.add_parser("hook")
     hook_commands = hook.add_subparsers(dest="hook_command", required=True)
@@ -939,12 +947,19 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         if action == "remove":
             return remove_codex_hooks()
         raise ValueError("unsupported harvest hook action")
-    if args.harvest_command == "schedule":
         options = {
             "interval": args.interval,
             "platform_name": args.platform_name,
             "home": args.home,
             "executable": args.executable,
+            "profile": args.profile,
+            "codex_active_root": args.codex_active_root,
+            "codex_archived_root": args.codex_archived_root,
+            "policy_config": args.policy_config,
+            "config_home": args.config_home,
+            "workspace_id": args.workspace_id,
+            "workspace_path": args.workspace_path,
+            "repository": args.repository,
         }
         if args.schedule_command == "install":
             return _scheduler.install(**options)
