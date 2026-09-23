@@ -47,6 +47,8 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path):
     second = install(platform_name="linux", home=tmp_path, executable=executable, **context)
     assert first["ok"] is True and first["changed"] is True
     assert second["ok"] is True and second["changed"] is False
+    assert "context" not in first and "argv" not in first
+    assert str(tmp_path) not in json.dumps(first)
     manifest = json.loads((tmp_path / ".config" / "josh-room" / "pcc-harvest.scheduler.json").read_text(encoding="utf-8"))
     assert manifest["context"]["profile"] == "synthetic"
     parsed = build_parser().parse_args(manifest["argv"][1:])
@@ -79,6 +81,14 @@ def test_scheduler_install_rejects_missing_context(tmp_path):
         "platform": "linux",
         "error": "scheduler-context-invalid",
     }
+    context = {
+        "profile": "synthetic",
+        "codex_active_root": tmp_path / "active",
+        "codex_archived_root": tmp_path / "archived",
+        "repository": "https://user:password@example.com/org/repo",
+    }
+    credential_result = install(platform_name="linux", home=tmp_path, executable=executable, **context)
+    assert credential_result["error"] == "scheduler-context-invalid"
     assert remove(platform_name="linux", home=tmp_path)["changed"] is False
 
 

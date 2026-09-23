@@ -17,6 +17,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .policy import RepositoryIdentity
+
 def _home() -> Path:
     if pwd is None:
         return Path.home()
@@ -80,6 +82,9 @@ class SchedulerContext:
         age = absolute(age_executable, "age executable")
         if age is not None:
             age = _executable(age)
+        repository_value = text(repository, "repository")
+        if repository_value is not None:
+            RepositoryIdentity.from_remote(repository_value)
         return cls(
             profile=text(profile, "profile", required=True),
             codex_active_root=absolute(codex_active_root, "Codex active root", required=True),
@@ -88,7 +93,7 @@ class SchedulerContext:
             config_home=absolute(config_home, "config home"),
             workspace_id=text(workspace_id, "workspace id"),
             workspace_path=absolute(workspace_path, "workspace path"),
-            repository=text(repository, "repository"),
+            repository=repository_value,
             path_kind=path_kind,
             age_executable=age,
         )
@@ -352,8 +357,6 @@ def install(
         )
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", platform=selected, error="scheduler-context-invalid")
-    argv = context.argv(exe)
-    details = {"context": context.to_dict(), "argv": argv}
     try:
         if selected == "linux":
             service, timer = _linux_paths(home)
@@ -363,19 +366,19 @@ def install(
             manifest_changed = _write_manifest(home, selected, exe, interval, context)
             changed = service_changed or timer_changed or manifest_changed
             activation = _activate(selected, home, (service, timer))
-            return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, files=[str(service), str(timer)], executable=exe, executable_sha256=_executable_digest(exe), overlap="systemd-oneshot", **details)
+            return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, overlap="systemd-oneshot")
         if selected == "macos":
             path = _mac_path(home)
             changed = _write_private(path, _mac_content(exe, interval, home, context))
             changed = _write_manifest(home, selected, exe, interval, context) or changed
             activation = _activate(selected, home, (path,))
-            return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, files=[str(path)], executable=exe, executable_sha256=_executable_digest(exe), overlap="throttle-interval", **details)
+            return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, overlap="throttle-interval")
         if selected == "windows":
             process = subprocess.run(_windows_command(exe, interval, context), capture_output=True, text=True, check=False)
             if process.returncode != 0:
-                return _envelope(ok=False, action="install", platform=selected, installed=False, changed=False, task=TASK_NAME, error="scheduler-install-failed", **details)
+                return _envelope(ok=False, action="install", platform=selected, installed=False, changed=False, task=TASK_NAME, error="scheduler-install-failed")
             changed = _write_manifest(home, selected, exe, interval, context)
-            return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, task=TASK_NAME, executable=exe, executable_sha256=_executable_digest(exe), overlap="task-single-instance", **details)
+            return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, task=TASK_NAME, overlap="task-single-instance")
     except OSError:
         return _envelope(ok=False, action="install", platform=selected, error="scheduler-unavailable")
     return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
@@ -412,7 +415,7 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
                 active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "josh-room-pcc-harvest.timer"], check=False).returncode == 0
             except OSError:
                 active = False
-        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh, files=[str(path) for path in paths])
+        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh)
     if selected == "macos":
         path = _mac_path(home)
         manifest, fresh = _manifest_state(home)
@@ -423,7 +426,7 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
                 active = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=False, capture_output=True).returncode == 0
             except OSError:
                 active = False
-        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh, files=[str(path)])
+        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh)
     if selected == "windows":
         if os.name != "nt":
             return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
@@ -453,7 +456,7 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
             return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
         for path in (*paths, manifest):
             path.unlink(missing_ok=True)
-        return _envelope(ok=activation != "deactivation-failed", action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path) for path in (*paths, manifest)])
+        return _envelope(ok=activation != "deactivation-failed", action="remove", platform=selected, removed=True, changed=existed, activation=activation)
     if selected == "macos":
         path = _mac_path(home)
         if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
@@ -465,7 +468,7 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
             return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
         path.unlink(missing_ok=True)
         manifest.unlink(missing_ok=True)
-        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path), str(manifest)])
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, activation=activation)
     if selected == "windows":
         if os.name != "nt":
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
