@@ -18,13 +18,13 @@ from pathlib import Path
 from . import device
 from .adapter_contract import (
     Checkpoint,
+    Decision,
     GateDecision,
     GateSet,
     LogicalSourceName,
     PlanStatus,
     SourceEvent,
 )
-from .adapter_contract import Decision
 from .codex_adapter import CodexRoots, CodexTranscriptAdapter
 from .harvest import HarvestError
 from .pcc_crypto import RecipientSet, encrypt_and_prepare
@@ -154,7 +154,7 @@ def _safe_policy_file(path: Path) -> PolicyConfig:
         return PolicyConfig.from_dict(body)
     except HarvestError:
         raise
-    except Exception as error:  # noqa: BLE001 - stable public boundary
+    except Exception as error:
         raise HarvestError("policy-config-unavailable") from error
 
 
@@ -163,7 +163,7 @@ def load_host_policy(*, policy_config: Path | None, config_home: Path | None) ->
         return _safe_policy_file(policy_config)
     try:
         return load_policy_config(config_home=config_home)
-    except Exception as error:  # noqa: BLE001 - policy boundary is public-safe
+    except Exception as error:
         raise HarvestError("policy-config-unavailable") from error
 
 
@@ -241,7 +241,7 @@ def _authority(profile_name: str) -> _Authority:
         )
     except HarvestError:
         raise
-    except Exception as error:  # noqa: BLE001 - native authority is fail-closed
+    except Exception as error:
         raise HarvestError("device-unavailable") from error
 
 
@@ -344,7 +344,7 @@ class HostHarvestBridge:
                 require_device=True,
             )
             outbox.release(event_id, owner)
-        except Exception:  # noqa: BLE001, S110
+        except Exception:
             try:
                 current = outbox.inspect_record(event_id)
                 if current is not None and current.owner == owner and current.state in {QueueState.CLAIMED, QueueState.SOURCE_SNAPSHOTTED}:
@@ -370,7 +370,7 @@ class HostHarvestBridge:
             stream = self.adapter.open(plan)
         except HarvestError:
             raise
-        except Exception as error:  # noqa: BLE001 - adapter details stay private
+        except Exception as error:
             raise HarvestError("source-unavailable") from error
         current = outbox.inspect_record(record.event_id)
         if current is None or current.owner != owner:
@@ -396,7 +396,7 @@ class HostHarvestBridge:
                 child_ids.append(self._prepare_event(outbox, record, owner, normalized, _event_checkpoint(normalized, stream.result.next_checkpoint), writer))
         except HarvestError:
             raise
-        except Exception as error:  # noqa: BLE001 - normalizer/crypto details stay private
+        except Exception as error:
             raise HarvestError("prepare-failed") from error
         latest = self.adapter.checkpoint(stream.result)
         try:
@@ -407,7 +407,7 @@ class HostHarvestBridge:
                 "end": latest.next_byte_offset,
                 "prefix_sha256": latest.prefix_digest,
             })
-        except Exception as error:  # noqa: BLE001 - durable terminal receipt is required
+        except Exception as error:
             raise HarvestError("prepare-failed") from error
         return {"expanded": True, "child_count": len(child_ids), "child_event_ids": child_ids, "state": expanded.state.value}
 
