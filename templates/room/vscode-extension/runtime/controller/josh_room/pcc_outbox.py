@@ -1218,12 +1218,16 @@ class PccOutbox:
                         quarantined += 1
                         diagnostics.append(Diagnostic("prepared-ciphertext-orphan"))
                 queue_ids = {record.event_id for record in records}
+                retained_quarantine = [path for path in self.quarantine_directory.iterdir() if path.is_file() and not path.is_symlink()]
+                if retained_quarantine:
+                    quarantined += len(retained_quarantine)
+                    diagnostics.append(Diagnostic("corrupt-record"))
+                queue_ids = {record.event_id for record in records}
                 return Inspection(records, diagnostics, quarantined, partial_count, sorted(prepared_ids - queue_ids))
         except (OutboxStorageError, OSError):
             return Inspection([], [Diagnostic("storage-unavailable")])
 
     def _now(self) -> float:
-        value = self.clock()
         if not _finite_number(value) or value < 0:
             raise OutboxStorageError("clock-invalid")
         return float(value)
