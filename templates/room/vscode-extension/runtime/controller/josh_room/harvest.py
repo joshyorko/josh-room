@@ -167,7 +167,7 @@ class HarvestController:
         if self.profile is None or self.recipient_resolver is None:
             raise HarvestError("capture-authority-unavailable")
         event = NormalizationEvent(str(raw.get("kind")), dict(raw["document"]))
-        child_owner = owner
+        destination = getattr(getattr(self.profile, "destination", None), "kind", None)
         if event.document.get("event_id") != record.event_id:
             from .pcc_enqueue import enqueue_trigger
 
