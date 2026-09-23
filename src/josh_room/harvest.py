@@ -11,6 +11,7 @@ import secrets
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from .pcc_outbox import OutboxError, PccOutbox, QueueRecord, QueueState
 
