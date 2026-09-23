@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .policy import RepositoryIdentity
 
+
 def _home() -> Path:
     if pwd is None:
         return Path.home()
