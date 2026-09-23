@@ -174,15 +174,16 @@ class HarvestController:
             child_id = event.document.get("event_id")
             if not isinstance(child_id, str):
                 raise HarvestError("normalized-event-invalid")
-            destination = getattr(getattr(self.profile, "destination", None), "kind", None)
+            trigger = record.metadata.get("trigger")
+            if trigger not in {"stop", "subagent-stop", "session-end"}:
+                raise HarvestError("policy-denied")
             if destination != "private-r2":
                 raise HarvestError("policy-denied")
             receipt = enqueue_trigger(
                 outbox,
                 event_id=child_id,
                 session_id=record.session_id,
-                checkpoint=record.checkpoint,
-                metadata={"object_kind": event.kind, "policy_decision": "allow", "destination_class": destination},
+                metadata={"object_kind": event.kind, "policy_decision": "allow", "destination_class": destination, "trigger": trigger},
             )
             if receipt.event_id != child_id or receipt.state is not QueueState.QUEUED:
                 raise HarvestError("child-lease-unavailable")
