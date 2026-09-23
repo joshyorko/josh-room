@@ -459,7 +459,6 @@ class HarvestController:
         if record is None or record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.POLICY_DENIED}:
             raise HarvestError("not-quarantinable")
         return self._transition(event_id, QueueState.QUARANTINED, reason)
-
     def discard(self, event_id: str) -> dict[str, object]:
         return self.quarantine(event_id, "operator-discard") | {
             "discard": "quarantined",
@@ -473,12 +472,18 @@ class HarvestController:
                 results.append(self.retry(record.event_id, reason))
         return _envelope(ok=True, command="retry-all", records=results)
 
-    def reconcile(self, *, limit: int = 1000) -> dict[str, object]:
+    def reconcile(self, *, limit: int = 1000, max_seconds: float | None = None) -> dict[str, object]:
         if type(limit) is not int or not 0 < limit <= 10000:
             raise HarvestError("invalid-limit")
+        if max_seconds is not None and (not isinstance(max_seconds, (int, float)) or max_seconds <= 0):
+            raise HarvestError("invalid-max-seconds")
+        started = time.monotonic()
         inspection = self.outbox.inspect()
         repaired: list[dict[str, object]] = []
         for event_id in (inspection.orphan_prepared or [])[:limit]:
+            if max_seconds is not None and time.monotonic() - started >= max_seconds:
+                repaired.append({"event_id": event_id, "state": "cancelled", "code": "cancelled"})
+                break
             try:
                 record = self.outbox.reconcile_prepared(
                     event_id,

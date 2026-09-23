@@ -935,7 +935,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
     if action == "discard":
         return controller.discard(args.event_id)
     if action == "reconcile":
-        return controller.reconcile(limit=args.limit)
+        return controller.reconcile(limit=args.limit, max_seconds=args.max_seconds)
     raise ValueError("unsupported harvest action")
 
 
