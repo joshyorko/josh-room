@@ -199,7 +199,8 @@ class HarvestController:
             self.recipient_resolver,
             require_device=True,
         )
-        if child_owner == owner and receipt.event_id != record.event_id:
+        if receipt.event_id != record.event_id:
+            outbox.expand(record.event_id, owner, child_event_ids=[receipt.event_id], checkpoint=record.checkpoint)
             outbox.release(receipt.event_id, owner)
         return {"event_id": receipt.event_id, "kind": receipt.kind, "ciphertext_size": receipt.ciphertext_size}
 
@@ -245,7 +246,9 @@ class HarvestController:
         inspection = self.outbox.inspect()
         counts = Counter(record.state.value for record in inspection.records)
         return _envelope(
-            ok=not any(item.code == "storage-unavailable" for item in inspection.diagnostics),
+            ok=not any(item.code == "storage-unavailable" for item in inspection.diagnostics) and not any(
+                counts.get(state.value, 0) for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED)
+            ),
             command="status",
             states={key: counts[key] for key in sorted(counts)},
             queued=sum(counts.get(state.value, 0) for state in (QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP)),
@@ -272,6 +275,18 @@ class HarvestController:
     def _claim_one(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
         return self.outbox.claim(owner), owner
+    def _claim_prepared(self) -> tuple[QueueRecord | None, str]:
+        owner = self.owner_factory()
+        now = self.outbox.clock()
+        for record in self.outbox.inspect().records:
+            if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
+                continue
+            if record.owner is not None and (record.lease_until is None or record.lease_until > now):
+                continue
+            claimed = self.outbox.claim_specific(record.event_id, owner, takeover=record.owner is not None)
+            if claimed is not None:
+                return claimed, owner
+        return None, owner
 
     def _release(self, record: QueueRecord, owner: str) -> None:
         # #8 owns lease release; trigger expansion is already terminal and
@@ -331,7 +346,7 @@ class HarvestController:
         delivered: list[dict[str, object]] = []
         failures: list[dict[str, object]] = []
         for _ in range(limit):
-            record, owner = self._claim_one()
+            record, owner = self._claim_prepared()
             if record is None:
                 break
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
@@ -393,9 +408,15 @@ class HarvestController:
         return _envelope(ok=True, command=state.value, record=_record_public(updated))
 
     def retry(self, event_id: str, reason: str = "operator-retry") -> dict[str, object]:
+        record = self.outbox.inspect_record(event_id)
+        if record is None or record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP}:
+            raise HarvestError("not-retryable")
         return self._transition(event_id, QueueState.RETRYABLE_FAILURE, reason)
 
     def quarantine(self, event_id: str, reason: str = "operator-quarantine") -> dict[str, object]:
+        record = self.outbox.inspect_record(event_id)
+        if record is None or record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.POLICY_DENIED}:
+            raise HarvestError("not-quarantinable")
         return self._transition(event_id, QueueState.QUARANTINED, reason)
 
     def discard(self, event_id: str) -> dict[str, object]:
