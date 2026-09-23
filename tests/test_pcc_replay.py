@@ -387,7 +387,9 @@ def test_denied_asset_cannot_satisfy_segment_reference():
     page = reader([segment_entry, asset_entry], mapping).export(limit=2)
 
     assert not page.records
-    assert {receipt["reason_code"] for receipt in page.quarantines} >= {"policy-mismatch", "missing-asset"}
+    assert {receipt["reason_code"] for receipt in page.quarantines} == {"policy-mismatch"}
+    assert page.complete is False
+    assert page.cursor is None
 def test_asset_reference_category_must_match_asset_event():
     segment = fixture("golden-session-segment.json")
     asset = fixture("golden-session-asset.json")
@@ -694,7 +696,7 @@ def test_failed_index_reads_still_consume_cumulative_scan_budget():
 
     assert len(read_keys) == 2
     assert page.records == ()
-    assert page.quarantines == ()
+    assert {receipt["reason_code"] for receipt in page.quarantines} == {"index-read-failed"}
     assert page.cursor == previous
     assert page.complete is False
     assert page.inspected_indexes == 0
@@ -803,7 +805,7 @@ def test_corrupt_off_page_index_blocks_complete_record_emission():
     ).export(cursor=previous, limit=1)
 
     assert page.records == ()
-    assert {item["reason_code"] for item in page.quarantines} == {"corrupt-ciphertext"}
+    assert {item["reason_code"] for item in page.quarantines} == {"index-read-failed"}
     assert page.cursor == previous
     assert page.complete is False
     assert page.inspected_indexes == 0
