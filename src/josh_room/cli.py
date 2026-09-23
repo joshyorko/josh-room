@@ -788,7 +788,7 @@ def _harvest_outbox_root(value: Path | None) -> Path:
         if not value.is_absolute():
             raise ValueError("outbox root must be absolute")
         return value
-    explicit = os.environ.get("JOSH_ROOM_OUTBOX_ROOT") or os.environ.get("JOSH_ROOM_HOOK_OUTBOX")
+    explicit = os.environ.get("JOSH_ROOM_HOOK_OUTBOX") or os.environ.get("JOSH_ROOM_OUTBOX_ROOT")
     if explicit:
         root = Path(explicit)
     else:

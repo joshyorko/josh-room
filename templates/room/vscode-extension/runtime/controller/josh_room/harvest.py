@@ -12,7 +12,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from .pcc_outbox import PccOutbox, QueueRecord, QueueState
+from .pcc_outbox import OutboxError, PccOutbox, QueueRecord, QueueState
 
 SCHEMA = "josh-room.harvest"
 SCHEMA_VERSION = {"major": 1, "minor": 0}
@@ -22,6 +22,18 @@ class HarvestError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+def _public_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, object] = {}
+    for key in sorted(value):
+        if not isinstance(key, str) or key.startswith("_") or key in {"path", "source_path", "secret", "token", "credential"}:
+            continue
+        item = value[key]
+        if item is None or isinstance(item, (bool, int, float, str)):
+            result[key] = item
+    return result
 
 
 def _envelope(*, ok: bool, command: str, **body: object) -> dict[str, object]:
@@ -186,8 +198,7 @@ class HarvestController:
             try:
                 if record.resume_state in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
                     prepared.append(_record_public(record))
-                    if offline:
-                        self._release(record, owner)
+                    self._release(record, owner)
                     continue
                 if self.prepare is None:
                     self.outbox.retry(record.event_id, owner, reason_code="prepare-unavailable")
@@ -196,10 +207,9 @@ class HarvestController:
                 outcome = self.prepare(self.outbox, record, owner)
                 current = self.outbox.inspect_record(record.event_id)
                 prepared.append(_record_public(current or record))
-                if offline:
-                    self._release(record, owner)
-                if outcome is not None and isinstance(outcome, Mapping):
-                    prepared[-1]["prepare"] = dict(outcome)
+                self._release(record, owner)
+                if outcome is not None:
+                    prepared[-1]["prepare"] = _public_mapping(outcome)
             except Exception as error:  # noqa: BLE001 - callback details map to stable codes
                 code = getattr(error, "code", None) or "prepare-failed"
                 code = getattr(code, "value", code)
@@ -261,8 +271,13 @@ class HarvestController:
             claimed = self.outbox.claim(owner)
             if claimed is None or claimed.event_id != event_id:
                 raise HarvestError("lease-conflict")
+        elif record.lease_until is None or record.lease_until <= self.outbox.clock():
+            try:
+                self.outbox.takeover(event_id, owner)
+            except OutboxError as error:
+                raise HarvestError("lease-conflict") from error
         else:
-            owner = record.owner
+            raise HarvestError("lease-conflict")
         updated = self.outbox.transition(event_id, owner, state, reason_code=reason)
         return _envelope(ok=True, command=state.value, record=_record_public(updated))
 
@@ -273,8 +288,6 @@ class HarvestController:
         return self._transition(event_id, QueueState.QUARANTINED, reason)
 
     def discard(self, event_id: str) -> dict[str, object]:
-        # The outbox owns destructive deletion and intentionally has no delete seam.
-        # Keep discard explicit without pretending to delete durable evidence.
         return self.quarantine(event_id, "operator-discard") | {"discard": "quarantined"}
 
     def reconcile(self, *, limit: int = 1000) -> dict[str, object]:
@@ -282,8 +295,24 @@ class HarvestController:
             raise HarvestError("invalid-limit")
         inspection = self.outbox.inspect()
         repaired: list[dict[str, object]] = []
-        for event_id in inspection.orphan_prepared[:limit]:
-            repaired.append({"event_id": event_id, "state": "orphan-prepared"})
+        for event_id in (inspection.orphan_prepared or [])[:limit]:
+            try:
+                record = self.outbox.reconcile_prepared(
+                    event_id,
+                    session_id=event_id,
+                    checkpoint={
+                        "source": event_id,
+                        "representation": "unknown",
+                        "start": 0,
+                        "end": 0,
+                        "prefix_sha256": "0" * 64,
+                    },
+                )
+            except OutboxError as error:
+                code = getattr(error, "code", "storage-unavailable")
+                repaired.append({"event_id": event_id, "state": "reconcile-failed", "code": str(code)})
+            else:
+                repaired.append({"event_id": record.event_id, "state": record.state.value})
         return _envelope(
             ok=True,
             command="reconcile",
