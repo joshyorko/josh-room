@@ -142,14 +142,33 @@ class HarvestController:
         if self.profile is None or self.recipient_resolver is None:
             raise HarvestError("capture-authority-unavailable")
         event = NormalizationEvent(str(raw.get("kind")), dict(raw["document"]))
+        child_owner = owner
+        if event.document.get("event_id") != record.event_id:
+            from .pcc_enqueue import enqueue_trigger
+
+            child_id = event.document.get("event_id")
+            if not isinstance(child_id, str):
+                raise HarvestError("normalized-event-invalid")
+            enqueue_trigger(
+                outbox,
+                event_id=child_id,
+                session_id=record.session_id,
+                checkpoint=record.checkpoint,
+                metadata={"object_kind": event.kind},
+            )
+            if outbox.claim_specific(child_id, owner) is None:
+                raise HarvestError("child-lease-unavailable")
+            child_owner = owner
         receipt = encrypt_and_prepare(
             event,
             outbox,
-            owner,
+            child_owner,
             self.profile,
             self.recipient_resolver,
             require_device=True,
         )
+        if child_owner == owner and receipt.event_id != record.event_id:
+            outbox.release(receipt.event_id, owner)
         return {"event_id": receipt.event_id, "kind": receipt.kind, "ciphertext_size": receipt.ciphertext_size}
 
     def _publish_default(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
