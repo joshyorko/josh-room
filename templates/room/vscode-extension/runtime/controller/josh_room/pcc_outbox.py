@@ -988,9 +988,8 @@ class PccOutbox:
         session_id: str,
         checkpoint: Mapping[str, object],
         is_final: bool = False,
-        metadata: Mapping[str, object] | None = None,
-        policy_decision: str = "allow",
         diagnostic_detail: object | None = None,
+        coalesce: bool = True,
     ) -> QueueReceipt:
         return enqueue_trigger(
             self,
@@ -1001,6 +1000,7 @@ class PccOutbox:
             metadata=metadata,
             policy_decision=policy_decision,
             diagnostic_detail=diagnostic_detail,
+            coalesce=coalesce,
         )
 
     def _enqueue_authority(
@@ -1011,9 +1011,9 @@ class PccOutbox:
         checkpoint: Mapping[str, object],
         is_final: bool = False,
         metadata: Mapping[str, object] | None = None,
-        policy_decision: str = "allow",
         diagnostic_detail: object | None = None,
         lock_timeout: float | None = None,
+        coalesce: bool = True,
     ) -> QueueReceipt:
         del diagnostic_detail  # Deliberately inert: enqueue never captures caller data.
         event_id = _identifier(event_id)
@@ -1035,14 +1035,15 @@ class PccOutbox:
                 self._ensure_layout()
                 records, _diagnostics, _quarantined = self._safe_records_unlocked()
                 key = _checkpoint_key(session_id, checkpoint)
-                existing = next((item for item in records if _checkpoint_key(item.session_id, item.checkpoint) == key), None)
+                existing = (
+                    next((item for item in records if _checkpoint_key(item.session_id, item.checkpoint) == key), None)
+                    if coalesce else None
+                )
                 event_owner = next((item for item in records if event_id in item.event_ids), None)
-                if event_owner is not None and event_owner is not existing:
-                    return QueueReceipt(
-                        event_id,
-                        QueueState.CAPTURE_GAP,
-                        diagnostic=CaptureGap("event-id-conflict", True),
-                    )
+                if event_owner is not None and event_owner.event_id == event_id:
+                    if _checkpoint_key(event_owner.session_id, event_owner.checkpoint) == key:
+                        return QueueReceipt(event_id, event_owner.state, sequence=event_owner.sequence, is_final=event_owner.is_final)
+                    return QueueReceipt(event_id, QueueState.CAPTURE_GAP, diagnostic=CaptureGap("event-id-conflict", True))
                 if existing is not None:
                     event_ids = list(existing.event_ids)
                     quota_hit = False
