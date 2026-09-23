@@ -246,8 +246,6 @@ class HarvestController:
         return _envelope(
             ok=not bool(inspection.diagnostics),
             command="plan",
-            content_free=True,
-            records=records,
             plans=plans,
             diagnostics=[item.to_dict() for item in inspection.diagnostics],
         )
@@ -257,7 +255,7 @@ class HarvestController:
         counts = Counter(record.state.value for record in inspection.records)
         return _envelope(
             ok=not any(item.code == "storage-unavailable" for item in inspection.diagnostics) and not any(
-                counts.get(state.value, 0) for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED)
+                counts.get(state.value, 0) for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED)
             ),
             command="status",
             states={key: counts[key] for key in sorted(counts)},
@@ -337,7 +335,10 @@ class HarvestController:
                 code = _safe_code(error, "device-unavailable" if error.__class__.__name__ == "DeviceError" else "prepare-failed")
                 code = getattr(code, "value", code)
                 try:
-                    self.outbox.retry(record.event_id, owner, reason_code=str(code))
+                    if str(code) == "policy-denied":
+                        self.outbox.transition(record.event_id, owner, QueueState.POLICY_DENIED, reason_code="policy-denied")
+                    else:
+                        self.outbox.retry(record.event_id, owner, reason_code=str(code))
                 except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": str(code)})
@@ -368,7 +369,7 @@ class HarvestController:
                 continue
             if not self._publication_allowed(record):
                 try:
-                    self.outbox.retry(record.event_id, owner, reason_code="policy-denied")
+                    self.outbox.transition(record.event_id, owner, QueueState.POLICY_DENIED, reason_code="policy-denied")
                 except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": "policy-denied"})
