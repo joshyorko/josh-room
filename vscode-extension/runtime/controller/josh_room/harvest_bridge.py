@@ -13,7 +13,7 @@ import os
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import device
@@ -271,7 +271,7 @@ def _observed_at(document: Mapping[str, object]) -> str:
     value = document.get("observed_at")
     if isinstance(value, str) and value:
         return value
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _index_document(event: NormalizationEvent, prepared: PreparedChild) -> tuple[str, dict[str, object]]:
