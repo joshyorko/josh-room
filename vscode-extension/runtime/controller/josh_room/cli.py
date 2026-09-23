@@ -965,14 +965,25 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             )
             def scheduled_policy(record):
                 workspace_id = record.metadata.get("workspace_id")
-                profiles = [
-                    profile for profile in policy.profiles.values()
-                    if profile.workspace_id == workspace_id
-                ]
+                profiles = [profile for profile in policy.profiles.values() if profile.workspace_id == workspace_id]
                 if len(profiles) != 1:
                     return {"decision": "deny", "destination": "local-only"}
                 profile = profiles[0]
-                return {"decision": "allow" if profile.destination.kind == "private-r2" else "deny", "destination": profile.destination.kind}
+                trigger = record.metadata.get("trigger")
+                if trigger not in {"stop", "subagent-stop", "session-end"}:
+                    return {"decision": "deny", "destination": "local-only"}
+                context = PolicyContext.from_values(
+                    workspace_id=args.workspace_id or profile.workspace_id,
+                    remote=args.repository,
+                    workspace_path=args.workspace_path,
+                    path_kind=args.path_kind,
+                    context_source="host-observed",
+                )
+                decision = decide(
+                    policy,
+                    CaptureRequest(context=context, logical_sources=("codex.transcript",), trigger=trigger),
+                )
+                return {"decision": decision.kind, "destination": decision.destination_class}
             controller = HarvestController(
                 outbox,
                 backend=_harvest_backend(args, instance or _instance_root()),
