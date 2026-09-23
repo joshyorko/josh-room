@@ -1042,7 +1042,9 @@ class PccOutbox:
                 )
                 event_owner = next((item for item in records if event_id in item.event_ids), None)
                 if event_owner is not None and event_owner.event_id == event_id:
-                    return QueueReceipt(event_id, event_owner.state, sequence=event_owner.sequence, is_final=event_owner.is_final)
+                    if _checkpoint_key(event_owner.session_id, event_owner.checkpoint) == key:
+                        return QueueReceipt(event_id, event_owner.state, sequence=event_owner.sequence, is_final=event_owner.is_final)
+                    return QueueReceipt(event_id, QueueState.CAPTURE_GAP, diagnostic=CaptureGap("event-id-conflict", True))
                 if event_owner is not None and event_owner is not existing:
                     return QueueReceipt(
                         event_id,
