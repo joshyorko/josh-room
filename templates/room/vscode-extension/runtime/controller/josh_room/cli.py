@@ -292,11 +292,11 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
             command.add_argument("--age-executable", type=Path)
         if action == "drain":
-            command.add_argument("--profile", required=True, help="host-owned capture/device profile")
+            command.add_argument("--profile", help="optional host-owned capture/device profile")
             command.add_argument("--policy-config", type=Path)
             command.add_argument("--config-home", type=Path)
-            command.add_argument("--codex-active-root", type=Path, required=True)
-            command.add_argument("--codex-archived-root", type=Path, required=True)
+            command.add_argument("--codex-active-root", type=Path)
+            command.add_argument("--codex-archived-root", type=Path)
             command.add_argument("--workspace-id")
             command.add_argument("--workspace-path")
             command.add_argument("--repository")
@@ -953,6 +953,13 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         controller = _harvest_bridge_controller(args, outbox)
         return controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
     if action == "drain":
+        if not args.profile:
+            controller = HarvestController(
+                outbox,
+                backend=_harvest_backend(args, instance or _instance_root()),
+                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
+            )
+            return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
         policy = load_host_policy(
             policy_config=getattr(args, "policy_config", None),
             config_home=getattr(args, "config_home", None),
@@ -968,7 +975,6 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             policy_check=_drain_policy_check(policy, profile, args),
         )
         return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
-    controller = HarvestController(outbox)
     if action == "plan":
         return controller.plan(args.event_id)
     if action == "status":
