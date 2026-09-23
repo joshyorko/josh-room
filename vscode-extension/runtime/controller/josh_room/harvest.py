@@ -242,11 +242,12 @@ class HarvestController:
             "object_key": getattr(getattr(result, "object", None), "key", None),
             "index_event_id": index_event_id,
         }
-
     def plan(self, event_id: str | None = None) -> dict[str, object]:
         inspection = self.outbox.inspect(event_id)
         plans = []
         for record in inspection.records:
+            if record.metadata.get("object_kind") == "index-event":
+                continue
             state = record.state
             if state in {QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP}:
                 action = "prepare"
