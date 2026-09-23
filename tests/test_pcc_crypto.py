@@ -34,7 +34,9 @@ from josh_room.pcc_crypto import (
     validate_manifest,
 )
 from josh_room.pcc_outbox import PccOutbox, QueueState
+from josh_room.pcc_replay import ReplayReader
 from josh_room.policy import CaptureProfile, Destination, Limits
+from josh_room.r2 import evidence_index_key, evidence_object_key
 from josh_room.session_evidence import canonical_json
 from josh_room.session_normalizer import (
     AssetReceipt,
@@ -337,6 +339,63 @@ def test_streaming_age_round_trip_covers_all_typed_event_kinds(tmp_path: Path, k
             assert decrypted.payload == canonical_json(event.document)
 
 
+def test_replay_reader_decrypts_index_and_evidence_with_profile_identity(tmp_path: Path):
+    (daily_identity, _recovery_identity), recipients = _real_age_recipients(tmp_path)
+    profile = _profile()
+    age_executable = shutil.which("age")
+    event = _event("session-segment")
+    event.document["asset_refs"] = []
+    evidence_path = tmp_path / "replay-evidence.age"
+    evidence_receipt = stream_encrypt(event, recipients, evidence_path, profile=profile, age_executable=age_executable)
+    evidence_body = evidence_path.read_bytes()
+
+    index_document = _fixture("golden-index-event.json")
+    index_document.update({
+        "event_id": "idx-replay-age",
+        "evidence_kind": "session-segment",
+        "evidence_event_id": event.document["event_id"],
+        "content_sha256": event.document["content_sha256"],
+        "ciphertext_sha256": evidence_receipt.sha256,
+        "ciphertext_size": evidence_receipt.size,
+        "content_type": "application/vnd.josh.codex-session-segment+json",
+    })
+    index_event = NormalizationEvent("index-event", index_document)
+    index_path = tmp_path / "replay-index.age"
+    stream_encrypt(index_event, recipients, index_path, profile=profile, age_executable=age_executable)
+    index_body = index_path.read_bytes()
+    index_digest = hashlib.sha256(index_body).hexdigest()
+    evidence_digest = hashlib.sha256(evidence_body).hexdigest()
+
+    class Backend:
+        def discover_evidence_indexes(self, *, max_events, page_size):
+            return [{
+                "key": evidence_index_key(index_digest),
+                "ciphertext_sha256": index_digest,
+                "ciphertext_size": len(index_body),
+            }]
+
+        def get_evidence_index_bytes(self, key):
+            assert key == evidence_index_key(index_digest)
+            return index_body
+
+        def get_evidence_bytes(self, key, expected_size=None):
+            assert key == evidence_object_key(evidence_digest)
+            assert expected_size == len(evidence_body)
+            return evidence_body
+
+    page = ReplayReader(
+        Backend(),
+        profile_id=profile.profile_id,
+        destination=profile.destination.kind,
+        workspace_id=profile.workspace_id,
+        identity_paths=(daily_identity,),
+        age_executable=age_executable,
+    ).export(limit=1)
+
+    assert len(page.records) == 1
+    assert page.records[0]["producer_trust"] == "untrusted"
+    assert page.records[0]["record"]["text"] == "Synthetic public fixture"
+    assert not page.quarantines
 def test_randomized_age_ciphertext_is_different_for_same_immutable_object(tmp_path: Path):
     (daily, recovery), recipients = _real_age_recipients(tmp_path)
     del daily, recovery
