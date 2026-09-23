@@ -10,8 +10,8 @@ try:
 except ImportError:  # pragma: no cover - Windows
     pwd = None
 
-import stat
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile

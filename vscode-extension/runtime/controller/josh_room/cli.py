@@ -890,6 +890,7 @@ def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
             workspace_id=args.workspace_id,
             workspace_path=args.workspace_path,
             repository=args.repository,
+            path_kind=args.path_kind,
             age_executable=args.age_executable,
         )
     )
@@ -1010,7 +1011,21 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         controller = _harvest_bridge_controller(args, outbox)
         result = controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
         if args.drain and result.get("ok"):
-            return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
+            policy = load_host_policy(
+                policy_config=getattr(args, "policy_config", None),
+                config_home=getattr(args, "config_home", None),
+            )
+            profile = policy.profiles.get(args.profile)
+            if profile is None:
+                raise ValueError("profile-unavailable")
+            drain_controller = HarvestController(
+                outbox,
+                backend=_harvest_backend(args, instance or _instance_root(), profile, policy),
+                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
+                profile=profile,
+                policy_check=_drain_policy_check(policy, profile, args),
+            )
+            return drain_controller.drain(limit=args.limit, max_seconds=args.max_seconds)
         return result
     if action == "drain":
         if not args.profile:
