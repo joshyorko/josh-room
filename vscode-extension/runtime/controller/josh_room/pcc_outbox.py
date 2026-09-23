@@ -17,7 +17,7 @@ import stat
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -52,7 +52,7 @@ class QueueState(StrEnum):
     SOURCE_SNAPSHOTTED = "source-snapshotted"
     PREPARED_ENCRYPTED = "prepared-encrypted"
     OBJECT_UPLOADED = "object-uploaded"
-    INDEX_PUBLISHED = "index-published"
+    TRIGGER_EXPANDED = "trigger-expanded"
     COMMITTED = "committed"
     RETRYABLE_FAILURE = "retryable-failure"
     QUARANTINED = "quarantined"
@@ -172,7 +172,8 @@ class QueueRecord:
     object_key: str | None = None
     ciphertext_sha256: str | None = None
     ciphertext_size: int | None = None
-    index_id: str | None = None
+    expanded_event_ids: tuple[str, ...] = ()
+    expanded_checkpoint: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         body: dict[str, object] = {
@@ -193,7 +194,8 @@ class QueueRecord:
             "object_key": self.object_key,
             "ciphertext_sha256": self.ciphertext_sha256,
             "ciphertext_size": self.ciphertext_size,
-            "index_id": self.index_id,
+            "expanded_event_ids": list(self.expanded_event_ids),
+            "expanded_checkpoint": self.expanded_checkpoint,
         }
         return body
 
@@ -308,10 +310,16 @@ class QueueRecord:
             raise ValueError("unowned record lease")
         if owner is not None and lease_until is None:
             raise ValueError("owned record lease")
-        if state in {QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED, QueueState.COMMITTED} and owner is not None:
+        if state in {QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED, QueueState.COMMITTED, QueueState.TRIGGER_EXPANDED} and owner is not None:
             raise ValueError("unowned state owner")
         if state is QueueState.CLAIMED and owner is None:
             raise ValueError("claimed record owner")
+        expanded_ids = tuple(body.get("expanded_event_ids", ()))
+        if len(expanded_ids) > _MAX_EVENT_IDS or any(not isinstance(value, str) or not _IDENTIFIER.fullmatch(value) for value in expanded_ids):
+            raise ValueError("record expanded event ids")
+        expanded_checkpoint = body.get("expanded_checkpoint")
+        if expanded_checkpoint is not None:
+            expanded_checkpoint = _validate_checkpoint(expanded_checkpoint)
         return cls(
             event_id=event_id,
             session_id=session_id,
@@ -331,6 +339,8 @@ class QueueRecord:
             ciphertext_sha256=digest,
             ciphertext_size=size,
             index_id=index_id,
+            expanded_event_ids=expanded_ids,
+            expanded_checkpoint=expanded_checkpoint,
         )
 
 
@@ -1729,3 +1739,42 @@ class PccOutbox:
 
     def commit(self, event_id: str, owner: str) -> QueueRecord:
         return self.transition(event_id, owner, QueueState.COMMITTED)
+    def expand(
+        self,
+        event_id: str,
+        owner: str,
+        *,
+        child_event_ids: Sequence[str],
+        checkpoint: Mapping[str, object],
+    ) -> QueueRecord:
+        event_id = _identifier(event_id)
+        owner = _identifier(owner)
+        if isinstance(child_event_ids, (str, bytes, bytearray)) or not child_event_ids:
+            raise ValueError("expanded event ids are invalid")
+        children = tuple(_identifier(value) for value in child_event_ids)
+        if len(children) > _MAX_EVENT_IDS or len(set(children)) != len(children):
+            raise ValueError("expanded event ids are invalid")
+        expanded_checkpoint = _validate_checkpoint(checkpoint)
+        with _exclusive_file_lock(self._lock_path):
+            record = self._must_read_unlocked(event_id)
+            if record.state is QueueState.TRIGGER_EXPANDED:
+                if record.expanded_event_ids != children or record.expanded_checkpoint != expanded_checkpoint:
+                    raise InvalidTransition()
+                return record
+            self._require_claim(record, owner)
+            if record.state not in {QueueState.CLAIMED, QueueState.SOURCE_SNAPSHOTTED}:
+                raise InvalidTransition()
+            expanded = QueueRecord(
+                **{
+                    **record.__dict__,
+                    "state": QueueState.TRIGGER_EXPANDED,
+                    "resume_state": QueueState.TRIGGER_EXPANDED,
+                    "owner": None,
+                    "lease_until": None,
+                    "failure_code": None,
+                    "expanded_event_ids": children,
+                    "expanded_checkpoint": expanded_checkpoint,
+                }
+            )
+            self._publish_record_unlocked(expanded)
+            return expanded
