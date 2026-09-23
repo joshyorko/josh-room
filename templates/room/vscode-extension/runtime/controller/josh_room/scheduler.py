@@ -9,6 +9,7 @@ try:
     import pwd
 except ImportError:  # pragma: no cover - Windows
     pwd = None
+
 import stat
 import subprocess
 import sys
@@ -24,7 +25,9 @@ def _home() -> Path:
     except (KeyError, OSError):
         return Path.home()
 
+
 _PATH_KINDS = frozenset({"directory", "worktree", "remote", "wsl", "symlink", "unknown"})
+
 
 @dataclass(frozen=True, slots=True)
 class SchedulerContext:
@@ -53,7 +56,7 @@ class SchedulerContext:
         repository: str | None = None,
         path_kind: str = "unknown",
         age_executable: Path | str | None = None,
-    ) -> "SchedulerContext":
+    ) -> SchedulerContext:
         def text(value: object, name: str, *, required: bool = False) -> str | None:
             if value is None:
                 if required:
