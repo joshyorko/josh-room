@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from josh_room.cli import build_parser
 from josh_room.harvest import HarvestController
 from josh_room.pcc_enqueue import enqueue_trigger
 from josh_room.pcc_outbox import PccOutbox, QueueState
@@ -26,18 +28,57 @@ def test_plan_status_inspect_are_content_free(tmp_path):
     inspected = controller.inspect()
     assert inspected["metadata_only"] is True
     assert "path" not in str(inspected)
-
-
 def test_scheduler_install_status_remove_is_idempotent(tmp_path):
     executable = tmp_path / "josh-room"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o700)
-    first = install(platform_name="linux", home=tmp_path, executable=executable)
-    second = install(platform_name="linux", home=tmp_path, executable=executable)
+    context = {
+        "profile": "synthetic",
+        "codex_active_root": tmp_path / "codex-active",
+        "codex_archived_root": tmp_path / "codex-archived",
+        "policy_config": tmp_path / "policy.json",
+        "config_home": tmp_path / "config",
+        "workspace_id": "workspace-synthetic",
+        "workspace_path": tmp_path,
+        "repository": "github.com/example/repo",
+        "path_kind": "worktree",
+    }
+    first = install(platform_name="linux", home=tmp_path, executable=executable, **context)
+    second = install(platform_name="linux", home=tmp_path, executable=executable, **context)
     assert first["ok"] is True and first["changed"] is True
     assert second["ok"] is True and second["changed"] is False
+    manifest = json.loads((tmp_path / ".config" / "josh-room" / "pcc-harvest.scheduler.json").read_text(encoding="utf-8"))
+    assert manifest["context"]["profile"] == "synthetic"
+    parsed = build_parser().parse_args(manifest["argv"][1:])
+    assert parsed.harvest_command == "run"
+    assert parsed.profile == "synthetic"
+    assert parsed.codex_active_root == context["codex_active_root"]
+    assert parsed.codex_archived_root == context["codex_archived_root"]
+    assert parsed.policy_config == context["policy_config"]
+    assert parsed.config_home == context["config_home"]
+    assert parsed.workspace_id == "workspace-synthetic"
+    assert parsed.path_kind == "worktree"
+    service = (tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.service").read_text(encoding="utf-8")
+    assert "--profile synthetic" in service
+    assert "--codex-active-root" in service and "--codex-archived-root" in service
     assert status(platform_name="linux", home=tmp_path)["installed"] is True
     assert remove(platform_name="linux", home=tmp_path)["changed"] is True
+    assert remove(platform_name="linux", home=tmp_path)["changed"] is False
+
+
+def test_scheduler_install_rejects_missing_context(tmp_path):
+    executable = tmp_path / "josh-room"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    result = install(platform_name="linux", home=tmp_path, executable=executable)
+    assert result == {
+        "schema": "josh-room.scheduler",
+        "schema_version": {"major": 1, "minor": 0},
+        "ok": False,
+        "action": "install",
+        "platform": "linux",
+        "error": "scheduler-context-invalid",
+    }
     assert remove(platform_name="linux", home=tmp_path)["changed"] is False
 
 
