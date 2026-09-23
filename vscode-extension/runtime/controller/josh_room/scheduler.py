@@ -23,7 +23,7 @@ def _home() -> Path:
 
 
 def _executable(value: str | os.PathLike[str] | None = None) -> str:
-    candidate = Path(value) if value is not None else Path(sys.executable)
+    candidate = Path(value) if value is not None else Path(sys.argv[0])
     if any(ord(char) < 0x20 or ord(char) == 0x7f for char in str(candidate)):
         raise ValueError("scheduler executable contains controls")
     if not candidate.is_absolute():
