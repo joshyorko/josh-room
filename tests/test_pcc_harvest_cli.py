@@ -7,7 +7,13 @@ from josh_room.cli import build_parser
 from josh_room.harvest import HarvestController
 from josh_room.pcc_enqueue import enqueue_trigger
 from josh_room.pcc_outbox import PccOutbox, QueueState
-from josh_room.scheduler import SchedulerContext, _linux_content, install, remove, status
+from josh_room.scheduler import (
+    SchedulerContext,
+    _linux_content,
+    install,
+    remove,
+    status,
+)
 
 
 def _queued(root: Path) -> PccOutbox:
