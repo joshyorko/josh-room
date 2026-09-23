@@ -278,8 +278,8 @@ def _index_document(event: NormalizationEvent, prepared: PreparedChild) -> tuple
     evidence_kind = event.document.get("kind")
     content_type = _EVENT_CONTENT_TYPES.get(evidence_kind)
     content_sha256 = event.document.get("content_sha256")
-    if evidence_kind == "session-asset":
-        content_sha256 = event.document.get("sha256")
+    if not isinstance(content_sha256, str):
+        content_sha256 = hashlib.sha256(json.dumps(dict(event.document), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if (
         not isinstance(evidence_kind, str)
         or content_type not in CONTENT_TYPES
