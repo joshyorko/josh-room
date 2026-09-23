@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Any
 
 from .pcc_crypto import DecryptedEnvelope, decrypt_envelope
-from .r2 import R2EvidenceError, R2EvidenceReadbackMismatch, evidence_object_key, validate_evidence_index_key
+from .r2 import (
+    R2EvidenceError,
+    R2EvidenceReadbackMismatch,
+    evidence_object_key,
+    validate_evidence_index_key,
+)
 from .session_evidence import (
     CURRENT_MAJOR,
     CURRENT_MINOR,
