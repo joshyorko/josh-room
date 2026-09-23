@@ -7,7 +7,7 @@ from josh_room.cli import build_parser
 from josh_room.harvest import HarvestController
 from josh_room.pcc_enqueue import enqueue_trigger
 from josh_room.pcc_outbox import PccOutbox, QueueState
-from josh_room.scheduler import install, remove, status
+from josh_room.scheduler import SchedulerContext, _linux_content, install, remove, status
 
 
 def _queued(root: Path) -> PccOutbox:
@@ -90,6 +90,21 @@ def test_scheduler_install_rejects_missing_context(tmp_path):
     credential_result = install(platform_name="linux", home=tmp_path, executable=executable, **context)
     assert credential_result["error"] == "scheduler-context-invalid"
     assert remove(platform_name="linux", home=tmp_path)["changed"] is False
+
+
+def test_scheduler_systemd_argv_escapes_expansion(tmp_path):
+    executable = tmp_path / "room$tool"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    context = SchedulerContext.from_values(
+        profile="$PROFILE",
+        codex_active_root=tmp_path / "$active",
+        codex_archived_root=tmp_path / "$archived",
+    )
+    service, _ = _linux_content(str(executable), 900, context)
+    assert "$$PROFILE" in service
+    assert "$$active" in service and "$$archived" in service
+    assert "room$$tool" in service
 
 
 def test_prepare_and_drain_never_prepare_in_drain(tmp_path):

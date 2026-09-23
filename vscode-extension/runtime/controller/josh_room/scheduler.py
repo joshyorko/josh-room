@@ -273,7 +273,7 @@ def _write_private(path: Path, content: str) -> bool:
 def _systemd_arg(value: str) -> str:
     if any(ord(char) < 0x20 or ord(char) == 0x7f for char in value):
         raise ValueError("scheduler argument contains controls")
-    return value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"').replace(" ", "\\x20").replace("\t", "\\x09")
+    return value.replace("%", "%%").replace("$", "$$").replace("\\", "\\\\").replace('"', '\\"').replace(" ", "\\x20").replace("\t", "\\x09")
 
 
 def _linux_content(executable: str, interval: int, context: SchedulerContext) -> tuple[str, str]:
