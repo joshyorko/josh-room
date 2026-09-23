@@ -17,7 +17,7 @@ import stat
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -54,6 +54,7 @@ class QueueState(StrEnum):
     OBJECT_UPLOADED = "object-uploaded"
     INDEX_PUBLISHED = "index-published"
     COMMITTED = "committed"
+    TRIGGER_EXPANDED = "trigger-expanded"
     RETRYABLE_FAILURE = "retryable-failure"
     QUARANTINED = "quarantined"
     POLICY_DENIED = "policy-denied"
@@ -173,6 +174,8 @@ class QueueRecord:
     ciphertext_sha256: str | None = None
     ciphertext_size: int | None = None
     index_id: str | None = None
+    expanded_event_ids: tuple[str, ...] = ()
+    expanded_checkpoint: dict[str, object] | None = None
 
     def to_dict(self) -> dict[str, object]:
         body: dict[str, object] = {
@@ -194,6 +197,8 @@ class QueueRecord:
             "ciphertext_sha256": self.ciphertext_sha256,
             "ciphertext_size": self.ciphertext_size,
             "index_id": self.index_id,
+            "expanded_event_ids": list(self.expanded_event_ids),
+            "expanded_checkpoint": self.expanded_checkpoint,
         }
         return body
 
@@ -202,26 +207,13 @@ class QueueRecord:
         if not isinstance(body, dict):
             raise TypeError("record shape")
         required = {
-            "event_id",
-            "session_id",
-            "checkpoint",
-            "metadata",
-            "state",
-            "sequence",
-            "event_ids",
-            "is_final",
-            "final_event_id",
-            "owner",
-            "lease_until",
-            "lease_seconds",
-            "resume_state",
-            "failure_code",
-            "object_key",
-            "ciphertext_sha256",
-            "ciphertext_size",
-            "index_id",
+            "event_id", "session_id", "checkpoint", "metadata", "state",
+            "sequence", "event_ids", "is_final", "final_event_id", "owner",
+            "lease_until", "lease_seconds", "resume_state", "failure_code",
+            "object_key", "ciphertext_sha256", "ciphertext_size", "index_id",
         }
-        if set(body) != required:
+        optional = {"expanded_event_ids", "expanded_checkpoint"}
+        if not set(body).issubset(required | optional) or not required.issubset(body):
             raise ValueError("record fields")
         event_id = _identifier(body["event_id"])
         session_id = _identifier(body["session_id"])
@@ -274,6 +266,17 @@ class QueueRecord:
         index_id = body["index_id"]
         if index_id is not None:
             _identifier(index_id)
+        expanded_ids = body.get("expanded_event_ids", [])
+        if (
+            not isinstance(expanded_ids, list)
+            or len(expanded_ids) > _MAX_EVENT_IDS
+            or any(not isinstance(item, str) or not _IDENTIFIER.fullmatch(item) for item in expanded_ids)
+            or len(set(expanded_ids)) != len(expanded_ids)
+        ):
+            raise ValueError("record expanded event ids")
+        expanded_checkpoint = body.get("expanded_checkpoint")
+        if expanded_checkpoint is not None:
+            expanded_checkpoint = _validate_checkpoint(expanded_checkpoint)
         progress_states = {
             QueueState.SOURCE_SNAPSHOTTED,
             QueueState.PREPARED_ENCRYPTED,
@@ -294,6 +297,8 @@ class QueueRecord:
             raise ValueError("progress record stage")
         if state in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP} and resume_state not in {QueueState.QUEUED, *progress_states}:
             raise ValueError("failure record progress")
+        if state is QueueState.TRIGGER_EXPANDED and resume_state is not QueueState.TRIGGER_EXPANDED:
+            raise ValueError("expanded record progress")
         if state is QueueState.COMMITTED and (resume_state is not QueueState.INDEX_PUBLISHED or index_id is None):
             raise ValueError("committed record index")
         if state is QueueState.INDEX_PUBLISHED and index_id is None:
@@ -304,11 +309,13 @@ class QueueRecord:
             digest is None or size is None
         ):
             raise ValueError("prepared record ciphertext")
+        if state is QueueState.TRIGGER_EXPANDED and not expanded_ids:
+            raise ValueError("expanded record children")
         if owner is None and lease_until is not None:
             raise ValueError("unowned record lease")
         if owner is not None and lease_until is None:
             raise ValueError("owned record lease")
-        if state in {QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED, QueueState.COMMITTED} and owner is not None:
+        if state in {QueueState.QUEUED, QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED, QueueState.COMMITTED, QueueState.TRIGGER_EXPANDED} and owner is not None:
             raise ValueError("unowned state owner")
         if state is QueueState.CLAIMED and owner is None:
             raise ValueError("claimed record owner")
@@ -331,6 +338,8 @@ class QueueRecord:
             ciphertext_sha256=digest,
             ciphertext_size=size,
             index_id=index_id,
+            expanded_event_ids=tuple(expanded_ids),
+            expanded_checkpoint=expanded_checkpoint,
         )
 
 
@@ -979,6 +988,7 @@ class PccOutbox:
         metadata: Mapping[str, object] | None = None,
         policy_decision: str = "allow",
         diagnostic_detail: object | None = None,
+        coalesce: bool = True,
     ) -> QueueReceipt:
         return enqueue_trigger(
             self,
@@ -989,6 +999,7 @@ class PccOutbox:
             metadata=metadata,
             policy_decision=policy_decision,
             diagnostic_detail=diagnostic_detail,
+            coalesce=coalesce,
         )
 
     def _enqueue_authority(
@@ -1002,6 +1013,7 @@ class PccOutbox:
         policy_decision: str = "allow",
         diagnostic_detail: object | None = None,
         lock_timeout: float | None = None,
+        coalesce: bool = True,
     ) -> QueueReceipt:
         del diagnostic_detail  # Deliberately inert: enqueue never captures caller data.
         event_id = _identifier(event_id)
@@ -1023,8 +1035,14 @@ class PccOutbox:
                 self._ensure_layout()
                 records, _diagnostics, _quarantined = self._safe_records_unlocked()
                 key = _checkpoint_key(session_id, checkpoint)
-                existing = next((item for item in records if _checkpoint_key(item.session_id, item.checkpoint) == key), None)
+                existing = (
+                    next((item for item in records if _checkpoint_key(item.session_id, item.checkpoint) == key), None)
+                    if coalesce
+                    else None
+                )
                 event_owner = next((item for item in records if event_id in item.event_ids), None)
+                if event_owner is not None and event_owner.event_id == event_id:
+                    return QueueReceipt(event_id, event_owner.state, sequence=event_owner.sequence, is_final=event_owner.is_final)
                 if event_owner is not None and event_owner is not existing:
                     return QueueReceipt(
                         event_id,
@@ -1600,6 +1618,48 @@ class PccOutbox:
             )
             self._publish_record_unlocked(released)
             return released
+
+    def expand(
+        self,
+        event_id: str,
+        owner: str,
+        *,
+        child_event_ids: Sequence[str],
+        checkpoint: Mapping[str, object],
+    ) -> QueueRecord:
+        """Durably terminalize a source trigger after child preparation."""
+
+        event_id = _identifier(event_id)
+        owner = _identifier(owner)
+        if isinstance(child_event_ids, (str, bytes, bytearray)):
+            raise ValueError("expanded event ids are invalid")
+        child_ids = tuple(_identifier(value) for value in child_event_ids)
+        if not child_ids or len(child_ids) > _MAX_EVENT_IDS:
+            raise ValueError("expanded event ids are invalid")
+        checkpoint = _validate_checkpoint(checkpoint)
+        with _exclusive_file_lock(self._lock_path):
+            record = self._must_read_unlocked(event_id)
+            if record.state is QueueState.TRIGGER_EXPANDED:
+                if record.expanded_event_ids != child_ids or record.expanded_checkpoint != checkpoint:
+                    raise InvalidTransition()
+                return record
+            self._require_claim(record, owner)
+            if record.resume_state is not QueueState.SOURCE_SNAPSHOTTED:
+                raise InvalidTransition()
+            expanded = QueueRecord(
+                **{
+                    **record.__dict__,
+                    "state": QueueState.TRIGGER_EXPANDED,
+                    "resume_state": QueueState.TRIGGER_EXPANDED,
+                    "owner": None,
+                    "lease_until": None,
+                    "failure_code": None,
+                    "expanded_event_ids": child_ids,
+                    "expanded_checkpoint": checkpoint,
+                }
+            )
+            self._publish_record_unlocked(expanded)
+            return expanded
 
     def reconcile_prepared(
         self,

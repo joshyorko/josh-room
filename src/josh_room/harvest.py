@@ -45,8 +45,9 @@ _SAFE_CODES = frozenset({
     "device-unavailable", "capture-authority-unavailable", "normalization-event-required",
     "normalized-event-invalid", "child-lease-unavailable", "provider-authority-unavailable",
     "provider-unavailable", "prepare-failed", "publish-failed", "not-prepared", "policy-denied",
+    "policy-config-unavailable", "profile-unavailable", "source-unavailable", "asset-payload-unavailable",
+    "recipient-authority-unavailable", "child-limit",
 })
-
 
 def _safe_code(value: object, fallback: str) -> str:
     candidate = getattr(value, "value", value)
@@ -88,6 +89,8 @@ def _record_public(record: QueueRecord) -> dict[str, object]:
         "ciphertext_size": record.ciphertext_size,
         "object_key": record.object_key,
         "index_id": record.index_id,
+        "expanded_event_ids": list(record.expanded_event_ids),
+        "expanded_checkpoint": dict(record.expanded_checkpoint) if isinstance(record.expanded_checkpoint, Mapping) else None,
     }
 
 
@@ -271,8 +274,11 @@ class HarvestController:
         return self.outbox.claim(owner), owner
 
     def _release(self, record: QueueRecord, owner: str) -> None:
-        # #8 owns lease release; use it when present without duplicating its
-        # transition semantics in this controller.
+        # #8 owns lease release; trigger expansion is already terminal and
+        # intentionally has no ciphertext to release on the parent record.
+        current = self.outbox.inspect_record(record.event_id)
+        if current is not None and current.state is QueueState.TRIGGER_EXPANDED and current.owner is None:
+            return
         release = getattr(self.outbox, "release", None)
         if callable(release):
             release(record.event_id, owner)

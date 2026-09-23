@@ -43,6 +43,7 @@ from .config import (
 from .crypto import CryptoError, _managed_executable, decrypt, generate_identity
 from .encryption_domain import validate_recipient
 from .harvest import HarvestController
+from .harvest_bridge import HostHarvestBridge, HostHarvestConfig, load_host_policy
 from .jat import (
     _jat_contract,
     run_build,
@@ -269,7 +270,6 @@ def build_parser() -> argparse.ArgumentParser:
     for action in ("install", "status", "repair", "remove"):
         hook_action = harvest_hook_commands.add_parser(action)
         hook_action.add_argument("--tool", required=True, choices=("codex",))
-        _json_option(hook_action)
     for action in ("plan", "run", "drain", "status", "inspect", "retry", "quarantine", "discard", "reconcile"):
         command = harvest_commands.add_parser(action)
         command.add_argument("--outbox-root", type=Path)
@@ -277,6 +277,20 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--limit", type=int, default=1 if action != "reconcile" else 1000)
         if action == "run":
             command.add_argument("--offline", action="store_true")
+            command.add_argument("--tool", choices=("codex",), default="codex", help="host source tool")
+            command.add_argument("--profile", required=True, help="host-owned capture/device profile")
+            command.add_argument("--policy-config", type=Path, help="explicit private policy file")
+            command.add_argument("--config-home", type=Path, help="private XDG config home containing josh-room/policy.json")
+            command.add_argument("--codex-active-root", type=Path, required=True, help="explicit Codex active transcript root")
+            command.add_argument("--codex-archived-root", type=Path, required=True, help="explicit Codex archived transcript root")
+            command.add_argument("--workspace-id")
+            command.add_argument("--workspace-path")
+            command.add_argument("--repository", help="host-observed repository remote (credential-free form)")
+            command.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
+            command.add_argument("--age-executable", type=Path)
+        if action == "drain":
+            command.add_argument("--dimension")
+            command.add_argument("--index-file", type=Path, help="encrypted #11 R2 index object")
         if action in {"plan", "inspect"}:
             command.add_argument("event_id", nargs="?")
         elif action in {"retry", "quarantine", "discard"}:
@@ -799,7 +813,50 @@ def _harvest_outbox_root(value: Path | None) -> Path:
     return root
 
 
-def _harvest_dispatch(args) -> dict:
+def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
+    if getattr(args, "tool", "codex") != "codex":
+        raise ValueError("unsupported harvest tool")
+    policy = load_host_policy(
+        policy_config=getattr(args, "policy_config", None),
+        config_home=getattr(args, "config_home", None),
+    )
+    from .codex_adapter import CodexRoots
+
+    roots = CodexRoots(args.codex_active_root, args.codex_archived_root)
+    bridge = HostHarvestBridge(
+        HostHarvestConfig(
+            roots=roots,
+            policy=policy,
+            profile_name=args.profile,
+            workspace_id=args.workspace_id,
+            workspace_path=args.workspace_path,
+            repository=args.repository,
+            path_kind=args.path_kind,
+            age_executable=args.age_executable,
+        )
+    )
+    return HarvestController(outbox, prepare=bridge.prepare)
+
+
+def _harvest_backend(args, instance: Path):
+    try:
+        selected = _effective_dimension(args)
+        if selected is None or selected.provider != "r2":
+            return None
+        return _backend(selected.provider, instance, selected.dimension_id)
+    except Exception:
+        return None
+
+
+def _harvest_index_file(value: Path | None) -> Path | None:
+    if value is None:
+        return None
+    if not value.is_absolute() or value.is_symlink() or not value.is_file():
+        raise ValueError("index file is unavailable")
+    return value
+
+
+def _harvest_dispatch(args, instance: Path | None = None) -> dict:
     if args.harvest_command == "hooks":
         if args.tool != "codex":
             raise ValueError("unsupported harvest hook")
@@ -827,18 +884,25 @@ def _harvest_dispatch(args) -> dict:
         if args.schedule_command == "remove":
             return _scheduler.remove(platform_name=args.platform_name, home=args.home)
         raise ValueError("unsupported schedule action")
-    controller = HarvestController(PccOutbox(_harvest_outbox_root(args.outbox_root)))
+    outbox = PccOutbox(_harvest_outbox_root(args.outbox_root))
     action = args.harvest_command
+    if action == "run":
+        controller = _harvest_bridge_controller(args, outbox)
+        return controller.run(limit=args.limit, offline=args.offline)
+    if action == "drain":
+        controller = HarvestController(
+            outbox,
+            backend=_harvest_backend(args, instance or _instance_root()),
+            index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
+        )
+        return controller.drain(limit=args.limit)
+    controller = HarvestController(outbox)
     if action == "plan":
         return controller.plan(args.event_id)
     if action == "status":
         return controller.status()
     if action == "inspect":
         return controller.inspect(args.event_id)
-    if action == "run":
-        return controller.run(limit=args.limit, offline=args.offline)
-    if action == "drain":
-        return controller.drain(limit=args.limit)
     if action == "retry":
         return controller.retry(args.event_id, args.reason or "operator-retry")
     if action == "quarantine":
@@ -856,7 +920,7 @@ def dispatch(args, instance: Path) -> dict:
             raise ValueError("unsupported hook")
         return process_codex_hook(json.load(sys.stdin))
     if args.command == "harvest":
-        return _harvest_dispatch(args)
+        return _harvest_dispatch(args, instance)
     if args.command == "encryption":
         if args.encryption_command == "recovery":
             if args.recovery_command != "generate":

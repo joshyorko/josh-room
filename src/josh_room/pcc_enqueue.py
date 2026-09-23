@@ -95,6 +95,7 @@ def enqueue_trigger(
     policy_decision: str = "allow",
     diagnostic_detail: object | None = None,
     lock_timeout: float | None = None,
+    coalesce: bool = True,
 ) -> QueueReceipt:
     """Enqueue through the #8 authority without duplicating queue semantics."""
 
@@ -107,6 +108,7 @@ def enqueue_trigger(
         policy_decision=policy_decision,
         diagnostic_detail=diagnostic_detail,
         lock_timeout=lock_timeout,
+        coalesce=coalesce,
     )
 
 
