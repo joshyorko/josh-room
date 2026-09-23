@@ -163,7 +163,7 @@ def test_publish_rejects_unlinked_index_file_before_backend_upload(tmp_path):
     assert outbox.inspect_record("event-unlinked-index").state is QueueState.PREPARED_ENCRYPTED
 
 
-def test_drain_rejects_mixed_profile_records_without_upload(tmp_path):
+def test_drain_skips_foreign_profile_records_without_upload(tmp_path):
     outbox = PccOutbox(tmp_path / "outbox")
     checkpoint = {
         "source": "synthetic",
@@ -221,8 +221,8 @@ def test_drain_rejects_mixed_profile_records_without_upload(tmp_path):
         outbox.release(index_id, owner)
         return index_id
 
-    personal_index = stage("event-personal", "workspace-personal", "binding-personal")
     work_index = stage("event-work", "workspace-work", "binding-work")
+    personal_index = stage("event-personal", "workspace-personal", "binding-personal")
     profile = SimpleNamespace(
         workspace_id="workspace-personal",
         destination=Destination("private-r2", "binding-personal"),
@@ -241,9 +241,10 @@ def test_drain_rejects_mixed_profile_records_without_upload(tmp_path):
         publish=publish,
         profile=profile,
         owner_factory=lambda: "drain-owner",
-    ).drain(limit=2)
+    ).drain(limit=1)
+    assert drained["failures"] == []
     assert uploads == ["event-personal"]
     assert outbox.inspect_record("event-personal").state is QueueState.COMMITTED
-    assert outbox.inspect_record("event-work").state is QueueState.POLICY_DENIED
+    assert outbox.inspect_record("event-work").state is QueueState.PREPARED_ENCRYPTED
     assert outbox.inspect_record(personal_index).state is QueueState.PREPARED_ENCRYPTED
     assert outbox.inspect_record(work_index).state is QueueState.PREPARED_ENCRYPTED

@@ -354,49 +354,6 @@ class HarvestController:
     def _claim_one(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
         return self.outbox.claim(owner), owner
-    def _reject_scope_mismatches(self, attempted: set[str], failures: list[dict[str, object]]) -> None:
-        """Reject mismatched prepared records before any publication claim."""
-        if self.profile is None:
-            return
-        eligible = {
-            QueueState.PREPARED_ENCRYPTED,
-            QueueState.OBJECT_UPLOADED,
-            QueueState.INDEX_PUBLISHED,
-        }
-        for candidate in self.outbox.inspect().records:
-            if (
-                candidate.event_id in attempted
-                or candidate.metadata.get("object_kind") == "index-event"
-                or candidate.resume_state not in eligible
-                or self._publication_scope_matches(self.outbox, candidate)
-            ):
-                continue
-            attempted.add(candidate.event_id)
-            owner = self.owner_factory()
-            try:
-                claimed = self.outbox.claim_specific(
-                    candidate.event_id,
-                    owner,
-                    takeover=candidate.owner is not None,
-                )
-            except Exception:  # noqa: BLE001 - a concurrent claimant may win
-                continue
-            if claimed is None:
-                continue
-            try:
-                self.outbox.transition(
-                    candidate.event_id,
-                    owner,
-                    QueueState.POLICY_DENIED,
-                    reason_code="scope-binding-mismatch",
-                )
-            except Exception:  # noqa: BLE001 - preserve a durable claim failure
-                try:
-                    self.outbox.retry(candidate.event_id, owner, reason_code="scope-binding-mismatch")
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            failures.append({"event_id": candidate.event_id, "code": "scope-binding-mismatch"})
-
 
     def _claim_prepare(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
@@ -418,6 +375,8 @@ class HarvestController:
             if record.event_id in excluded or record.metadata.get("object_kind") == "index-event":
                 continue
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
+                continue
+            if self.profile is not None and not self._publication_scope_matches(self.outbox, record):
                 continue
             if record.owner is not None and (record.lease_until is None or record.lease_until > now):
                 continue
@@ -497,7 +456,7 @@ class HarvestController:
         delivered: list[dict[str, object]] = []
         failures: list[dict[str, object]] = []
         attempted: set[str] = set()
-        self._reject_scope_mismatches(attempted, failures)
+        # Scope filtering happens while selecting each bounded item, so foreign records remain unchanged.
         for _ in range(limit):
             if max_seconds is not None and time.monotonic() - started >= max_seconds:
                 failures.append({"event_id": None, "code": "cancelled"})
