@@ -229,7 +229,7 @@ def launch_context(
     current_executable: str | os.PathLike[str] | None = None,
     argv: list[str] | None = None,
 ) -> SchedulerContext:
-    """Exec the protected executable when a trusted launcher starts a job."""
+    selected_home = _trusted_home(home)
     _launcher(selected_home)
     context, stored_executable = _load_context_state(selected_home, _context_id(context_id))
     runtime_executable = _runtime_executable(current_executable or sys.argv[0])
