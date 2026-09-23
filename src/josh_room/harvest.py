@@ -43,8 +43,7 @@ def _public_mapping(value: object) -> dict[str, object]:
                 result[key] = [
                     _public_mapping(part) if isinstance(part, Mapping) else part
                     for part in list(item)[:32]
-                    if item is None or isinstance(part, (str, int, float, bool))
-                    or isinstance(part, Mapping)
+                    if item is None or isinstance(part, (str, int, float, bool, Mapping))
                 ]
         elif isinstance(item, str):
             if len(item) > 256 or any(marker in item.lower() for marker in ("secret", "token", "credential", "/")):

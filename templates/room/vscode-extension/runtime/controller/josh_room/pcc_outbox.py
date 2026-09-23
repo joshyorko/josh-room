@@ -500,7 +500,7 @@ def _validate_expanded_checkpoint(value: object) -> dict[str, object]:
     record cursor, observed size, and evidence chain head.
     """
     if not isinstance(value, Mapping):
-        raise ValueError("expanded checkpoint is invalid")
+        raise TypeError("expanded checkpoint is invalid")
     required = {"source", "representation", "start", "end", "prefix_sha256"}
     cursor = {"next_record_index", "next_byte_offset", "observed_size", "chain_head_sha256"}
     if set(value) == required:
