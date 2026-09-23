@@ -1,7 +1,7 @@
 """Reversible one-shot scheduler integration for PCC harvest."""
 from __future__ import annotations
 
-import json
+import hashlib
 import os
 import pwd
 import stat
@@ -103,9 +103,6 @@ def _write_private(path: Path, content: str) -> bool:
     finally:
         temporary.unlink(missing_ok=True)
 
-
-def _systemd_arg(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace(" ", "\\x20").replace("\t", "\\x09")
 
 
 def _systemd_arg(value: str) -> str:
