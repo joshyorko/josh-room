@@ -1781,6 +1781,15 @@ class PccOutbox:
             )
             self._publish_record_unlocked(expanded)
             return expanded
+    def prepared_path(self, event_id: str) -> Path:
+        event_id = _identifier(event_id)
+        record = self.prepared.inspect_record(event_id)
+        if record is None or not hasattr(record, "ciphertext_file"):
+            raise OutboxError("prepared ciphertext unavailable")
+        path = self.prepared.directory / record.ciphertext_file
+        if path.is_symlink() or not path.is_file():
+            raise OutboxError("prepared ciphertext unavailable")
+        return path
     def discard_receipt(self, event_id: str) -> dict[str, object]:
         event_id = _identifier(event_id)
         with _exclusive_file_lock(self._lock_path):

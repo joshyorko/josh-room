@@ -349,7 +349,7 @@ class HostHarvestBridge:
         if event.kind == "session-asset" and payload is None:
             raise HarvestError("asset-payload-unavailable")
         try:
-            encrypt_and_prepare(
+            prepared = encrypt_and_prepare(
                 event,
                 outbox,
                 owner,
@@ -359,6 +359,9 @@ class HostHarvestBridge:
                 age_executable=self.config.age_executable,
                 require_device=True,
             )
+            outbox.prepared_path(event_id)
+            if prepared.ciphertext_size <= 0:
+                raise HarvestError("prepared-ciphertext-unavailable")
             outbox.release(event_id, owner)
         except Exception:
             try:
