@@ -485,25 +485,11 @@ def _validate_metadata(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise TypeError("public metadata is invalid")
     allowed = {
-        "workspace_id",
-        "object_kind",
-        "destination_class",
-        "source_surface",
-        "trigger",
-        "source_adapter_version",
-        "content_type",
-        "content_sha256",
-        "content_size",
-        "evidence_kind",
-        "evidence_event_id",
-        "policy_decision",
-        "capture_status",
-        "sensitivity",
-        "recipient_set_fingerprint",
-        "ciphertext_sha256",
-        "ciphertext_size",
-        "object_key",
-        "index_id",
+        "workspace_id", "object_kind", "destination_class", "destination_binding_id",
+        "source_surface", "source_adapter", "source_adapter_version", "trigger",
+        "content_type", "content_sha256", "content_size", "evidence_kind", "evidence_event_id",
+        "policy_decision", "capture_status", "sensitivity", "recipient_set_fingerprint",
+        "ciphertext_sha256", "ciphertext_size", "object_key", "index_id",
     }
     if any(not isinstance(key, str) or key not in allowed for key in value):
         raise ValueError("public metadata contains an unsupported field")
