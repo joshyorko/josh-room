@@ -276,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
         command = harvest_commands.add_parser(action)
         command.add_argument("--outbox-root", type=Path)
         if action in {"run", "drain", "reconcile"}:
+            command.add_argument("--limit", type=int, default=1 if action != "reconcile" else 1000)
             command.add_argument("--drain", action="store_true", help="deliver prepared records after offline preparation")
             command.add_argument("--max-seconds", type=float)
         if action == "run":
