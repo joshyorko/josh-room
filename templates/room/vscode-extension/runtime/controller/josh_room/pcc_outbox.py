@@ -494,29 +494,17 @@ def _validate_metadata(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise TypeError("public metadata is invalid")
     allowed = {
-        "workspace_id",
-        "object_kind",
-        "destination_class",
-        "recipient_set_fingerprint",
-        "source_surface",
-        "source_adapter",
-        "source_adapter_version",
-        "content_type",
-        "content_sha256",
-        "content_size",
-        "policy_decision",
-        "capture_status",
-        "sensitivity",
-        "ciphertext_sha256",
-        "ciphertext_size",
-        "object_key",
-        "index_id",
+        "workspace_id", "object_kind", "destination_class", "recipient_set_fingerprint",
+        "source_surface", "source_adapter", "source_adapter_version", "trigger",
+        "content_type", "content_sha256", "content_size", "policy_decision",
+        "capture_status", "sensitivity", "ciphertext_sha256", "ciphertext_size",
+        "object_key", "index_id",
     }
     if any(not isinstance(key, str) or key not in allowed for key in value):
         raise ValueError("public metadata contains an unsupported field")
     result: dict[str, object] = {}
     for key, item in value.items():
-        if key in {"workspace_id", "object_kind", "source_surface", "source_adapter", "source_adapter_version", "index_id"}:
+        if key in {"workspace_id", "object_kind", "source_surface", "source_adapter", "source_adapter_version", "index_id", "trigger"}:
             result[key] = _identifier(item)
         elif key == "destination_class":
             if item not in {"local-only", "private-r2"}:
