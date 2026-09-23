@@ -44,7 +44,7 @@
             "segment": {"type": "object"},
             "record_index": {"type": "integer", "minimum": 0},
             "record": {"type": "object"},
-            "producer_trust": {"const": "authenticated"},
+            "producer_trust": {"const": "untrusted"},
             "asset_refs": {"type": "array"}
           }
         }

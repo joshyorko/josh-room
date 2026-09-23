@@ -27,12 +27,13 @@ consumer path. Decrypted strings, including transcript/tool text, remain inert
 JSON data and are never interpreted as commands, paths, URLs, templates, SQL,
 or secret references.
 
-Unknown major or malformed schema, policy/profile mismatch, untrusted producer,
-broken predecessor chain, missing asset, corrupt ciphertext, and any digest or
-size mismatch produce a stable quarantine receipt. Age decryption establishes
-confidentiality/recipient integrity only; the producer must provide an explicit
-authenticated claim for export. The current synthetic path labels absent or
-unverified producer authentication as `untrusted-producer`.
+Unknown major or malformed schema, policy/profile mismatch, broken predecessor
+chain, missing asset, corrupt ciphertext, and any digest or size mismatch
+produce a stable quarantine receipt. Age decryption establishes
+confidentiality/recipient integrity only; v1 has no approved sender-signature
+verification. A decrypted `producer.authenticated` claim is inert and cannot
+upgrade provenance. Valid evidence is emitted with `producer_trust: "untrusted"`;
+unsigned status alone does not quarantine it.
 
 ## MemoryD concept mapping
 
@@ -47,13 +48,12 @@ unverified producer authentication as `untrusted-producer`.
 | `capture_gap`, quarantine receipts | blocked/quarantined/gap records | Never silently promote a gap or rejected evidence to memory. |
 | event IDs, source checkpoint, segment/asset digest, plaintext and ciphertext digest | stable provenance/idempotency | Importers must retain these identities and use the emitted idempotency key. |
 
-The future MemoryD PCC importer is a separate bounded issue. It should consume
-only this neutral JSONL stream, apply its own profile policy and content
-screening, and report imported/skipped/quarantined counts. It must not parse R2
-objects or import Josh Room private modules. No importer issue is opened by
-this change without parent authorization; the required issue should reference
-Josh Room #14, this schema, profile/workspace default-deny, idempotent cursor
-resume, and the quarantine receipt contract.
+The downstream PCC importer is tracked separately at
+https://github.com/joshyorko/codex-memoryd/issues/242. It consumes only this
+neutral JSONL stream, applies its own profile policy and content screening, and
+reports imported/skipped/quarantined counts. It must not parse R2 objects or
+import Josh Room private modules. This importer is distinct from MemoryD's OMP
+adapter issue #241.
 
 ## Triggering and live evidence
 

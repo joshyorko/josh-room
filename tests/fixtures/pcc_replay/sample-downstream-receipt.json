@@ -8,6 +8,6 @@
   "skipped": 0,
   "quarantined": 2,
   "idempotency_keys": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-  "quarantine_reasons": ["missing-asset", "untrusted-producer"],
+  "quarantine_reasons": ["broken-chain", "missing-asset"],
   "content": "omitted"
 }

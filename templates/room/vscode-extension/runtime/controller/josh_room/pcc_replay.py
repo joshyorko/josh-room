@@ -38,6 +38,12 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _MAX_CURSOR_BYTES = 4096
 _MAX_JSONL_RECORD_BYTES = 4 * 1024 * 1024
+_MAX_REPLAY_PAGE_SIZE = 8
+_MAX_REPLAY_INDEXES = 10_000
+_MAX_REPLAY_CIPHERTEXT_BYTES = 80 * 1024 * 1024
+_MAX_REPLAY_SEGMENT_BYTES = 4 * 1024 * 1024
+_MAX_REPLAY_RECORDS_PER_SEGMENT = 128
+_MAX_REPLAY_ASSETS_PER_SEGMENT = 32
 
 
 class ReplayError(RuntimeError):
@@ -50,16 +56,19 @@ class ReplayError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ReplayLimits:
-    page_size: int = 100
+    page_size: int = _MAX_REPLAY_PAGE_SIZE
     max_indexes: int = 1000
-    max_ciphertext_bytes: int = 8 * 1024 * 1024 * 1024
+    max_ciphertext_bytes: int = _MAX_REPLAY_CIPHERTEXT_BYTES
 
     def __post_init__(self) -> None:
-        if type(self.page_size) is not int or not 0 < self.page_size <= 1000:
+        if type(self.page_size) is not int or not 0 < self.page_size <= _MAX_REPLAY_PAGE_SIZE:
             raise ValueError("replay page size is invalid")
-        if type(self.max_indexes) is not int or not 0 < self.max_indexes <= 100_000:
+        if type(self.max_indexes) is not int or not 0 < self.max_indexes <= _MAX_REPLAY_INDEXES:
             raise ValueError("replay index bound is invalid")
-        if type(self.max_ciphertext_bytes) is not int or self.max_ciphertext_bytes < 0:
+        if (
+            type(self.max_ciphertext_bytes) is not int
+            or not 0 < self.max_ciphertext_bytes <= _MAX_REPLAY_CIPHERTEXT_BYTES
+        ):
             raise ValueError("replay ciphertext bound is invalid")
 
 
@@ -182,10 +191,15 @@ class _IndexRef:
 class _Evidence:
     index: _IndexRef
     index_document: dict[str, Any]
-    index_manifest: dict[str, Any]
     document: dict[str, Any]
-    manifest: dict[str, Any]
-    payload: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ChainEvidence:
+    index: _IndexRef
+    document: dict[str, Any]
+    digest: str | None = None
+    evidence: _Evidence | None = None
 
 
 def _identifier(value: object, code: str) -> str:
@@ -257,7 +271,6 @@ class ReplayReader:
         identity_paths: Sequence[str | os.PathLike[str]] = (),
         decryptor: Callable[..., object] | None = None,
         age_executable: str | os.PathLike[str] | None = None,
-        producer_authenticated: Callable[[Mapping[str, Any]], bool] | None = None,
         authorize: Callable[[str, str], bool] | None = None,
         limits: ReplayLimits | None = None,
     ) -> None:
@@ -280,36 +293,44 @@ class ReplayReader:
         self.identity_paths = tuple(Path(path) for path in identity_paths)
         self.decryptor = decryptor
         self.age_executable = age_executable
-        self.producer_authenticated = producer_authenticated
         self.limits = limits or ReplayLimits()
 
-    def _discover(self) -> list[_IndexRef]:
+    def _discover(self) -> tuple[list[_IndexRef], bool]:
         discover = getattr(self.backend, "discover_evidence_indexes", None) or getattr(self.backend, "discover_index_events", None)
         if discover is None:
             raise ReplayError("index-discovery-unavailable")
+        max_events = self.limits.max_indexes + 1
         try:
-            refs = discover(max_events=self.limits.max_indexes, page_size=self.limits.page_size)
+            refs = discover(max_events=max_events, page_size=self.limits.page_size)
         except TypeError:
-            refs = discover(self.limits.max_indexes, self.limits.page_size)
+            refs = discover(max_events, self.limits.page_size)
         if not isinstance(refs, Iterable):
             raise ReplayError("index-discovery-invalid")
         result: dict[str, _IndexRef] = {}
+        raw_count = 0
+        truncated = False
         for raw in refs:
+            raw_count += 1
             try:
                 ref = _safe_ref(raw)
             except ReplayError:
                 continue
             result.setdefault(ref.key, ref)
-            if len(result) >= self.limits.max_indexes:
+            if len(result) > self.limits.max_indexes:
+                truncated = True
                 break
-        return sorted(result.values(), key=lambda item: item.key)
+        if raw_count >= max_events:
+            truncated = True
+        selected = sorted(result.values(), key=lambda item: item.key)[: self.limits.max_indexes]
+        return selected, truncated
 
     def inspect(self, *, cursor: str | None = None, limit: int | None = None) -> dict[str, Any]:
         bound = self.limits.page_size if limit is None else limit
         if type(bound) is not int or not 0 < bound <= self.limits.page_size:
             raise ReplayError("limit-invalid")
         decoded = ReplayCursor.decode(cursor, profile_id=self.profile_id, destination=self.destination) if cursor else ReplayCursor(self.profile_id, self.destination)
-        refs = [item for item in self._discover() if decoded.last_index_key is None or item.key > decoded.last_index_key]
+        all_refs, truncated = self._discover()
+        refs = [item for item in all_refs if decoded.last_index_key is None or item.key > decoded.last_index_key]
         selected = refs[:bound]
         next_cursor = decoded.last_index_key
         if selected:
@@ -327,18 +348,20 @@ class ReplayReader:
                 for item in selected
             ],
             "next_cursor": ReplayCursor(self.profile_id, self.destination, next_cursor).encode() if next_cursor else None,
-            "complete": len(refs) <= bound,
+            "complete": not truncated and len(refs) <= bound,
         }
 
     def _read_index(self, ref: _IndexRef) -> bytes:
+        if ref.ciphertext_size > self.limits.max_ciphertext_bytes:
+            raise ReplayError("ciphertext-too-large")
         try:
             body = self.backend.get_evidence_index_bytes(ref.key)
         except Exception as error:  # noqa: BLE001 - provider details are not public
             raise ReplayError("index-read-failed") from error
-        if not isinstance(body, bytes) or len(body) != ref.ciphertext_size or hashlib.sha256(body).hexdigest() != ref.ciphertext_sha256:
-            raise ReplayError("digest-mismatch")
-        if len(body) > self.limits.max_ciphertext_bytes:
+        if not isinstance(body, bytes) or len(body) > self.limits.max_ciphertext_bytes:
             raise ReplayError("ciphertext-too-large")
+        if len(body) != ref.ciphertext_size or hashlib.sha256(body).hexdigest() != ref.ciphertext_sha256:
+            raise ReplayError("digest-mismatch")
         return body
 
     def _read_object(self, digest: str, size: int) -> bytes:
@@ -382,14 +405,6 @@ class ReplayReader:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _producer_ok(self, manifest: Mapping[str, Any]) -> bool:
-        if self.producer_authenticated is not None:
-            try:
-                return self.producer_authenticated(manifest) is True
-            except Exception:  # noqa: BLE001
-                return False
-        producer = manifest.get("producer")
-        return isinstance(producer, Mapping) and producer.get("authenticated") is True
 
     def _validate_index(self, ref: _IndexRef, manifest: dict[str, Any], document: dict[str, Any], payload: bytes) -> _Evidence:
         result = validate_document(document)
@@ -405,15 +420,11 @@ class ReplayReader:
         manifest_workspace = profile.get("workspace_id")
         if self.workspace_id is not None and manifest_workspace != self.workspace_id:
             raise ReplayError("profile-boundary-denied")
-        if not self._producer_ok(manifest):
-            raise ReplayError("untrusted-producer")
         policy = manifest.get("policy")
         if not isinstance(policy, Mapping) or policy.get("decision") not in {"allow", "local-only"}:
             raise ReplayError("policy-mismatch")
         if policy.get("destination") is not None and policy.get("destination") != self.destination:
             raise ReplayError("policy-mismatch")
-        # The index ciphertext identity describes the evidence object, while
-        # ``ref`` identifies this encrypted index object itself.
         expected_kind = document.get("evidence_kind")
         expected_event = document.get("evidence_event_id")
         if not isinstance(expected_kind, str) or not isinstance(expected_event, str):
@@ -433,19 +444,40 @@ class ReplayReader:
             raise ReplayError(_error_code(validated, "evidence-invalid"))
         if evidence_document.get("kind") != expected_kind or evidence_document.get("event_id") != expected_event:
             raise ReplayError("manifest-mismatch")
-        if not self._producer_ok(evidence_manifest):
-            raise ReplayError("untrusted-producer")
         evidence_profile = evidence_manifest.get("profile")
         if not isinstance(evidence_profile, Mapping) or evidence_profile.get("id") != self.profile_id:
             raise ReplayError("profile-boundary-denied")
         if self.workspace_id is not None and evidence_profile.get("workspace_id") != self.workspace_id:
             raise ReplayError("profile-boundary-denied")
-        if evidence_document.get("kind") in {"session-segment", "session-final"}:
-            if evidence_document.get("content_sha256") != hashlib.sha256(canonical_json(evidence_document.get("records", []))).hexdigest() if evidence_document.get("kind") == "session-segment" else False:
+        evidence_capture = evidence_document.get("capture")
+        if not isinstance(evidence_capture, Mapping):
+            raise ReplayError("policy-mismatch")
+        if evidence_capture.get("status") == "quarantined":
+            raise ReplayError("capture-quarantined")
+        evidence_policy = evidence_manifest.get("policy")
+        evidence_decision = evidence_capture.get("policy_decision")
+        if (
+            not isinstance(evidence_policy, Mapping)
+            or evidence_decision not in {"allow", "local-only"}
+            or evidence_policy.get("decision") != evidence_decision
+            or evidence_policy.get("status") != evidence_capture.get("status")
+            or evidence_policy.get("sensitivity") != evidence_capture.get("sensitivity")
+        ):
+            raise ReplayError("policy-mismatch")
+        if evidence_policy.get("destination") is not None and evidence_policy.get("destination") != self.destination:
+            raise ReplayError("policy-mismatch")
+        if evidence_document.get("kind") == "session-segment":
+            records_payload = canonical_json(evidence_document.get("records", []))
+            if evidence_document.get("content_sha256") != hashlib.sha256(records_payload).hexdigest():
                 raise ReplayError("digest-mismatch")
-            if evidence_document.get("kind") == "session-segment":
-                if evidence_document.get("content_size") != len(canonical_json(evidence_document.get("records", []))):
-                    raise ReplayError("digest-mismatch")
+            if evidence_document.get("content_size") != len(records_payload):
+                raise ReplayError("digest-mismatch")
+            if (
+                len(records_payload) > _MAX_REPLAY_SEGMENT_BYTES
+                or evidence_document.get("record_count", 0) > _MAX_REPLAY_RECORDS_PER_SEGMENT
+                or len(evidence_document.get("asset_refs", ())) > _MAX_REPLAY_ASSETS_PER_SEGMENT
+            ):
+                raise ReplayError("segment-too-large")
         elif evidence_document.get("kind") == "session-asset":
             if evidence_document.get("sha256") != hashlib.sha256(evidence_payload).hexdigest() or evidence_document.get("size") != len(evidence_payload):
                 raise ReplayError("digest-mismatch")
@@ -454,7 +486,7 @@ class ReplayReader:
             raise ReplayError("digest-mismatch")
         if expected_kind == "session-asset" and index_content not in {canonical_digest(evidence_document), evidence_document.get("sha256")}:
             raise ReplayError("digest-mismatch")
-        return _Evidence(ref, document, manifest, evidence_document, evidence_manifest, evidence_payload)
+        return _Evidence(ref, document, evidence_document)
 
     def _quarantine(self, ref: _IndexRef, reason: str, *, event_id: str | None = None, cursor: str | None = None) -> dict[str, Any]:
         return QuarantineReceipt(reason, ref.key, event_id, ref.ciphertext_sha256, ref.ciphertext_size, cursor).to_dict(profile_id=self.profile_id, destination=self.destination)
@@ -495,7 +527,7 @@ class ReplayReader:
             },
             "record_index": index,
             "record": copy.deepcopy(dict(record)),
-            "producer_trust": "authenticated",
+            "producer_trust": "untrusted",
         }
         if isinstance(segment.get("asset_refs"), list):
             result["asset_refs"] = copy.deepcopy(segment["asset_refs"])
@@ -504,7 +536,24 @@ class ReplayReader:
             raise ReplayError("normalized-record-too-large")
         return result
 
-    def _verify_chain(self, items: list[_Evidence], quarantines: list[dict[str, Any]]) -> list[_Evidence]:
+    def _chain_evidence(self, item: _Evidence, *, retain_segment: bool) -> _ChainEvidence:
+        document = item.document
+        kind = document.get("kind")
+        if kind == "session-segment":
+            fields = ("kind", "event_id", "session_id", "checkpoint", "previous_segment_sha256", "asset_refs")
+            digest = canonical_digest(document)
+            evidence = item if retain_segment else None
+        elif kind == "session-asset":
+            fields = ("kind", "event_id", "session_id", "asset_id", "sha256", "size")
+            digest = None
+            evidence = None
+        else:
+            fields = ("kind", "event_id", "session_id", "last_segment_sha256")
+            digest = None
+            evidence = None
+        metadata = {key: document[key] for key in fields if key in document}
+        return _ChainEvidence(item.index, metadata, digest, evidence)
+    def _verify_chain(self, items: list[_ChainEvidence], quarantines: list[dict[str, Any]]) -> list[_ChainEvidence]:
         valid = [item for item in items if item.document.get("kind") in {"session-segment", "session-asset", "session-final"}]
         segments = [item for item in valid if item.document.get("kind") == "session-segment"]
         assets = [item for item in valid if item.document.get("kind") == "session-asset"]
@@ -513,21 +562,34 @@ class ReplayReader:
             (item.document.get("session_id"), item.document.get("asset_id"), item.document.get("sha256"), item.document.get("size"))
             for item in assets
         }
-        accepted: list[_Evidence] = []
-        by_session: dict[object, list[_Evidence]] = {}
+        by_session: dict[object, list[_ChainEvidence]] = {}
+        finals_by_session: dict[object, list[_ChainEvidence]] = {}
         for item in segments:
             by_session.setdefault(item.document.get("session_id"), []).append(item)
-        failed: set[str] = set()
-        for session_id, group in by_session.items():
-            ordered = sorted(group, key=lambda item: (
-                (item.document.get("checkpoint") or {}).get("start", 0),
-                (item.document.get("checkpoint") or {}).get("end", 0),
-                str(item.document.get("event_id", "")),
-            ))
+        for item in finals:
+            finals_by_session.setdefault(item.document.get("session_id"), []).append(item)
+        accepted: list[_ChainEvidence] = []
+        reported: set[tuple[str, str]] = set()
+
+        def quarantine(item: _ChainEvidence, reason: str) -> None:
+            key = (item.index.key, reason)
+            if key not in reported:
+                quarantines.append(self._quarantine(item.index, reason, event_id=str(item.document.get("event_id"))))
+                reported.add(key)
+
+        for session_id in by_session.keys() | finals_by_session.keys():
+            group = sorted(
+                by_session.get(session_id, ()),
+                key=lambda item: (
+                    (item.document.get("checkpoint") or {}).get("start", 0),
+                    (item.document.get("checkpoint") or {}).get("end", 0),
+                    str(item.document.get("event_id", "")),
+                ),
+            )
             previous: str | None = None
-            for item in ordered:
+            failed = False
+            for item in group:
                 document = item.document
-                digest = canonical_digest(document)
                 declared = document.get("previous_segment_sha256")
                 chain_bad = declared != previous and not (declared is None and previous is None)
                 refs = document.get("asset_refs", ())
@@ -537,58 +599,84 @@ class ReplayReader:
                     if isinstance(ref, Mapping)
                 )
                 if chain_bad:
-                    failed.add(str(document.get("event_id")))
-                    quarantines.append(self._quarantine(item.index, "broken-chain", event_id=str(document.get("event_id"))))
+                    quarantine(item, "broken-chain")
+                    failed = True
                 if missing_asset:
-                    failed.add(str(document.get("event_id")))
-                    quarantines.append(self._quarantine(item.index, "missing-asset", event_id=str(document.get("event_id"))))
-                if chain_bad or missing_asset:
-                    previous = digest
-                    continue
-                accepted.append(item)
-                previous = digest
-            for final in finals:
-                if final.document.get("session_id") != session_id:
-                    continue
+                    quarantine(item, "missing-asset")
+                    failed = True
+                if failed and not chain_bad and not missing_asset:
+                    quarantine(item, "broken-chain")
+                previous = item.digest
+            session_finals = finals_by_session.get(session_id, ())
+            for final in session_finals:
                 declared = final.document.get("last_segment_sha256")
                 if declared is not None and declared != previous:
-                    quarantines.append(self._quarantine(final.index, "broken-chain", event_id=str(final.document.get("event_id"))))
-        for item in finals:
-            if item not in accepted and not any(q.get("event_id") == item.document.get("event_id") for q in quarantines):
-                accepted.append(item)
-        return [item for item in accepted if str(item.document.get("event_id")) not in failed]
+                    quarantine(final, "broken-chain")
+                    failed = True
+                elif failed:
+                    quarantine(final, "broken-chain")
+            if failed:
+                for item in group:
+                    quarantine(item, "broken-chain")
+            else:
+                accepted.extend(group)
+                accepted.extend(session_finals)
+        return accepted
 
     def export(self, *, cursor: str | None = None, limit: int | None = None) -> ReplayPage:
         bound = self.limits.page_size if limit is None else limit
         if type(bound) is not int or not 0 < bound <= self.limits.page_size:
             raise ReplayError("limit-invalid")
         decoded = ReplayCursor.decode(cursor, profile_id=self.profile_id, destination=self.destination) if cursor else ReplayCursor(self.profile_id, self.destination)
-        refs = [item for item in self._discover() if decoded.last_index_key is None or item.key > decoded.last_index_key]
-        selected = refs[:bound]
+        refs, truncated = self._discover()
+        if truncated:
+            resume_cursor = ReplayCursor(self.profile_id, self.destination, decoded.last_index_key).encode() if decoded.last_index_key else None
+            return ReplayPage((), (), resume_cursor, False, 0)
+        available = [item for item in refs if decoded.last_index_key is None or item.key > decoded.last_index_key]
+        selected = available[:bound]
+        last_key = selected[-1].key if selected else decoded.last_index_key
+        next_cursor = ReplayCursor(self.profile_id, self.destination, last_key).encode() if last_key else None
+        if not selected:
+            return ReplayPage((), (), next_cursor, not truncated, 0)
+        selected_keys = {item.key for item in selected}
         quarantines: list[dict[str, Any]] = []
-        evidence: list[_Evidence] = []
-        last_key = decoded.last_index_key
-        for ref in selected:
-            last_key = ref.key
-            next_cursor = ReplayCursor(self.profile_id, self.destination, last_key).encode()
+        evidence: list[_ChainEvidence] = []
+        for ref in refs:
             try:
                 index_body = self._read_index(ref)
                 manifest, document, payload = self._decrypt(index_body, expected_kind="index-event")
-                evidence.append(self._validate_index(ref, manifest, document, payload))
+                item = self._validate_index(ref, manifest, document, payload)
+                retain = ref.key in selected_keys and item.document.get("kind") == "session-segment"
+                evidence.append(self._chain_evidence(item, retain_segment=retain))
             except ReplayError as error:
-                quarantines.append(self._quarantine(ref, error.code, cursor=next_cursor))
+                if ref.key in selected_keys:
+                    quarantines.append(self._quarantine(
+                        ref,
+                        error.code,
+                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
+                    ))
             except Exception:  # noqa: BLE001
-                quarantines.append(self._quarantine(ref, "corrupt-ciphertext", cursor=next_cursor))
+                if ref.key in selected_keys:
+                    quarantines.append(self._quarantine(
+                        ref,
+                        "corrupt-ciphertext",
+                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
+                    ))
         accepted = self._verify_chain(evidence, quarantines)
+        quarantines = [item for item in quarantines if item.get("index_key") in selected_keys]
         records: list[dict[str, Any]] = []
-        for item in sorted(accepted, key=lambda value: (str(value.document.get("session_id", "")), (value.document.get("checkpoint") or {}).get("start", 0), str(value.document.get("event_id", "")))):
+        for chain_item in sorted(
+            accepted,
+            key=lambda value: (
+                str(value.document.get("session_id", "")),
+                (value.document.get("checkpoint") or {}).get("start", 0),
+                str(value.document.get("event_id", "")),
+            ),
+        ):
+            item = chain_item.evidence
+            if item is None or item.document.get("kind") != "session-segment":
+                continue
             document = item.document
-            if document.get("kind") != "session-segment":
-                continue
-            capture = document.get("capture")
-            if isinstance(capture, Mapping) and capture.get("status") == "quarantined":
-                quarantines.append(self._quarantine(item.index, "capture-quarantined", event_id=str(document.get("event_id"))))
-                continue
             raw_records = document.get("records")
             if not isinstance(raw_records, list):
                 quarantines.append(self._quarantine(item.index, "evidence-invalid", event_id=str(document.get("event_id"))))
@@ -596,8 +684,7 @@ class ReplayReader:
             for index, record in enumerate(raw_records):
                 if isinstance(record, Mapping):
                     records.append(self._normalized(item, document, record, index))
-        next_cursor = ReplayCursor(self.profile_id, self.destination, last_key).encode() if last_key else None
-        return ReplayPage(tuple(records), tuple(quarantines), next_cursor, len(refs) <= bound, len(selected))
+        return ReplayPage(tuple(records), tuple(quarantines), next_cursor, not truncated and len(available) <= bound, len(selected))
 
     def iter_jsonl(self, *, cursor: str | None = None, limit: int | None = None) -> Iterator[str]:
         yield from self.export(cursor=cursor, limit=limit).jsonl()

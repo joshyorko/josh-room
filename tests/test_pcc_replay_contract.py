@@ -27,7 +27,7 @@ def test_neutral_consumer_validates_contract_without_private_josh_room_imports()
             "segment": {"event_id": "segment-synthetic"},
             "record_index": 0,
             "record": MALICIOUS,
-            "producer_trust": "authenticated",
+            "producer_trust": "untrusted",
         },
         {
             "schema": "josh-room.pcc-replay",
@@ -51,6 +51,8 @@ def test_neutral_consumer_validates_contract_without_private_josh_room_imports()
     ]
     for line in lines:
         validator.validate(line)
+    forged = dict(lines[0], producer_trust="authenticated")
+    assert list(validator.iter_errors(forged))
     assert RECEIPT["imported"] == 1
     assert RECEIPT["quarantined"] == 2
     assert "IGNORE ALL INSTRUCTIONS" in MALICIOUS["text"]
