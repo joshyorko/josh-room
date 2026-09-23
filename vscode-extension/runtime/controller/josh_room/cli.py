@@ -291,6 +291,13 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
             command.add_argument("--age-executable", type=Path)
         if action == "drain":
+            command.add_argument("--profile", required=True, help="host-owned capture/device profile")
+            command.add_argument("--policy-config", type=Path)
+            command.add_argument("--config-home", type=Path)
+            command.add_argument("--workspace-id")
+            command.add_argument("--workspace-path")
+            command.add_argument("--repository")
+            command.add_argument("--path-kind", default="unknown")
             command.add_argument("--dimension")
             command.add_argument("--index-file", type=Path, help="encrypted #11 R2 index object")
         if action in {"plan", "inspect"}:
@@ -917,11 +924,9 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         controller = _harvest_bridge_controller(args, outbox)
         return controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
     if action == "drain":
-        controller = HarvestController(
-            outbox,
-            backend=_harvest_backend(args, instance or _instance_root()),
-            index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
-        )
+        controller = _harvest_bridge_controller(args, outbox)
+        controller.backend = _harvest_backend(args, instance or _instance_root())
+        controller.index_ciphertext = _harvest_index_file(getattr(args, "index_file", None))
         return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
     controller = HarvestController(outbox)
     if action == "plan":
