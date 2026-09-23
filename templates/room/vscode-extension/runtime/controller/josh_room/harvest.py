@@ -328,6 +328,7 @@ class HarvestController:
         return None, owner
     def _claim_prepared(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
+        now = self.outbox.clock()
         for record in self.outbox.inspect().records:
             if record.metadata.get("object_kind") == "index-event":
                 continue
