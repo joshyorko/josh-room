@@ -56,7 +56,7 @@ class QueueState(StrEnum):
     TRIGGER_EXPANDED = "trigger-expanded"
     COMMITTED = "committed"
     RETRYABLE_FAILURE = "retryable-failure"
-    QUARANTINED = "quarantined"
+    POLICY_DENIED = "policy-denied"
     CAPTURE_GAP = "capture-gap"
 
 
@@ -172,9 +172,9 @@ class QueueRecord:
     object_key: str | None = None
     ciphertext_sha256: str | None = None
     ciphertext_size: int | None = None
+    index_id: str | None = None
     expanded_event_ids: tuple[str, ...] = ()
     expanded_checkpoint: dict[str, object] | None = None
-
     def to_dict(self) -> dict[str, object]:
         body: dict[str, object] = {
             "event_id": self.event_id,
@@ -194,6 +194,7 @@ class QueueRecord:
             "object_key": self.object_key,
             "ciphertext_sha256": self.ciphertext_sha256,
             "ciphertext_size": self.ciphertext_size,
+            "index_id": self.index_id,
             "expanded_event_ids": list(self.expanded_event_ids),
             "expanded_checkpoint": self.expanded_checkpoint,
         }
