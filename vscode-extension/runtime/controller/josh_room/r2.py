@@ -452,9 +452,20 @@ class R2Backend(ObjectStore):
             self._verify_evidence_remote(key, digest, expected_size)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
+        if expected_size is not None and (
+            type(expected_size) is not int or expected_size < 0 or expected_size > self.config.max_bytes
+        ):
+            raise R2EvidenceReadbackMismatch()
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
-        body = response["Body"].read(self.config.max_bytes + 1)
-        if len(body) != int(response.get("ContentLength", -1)) or len(body) > self.config.max_bytes:
+        read_limit = self.config.max_bytes + 1
+        if expected_size is not None:
+            read_limit = min(read_limit, expected_size + 1)
+        body = response["Body"].read(read_limit)
+        if (
+            len(body) != int(response.get("ContentLength", -1))
+            or len(body) > self.config.max_bytes
+            or (expected_size is not None and len(body) != expected_size)
+        ):
             raise R2EvidenceReadbackMismatch()
         if hashlib.sha256(body).hexdigest() != digest:
             raise R2EvidenceReadbackMismatch()
@@ -507,29 +518,51 @@ class R2Backend(ObjectStore):
 
     publish_index_event = put_evidence_index_bytes
 
-    def get_evidence_index_bytes(self, key: str) -> bytes:
+    def get_evidence_index_bytes(self, key: str, expected_size: int | None = None) -> bytes:
         digest = validate_evidence_index_key(key)
+        if expected_size is not None and (
+            type(expected_size) is not int or expected_size < 0 or expected_size > self.config.max_bytes
+        ):
+            raise R2EvidenceReadbackMismatch()
         try:
-            self._verify_evidence_remote(key, digest, None)
+            self._verify_evidence_remote(key, digest, expected_size)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
-        body = response["Body"].read(self.config.max_bytes + 1)
-        if hashlib.sha256(body).hexdigest() != digest:
+        read_limit = self.config.max_bytes + 1
+        if expected_size is not None:
+            read_limit = min(read_limit, expected_size + 1)
+        body = response["Body"].read(read_limit)
+        if (
+            len(body) != int(response.get("ContentLength", -1))
+            or len(body) > self.config.max_bytes
+            or (expected_size is not None and len(body) != expected_size)
+            or hashlib.sha256(body).hexdigest() != digest
+        ):
             raise R2EvidenceReadbackMismatch()
         return body
 
-    def discover_evidence_indexes(self, *, max_events: int = 1000, page_size: int = 100) -> list[R2EvidenceIndexRef]:
-        """Discover only encrypted index keys under the fixed, opaque prefix."""
-        if type(max_events) is not int or not 0 < max_events <= 100_000:
+    def discover_evidence_indexes(
+        self,
+        *,
+        max_events: int = 1000,
+        page_size: int = 100,
+        max_pages: int = 128,
+    ) -> list[R2EvidenceIndexRef]:
+        """Discover encrypted indexes with explicit event and page bounds."""
+        if type(max_events) is not int or not 0 < max_events <= 100_001:
             raise ValueError("evidence discovery bound is invalid")
         if type(page_size) is not int or not 0 < page_size <= _MAX_EVIDENCE_INDEX_PAGE:
             raise ValueError("evidence page size is invalid")
+        if type(max_pages) is not int or not 0 < max_pages <= 1000:
+            raise ValueError("evidence page bound is invalid")
         result: dict[str, R2EvidenceIndexRef] = {}
         token = None
         seen_tokens: set[str] = set()
         pages = 0
-        while pages < max_events:
+        incomplete = False
+        response = {}
+        while pages < max_pages:
             kwargs = {
                 "Bucket": self.config.bucket,
                 "Prefix": EVIDENCE_INDEX_PREFIX,
@@ -560,9 +593,14 @@ class R2Backend(ObjectStore):
                 break
             next_token = response.get("NextContinuationToken")
             if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
+                incomplete = True
                 break
             seen_tokens.add(next_token)
             token = next_token
+        else:
+            incomplete = bool(response.get("IsTruncated")) and len(result) < max_events
+        if incomplete:
+            raise R2EvidenceError("index-discovery-incomplete")
         return sorted(result.values(), key=lambda item: item.key)
 
     put_evidence = put_evidence_file

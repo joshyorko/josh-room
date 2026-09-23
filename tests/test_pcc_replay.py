@@ -20,8 +20,8 @@ class FakeBackend:
         self.index = {item["index_key"]: item["index_body"] for item in entries}
         self.objects = {item["object_key"]: item["object_body"] for item in entries}
 
-    def discover_evidence_indexes(self, *, max_events, page_size):
-        del page_size
+    def discover_evidence_indexes(self, *, max_events, page_size, max_pages):
+        del page_size, max_pages
         refs = []
         for item in self.entries[:max_events]:
             digest = item["index_key"].rsplit("/", 1)[-1].removesuffix(".age")
@@ -34,8 +34,11 @@ class FakeBackend:
             )
         return refs
 
-    def get_evidence_index_bytes(self, key):
-        return self.index[key]
+    def get_evidence_index_bytes(self, key, expected_size=None):
+        body = self.index[key]
+        if expected_size is not None:
+            assert expected_size == len(body)
+        return body
 
     def get_evidence_bytes(self, key, expected_size=None):
         body = self.objects[key]
@@ -284,6 +287,21 @@ def test_deferred_signatures_preserve_evidence_as_untrusted(producer_claim):
         item["evidence_envelope"],
     ))
 
+@pytest.mark.parametrize("scope_location", ["index", "evidence"])
+def test_cross_workspace_quarantine_without_content(scope_location):
+    segment = fixture("golden-session-segment.json")
+    segment["asset_refs"] = []
+    item = entry(segment)
+    item[f"{scope_location}_envelope"]["manifest"]["profile"]["workspace_id"] = "workspace-work"
+    mapping = {
+        item["index_body"]: item["index_envelope"],
+        item["object_body"]: item["evidence_envelope"],
+    }
+
+    page = reader([item], mapping).export(limit=1)
+
+    assert not page.records
+    assert {receipt["reason_code"] for receipt in page.quarantines} == {"profile-boundary-denied"}
 @pytest.mark.parametrize(
     ("manifest_decision", "capture_decision"),
     (("deny", "deny"), ("quarantine", "quarantine"), ("allow", "deny"), ("allow", "quarantine")),
@@ -363,17 +381,29 @@ def test_asset_reference_category_must_match_asset_event():
 
 
 @pytest.mark.parametrize(
-    ("page_size", "max_indexes", "max_ciphertext_bytes"),
+    ("page_size", "max_indexes", "max_ciphertext_bytes", "max_scan_bytes"),
     [
-        (9, 1000, ReplayLimits().max_ciphertext_bytes),
-        (8, 10_001, ReplayLimits().max_ciphertext_bytes),
-        (8, 1000, ReplayLimits().max_ciphertext_bytes + 1),
+        (9, 1000, ReplayLimits().max_ciphertext_bytes, ReplayLimits().max_scan_bytes),
+        (8, 100_001, ReplayLimits().max_ciphertext_bytes, ReplayLimits().max_scan_bytes),
+        (8, 1000, ReplayLimits().max_ciphertext_bytes + 1, ReplayLimits().max_scan_bytes),
+        (8, 1000, ReplayLimits().max_ciphertext_bytes, 8 * 1024 * 1024 * 1024 + 1),
     ],
 )
-def test_replay_limits_reject_unbounded_settings(page_size, max_indexes, max_ciphertext_bytes):
+def test_replay_limits_reject_unbounded_settings(page_size, max_indexes, max_ciphertext_bytes, max_scan_bytes):
     with pytest.raises(ValueError):
-        ReplayLimits(page_size=page_size, max_indexes=max_indexes, max_ciphertext_bytes=max_ciphertext_bytes)
+        ReplayLimits(
+            page_size=page_size,
+            max_indexes=max_indexes,
+            max_ciphertext_bytes=max_ciphertext_bytes,
+            max_scan_bytes=max_scan_bytes,
+        )
 
+
+def test_replay_limits_preserve_original_discovery_capacity():
+    limits = ReplayLimits(max_indexes=100_000, max_scan_bytes=8 * 1024 * 1024 * 1024)
+
+    assert limits.max_indexes == 100_000
+    assert limits.max_scan_bytes == 8 * 1024 * 1024 * 1024
 
 def test_oversized_index_is_rejected_before_ciphertext_fetch():
     segment = fixture("golden-session-segment.json")
@@ -489,6 +519,105 @@ def test_index_cap_does_not_export_an_unverified_partial_set():
     assert page.cursor is None
     assert page.complete is False
     assert page.inspected_indexes == 0
+
+def test_cumulative_scan_cap_returns_incomplete_without_fetching_evidence():
+    segment = fixture("golden-session-segment.json")
+    segment["asset_refs"] = []
+    item = entry(segment, payload=canonical_json(segment))
+    backend = FakeBackend([item])
+    backend.get_evidence_bytes = lambda *_args, **_kwargs: pytest.fail("scan cap fetched evidence")
+
+    page = ReplayReader(
+        backend,
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=lambda body, **_kwargs: {item["index_body"]: item["index_envelope"]}[body],
+        limits=ReplayLimits(
+            max_scan_bytes=len(item["index_body"]) + len(item["object_body"]) - 1,
+        ),
+    ).export(limit=1)
+
+    assert page.records == ()
+    assert page.quarantines == ()
+    assert page.cursor is None
+    assert page.complete is False
+    assert page.inspected_indexes == 0
+
+    exact_page = reader(
+        [item],
+        {
+            item["index_body"]: item["index_envelope"],
+            item["object_body"]: item["evidence_envelope"],
+        },
+        limits=ReplayLimits(max_scan_bytes=len(item["index_body"]) + len(item["object_body"])),
+    ).export(limit=1)
+
+    assert exact_page.records
+    assert exact_page.complete
+
+@pytest.mark.parametrize("local_only_at", ["index", "evidence"])
+def test_local_only_evidence_is_not_exported_from_private_r2(local_only_at):
+    segment = fixture("golden-session-segment.json")
+    segment["asset_refs"] = []
+    if local_only_at == "evidence":
+        segment["capture"]["policy_decision"] = "local-only"
+    item = entry(segment, payload=canonical_json(segment))
+    if local_only_at == "index":
+        item["index_envelope"]["manifest"]["policy"]["decision"] = "local-only"
+    mapping = {
+        item["index_body"]: item["index_envelope"],
+        item["object_body"]: item["evidence_envelope"],
+    }
+
+    page = reader([item], mapping).export(limit=1)
+
+    assert not page.records
+    assert {receipt["reason_code"] for receipt in page.quarantines} == {"policy-mismatch"}
+
+
+def test_final_without_last_segment_digest_quarantines_its_session():
+    segment = fixture("golden-session-segment.json")
+    segment["asset_refs"] = []
+    final = fixture("golden-session-final.json")
+    final["session_id"] = segment["session_id"]
+    final.pop("last_segment_sha256", None)
+    segment_entry = entry(segment, payload=canonical_json(segment))
+    final_entry = entry(final, payload=canonical_json(final))
+    entries = [segment_entry, final_entry]
+    mapping = {
+        item["index_body"]: item["index_envelope"]
+        for item in entries
+    } | {
+        item["object_body"]: item["evidence_envelope"]
+        for item in entries
+    }
+
+    page = reader(entries, mapping).export(limit=8)
+
+    assert not page.records
+    assert "broken-chain" in {receipt["reason_code"] for receipt in page.quarantines}
+
+
+def test_malformed_index_reference_keeps_export_incomplete():
+    class Backend:
+        discover_evidence_indexes = lambda *_args, **_kwargs: [{"key": "not-an-index"}]
+        get_evidence_index_bytes = lambda *_args, **_kwargs: pytest.fail("malformed index fetched")
+        get_evidence_bytes = lambda *_args, **_kwargs: pytest.fail("evidence fetched")
+
+    replay_reader = ReplayReader(
+        Backend(),
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=lambda *_args, **_kwargs: pytest.fail("malformed index decrypted"),
+    )
+
+    page = replay_reader.export(limit=1)
+
+    assert not page.records
+    assert page.complete is False
+    assert page.cursor is None
 def test_bad_chain_and_missing_asset_are_quarantined():
     first = fixture("golden-session-segment.json")
     first["asset_refs"] = []
@@ -539,5 +668,12 @@ def test_identity_required_without_test_decryptor():
         get_evidence_bytes = lambda *_args, **_kwargs: b""
         discover_evidence_indexes = lambda *_args, **_kwargs: []
 
+    with pytest.raises(TypeError, match="workspace_id"):
+        ReplayReader(Backend(), profile_id="profile-personal", destination="private-r2")
     with pytest.raises(ReplayError, match="identity-unavailable"):
-        ReplayReader(Backend(), profile_id="profile-personal", destination="private-r2")._decrypt(b"x", expected_kind="index-event")
+        ReplayReader(
+            Backend(),
+            profile_id="profile-personal",
+            destination="private-r2",
+            workspace_id="workspace-synthetic",
+        )._decrypt(b"x", expected_kind="index-event")

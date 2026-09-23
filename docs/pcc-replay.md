@@ -6,12 +6,16 @@ upload health.
 
 ## Contract
 
-`ReplayReader` requires an explicit `profile_id` and `destination`, and accepts
-an existing #11 backend plus an approved local age identity. `export()` reads a
-bounded, deterministic page of encrypted index events, verifies index and
-object SHA-256/size, decrypts both envelopes, validates Session Evidence v1,
-checks the profile/workspace and policy binding, verifies the segment chain and
-asset references, and returns inert normalized records plus quarantine receipts.
+`ReplayReader` requires explicit `profile_id`, `workspace_id`, and `destination`,
+plus an existing #11 backend. `export()` also requires an approved local age
+identity and reads a bounded deterministic page of encrypted index events,
+verifies index and object SHA-256/size, decrypts both envelopes, validates
+Session Evidence v1, checks profile/workspace and policy binding, verifies the
+segment chain and asset references, and returns inert normalized records plus
+quarantine receipts. The CLI binds workspace to the selected host profile;
+`--workspace-id` is only an assertion and mismatches fail closed. `inspect()`
+does not require an age identity and remains metadata-only.
+Private-R2 export accepts only `allow`; `local-only` evidence is never exported.
 `iter_jsonl()` emits the versioned `josh-room.pcc-replay` JSONL contract described
 by `schemas/pcc-replay-v1.schema.json`.
 
@@ -24,12 +28,12 @@ use listing order or ingestion time.
 
 Replay pages are limited to 8 indexes (default), each encrypted index/evidence
 object to 80 MiB, and each segment to 4 MiB, 128 records, and 32 asset refs.
-`max_indexes` bounds discovery at 1,000 by default and 10,000 maximum. Each
-export validates the entire discovered bounded set before returning a page, so
-segment, asset, and final links remain valid across cursor boundaries. If the
-discovery cap is exceeded, export emits no records and leaves the cursor
-unchanged; increase `--max-indexes` to continue. This full bounded scan repeats
-for each page.
+`max_indexes` bounds discovery at 1,000 by default and 100,000 maximum. Each
+export validates the entire discovered bounded set to verify cross-page links;
+the cumulative ciphertext scan defaults to 1 GiB and accepts `--max-scan-bytes`
+up to an 8 GiB hard cap. Exceeding either bound emits no records and leaves the
+cursor unchanged. The bounded scan repeats for each page.
+
 
 Index keys are content-addressed, not chronological. A cursor is a page
 position within the discovered set, not a watermark for future uploads. To

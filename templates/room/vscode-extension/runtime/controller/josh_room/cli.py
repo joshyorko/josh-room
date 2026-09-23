@@ -367,6 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
         replay_action.add_argument("--identity", type=Path, action="append")
         replay_action.add_argument("--age-executable", type=Path)
         if action == "export":
+            replay_action.add_argument("--max-scan-bytes", type=int, default=ReplayLimits().max_scan_bytes)
             replay_action.add_argument("--jsonl", action="store_true", help="emit one contract object per line")
         _json_option(replay_action)
     hook = commands.add_parser("hook")
@@ -1132,6 +1133,10 @@ def _replay_dispatch(args, instance: Path) -> dict:
     profile = policy.profiles.get(args.profile)
     if profile is None:
         raise ValueError("profile-unavailable")
+    workspace_id = profile.workspace_id
+    requested_workspace = getattr(args, "workspace_id", None)
+    if requested_workspace is not None and requested_workspace != workspace_id:
+        raise ValueError("workspace-binding-mismatch")
     destination = getattr(profile.destination, "kind", None)
     if args.destination != destination:
         raise ValueError("destination-binding-mismatch")
@@ -1145,11 +1150,15 @@ def _replay_dispatch(args, instance: Path) -> dict:
             backend,
             profile_id=profile.profile_id,
             destination=destination,
-            workspace_id=args.workspace_id or profile.workspace_id,
+            workspace_id=workspace_id,
             identity_paths=identity_paths,
             age_executable=getattr(args, "age_executable", None),
             authorize=lambda selected_profile, selected_destination: selected_profile == profile.profile_id and selected_destination == destination,
-            limits=ReplayLimits(page_size=args.page_size, max_indexes=args.max_indexes),
+            limits=ReplayLimits(
+                page_size=args.page_size,
+                max_indexes=args.max_indexes,
+                max_scan_bytes=getattr(args, "max_scan_bytes", ReplayLimits().max_scan_bytes),
+            ),
         )
         if args.replay_command == "inspect":
             return reader.inspect(cursor=args.cursor, limit=args.limit)
@@ -1159,7 +1168,7 @@ def _replay_dispatch(args, instance: Path) -> dict:
             "schema_version": {"major": 1, "minor": 0},
             "ok": True,
             "profile_id": profile.profile_id,
-            "workspace_id": args.workspace_id or profile.workspace_id,
+            "workspace_id": workspace_id,
             "destination": destination,
             "next_cursor": page.cursor,
             "complete": page.complete,

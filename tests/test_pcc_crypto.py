@@ -367,15 +367,16 @@ def test_replay_reader_decrypts_index_and_evidence_with_profile_identity(tmp_pat
     evidence_digest = hashlib.sha256(evidence_body).hexdigest()
 
     class Backend:
-        def discover_evidence_indexes(self, *, max_events, page_size):
+        def discover_evidence_indexes(self, *, max_events, page_size, max_pages):
             return [{
                 "key": evidence_index_key(index_digest),
                 "ciphertext_sha256": index_digest,
                 "ciphertext_size": len(index_body),
             }]
 
-        def get_evidence_index_bytes(self, key):
+        def get_evidence_index_bytes(self, key, expected_size=None):
             assert key == evidence_index_key(index_digest)
+            assert expected_size == len(index_body)
             return index_body
 
         def get_evidence_bytes(self, key, expected_size=None):

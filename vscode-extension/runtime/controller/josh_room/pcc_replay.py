@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .pcc_crypto import DecryptedEnvelope, decrypt_envelope
-from .r2 import evidence_object_key, validate_evidence_index_key
+from .r2 import R2EvidenceError, R2EvidenceReadbackMismatch, evidence_object_key, validate_evidence_index_key
 from .session_evidence import (
     CURRENT_MAJOR,
     CURRENT_MINOR,
@@ -39,11 +39,15 @@ _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _MAX_CURSOR_BYTES = 4096
 _MAX_JSONL_RECORD_BYTES = 4 * 1024 * 1024
 _MAX_REPLAY_PAGE_SIZE = 8
-_MAX_REPLAY_INDEXES = 10_000
+_MAX_REPLAY_INDEXES = 100_000
 _MAX_REPLAY_CIPHERTEXT_BYTES = 80 * 1024 * 1024
 _MAX_REPLAY_SEGMENT_BYTES = 4 * 1024 * 1024
 _MAX_REPLAY_RECORDS_PER_SEGMENT = 128
 _MAX_REPLAY_ASSETS_PER_SEGMENT = 32
+_DEFAULT_REPLAY_SCAN_BYTES = 1024 * 1024 * 1024
+_MAX_REPLAY_SCAN_BYTES = 8 * 1024 * 1024 * 1024
+_R2_DISCOVERY_PAGE_SIZE = 1000
+_R2_DISCOVERY_MAX_PAGES = 128
 
 
 class ReplayError(RuntimeError):
@@ -59,6 +63,7 @@ class ReplayLimits:
     page_size: int = _MAX_REPLAY_PAGE_SIZE
     max_indexes: int = 1000
     max_ciphertext_bytes: int = _MAX_REPLAY_CIPHERTEXT_BYTES
+    max_scan_bytes: int = _DEFAULT_REPLAY_SCAN_BYTES
 
     def __post_init__(self) -> None:
         if type(self.page_size) is not int or not 0 < self.page_size <= _MAX_REPLAY_PAGE_SIZE:
@@ -70,6 +75,8 @@ class ReplayLimits:
             or not 0 < self.max_ciphertext_bytes <= _MAX_REPLAY_CIPHERTEXT_BYTES
         ):
             raise ValueError("replay ciphertext bound is invalid")
+        if type(self.max_scan_bytes) is not int or not 0 < self.max_scan_bytes <= _MAX_REPLAY_SCAN_BYTES:
+            raise ValueError("replay scan byte bound is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,7 +274,7 @@ class ReplayReader:
         *,
         profile_id: str,
         destination: str,
-        workspace_id: str | None = None,
+        workspace_id: str,
         identity_paths: Sequence[str | os.PathLike[str]] = (),
         decryptor: Callable[..., object] | None = None,
         age_executable: str | os.PathLike[str] | None = None,
@@ -275,6 +282,7 @@ class ReplayReader:
         limits: ReplayLimits | None = None,
     ) -> None:
         _identifier(profile_id, "profile-invalid")
+        _identifier(workspace_id, "workspace-invalid")
         if not isinstance(destination, str) or not destination or len(destination) > 128 or any(ord(char) < 0x21 for char in destination):
             raise ReplayError("destination-invalid")
         if authorize is not None:
@@ -301,9 +309,17 @@ class ReplayReader:
             raise ReplayError("index-discovery-unavailable")
         max_events = self.limits.max_indexes + 1
         try:
-            refs = discover(max_events=max_events, page_size=self.limits.page_size)
-        except TypeError:
-            refs = discover(max_events, self.limits.page_size)
+            refs = discover(
+                max_events=max_events,
+                page_size=_R2_DISCOVERY_PAGE_SIZE,
+                max_pages=_R2_DISCOVERY_MAX_PAGES,
+            )
+        except R2EvidenceError as error:
+            if error.code == "index-discovery-incomplete":
+                return [], True
+            raise ReplayError("index-discovery-failed") from error
+        except Exception as error:
+            raise ReplayError("index-discovery-failed") from error
         if not isinstance(refs, Iterable):
             raise ReplayError("index-discovery-invalid")
         result: dict[str, _IndexRef] = {}
@@ -314,6 +330,7 @@ class ReplayReader:
             try:
                 ref = _safe_ref(raw)
             except ReplayError:
+                truncated = True
                 continue
             result.setdefault(ref.key, ref)
             if len(result) > self.limits.max_indexes:
@@ -355,7 +372,9 @@ class ReplayReader:
         if ref.ciphertext_size > self.limits.max_ciphertext_bytes:
             raise ReplayError("ciphertext-too-large")
         try:
-            body = self.backend.get_evidence_index_bytes(ref.key)
+            body = self.backend.get_evidence_index_bytes(ref.key, expected_size=ref.ciphertext_size)
+        except R2EvidenceReadbackMismatch:
+            raise ReplayError("digest-mismatch") from None
         except Exception as error:
             raise ReplayError("index-read-failed") from error
         if not isinstance(body, bytes) or len(body) > self.limits.max_ciphertext_bytes:
@@ -370,10 +389,9 @@ class ReplayReader:
             raise ReplayError("ciphertext-size-invalid")
         key = evidence_object_key(digest)
         try:
-            try:
-                body = self.backend.get_evidence_bytes(key, expected_size=size)
-            except TypeError:
-                body = self.backend.get_evidence_bytes(key)
+            body = self.backend.get_evidence_bytes(key, expected_size=size)
+        except R2EvidenceReadbackMismatch:
+            raise ReplayError("digest-mismatch") from None
         except Exception as error:
             raise ReplayError("evidence-read-failed") from error
         if not isinstance(body, bytes) or len(body) != size or hashlib.sha256(body).hexdigest() != digest:
@@ -418,10 +436,11 @@ class ReplayReader:
         if not isinstance(profile, Mapping) or profile.get("id") != self.profile_id:
             raise ReplayError("profile-boundary-denied")
         manifest_workspace = profile.get("workspace_id")
-        if self.workspace_id is not None and manifest_workspace != self.workspace_id:
+        if manifest_workspace != self.workspace_id:
             raise ReplayError("profile-boundary-denied")
         policy = manifest.get("policy")
-        if not isinstance(policy, Mapping) or policy.get("decision") not in {"allow", "local-only"}:
+        allowed_decisions = {"allow"} if self.destination == "private-r2" else {"allow", "local-only"}
+        if not isinstance(policy, Mapping) or policy.get("decision") not in allowed_decisions:
             raise ReplayError("policy-mismatch")
         if policy.get("destination") is not None and policy.get("destination") != self.destination:
             raise ReplayError("policy-mismatch")
@@ -447,7 +466,10 @@ class ReplayReader:
         evidence_profile = evidence_manifest.get("profile")
         if not isinstance(evidence_profile, Mapping) or evidence_profile.get("id") != self.profile_id:
             raise ReplayError("profile-boundary-denied")
-        if self.workspace_id is not None and evidence_profile.get("workspace_id") != self.workspace_id:
+        if evidence_profile.get("workspace_id") != self.workspace_id:
+            raise ReplayError("profile-boundary-denied")
+        document_workspace = evidence_document.get("workspace_id")
+        if document_workspace is not None and document_workspace != self.workspace_id:
             raise ReplayError("profile-boundary-denied")
         evidence_capture = evidence_document.get("capture")
         if not isinstance(evidence_capture, Mapping):
@@ -458,7 +480,7 @@ class ReplayReader:
         evidence_decision = evidence_capture.get("policy_decision")
         if (
             not isinstance(evidence_policy, Mapping)
-            or evidence_decision not in {"allow", "local-only"}
+            or evidence_decision not in allowed_decisions
             or evidence_policy.get("decision") != evidence_decision
             or evidence_policy.get("status") != evidence_capture.get("status")
             or evidence_policy.get("sensitivity") != evidence_capture.get("sensitivity")
@@ -610,7 +632,7 @@ class ReplayReader:
             session_finals = finals_by_session.get(session_id, ())
             for final in session_finals:
                 declared = final.document.get("last_segment_sha256")
-                if declared is not None and declared != previous:
+                if (group and declared is None) or (declared is not None and declared != previous):
                     quarantine(final, "broken-chain")
                     failed = True
                 elif failed:
@@ -641,10 +663,22 @@ class ReplayReader:
         selected_keys = {item.key for item in selected}
         quarantines: list[dict[str, Any]] = []
         evidence: list[_ChainEvidence] = []
+        scanned_bytes = 0
+        scan_limited = False
         for ref in refs:
+            if scanned_bytes + ref.ciphertext_size > self.limits.max_scan_bytes:
+                scan_limited = True
+                break
             try:
                 index_body = self._read_index(ref)
+                scanned_bytes += len(index_body)
                 manifest, document, payload = self._decrypt(index_body, expected_kind="index-event")
+                object_size = document.get("ciphertext_size")
+                if type(object_size) is int and object_size >= 0:
+                    if scanned_bytes + object_size > self.limits.max_scan_bytes:
+                        scan_limited = True
+                        break
+                    scanned_bytes += object_size
                 item = self._validate_index(ref, manifest, document, payload)
                 retain = ref.key in selected_keys and item.document.get("kind") == "session-segment"
                 evidence.append(self._chain_evidence(item, retain_segment=retain))
@@ -662,6 +696,9 @@ class ReplayReader:
                         "corrupt-ciphertext",
                         cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
                     ))
+        if scan_limited:
+            resume_cursor = ReplayCursor(self.profile_id, self.destination, decoded.last_index_key).encode() if decoded.last_index_key else None
+            return ReplayPage((), (), resume_cursor, False, 0)
         accepted = self._verify_chain(evidence, quarantines)
         quarantines = [item for item in quarantines if item.get("index_key") in selected_keys]
         records: list[dict[str, Any]] = []

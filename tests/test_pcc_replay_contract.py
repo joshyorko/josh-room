@@ -36,7 +36,7 @@ def test_neutral_consumer_validates_contract_without_private_josh_room_imports()
             "quarantine_id": "b" * 64,
             "profile_id": "profile-synthetic",
             "destination": "private-r2",
-            "reason_code": "missing-asset",
+            "reason_code": "unknown_major",
         },
         {
             "schema": "josh-room.pcc-replay",

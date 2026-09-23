@@ -61,7 +61,7 @@
             "quarantine_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "profile_id": {"type": "string", "minLength": 1, "maxLength": 128},
             "destination": {"type": "string", "minLength": 1, "maxLength": 128},
-            "reason_code": {"type": "string", "pattern": "^[a-z0-9-]+$"}
+            "reason_code": {"type": "string", "pattern": "^[a-z0-9_-]+$"}
           }
         }
       ]

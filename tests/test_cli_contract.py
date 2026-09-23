@@ -145,6 +145,16 @@ def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):
     emit(result, True)
     assert json.loads(capsys.readouterr().out) == result
 
+def test_replay_cli_accepts_cumulative_scan_budget_override():
+    budget = 2 * 1024 * 1024 * 1024
+
+    parsed = build_parser().parse_args([
+        "replay", "export", "--profile", "personal", "--destination", "private-r2",
+        "--max-scan-bytes", str(budget),
+    ])
+
+    assert parsed.max_scan_bytes == budget
+
 def test_replay_inspect_cli_is_metadata_only_without_age_identity(tmp_path, monkeypatch, capsys):
     profile = SimpleNamespace(
         profile_id="profile-personal",
@@ -154,7 +164,7 @@ def test_replay_inspect_cli_is_metadata_only_without_age_identity(tmp_path, monk
     policy = SimpleNamespace(profiles={"personal": profile})
 
     class Backend:
-        def discover_evidence_indexes(self, *, max_events, page_size):
+        def discover_evidence_indexes(self, *, max_events, page_size, max_pages):
             return []
 
         def get_evidence_index_bytes(self, *_args, **_kwargs):
@@ -183,6 +193,31 @@ def test_replay_inspect_cli_is_metadata_only_without_age_identity(tmp_path, monk
     assert result["complete"] is True
 
 
+def test_replay_inspect_rejects_workspace_override(tmp_path, monkeypatch, capsys):
+    profile = SimpleNamespace(
+        profile_id="profile-personal",
+        workspace_id="workspace-synthetic",
+        destination=SimpleNamespace(kind="private-r2"),
+    )
+    policy = SimpleNamespace(profiles={"personal": profile})
+
+    monkeypatch.delenv("JOSH_ROOM_RESULT_FILE", raising=False)
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_uses_minio_encryption", lambda _args: False)
+    monkeypatch.setattr(cli, "_requires_oauth", lambda _args: False)
+    monkeypatch.setattr(cli, "_requires_encryption", lambda _args: False)
+    monkeypatch.setattr(cli, "_identity_environment", lambda: cli.nullcontext())
+    monkeypatch.setattr(cli, "load_runtime_session", lambda: True)
+    monkeypatch.setattr(cli, "load_host_policy", lambda **_kwargs: policy)
+    monkeypatch.setattr(cli, "_harvest_backend", lambda *_args, **_kwargs: pytest.fail("workspace override reached R2"))
+
+    assert main([
+        "replay", "inspect", "--profile", "personal", "--destination", "private-r2",
+        "--workspace-id", "workspace-work", "--json",
+    ]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["error"] == "workspace-binding-mismatch"
 @pytest.mark.parametrize("failure", [
     {
         "ok": False,
