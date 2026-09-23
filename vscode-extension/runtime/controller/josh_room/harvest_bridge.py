@@ -276,6 +276,9 @@ class HostHarvestBridge:
         return self.authority.recipient_set
 
     def _decision(self, record: QueueRecord):
+        trigger = record.metadata.get("trigger")
+        if trigger not in {"stop", "subagent-stop", "session-end"}:
+            raise HarvestError("policy-denied")
         context = PolicyContext.from_values(
             workspace_id=self.config.workspace_id or self.profile.workspace_id,
             remote=self.config.repository,
@@ -286,7 +289,7 @@ class HostHarvestBridge:
         request = CaptureRequest(
             context=context,
             logical_sources=(LogicalSourceName.TRANSCRIPT.value,),
-            trigger="session-end" if record.is_final else "stop",
+            trigger=trigger,
         )
         decision = decide(self.config.policy, request)
         if self.config.profile_name and decision.profile_name not in {None, self.config.profile_name}:

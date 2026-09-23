@@ -41,13 +41,12 @@ def _public_mapping(value: object) -> dict[str, object]:
             result[key] = item
         elif item is None or isinstance(item, (bool, int, float)):
             result[key] = item
-
+    return result
 _SAFE_CODES = frozenset({
     "device-unavailable", "capture-authority-unavailable", "normalization-event-required",
     "normalized-event-invalid", "child-lease-unavailable", "provider-authority-unavailable",
     "provider-unavailable", "prepare-failed", "publish-failed", "not-prepared", "policy-denied",
-    "policy-config-unavailable", "profile-unavailable", "source-unavailable", "asset-payload-unavailable",
-    "recipient-authority-unavailable", "child-limit",
+    "recipient-authority-unavailable", "child-limit", "empty-capture",
 })
 
 def _safe_code(value: object, fallback: str) -> str:
@@ -353,7 +352,9 @@ class HarvestController:
                 current = self.outbox.inspect_record(record.event_id)
                 prepared.append(_record_public(current or record))
                 self._release(record, owner)
-                if outcome is not None:
+                if isinstance(outcome, Mapping) and outcome.get("expanded") is False:
+                    failures.append({"event_id": record.event_id, "code": "empty-capture"})
+                elif outcome is not None:
                     prepared[-1]["prepare"] = _public_mapping(outcome)
             except Exception as error:  # noqa: BLE001 - callback details map to stable codes
                 code = _safe_code(error, "device-unavailable" if error.__class__.__name__ == "DeviceError" else "prepare-failed")
