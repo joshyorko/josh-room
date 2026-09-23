@@ -184,6 +184,7 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         selected, home = _platform(platform_name), _trusted_home(home)
         if selected == "windows":
             return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
+        exe = _executable(executable)
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", error="scheduler-path-invalid")
     if selected == "linux":

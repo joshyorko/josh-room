@@ -316,6 +316,7 @@ class HarvestController:
     def _claim_one(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
         return self.outbox.claim(owner), owner
+
     def _claim_prepare(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
         for record in self.outbox.inspect().records:
@@ -327,11 +328,13 @@ class HarvestController:
             if claimed is not None:
                 return claimed, owner
         return None, owner
-    def _claim_prepared(self) -> tuple[QueueRecord | None, str]:
+
+    def _claim_prepared(self, excluded: set[str] | None = None) -> tuple[QueueRecord | None, str]:
+        excluded = excluded or set()
         owner = self.owner_factory()
         now = self.outbox.clock()
         for record in self.outbox.inspect().records:
-            if record.metadata.get("object_kind") == "index-event":
+            if record.event_id in excluded or record.metadata.get("object_kind") == "index-event":
                 continue
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
                 continue
@@ -412,13 +415,15 @@ class HarvestController:
         started = time.monotonic()
         delivered: list[dict[str, object]] = []
         failures: list[dict[str, object]] = []
+        attempted: set[str] = set()
         for _ in range(limit):
             if max_seconds is not None and time.monotonic() - started >= max_seconds:
                 failures.append({"event_id": None, "code": "cancelled"})
                 break
-            record, owner = self._claim_prepared()
+            record, owner = self._claim_prepared(attempted)
             if record is None:
                 break
+            attempted.add(record.event_id)
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code="not-prepared")
@@ -535,23 +540,7 @@ class HarvestController:
             if max_seconds is not None and time.monotonic() - started >= max_seconds:
                 repaired.append({"event_id": event_id, "state": "cancelled", "code": "cancelled"})
                 break
-            try:
-                record = self.outbox.reconcile_prepared(
-                    event_id,
-                    session_id=event_id,
-                    checkpoint={
-                        "source": event_id,
-                        "representation": "unknown",
-                        "start": 0,
-                        "end": 0,
-                        "prefix_sha256": "0" * 64,
-                    },
-                )
-            except OutboxError as error:
-                code = _safe_code(error, "storage-unavailable")
-                repaired.append({"event_id": event_id, "state": "reconcile-failed", "code": code})
-            else:
-                repaired.append({"event_id": record.event_id, "state": record.state.value})
+            repaired.append({"event_id": event_id, "state": "reconcile-failed", "code": "repair-authority-unavailable"})
         diagnostics = [item.to_dict() for item in inspection.diagnostics]
         ok = not any(item.get("state") == "reconcile-failed" for item in repaired) and not diagnostics
         return _envelope(
