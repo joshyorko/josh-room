@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from josh_room.pcc_crypto import CryptoError, CryptoErrorCode
+from josh_room.pcc_replay import ReplayCursor, ReplayError, ReplayLimits, ReplayReader
 from josh_room.r2 import R2EvidenceError, evidence_index_key, evidence_object_key
 from josh_room.session_evidence import canonical_digest, canonical_json
 
