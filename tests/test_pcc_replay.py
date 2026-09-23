@@ -469,6 +469,26 @@ def test_oversized_index_is_rejected_before_ciphertext_fetch():
     assert {item["reason_code"] for item in page.quarantines} == {"ciphertext-too-large"}
 
 
+def test_oversized_advertised_evidence_size_is_quarantined_before_scan_budget():
+    segment = fixture("golden-session-segment.json")
+    segment["asset_refs"] = []
+    item = entry(segment, payload=canonical_json(segment))
+    item["index_envelope"]["document"]["ciphertext_size"] = ReplayLimits().max_scan_bytes + 1
+    backend = FakeBackend([item])
+    backend.get_evidence_bytes = lambda *_args, **_kwargs: pytest.fail("oversized evidence fetched")
+    mapping = {item["index_body"]: item["index_envelope"]}
+
+    page = ReplayReader(
+        backend,
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=lambda body, **_kwargs: mapping[body],
+    ).export(limit=1)
+
+    assert not page.records
+    assert {receipt["reason_code"] for receipt in page.quarantines} == {"ciphertext-size-invalid"}
+    assert page.complete is True
 def test_metadata_only_inspection_never_fetches_or_decrypts():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
@@ -601,6 +621,7 @@ def test_cumulative_scan_cap_returns_incomplete_without_fetching_evidence():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
     item = entry(segment, payload=canonical_json(segment))
+    scan_budget = len(item["index_body"]) + len(item["object_body"]) + 2
     backend = FakeBackend([item])
     backend.get_evidence_bytes = lambda *_args, **_kwargs: pytest.fail("scan cap fetched evidence")
 
@@ -611,7 +632,7 @@ def test_cumulative_scan_cap_returns_incomplete_without_fetching_evidence():
         workspace_id="workspace-synthetic",
         decryptor=lambda body, **_kwargs: {item["index_body"]: item["index_envelope"]}[body],
         limits=ReplayLimits(
-            max_scan_bytes=len(item["index_body"]) + len(item["object_body"]) - 1,
+            max_scan_bytes=scan_budget - 1,
         ),
     ).export(limit=1)
 
@@ -627,11 +648,53 @@ def test_cumulative_scan_cap_returns_incomplete_without_fetching_evidence():
             item["index_body"]: item["index_envelope"],
             item["object_body"]: item["evidence_envelope"],
         },
-        limits=ReplayLimits(max_scan_bytes=len(item["index_body"]) + len(item["object_body"])),
+        limits=ReplayLimits(max_scan_bytes=scan_budget),
     ).export(limit=1)
 
     assert exact_page.records
     assert exact_page.complete
+
+def test_failed_index_reads_still_consume_cumulative_scan_budget():
+    read_keys = []
+    refs = []
+    for index in range(1, 4):
+        digest = f"{index:064x}"
+        refs.append({
+            "key": evidence_index_key(digest),
+            "ciphertext_sha256": digest,
+            "ciphertext_size": 5,
+        })
+
+    class Backend:
+        def discover_evidence_indexes(self, **_kwargs):
+            return refs
+
+        def get_evidence_index_bytes(self, key, **_kwargs):
+            read_keys.append(key)
+            raise OSError("synthetic read failure")
+
+        get_evidence_bytes = lambda *_args, **_kwargs: pytest.fail("failed indexes fetched evidence")
+
+    previous = ReplayCursor(
+        "profile-personal",
+        "private-r2",
+        evidence_index_key("0" * 64),
+    ).encode()
+    page = ReplayReader(
+        Backend(),
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=lambda *_args, **_kwargs: pytest.fail("failed index decrypted"),
+        limits=ReplayLimits(max_indexes=3, max_scan_bytes=12),
+    ).export(cursor=previous, limit=8)
+
+    assert len(read_keys) == 2
+    assert page.records == ()
+    assert page.quarantines == ()
+    assert page.cursor == previous
+    assert page.complete is False
+    assert page.inspected_indexes == 0
 
 @pytest.mark.parametrize("local_only_at", ["index", "evidence"])
 def test_local_only_evidence_is_not_exported_from_private_r2(local_only_at):

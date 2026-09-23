@@ -680,19 +680,37 @@ class ReplayReader:
         scanned_bytes = 0
         scan_limited = False
         for ref in refs:
-            if scanned_bytes + ref.ciphertext_size > self.limits.max_scan_bytes:
+            if ref.ciphertext_size > self.limits.max_ciphertext_bytes:
+                if ref.key in selected_keys:
+                    quarantines.append(self._quarantine(
+                        ref,
+                        "ciphertext-too-large",
+                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
+                    ))
+                else:
+                    scan_limited = True
+                    break
+                continue
+            index_scan_bytes = ref.ciphertext_size + 1
+            if scanned_bytes + index_scan_bytes > self.limits.max_scan_bytes:
                 scan_limited = True
                 break
+            scanned_bytes += index_scan_bytes
             try:
                 index_body = self._read_index(ref)
-                scanned_bytes += len(index_body)
                 manifest, document, payload = self._decrypt(index_body, expected_kind="index-event")
                 object_size = document.get("ciphertext_size")
-                if type(object_size) is int and object_size >= 0:
-                    if scanned_bytes + object_size > self.limits.max_scan_bytes:
-                        scan_limited = True
-                        break
-                    scanned_bytes += object_size
+                if (
+                    type(object_size) is not int
+                    or object_size < 0
+                    or object_size > self.limits.max_ciphertext_bytes
+                ):
+                    raise ReplayError("ciphertext-size-invalid")
+                object_scan_bytes = object_size + 1
+                if scanned_bytes + object_scan_bytes > self.limits.max_scan_bytes:
+                    scan_limited = True
+                    break
+                scanned_bytes += object_scan_bytes
                 item = self._validate_index(ref, manifest, document, payload)
                 retain = ref.key in selected_keys and item.document.get("kind") == "session-segment"
                 evidence.append(self._chain_evidence(item, retain_segment=retain))

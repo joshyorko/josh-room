@@ -32,9 +32,10 @@ Replay pages are limited to 8 indexes (default), each encrypted index/evidence
 object to 80 MiB, and each segment to 4 MiB, 128 records, and 32 asset refs.
 `max_indexes` bounds discovery at 1,000 by default and 100,000 maximum. Each
 export validates the entire discovered bounded set to verify cross-page links;
-the cumulative ciphertext scan defaults to 1 GiB and accepts `--max-scan-bytes`
-up to an 8 GiB hard cap. Exceeding either bound emits no records and leaves the
-cursor unchanged. The bounded scan repeats for each page.
+the cumulative ciphertext body-read budget, including one-byte mismatch probes,
+defaults to 1 GiB and accepts `--max-scan-bytes` up to an 8 GiB hard cap.
+Exceeding either bound emits no records and leaves the cursor unchanged. The
+bounded scan repeats for each page.
 
 
 Index keys are content-addressed, not chronological. A cursor is a page
