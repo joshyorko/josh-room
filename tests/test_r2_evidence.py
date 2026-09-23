@@ -333,7 +333,7 @@ def test_index_discovery_reports_page_cap_after_skipped_keys():
 
     assert failure.value.code == "index-discovery-incomplete"
 
-def test_index_discovery_reports_malformed_valid_index_size_as_incomplete():
+def test_index_discovery_quarantines_index_above_backend_size_cap():
     fake = EvidenceS3()
     store = backend(fake)
     digest = hashlib.sha256(b"synthetic index").hexdigest()
@@ -347,10 +347,30 @@ def test_index_discovery_reports_malformed_valid_index_size_as_incomplete():
         },
     ]
 
-    with pytest.raises(R2EvidenceError) as failure:
-        store.discover_evidence_indexes(max_events=2, page_size=1, max_pages=1)
+    refs = store.discover_evidence_indexes(max_events=2, page_size=1, max_pages=1)
 
-    assert failure.value.code == "index-discovery-incomplete"
+    assert len(refs) == 1
+    assert refs[0].ciphertext_size == 0
+    assert refs[0].listing_error == "ciphertext-too-large"
+
+
+@pytest.mark.parametrize("size", [-1, "invalid-size", None, True])
+def test_index_discovery_marks_malformed_valid_index_size_for_quarantine(size):
+    fake = EvidenceS3()
+    store = backend(fake)
+    digest = hashlib.sha256(b"synthetic malformed size").hexdigest()
+    fake.list_pages = [
+        {
+            "Contents": [{"Key": evidence_index_key(digest), "Size": size}],
+            "IsTruncated": False,
+        },
+    ]
+
+    refs = store.discover_evidence_indexes(max_events=2, page_size=1, max_pages=1)
+
+    assert len(refs) == 1
+    assert refs[0].ciphertext_size == 0
+    assert refs[0].listing_error == "ciphertext-size-invalid"
 
 def test_outbox_uploaded_indexed_committed_and_unindexed_recovery(tmp_path):
     fake = EvidenceS3()

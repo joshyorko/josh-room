@@ -18,6 +18,10 @@ does not require an age identity and remains metadata-only.
 Private-R2 export accepts only `allow`; `local-only` evidence is never exported.
 The policy `binding_id` pins the exact host Dimension; `--dimension` is only an
 assertion and a mismatch fails closed.
+Replay uses the profile-bound R2 credential available through the host keyring
+or an existing runtime session. It never opens interactive Cloudflare sign-in;
+missing credentials fail non-interactively. OAuth authorization is not
+preflighted against a default or caller-selected Dimension.
 `iter_jsonl()` emits the versioned `josh-room.pcc-replay` JSONL contract described
 by `schemas/pcc-replay-v1.schema.json`.
 
@@ -36,6 +40,10 @@ the cumulative ciphertext body-read budget, including one-byte mismatch probes,
 defaults to 1 GiB and accepts `--max-scan-bytes` up to an 8 GiB hard cap.
 Exceeding either bound emits no records and leaves the cursor unchanged. The
 bounded scan repeats for each page.
+
+An index with a valid content-addressed key but a missing, malformed, or
+backend-over-cap listing size remains a per-index quarantine reference. It is
+never fetched, and pagination advances when that key is selected.
 
 
 Index keys are content-addressed, not chronological. A cursor is a page

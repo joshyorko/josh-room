@@ -202,6 +202,7 @@ class _IndexRef:
     key: str
     ciphertext_sha256: str
     ciphertext_size: int
+    listing_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,20 +234,30 @@ def _digest(value: object) -> str:
 
 def _safe_ref(value: object) -> _IndexRef:
     if isinstance(value, Mapping):
-        key, digest, size = value.get("key"), value.get("ciphertext_sha256"), value.get("ciphertext_size")
+        key = value.get("key")
+        digest = value.get("ciphertext_sha256")
+        size = value.get("ciphertext_size")
+        listing_error = value.get("listing_error")
     else:
         key = getattr(value, "key", None)
         digest = getattr(value, "ciphertext_sha256", None)
         size = getattr(value, "ciphertext_size", None)
+        listing_error = getattr(value, "listing_error", None)
     if not isinstance(key, str):
         raise ReplayError("index-reference-invalid")
     try:
         key_digest = validate_evidence_index_key(key)
     except (TypeError, ValueError):
         raise ReplayError("index-reference-invalid") from None
-    if digest != key_digest or type(size) is not int or size < 0:
+    if (
+        digest != key_digest
+        or type(size) is not int
+        or size < 0
+        or listing_error not in (None, "ciphertext-size-invalid", "ciphertext-too-large")
+        or (listing_error is not None and size != 0)
+    ):
         raise ReplayError("index-reference-invalid")
-    return _IndexRef(key, key_digest, size)
+    return _IndexRef(key, key_digest, size, listing_error)
 
 
 def _payload_from_envelope(value: object) -> tuple[dict[str, Any], dict[str, Any], bytes]:
@@ -371,7 +382,12 @@ class ReplayReader:
             "workspace_id": self.workspace_id,
             "destination": self.destination,
             "indexes": [
-                {"key": item.key, "ciphertext_sha256": item.ciphertext_sha256, "ciphertext_size": item.ciphertext_size}
+                {
+                    "key": item.key,
+                    "ciphertext_sha256": item.ciphertext_sha256,
+                    "ciphertext_size": None if item.listing_error else item.ciphertext_size,
+                    **({"error_code": item.listing_error} if item.listing_error else {}),
+                }
                 for item in selected
             ],
             "next_cursor": ReplayCursor(self.profile_id, self.destination, next_cursor).encode() if next_cursor else None,
@@ -525,7 +541,14 @@ class ReplayReader:
         return _Evidence(ref, document, evidence_document)
 
     def _quarantine(self, ref: _IndexRef, reason: str, *, event_id: str | None = None, cursor: str | None = None) -> dict[str, Any]:
-        return QuarantineReceipt(reason, ref.key, event_id, ref.ciphertext_sha256, ref.ciphertext_size, cursor).to_dict(profile_id=self.profile_id, destination=self.destination)
+        return QuarantineReceipt(
+            reason,
+            ref.key,
+            event_id,
+            ref.ciphertext_sha256,
+            None if ref.listing_error else ref.ciphertext_size,
+            cursor,
+        ).to_dict(profile_id=self.profile_id, destination=self.destination)
 
     def _normalized(self, item: _Evidence, segment: Mapping[str, Any], record: Mapping[str, Any], index: int) -> dict[str, Any]:
         session_id = segment.get("session_id")
@@ -680,6 +703,14 @@ class ReplayReader:
         scanned_bytes = 0
         scan_limited = False
         for ref in refs:
+            if ref.listing_error is not None:
+                if ref.key in selected_keys:
+                    quarantines.append(self._quarantine(
+                        ref,
+                        ref.listing_error,
+                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
+                    ))
+                continue
             if ref.ciphertext_size > self.limits.max_ciphertext_bytes:
                 if ref.key in selected_keys:
                     quarantines.append(self._quarantine(

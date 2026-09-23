@@ -153,6 +153,7 @@ class R2EvidenceIndexRef:
     key: str
     ciphertext_sha256: str
     ciphertext_size: int
+    listing_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,10 +585,23 @@ class R2Backend(ObjectStore):
                 except ValueError:
                     continue
                 size = item.get("Size")
-                if type(size) is not int or size < 0 or size > self.config.max_bytes:
-                    incomplete = True
-                    continue
-                result.setdefault(key, R2EvidenceIndexRef(key, digest, size))
+                if type(size) is not int or size < 0:
+                    ref = R2EvidenceIndexRef(
+                        key,
+                        digest,
+                        0,
+                        "ciphertext-size-invalid",
+                    )
+                elif size > self.config.max_bytes:
+                    ref = R2EvidenceIndexRef(
+                        key,
+                        digest,
+                        0,
+                        "ciphertext-too-large",
+                    )
+                else:
+                    ref = R2EvidenceIndexRef(key, digest, size)
+                result.setdefault(key, ref)
                 if len(result) >= max_events:
                     break
             if len(result) >= max_events or not response.get("IsTruncated"):

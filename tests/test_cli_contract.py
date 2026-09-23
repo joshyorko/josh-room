@@ -193,7 +193,7 @@ def test_replay_inspect_cli_is_metadata_only_without_age_identity(tmp_path, monk
     assert result["complete"] is True
 
 
-def test_replay_inspect_uses_policy_bound_dimension_not_shared_credentials(tmp_path, monkeypatch):
+def test_replay_inspect_uses_policy_bound_dimension_not_shared_credentials(tmp_path, monkeypatch, capsys):
     profile = SimpleNamespace(
         profile_id="profile-personal",
         workspace_id="workspace-synthetic",
@@ -258,7 +258,24 @@ def test_replay_inspect_uses_policy_bound_dimension_not_shared_credentials(tmp_p
     ])
     with pytest.raises(ValueError, match="destination-binding-mismatch"):
         cli._replay_dispatch(overridden, tmp_path)
+
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_identity_environment", lambda: cli.nullcontext())
+    monkeypatch.setattr(cli, "load_runtime_session", lambda: False)
+
+    def reject_oauth_preflight(**_kwargs):
+        pytest.fail("replay must not open interactive Cloudflare login")
+
+    monkeypatch.setattr(cli, "ensure_runtime_session", reject_oauth_preflight)
+    monkeypatch.setattr(cli, "_requires_encryption", lambda _args: False)
+    assert main([
+        "replay", "inspect", "--profile", "personal", "--destination", "private-r2",
+        "--dimension", "work-r2", "--json",
+    ]) == 2
+    assert json.loads(capsys.readouterr().out)["error"] == "destination-binding-mismatch"
     assert selected == [("r2", "personal-r2")]
+
 def test_replay_jsonl_large_page_keeps_success_exit_and_bounded_summary(tmp_path, monkeypatch, capsys):
     profile = SimpleNamespace(
         profile_id="profile-personal",

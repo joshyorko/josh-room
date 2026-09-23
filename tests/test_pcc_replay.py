@@ -698,7 +698,14 @@ def test_failed_index_reads_still_consume_cumulative_scan_budget():
     assert page.complete is False
     assert page.inspected_indexes == 0
 
-def test_unselected_oversized_index_does_not_stall_cursor():
+@pytest.mark.parametrize(
+    ("listed_size", "expected_reason"),
+    [
+        ("oversized", "ciphertext-too-large"),
+        ("malformed", "ciphertext-size-invalid"),
+    ],
+)
+def test_unselected_invalid_index_does_not_stall_cursor(listed_size, expected_reason):
     items = []
     mapping = {}
     for event_id in ("event-valid-index", "event-oversized-index"):
@@ -720,12 +727,16 @@ def test_unselected_oversized_index_does_not_stall_cursor():
                 page_size=page_size,
                 max_pages=max_pages,
             )
-            refs[-1]["ciphertext_size"] = ReplayLimits().max_ciphertext_bytes + 1
+            if listed_size == "oversized":
+                refs[-1]["ciphertext_size"] = ReplayLimits().max_ciphertext_bytes + 1
+            else:
+                refs[-1]["ciphertext_size"] = 0
+                refs[-1]["listing_error"] = "ciphertext-size-invalid"
             return refs
 
         def get_evidence_index_bytes(self, key, expected_size=None):
             if key == oversized_key:
-                pytest.fail("oversized index body fetched")
+                pytest.fail("invalid index body fetched")
             return super().get_evidence_index_bytes(key, expected_size)
 
     replay = ReplayReader(
@@ -740,11 +751,17 @@ def test_unselected_oversized_index_does_not_stall_cursor():
     assert len(first_page.records) == 1
     assert first_page.complete is False
     assert first_page.cursor is not None
+    inspection = replay.inspect(cursor=first_page.cursor, limit=1)
+    if listed_size == "malformed":
+        assert inspection["indexes"][0]["ciphertext_size"] is None
+        assert inspection["indexes"][0]["error_code"] == expected_reason
+    else:
+        assert inspection["indexes"][0]["ciphertext_size"] == ReplayLimits().max_ciphertext_bytes + 1
 
     second_page = replay.export(cursor=first_page.cursor, limit=1)
 
     assert second_page.records == ()
-    assert {item["reason_code"] for item in second_page.quarantines} == {"ciphertext-too-large"}
+    assert {item["reason_code"] for item in second_page.quarantines} == {expected_reason}
     assert second_page.cursor != first_page.cursor
     assert second_page.complete is True
 

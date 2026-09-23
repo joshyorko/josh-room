@@ -620,8 +620,6 @@ def _write_runtime_result(result):
 
 
 def _requires_oauth(args) -> bool:
-    if args.command == "replay":
-        return getattr(args, "destination", None) == "private-r2"
     if args.command == "provider" and args.provider_command == "bucket":
         if getattr(args, "provider", None) == "r2":
             return True
