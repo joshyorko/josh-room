@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from josh_room import scheduler
 from josh_room.cli import build_parser
 from josh_room.harvest import HarvestController
 from josh_room.pcc_enqueue import enqueue_trigger
 from josh_room.pcc_outbox import PccOutbox, QueueState
 from josh_room.scheduler import (
     SchedulerContext,
+    _activate,
     _linux_content,
     _mac_content,
     _windows_command,
@@ -71,6 +73,13 @@ def _installed_scheduler(tmp_path: Path, platform_name: str) -> tuple[Path, ...]
     return (*native, manifest, state)
 
 
+def _native_scheduler_fixture(tmp_path: Path, platform_name: str) -> Path:
+    path = tmp_path / f"{platform_name}-native"
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o700)
+    return path
+
+
 @pytest.mark.parametrize(
     ("platform_name", "message"),
     (
@@ -82,6 +91,11 @@ def test_scheduler_remove_preserves_definitions_when_deactivation_fails(tmp_path
     targets = _installed_scheduler(tmp_path, platform_name)
     before = {path: path.read_bytes() for path in targets}
     monkeypatch.setattr("josh_room.scheduler._home", lambda: tmp_path)
+    monkeypatch.setattr(
+        scheduler,
+        "_SYSTEMCTL" if platform_name == "linux" else "_LAUNCHCTL",
+        _native_scheduler_fixture(tmp_path, platform_name),
+    )
 
     def fail(*args, **kwargs):
         raise subprocess.CalledProcessError(1, args[0], stderr=message)
@@ -110,12 +124,48 @@ def test_scheduler_remove_treats_verified_absence_as_idempotent(tmp_path, monkey
         raise subprocess.CalledProcessError(1, args[0], stderr=message)
 
     monkeypatch.setattr("josh_room.scheduler.subprocess.run", absent)
+    monkeypatch.setattr(
+        scheduler,
+        "_SYSTEMCTL" if platform_name == "linux" else "_LAUNCHCTL",
+        _native_scheduler_fixture(tmp_path, platform_name),
+    )
     first = remove(platform_name=platform_name, home=tmp_path)
     second = remove(platform_name=platform_name, home=tmp_path)
     assert first["ok"] is True and first["changed"] is True
     assert first["activation"] == "inactive"
     assert second["ok"] is True and second["changed"] is False
     assert all(not path.exists() for path in targets)
+
+
+
+def test_scheduler_native_tools_ignore_path_shadowing(tmp_path, monkeypatch):
+    trusted = tmp_path / "trusted-systemctl"
+    trusted.write_text("#!/bin/sh\n", encoding="utf-8")
+    trusted.chmod(0o700)
+    shadow = tmp_path / "shadow" / "systemctl"
+    shadow.parent.mkdir()
+    shadow.write_text("#!/bin/sh\n", encoding="utf-8")
+    shadow.chmod(0o700)
+    monkeypatch.setattr(scheduler, "_SYSTEMCTL", trusted)
+    monkeypatch.setenv("PATH", str(shadow.parent))
+    monkeypatch.setattr(scheduler, "_home", lambda: tmp_path)
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(scheduler.subprocess, "run", run)
+    assert scheduler._native_scheduler_executable("linux") == str(trusted)
+    assert _activate("linux", tmp_path, ()) == "active"
+    assert scheduler._deactivate("linux", tmp_path) == "inactive"
+    for path in scheduler._linux_paths(tmp_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("definition", encoding="utf-8")
+    monkeypatch.setattr(scheduler, "_manifest_state", lambda home: (True, True))
+    assert status(platform_name="linux", home=tmp_path)["active"] is True
+    assert [argv[0] for argv in calls] == [str(trusted)] * 4
+
 
 def test_plan_status_inspect_are_content_free(tmp_path):
     controller = HarvestController(_queued(tmp_path / "outbox"), owner_factory=lambda: "worker-1")
