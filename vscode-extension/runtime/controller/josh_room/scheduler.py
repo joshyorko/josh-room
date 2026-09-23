@@ -357,8 +357,9 @@ def _xml_arg(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 def _mac_content(executable: str, interval: int, home: Path, context: SchedulerContext, context_id: str | None = None) -> str:
+    del home
     arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in context.argv(executable, context_id))
-    path_value = _xml_arg(f"{home}/.local/bin:{home}/bin:/usr/local/bin:/usr/bin:/bin")
+    path_value = "$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin"
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
