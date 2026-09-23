@@ -76,7 +76,18 @@ def test_bridge_prepares_evidence_and_index_and_drain_selects_event_path(tmp_pat
     age = tmp_path / "age"
     age.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
     age.chmod(0o700)
-    bridge = HostHarvestBridge(HostHarvestConfig(roots=SimpleNamespace(), policy=policy, profile_name="synthetic", age_executable=age))
+    bridge = HostHarvestBridge(
+        HostHarvestConfig(
+            roots=SimpleNamespace(),
+            policy=policy,
+            profile_name="synthetic",
+            workspace_id=profile.workspace_id,
+            workspace_path=None,
+            repository=None,
+            path_kind="unknown",
+            age_executable=age,
+        )
+    )
     outbox = PccOutbox(tmp_path / "outbox")
     enqueue_trigger(outbox, event_id="parent-synthetic", session_id="session-synthetic", checkpoint=document["checkpoint"], metadata={"trigger": "stop", "policy_decision": "allow", "destination_class": "private-r2", "workspace_id": profile.workspace_id}, coalesce=False)
     outbox.claim("prepare-owner")
