@@ -224,7 +224,8 @@ class QueueRecord:
             "ciphertext_size",
             "index_id",
         }
-        if set(body) != required:
+        optional = {"expanded_event_ids", "expanded_checkpoint"}
+        if not required.issubset(body) or set(body) - required - optional:
             raise ValueError("record fields")
         event_id = _identifier(body["event_id"])
         session_id = _identifier(body["session_id"])
