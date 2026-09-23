@@ -313,6 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "quarantine":
             command.add_argument("--inspect", action="store_true")
             command.add_argument("--list", action="store_true")
+        if action in {"retry", "quarantine"}:
             command.add_argument("--reason", default=None)
         _json_option(command)
     schedule = harvest_commands.add_parser("schedule")
@@ -1022,9 +1023,10 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         if args.inspect:
             return controller.quarantine_inspect(args.event_id)
         return controller.quarantine(args.event_id, args.reason or "operator-quarantine")
+    if action == "discard":
+        return controller.discard(args.event_id)
     if action == "reconcile":
         return controller.reconcile(limit=args.limit, max_seconds=args.max_seconds)
-    raise ValueError("unsupported harvest action")
 
 
 def dispatch(args, instance: Path) -> dict:
