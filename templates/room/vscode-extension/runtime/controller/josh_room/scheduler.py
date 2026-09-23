@@ -375,17 +375,18 @@ def _systemd_arg(value: str) -> str:
 
 def _linux_content(executable: str, interval: int, context: SchedulerContext, context_id: str | None = None) -> tuple[str, str]:
     argv = context.argv(executable, context_id)
-    command = " ".join(["/usr/bin/env", "--ignore-environment", "HOME=%h", "PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin:/bin", *(_systemd_arg(item) for item in argv)])
+    command_argv = ["%h/.local/bin/josh-room", *argv[1:]]
+    command = " ".join(["/usr/bin/env", "--ignore-environment", "HOME=%h", "PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin:/bin", *(_systemd_arg(item) if index else item for index, item in enumerate(command_argv))])
     service = f"[Unit]\nDescription=Josh Room PCC harvest\nRefuseManualStart=yes\n\n[Service]\nType=oneshot\nExecStart={command}\n"
     timer = f"[Unit]\nDescription=Josh Room PCC harvest timer\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec={interval}s\nPersistent=true\nUnit=josh-room-pcc-harvest.service\n\n[Install]\nWantedBy=timers.target\n"
     return service, timer
 
 def _xml_arg(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
 def _mac_content(executable: str, interval: int, home: Path, context: SchedulerContext, context_id: str | None = None) -> str:
     del home
-    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in context.argv(executable, context_id))
+    argv = context.argv(executable, context_id)
+    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in ["$HOME/.local/bin/josh-room", *argv[1:]])
     path_value = "$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin"
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
