@@ -85,6 +85,18 @@ def _activate(platform_name: str, home: Path, files: tuple[Path, ...]) -> str:
             return "active"
     except (OSError, subprocess.CalledProcessError):
         return "activation-failed"
+def _deactivate(platform_name: str, home: Path) -> str:
+    if home != _home():
+        return "not-attempted"
+    try:
+        if platform_name == "linux":
+            subprocess.run(["systemctl", "--user", "disable", "--now", "josh-room-pcc-harvest.timer"], check=True, capture_output=True)
+            return "inactive"
+        if platform_name == "macos":
+            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=True, capture_output=True)
+            return "inactive"
+    except (OSError, subprocess.CalledProcessError):
+        return "deactivation-failed"
     return "unsupported"
 
 def _linux_paths(home: Path) -> tuple[Path, Path]:
@@ -219,8 +231,6 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
             return _envelope(ok=False, action="status", platform=selected, error="scheduler-unavailable")
         return _envelope(ok=process.returncode == 0, action="status", platform=selected, installed=process.returncode == 0, task=TASK_NAME, **({} if process.returncode == 0 else {"error": "scheduler-not-installed"}))
     return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
-
-
 def remove(*, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
     try:
         selected, home = _platform(platform_name), _trusted_home(home)
@@ -235,7 +245,8 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         existed = any(path.exists() for path in paths) or manifest.exists()
         for path in (*paths, manifest):
             path.unlink(missing_ok=True)
-        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path) for path in (*paths, manifest)])
+        activation = _deactivate(selected, home)
+        return _envelope(ok=activation != "deactivation-failed", action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path) for path in (*paths, manifest)])
     if selected == "macos":
         path = _mac_path(home)
         if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
@@ -244,7 +255,8 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         existed = path.exists() or manifest.exists()
         path.unlink(missing_ok=True)
         manifest.unlink(missing_ok=True)
-        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path), str(manifest)])
+        activation = _deactivate(selected, home)
+        return _envelope(ok=activation != "deactivation-failed", action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path), str(manifest)])
     if selected == "windows":
         try:
             process = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True, check=False)
