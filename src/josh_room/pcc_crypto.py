@@ -267,6 +267,39 @@ def _profile_binding(document: Mapping[str, Any], profile: CaptureProfile) -> di
     return {"id": profile.profile_id, "workspace_id": profile.workspace_id}
 
 
+def _effective_capture(document: Mapping[str, Any]) -> Mapping[str, Any]:
+    capture = document.get("capture")
+    if isinstance(capture, Mapping):
+        return capture
+    if document.get("kind") == "index-event":
+        return {"status": "complete", "policy_decision": "allow", "sensitivity": "unknown"}
+    _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+
+def _index_queue_identity(document: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "evidence_kind": document["evidence_kind"],
+        "evidence_event_id": document["evidence_event_id"],
+        "content_sha256": document["content_sha256"],
+        "ciphertext_sha256": document["ciphertext_sha256"],
+        "ciphertext_size": document["ciphertext_size"],
+    }
+
+
+def _validate_index_queue_binding(document: Mapping[str, Any], metadata: Mapping[str, Any]) -> None:
+    effective_capture = _effective_capture(document)
+    for metadata_key, expected in (
+        ("policy_decision", effective_capture.get("policy_decision")),
+        ("capture_status", effective_capture.get("status")),
+        ("sensitivity", effective_capture.get("sensitivity")),
+    ):
+        if metadata.get(metadata_key) != expected:
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    for key, expected in _index_queue_identity(document).items():
+        if metadata.get(key) != expected:
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+
 def _validate_queue_binding(
     event: NormalizationEvent,
     document: Mapping[str, Any],
@@ -305,6 +338,7 @@ def _validate_queue_binding(
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
 
     if kind == "index-event":
+        _validate_index_queue_binding(document, metadata)
         return
     source = document.get("source")
     if not isinstance(source, Mapping):
@@ -321,16 +355,14 @@ def _validate_queue_binding(
             if metadata.get(metadata_key) != source.get(document_key):
                 _fail(CryptoErrorCode.MANIFEST_MISMATCH)
 
-    capture = document.get("capture")
-    if not isinstance(capture, Mapping):
-        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    effective_capture = _effective_capture(document)
     for metadata_key, document_key in (
         ("policy_decision", "policy_decision"),
         ("capture_status", "status"),
     ):
-        if metadata.get(metadata_key) != capture.get(document_key):
+        if metadata.get(metadata_key) != effective_capture.get(document_key):
             _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
-    if "sensitivity" in capture and metadata.get("sensitivity") != capture["sensitivity"]:
+    if "sensitivity" in effective_capture and metadata.get("sensitivity") != effective_capture["sensitivity"]:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
 
 
@@ -375,17 +407,7 @@ def _source_provenance(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _policy_result(document: Mapping[str, Any], profile: CaptureProfile) -> dict[str, Any]:
-    capture = document.get("capture")
-    if not isinstance(capture, Mapping):
-        if document.get("kind") == "index-event":
-            return {
-                "decision": "allow",
-                "sensitivity": "unknown",
-                "status": "complete",
-                "policy_version": profile.policy_version,
-                "provenance": profile.provenance,
-            }
-        _fail(CryptoErrorCode.DOCUMENT_INVALID)
+    capture = _effective_capture(document)
     return {
         "decision": capture.get("policy_decision"),
         "sensitivity": capture.get("sensitivity"),
@@ -834,13 +856,9 @@ def _prepared_metadata(
         "session-final": "application/vnd.josh.codex-session-final+json",
         "index-event": "application/vnd.josh.codex-index-event+json",
     }.get(kind)
-    capture = document.get("capture")
     if not isinstance(kind, str) or content_type not in CONTENT_TYPES:
         _fail(CryptoErrorCode.DOCUMENT_INVALID)
-    if not isinstance(capture, Mapping):
-        if kind != "index-event":
-            _fail(CryptoErrorCode.DOCUMENT_INVALID)
-        capture = {"status": "complete", "policy_decision": "allow"}
+    capture = _effective_capture(document)
     # Deliberately omit content_sha256/content_size.  Those values belong in
     # the encrypted manifest and are not public delivery metadata.
     result = {
