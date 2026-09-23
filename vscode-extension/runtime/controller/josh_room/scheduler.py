@@ -115,13 +115,15 @@ def _linux_content(executable: str, interval: int) -> tuple[str, str]:
     return service, timer
 
 
-def _mac_content(executable: str, interval: int) -> str:
+def _mac_content(executable: str, interval: int, home: Path) -> str:
     escaped = executable.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    home_value = str(home).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.josh-room.pcc-harvest</string>
   <key>ProgramArguments</key><array><string>{escaped}</string><string>harvest</string><string>drain</string><string>--limit</string><string>100</string></array>
+  <key>EnvironmentVariables</key><dict><key>HOME</key><string>{home_value}</string><key>PATH</key><string>/usr/bin:/bin</string></dict>
   <key>StartInterval</key><integer>{interval}</integer>
   <key>RunAtLoad</key><false/>
   <key>ProcessType</key><string>Background</string>
@@ -152,7 +154,7 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(service), str(timer)], executable=exe, executable_sha256=_executable_digest(exe), overlap="systemd-oneshot")
     if selected == "macos":
         path = _mac_path(home)
-        changed = _write_private(path, _mac_content(exe, interval))
+        changed = _write_private(path, _mac_content(exe, interval, home))
         return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(path)], executable=exe, executable_sha256=_executable_digest(exe), overlap="throttle-interval")
     if selected == "windows":
         try:
