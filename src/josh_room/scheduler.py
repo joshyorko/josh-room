@@ -1,7 +1,7 @@
 """Reversible one-shot scheduler integration for PCC harvest."""
 from __future__ import annotations
 
-import os
+import hashlib
 import stat
 import subprocess
 import sys
@@ -19,16 +19,21 @@ def _home() -> Path:
 
 
 def _executable(value: str | os.PathLike[str] | None = None) -> str:
-    if value is not None:
-        candidate = Path(value)
-        if not candidate.is_absolute():
-            raise ValueError("scheduler executable must be absolute")
-    else:
-        candidate = Path(sys.argv[0])
-        if not candidate.is_absolute():
-            candidate = Path(sys.executable)
-    return str(candidate.resolve(strict=False))
-
+    candidate = Path(value) if value is not None else Path(sys.executable)
+    if not candidate.is_absolute():
+        raise ValueError("scheduler executable must be absolute")
+    status = candidate.lstat()
+    if candidate.is_symlink() or not stat.S_ISREG(status.st_mode) or not (status.st_mode & 0o111):
+        raise ValueError("scheduler executable is not trusted")
+    if status.st_mode & 0o022 or (os.name == "posix" and status.st_uid != os.getuid()):
+        raise ValueError("scheduler executable is not trusted")
+    return str(candidate)
+def _executable_digest(path: str) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 def _envelope(*, ok: bool, action: str, **body: object) -> dict[str, object]:
     result = {"schema": SCHEMA, "schema_version": dict(SCHEMA_VERSION), "ok": bool(ok), "action": action}
@@ -138,17 +143,17 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         service_changed = _write_private(service, service_body)
         timer_changed = _write_private(timer, timer_body)
         changed = service_changed or timer_changed
-        return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(service), str(timer)], executable=exe, overlap="systemd-oneshot")
+        return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(service), str(timer)], executable=exe, executable_sha256=_executable_digest(exe), overlap="systemd-oneshot")
     if selected == "macos":
         path = _mac_path(home)
         changed = _write_private(path, _mac_content(exe, interval))
-        return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(path)], executable=exe, overlap="throttle-interval")
+        return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(path)], executable=exe, executable_sha256=_executable_digest(exe), overlap="throttle-interval")
     if selected == "windows":
         try:
             process = subprocess.run(_windows_command(exe, interval), capture_output=True, text=True, check=False)
         except OSError:
             return _envelope(ok=False, action="install", platform=selected, error="scheduler-unavailable")
-        return _envelope(ok=process.returncode == 0, action="install", platform=selected, installed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, executable=exe, overlap="task-single-instance", **({} if process.returncode == 0 else {"error": "scheduler-install-failed"}))
+        return _envelope(ok=process.returncode == 0, action="install", platform=selected, installed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, executable=exe, executable_sha256=_executable_digest(exe), overlap="task-single-instance", **({} if process.returncode == 0 else {"error": "scheduler-install-failed"}))
     return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
 
 def status(*, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
@@ -167,7 +172,7 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
             process = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, check=False)
         except OSError:
             return _envelope(ok=False, action="status", platform=selected, error="scheduler-unavailable")
-        return _envelope(ok=True, action="status", platform=selected, installed=process.returncode == 0, task=TASK_NAME)
+        return _envelope(ok=process.returncode == 0, action="status", platform=selected, installed=process.returncode == 0, task=TASK_NAME, **({} if process.returncode == 0 else {"error": "scheduler-not-installed"}))
     return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
 
 
@@ -197,7 +202,7 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
             process = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True, check=False)
         except OSError:
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unavailable")
-        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=process.returncode == 0, task=TASK_NAME)
+        return _envelope(ok=process.returncode == 0, action="remove", platform=selected, removed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, **({} if process.returncode == 0 else {"error": "scheduler-remove-failed"}))
     return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
 
 
