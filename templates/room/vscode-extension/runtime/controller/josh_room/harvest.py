@@ -225,6 +225,17 @@ class HarvestController:
         index_event_id = record.metadata.get("index_event_id")
         index_ciphertext = self.index_ciphertext
         if isinstance(index_event_id, str):
+            index_record = outbox.inspect_record(index_event_id)
+            if index_record is None:
+                raise HarvestError("index-builder-unavailable")
+            index_metadata = index_record.metadata
+            if (
+                index_metadata.get("evidence_event_id") != record.event_id
+                or index_metadata.get("evidence_kind") != record.metadata.get("object_kind")
+                or index_metadata.get("ciphertext_sha256") != record.ciphertext_sha256
+                or index_metadata.get("ciphertext_size") != record.ciphertext_size
+            ):
+                raise HarvestError("index-builder-unavailable")
             try:
                 index_ciphertext = outbox.prepared_path(index_event_id)
             except Exception as error:
