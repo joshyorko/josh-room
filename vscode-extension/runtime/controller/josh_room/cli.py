@@ -911,12 +911,17 @@ def _harvest_backend(args, instance: Path):
         return None
 
 
-def _harvest_index_file(value: Path | None) -> Path | None:
-    if value is None:
+def _harvest_index_file(value: Path | None, default_root: Path | None = None) -> Path | None:
+    candidate = value
+    if candidate is None and default_root is not None:
+        candidate = default_root / "prepared" / "index.age"
+    if candidate is None:
         return None
-    if not value.is_absolute() or value.is_symlink() or not value.is_file():
+    if not candidate.is_absolute() or candidate.is_symlink() or not candidate.is_file():
+        if value is None:
+            return None
         raise ValueError("index file is unavailable")
-    return value
+    return candidate
 
 
 def _harvest_dispatch(args, instance: Path | None = None) -> dict:
@@ -971,7 +976,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             controller = HarvestController(
                 outbox,
                 backend=_harvest_backend(args, instance or _instance_root()),
-                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
+                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
                 policy_check=scheduled_policy,
             )
             return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
@@ -985,7 +990,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         controller = HarvestController(
             outbox,
             backend=_harvest_backend(args, instance or _instance_root()),
-            index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
+            index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
             profile=profile,
             policy_check=_drain_policy_check(policy, profile, args),
         )
