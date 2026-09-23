@@ -95,7 +95,7 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path, monkeypatch):
         current_executable=conflicting,
         argv=["harvest", "run", "--scheduler-context-id", manifest["context_id"]],
     )
-    assert calls == [(str(executable), ["harvest", "run", "--scheduler-context-id", manifest["context_id"]])]
+    assert calls == [(str(executable), [str(executable), "harvest", "run", "--scheduler-context-id", manifest["context_id"]])]
     service = (tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.service").read_text(encoding="utf-8")
     assert "--scheduler-context-id" in service
     assert "--codex-active-root" not in service and "--codex-archived-root" not in service
@@ -118,9 +118,9 @@ def test_scheduler_native_definitions_are_path_free(tmp_path):
     command = _windows_command(str(executable), 900, context)
     for definition in (service, plist, " ".join(command)):
         assert str(tmp_path) not in definition
-    assert "$$PROFILE" not in service
+    assert "$$PROFILE" in service
     assert "--scheduler-context-id" in service
-    assert "room$$tool" in service
+    assert "%h/.local/bin/josh-room" in service
 
 def test_scheduler_windows_is_truthfully_unsupported(tmp_path):
     assert install(platform_name="windows", home=tmp_path)["error"] == "scheduler-unsupported-platform"
