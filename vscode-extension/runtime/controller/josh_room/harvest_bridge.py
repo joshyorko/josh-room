@@ -27,7 +27,7 @@ from .adapter_contract import (
 )
 from .codex_adapter import CodexRoots, CodexTranscriptAdapter
 from .harvest import HarvestError
-from .pcc_crypto import RecipientSet, encrypt_and_prepare
+from .pcc_crypto import PreparedReceipt, RecipientSet, encrypt_and_prepare
 from .pcc_enqueue import enqueue_trigger
 from .pcc_outbox import PccOutbox, QueueRecord, QueueState
 from .policy import CaptureRequest, PolicyConfig, PolicyContext, decide
@@ -244,6 +244,12 @@ def _authority(profile_name: str) -> _Authority:
         raise HarvestError("device-unavailable") from error
 
 
+@dataclass(frozen=True)
+class PreparedChild:
+    event_id: str
+    receipt: PreparedReceipt
+    ciphertext_path: Path
+
 class HostHarvestBridge:
     """Prepare one trigger from explicit host roots and policy authority."""
 
@@ -303,7 +309,7 @@ class HostHarvestBridge:
         event: NormalizationEvent,
         checkpoint: dict[str, object],
         writer: _MemoryAssetWriter,
-    ) -> str:
+    ) -> PreparedChild:
         event_id = event.document.get("event_id")
         if not isinstance(event_id, str) or not event_id:
             raise HarvestError("normalized-event-invalid")
@@ -370,7 +376,7 @@ class HostHarvestBridge:
             except Exception:  # noqa: BLE001, S110
                 pass
             raise
-        return event_id
+        return PreparedChild(event_id, prepared, outbox.prepared_path(event_id))
 
     def prepare(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
         if self.profile.destination.kind != "private-r2":
@@ -407,11 +413,14 @@ class HostHarvestBridge:
         )
         normalizer = SessionNormalizer(stream, context, prior_checkpoint=prior, finalize=record.is_final, asset_writer=writer)
         child_ids: list[str] = []
+        prepared_children: list[PreparedChild] = []
         try:
             for normalized in normalizer.normalize():
                 if len(child_ids) >= _MAX_CHILD_EVENTS:
                     raise HarvestError("child-limit")
-                child_ids.append(self._prepare_event(outbox, record, owner, normalized, _event_checkpoint(normalized, stream.result.next_checkpoint), writer))
+                child = self._prepare_event(outbox, record, owner, normalized, _event_checkpoint(normalized, stream.result.next_checkpoint), writer)
+                prepared_children.append(child)
+                child_ids.append(child.event_id)
         except HarvestError:
             raise
         except Exception as error:
