@@ -39,7 +39,6 @@ from .session_normalizer import (
     NormalizationEvent,
     SessionNormalizer,
 )
-
 _MAX_CHILD_EVENTS = 64
 
 
