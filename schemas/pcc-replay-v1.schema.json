@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/pcc-replay-v1.schema.json",
+  "title": "Josh Room PCC replay JSONL v1",
+  "oneOf": [
+    {"$ref": "#/$defs/record"},
+    {"$ref": "#/$defs/quarantine"},
+    {"$ref": "#/$defs/summary"}
+  ],
+  "$defs": {
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": {
+        "major": {"const": 1},
+        "minor": {"type": "integer", "minimum": 0}
+      }
+    },
+    "base": {
+      "type": "object",
+      "required": ["schema", "schema_version", "type"],
+      "properties": {
+        "schema": {"const": "josh-room.pcc-replay"},
+        "schema_version": {"$ref": "#/$defs/version"},
+        "type": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "record": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": ["type", "idempotency_key", "profile_id", "workspace_id", "session", "source", "checkpoint", "segment", "record_index", "record", "producer_trust"],
+          "properties": {
+            "type": {"const": "record"},
+            "idempotency_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "profile_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "workspace_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "session": {"type": "object"},
+            "source": {"type": "object"},
+            "checkpoint": {"type": "object"},
+            "segment": {"type": "object"},
+            "record_index": {"type": "integer", "minimum": 0},
+            "record": {"type": "object"},
+            "producer_trust": {"const": "untrusted"},
+            "asset_refs": {"type": "array"}
+          }
+        }
+      ]
+    },
+    "quarantine": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": ["type", "quarantine_id", "profile_id", "destination", "reason_code"],
+          "properties": {
+            "type": {"const": "quarantine"},
+            "quarantine_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "profile_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "destination": {"type": "string", "minLength": 1, "maxLength": 128},
+            "reason_code": {"type": "string", "pattern": "^[a-z0-9_-]+$"}
+          }
+        }
+      ]
+    },
+    "summary": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "required": ["type", "complete", "inspected_indexes", "records", "quarantined"],
+          "properties": {
+            "type": {"const": "summary"},
+            "next_cursor": {"type": ["string", "null"]},
+            "complete": {"type": "boolean"},
+            "inspected_indexes": {"type": "integer", "minimum": 0},
+            "records": {"type": "integer", "minimum": 0},
+            "quarantined": {"type": "integer", "minimum": 0}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -153,6 +153,7 @@ class R2EvidenceIndexRef:
     key: str
     ciphertext_sha256: str
     ciphertext_size: int
+    listing_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,12 +450,23 @@ class R2Backend(ObjectStore):
     def get_evidence_bytes(self, key: str, expected_size: int | None = None) -> bytes:
         digest = validate_evidence_object_key(key)
         try:
-            self._verify_evidence_remote(key, digest, expected_size)
+            self._verify_evidence_remote(key, digest, expected_size, verify_body=False)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
+        if expected_size is not None and (
+            type(expected_size) is not int or expected_size < 0 or expected_size > self.config.max_bytes
+        ):
+            raise R2EvidenceReadbackMismatch()
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
-        body = response["Body"].read(self.config.max_bytes + 1)
-        if len(body) != int(response.get("ContentLength", -1)) or len(body) > self.config.max_bytes:
+        read_limit = self.config.max_bytes + 1
+        if expected_size is not None:
+            read_limit = min(read_limit, expected_size + 1)
+        body = response["Body"].read(read_limit)
+        if (
+            len(body) != int(response.get("ContentLength", -1))
+            or len(body) > self.config.max_bytes
+            or (expected_size is not None and len(body) != expected_size)
+        ):
             raise R2EvidenceReadbackMismatch()
         if hashlib.sha256(body).hexdigest() != digest:
             raise R2EvidenceReadbackMismatch()
@@ -462,7 +474,7 @@ class R2Backend(ObjectStore):
     def download_evidence_file(self, key: str, destination: Path, expected_size: int) -> None:
         digest = validate_evidence_object_key(key)
         try:
-            self._verify_evidence_remote(key, digest, expected_size)
+            self._verify_evidence_remote(key, digest, expected_size, verify_body=False)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
         destination = Path(destination)
@@ -507,29 +519,51 @@ class R2Backend(ObjectStore):
 
     publish_index_event = put_evidence_index_bytes
 
-    def get_evidence_index_bytes(self, key: str) -> bytes:
+    def get_evidence_index_bytes(self, key: str, expected_size: int | None = None) -> bytes:
         digest = validate_evidence_index_key(key)
+        if expected_size is not None and (
+            type(expected_size) is not int or expected_size < 0 or expected_size > self.config.max_bytes
+        ):
+            raise R2EvidenceReadbackMismatch()
         try:
-            self._verify_evidence_remote(key, digest, None)
+            self._verify_evidence_remote(key, digest, expected_size, verify_body=False)
         except ValueError as error:
             raise R2EvidenceReadbackMismatch() from error
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
-        body = response["Body"].read(self.config.max_bytes + 1)
-        if hashlib.sha256(body).hexdigest() != digest:
+        read_limit = self.config.max_bytes + 1
+        if expected_size is not None:
+            read_limit = min(read_limit, expected_size + 1)
+        body = response["Body"].read(read_limit)
+        if (
+            len(body) != int(response.get("ContentLength", -1))
+            or len(body) > self.config.max_bytes
+            or (expected_size is not None and len(body) != expected_size)
+            or hashlib.sha256(body).hexdigest() != digest
+        ):
             raise R2EvidenceReadbackMismatch()
         return body
 
-    def discover_evidence_indexes(self, *, max_events: int = 1000, page_size: int = 100) -> list[R2EvidenceIndexRef]:
-        """Discover only encrypted index keys under the fixed, opaque prefix."""
-        if type(max_events) is not int or not 0 < max_events <= 100_000:
+    def discover_evidence_indexes(
+        self,
+        *,
+        max_events: int = 1000,
+        page_size: int = 100,
+        max_pages: int = 128,
+    ) -> list[R2EvidenceIndexRef]:
+        """Discover encrypted indexes with explicit event and page bounds."""
+        if type(max_events) is not int or not 0 < max_events <= 100_001:
             raise ValueError("evidence discovery bound is invalid")
         if type(page_size) is not int or not 0 < page_size <= _MAX_EVIDENCE_INDEX_PAGE:
             raise ValueError("evidence page size is invalid")
+        if type(max_pages) is not int or not 0 < max_pages <= 1000:
+            raise ValueError("evidence page bound is invalid")
         result: dict[str, R2EvidenceIndexRef] = {}
         token = None
         seen_tokens: set[str] = set()
         pages = 0
-        while pages < max_events:
+        incomplete = False
+        response = {}
+        while pages < max_pages:
             kwargs = {
                 "Bucket": self.config.bucket,
                 "Prefix": EVIDENCE_INDEX_PREFIX,
@@ -551,18 +585,37 @@ class R2Backend(ObjectStore):
                 except ValueError:
                     continue
                 size = item.get("Size")
-                if type(size) is not int or size < 0 or size > self.config.max_bytes:
-                    continue
-                result.setdefault(key, R2EvidenceIndexRef(key, digest, size))
+                if type(size) is not int or size < 0:
+                    ref = R2EvidenceIndexRef(
+                        key,
+                        digest,
+                        0,
+                        "ciphertext-size-invalid",
+                    )
+                elif size > self.config.max_bytes:
+                    ref = R2EvidenceIndexRef(
+                        key,
+                        digest,
+                        0,
+                        "ciphertext-too-large",
+                    )
+                else:
+                    ref = R2EvidenceIndexRef(key, digest, size)
+                result.setdefault(key, ref)
                 if len(result) >= max_events:
                     break
             if len(result) >= max_events or not response.get("IsTruncated"):
                 break
             next_token = response.get("NextContinuationToken")
             if not isinstance(next_token, str) or not next_token or next_token in seen_tokens:
+                incomplete = True
                 break
             seen_tokens.add(next_token)
             token = next_token
+        else:
+            incomplete = bool(response.get("IsTruncated")) and len(result) < max_events
+        if incomplete:
+            raise R2EvidenceError("index-discovery-incomplete")
         return sorted(result.values(), key=lambda item: item.key)
 
     put_evidence = put_evidence_file
@@ -1288,7 +1341,14 @@ class R2Backend(ObjectStore):
         except Exception as error:
             raise R2EvidenceAbortFailure(retries=retries) from error
 
-    def _verify_evidence_remote(self, key: str, digest: str, size: int | None) -> int:
+    def _verify_evidence_remote(
+        self,
+        key: str,
+        digest: str,
+        size: int | None,
+        *,
+        verify_body: bool = True,
+    ) -> int:
         try:
             head = self.client.head_object(Bucket=self.config.bucket, Key=key)
         except ClientError as error:
@@ -1298,6 +1358,8 @@ class R2Backend(ObjectStore):
         observed_size = int(head.get("ContentLength", -1))
         if observed_size > self.config.max_bytes or size is not None and observed_size != size:
             raise ValueError("evidence object size mismatch")
+        if not verify_body:
+            return observed_size
         response = self.client.get_object(Bucket=self.config.bucket, Key=key)
         body = response["Body"]
         observed = hashlib.sha256()
@@ -1312,7 +1374,6 @@ class R2Backend(ObjectStore):
             observed.update(chunk)
         if total != observed_size or observed.hexdigest() != digest:
             raise ValueError("evidence object digest mismatch")
-
         return observed_size
     def _map_evidence_error(self, error, *, retries: int = 0, published: bool = True):
         code = str(error.response.get("Error", {}).get("Code")) if isinstance(error, ClientError) else ""

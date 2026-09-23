@@ -26,6 +26,10 @@ The pure decision function applies these rules in order:
 6. A `local-only` destination returns `local-only`; a named private R2 binding
    returns `allow` only when its configured scope equals the profile name.
 
+For PCC replay, a private-R2 policy binding ID is the exact host-configured
+Dimension ID. The CLI cannot redirect replay to another Dimension that happens
+to reuse the same credential profile.
+
 The decision and dry-run output contain logical source names, bounded size
 estimates, profile metadata, destination class, policy version, provenance, and
 stable reason codes. They do not contain transcript text, secrets, absolute

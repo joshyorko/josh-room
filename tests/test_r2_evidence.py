@@ -318,6 +318,60 @@ def test_paginated_duplicate_safe_index_discovery_has_fixed_prefix_and_no_order_
     assert all(call[1]["Prefix"] == EVIDENCE_INDEX_PREFIX for call in fake.calls if call[0] == "list_objects_v2")
 
 
+def test_index_discovery_reports_page_cap_after_skipped_keys():
+    fake = EvidenceS3()
+    fake.list_pages = [
+        {
+            "Contents": [{"Key": "not-an-index", "Size": 1}],
+            "IsTruncated": True,
+            "NextContinuationToken": "next",
+        },
+    ]
+
+    with pytest.raises(R2EvidenceError) as failure:
+        backend(fake).discover_evidence_indexes(max_events=2, page_size=1, max_pages=1)
+
+    assert failure.value.code == "index-discovery-incomplete"
+
+def test_index_discovery_quarantines_index_above_backend_size_cap():
+    fake = EvidenceS3()
+    store = backend(fake)
+    digest = hashlib.sha256(b"synthetic index").hexdigest()
+    fake.list_pages = [
+        {
+            "Contents": [{
+                "Key": evidence_index_key(digest),
+                "Size": store.config.max_bytes + 1,
+            }],
+            "IsTruncated": False,
+        },
+    ]
+
+    refs = store.discover_evidence_indexes(max_events=2, page_size=1, max_pages=1)
+
+    assert len(refs) == 1
+    assert refs[0].ciphertext_size == 0
+    assert refs[0].listing_error == "ciphertext-too-large"
+
+
+@pytest.mark.parametrize("size", [-1, "invalid-size", None, True])
+def test_index_discovery_marks_malformed_valid_index_size_for_quarantine(size):
+    fake = EvidenceS3()
+    store = backend(fake)
+    digest = hashlib.sha256(b"synthetic malformed size").hexdigest()
+    fake.list_pages = [
+        {
+            "Contents": [{"Key": evidence_index_key(digest), "Size": size}],
+            "IsTruncated": False,
+        },
+    ]
+
+    refs = store.discover_evidence_indexes(max_events=2, page_size=1, max_pages=1)
+
+    assert len(refs) == 1
+    assert refs[0].ciphertext_size == 0
+    assert refs[0].listing_error == "ciphertext-size-invalid"
+
 def test_outbox_uploaded_indexed_committed_and_unindexed_recovery(tmp_path):
     fake = EvidenceS3()
     store = backend(fake)
@@ -374,6 +428,43 @@ def test_readback_mismatch_is_typed_and_not_hidden_by_etag(tmp_path):
     fake.objects[key] = {"body": b"tampered"}
     with pytest.raises(R2EvidenceReadbackMismatch):
         store.get_evidence_bytes(key, expected_size=len(source.read_bytes()))
+@pytest.mark.parametrize("index", [False, True])
+def test_evidence_readback_bounds_body_read_by_declared_size_plus_one(index):
+    fake = EvidenceS3()
+    store = backend(fake)
+    payload = b"bounded encrypted evidence"
+    if index:
+        receipt = store.put_evidence_index_bytes(payload)
+    else:
+        receipt = store.put_evidence_stream(
+            io.BytesIO(payload),
+            len(payload),
+            hashlib.sha256(payload).hexdigest(),
+        )
+
+    read_sizes = []
+
+    class BoundedBody(io.BytesIO):
+        def read(self, size=-1):
+            read_sizes.append(size)
+            return super().read(size)
+
+    get_object = fake.get_object
+
+    def tracked_get(**kwargs):
+        response = get_object(**kwargs)
+        response["Body"] = BoundedBody(response["Body"].read())
+        return response
+
+    fake.get_object = tracked_get
+    if index:
+        body = store.get_evidence_index_bytes(receipt.key, expected_size=receipt.ciphertext_size)
+    else:
+        body = store.get_evidence_bytes(receipt.key, expected_size=receipt.ciphertext_size)
+
+    assert body == payload
+    assert read_sizes == [len(payload) + 1]
+
 
 
 def test_outbox_retry_from_uploaded_stage_does_not_rewind_or_repeat_mark_uploaded(tmp_path):

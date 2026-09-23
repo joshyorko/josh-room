@@ -57,6 +57,7 @@ from .jat import (
 )
 from .keyring import backend_status as _keyring_backend_status
 from .keyring import lookup_value as lookup_keyring_value
+from .keyring import secure_lookup as lookup_secure_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
 from .local_store import ImmutableLocalStore
@@ -96,6 +97,7 @@ from .pcc_hooks import (
     repair_codex_hooks,
 )
 from .pcc_outbox import PccOutbox
+from .pcc_replay import ReplayLimits, ReplayReader
 from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
 from .tls import initialize_system_trust
@@ -348,6 +350,26 @@ def build_parser() -> argparse.ArgumentParser:
         schedule_action.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
         schedule_action.add_argument("--age-executable", type=Path)
         _json_option(schedule_action)
+    replay = commands.add_parser("replay", help="bounded PCC raw-evidence reader/export")
+    replay_commands = replay.add_subparsers(dest="replay_command", required=True)
+    for action in ("inspect", "export"):
+        replay_action = replay_commands.add_parser(action)
+        replay_action.add_argument("--profile", required=True)
+        replay_action.add_argument("--destination", required=True)
+        replay_action.add_argument("--workspace-id")
+        replay_action.add_argument("--policy-config", type=Path)
+        replay_action.add_argument("--config-home", type=Path)
+        replay_action.add_argument("--dimension")
+        replay_action.add_argument("--cursor")
+        replay_action.add_argument("--limit", type=int, default=8)
+        replay_action.add_argument("--page-size", type=int, default=8)
+        replay_action.add_argument("--max-indexes", type=int, default=1000)
+        replay_action.add_argument("--identity", type=Path, action="append")
+        replay_action.add_argument("--age-executable", type=Path)
+        if action == "export":
+            replay_action.add_argument("--max-scan-bytes", type=int, default=ReplayLimits().max_scan_bytes)
+            replay_action.add_argument("--jsonl", action="store_true", help="emit one contract object per line")
+        _json_option(replay_action)
     hook = commands.add_parser("hook")
     hook_commands = hook.add_subparsers(dest="hook_command", required=True)
     hook_codex = hook_commands.add_parser("codex")
@@ -530,6 +552,17 @@ def main(argv=None):
         result = {"ok": False, "error": str(error)}
         if isinstance(getattr(error, "result", None), dict):
             result.update(error.result)
+    if getattr(args, "jsonl", False) and isinstance(result, dict) and "_jsonl_lines" in result:
+        lines = tuple(result.pop("_jsonl_lines"))
+        record_count = len(result.pop("records", ()))
+        quarantine_count = len(result.pop("quarantines", ()))
+        result["records"] = record_count
+        result["quarantined"] = quarantine_count
+        result = _bounded_json_result(result)
+        _write_runtime_result(result)
+        for line in lines:
+            print(line)
+        return _exit_code(result)
     result = _bounded_json_result(result)
     _write_runtime_result(result)
     emit(result, getattr(args, "json", False))
@@ -1045,7 +1078,14 @@ def _resolve_drain_profile(policy, args):
     return matches[0]
 
 
-def _harvest_backend(args, instance: Path, profile=None, policy=None):
+def _harvest_backend(
+    args,
+    instance: Path,
+    profile=None,
+    policy=None,
+    *,
+    bound_dimension_id: str | None = None,
+):
     if profile is None:
         raise ValueError("profile-unavailable")
     destination = getattr(profile, "destination", None)
@@ -1058,16 +1098,118 @@ def _harvest_backend(args, instance: Path, profile=None, policy=None):
     expected_credential = getattr(binding, "credential_profile_ref", None)
     if binding is None or not expected_credential:
         raise ValueError("destination-binding-unavailable")
+    if bound_dimension_id is not None and getattr(args, "dimension", None) not in {None, bound_dimension_id}:
+        raise ValueError("destination-binding-mismatch")
     try:
-        selected = _effective_dimension(args)
+        if bound_dimension_id is None:
+            selected = _effective_dimension(args)
+        else:
+            selected = DimensionRegistry(private_config() or {}).select(bound_dimension_id)
     except (OSError, RuntimeError, ValueError) as error:
         raise ValueError("destination-binding-unavailable") from error
-    if selected is None or selected.provider != "r2" or getattr(selected, "credential_profile", None) != expected_credential:
+    if (
+        selected is None
+        or selected.provider != "r2"
+        or getattr(selected, "credential_profile", None) != expected_credential
+        or (bound_dimension_id is not None and selected.dimension_id != bound_dimension_id)
+    ):
         raise ValueError("destination-binding-mismatch")
     try:
         return _backend(selected.provider, instance, selected.dimension_id)
     except (OSError, RuntimeError, ValueError) as error:
         raise ValueError("destination-binding-unavailable") from error
+@contextmanager
+def _replay_identity_paths(args):
+    explicit = tuple(getattr(args, "identity", None) or ())
+    if explicit:
+        yield explicit
+        return
+    try:
+        age_profile = _device.active_age_profile(profile=args.profile)
+        if not isinstance(age_profile, str) or not age_profile:
+            raise ValueError
+        identity = lookup_secure_value(age_profile, "age-identity")
+    except Exception as error:  # identity authority fails closed
+        raise ValueError("identity-unavailable") from error
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".pcc-replay-identity-", mode="w", delete=False) as handle:
+            temporary = Path(handle.name)
+            os.chmod(temporary, 0o600)
+            handle.write(identity)
+            handle.write("\n")
+        yield (temporary,)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _replay_dispatch(args, instance: Path) -> dict:
+    policy = load_host_policy(
+        policy_config=getattr(args, "policy_config", None),
+        config_home=getattr(args, "config_home", None),
+    )
+    profile = policy.profiles.get(args.profile)
+    if profile is None:
+        raise ValueError("profile-unavailable")
+    workspace_id = profile.workspace_id
+    requested_workspace = getattr(args, "workspace_id", None)
+    if requested_workspace is not None and requested_workspace != workspace_id:
+        raise ValueError("workspace-binding-mismatch")
+    destination = getattr(profile.destination, "kind", None)
+    if args.destination != destination:
+        raise ValueError("destination-binding-mismatch")
+    if destination != "private-r2":
+        raise ValueError("replay-destination-unavailable")
+    binding_id = getattr(profile.destination, "binding_id", None)
+    if not isinstance(binding_id, str) or not binding_id:
+        raise ValueError("destination-binding-unavailable")
+    requested_dimension = getattr(args, "dimension", None)
+    if requested_dimension is not None and requested_dimension != binding_id:
+        raise ValueError("destination-binding-mismatch")
+    backend = _harvest_backend(
+        args,
+        instance,
+        profile=profile,
+        policy=policy,
+        bound_dimension_id=binding_id,
+    )
+    identities = () if args.replay_command == "inspect" else None
+    identity_context = nullcontext(identities) if identities is not None else _replay_identity_paths(args)
+    with identity_context as identity_paths:
+        reader = ReplayReader(
+            backend,
+            profile_id=profile.profile_id,
+            destination=destination,
+            workspace_id=workspace_id,
+            identity_paths=identity_paths,
+            age_executable=getattr(args, "age_executable", None),
+            authorize=lambda selected_profile, selected_destination: selected_profile == profile.profile_id and selected_destination == destination,
+            limits=ReplayLimits(
+                page_size=args.page_size,
+                max_indexes=args.max_indexes,
+                max_scan_bytes=getattr(args, "max_scan_bytes", ReplayLimits().max_scan_bytes),
+            ),
+        )
+        if args.replay_command == "inspect":
+            return reader.inspect(cursor=args.cursor, limit=args.limit)
+        page = reader.export(cursor=args.cursor, limit=args.limit)
+        result = {
+            "schema": "josh-room.pcc-replay",
+            "schema_version": {"major": 1, "minor": 0},
+            "ok": True,
+            "profile_id": profile.profile_id,
+            "workspace_id": workspace_id,
+            "destination": destination,
+            "next_cursor": page.cursor,
+            "complete": page.complete,
+            "inspected_indexes": page.inspected_indexes,
+            "records": list(page.records),
+            "quarantines": list(page.quarantines),
+        }
+        if getattr(args, "jsonl", False):
+            result["_jsonl_lines"] = tuple(page.jsonl())
+        return result
 
 
 def _harvest_index_file(value: Path | None, default_root: Path | None = None) -> Path | None:
@@ -1209,6 +1351,8 @@ def dispatch(args, instance: Path) -> dict:
         return process_codex_hook(json.load(sys.stdin))
     if args.command == "harvest":
         return _harvest_dispatch(args, instance)
+    if args.command == "replay":
+        return _replay_dispatch(args, instance)
     if args.command == "encryption":
         if args.encryption_command == "recovery":
             if args.recovery_command != "generate":
