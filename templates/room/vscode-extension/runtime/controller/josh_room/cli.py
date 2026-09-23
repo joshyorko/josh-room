@@ -947,6 +947,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         if action == "remove":
             return remove_codex_hooks()
         raise ValueError("unsupported harvest hook action")
+    if args.harvest_command == "schedule":
         options = {
             "interval": args.interval,
             "platform_name": args.platform_name,
@@ -968,6 +969,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         if args.schedule_command == "remove":
             return _scheduler.remove(platform_name=args.platform_name, home=args.home)
         raise ValueError("unsupported schedule action")
+    outbox = PccOutbox(_harvest_outbox_root(args.outbox_root))
     action = args.harvest_command
     if action == "run":
         controller = _harvest_bridge_controller(args, outbox)
