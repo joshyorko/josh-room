@@ -181,7 +181,9 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
     if type(interval) is not int or not 60 <= interval <= 86400:
         return _envelope(ok=False, action="install", error="invalid-interval")
     try:
-        selected, home, exe = _platform(platform_name), _trusted_home(home), _executable(executable)
+        selected, home = _platform(platform_name), _trusted_home(home)
+        if selected == "windows" and os.name != "nt":
+            return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", error="scheduler-path-invalid")
     if selected == "linux":
@@ -216,12 +218,13 @@ def _manifest_state(home: Path) -> tuple[bool, bool]:
         return True, _executable_digest(executable) == digest
     except (OSError, KeyError, TypeError, ValueError):
         return False, False
-
 def status(*, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
     try:
         selected, home = _platform(platform_name), _trusted_home(home)
     except (OSError, ValueError):
         return _envelope(ok=False, action="status", error="scheduler-path-invalid")
+    if selected == "windows" and os.name != "nt":
+        return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
     if selected == "linux":
         paths = _linux_paths(home)
         manifest, fresh = _manifest_state(home)
@@ -245,6 +248,8 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
                 active = False
         return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh, files=[str(path)])
     if selected == "windows":
+        if os.name != "nt":
+            return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
         try:
             process = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, check=False)
         except OSError:
