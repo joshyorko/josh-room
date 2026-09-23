@@ -270,10 +270,12 @@ def build_parser() -> argparse.ArgumentParser:
     for action in ("install", "status", "repair", "remove"):
         hook_action = harvest_hook_commands.add_parser(action)
         hook_action.add_argument("--tool", required=True, choices=("codex",))
+        _json_option(hook_action)
     for action in ("plan", "run", "drain", "status", "inspect", "retry", "quarantine", "discard", "reconcile"):
         command = harvest_commands.add_parser(action)
         command.add_argument("--outbox-root", type=Path)
         if action in {"run", "drain", "reconcile"}:
+            command.add_argument("--limit", type=int, default=1 if action != "reconcile" else 1000)
             command.add_argument("--max-seconds", type=float)
         if action == "run":
             command.add_argument("--offline", action="store_true")
@@ -301,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--list", action="store_true")
         if action in {"retry", "quarantine"}:
             command.add_argument("--reason", default=None)
+        _json_option(command)
     schedule = harvest_commands.add_parser("schedule")
     schedule_commands = schedule.add_subparsers(dest="schedule_command", required=True)
     for action in ("install", "status", "remove"):
