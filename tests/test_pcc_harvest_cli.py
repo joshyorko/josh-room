@@ -105,6 +105,11 @@ def test_scheduler_native_definitions_are_path_free(tmp_path):
     assert "--scheduler-context-id" in service
     assert "room$$tool" in service
 
+def test_scheduler_windows_is_truthfully_unsupported(tmp_path):
+    assert install(platform_name="windows", home=tmp_path)["error"] == "scheduler-unsupported-platform"
+    assert status(platform_name="windows", home=tmp_path)["error"] == "scheduler-unsupported-platform"
+    assert remove(platform_name="windows", home=tmp_path)["error"] == "scheduler-unsupported-platform"
+
 
 def test_scheduler_install_rejects_missing_context(tmp_path):
     executable = tmp_path / "josh-room"
