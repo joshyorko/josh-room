@@ -1,7 +1,7 @@
 """Reversible one-shot scheduler integration for PCC harvest."""
 from __future__ import annotations
 
-import hashlib
+import json
 import os
 import pwd
 import stat
@@ -63,7 +63,13 @@ def _platform(value: str | None = None) -> str:
     if name.startswith("win"):
         return "windows"
     return "unsupported"
+def _manifest_path(home: Path) -> Path:
+    return home / ".config" / "josh-room" / "pcc-harvest.scheduler.json"
 
+def _write_manifest(home: Path, platform_name: str, executable: str, interval: int) -> bool:
+    path = _manifest_path(home)
+    body = json.dumps({"platform": platform_name, "executable": executable, "executable_sha256": _executable_digest(executable), "interval": interval}, sort_keys=True) + "\n"
+    return _write_private(path, body)
 
 def _linux_paths(home: Path) -> tuple[Path, Path]:
     base = home / ".config" / "systemd" / "user"
@@ -150,11 +156,12 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         service_body, timer_body = _linux_content(exe, interval)
         service_changed = _write_private(service, service_body)
         timer_changed = _write_private(timer, timer_body)
-        changed = service_changed or timer_changed
+        changed = service_changed or timer_changed or _write_manifest(home, selected, exe, interval)
         return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(service), str(timer)], executable=exe, executable_sha256=_executable_digest(exe), overlap="systemd-oneshot")
     if selected == "macos":
         path = _mac_path(home)
         changed = _write_private(path, _mac_content(exe, interval, home))
+        changed = changed or _write_manifest(home, selected, exe, interval)
         return _envelope(ok=True, action="install", platform=selected, installed=True, changed=changed, files=[str(path)], executable=exe, executable_sha256=_executable_digest(exe), overlap="throttle-interval")
     if selected == "windows":
         try:
@@ -164,6 +171,16 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         return _envelope(ok=process.returncode == 0, action="install", platform=selected, installed=process.returncode == 0, changed=process.returncode == 0, task=TASK_NAME, executable=exe, executable_sha256=_executable_digest(exe), overlap="task-single-instance", **({} if process.returncode == 0 else {"error": "scheduler-install-failed"}))
     return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
 
+def _manifest_state(home: Path) -> tuple[bool, bool]:
+    path = _manifest_path(home)
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+        executable = body["executable"]
+        digest = body["executable_sha256"]
+        return True, _executable_digest(executable) == digest
+    except (OSError, KeyError, TypeError, ValueError):
+        return False, False
+
 def status(*, platform_name: str | None = None, home: Path | None = None) -> dict[str, object]:
     try:
         selected, home = _platform(platform_name), _trusted_home(home)
@@ -171,10 +188,14 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
         return _envelope(ok=False, action="status", error="scheduler-path-invalid")
     if selected == "linux":
         paths = _linux_paths(home)
-        return _envelope(ok=True, action="status", platform=selected, installed=all(path.is_file() and not path.is_symlink() for path in paths), files=[str(path) for path in paths])
+        manifest, fresh = _manifest_state(home)
+        installed = all(path.is_file() and not path.is_symlink() for path in paths) and manifest
+        return _envelope(ok=installed and fresh, action="status", platform=selected, installed=installed, stale=installed and not fresh, files=[str(path) for path in paths])
     if selected == "macos":
         path = _mac_path(home)
-        return _envelope(ok=True, action="status", platform=selected, installed=path.is_file() and not path.is_symlink(), files=[str(path)])
+        manifest, fresh = _manifest_state(home)
+        installed = path.is_file() and not path.is_symlink() and manifest
+        return _envelope(ok=installed and fresh, action="status", platform=selected, installed=installed, stale=installed and not fresh, files=[str(path)])
     if selected == "windows":
         try:
             process = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, check=False)
