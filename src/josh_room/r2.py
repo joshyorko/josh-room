@@ -199,13 +199,15 @@ class R2Config:
             raise ValueError("private R2 configuration is unavailable")
         return cls(endpoint=values["endpoint"], bucket=values["bucket"], credential_profile=values["credential_profile"], region=values.get("region", "auto"), catalog_key=values.get("catalog_key", "catalog.jroom.age"), temporary_credentials=values.get("temporary_credentials", True), dimension_id="r2")
 
-def client_for_config(config: R2Config):
+def client_for_config(config: R2Config, credential_profile: str | None = None):
     import boto3
     from botocore.config import Config
 
-    from .device import active_credential_profile
-
-    credential_profile = active_credential_profile() or config.credential_profile
+    selected_profile = credential_profile or config.credential_profile
+    if selected_profile in {None, "oauth-runtime"}:
+        from .device import active_credential_profile
+        selected_profile = active_credential_profile() or selected_profile
+    credential_profile = selected_profile
     credentials = lookup(credential_profile, allow_runtime=True)
     return boto3.client(
         "s3",

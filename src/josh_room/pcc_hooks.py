@@ -41,7 +41,7 @@ _HOOK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$")
 _MARKER_RE = re.compile(
     rf"(?ms)^({re.escape(MARKER_PREFIX)}(?P<event>Stop|SubagentStop|SessionEnd)\n.*?^{re.escape(MARKER_SUFFIX)}\n?)"
 )
-_EVENT_LABELS = {"Stop": "stop", "SubagentStop": "subagent_stop", "SessionEnd": "session_end"}
+_EVENT_LABELS = {"Stop": "stop", "SubagentStop": "subagent-stop", "SessionEnd": "session-end"}
 _EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
 
 
@@ -240,7 +240,7 @@ def process_codex_hook(
             metadata={
                 "source_surface": "subagent" if event == "SubagentStop" else "unknown",
                 "source_adapter": "codex-transcript",
-                "source_adapter_version": "1",
+                "trigger": _EVENT_LABELS[event],
                 "object_kind": "trigger",
             },
             policy_decision="local-only",

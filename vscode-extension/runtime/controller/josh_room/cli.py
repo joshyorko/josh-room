@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import device as _device
 from . import r2 as _r2
+from . import scheduler as _scheduler
 from .auth import (
     EncryptionStateError,
     _keyset_from_backend,
@@ -41,6 +42,8 @@ from .config import (
 )
 from .crypto import CryptoError, _managed_executable, decrypt, generate_identity
 from .encryption_domain import validate_recipient
+from .harvest import HarvestController
+from .harvest_bridge import HostHarvestBridge, HostHarvestConfig, load_host_policy
 from .jat import (
     _jat_contract,
     run_build,
@@ -91,6 +94,8 @@ from .pcc_hooks import (
     remove_codex_hooks,
     repair_codex_hooks,
 )
+from .pcc_outbox import PccOutbox
+from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
 from .tls import initialize_system_trust
 from .workspace_state import local_status
@@ -267,6 +272,71 @@ def build_parser() -> argparse.ArgumentParser:
         hook_action = harvest_hook_commands.add_parser(action)
         hook_action.add_argument("--tool", required=True, choices=("codex",))
         _json_option(hook_action)
+    for action in ("plan", "run", "drain", "status", "inspect", "retry", "quarantine", "discard", "reconcile"):
+        command = harvest_commands.add_parser(action)
+        command.add_argument("--outbox-root", type=Path)
+        if action in {"run", "drain", "reconcile"}:
+            command.add_argument("--limit", type=int, default=1 if action != "reconcile" else 1000)
+            command.add_argument("--drain", action="store_true", help="deliver prepared records after offline preparation")
+            command.add_argument("--max-seconds", type=float)
+        if action == "run":
+            command.add_argument("--offline", action="store_true")
+            command.add_argument("--tool", choices=("codex",), default="codex", help="host source tool")
+            command.add_argument("--profile", required=False, help="host-owned capture/device profile")
+            command.add_argument("--policy-config", type=Path, help="explicit private policy file")
+            command.add_argument("--config-home", type=Path, help="private XDG config home containing josh-room/policy.json")
+            command.add_argument("--codex-active-root", type=Path, required=False, help="explicit Codex active transcript root")
+            command.add_argument("--codex-archived-root", type=Path, required=False, help="explicit Codex archived transcript root")
+            command.add_argument("--scheduler-context-id", help="opaque installed scheduler context identifier")
+            command.add_argument("--workspace-id")
+            command.add_argument("--workspace-path")
+            command.add_argument("--repository", help="host-observed repository remote (credential-free form)")
+            command.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
+            command.add_argument("--age-executable", type=Path)
+        if action == "drain":
+            command.add_argument("--profile", help="optional host-owned capture/device profile")
+            command.add_argument("--policy-config", type=Path)
+            command.add_argument("--config-home", type=Path)
+            command.add_argument("--codex-active-root", type=Path)
+            command.add_argument("--codex-archived-root", type=Path)
+            command.add_argument("--workspace-id")
+            command.add_argument("--workspace-path")
+            command.add_argument("--repository")
+            command.add_argument("--path-kind", default="unknown")
+            command.add_argument("--age-executable", type=Path)
+            command.add_argument("--dimension")
+            command.add_argument("--index-file", type=Path, help="encrypted #11 R2 index object")
+        if action in {"plan", "inspect"}:
+            command.add_argument("event_id", nargs="?")
+        elif action in {"retry", "quarantine", "discard"}:
+            command.add_argument("event_id", nargs="?" if action in {"retry", "quarantine"} else None)
+        if action == "retry":
+            command.add_argument("--all-retryable", action="store_true")
+        if action == "quarantine":
+            command.add_argument("--inspect", action="store_true")
+            command.add_argument("--list", action="store_true")
+        if action in {"retry", "quarantine"}:
+            command.add_argument("--reason", default=None)
+        _json_option(command)
+    schedule = harvest_commands.add_parser("schedule")
+    schedule_commands = schedule.add_subparsers(dest="schedule_command", required=True)
+    for action in ("install", "status", "remove"):
+        schedule_action = schedule_commands.add_parser(action)
+        schedule_action.add_argument("--interval", type=int, default=900)
+        schedule_action.add_argument("--platform", dest="platform_name")
+        schedule_action.add_argument("--home", type=Path)
+        schedule_action.add_argument("--executable")
+        schedule_action.add_argument("--profile")
+        schedule_action.add_argument("--codex-active-root", type=Path)
+        schedule_action.add_argument("--codex-archived-root", type=Path)
+        schedule_action.add_argument("--policy-config", type=Path)
+        schedule_action.add_argument("--config-home", type=Path)
+        schedule_action.add_argument("--workspace-id")
+        schedule_action.add_argument("--workspace-path")
+        schedule_action.add_argument("--repository")
+        schedule_action.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
+        schedule_action.add_argument("--age-executable", type=Path)
+        _json_option(schedule_action)
     hook = commands.add_parser("hook")
     hook_commands = hook.add_subparsers(dest="hook_command", required=True)
     hook_codex = hook_commands.add_parser("codex")
@@ -452,8 +522,36 @@ def main(argv=None):
     result = _bounded_json_result(result)
     _write_runtime_result(result)
     emit(result, getattr(args, "json", False))
-    return 0 if result["ok"] else 2
+    return _exit_code(result)
 
+def _exit_code(result: dict) -> int:
+    if result.get("ok") is True:
+        return 0
+    error = result.get("error")
+    if error in {"backlog", "not-prepared"}:
+        return 3
+    if error in {"quarantined", "not-quarantinable"}:
+        return 4
+    if error in {"capture-gap", "child-lease-unavailable"}:
+        return 5
+    if error in {"policy-denied", "not-retryable"}:
+        return 6
+    if error in {"config-invalid", "scheduler-path-invalid", "capture-authority-unavailable", "index-builder-unavailable"}:
+        return 78
+    if error in {"internal", "storage-unavailable", "corrupt-record"}:
+        return 70
+    if result.get("command") == "status":
+        states = result.get("states", {})
+        if isinstance(states, dict):
+            if states.get("capture-gap", 0):
+                return 5
+            if states.get("quarantined", 0):
+                return 4
+            if states.get("policy-denied", 0):
+                return 6
+            if any(states.get(value, 0) for value in ("queued", "retryable-failure")):
+                return 3
+    return 2
 
 def _write_runtime_result(result):
     target_value = os.environ.get("JOSH_ROOM_RESULT_FILE")
@@ -757,13 +855,120 @@ def _bucket_operation(args, config):
     }
 
 
-def dispatch(args, instance: Path) -> dict:
-    if args.command == "hook":
-        if args.hook_command != "codex":
-            raise ValueError("unsupported hook")
-        return process_codex_hook(json.load(sys.stdin))
-    if args.command == "harvest":
-        if args.harvest_command != "hooks" or args.tool != "codex":
+def _harvest_outbox_root(value: Path | None) -> Path:
+    if value is not None:
+        if not value.is_absolute():
+            raise ValueError("outbox root must be absolute")
+        return value
+    explicit = os.environ.get("JOSH_ROOM_HOOK_OUTBOX") or os.environ.get("JOSH_ROOM_OUTBOX_ROOT")
+    if explicit:
+        root = Path(explicit)
+    else:
+        state_home = os.environ.get("XDG_STATE_HOME")
+        root = (Path(state_home) if state_home else Path.home() / ".local" / "state") / "josh-room" / "pcc-outbox"
+    if not root.is_absolute():
+        raise ValueError("outbox root must be absolute")
+    return root
+
+
+def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
+    if getattr(args, "tool", "codex") != "codex":
+        raise ValueError("unsupported harvest tool")
+    policy = load_host_policy(
+        policy_config=getattr(args, "policy_config", None),
+        config_home=getattr(args, "config_home", None),
+    )
+    from .codex_adapter import CodexRoots
+
+
+    roots = CodexRoots(args.codex_active_root, args.codex_archived_root)
+    bridge = HostHarvestBridge(
+        HostHarvestConfig(
+            roots=roots,
+            policy=policy,
+            profile_name=args.profile,
+            workspace_id=args.workspace_id,
+            workspace_path=args.workspace_path,
+            repository=args.repository,
+            path_kind=args.path_kind,
+            age_executable=args.age_executable,
+        )
+    )
+    profile = policy.profiles[args.profile]
+    outbox.max_bytes = min(outbox.max_bytes, profile.limits.local_outbox_bytes)
+    return HarvestController(outbox, prepare=bridge.prepare, profile=profile)
+def _drain_policy_check(policy, profile, args):
+    def check(record):
+        trigger = record.metadata.get("trigger")
+        if trigger not in {"stop", "subagent-stop", "session-end"}:
+            return {"decision": "deny", "destination": "local-only"}
+        context = PolicyContext.from_values(
+            workspace_id=args.workspace_id or profile.workspace_id,
+            remote=args.repository,
+            workspace_path=args.workspace_path,
+            path_kind=args.path_kind,
+        )
+        decision = decide(
+            policy,
+            CaptureRequest(context=context, logical_sources=("codex.transcript",), trigger=trigger),
+        )
+        return {"decision": decision.kind, "destination": decision.destination_class}
+    return check
+
+
+def _harvest_backend(args, instance: Path, profile=None, policy=None):
+    binding_id = getattr(getattr(profile, "destination", None), "binding_id", None)
+    binding = policy.r2_bindings.get(binding_id) if policy is not None and binding_id is not None else None
+    expected_credential = getattr(binding, "credential_profile_ref", None)
+    if binding_id is not None and binding is None:
+        raise ValueError("destination-binding-unavailable")
+    try:
+        selected = _effective_dimension(args)
+        if selected is None or selected.provider != "r2":
+            return None
+        if expected_credential is not None and getattr(selected, "credential_profile", None) != expected_credential:
+            raise ValueError("destination-binding-mismatch")
+        return _backend(selected.provider, instance, selected.dimension_id)
+    except (OSError, RuntimeError, ValueError) as error:
+        if binding_id is not None:
+            raise ValueError("destination-binding-unavailable") from error
+        return None
+
+
+def _harvest_index_file(value: Path | None, default_root: Path | None = None) -> Path | None:
+    candidate = value
+    if candidate is None and default_root is not None:
+        candidate = default_root / "prepared" / "index.age"
+    if candidate is None:
+        return None
+    if not candidate.is_absolute() or candidate.is_symlink() or not candidate.is_file():
+        if value is None:
+            return None
+        raise ValueError("index file is unavailable")
+    return candidate
+
+def _load_scheduler_context(args) -> None:
+    context_id = getattr(args, "scheduler_context_id", None)
+    if not context_id:
+        return
+    context = _scheduler.launch_context(context_id)
+    args.profile = context.profile
+    args.codex_active_root = Path(context.codex_active_root)
+    args.codex_archived_root = Path(context.codex_archived_root)
+    args.policy_config = Path(context.policy_config) if context.policy_config is not None else None
+    args.config_home = Path(context.config_home) if context.config_home is not None else None
+    args.workspace_id = context.workspace_id
+    args.workspace_path = context.workspace_path
+    args.repository = context.repository
+    args.path_kind = context.path_kind
+    args.age_executable = Path(context.age_executable) if context.age_executable is not None else None
+
+
+def _harvest_dispatch(args, instance: Path | None = None) -> dict:
+    if args.harvest_command == "run":
+        _load_scheduler_context(args)
+    if args.harvest_command == "hooks":
+        if args.tool != "codex":
             raise ValueError("unsupported harvest hook")
         action = args.harvest_hooks_command
         if action == "install":
@@ -774,7 +979,132 @@ def dispatch(args, instance: Path) -> dict:
             return repair_codex_hooks()
         if action == "remove":
             return remove_codex_hooks()
-        raise ValueError("unsupported harvest hook action")
+    if args.harvest_command == "schedule":
+        options = {
+            "interval": args.interval,
+            "platform_name": args.platform_name,
+            "home": args.home,
+            "executable": args.executable,
+            "profile": args.profile,
+            "codex_active_root": args.codex_active_root,
+            "codex_archived_root": args.codex_archived_root,
+            "policy_config": args.policy_config,
+            "config_home": args.config_home,
+            "workspace_id": args.workspace_id,
+            "workspace_path": args.workspace_path,
+            "repository": args.repository,
+            "path_kind": args.path_kind,
+            "age_executable": args.age_executable,
+        }
+        if args.schedule_command == "install":
+            return _scheduler.install(**options)
+        if args.schedule_command == "status":
+            return _scheduler.status(platform_name=args.platform_name, home=args.home)
+        if args.schedule_command == "remove":
+            return _scheduler.remove(platform_name=args.platform_name, home=args.home)
+        raise ValueError("unsupported schedule action")
+    outbox = PccOutbox(_harvest_outbox_root(args.outbox_root))
+    action = args.harvest_command
+    if action == "run":
+        if args.offline and args.drain:
+            raise ValueError("offline-drain-conflict")
+        controller = _harvest_bridge_controller(args, outbox)
+        result = controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
+        if args.drain and result.get("ok"):
+            policy = load_host_policy(
+                policy_config=getattr(args, "policy_config", None),
+                config_home=getattr(args, "config_home", None),
+            )
+            profile = policy.profiles.get(args.profile)
+            if profile is None:
+                raise ValueError("profile-unavailable")
+            drain_controller = HarvestController(
+                outbox,
+                backend=_harvest_backend(args, instance or _instance_root(), profile, policy),
+                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
+                profile=profile,
+                policy_check=_drain_policy_check(policy, profile, args),
+            )
+            return drain_controller.drain(limit=args.limit, max_seconds=args.max_seconds)
+        return result
+    if action == "drain":
+        if not args.profile:
+            policy = load_host_policy(
+                policy_config=getattr(args, "policy_config", None),
+                config_home=getattr(args, "config_home", None),
+            )
+            def scheduled_policy(record):
+                workspace_id = record.metadata.get("workspace_id")
+                profiles = [profile for profile in policy.profiles.values() if profile.workspace_id == workspace_id]
+                if len(profiles) != 1:
+                    return {"decision": "deny", "destination": "local-only"}
+                profile = profiles[0]
+                trigger = record.metadata.get("trigger")
+                if trigger not in {"stop", "subagent-stop", "session-end"}:
+                    return {"decision": "deny", "destination": "local-only"}
+                context = PolicyContext.from_values(
+                    workspace_id=args.workspace_id or profile.workspace_id,
+                    remote=args.repository,
+                    workspace_path=args.workspace_path,
+                    path_kind=args.path_kind,
+                    context_source="host-observed",
+                )
+                decision = decide(
+                    policy,
+                    CaptureRequest(context=context, logical_sources=("codex.transcript",), trigger=trigger),
+                )
+                return {"decision": decision.kind, "destination": decision.destination_class}
+            controller = HarvestController(
+                outbox,
+                backend=_harvest_backend(args, instance or _instance_root(), None, policy),
+                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
+                policy_check=scheduled_policy,
+            )
+            return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
+        policy = load_host_policy(
+            policy_config=getattr(args, "policy_config", None),
+            config_home=getattr(args, "config_home", None),
+        )
+        profile = policy.profiles.get(args.profile)
+        if profile is None:
+            raise ValueError("profile-unavailable")
+        controller = HarvestController(
+            outbox,
+            backend=_harvest_backend(args, instance or _instance_root(), profile, policy),
+            index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
+            profile=profile,
+            policy_check=_drain_policy_check(policy, profile, args),
+        )
+        return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
+    if action == "plan":
+        return controller.plan(args.event_id)
+    if action == "status":
+        return controller.status()
+    if action == "inspect":
+        return controller.inspect(args.event_id)
+    if action == "retry":
+        if args.all_retryable:
+            return controller.retry_all(args.reason or "operator-retry")
+        return controller.retry(args.event_id, args.reason or "operator-retry")
+    if action == "quarantine":
+        if args.list:
+            return controller.quarantine_list()
+        if args.inspect:
+            return controller.quarantine_inspect(args.event_id)
+        return controller.quarantine(args.event_id, args.reason or "operator-quarantine")
+    if action == "discard":
+        return controller.discard(args.event_id)
+    if action == "reconcile":
+        return controller.reconcile(limit=args.limit, max_seconds=args.max_seconds)
+
+
+def dispatch(args, instance: Path) -> dict:
+    if args.command == "hook":
+        if args.hook_command != "codex":
+            raise ValueError("unsupported hook")
+        return process_codex_hook(json.load(sys.stdin))
+    if args.command == "harvest":
+        return _harvest_dispatch(args, instance)
     if args.command == "encryption":
         if args.encryption_command == "recovery":
             if args.recovery_command != "generate":

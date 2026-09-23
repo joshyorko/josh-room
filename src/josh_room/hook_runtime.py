@@ -127,7 +127,7 @@ def process(payload: object) -> dict[str, object]:
             session_id=str(payload["session_id"]),
             checkpoint={"source": source, "representation": representation, "start": 0, "end": 0, "prefix_sha256": _EMPTY_DIGEST},
             is_final=event == "SessionEnd",
-            metadata={"source_surface": "subagent" if event == "SubagentStop" else "unknown", "source_adapter": "codex-transcript", "source_adapter_version": "1", "object_kind": "trigger"},
+            metadata={"source_surface": "subagent" if event == "SubagentStop" else "unknown", "source_adapter": "codex-transcript", "source_adapter_version": "1", "trigger": {"Stop": "stop", "SubagentStop": "subagent-stop", "SessionEnd": "session-end"}[event], "object_kind": "trigger"},
             policy_decision="local-only",
             lock_timeout=_LOCK_TIMEOUT_SECONDS,
         )
