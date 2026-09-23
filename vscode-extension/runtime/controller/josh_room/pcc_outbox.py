@@ -1632,10 +1632,10 @@ class PccOutbox:
         event_id = _identifier(event_id)
         owner = _identifier(owner)
         if isinstance(child_event_ids, (str, bytes, bytearray)):
-            raise ValueError("expanded event ids are invalid")
+            raise TypeError("expanded event ids are invalid")
         child_ids = tuple(_identifier(value) for value in child_event_ids)
         if not child_ids or len(child_ids) > _MAX_EVENT_IDS:
-            raise ValueError("expanded event ids are invalid")
+            raise TypeError("expanded event ids are invalid")
         checkpoint = _validate_checkpoint(checkpoint)
         with _exclusive_file_lock(self._lock_path):
             record = self._must_read_unlocked(event_id)

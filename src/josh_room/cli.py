@@ -844,7 +844,7 @@ def _harvest_backend(args, instance: Path):
         if selected is None or selected.provider != "r2":
             return None
         return _backend(selected.provider, instance, selected.dimension_id)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 

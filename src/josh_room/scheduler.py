@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import os
 import pwd
-import shutil
 import stat
 import subprocess
 import sys

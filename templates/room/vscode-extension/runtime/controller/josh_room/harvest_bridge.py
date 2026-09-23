@@ -7,26 +7,24 @@ public outbox metadata.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
 import stat
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from . import device
 from .adapter_contract import (
     Checkpoint,
-    Decision as AdapterDecision,
     GateDecision,
     GateSet,
     LogicalSourceName,
     PlanStatus,
     SourceEvent,
 )
+from .adapter_contract import Decision
 from .codex_adapter import CodexRoots, CodexTranscriptAdapter
 from .harvest import HarvestError
 from .pcc_crypto import RecipientSet, encrypt_and_prepare
@@ -37,13 +35,11 @@ from .policy_config import load_policy_config
 from .session_normalizer import (
     AssetReceipt,
     AssetSink,
-    AssetWriter,
     NormalizationContext,
     NormalizationEvent,
     SessionNormalizer,
 )
 
-_EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
 _MAX_CHILD_EVENTS = 64
 
 
@@ -54,11 +50,11 @@ class _PolicyGate:
     def evaluate(self, _event: object, _declaration: object) -> GateDecision:
         value = getattr(self._decision, "kind", "local-only")
         mapped = {
-            "allow": AdapterDecision.ALLOW,
-            "deny": AdapterDecision.DENY,
-            "local-only": AdapterDecision.LOCAL_ONLY,
-            "quarantine": AdapterDecision.QUARANTINE,
-        }.get(value, AdapterDecision.LOCAL_ONLY)
+            "allow": Decision.ALLOW,
+            "deny": Decision.DENY,
+            "local-only": Decision.LOCAL_ONLY,
+            "quarantine": Decision.QUARANTINE,
+        }.get(value, Decision.LOCAL_ONLY)
         reasons = tuple(getattr(self._decision, "reason_codes", ()) or ("policy-unavailable",))
         return GateDecision(mapped, reasons, "host-policy")
 
@@ -67,17 +63,17 @@ class _MaterialGate(_PolicyGate):
     def evaluate(self, _event: object, _declaration: object) -> GateDecision:
         value = getattr(self._decision, "kind", "local-only")
         mapped = {
-            "allow": AdapterDecision.ALLOW,
-            "deny": AdapterDecision.DENY,
-            "local-only": AdapterDecision.LOCAL_ONLY,
-            "quarantine": AdapterDecision.QUARANTINE,
-        }.get(value, AdapterDecision.LOCAL_ONLY)
+            "allow": Decision.ALLOW,
+            "deny": Decision.DENY,
+            "local-only": Decision.LOCAL_ONLY,
+            "quarantine": Decision.QUARANTINE,
+        }.get(value, Decision.LOCAL_ONLY)
         reasons = tuple(getattr(self._decision, "reason_codes", ()) or ("policy-unavailable",))
         return GateDecision(mapped, reasons, "host-policy")
 
 
 class _MemoryAssetSink:
-    def __init__(self, writer: "_MemoryAssetWriter", asset_id: str, content_type: str, media_category: str) -> None:
+    def __init__(self, writer: _MemoryAssetWriter, asset_id: str, content_type: str, media_category: str) -> None:
         self._writer = writer
         self._asset_id = asset_id
         self._content_type = content_type
@@ -348,12 +344,12 @@ class HostHarvestBridge:
                 require_device=True,
             )
             outbox.release(event_id, owner)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             try:
                 current = outbox.inspect_record(event_id)
                 if current is not None and current.owner == owner and current.state in {QueueState.CLAIMED, QueueState.SOURCE_SNAPSHOTTED}:
                     outbox.retry(event_id, owner, reason_code="prepare-failed")
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
             raise
         return event_id
@@ -416,4 +412,4 @@ class HostHarvestBridge:
         return {"expanded": True, "child_count": len(child_ids), "child_event_ids": child_ids, "state": expanded.state.value}
 
 
-__all__ = ["HostHarvestConfig", "HostHarvestBridge", "load_host_policy"]
+__all__ = ["HostHarvestBridge", "HostHarvestConfig", "load_host_policy"]
