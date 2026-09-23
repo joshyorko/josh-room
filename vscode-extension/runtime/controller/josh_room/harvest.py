@@ -91,8 +91,8 @@ def _record_public(record: QueueRecord) -> dict[str, object]:
         "ciphertext_size": record.ciphertext_size,
         "object_key": record.object_key,
         "index_id": record.index_id,
-        "expanded_event_ids": list(record.expanded_event_ids),
-        "expanded_checkpoint": dict(record.expanded_checkpoint) if isinstance(record.expanded_checkpoint, Mapping) else None,
+        "expanded_event_ids": list(getattr(record, "expanded_event_ids", ())),
+        "expanded_checkpoint": dict(getattr(record, "expanded_checkpoint", None)) if isinstance(getattr(record, "expanded_checkpoint", None), Mapping) else None,
     }
 
 
