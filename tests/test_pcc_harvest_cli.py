@@ -46,7 +46,7 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path):
         "config_home": tmp_path / "config",
         "workspace_id": "workspace-synthetic",
         "workspace_path": tmp_path,
-        "repository": "github.com/example/repo",
+        "repository": "https://github.com/example/repo",
         "path_kind": "worktree",
     }
     first = install(platform_name="linux", home=tmp_path, executable=executable, **context)
