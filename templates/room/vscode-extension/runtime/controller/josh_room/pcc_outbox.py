@@ -902,6 +902,7 @@ class PccOutbox:
             raise ValueError("outbox lease duration is invalid")
         self.root = Path(root)
         _validate_root_path(self.root)
+        self.queue_directory = self.root / "queue"
         self.quarantine_directory = self.root / "quarantine"
         self.receipts_directory = self.root / "receipts"
         self._lock_path = self.root / "state.lock"
