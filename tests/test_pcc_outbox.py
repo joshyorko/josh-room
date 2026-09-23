@@ -11,6 +11,7 @@ import josh_room.pcc_outbox as outbox_module
 from josh_room.pcc_outbox import (
     CaptureGap,
     LeaseConflict,
+    OutboxError,
     PccOutbox,
     PreparedFileRecord,
     QueueState,
@@ -77,6 +78,90 @@ def test_state_machine_claims_renews_and_rejects_live_theft(tmp_path):
     assert recovered.owner == "worker-two"
     with pytest.raises(LeaseConflict):
         outbox.transition(receipt.event_id, "worker-one", QueueState.SOURCE_SNAPSHOTTED)
+
+
+def test_claim_specific_claims_only_the_requested_child(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: 100.0, lease_seconds=10)
+    first = _enqueue(outbox, "event-one")
+    second = _enqueue(outbox, "event-two", number=2)
+
+    claimed = outbox.claim_specific(second.event_id, "child-owner")
+
+    assert claimed.event_id == second.event_id
+    assert claimed.state is QueueState.CLAIMED
+    assert claimed.resume_state is QueueState.QUEUED
+    assert claimed.owner == "child-owner"
+    assert outbox.inspect_record(first.event_id).owner is None
+
+
+def test_claim_specific_missing_event_returns_public_safe_error(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+
+    with pytest.raises(OutboxError, match=r"^outbox record not found$"):
+        outbox.claim_specific("missing-event", "child-owner")
+
+
+def test_claim_specific_preserves_live_owner_protection(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: 100.0, lease_seconds=10)
+    receipt = _enqueue(outbox, "event-one")
+    claimed = outbox.claim_specific(receipt.event_id, "live-owner")
+
+    with pytest.raises(LeaseConflict):
+        outbox.claim_specific(receipt.event_id, "child-owner", takeover=True)
+
+    current = outbox.inspect_record(receipt.event_id)
+    assert current == claimed
+
+
+def test_claim_specific_requires_explicit_stale_takeover_and_preserves_resume(tmp_path):
+    now = [100.0]
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: now[0], lease_seconds=10)
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim_specific(receipt.event_id, "old-owner")
+    outbox.transition(receipt.event_id, "old-owner", QueueState.SOURCE_SNAPSHOTTED)
+    now[0] = 111.0
+
+    with pytest.raises(LeaseConflict):
+        outbox.claim_specific(receipt.event_id, "new-owner")
+
+    taken = outbox.claim_specific(receipt.event_id, "new-owner", takeover=True)
+
+    assert taken.state is QueueState.SOURCE_SNAPSHOTTED
+    assert taken.resume_state is QueueState.SOURCE_SNAPSHOTTED
+    assert taken.owner == "new-owner"
+    assert taken.lease_until == 121.0
+
+
+def test_claim_specific_concurrently_claims_distinct_children(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: 100.0)
+    first = _enqueue(outbox, "event-one")
+    second = _enqueue(outbox, "event-two", number=2)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        claimed = list(
+            workers.map(
+                lambda item: outbox.claim_specific(*item),
+                ((first.event_id, "owner-one"), (second.event_id, "owner-two")),
+            )
+        )
+
+    assert {record.event_id for record in claimed} == {"event-one", "event-two"}
+    assert {record.owner for record in claimed} == {"owner-one", "owner-two"}
+
+
+def test_claim_specific_claims_prepared_record_after_release(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: 100.0)
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim_specific(receipt.event_id, "prepare-owner")
+    outbox.transition(receipt.event_id, "prepare-owner", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(receipt.event_id, "prepare-owner", b"ciphertext")
+    outbox.release(receipt.event_id, "prepare-owner")
+
+    drained = outbox.claim_specific(receipt.event_id, "drain-owner")
+
+    assert drained.state is QueueState.CLAIMED
+    assert drained.resume_state is QueueState.PREPARED_ENCRYPTED
+    assert drained.owner == "drain-owner"
 
 
 def test_reused_event_id_cannot_overwrite_a_different_checkpoint(tmp_path):
@@ -469,6 +554,90 @@ def test_commit_clears_ownership_and_lease(tmp_path):
 
     assert committed.owner is None
     assert committed.lease_until is None
+
+
+def test_owner_release_preserves_prepared_state_and_allows_immediate_drain(tmp_path):
+    now = [100.0]
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: now[0], lease_seconds=10)
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    prepared = outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+
+    released = outbox.release(receipt.event_id, "run-owner")
+    assert released.state is QueueState.PREPARED_ENCRYPTED
+    assert released.resume_state is QueueState.PREPARED_ENCRYPTED
+    assert released.owner is None
+    assert released.lease_until is None
+    assert released.ciphertext_sha256 == prepared.ciphertext_sha256
+    assert released.ciphertext_size == prepared.ciphertext_size
+    assert outbox.release(receipt.event_id, "run-owner") == released
+
+    drained = outbox.claim("drain-owner")
+    assert drained is not None
+    assert drained.state is QueueState.CLAIMED
+    assert drained.resume_state is QueueState.PREPARED_ENCRYPTED
+
+
+def test_release_publication_failure_keeps_owner_for_crash_recovery(tmp_path, monkeypatch):
+    now = [100.0]
+    outbox = PccOutbox(tmp_path / "outbox", clock=lambda: now[0], lease_seconds=10)
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+
+    def fail_queue_publication(_record):
+        raise outbox_module.OutboxStorageError("publication-failed", pending_preserved=True)
+
+    original_publish = outbox._publish_record_unlocked
+    monkeypatch.setattr(outbox, "_publish_record_unlocked", fail_queue_publication)
+    with pytest.raises(outbox_module.OutboxStorageError):
+        outbox.release(receipt.event_id, "run-owner")
+
+    pending = outbox.inspect_record(receipt.event_id)
+    assert pending is not None
+    assert pending.state is QueueState.PREPARED_ENCRYPTED
+    assert pending.resume_state is QueueState.PREPARED_ENCRYPTED
+    assert pending.owner == "run-owner"
+    monkeypatch.setattr(outbox, "_publish_record_unlocked", original_publish)
+    now[0] = 200.0
+    recovered = outbox.takeover(receipt.event_id, "drain-owner")
+    assert recovered.owner == "drain-owner"
+    assert recovered.resume_state is QueueState.PREPARED_ENCRYPTED
+
+
+def test_release_rejects_live_owner_conflict_without_clearing_lease(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+
+    with pytest.raises(LeaseConflict):
+        outbox.release(receipt.event_id, "drain-owner")
+
+    pending = outbox.inspect_record(receipt.event_id)
+    assert pending is not None
+    assert pending.owner == "run-owner"
+    assert pending.lease_until is not None
+
+
+def test_release_fails_closed_when_prepared_publication_is_missing(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    receipt = _enqueue(outbox, "event-one")
+    outbox.claim("run-owner")
+    outbox.transition(receipt.event_id, "run-owner", QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted(receipt.event_id, "run-owner", b"ciphertext")
+    outbox.prepared._path(receipt.event_id).unlink()
+
+    with pytest.raises(outbox_module.OutboxStorageError):
+        outbox.release(receipt.event_id, "run-owner")
+
+    pending = outbox.inspect_record(receipt.event_id)
+    assert pending is not None
+    assert pending.owner == "run-owner"
+    assert pending.resume_state is QueueState.PREPARED_ENCRYPTED
 
 
 def test_orphan_prepared_record_can_be_reconciled_without_plaintext(tmp_path):
