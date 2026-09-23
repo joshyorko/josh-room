@@ -525,7 +525,7 @@ def _exit_code(result: dict) -> int:
         return 6
     if error in {"config-invalid", "scheduler-path-invalid", "capture-authority-unavailable"}:
         return 78
-    if error in {"internal", "storage-unavailable"}:
+    if error in {"internal", "storage-unavailable", "corrupt-record"}:
         return 70
     if result.get("command") == "status":
         states = result.get("states", {})
@@ -983,7 +983,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
         if args.list:
             return controller.quarantine_list()
         if args.inspect:
-            return controller.inspect(args.event_id)
+            return controller.quarantine_inspect(args.event_id)
         return controller.quarantine(args.event_id, args.reason or "operator-quarantine")
     if action == "reconcile":
         return controller.reconcile(limit=args.limit, max_seconds=args.max_seconds)

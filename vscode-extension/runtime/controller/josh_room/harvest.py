@@ -268,7 +268,7 @@ class HarvestController:
     def status(self) -> dict[str, object]:
         inspection = self.outbox.inspect()
         counts = Counter(record.state.value for record in inspection.records)
-        return _envelope(
+        result = _envelope(
             ok=not any(item.code == "storage-unavailable" for item in inspection.diagnostics) and not any(
                 counts.get(state.value, 0) for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED)
             ),
@@ -287,6 +287,9 @@ class HarvestController:
             orphan_prepared=list(inspection.orphan_prepared or []),
             diagnostics=[item.to_dict() for item in inspection.diagnostics],
         )
+        if inspection.diagnostics:
+            result["error"] = inspection.diagnostics[0].code
+        return result
 
     def inspect(self, event_id: str | None = None) -> dict[str, object]:
         inspection = self.outbox.inspect(event_id)
@@ -467,6 +470,13 @@ class HarvestController:
             command="quarantine-list",
             records=[_record_public(record) for record in inspection.records if record.state is QueueState.QUARANTINED],
         )
+    def quarantine_inspect(self, event_id: str) -> dict[str, object]:
+        record = self.outbox.inspect_record(event_id)
+        if record is None:
+            raise HarvestError("not-found")
+        if record.state is not QueueState.QUARANTINED:
+            raise HarvestError("not-quarantined")
+        return _envelope(ok=True, command="quarantine-inspect", records=[_record_public(record)])
     def discard(self, event_id: str) -> dict[str, object]:
         record = self.outbox.inspect_record(event_id)
         if record is None or record.state is not QueueState.QUARANTINED:
