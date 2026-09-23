@@ -56,7 +56,7 @@ class QueueState(StrEnum):
     TRIGGER_EXPANDED = "trigger-expanded"
     COMMITTED = "committed"
     RETRYABLE_FAILURE = "retryable-failure"
-    POLICY_DENIED = "policy-denied"
+    QUARANTINED = "quarantined"
     CAPTURE_GAP = "capture-gap"
 
 
