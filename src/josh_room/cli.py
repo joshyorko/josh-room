@@ -55,6 +55,7 @@ from .jat import (
     run_restore,
     run_serve,
 )
+from .keyring import backend_status as _keyring_backend_status
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
@@ -306,6 +307,16 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--age-executable", type=Path)
             command.add_argument("--dimension")
             command.add_argument("--index-file", type=Path, help="encrypted #11 R2 index object")
+        if action in {"plan", "status"}:
+            command.add_argument("--profile")
+            command.add_argument("--policy-config", type=Path)
+            command.add_argument("--config-home", type=Path)
+            command.add_argument("--codex-active-root", type=Path)
+            command.add_argument("--codex-archived-root", type=Path)
+            command.add_argument("--workspace-id")
+            command.add_argument("--workspace-path")
+            command.add_argument("--repository")
+            command.add_argument("--path-kind", default="unknown")
         if action in {"plan", "inspect"}:
             command.add_argument("event_id", nargs="?")
         elif action in {"retry", "quarantine", "discard"}:
@@ -871,6 +882,88 @@ def _harvest_outbox_root(value: Path | None) -> Path:
     return root
 
 
+def _harvest_host_status(args, outbox, policy=None, profile=None):
+    """Return secret-free, network-free readiness for the harvest operator."""
+    if policy is None:
+        try:
+            policy = load_host_policy(
+                policy_config=getattr(args, "policy_config", None),
+                config_home=getattr(args, "config_home", None),
+            )
+        except Exception:  # noqa: BLE001 - unconfigured policy is an explicit state
+            policy = None
+    profile_name = getattr(args, "profile", None)
+    if profile is None and policy is not None and isinstance(profile_name, str):
+        profile = policy.profiles.get(profile_name)
+    policy_state = (
+        {"state": "ready", "profile": profile_name}
+        if profile is not None
+        else {"state": "available" if policy is not None else "unavailable", "reason": "profile-unconfigured" if policy is not None else "policy-config-unavailable"}
+    )
+
+    active = getattr(args, "codex_active_root", None)
+    archived = getattr(args, "codex_archived_root", None)
+    if active is None or archived is None:
+        codex_home = os.environ.get("CODEX_HOME")
+        base = Path(codex_home) if codex_home else Path.home() / ".codex"
+        active = active or Path(os.environ.get("JOSH_ROOM_CODEX_ACTIVE_ROOT", base / "sessions"))
+        archived = archived or Path(os.environ.get("JOSH_ROOM_CODEX_ARCHIVED_ROOT", base / "archived_sessions"))
+    source_state = (
+        {"state": "ready"}
+        if active.is_absolute() and archived.is_absolute() and active.is_dir() and archived.is_dir() and active != archived
+        else {"state": "unavailable", "reason": "source-roots-unavailable"}
+    )
+    try:
+        hook = codex_hook_status()
+        hook_state = "ready" if hook.get("state") == "healthy" and hook.get("trust") == "trusted" else "unavailable"
+        hook = {"state": hook_state, **({"reason": "hook-not-ready"} if hook_state != "ready" else {})}
+    except Exception:  # noqa: BLE001 - diagnostics fail closed
+        hook = {"state": "error", "reason": "hook-status-unavailable"}
+    try:
+        keyring = _keyring_backend_status().to_dict()
+        keyring["state"] = "ready" if keyring.get("available") else "unavailable"
+    except Exception:  # noqa: BLE001 - diagnostics fail closed
+        keyring = {"state": "error", "reason": "keyring-status-unavailable"}
+    try:
+        device = _device.doctor()
+        device = {"state": "ready" if device.get("prepare_allowed") else "unavailable", "reason": "device-not-ready"} if not device.get("prepare_allowed") else {"state": "ready"}
+    except Exception:  # noqa: BLE001 - diagnostics fail closed
+        device = {"state": "error", "reason": "device-status-unavailable"}
+    try:
+        scheduler = _scheduler.status()
+        scheduler = {"state": "ready" if scheduler.get("installed") and scheduler.get("active") and not scheduler.get("stale") else "unavailable", "reason": scheduler.get("error", "scheduler-not-ready")}
+    except Exception:  # noqa: BLE001 - diagnostics fail closed
+        scheduler = {"state": "error", "reason": "scheduler-status-unavailable"}
+    return {
+        "policy": policy_state,
+        "source": source_state,
+        "hook": hook,
+        "keyring": keyring,
+        "device": device,
+        "scheduler": scheduler,
+    }
+
+
+def _harvest_estimate(record):
+    metadata = record.metadata
+    result = {}
+    for target, keys in (("estimated_records", ("estimated_records", "records")), ("estimated_bytes", ("estimated_bytes", "bytes", "content_size"))):
+        for key in keys:
+            value = metadata.get(key)
+            if type(value) is int and 0 <= value <= 1_000_000_000_000:
+                result[target] = value
+                break
+    return result
+
+
+def _harvest_controller_context(args, outbox, *, policy=None, profile=None):
+    return {
+        "host_status": lambda: _harvest_host_status(args, outbox, policy, profile),
+        "estimate": _harvest_estimate,
+    }
+
+
+
 def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
     if getattr(args, "tool", "codex") != "codex":
         raise ValueError("unsupported harvest tool")
@@ -896,9 +989,29 @@ def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
     )
     profile = policy.profiles[args.profile]
     outbox.max_bytes = min(outbox.max_bytes, profile.limits.local_outbox_bytes)
-    return HarvestController(outbox, prepare=bridge.prepare, profile=profile)
+    return HarvestController(
+        outbox,
+        prepare=bridge.prepare,
+        profile=profile,
+        **_harvest_controller_context(args, outbox, policy=policy, profile=profile),
+    )
 def _drain_policy_check(policy, profile, args):
     def check(record):
+        destination = getattr(profile, "destination", None)
+        expected_binding = getattr(destination, "binding_id", None)
+        if (
+            record.metadata.get("workspace_id") != profile.workspace_id
+            or record.metadata.get("destination_class") != destination.kind
+            or (
+                destination.kind == "private-r2"
+                and record.metadata.get("destination_binding_id") != expected_binding
+            )
+            or (
+                destination.kind == "local-only"
+                and "destination_binding_id" in record.metadata
+            )
+        ):
+            return {"decision": "deny", "destination": "local-only", "reason": "scope-binding-mismatch"}
         trigger = record.metadata.get("trigger")
         if trigger not in {"stop", "subagent-stop", "session-end"}:
             return {"decision": "deny", "destination": "local-only"}
@@ -916,23 +1029,45 @@ def _drain_policy_check(policy, profile, args):
     return check
 
 
+def _resolve_drain_profile(policy, args):
+    profile_name = getattr(args, "profile", None)
+    if profile_name:
+        profile = policy.profiles.get(profile_name)
+        if profile is None:
+            raise ValueError("profile-unavailable")
+        return profile
+    workspace_id = getattr(args, "workspace_id", None)
+    if not workspace_id:
+        raise ValueError("profile-unavailable")
+    matches = [profile for profile in policy.profiles.values() if profile.workspace_id == workspace_id]
+    if len(matches) != 1:
+        raise ValueError("profile-unavailable")
+    return matches[0]
+
+
 def _harvest_backend(args, instance: Path, profile=None, policy=None):
-    binding_id = getattr(getattr(profile, "destination", None), "binding_id", None)
-    binding = policy.r2_bindings.get(binding_id) if policy is not None and binding_id is not None else None
+    if profile is None:
+        raise ValueError("profile-unavailable")
+    destination = getattr(profile, "destination", None)
+    if getattr(destination, "kind", None) != "private-r2":
+        return None
+    binding_id = getattr(destination, "binding_id", None)
+    if not isinstance(binding_id, str) or not binding_id:
+        raise ValueError("destination-binding-unavailable")
+    binding = policy.r2_bindings.get(binding_id) if policy is not None else None
     expected_credential = getattr(binding, "credential_profile_ref", None)
-    if binding_id is not None and binding is None:
+    if binding is None or not expected_credential:
         raise ValueError("destination-binding-unavailable")
     try:
         selected = _effective_dimension(args)
-        if selected is None or selected.provider != "r2":
-            return None
-        if expected_credential is not None and getattr(selected, "credential_profile", None) != expected_credential:
-            raise ValueError("destination-binding-mismatch")
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError("destination-binding-unavailable") from error
+    if selected is None or selected.provider != "r2" or getattr(selected, "credential_profile", None) != expected_credential:
+        raise ValueError("destination-binding-mismatch")
+    try:
         return _backend(selected.provider, instance, selected.dimension_id)
     except (OSError, RuntimeError, ValueError) as error:
-        if binding_id is not None:
-            raise ValueError("destination-binding-unavailable") from error
-        return None
+        raise ValueError("destination-binding-unavailable") from error
 
 
 def _harvest_index_file(value: Path | None, default_root: Path | None = None) -> Path | None:
@@ -1004,6 +1139,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             return _scheduler.remove(platform_name=args.platform_name, home=args.home)
         raise ValueError("unsupported schedule action")
     outbox = PccOutbox(_harvest_outbox_root(args.outbox_root))
+    controller = HarvestController(outbox, **_harvest_controller_context(args, outbox))
     action = args.harvest_command
     if action == "run":
         if args.offline and args.drain:
@@ -1024,56 +1160,24 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
                 index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
                 profile=profile,
                 policy_check=_drain_policy_check(policy, profile, args),
+                **_harvest_controller_context(args, outbox, policy=policy, profile=profile),
             )
             return drain_controller.drain(limit=args.limit, max_seconds=args.max_seconds)
         return result
     if action == "drain":
-        if not args.profile:
-            policy = load_host_policy(
-                policy_config=getattr(args, "policy_config", None),
-                config_home=getattr(args, "config_home", None),
-            )
-            def scheduled_policy(record):
-                workspace_id = record.metadata.get("workspace_id")
-                profiles = [profile for profile in policy.profiles.values() if profile.workspace_id == workspace_id]
-                if len(profiles) != 1:
-                    return {"decision": "deny", "destination": "local-only"}
-                profile = profiles[0]
-                trigger = record.metadata.get("trigger")
-                if trigger not in {"stop", "subagent-stop", "session-end"}:
-                    return {"decision": "deny", "destination": "local-only"}
-                context = PolicyContext.from_values(
-                    workspace_id=args.workspace_id or profile.workspace_id,
-                    remote=args.repository,
-                    workspace_path=args.workspace_path,
-                    path_kind=args.path_kind,
-                    context_source="host-observed",
-                )
-                decision = decide(
-                    policy,
-                    CaptureRequest(context=context, logical_sources=("codex.transcript",), trigger=trigger),
-                )
-                return {"decision": decision.kind, "destination": decision.destination_class}
-            controller = HarvestController(
-                outbox,
-                backend=_harvest_backend(args, instance or _instance_root(), None, policy),
-                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
-                policy_check=scheduled_policy,
-            )
-            return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
+
         policy = load_host_policy(
             policy_config=getattr(args, "policy_config", None),
             config_home=getattr(args, "config_home", None),
         )
-        profile = policy.profiles.get(args.profile)
-        if profile is None:
-            raise ValueError("profile-unavailable")
+        profile = _resolve_drain_profile(policy, args)
         controller = HarvestController(
             outbox,
             backend=_harvest_backend(args, instance or _instance_root(), profile, policy),
             index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
             profile=profile,
             policy_check=_drain_policy_check(policy, profile, args),
+            **_harvest_controller_context(args, outbox, policy=policy, profile=profile),
         )
         return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
     if action == "plan":
