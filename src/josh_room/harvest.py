@@ -468,10 +468,17 @@ class HarvestController:
             records=[_record_public(record) for record in inspection.records if record.state is QueueState.QUARANTINED],
         )
     def discard(self, event_id: str) -> dict[str, object]:
-        result = self.quarantine(event_id, "operator-discard")
-        result["command"] = "discard"
-        result.update({"discard": "quarantined", "discarded": False, "evidence_deleted": False})
-        return result
+        record = self.outbox.inspect_record(event_id)
+        if record is None or record.state is not QueueState.QUARANTINED:
+            raise HarvestError("not-discardable")
+        return _envelope(
+            ok=True,
+            command="discard",
+            record=_record_public(record),
+            discarded=True,
+            evidence_deleted=False,
+            receipt="operator-discarded-quarantined",
+        )
     def retry_all(self, reason: str = "operator-retry") -> dict[str, object]:
         results = []
         for record in self.outbox.inspect().records:
