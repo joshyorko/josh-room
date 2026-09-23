@@ -46,7 +46,7 @@ _SAFE_CODES = frozenset({
     "device-unavailable", "capture-authority-unavailable", "normalization-event-required",
     "normalized-event-invalid", "child-lease-unavailable", "provider-authority-unavailable",
     "provider-unavailable", "prepare-failed", "publish-failed", "not-prepared", "policy-denied",
-    "recipient-authority-unavailable", "child-limit", "empty-capture",
+    "recipient-authority-unavailable", "child-limit", "empty-capture", "index-builder-unavailable",
 })
 
 def _safe_code(value: object, fallback: str) -> str:
@@ -222,6 +222,8 @@ class HarvestController:
     def _publish_default(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
         if self.backend is None or not callable(getattr(self.backend, "publish_outbox_evidence", None)):
             raise HarvestError("provider-authority-unavailable")
+        if self.index_ciphertext is None:
+            raise HarvestError("index-builder-unavailable")
         result = self.backend.publish_outbox_evidence(
             outbox,
             record.event_id,

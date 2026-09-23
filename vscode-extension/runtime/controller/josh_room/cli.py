@@ -523,7 +523,7 @@ def _exit_code(result: dict) -> int:
         return 5
     if error in {"policy-denied", "not-retryable"}:
         return 6
-    if error in {"config-invalid", "scheduler-path-invalid", "capture-authority-unavailable"}:
+    if error in {"config-invalid", "scheduler-path-invalid", "capture-authority-unavailable", "index-builder-unavailable"}:
         return 78
     if error in {"internal", "storage-unavailable", "corrupt-record"}:
         return 70
