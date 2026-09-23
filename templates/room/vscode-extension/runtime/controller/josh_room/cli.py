@@ -294,12 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
         if action in {"plan", "inspect"}:
             command.add_argument("event_id", nargs="?")
         elif action in {"retry", "quarantine", "discard"}:
-            command.add_argument("event_id", nargs="?" if action == "retry" else None)
+            command.add_argument("event_id", nargs="?" if action in {"retry", "quarantine"} else None)
         if action == "retry":
             command.add_argument("--all-retryable", action="store_true")
+        if action == "quarantine":
+            command.add_argument("--list", action="store_true")
         if action in {"retry", "quarantine"}:
             command.add_argument("--reason", default=None)
-        _json_option(command)
     schedule = harvest_commands.add_parser("schedule")
     schedule_commands = schedule.add_subparsers(dest="schedule_command", required=True)
     for action in ("install", "status", "remove"):
@@ -931,6 +932,8 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             return controller.retry_all(args.reason or "operator-retry")
         return controller.retry(args.event_id, args.reason or "operator-retry")
     if action == "quarantine":
+        if args.list:
+            return controller.quarantine_list()
         return controller.quarantine(args.event_id, args.reason or "operator-quarantine")
     if action == "discard":
         return controller.discard(args.event_id)
