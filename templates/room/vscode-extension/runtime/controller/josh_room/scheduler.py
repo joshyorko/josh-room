@@ -212,17 +212,20 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         for path in paths:
             if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
                 return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
-        existed = any(path.exists() for path in paths)
-        for path in paths:
+        manifest = _manifest_path(home)
+        existed = any(path.exists() for path in paths) or manifest.exists()
+        for path in (*paths, manifest):
             path.unlink(missing_ok=True)
-        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path) for path in paths])
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path) for path in (*paths, manifest)])
     if selected == "macos":
         path = _mac_path(home)
         if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
-        existed = path.exists()
+        manifest = _manifest_path(home)
+        existed = path.exists() or manifest.exists()
         path.unlink(missing_ok=True)
-        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path)])
+        manifest.unlink(missing_ok=True)
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, files=[str(path), str(manifest)])
     if selected == "windows":
         try:
             process = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True, check=False)
