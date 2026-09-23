@@ -332,6 +332,33 @@ def test_denied_asset_cannot_satisfy_segment_reference():
 
     assert not page.records
     assert {receipt["reason_code"] for receipt in page.quarantines} >= {"policy-mismatch", "missing-asset"}
+def test_asset_reference_category_must_match_asset_event():
+    segment = fixture("golden-session-segment.json")
+    asset = fixture("golden-session-asset.json")
+    segment["session_id"] = asset["session_id"] = "session-assets"
+    asset_payload = b"synthetic asset payload"
+    asset["sha256"] = hashlib.sha256(asset_payload).hexdigest()
+    asset["size"] = len(asset_payload)
+    segment["asset_refs"] = [{
+        "asset_id": asset["asset_id"],
+        "sha256": asset["sha256"],
+        "size": asset["size"],
+        "media_category": asset["media_category"],
+    }]
+    asset["media_category"] = "other"
+    segment_entry = entry(segment, payload=canonical_json(segment))
+    asset_entry = entry(asset, payload=asset_payload)
+    mapping = {
+        segment_entry["index_body"]: segment_entry["index_envelope"],
+        segment_entry["object_body"]: segment_entry["evidence_envelope"],
+        asset_entry["index_body"]: asset_entry["index_envelope"],
+        asset_entry["object_body"]: asset_entry["evidence_envelope"],
+    }
+
+    page = reader([segment_entry, asset_entry], mapping).export(limit=2)
+
+    assert not page.records
+    assert "missing-asset" in {receipt["reason_code"] for receipt in page.quarantines}
 
 
 

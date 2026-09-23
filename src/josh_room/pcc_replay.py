@@ -544,7 +544,7 @@ class ReplayReader:
             digest = canonical_digest(document)
             evidence = item if retain_segment else None
         elif kind == "session-asset":
-            fields = ("kind", "event_id", "session_id", "asset_id", "sha256", "size")
+            fields = ("kind", "event_id", "session_id", "asset_id", "sha256", "size", "media_category")
             digest = None
             evidence = None
         else:
@@ -559,7 +559,7 @@ class ReplayReader:
         assets = [item for item in valid if item.document.get("kind") == "session-asset"]
         finals = [item for item in valid if item.document.get("kind") == "session-final"]
         asset_keys = {
-            (item.document.get("session_id"), item.document.get("asset_id"), item.document.get("sha256"), item.document.get("size"))
+            (item.document.get("session_id"), item.document.get("asset_id"), item.document.get("sha256"), item.document.get("size"), item.document.get("media_category"))
             for item in assets
         }
         by_session: dict[object, list[_ChainEvidence]] = {}
@@ -594,7 +594,7 @@ class ReplayReader:
                 chain_bad = declared != previous and not (declared is None and previous is None)
                 refs = document.get("asset_refs", ())
                 missing_asset = not isinstance(refs, list) or any(
-                    (session_id, ref.get("asset_id"), ref.get("sha256"), ref.get("size")) not in asset_keys
+                    (session_id, ref.get("asset_id"), ref.get("sha256"), ref.get("size"), ref.get("media_category")) not in asset_keys
                     for ref in refs
                     if isinstance(ref, Mapping)
                 )
