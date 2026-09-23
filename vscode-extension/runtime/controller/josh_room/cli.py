@@ -946,7 +946,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             backend=_harvest_backend(args, instance or _instance_root()),
             index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
             profile=profile,
-            policy_check=lambda _record: {"decision": "allow", "destination": profile.destination.kind},
+            policy_check=lambda _record: {"decision": "allow" if profile.destination.kind == "private-r2" else "deny", "destination": profile.destination.kind},
         )
         return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
     controller = HarvestController(outbox)

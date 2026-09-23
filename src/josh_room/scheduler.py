@@ -95,7 +95,9 @@ def _deactivate(platform_name: str, home: Path) -> str:
         if platform_name == "macos":
             subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=True, capture_output=True)
             return "inactive"
-    except (OSError, subprocess.CalledProcessError):
+    except subprocess.CalledProcessError:
+        return "inactive"
+    except OSError:
         return "deactivation-failed"
     return "unsupported"
 
