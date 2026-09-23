@@ -94,6 +94,7 @@ from .pcc_hooks import (
     remove_codex_hooks,
     repair_codex_hooks,
 )
+from .policy import CaptureRequest, PolicyContext, decide
 from .pcc_outbox import PccOutbox
 from .progress import report_progress
 from .tls import initialize_system_trust
@@ -866,6 +867,7 @@ def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
     )
     from .codex_adapter import CodexRoots
 
+
     roots = CodexRoots(args.codex_active_root, args.codex_archived_root)
     bridge = HostHarvestBridge(
         HostHarvestConfig(
@@ -880,6 +882,23 @@ def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
         )
     )
     return HarvestController(outbox, prepare=bridge.prepare)
+def _drain_policy_check(policy, profile, args):
+    def check(record):
+        trigger = record.metadata.get("trigger")
+        if trigger not in {"stop", "subagent-stop", "session-end"}:
+            return {"decision": "deny", "destination": "local-only"}
+        context = PolicyContext.from_values(
+            workspace_id=args.workspace_id or profile.workspace_id,
+            remote=args.repository,
+            workspace_path=args.workspace_path,
+            path_kind=args.path_kind,
+        )
+        decision = decide(
+            policy,
+            CaptureRequest(context=context, logical_sources=("codex.transcript",), trigger=trigger),
+        )
+        return {"decision": decision.kind, "destination": decision.destination_class}
+    return check
 
 
 def _harvest_backend(args, instance: Path):
@@ -946,7 +965,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             backend=_harvest_backend(args, instance or _instance_root()),
             index_ciphertext=_harvest_index_file(getattr(args, "index_file", None)),
             profile=profile,
-            policy_check=lambda _record: {"decision": "allow" if profile.destination.kind == "private-r2" else "deny", "destination": profile.destination.kind},
+            policy_check=_drain_policy_check(policy, profile, args),
         )
         return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
     controller = HarvestController(outbox)

@@ -257,9 +257,11 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
                 return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
         manifest = _manifest_path(home)
         existed = any(path.exists() for path in paths) or manifest.exists()
+        activation = _deactivate(selected, home)
+        if activation == "deactivation-failed":
+            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
         for path in (*paths, manifest):
             path.unlink(missing_ok=True)
-        activation = _deactivate(selected, home)
         return _envelope(ok=activation != "deactivation-failed", action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path) for path in (*paths, manifest)])
     if selected == "macos":
         path = _mac_path(home)
@@ -267,10 +269,12 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
         manifest = _manifest_path(home)
         existed = path.exists() or manifest.exists()
+        activation = _deactivate(selected, home)
+        if activation == "deactivation-failed":
+            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
         path.unlink(missing_ok=True)
         manifest.unlink(missing_ok=True)
-        activation = _deactivate(selected, home)
-        return _envelope(ok=activation != "deactivation-failed", action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path), str(manifest)])
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path), str(manifest)])
     if selected == "windows":
         try:
             process = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True, text=True, check=False)
