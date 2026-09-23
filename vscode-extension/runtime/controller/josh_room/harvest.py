@@ -221,7 +221,7 @@ class HarvestController:
     def _record_scope_matches(self, record: QueueRecord) -> bool:
         """Require queued delivery metadata to match the selected host profile."""
         if self.profile is None:
-            return True
+            return False
         destination = getattr(self.profile, "destination", None)
         expected_kind = getattr(destination, "kind", None)
         expected_binding = getattr(destination, "binding_id", None)
@@ -245,7 +245,9 @@ class HarvestController:
         return True
 
     def _publication_allowed(self, record: QueueRecord) -> bool:
-        if self.profile is not None and not self._record_scope_matches(record):
+        if self.profile is None:
+            return False
+        if not self._record_scope_matches(record):
             return False
         if self.policy_check is not None:
             try:
@@ -576,7 +578,7 @@ class HarvestController:
                 continue
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
                 continue
-            if self.profile is not None and not self._publication_scope_matches(self.outbox, record):
+            if not self._publication_scope_matches(self.outbox, record):
                 continue
             if record.owner is not None and (record.lease_until is None or record.lease_until > now):
                 continue
