@@ -459,6 +459,7 @@ class HarvestController:
         ok = not any(item.get("state") == "reconcile-failed" for item in repaired)
         return _envelope(
             ok=ok,
+            command="reconcile",
             bounded=True,
             repaired=repaired,
             diagnostics=[item.to_dict() for item in inspection.diagnostics],
