@@ -899,6 +899,21 @@ def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
     return HarvestController(outbox, prepare=bridge.prepare, profile=profile)
 def _drain_policy_check(policy, profile, args):
     def check(record):
+        destination = getattr(profile, "destination", None)
+        expected_binding = getattr(destination, "binding_id", None)
+        if (
+            record.metadata.get("workspace_id") != profile.workspace_id
+            or record.metadata.get("destination_class") != destination.kind
+            or (
+                destination.kind == "private-r2"
+                and record.metadata.get("destination_binding_id") != expected_binding
+            )
+            or (
+                destination.kind == "local-only"
+                and "destination_binding_id" in record.metadata
+            )
+        ):
+            return {"decision": "deny", "destination": "local-only", "reason": "scope-binding-mismatch"}
         trigger = record.metadata.get("trigger")
         if trigger not in {"stop", "subagent-stop", "session-end"}:
             return {"decision": "deny", "destination": "local-only"}
@@ -1039,6 +1054,19 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
                 if len(profiles) != 1:
                     return {"decision": "deny", "destination": "local-only"}
                 profile = profiles[0]
+                destination = profile.destination
+                if (
+                    record.metadata.get("destination_class") != destination.kind
+                    or (
+                        destination.kind == "private-r2"
+                        and record.metadata.get("destination_binding_id") != destination.binding_id
+                    )
+                    or (
+                        destination.kind == "local-only"
+                        and "destination_binding_id" in record.metadata
+                    )
+                ):
+                    return {"decision": "deny", "destination": "local-only", "reason": "scope-binding-mismatch"}
                 trigger = record.metadata.get("trigger")
                 if trigger not in {"stop", "subagent-stop", "session-end"}:
                     return {"decision": "deny", "destination": "local-only"}

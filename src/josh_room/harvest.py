@@ -154,7 +154,35 @@ class HarvestController:
         self.publish = publish or self._publish_default
         self.owner_factory = owner_factory
 
+    def _record_scope_matches(self, record: QueueRecord) -> bool:
+        """Require queued delivery metadata to match the selected host profile."""
+        if self.profile is None:
+            return True
+        destination = getattr(self.profile, "destination", None)
+        expected_kind = getattr(destination, "kind", None)
+        expected_binding = getattr(destination, "binding_id", None)
+        if record.metadata.get("workspace_id") != getattr(self.profile, "workspace_id", None):
+            return False
+        if record.metadata.get("destination_class") != expected_kind:
+            return False
+        actual_binding = record.metadata.get("destination_binding_id")
+        if expected_kind == "private-r2":
+            return actual_binding == expected_binding
+        return actual_binding is None
+
+    def _publication_scope_matches(self, outbox: PccOutbox, record: QueueRecord) -> bool:
+        if not self._record_scope_matches(record):
+            return False
+        index_event_id = record.metadata.get("index_event_id")
+        if isinstance(index_event_id, str):
+            index_record = outbox.inspect_record(index_event_id)
+            if index_record is not None and not self._record_scope_matches(index_record):
+                return False
+        return True
+
     def _publication_allowed(self, record: QueueRecord) -> bool:
+        if self.profile is not None and not self._record_scope_matches(record):
+            return False
         if self.policy_check is not None:
             try:
                 current = self.policy_check(record)
@@ -326,6 +354,49 @@ class HarvestController:
     def _claim_one(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
         return self.outbox.claim(owner), owner
+    def _reject_scope_mismatches(self, attempted: set[str], failures: list[dict[str, object]]) -> None:
+        """Reject mismatched prepared records before any publication claim."""
+        if self.profile is None:
+            return
+        eligible = {
+            QueueState.PREPARED_ENCRYPTED,
+            QueueState.OBJECT_UPLOADED,
+            QueueState.INDEX_PUBLISHED,
+        }
+        for candidate in self.outbox.inspect().records:
+            if (
+                candidate.event_id in attempted
+                or candidate.metadata.get("object_kind") == "index-event"
+                or candidate.resume_state not in eligible
+                or self._publication_scope_matches(self.outbox, candidate)
+            ):
+                continue
+            attempted.add(candidate.event_id)
+            owner = self.owner_factory()
+            try:
+                claimed = self.outbox.claim_specific(
+                    candidate.event_id,
+                    owner,
+                    takeover=candidate.owner is not None,
+                )
+            except Exception:  # noqa: BLE001 - a concurrent claimant may win
+                continue
+            if claimed is None:
+                continue
+            try:
+                self.outbox.transition(
+                    candidate.event_id,
+                    owner,
+                    QueueState.POLICY_DENIED,
+                    reason_code="scope-binding-mismatch",
+                )
+            except Exception:  # noqa: BLE001 - preserve a durable claim failure
+                try:
+                    self.outbox.retry(candidate.event_id, owner, reason_code="scope-binding-mismatch")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            failures.append({"event_id": candidate.event_id, "code": "scope-binding-mismatch"})
+
 
     def _claim_prepare(self) -> tuple[QueueRecord | None, str]:
         owner = self.owner_factory()
@@ -426,6 +497,7 @@ class HarvestController:
         delivered: list[dict[str, object]] = []
         failures: list[dict[str, object]] = []
         attempted: set[str] = set()
+        self._reject_scope_mismatches(attempted, failures)
         for _ in range(limit):
             if max_seconds is not None and time.monotonic() - started >= max_seconds:
                 failures.append({"event_id": None, "code": "cancelled"})
@@ -440,6 +512,13 @@ class HarvestController:
                 except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": "not-prepared"})
+                continue
+            if not self._publication_scope_matches(self.outbox, record):
+                try:
+                    self.outbox.transition(record.event_id, owner, QueueState.POLICY_DENIED, reason_code="scope-binding-mismatch")
+                except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
+                    pass
+                failures.append({"event_id": record.event_id, "code": "scope-binding-mismatch"})
                 continue
             if not self._publication_allowed(record):
                 try:

@@ -160,3 +160,89 @@ def test_publish_rejects_unlinked_index_file_before_backend_upload(tmp_path):
         controller._publish_default(outbox, record, "worker-one")
     assert calls == []
     assert outbox.inspect_record("event-unlinked-index").state is QueueState.PREPARED_ENCRYPTED
+
+
+def test_drain_rejects_mixed_profile_records_without_upload(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    checkpoint = {
+        "source": "synthetic",
+        "representation": "active-jsonl",
+        "start": 0,
+        "end": 1,
+        "prefix_sha256": "a" * 64,
+    }
+
+    def stage(event_id, workspace_id, binding_id):
+        index_id = f"{event_id}-index"
+        evidence_metadata = {
+            "object_kind": "session-segment",
+            "policy_decision": "allow",
+            "destination_class": "private-r2",
+            "destination_binding_id": binding_id,
+            "workspace_id": workspace_id,
+            "index_event_id": index_id,
+        }
+        outbox.enqueue(
+            event_id=event_id,
+            session_id=f"session-{event_id}",
+            checkpoint=checkpoint,
+            metadata=evidence_metadata,
+            coalesce=False,
+        )
+        owner = f"prepare-{event_id}"
+        outbox.claim_specific(event_id, owner)
+        outbox.transition(event_id, owner, QueueState.SOURCE_SNAPSHOTTED)
+        outbox.prepare_encrypted(event_id, owner, f"ciphertext-{event_id}".encode(), metadata={"object_kind": "session-segment"})
+        outbox.release(event_id, owner)
+        evidence = outbox.inspect_record(event_id)
+        assert evidence is not None
+        index_metadata = {
+            "object_kind": "index-event",
+            "policy_decision": "allow",
+            "destination_class": "private-r2",
+            "destination_binding_id": binding_id,
+            "workspace_id": workspace_id,
+            "evidence_kind": "session-segment",
+            "evidence_event_id": event_id,
+            "ciphertext_sha256": evidence.ciphertext_sha256,
+            "ciphertext_size": evidence.ciphertext_size,
+        }
+        outbox.enqueue(
+            event_id=index_id,
+            session_id=f"session-{event_id}",
+            checkpoint=checkpoint,
+            metadata=index_metadata,
+            coalesce=False,
+        )
+        outbox.claim_specific(index_id, owner)
+        outbox.transition(index_id, owner, QueueState.SOURCE_SNAPSHOTTED)
+        outbox.prepare_encrypted(index_id, owner, f"index-{event_id}".encode(), metadata={"object_kind": "index-event"})
+        outbox.release(index_id, owner)
+        return index_id
+
+    personal_index = stage("event-personal", "workspace-personal", "binding-personal")
+    work_index = stage("event-work", "workspace-work", "binding-work")
+    profile = SimpleNamespace(
+        workspace_id="workspace-personal",
+        destination=Destination("private-r2", "binding-personal"),
+    )
+    uploads = []
+
+    def publish(box, record, owner):
+        uploads.append(record.event_id)
+        box.mark_uploaded(record.event_id, owner, object_key=f"evidence/objects/sha256/{record.ciphertext_sha256}", ciphertext_size=record.ciphertext_size)
+        box.publish_index(record.event_id, owner, index_id="a" * 64)
+        box.commit(record.event_id, owner)
+        return SimpleNamespace(committed=True, object=None)
+
+    drained = HarvestController(
+        outbox,
+        publish=publish,
+        profile=profile,
+        owner_factory=lambda: "drain-owner",
+    ).drain(limit=2)
+    assert uploads == ["event-personal"]
+    assert outbox.inspect_record("event-personal").state is QueueState.COMMITTED
+    assert outbox.inspect_record("event-work").state is QueueState.POLICY_DENIED
+    assert outbox.inspect_record(personal_index).state is QueueState.PREPARED_ENCRYPTED
+    assert outbox.inspect_record(work_index).state is QueueState.PREPARED_ENCRYPTED
