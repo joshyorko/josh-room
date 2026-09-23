@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,89 @@ def _queued(root: Path) -> PccOutbox:
     )
     return outbox
 
+
+def _installed_scheduler(tmp_path: Path, platform_name: str) -> tuple[Path, ...]:
+    executable = tmp_path / "josh-room"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+    launcher = tmp_path / ".local" / "bin" / "josh-room"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o700)
+    result = install(
+        platform_name=platform_name,
+        home=tmp_path,
+        executable=executable,
+        profile="synthetic",
+        codex_active_root=tmp_path / "codex-active",
+        codex_archived_root=tmp_path / "codex-archived",
+        policy_config=tmp_path / "policy.json",
+        config_home=tmp_path / "config",
+        workspace_id="workspace-synthetic",
+        workspace_path=tmp_path,
+        repository="https://github.com/example/repo",
+        path_kind="worktree",
+    )
+    assert result["ok"] is True
+    manifest = tmp_path / ".config" / "josh-room" / "pcc-harvest.scheduler.json"
+    context_id = json.loads(manifest.read_text(encoding="utf-8"))["context_id"]
+    state = tmp_path / ".local" / "state" / "josh-room" / "scheduler" / f"{context_id}.json"
+    native = (
+        (tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.service", tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.timer")
+        if platform_name == "linux"
+        else (tmp_path / "Library" / "LaunchAgents" / "dev.josh-room.pcc-harvest.plist",)
+    )
+    if platform_name != "linux":
+        native[0].parent.mkdir(parents=True)
+        native[0].write_text("plist", encoding="utf-8")
+    return (*native, manifest, state)
+
+
+@pytest.mark.parametrize(
+    ("platform_name", "message"),
+    (
+        ("linux", "Failed to stop josh-room-pcc-harvest.timer: Access denied."),
+        ("darwin", "launchctl: permission denied"),
+    ),
+)
+def test_scheduler_remove_preserves_definitions_when_deactivation_fails(tmp_path, monkeypatch, platform_name, message):
+    targets = _installed_scheduler(tmp_path, platform_name)
+    before = {path: path.read_bytes() for path in targets}
+    monkeypatch.setattr("josh_room.scheduler._home", lambda: tmp_path)
+
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr=message)
+
+    monkeypatch.setattr("josh_room.scheduler.subprocess.run", fail)
+    result = remove(platform_name=platform_name, home=tmp_path)
+    assert result["ok"] is False
+    assert result["error"] == "scheduler-remove-failed"
+    assert result["activation"] == "deactivation-failed"
+    assert result["removed"] is False and result["changed"] is False
+    assert {path: path.read_bytes() for path in targets} == before
+
+
+@pytest.mark.parametrize(
+    ("platform_name", "message"),
+    (
+        ("linux", "Failed to stop josh-room-pcc-harvest.timer: Unit josh-room-pcc-harvest.timer not loaded."),
+        ("darwin", 'Could not find service "dev.josh-room.pcc-harvest" in domain for user.'),
+    ),
+)
+def test_scheduler_remove_treats_verified_absence_as_idempotent(tmp_path, monkeypatch, platform_name, message):
+    targets = _installed_scheduler(tmp_path, platform_name)
+    monkeypatch.setattr("josh_room.scheduler._home", lambda: tmp_path)
+
+    def absent(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr=message)
+
+    monkeypatch.setattr("josh_room.scheduler.subprocess.run", absent)
+    first = remove(platform_name=platform_name, home=tmp_path)
+    second = remove(platform_name=platform_name, home=tmp_path)
+    assert first["ok"] is True and first["changed"] is True
+    assert first["activation"] == "inactive"
+    assert second["ok"] is True and second["changed"] is False
+    assert all(not path.exists() for path in targets)
 
 def test_plan_status_inspect_are_content_free(tmp_path):
     controller = HarvestController(_queued(tmp_path / "outbox"), owner_factory=lambda: "worker-1")
