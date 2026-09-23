@@ -1,7 +1,7 @@
 """Reversible one-shot scheduler integration for PCC harvest."""
 from __future__ import annotations
 
-import hashlib
+import json
 import os
 import pwd
 import stat
