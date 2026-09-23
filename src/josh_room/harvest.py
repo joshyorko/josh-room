@@ -114,13 +114,57 @@ class HarvestController:
         prepare: Callable[[PccOutbox, QueueRecord, str], object] | None = None,
         publish: Callable[[PccOutbox, QueueRecord, str], object] | None = None,
         owner_factory: Callable[[], str] = _owner,
+        profile: object | None = None,
+        recipient_resolver: Callable[[str], object] | None = None,
+        backend: object | None = None,
+        index_ciphertext: bytes | Path | None = None,
     ) -> None:
         if not isinstance(outbox, PccOutbox):
             raise TypeError("outbox is required")
         self.outbox = outbox
-        self.prepare = prepare
-        self.publish = publish
+        self.profile = profile
+        self.recipient_resolver = recipient_resolver
+        self.backend = backend
+        self.index_ciphertext = index_ciphertext
+        self.prepare = prepare or self._prepare_default
+        self.publish = publish or self._publish_default
         self.owner_factory = owner_factory
+
+    def _prepare_default(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
+        from .device import require_prepare_upload
+        from .pcc_crypto import encrypt_and_prepare
+        from .session_normalizer import NormalizationEvent
+
+        require_prepare_upload()
+        raw = record.metadata.get("normalization_event")
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("document"), Mapping):
+            raise HarvestError("normalization-event-required")
+        if self.profile is None or self.recipient_resolver is None:
+            raise HarvestError("capture-authority-unavailable")
+        event = NormalizationEvent(str(raw.get("kind")), dict(raw["document"]))
+        receipt = encrypt_and_prepare(
+            event,
+            outbox,
+            owner,
+            self.profile,
+            self.recipient_resolver,
+            require_device=True,
+        )
+        return {"event_id": receipt.event_id, "kind": receipt.kind, "ciphertext_size": receipt.ciphertext_size}
+
+    def _publish_default(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
+        if self.backend is None or not callable(getattr(self.backend, "publish_outbox_evidence", None)):
+            raise HarvestError("provider-authority-unavailable")
+        result = self.backend.publish_outbox_evidence(
+            outbox,
+            record.event_id,
+            owner,
+            index_ciphertext=self.index_ciphertext,
+        )
+        return {
+            "committed": bool(getattr(result, "committed", False)),
+            "object_key": getattr(getattr(result, "object", None), "key", None),
+        }
 
     def plan(self, event_id: str | None = None) -> dict[str, object]:
         inspection = self.outbox.inspect(event_id)
@@ -211,7 +255,7 @@ class HarvestController:
                 if outcome is not None:
                     prepared[-1]["prepare"] = _public_mapping(outcome)
             except Exception as error:  # noqa: BLE001 - callback details map to stable codes
-                code = getattr(error, "code", None) or "prepare-failed"
+                code = getattr(error, "code", None) or ("device-unavailable" if error.__class__.__name__ == "DeviceError" else "prepare-failed")
                 code = getattr(code, "value", code)
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code=str(code))
@@ -249,11 +293,11 @@ class HarvestController:
                 outcome = self.publish(self.outbox, record, owner)
                 current = self.outbox.inspect_record(record.event_id)
                 item = _record_public(current or record)
-                if isinstance(outcome, Mapping):
-                    item["publish"] = dict(outcome)
+                if outcome is not None:
+                    item["publish"] = _public_mapping(outcome)
                 delivered.append(item)
             except Exception as error:  # noqa: BLE001 - provider details map to stable codes
-                code = getattr(error, "code", None) or "publish-failed"
+                code = getattr(error, "code", None) or ("provider-unavailable" if error.__class__.__name__ in {"R2EvidenceError", "R2EvidencePublicationError"} else "publish-failed")
                 code = getattr(code, "value", code)
                 try:
                     self.outbox.retry(record.event_id, owner, reason_code=str(code))
