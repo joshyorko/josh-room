@@ -388,7 +388,8 @@ def _xml_arg(value: str) -> str:
 def _mac_content(executable: str, interval: int, home: Path, context: SchedulerContext, context_id: str | None = None) -> str:
     del home
     argv = context.argv(executable, context_id)
-    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in ["/usr/bin/env", "josh-room", *argv[1:]])
+    launcher = ["/bin/sh", "-c", 'exec "$HOME/.local/bin/josh-room" "$@"', "josh-room", *argv[1:]]
+    arguments = "".join(f"<string>{_xml_arg(value)}</string>" for value in launcher)
     path_value = "$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:/bin"
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

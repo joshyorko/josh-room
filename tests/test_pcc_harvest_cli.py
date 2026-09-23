@@ -125,7 +125,7 @@ def test_scheduler_native_definitions_are_path_free(tmp_path):
     assert "$PROFILE" not in service and "$$PROFILE" not in service
     assert "--scheduler-context-id" in service
     assert "%h/.local/bin/josh-room" in service
-    assert "/usr/bin/env" in plist and "<string>josh-room</string>" in plist
+    assert "/bin/sh" in plist and 'exec "$HOME/.local/bin/josh-room" "$@"' in plist
 
 def test_scheduler_windows_is_truthfully_unsupported(tmp_path):
     assert install(platform_name="windows", home=tmp_path)["error"] == "scheduler-unsupported-platform"
