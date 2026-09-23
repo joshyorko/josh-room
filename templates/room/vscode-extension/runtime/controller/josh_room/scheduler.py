@@ -214,6 +214,14 @@ def _runtime_executable(value: str | os.PathLike[str]) -> str:
     return _executable(candidate)
 
 
+def load_context(context_id: str, *, home: Path | None = None, executable: str | os.PathLike[str] | None = None) -> SchedulerContext:
+    """Load and validate an installed scheduler context without exposing it."""
+    selected_home = _trusted_home(home)
+    context, stored_executable = _load_context_state(selected_home, _context_id(context_id))
+    if executable is not None and _runtime_executable(executable) != stored_executable:
+        raise ValueError("scheduler executable is not trusted")
+    return context
+
 def launch_context(
     context_id: str,
     *,

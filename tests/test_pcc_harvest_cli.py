@@ -14,7 +14,7 @@ from josh_room.scheduler import (
     _linux_content,
     _mac_content,
     _windows_command,
-    launch_context,
+    install,
     load_context,
     remove,
     status,
@@ -39,7 +39,7 @@ def test_plan_status_inspect_are_content_free(tmp_path):
     inspected = controller.inspect()
     assert inspected["metadata_only"] is True
     assert "path" not in str(inspected)
-def test_scheduler_install_status_remove_is_idempotent(tmp_path):
+def test_scheduler_install_status_remove_is_idempotent(tmp_path, monkeypatch):
     executable = tmp_path / "josh-room"
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     executable.chmod(0o700)
