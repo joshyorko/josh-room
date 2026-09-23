@@ -55,10 +55,10 @@ from .jat import (
     run_restore,
     run_serve,
 )
+from .keyring import backend_status as _keyring_backend_status
 from .keyring import lookup_value as lookup_keyring_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
-from .keyring import backend_status as _keyring_backend_status
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
 from .minio import check_bucket_access as check_minio_bucket
