@@ -148,7 +148,7 @@ def _systemd_arg(value: str) -> str:
 
 
 def _linux_content(executable: str, interval: int) -> tuple[str, str]:
-    command = f"/usr/bin/env --ignore-environment HOME=%h PATH=/usr/bin:/bin {_systemd_arg(executable)} harvest run --offline --drain --limit 100"
+    command = f"/usr/bin/env --ignore-environment HOME=%h PATH=/usr/bin:/bin {_systemd_arg(executable)} harvest run --drain --limit 100"
     service = f"[Unit]\nDescription=Josh Room PCC harvest\nRefuseManualStart=yes\n\n[Service]\nType=oneshot\nExecStart={command}\n"
     timer = f"[Unit]\nDescription=Josh Room PCC harvest timer\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec={interval}s\nPersistent=true\nUnit=josh-room-pcc-harvest.service\n\n[Install]\nWantedBy=timers.target\n"
     return service, timer
@@ -161,7 +161,7 @@ def _mac_content(executable: str, interval: int, home: Path) -> str:
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.josh-room.pcc-harvest</string>
-  <key>ProgramArguments</key><array><string>{escaped}</string><string>harvest</string><string>run</string><string>--offline</string><string>--drain</string><string>--limit</string><string>100</string></array>
+  <key>ProgramArguments</key><array><string>{escaped}</string><string>harvest</string><string>run</string><string>--drain</string><string>--limit</string><string>100</string></array>
   <key>EnvironmentVariables</key><dict><key>HOME</key><string>{home_value}</string><key>PATH</key><string>/usr/bin:/bin</string></dict>
   <key>StartInterval</key><integer>{interval}</integer>
   <key>RunAtLoad</key><false/>

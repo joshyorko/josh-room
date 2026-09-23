@@ -972,6 +972,8 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
     outbox = PccOutbox(_harvest_outbox_root(args.outbox_root))
     action = args.harvest_command
     if action == "run":
+        if args.offline and args.drain:
+            raise ValueError("offline-drain-conflict")
         controller = _harvest_bridge_controller(args, outbox)
         result = controller.run(limit=args.limit, offline=args.offline, max_seconds=args.max_seconds)
         if args.drain and result.get("ok"):
