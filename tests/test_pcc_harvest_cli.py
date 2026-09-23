@@ -15,9 +15,9 @@ from josh_room.scheduler import (
     _mac_content,
     _windows_command,
     install,
+    launch_context,
     load_context,
     remove,
-    status,
 )
 
 
