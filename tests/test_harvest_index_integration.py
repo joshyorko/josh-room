@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import pytest
 from types import SimpleNamespace
+
+import pytest
 
 from josh_room import harvest_bridge as bridge_module
 from josh_room.adapter_contract import Checkpoint, LogicalSourceName, PlanStatus
