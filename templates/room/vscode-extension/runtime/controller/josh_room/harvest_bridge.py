@@ -313,10 +313,14 @@ class HostHarvestBridge:
         trigger = parent.metadata.get("trigger")
         if trigger not in {"stop", "subagent-stop", "session-end"}:
             raise HarvestError("policy-denied")
+        binding_id = getattr(getattr(self.profile, "destination", None), "binding_id", None)
+        if self.profile.destination.kind == "private-r2" and not isinstance(binding_id, str):
+            raise HarvestError("policy-denied")
         metadata = {
             "object_kind": event.kind,
             "policy_decision": "allow",
             "destination_class": self.profile.destination.kind,
+            **({"destination_binding_id": binding_id} if binding_id is not None else {}),
             "workspace_id": self.profile.workspace_id,
             "source_adapter": "codex-transcript",
             "source_adapter_version": "1",
