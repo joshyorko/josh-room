@@ -11,6 +11,7 @@ except ImportError:  # pragma: no cover - Windows
     pwd = None
 
 import stat
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -204,10 +205,22 @@ def _load_context_state(home: Path, context_id: str) -> tuple[SchedulerContext, 
     except (OSError, KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("scheduler context is invalid") from error
 
-def load_context(context_id: str, *, home: Path | None = None) -> SchedulerContext:
+def _runtime_executable(value: str | os.PathLike[str]) -> str:
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        located = shutil.which(str(candidate))
+        if located is None:
+            raise ValueError("scheduler executable is not trusted")
+        candidate = Path(located)
+    return _executable(candidate)
+
+
+def load_context(context_id: str, *, home: Path | None = None, executable: str | os.PathLike[str] | None = None) -> SchedulerContext:
     """Load and validate an installed scheduler context without exposing it."""
     selected_home = _trusted_home(home)
-    context, _ = _load_context_state(selected_home, _context_id(context_id))
+    context, stored_executable = _load_context_state(selected_home, _context_id(context_id))
+    if executable is not None and _runtime_executable(executable) != stored_executable:
+        raise ValueError("scheduler executable is not trusted")
     return context
 
 

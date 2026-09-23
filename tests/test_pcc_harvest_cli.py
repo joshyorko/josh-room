@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from josh_room.cli import build_parser
 from josh_room.harvest import HarvestController
 from josh_room.pcc_enqueue import enqueue_trigger
@@ -79,6 +81,11 @@ def test_scheduler_install_status_remove_is_idempotent(tmp_path):
     assert loaded.workspace_id == "workspace-synthetic"
     assert loaded.path_kind == "worktree"
     assert str(tmp_path) in state_text
+    conflicting = tmp_path / "conflicting"
+    conflicting.write_text("#!/bin/sh\n", encoding="utf-8")
+    conflicting.chmod(0o700)
+    with pytest.raises(ValueError, match="scheduler executable"):
+        load_context(manifest["context_id"], home=tmp_path, executable=conflicting)
     service = (tmp_path / ".config" / "systemd" / "user" / "josh-room-pcc-harvest.service").read_text(encoding="utf-8")
     assert "--scheduler-context-id" in service
     assert "--codex-active-root" not in service and "--codex-archived-root" not in service

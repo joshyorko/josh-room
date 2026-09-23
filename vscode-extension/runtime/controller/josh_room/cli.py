@@ -950,7 +950,7 @@ def _load_scheduler_context(args) -> None:
     context_id = getattr(args, "scheduler_context_id", None)
     if not context_id:
         return
-    context = _scheduler.load_context(context_id)
+    context = _scheduler.load_context(context_id, executable=sys.argv[0])
     args.profile = context.profile
     args.codex_active_root = Path(context.codex_active_root)
     args.codex_archived_root = Path(context.codex_archived_root)
