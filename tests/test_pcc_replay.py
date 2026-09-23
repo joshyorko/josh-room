@@ -488,7 +488,8 @@ def test_oversized_advertised_evidence_size_is_quarantined_before_scan_budget():
 
     assert not page.records
     assert {receipt["reason_code"] for receipt in page.quarantines} == {"ciphertext-size-invalid"}
-    assert page.complete is True
+    assert page.complete is False
+    assert page.cursor is None
 
 
 def test_metadata_only_inspection_never_fetches_or_decrypts():
@@ -705,20 +706,25 @@ def test_failed_index_reads_still_consume_cumulative_scan_budget():
         ("malformed", "ciphertext-size-invalid"),
     ],
 )
-def test_unselected_invalid_index_does_not_stall_cursor(listed_size, expected_reason):
+def test_unselected_invalid_index_blocks_record_emission(listed_size, expected_reason):
     items = []
     mapping = {}
-    for event_id in ("event-valid-index", "event-oversized-index"):
+    for event_id in ("event-valid-index", "event-invalid-index"):
         segment = fixture("golden-session-segment.json")
         segment["event_id"] = event_id
-        segment["session_id"] = f"session-{event_id}"
+        segment["session_id"] = "session-shared"
         segment["asset_refs"] = []
         item = entry(segment, payload=canonical_json(segment))
         items.append(item)
         mapping[item["index_body"]] = item["index_envelope"]
         mapping[item["object_body"]] = item["evidence_envelope"]
     items.sort(key=lambda item: item["index_key"])
-    oversized_key = items[-1]["index_key"]
+    invalid_key = items[-1]["index_key"]
+    cursor_after_first = ReplayCursor(
+        "profile-personal",
+        "private-r2",
+        items[0]["index_key"],
+    ).encode()
 
     class Backend(FakeBackend):
         def discover_evidence_indexes(self, *, max_events, page_size, max_pages):
@@ -735,7 +741,7 @@ def test_unselected_invalid_index_does_not_stall_cursor(listed_size, expected_re
             return refs
 
         def get_evidence_index_bytes(self, key, expected_size=None):
-            if key == oversized_key:
+            if key == invalid_key:
                 pytest.fail("invalid index body fetched")
             return super().get_evidence_index_bytes(key, expected_size)
 
@@ -747,23 +753,60 @@ def test_unselected_invalid_index_does_not_stall_cursor(listed_size, expected_re
         decryptor=lambda body, **_kwargs: mapping[body],
     )
 
-    first_page = replay.export(limit=1)
-    assert len(first_page.records) == 1
-    assert first_page.complete is False
-    assert first_page.cursor is not None
-    inspection = replay.inspect(cursor=first_page.cursor, limit=1)
+    page = replay.export(limit=1)
+    inspection = replay.inspect(cursor=cursor_after_first, limit=1)
+
+    assert page.records == ()
+    assert {item["reason_code"] for item in page.quarantines} == {expected_reason}
+    assert page.cursor is None
+    assert page.complete is False
+    assert page.inspected_indexes == 0
     if listed_size == "malformed":
         assert inspection["indexes"][0]["ciphertext_size"] is None
         assert inspection["indexes"][0]["error_code"] == expected_reason
     else:
         assert inspection["indexes"][0]["ciphertext_size"] == ReplayLimits().max_ciphertext_bytes + 1
 
-    second_page = replay.export(cursor=first_page.cursor, limit=1)
 
-    assert second_page.records == ()
-    assert {item["reason_code"] for item in second_page.quarantines} == {expected_reason}
-    assert second_page.cursor != first_page.cursor
-    assert second_page.complete is True
+def test_corrupt_off_page_index_blocks_complete_record_emission():
+    items = []
+    mapping = {}
+    for event_id in ("event-unreadable-index", "event-selected-index"):
+        segment = fixture("golden-session-segment.json")
+        segment["event_id"] = event_id
+        segment["session_id"] = "session-shared"
+        segment["asset_refs"] = []
+        item = entry(segment, payload=canonical_json(segment))
+        items.append(item)
+        mapping[item["index_body"]] = item["index_envelope"]
+        mapping[item["object_body"]] = item["evidence_envelope"]
+    items.sort(key=lambda item: item["index_key"])
+    unreadable_key = items[0]["index_key"]
+    previous = ReplayCursor(
+        "profile-personal",
+        "private-r2",
+        unreadable_key,
+    ).encode()
+
+    class Backend(FakeBackend):
+        def get_evidence_index_bytes(self, key, expected_size=None):
+            if key == unreadable_key:
+                raise OSError("synthetic unreadable index")
+            return super().get_evidence_index_bytes(key, expected_size)
+
+    page = ReplayReader(
+        Backend(items),
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=lambda body, **_kwargs: mapping[body],
+    ).export(cursor=previous, limit=1)
+
+    assert page.records == ()
+    assert {item["reason_code"] for item in page.quarantines} == {"corrupt-ciphertext"}
+    assert page.cursor == previous
+    assert page.complete is False
+    assert page.inspected_indexes == 0
 
 @pytest.mark.parametrize("local_only_at", ["index", "evidence"])
 def test_local_only_evidence_is_not_exported_from_private_r2(local_only_at):

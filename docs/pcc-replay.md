@@ -42,8 +42,11 @@ Exceeding either bound emits no records and leaves the cursor unchanged. The
 bounded scan repeats for each page.
 
 An index with a valid content-addressed key but a missing, malformed, or
-backend-over-cap listing size remains a per-index quarantine reference. It is
-never fetched, and pagination advances when that key is selected.
+backend-over-cap listing size becomes an index-level quarantine and is never
+fetched. Any index/evidence read, decrypt, or validation failure—including an
+off-page failure—emits no records and preserves the cursor because the affected
+session chain cannot be identified safely. Resolve the offending ref before
+replay can continue.
 
 
 Index keys are content-addressed, not chronological. A cursor is a page
