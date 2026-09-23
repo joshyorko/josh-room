@@ -294,10 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--profile", required=True, help="host-owned capture/device profile")
             command.add_argument("--policy-config", type=Path)
             command.add_argument("--config-home", type=Path)
+            command.add_argument("--codex-active-root", type=Path, required=True)
+            command.add_argument("--codex-archived-root", type=Path, required=True)
             command.add_argument("--workspace-id")
             command.add_argument("--workspace-path")
             command.add_argument("--repository")
             command.add_argument("--path-kind", default="unknown")
+            command.add_argument("--age-executable", type=Path)
             command.add_argument("--dimension")
             command.add_argument("--index-file", type=Path, help="encrypted #11 R2 index object")
         if action in {"plan", "inspect"}:

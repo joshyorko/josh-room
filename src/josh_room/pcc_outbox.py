@@ -488,8 +488,7 @@ def _validate_metadata(value: object) -> dict[str, object]:
         "workspace_id",
         "object_kind",
         "destination_class",
-        "destination_binding_id",
-        "source_surface",
+        "trigger",
         "source_adapter",
         "source_adapter_version",
         "content_type",
@@ -519,7 +518,7 @@ def _validate_metadata(value: object) -> dict[str, object]:
             "source_adapter_version",
             "evidence_kind",
             "evidence_event_id",
-            "index_id",
+            "trigger",
         }:
             result[key] = _identifier(item)
         elif key == "destination_class":
