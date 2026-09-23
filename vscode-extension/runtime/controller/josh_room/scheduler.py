@@ -169,7 +169,8 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         service_body, timer_body = _linux_content(exe, interval)
         service_changed = _write_private(service, service_body)
         timer_changed = _write_private(timer, timer_body)
-        changed = service_changed or timer_changed or _write_manifest(home, selected, exe, interval)
+        manifest_changed = _write_manifest(home, selected, exe, interval)
+        changed = service_changed or timer_changed or manifest_changed
         activation = _activate(selected, home, (service, timer))
         return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, files=[str(service), str(timer)], executable=exe, executable_sha256=_executable_digest(exe), overlap="systemd-oneshot")
     if selected == "macos":
