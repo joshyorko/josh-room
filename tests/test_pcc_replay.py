@@ -401,8 +401,18 @@ def test_corrupt_ciphertext_is_quarantined_without_content():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
     item = entry(segment, payload=canonical_json(segment))
-    mapping = {item["index_body"]: item["index_envelope"]}
-    page = reader([item], mapping, decryptor=lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad age data"))).export(limit=1)
+    backend = FakeBackend([item])
+
+    def fail_decrypt(*_args, **_kwargs):
+        raise ValueError("bad age data")
+
+    page = ReplayReader(
+        backend,
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=fail_decrypt,
+    ).export(limit=1)
 
     assert not page.records
     assert {receipt["reason_code"] for receipt in page.quarantines} == {"corrupt-ciphertext"}
