@@ -1238,6 +1238,62 @@ class PccOutbox:
             self._publish_record_unlocked(claimed)
             return claimed
 
+    def claim_specific(self, event_id: str, owner: str, *, takeover: bool = False) -> QueueRecord | None:
+        """Atomically claim one exact event, optionally taking over a stale lease."""
+
+        event_id = _identifier(event_id)
+        owner = _identifier(owner)
+        if type(takeover) is not bool:
+            raise ValueError("takeover flag is invalid")
+        with _exclusive_file_lock(self._lock_path):
+            self._ensure_layout()
+            record = self._must_read_unlocked(event_id)
+            claimable = self._claimable(record)
+            if record.owner is None and not claimable:
+                return None
+            now = self._now()
+            if claimable:
+                resume = record.resume_state
+                if record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP}:
+                    resume = record.state
+                claimed = QueueRecord(
+                    **{
+                        **record.__dict__,
+                        "state": QueueState.CLAIMED,
+                        "owner": owner,
+                        "lease_until": now + self.lease_seconds,
+                        "lease_seconds": self.lease_seconds,
+                        "resume_state": resume,
+                        "failure_code": None,
+                    }
+                )
+                self._publish_record_unlocked(claimed)
+                return claimed
+            owned_states = {
+                QueueState.CLAIMED,
+                QueueState.SOURCE_SNAPSHOTTED,
+                QueueState.PREPARED_ENCRYPTED,
+                QueueState.OBJECT_UPLOADED,
+                QueueState.INDEX_PUBLISHED,
+            }
+            if (
+                not takeover
+                or record.state not in owned_states
+                or record.owner is None
+                or record.lease_until is None
+                or record.lease_until > now
+            ):
+                raise LeaseConflict()
+            taken = QueueRecord(
+                **{
+                    **record.__dict__,
+                    "owner": owner,
+                    "lease_until": now + record.lease_seconds,
+                }
+            )
+            self._publish_record_unlocked(taken)
+            return taken
+
     def _require_claim(self, record: QueueRecord, owner: str) -> None:
         owned_states = {
             QueueState.CLAIMED,
