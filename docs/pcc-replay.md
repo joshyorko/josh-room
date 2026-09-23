@@ -16,6 +16,8 @@ quarantine receipts. The CLI binds workspace to the selected host profile;
 `--workspace-id` is only an assertion and mismatches fail closed. `inspect()`
 does not require an age identity and remains metadata-only.
 Private-R2 export accepts only `allow`; `local-only` evidence is never exported.
+The policy `binding_id` pins the exact host Dimension; `--dimension` is only an
+assertion and a mismatch fails closed.
 `iter_jsonl()` emits the versioned `josh-room.pcc-replay` JSONL contract described
 by `schemas/pcc-replay-v1.schema.json`.
 

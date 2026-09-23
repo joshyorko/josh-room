@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .pcc_crypto import DecryptedEnvelope, decrypt_envelope
+from .pcc_crypto import CryptoError, CryptoErrorCode, DecryptedEnvelope, decrypt_envelope
 from .r2 import (
     R2EvidenceError,
     R2EvidenceReadbackMismatch,
@@ -422,6 +422,10 @@ class ReplayReader:
         try:
             try:
                 value = decrypt_envelope(temporary, self.identity_paths, age_executable=self.age_executable)
+            except CryptoError as error:
+                if error.code is CryptoErrorCode.UNKNOWN_SCHEMA:
+                    raise ReplayError("unknown_major") from None
+                raise ReplayError("decrypt-failed") from error
             except Exception as error:
                 raise ReplayError("decrypt-failed") from error
             return _payload_from_envelope(value)
@@ -604,7 +608,7 @@ class ReplayReader:
                 quarantines.append(self._quarantine(item.index, reason, event_id=str(item.document.get("event_id"))))
                 reported.add(key)
 
-        for session_id in by_session.keys() | finals_by_session.keys():
+        for session_id in sorted(by_session.keys() | finals_by_session.keys(), key=str):
             group = sorted(
                 by_session.get(session_id, ()),
                 key=lambda item: (

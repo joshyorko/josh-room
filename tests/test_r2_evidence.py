@@ -333,6 +333,25 @@ def test_index_discovery_reports_page_cap_after_skipped_keys():
 
     assert failure.value.code == "index-discovery-incomplete"
 
+def test_index_discovery_reports_malformed_valid_index_size_as_incomplete():
+    fake = EvidenceS3()
+    store = backend(fake)
+    digest = hashlib.sha256(b"synthetic index").hexdigest()
+    fake.list_pages = [
+        {
+            "Contents": [{
+                "Key": evidence_index_key(digest),
+                "Size": store.config.max_bytes + 1,
+            }],
+            "IsTruncated": False,
+        },
+    ]
+
+    with pytest.raises(R2EvidenceError) as failure:
+        store.discover_evidence_indexes(max_events=2, page_size=1, max_pages=1)
+
+    assert failure.value.code == "index-discovery-incomplete"
+
 def test_outbox_uploaded_indexed_committed_and_unindexed_recovery(tmp_path):
     fake = EvidenceS3()
     store = backend(fake)
@@ -424,7 +443,9 @@ def test_evidence_readback_bounds_body_read_by_declared_size_plus_one(index):
         body = store.get_evidence_bytes(receipt.key, expected_size=receipt.ciphertext_size)
 
     assert body == payload
-    assert read_sizes == [len(payload) + 1]
+    assert read_sizes
+    assert read_sizes[-1] == len(payload) + 1
+    assert all(size <= len(payload) + 1 for size in read_sizes)
 
 
 

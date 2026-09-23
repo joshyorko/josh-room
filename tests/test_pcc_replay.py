@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from josh_room.pcc_replay import ReplayCursor, ReplayError, ReplayLimits, ReplayReader
-from josh_room.r2 import evidence_index_key, evidence_object_key
+from josh_room.pcc_crypto import CryptoError, CryptoErrorCode
+from josh_room.r2 import R2EvidenceError, evidence_index_key, evidence_object_key
 from josh_room.session_evidence import canonical_digest, canonical_json
 
 ROOT = Path(__file__).parents[1]
@@ -253,6 +253,43 @@ def test_duplicate_and_out_of_order_discovery_exports_each_event_once():
     assert {item["segment"]["event_id"] for item in page.records} == {"evt-one", "evt-two"}
     assert len(page.records) == 2
     assert not page.quarantines
+def test_multi_session_quarantine_jsonl_is_stably_sorted():
+    for attempt in range(100):
+        session_ids = [f"session-order-{attempt}-{suffix}" for suffix in ("a", "b")]
+        items = []
+        mapping = {}
+        event_sessions = {}
+        for index, session_id in enumerate(session_ids):
+            segment = fixture("golden-session-segment.json")
+            event_id = f"event-order-{attempt}-{index}"
+            segment["event_id"] = event_id
+            segment["session_id"] = session_id
+            segment["previous_segment_sha256"] = "f" * 64
+            segment["asset_refs"] = []
+            item = entry(segment, payload=canonical_json(segment))
+            items.append(item)
+            mapping[item["index_body"]] = item["index_envelope"]
+            mapping[item["object_body"]] = item["evidence_envelope"]
+            event_sessions[event_id] = session_id
+        ordered = sorted(items, key=lambda item: item["index_key"])
+        session_order = list({
+            item["evidence_envelope"]["document"]["session_id"]: []
+            for item in ordered
+        }.keys() | {}.keys())
+        if session_order != sorted(session_ids):
+            break
+    else:
+        pytest.fail("could not generate a nondeterministic-order witness")
+
+    page = reader(items, mapping).export(limit=8)
+    quarantine_sessions = [
+        event_sessions[item["event_id"]]
+        for line in page.jsonl()
+        if (item := json.loads(line)).get("type") == "quarantine"
+    ]
+
+    assert quarantine_sessions == sorted(session_ids)
+
 def test_cross_profile_quarantine_without_content():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
@@ -619,6 +656,7 @@ def test_final_without_last_segment_digest_quarantines_its_session():
     segment = fixture("golden-session-segment.json")
     segment["asset_refs"] = []
     final = fixture("golden-session-final.json")
+    segment["session_id"] = "session-final-link"
     final["session_id"] = segment["session_id"]
     final.pop("last_segment_sha256", None)
     segment_entry = entry(segment, payload=canonical_json(segment))
@@ -657,6 +695,33 @@ def test_malformed_index_reference_keeps_export_incomplete():
     assert not page.records
     assert page.complete is False
     assert page.cursor is None
+def test_incomplete_r2_discovery_preserves_consumer_cursor():
+    class Backend:
+        def discover_evidence_indexes(self, **_kwargs):
+            raise R2EvidenceError("index-discovery-incomplete")
+
+        get_evidence_index_bytes = lambda *_args, **_kwargs: pytest.fail("incomplete discovery fetched an index")
+        get_evidence_bytes = lambda *_args, **_kwargs: pytest.fail("incomplete discovery fetched evidence")
+
+    previous = ReplayCursor(
+        "profile-personal",
+        "private-r2",
+        evidence_index_key("a" * 64),
+    ).encode()
+    page = ReplayReader(
+        Backend(),
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=lambda *_args, **_kwargs: pytest.fail("incomplete discovery decrypted an index"),
+    ).export(cursor=previous, limit=1)
+
+    assert page.records == ()
+    assert page.quarantines == ()
+    assert page.cursor == previous
+    assert page.complete is False
+    assert page.inspected_indexes == 0
+
 def test_bad_chain_and_missing_asset_are_quarantined():
     first = fixture("golden-session-segment.json")
     first["asset_refs"] = []
@@ -700,6 +765,27 @@ def test_unknown_major_and_wrong_ciphertext_digest_quarantine():
     page = reader([unknown, bad], mapping).export(limit=2)
     assert {item["reason_code"] for item in page.quarantines} >= {"unknown_major", "digest-mismatch"}
 
+
+def test_production_crypto_unknown_schema_reason_is_preserved(monkeypatch):
+    segment = fixture("golden-session-segment.json")
+    segment["asset_refs"] = []
+    item = entry(segment, payload=canonical_json(segment))
+    backend = FakeBackend([item])
+
+    def decrypt_unknown_schema(*_args, **_kwargs):
+        raise CryptoError(CryptoErrorCode.UNKNOWN_SCHEMA)
+
+    monkeypatch.setattr("josh_room.pcc_replay.decrypt_envelope", decrypt_unknown_schema)
+    page = ReplayReader(
+        backend,
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        identity_paths=(Path("synthetic-identity"),),
+    ).export(limit=1)
+
+    assert not page.records
+    assert {receipt["reason_code"] for receipt in page.quarantines} == {"unknown_major"}
 
 def test_identity_required_without_test_decryptor():
     class Backend:

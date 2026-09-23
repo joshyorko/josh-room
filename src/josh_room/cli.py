@@ -1076,7 +1076,14 @@ def _resolve_drain_profile(policy, args):
     return matches[0]
 
 
-def _harvest_backend(args, instance: Path, profile=None, policy=None):
+def _harvest_backend(
+    args,
+    instance: Path,
+    profile=None,
+    policy=None,
+    *,
+    bound_dimension_id: str | None = None,
+):
     if profile is None:
         raise ValueError("profile-unavailable")
     destination = getattr(profile, "destination", None)
@@ -1089,11 +1096,21 @@ def _harvest_backend(args, instance: Path, profile=None, policy=None):
     expected_credential = getattr(binding, "credential_profile_ref", None)
     if binding is None or not expected_credential:
         raise ValueError("destination-binding-unavailable")
+    if bound_dimension_id is not None and getattr(args, "dimension", None) not in {None, bound_dimension_id}:
+        raise ValueError("destination-binding-mismatch")
     try:
-        selected = _effective_dimension(args)
+        if bound_dimension_id is None:
+            selected = _effective_dimension(args)
+        else:
+            selected = DimensionRegistry(private_config() or {}).select(bound_dimension_id)
     except (OSError, RuntimeError, ValueError) as error:
         raise ValueError("destination-binding-unavailable") from error
-    if selected is None or selected.provider != "r2" or getattr(selected, "credential_profile", None) != expected_credential:
+    if (
+        selected is None
+        or selected.provider != "r2"
+        or getattr(selected, "credential_profile", None) != expected_credential
+        or (bound_dimension_id is not None and selected.dimension_id != bound_dimension_id)
+    ):
         raise ValueError("destination-binding-mismatch")
     try:
         return _backend(selected.provider, instance, selected.dimension_id)
@@ -1142,7 +1159,19 @@ def _replay_dispatch(args, instance: Path) -> dict:
         raise ValueError("destination-binding-mismatch")
     if destination != "private-r2":
         raise ValueError("replay-destination-unavailable")
-    backend = _harvest_backend(args, instance, profile=profile, policy=policy)
+    binding_id = getattr(profile.destination, "binding_id", None)
+    if not isinstance(binding_id, str) or not binding_id:
+        raise ValueError("destination-binding-unavailable")
+    requested_dimension = getattr(args, "dimension", None)
+    if requested_dimension is not None and requested_dimension != binding_id:
+        raise ValueError("destination-binding-mismatch")
+    backend = _harvest_backend(
+        args,
+        instance,
+        profile=profile,
+        policy=policy,
+        bound_dimension_id=binding_id,
+    )
     identities = () if args.replay_command == "inspect" else None
     identity_context = nullcontext(identities) if identities is not None else _replay_identity_paths(args)
     with identity_context as identity_paths:

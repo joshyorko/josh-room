@@ -159,7 +159,7 @@ def test_replay_inspect_cli_is_metadata_only_without_age_identity(tmp_path, monk
     profile = SimpleNamespace(
         profile_id="profile-personal",
         workspace_id="workspace-synthetic",
-        destination=SimpleNamespace(kind="private-r2"),
+        destination=SimpleNamespace(kind="private-r2", binding_id="personal-r2"),
     )
     policy = SimpleNamespace(profiles={"personal": profile})
 
@@ -193,6 +193,72 @@ def test_replay_inspect_cli_is_metadata_only_without_age_identity(tmp_path, monk
     assert result["complete"] is True
 
 
+def test_replay_inspect_uses_policy_bound_dimension_not_shared_credentials(tmp_path, monkeypatch):
+    profile = SimpleNamespace(
+        profile_id="profile-personal",
+        workspace_id="workspace-synthetic",
+        destination=SimpleNamespace(kind="private-r2", binding_id="personal-r2"),
+    )
+    policy = SimpleNamespace(
+        profiles={"personal": profile},
+        r2_bindings={
+            "personal-r2": SimpleNamespace(scope="personal", credential_profile_ref="shared"),
+        },
+    )
+    config = {
+        "default_dimension": "work-r2",
+        "dimensions": {
+            "personal-r2": {
+                "display_name": "Personal",
+                "provider": "r2",
+                "endpoint": "https://personal-r2.example.invalid",
+                "bucket": "personal",
+                "credential_profile": "shared",
+            },
+            "work-r2": {
+                "display_name": "Work",
+                "provider": "r2",
+                "endpoint": "https://work-r2.example.invalid",
+                "bucket": "work",
+                "credential_profile": "shared",
+            },
+        },
+    }
+
+    class Backend:
+        def discover_evidence_indexes(self, **_kwargs):
+            return []
+
+        def get_evidence_index_bytes(self, *_args, **_kwargs):
+            pytest.fail("metadata inspection fetched encrypted indexes")
+
+        def get_evidence_bytes(self, *_args, **_kwargs):
+            pytest.fail("metadata inspection fetched evidence")
+
+    selected = []
+    monkeypatch.setattr(cli, "private_config", lambda: config)
+    monkeypatch.setattr(cli, "load_host_policy", lambda **_kwargs: policy)
+    monkeypatch.setattr(
+        cli,
+        "_backend",
+        lambda provider, _instance, dimension: selected.append((provider, dimension)) or Backend(),
+    )
+
+    args = build_parser().parse_args([
+        "replay", "inspect", "--profile", "personal", "--destination", "private-r2",
+    ])
+    result = cli._replay_dispatch(args, tmp_path)
+
+    assert result["metadata_only"] is True
+    assert selected == [("r2", "personal-r2")]
+
+    overridden = build_parser().parse_args([
+        "replay", "inspect", "--profile", "personal", "--destination", "private-r2",
+        "--dimension", "work-r2",
+    ])
+    with pytest.raises(ValueError, match="destination-binding-mismatch"):
+        cli._replay_dispatch(overridden, tmp_path)
+    assert selected == [("r2", "personal-r2")]
 def test_replay_inspect_rejects_workspace_override(tmp_path, monkeypatch, capsys):
     profile = SimpleNamespace(
         profile_id="profile-personal",

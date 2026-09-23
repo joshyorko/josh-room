@@ -585,6 +585,7 @@ class R2Backend(ObjectStore):
                     continue
                 size = item.get("Size")
                 if type(size) is not int or size < 0 or size > self.config.max_bytes:
+                    incomplete = True
                     continue
                 result.setdefault(key, R2EvidenceIndexRef(key, digest, size))
                 if len(result) >= max_events:
