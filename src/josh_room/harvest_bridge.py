@@ -532,7 +532,13 @@ class HostHarvestBridge:
             policy_decision="allow",
             sensitivity="unknown",
         )
-        normalizer = SessionNormalizer(stream, context, prior_checkpoint=prior, finalize=record.is_final, asset_writer=writer)
+        normalizer = SessionNormalizer(
+            stream,
+            context,
+            prior_checkpoint=prior,
+            finalize=record.is_final,
+            asset_writer=writer if self.profile.capture_mode == "transcript-and-assets" else None,
+        )
         child_ids: list[str] = []
         prepared_children: list[PreparedChild] = []
         try:
