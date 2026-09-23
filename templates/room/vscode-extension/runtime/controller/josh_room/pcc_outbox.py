@@ -903,7 +903,7 @@ class PccOutbox:
         self.root = Path(root)
         _validate_root_path(self.root)
         self.queue_directory = self.root / "queue"
-        self.quarantine_directory = self.root / "quarantine"
+        self.receipts_directory = self.root / "receipts"
         self._lock_path = self.root / "state.lock"
         self.max_events = max_events
         self.max_bytes = max_bytes
@@ -920,9 +920,9 @@ class PccOutbox:
         queue_created = _ensure_directory(self.queue_directory)
         prepared_created = _ensure_directory(self.prepared.directory)
         quarantine_created = _ensure_directory(self.quarantine_directory)
-        if root_created or queue_created or prepared_created or quarantine_created:
+        receipts_created = _ensure_directory(self.receipts_directory)
+        if root_created or queue_created or prepared_created or quarantine_created or receipts_created:
             _sync_directory(self.root)
-
     def _publish_record_unlocked(self, record: QueueRecord) -> None:
         body = json.dumps(record.to_dict(), sort_keys=True, separators=(",", ":")).encode("utf-8")
         self._publisher.publish(self._path(record.event_id), body)
@@ -1780,3 +1780,19 @@ class PccOutbox:
             )
             self._publish_record_unlocked(expanded)
             return expanded
+    def discard_receipt(self, event_id: str) -> dict[str, object]:
+        event_id = _identifier(event_id)
+        with _exclusive_file_lock(self._lock_path):
+            self._ensure_layout()
+            path = self.receipts_directory / f"{event_id}.discard.json"
+            if path.is_file() and not path.is_symlink():
+                try:
+                    value = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError) as error:
+                    raise OutboxStorageError("receipt-corrupt") from error
+                if isinstance(value, dict):
+                    return value
+                raise OutboxStorageError("receipt-corrupt")
+            receipt = {"event_id": event_id, "kind": "operator-discard", "discarded": True, "evidence_deleted": False}
+            self._publisher.publish(path, json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            return receipt
