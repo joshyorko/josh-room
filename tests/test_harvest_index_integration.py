@@ -248,3 +248,44 @@ def test_drain_skips_foreign_profile_records_without_upload(tmp_path):
     assert outbox.inspect_record("event-work").state is QueueState.PREPARED_ENCRYPTED
     assert outbox.inspect_record(personal_index).state is QueueState.PREPARED_ENCRYPTED
     assert outbox.inspect_record(work_index).state is QueueState.PREPARED_ENCRYPTED
+
+
+def test_omitted_profile_drain_never_publishes_work_record(tmp_path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    outbox.enqueue(
+        event_id="event-work",
+        session_id="session-work",
+        checkpoint={"source": "synthetic", "representation": "active-jsonl", "start": 0, "end": 1, "prefix_sha256": "a" * 64},
+        metadata={
+            "object_kind": "session-segment",
+            "policy_decision": "allow",
+            "destination_class": "private-r2",
+            "destination_binding_id": "binding-work",
+            "workspace_id": "workspace-work",
+        },
+        coalesce=False,
+    )
+    owner = "prepare-work"
+    outbox.claim_specific("event-work", owner)
+    outbox.transition("event-work", owner, QueueState.SOURCE_SNAPSHOTTED)
+    outbox.prepare_encrypted("event-work", owner, b"work-ciphertext", metadata={"object_kind": "session-segment"})
+    outbox.release("event-work", owner)
+
+    uploads = []
+
+    def publish(box, record, claim_owner):
+        uploads.append(record.event_id)
+        box.mark_uploaded(record.event_id, claim_owner, object_key="work", ciphertext_size=record.ciphertext_size)
+        box.commit(record.event_id, claim_owner)
+
+    drained = HarvestController(
+        outbox,
+        backend=object(),
+        publish=publish,
+        owner_factory=lambda: "drain-owner",
+    ).drain()
+
+    assert drained["delivered"] == []
+    assert drained["failures"] == []
+    assert uploads == []
+    assert outbox.inspect_record("event-work").state is QueueState.PREPARED_ENCRYPTED

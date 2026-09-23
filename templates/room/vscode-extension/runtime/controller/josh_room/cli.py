@@ -931,23 +931,45 @@ def _drain_policy_check(policy, profile, args):
     return check
 
 
+def _resolve_drain_profile(policy, args):
+    profile_name = getattr(args, "profile", None)
+    if profile_name:
+        profile = policy.profiles.get(profile_name)
+        if profile is None:
+            raise ValueError("profile-unavailable")
+        return profile
+    workspace_id = getattr(args, "workspace_id", None)
+    if not workspace_id:
+        raise ValueError("profile-unavailable")
+    matches = [profile for profile in policy.profiles.values() if profile.workspace_id == workspace_id]
+    if len(matches) != 1:
+        raise ValueError("profile-unavailable")
+    return matches[0]
+
+
 def _harvest_backend(args, instance: Path, profile=None, policy=None):
-    binding_id = getattr(getattr(profile, "destination", None), "binding_id", None)
-    binding = policy.r2_bindings.get(binding_id) if policy is not None and binding_id is not None else None
+    if profile is None:
+        raise ValueError("profile-unavailable")
+    destination = getattr(profile, "destination", None)
+    if getattr(destination, "kind", None) != "private-r2":
+        return None
+    binding_id = getattr(destination, "binding_id", None)
+    if not isinstance(binding_id, str) or not binding_id:
+        raise ValueError("destination-binding-unavailable")
+    binding = policy.r2_bindings.get(binding_id) if policy is not None else None
     expected_credential = getattr(binding, "credential_profile_ref", None)
-    if binding_id is not None and binding is None:
+    if binding is None or not expected_credential:
         raise ValueError("destination-binding-unavailable")
     try:
         selected = _effective_dimension(args)
-        if selected is None or selected.provider != "r2":
-            return None
-        if expected_credential is not None and getattr(selected, "credential_profile", None) != expected_credential:
-            raise ValueError("destination-binding-mismatch")
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError("destination-binding-unavailable") from error
+    if selected is None or selected.provider != "r2" or getattr(selected, "credential_profile", None) != expected_credential:
+        raise ValueError("destination-binding-mismatch")
+    try:
         return _backend(selected.provider, instance, selected.dimension_id)
     except (OSError, RuntimeError, ValueError) as error:
-        if binding_id is not None:
-            raise ValueError("destination-binding-unavailable") from error
-        return None
+        raise ValueError("destination-binding-unavailable") from error
 
 
 def _harvest_index_file(value: Path | None, default_root: Path | None = None) -> Path | None:
@@ -1043,59 +1065,11 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             return drain_controller.drain(limit=args.limit, max_seconds=args.max_seconds)
         return result
     if action == "drain":
-        if not args.profile:
-            policy = load_host_policy(
-                policy_config=getattr(args, "policy_config", None),
-                config_home=getattr(args, "config_home", None),
-            )
-            def scheduled_policy(record):
-                workspace_id = record.metadata.get("workspace_id")
-                profiles = [profile for profile in policy.profiles.values() if profile.workspace_id == workspace_id]
-                if len(profiles) != 1:
-                    return {"decision": "deny", "destination": "local-only"}
-                profile = profiles[0]
-                destination = profile.destination
-                if (
-                    record.metadata.get("destination_class") != destination.kind
-                    or (
-                        destination.kind == "private-r2"
-                        and record.metadata.get("destination_binding_id") != destination.binding_id
-                    )
-                    or (
-                        destination.kind == "local-only"
-                        and "destination_binding_id" in record.metadata
-                    )
-                ):
-                    return {"decision": "deny", "destination": "local-only", "reason": "scope-binding-mismatch"}
-                trigger = record.metadata.get("trigger")
-                if trigger not in {"stop", "subagent-stop", "session-end"}:
-                    return {"decision": "deny", "destination": "local-only"}
-                context = PolicyContext.from_values(
-                    workspace_id=args.workspace_id or profile.workspace_id,
-                    remote=args.repository,
-                    workspace_path=args.workspace_path,
-                    path_kind=args.path_kind,
-                    context_source="host-observed",
-                )
-                decision = decide(
-                    policy,
-                    CaptureRequest(context=context, logical_sources=("codex.transcript",), trigger=trigger),
-                )
-                return {"decision": decision.kind, "destination": decision.destination_class}
-            controller = HarvestController(
-                outbox,
-                backend=_harvest_backend(args, instance or _instance_root(), None, policy),
-                index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
-                policy_check=scheduled_policy,
-            )
-            return controller.drain(limit=args.limit, max_seconds=args.max_seconds)
         policy = load_host_policy(
             policy_config=getattr(args, "policy_config", None),
             config_home=getattr(args, "config_home", None),
         )
-        profile = policy.profiles.get(args.profile)
-        if profile is None:
-            raise ValueError("profile-unavailable")
+        profile = _resolve_drain_profile(policy, args)
         controller = HarvestController(
             outbox,
             backend=_harvest_backend(args, instance or _instance_root(), profile, policy),
