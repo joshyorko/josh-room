@@ -52,7 +52,7 @@ class QueueState(StrEnum):
     SOURCE_SNAPSHOTTED = "source-snapshotted"
     PREPARED_ENCRYPTED = "prepared-encrypted"
     OBJECT_UPLOADED = "object-uploaded"
-    INDEX_PUBLISHED = "index-published"
+    COMMITTED = "committed"
     TRIGGER_EXPANDED = "trigger-expanded"
     RETRYABLE_FAILURE = "retryable-failure"
     QUARANTINED = "quarantined"
