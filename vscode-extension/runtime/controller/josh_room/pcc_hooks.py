@@ -236,6 +236,7 @@ def process_codex_hook(
                 "end": 0,
                 "prefix_sha256": _EMPTY_DIGEST,
             },
+            is_final=event == "SessionEnd",
             metadata={
                 "source_surface": "subagent" if event == "SubagentStop" else "unknown",
                 "source_adapter": "codex-transcript",
