@@ -1,7 +1,7 @@
 """Reversible one-shot scheduler integration for PCC harvest."""
 from __future__ import annotations
 
-import json
+import hashlib
 import os
 import pwd
 import stat
@@ -170,13 +170,13 @@ def install(*, interval: int = 900, executable: str | os.PathLike[str] | None = 
         timer_changed = _write_private(timer, timer_body)
         changed = service_changed or timer_changed or _write_manifest(home, selected, exe, interval)
         activation = _activate(selected, home, (service, timer))
-        return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=True, changed=changed, activation=activation, files=[str(service), str(timer)], executable=exe, executable_sha256=_executable_digest(exe), overlap="systemd-oneshot")
+        return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, files=[str(service), str(timer)], executable=exe, executable_sha256=_executable_digest(exe), overlap="systemd-oneshot")
     if selected == "macos":
         path = _mac_path(home)
         changed = _write_private(path, _mac_content(exe, interval, home))
         changed = changed or _write_manifest(home, selected, exe, interval)
         activation = _activate(selected, home, (path,))
-        return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=True, changed=changed, activation=activation, files=[str(path)], executable=exe, executable_sha256=_executable_digest(exe), overlap="throttle-interval")
+        return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, files=[str(path)], executable=exe, executable_sha256=_executable_digest(exe), overlap="throttle-interval")
     if selected == "windows":
         try:
             process = subprocess.run(_windows_command(exe, interval), capture_output=True, text=True, check=False)
