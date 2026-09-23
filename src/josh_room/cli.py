@@ -56,10 +56,10 @@ from .jat import (
     run_serve,
 )
 from .keyring import backend_status as _keyring_backend_status
+from .keyring import lookup_value as lookup_keyring_value
 from .keyring import secure_lookup as lookup_secure_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
-from .pcc_replay import ReplayError, ReplayLimits, ReplayReader
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
 from .minio import check_bucket_access as check_minio_bucket
@@ -97,6 +97,7 @@ from .pcc_hooks import (
     repair_codex_hooks,
 )
 from .pcc_outbox import PccOutbox
+from .pcc_replay import ReplayLimits, ReplayReader
 from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
 from .tls import initialize_system_trust

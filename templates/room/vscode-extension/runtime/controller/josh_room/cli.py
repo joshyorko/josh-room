@@ -56,9 +56,10 @@ from .jat import (
     run_serve,
 )
 from .keyring import backend_status as _keyring_backend_status
-from .keyring import lookup_value as lookup_keyring_value
+from .keyring import secure_lookup as lookup_secure_value
 from .keyring import store as store_keyring
 from .keyring import store_value as store_keyring_value
+from .pcc_replay import ReplayError, ReplayLimits, ReplayReader
 from .local_store import ImmutableLocalStore
 from .minio import MinioBackend, MinioConfig
 from .minio import check_bucket_access as check_minio_bucket
@@ -348,6 +349,25 @@ def build_parser() -> argparse.ArgumentParser:
         schedule_action.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
         schedule_action.add_argument("--age-executable", type=Path)
         _json_option(schedule_action)
+    replay = commands.add_parser("replay", help="bounded PCC raw-evidence reader/export")
+    replay_commands = replay.add_subparsers(dest="replay_command", required=True)
+    for action in ("inspect", "export"):
+        replay_action = replay_commands.add_parser(action)
+        replay_action.add_argument("--profile", required=True)
+        replay_action.add_argument("--destination", required=True)
+        replay_action.add_argument("--workspace-id")
+        replay_action.add_argument("--policy-config", type=Path)
+        replay_action.add_argument("--config-home", type=Path)
+        replay_action.add_argument("--dimension")
+        replay_action.add_argument("--cursor")
+        replay_action.add_argument("--limit", type=int, default=100)
+        replay_action.add_argument("--page-size", type=int, default=100)
+        replay_action.add_argument("--max-indexes", type=int, default=1000)
+        replay_action.add_argument("--identity", type=Path, action="append")
+        replay_action.add_argument("--age-executable", type=Path)
+        if action == "export":
+            replay_action.add_argument("--jsonl", action="store_true", help="emit one contract object per line")
+        _json_option(replay_action)
     hook = commands.add_parser("hook")
     hook_commands = hook.add_subparsers(dest="hook_command", required=True)
     hook_codex = hook_commands.add_parser("codex")
@@ -530,6 +550,13 @@ def main(argv=None):
         result = {"ok": False, "error": str(error)}
         if isinstance(getattr(error, "result", None), dict):
             result.update(error.result)
+    if getattr(args, "jsonl", False) and isinstance(result, dict) and "_jsonl_lines" in result:
+        lines = tuple(result.pop("_jsonl_lines"))
+        result = _bounded_json_result(result)
+        _write_runtime_result(result)
+        for line in lines:
+            print(line)
+        return _exit_code(result)
     result = _bounded_json_result(result)
     _write_runtime_result(result)
     emit(result, getattr(args, "json", False))
@@ -587,6 +614,8 @@ def _write_runtime_result(result):
 
 
 def _requires_oauth(args) -> bool:
+    if args.command == "replay":
+        return getattr(args, "destination", None) == "private-r2"
     if args.command == "provider" and args.provider_command == "bucket":
         if getattr(args, "provider", None) == "r2":
             return True
@@ -1068,6 +1097,78 @@ def _harvest_backend(args, instance: Path, profile=None, policy=None):
         return _backend(selected.provider, instance, selected.dimension_id)
     except (OSError, RuntimeError, ValueError) as error:
         raise ValueError("destination-binding-unavailable") from error
+@contextmanager
+def _replay_identity_paths(args):
+    explicit = tuple(getattr(args, "identity", None) or ())
+    if explicit:
+        yield explicit
+        return
+    try:
+        age_profile = _device.active_age_profile(profile=args.profile)
+        if not isinstance(age_profile, str) or not age_profile:
+            raise ValueError
+        identity = lookup_secure_value(age_profile, "age-identity")
+    except Exception as error:  # noqa: BLE001 - identity authority fails closed
+        raise ValueError("identity-unavailable") from error
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".pcc-replay-identity-", mode="w", delete=False) as handle:
+            temporary = Path(handle.name)
+            os.chmod(temporary, 0o600)
+            handle.write(identity)
+            handle.write("\n")
+        yield (temporary,)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _replay_dispatch(args, instance: Path) -> dict:
+    policy = load_host_policy(
+        policy_config=getattr(args, "policy_config", None),
+        config_home=getattr(args, "config_home", None),
+    )
+    profile = policy.profiles.get(args.profile)
+    if profile is None:
+        raise ValueError("profile-unavailable")
+    destination = getattr(profile.destination, "kind", None)
+    if args.destination != destination:
+        raise ValueError("destination-binding-mismatch")
+    if destination != "private-r2":
+        raise ValueError("replay-destination-unavailable")
+    backend = _harvest_backend(args, instance, profile=profile, policy=policy)
+    identities = () if args.replay_command == "inspect" else None
+    identity_context = nullcontext(identities) if identities is not None else _replay_identity_paths(args)
+    with identity_context as identity_paths:
+        reader = ReplayReader(
+            backend,
+            profile_id=profile.profile_id,
+            destination=destination,
+            workspace_id=args.workspace_id or profile.workspace_id,
+            identity_paths=identity_paths,
+            age_executable=getattr(args, "age_executable", None),
+            authorize=lambda selected_profile, selected_destination: selected_profile == profile.profile_id and selected_destination == destination,
+            limits=ReplayLimits(page_size=args.page_size, max_indexes=args.max_indexes),
+        )
+        if args.replay_command == "inspect":
+            return reader.inspect(cursor=args.cursor, limit=args.limit)
+        page = reader.export(cursor=args.cursor, limit=args.limit)
+        result = {
+            "schema": "josh-room.pcc-replay",
+            "schema_version": {"major": 1, "minor": 0},
+            "ok": True,
+            "profile_id": profile.profile_id,
+            "workspace_id": args.workspace_id or profile.workspace_id,
+            "destination": destination,
+            "next_cursor": page.cursor,
+            "complete": page.complete,
+            "inspected_indexes": page.inspected_indexes,
+            "records": list(page.records),
+            "quarantines": list(page.quarantines),
+        }
+        if getattr(args, "jsonl", False):
+            result["_jsonl_lines"] = tuple(page.jsonl())
+        return result
 
 
 def _harvest_index_file(value: Path | None, default_root: Path | None = None) -> Path | None:
@@ -1209,6 +1310,8 @@ def dispatch(args, instance: Path) -> dict:
         return process_codex_hook(json.load(sys.stdin))
     if args.command == "harvest":
         return _harvest_dispatch(args, instance)
+    if args.command == "replay":
+        return _replay_dispatch(args, instance)
     if args.command == "encryption":
         if args.encryption_command == "recovery":
             if args.recovery_command != "generate":
