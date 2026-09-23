@@ -332,6 +332,8 @@ def build_parser() -> argparse.ArgumentParser:
         schedule_action.add_argument("--workspace-id")
         schedule_action.add_argument("--workspace-path")
         schedule_action.add_argument("--repository")
+        schedule_action.add_argument("--path-kind", choices=("directory", "worktree", "remote", "wsl", "symlink", "unknown"), default="unknown")
+        schedule_action.add_argument("--age-executable", type=Path)
         _json_option(schedule_action)
     hook = commands.add_parser("hook")
     hook_commands = hook.add_subparsers(dest="hook_command", required=True)
@@ -886,11 +888,12 @@ def _harvest_bridge_controller(args, outbox: PccOutbox) -> HarvestController:
             workspace_id=args.workspace_id,
             workspace_path=args.workspace_path,
             repository=args.repository,
-            path_kind=args.path_kind,
             age_executable=args.age_executable,
         )
     )
-    return HarvestController(outbox, prepare=bridge.prepare)
+    profile = policy.profiles[args.profile]
+    outbox.max_bytes = min(outbox.max_bytes, profile.limits.local_outbox_bytes)
+    return HarvestController(outbox, prepare=bridge.prepare, profile=profile)
 def _drain_policy_check(policy, profile, args):
     def check(record):
         trigger = record.metadata.get("trigger")
@@ -946,7 +949,6 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             return repair_codex_hooks()
         if action == "remove":
             return remove_codex_hooks()
-        raise ValueError("unsupported harvest hook action")
     if args.harvest_command == "schedule":
         options = {
             "interval": args.interval,
@@ -961,6 +963,8 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             "workspace_id": args.workspace_id,
             "workspace_path": args.workspace_path,
             "repository": args.repository,
+            "path_kind": args.path_kind,
+            "age_executable": args.age_executable,
         }
         if args.schedule_command == "install":
             return _scheduler.install(**options)
