@@ -299,21 +299,50 @@ def _platform(value: str | None = None) -> str:
     if name.startswith("win"):
         return "windows"
     return "unsupported"
+_SYSTEMCTL = Path("/usr/bin/systemctl")
+_LAUNCHCTL = Path("/bin/launchctl")
+
+
+def _native_scheduler_executable(platform_name: str) -> str | None:
+    """Return only the fixed, trusted native scheduler path."""
+    candidate = {"linux": _SYSTEMCTL, "macos": _LAUNCHCTL}.get(platform_name)
+    if candidate is None or not candidate.is_absolute():
+        return None
+    try:
+        status = candidate.stat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(status.st_mode) or not (status.st_mode & 0o111):
+        return None
+    return str(candidate)
+
+
+def _activation_error(activation: str) -> str | None:
+    if activation == "unsupported":
+        return "scheduler-native-unavailable"
+    if activation == "activation-failed":
+        return "scheduler-activation-failed"
+    return None
+
 
 def _activate(platform_name: str, home: Path, files: tuple[Path, ...]) -> str:
     if home != _home():
         return "not-attempted"
+    native = _native_scheduler_executable(platform_name)
+    if native is None:
+        return "unsupported"
     try:
         if platform_name == "linux":
-            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, capture_output=True)
-            subprocess.run(["systemctl", "--user", "enable", "--now", "josh-room-pcc-harvest.timer"], check=True, capture_output=True)
+            subprocess.run([native, "--user", "daemon-reload"], check=True, capture_output=True)
+            subprocess.run([native, "--user", "enable", "--now", "josh-room-pcc-harvest.timer"], check=True, capture_output=True)
             return "active"
         if platform_name == "macos":
             uid = str(os.getuid())
-            subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(files[0])], check=True, capture_output=True)
+            subprocess.run([native, "bootstrap", f"gui/{uid}", str(files[0])], check=True, capture_output=True)
             return "active"
     except (OSError, subprocess.CalledProcessError):
         return "activation-failed"
+
 
 
 def _native_error_text(error: subprocess.CalledProcessError) -> str:
@@ -341,12 +370,15 @@ def _is_absent_native_job(platform_name: str, error: subprocess.CalledProcessErr
 def _deactivate(platform_name: str, home: Path) -> str:
     if home != _home():
         return "not-attempted"
+    native = _native_scheduler_executable(platform_name)
+    if native is None:
+        return "unsupported"
     try:
         if platform_name == "linux":
-            subprocess.run(["systemctl", "--user", "disable", "--now", "josh-room-pcc-harvest.timer"], check=True, capture_output=True)
+            subprocess.run([native, "--user", "disable", "--now", "josh-room-pcc-harvest.timer"], check=True, capture_output=True)
             return "inactive"
         if platform_name == "macos":
-            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=True, capture_output=True)
+            subprocess.run([native, "bootout", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=True, capture_output=True)
             return "inactive"
     except subprocess.CalledProcessError as error:
         return "inactive" if _is_absent_native_job(platform_name, error) else "deactivation-failed"
@@ -494,13 +526,33 @@ def install(
             manifest_changed = _write_manifest(home, selected, exe, interval, context_id, context)
             changed = context_changed or service_changed or timer_changed or manifest_changed
             activation = _activate(selected, home, (service, timer))
-            return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, overlap="systemd-oneshot")
+            error = _activation_error(activation)
+            return _envelope(
+                ok=error is None,
+                action="install",
+                platform=selected,
+                installed=error is None,
+                changed=changed,
+                activation=activation,
+                overlap="systemd-oneshot",
+                **({"error": error} if error is not None else {}),
+            )
         if selected == "macos":
             path = _mac_path(home)
             changed = context_changed or _write_private(path, _mac_content(exe, interval, home, context, context_id))
             changed = _write_manifest(home, selected, exe, interval, context_id, context) or changed
             activation = _activate(selected, home, (path,))
-            return _envelope(ok=activation != "activation-failed", action="install", platform=selected, installed=activation != "activation-failed", changed=changed, activation=activation, overlap="throttle-interval")
+            error = _activation_error(activation)
+            return _envelope(
+                ok=error is None,
+                action="install",
+                platform=selected,
+                installed=error is None,
+                changed=changed,
+                activation=activation,
+                overlap="throttle-interval",
+                **({"error": error} if error is not None else {}),
+            )
         if selected == "windows":
             process = subprocess.run(_windows_command(exe, interval, context, context_id), capture_output=True, text=True, check=False)
             if process.returncode != 0:
@@ -544,23 +596,43 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
         manifest, fresh = _manifest_state(home)
         installed = all(path.is_file() and not path.is_symlink() for path in paths) and manifest
         active = False
-        if home == _home() and installed:
+        native = _native_scheduler_executable(selected) if home == _home() and installed else None
+        if native is not None:
             try:
-                active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", "josh-room-pcc-harvest.timer"], check=False).returncode == 0
+                active = subprocess.run([native, "--user", "is-active", "--quiet", "josh-room-pcc-harvest.timer"], check=False).returncode == 0
             except OSError:
                 active = False
-        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh)
+        error = "scheduler-native-unavailable" if home == _home() and installed and native is None else None
+        return _envelope(
+            ok=error is None and installed and fresh and active,
+            action="status",
+            platform=selected,
+            installed=installed,
+            active=active,
+            stale=installed and not fresh,
+            **({"error": error} if error is not None else {}),
+        )
     if selected == "macos":
         path = _mac_path(home)
         manifest, fresh = _manifest_state(home)
         installed = path.is_file() and not path.is_symlink() and manifest
         active = False
-        if home == _home() and installed:
+        native = _native_scheduler_executable(selected) if home == _home() and installed else None
+        if native is not None:
             try:
-                active = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=False, capture_output=True).returncode == 0
+                active = subprocess.run([native, "print", f"gui/{os.getuid()}/dev.josh-room.pcc-harvest"], check=False, capture_output=True).returncode == 0
             except OSError:
                 active = False
-        return _envelope(ok=installed and fresh and active, action="status", platform=selected, installed=installed, active=active, stale=installed and not fresh)
+        error = "scheduler-native-unavailable" if home == _home() and installed and native is None else None
+        return _envelope(
+            ok=error is None and installed and fresh and active,
+            action="status",
+            platform=selected,
+            installed=installed,
+            active=active,
+            stale=installed and not fresh,
+            **({"error": error} if error is not None else {}),
+        )
     if selected == "windows":
         if os.name != "nt":
             return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
@@ -585,8 +657,9 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
                 return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
         existed = any(path.exists() for path in paths) or manifest.exists() or (state is not None and state.exists())
         activation = _deactivate(selected, home)
-        if activation == "deactivation-failed":
-            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-remove-failed")
+        if activation in {"deactivation-failed", "unsupported"}:
+            error = "scheduler-native-unavailable" if activation == "unsupported" else "scheduler-remove-failed"
+            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error=error)
         targets = (*paths, manifest) + ((state,) if state is not None else ())
         for path in targets:
             path.unlink(missing_ok=True)
@@ -597,8 +670,9 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-path-unavailable")
         existed = path.exists() or manifest.exists() or (state is not None and state.exists())
         activation = _deactivate(selected, home)
-        if activation == "deactivation-failed":
-            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-remove-failed")
+        if activation in {"deactivation-failed", "unsupported"}:
+            error = "scheduler-native-unavailable" if activation == "unsupported" else "scheduler-remove-failed"
+            return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error=error)
         targets = (path, manifest) + ((state,) if state is not None else ())
         for target in targets:
             target.unlink(missing_ok=True)
