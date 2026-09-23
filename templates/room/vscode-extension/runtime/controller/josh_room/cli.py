@@ -914,16 +914,20 @@ def _drain_policy_check(policy, profile, args):
     return check
 
 
-def _harvest_backend(args, instance: Path, profile=None):
+def _harvest_backend(args, instance: Path, profile=None, policy=None):
     binding_id = getattr(getattr(profile, "destination", None), "binding_id", None)
-    if binding_id is not None and getattr(args, "dimension", None) not in {None, binding_id}:
-        raise ValueError("destination-binding-mismatch")
+    binding = policy.r2_bindings.get(binding_id) if policy is not None and binding_id is not None else None
+    expected_credential = getattr(binding, "credential_profile_ref", None)
+    if binding_id is not None and binding is None:
+        raise ValueError("destination-binding-unavailable")
     try:
         selected = _effective_dimension(args)
         if selected is None or selected.provider != "r2":
             return None
+        if expected_credential is not None and getattr(selected, "credential_profile", None) != expected_credential:
+            raise ValueError("destination-binding-mismatch")
         return _backend(selected.provider, instance, selected.dimension_id)
-    except Exception as error:  # noqa: BLE001
+    except (OSError, RuntimeError, ValueError) as error:
         if binding_id is not None:
             raise ValueError("destination-binding-unavailable") from error
         return None
@@ -1018,7 +1022,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
                 return {"decision": decision.kind, "destination": decision.destination_class}
             controller = HarvestController(
                 outbox,
-                backend=_harvest_backend(args, instance or _instance_root(), None),
+                backend=_harvest_backend(args, instance or _instance_root(), None, policy),
                 index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
                 policy_check=scheduled_policy,
             )
@@ -1032,7 +1036,7 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
             raise ValueError("profile-unavailable")
         controller = HarvestController(
             outbox,
-            backend=_harvest_backend(args, instance or _instance_root(), profile),
+            backend=_harvest_backend(args, instance or _instance_root(), profile, policy),
             index_ciphertext=_harvest_index_file(getattr(args, "index_file", None), outbox.root),
             profile=profile,
             policy_check=_drain_policy_check(policy, profile, args),
