@@ -29,10 +29,16 @@ def _public_mapping(value: object) -> dict[str, object]:
         return {}
     result: dict[str, object] = {}
     for key in sorted(value):
-        if not isinstance(key, str) or key.startswith("_") or key in {"path", "source_path", "secret", "token", "credential"}:
+        if not isinstance(key, str) or key.startswith("_") or key.lower() in {
+            "path", "source_path", "filename", "cwd", "error", "secret", "token", "credential",
+        }:
             continue
         item = value[key]
-        if item is None or isinstance(item, (bool, int, float, str)):
+        if isinstance(item, str):
+            if len(item) > 256 or any(marker in item.lower() for marker in ("secret", "token", "credential", "/")):
+                continue
+            result[key] = item
+        elif item is None or isinstance(item, (bool, int, float)):
             result[key] = item
 
 _SAFE_CODES = frozenset({

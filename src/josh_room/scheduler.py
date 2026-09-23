@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import pwd
+import shutil
 import stat
 import subprocess
 import sys
@@ -14,12 +17,16 @@ TASK_NAME = "JoshRoomPccHarvest"
 
 
 def _home() -> Path:
-    value = os.environ.get("HOME")
-    return Path(value) if value and Path(value).is_absolute() else Path.home()
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (KeyError, OSError):
+        return Path.home()
 
 
 def _executable(value: str | os.PathLike[str] | None = None) -> str:
     candidate = Path(value) if value is not None else Path(sys.executable)
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in str(candidate)):
+        raise ValueError("scheduler executable contains controls")
     if not candidate.is_absolute():
         raise ValueError("scheduler executable must be absolute")
     status = candidate.lstat()
