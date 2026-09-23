@@ -329,7 +329,7 @@ def install(
         selected, home = _platform(platform_name), _trusted_home(home)
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", error="scheduler-path-invalid")
-    if selected == "windows" and os.name != "nt":
+    if selected == "windows":
         return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
     if selected not in {"linux", "macos", "windows"}:
         return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
@@ -400,6 +400,8 @@ def status(*, platform_name: str | None = None, home: Path | None = None) -> dic
     except (OSError, ValueError):
         return _envelope(ok=False, action="status", error="scheduler-path-invalid")
 
+    if selected == "windows":
+        return _envelope(ok=False, action="status", platform=selected, error="scheduler-unsupported-platform")
     if selected == "linux":
         paths = _linux_paths(home)
         manifest, fresh = _manifest_state(home)
@@ -436,6 +438,9 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
         selected, home = _platform(platform_name), _trusted_home(home)
     except (OSError, ValueError):
         return _envelope(ok=False, action="remove", error="scheduler-path-invalid")
+    if selected == "windows":
+        return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
+
     if selected == "linux":
         paths = _linux_paths(home)
         for path in paths:
@@ -460,6 +465,7 @@ def remove(*, platform_name: str | None = None, home: Path | None = None) -> dic
             return _envelope(ok=False, action="remove", platform=selected, removed=False, changed=False, activation=activation, error="scheduler-deactivation-failed")
         path.unlink(missing_ok=True)
         manifest.unlink(missing_ok=True)
+        return _envelope(ok=True, action="remove", platform=selected, removed=True, changed=existed, activation=activation, files=[str(path), str(manifest)])
     if selected == "windows":
         if os.name != "nt":
             return _envelope(ok=False, action="remove", platform=selected, error="scheduler-unsupported-platform")
