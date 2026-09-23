@@ -218,7 +218,35 @@ class HarvestController:
         self.publish = publish or self._publish_default
         self.owner_factory = owner_factory
 
+    def _record_scope_matches(self, record: QueueRecord) -> bool:
+        """Require queued delivery metadata to match the selected host profile."""
+        if self.profile is None:
+            return True
+        destination = getattr(self.profile, "destination", None)
+        expected_kind = getattr(destination, "kind", None)
+        expected_binding = getattr(destination, "binding_id", None)
+        if record.metadata.get("workspace_id") != getattr(self.profile, "workspace_id", None):
+            return False
+        if record.metadata.get("destination_class") != expected_kind:
+            return False
+        actual_binding = record.metadata.get("destination_binding_id")
+        if expected_kind == "private-r2":
+            return actual_binding == expected_binding
+        return actual_binding is None
+
+    def _publication_scope_matches(self, outbox: PccOutbox, record: QueueRecord) -> bool:
+        if not self._record_scope_matches(record):
+            return False
+        index_event_id = record.metadata.get("index_event_id")
+        if isinstance(index_event_id, str):
+            index_record = outbox.inspect_record(index_event_id)
+            if index_record is not None and not self._record_scope_matches(index_record):
+                return False
+        return True
+
     def _publication_allowed(self, record: QueueRecord) -> bool:
+        if self.profile is not None and not self._record_scope_matches(record):
+            return False
         if self.policy_check is not None:
             try:
                 current = self.policy_check(record)
@@ -287,25 +315,24 @@ class HarvestController:
         if self.backend is None or not callable(getattr(self.backend, "publish_outbox_evidence", None)):
             raise HarvestError("provider-authority-unavailable")
         index_event_id = record.metadata.get("index_event_id")
-        index_ciphertext = self.index_ciphertext
-        if isinstance(index_event_id, str):
-            index_record = outbox.inspect_record(index_event_id)
-            if index_record is None:
-                raise HarvestError("index-builder-unavailable")
-            index_metadata = index_record.metadata
-            if (
-                index_metadata.get("evidence_event_id") != record.event_id
-                or index_metadata.get("evidence_kind") != record.metadata.get("object_kind")
-                or index_metadata.get("ciphertext_sha256") != record.ciphertext_sha256
-                or index_metadata.get("ciphertext_size") != record.ciphertext_size
-            ):
-                raise HarvestError("index-builder-unavailable")
-            try:
-                index_ciphertext = outbox.prepared_path(index_event_id)
-            except Exception as error:
-                raise HarvestError("index-builder-unavailable") from error
-        if index_ciphertext is None:
+        if not isinstance(index_event_id, str) or not index_event_id:
             raise HarvestError("index-builder-unavailable")
+        index_record = outbox.inspect_record(index_event_id)
+        if index_record is None:
+            raise HarvestError("index-builder-unavailable")
+        index_metadata = index_record.metadata
+        if (
+            index_metadata.get("object_kind") != "index-event"
+            or index_metadata.get("evidence_event_id") != record.event_id
+            or index_metadata.get("evidence_kind") != record.metadata.get("object_kind")
+            or index_metadata.get("ciphertext_sha256") != record.ciphertext_sha256
+            or index_metadata.get("ciphertext_size") != record.ciphertext_size
+        ):
+            raise HarvestError("index-builder-unavailable")
+        try:
+            index_ciphertext = outbox.prepared_path(index_event_id)
+        except Exception as error:
+            raise HarvestError("index-builder-unavailable") from error
         result = self.backend.publish_outbox_evidence(
             outbox,
             record.event_id,
@@ -539,6 +566,8 @@ class HarvestController:
                 continue
             if record.resume_state not in {QueueState.PREPARED_ENCRYPTED, QueueState.OBJECT_UPLOADED, QueueState.INDEX_PUBLISHED}:
                 continue
+            if self.profile is not None and not self._publication_scope_matches(self.outbox, record):
+                continue
             if record.owner is not None and (record.lease_until is None or record.lease_until > now):
                 continue
             claimed = self.outbox.claim_specific(record.event_id, owner, takeover=record.owner is not None)
@@ -619,6 +648,7 @@ class HarvestController:
         delivered: list[dict[str, object]] = []
         failures: list[dict[str, object]] = []
         attempted: set[str] = set()
+        # Scope filtering happens while selecting each bounded item, so foreign records remain unchanged.
         for _ in range(limit):
             if max_seconds is not None and time.monotonic() - started >= max_seconds:
                 failures.append({"event_id": None, "code": "cancelled"})
@@ -633,6 +663,13 @@ class HarvestController:
                 except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": "not-prepared"})
+                continue
+            if not self._publication_scope_matches(self.outbox, record):
+                try:
+                    self.outbox.transition(record.event_id, owner, QueueState.POLICY_DENIED, reason_code="scope-binding-mismatch")
+                except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
+                    pass
+                failures.append({"event_id": record.event_id, "code": "scope-binding-mismatch"})
                 continue
             if not self._publication_allowed(record):
                 try:
