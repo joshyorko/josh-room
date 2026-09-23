@@ -321,7 +321,7 @@ class QueueRecord:
             raise ValueError("record expanded event ids")
         expanded_checkpoint = body.get("expanded_checkpoint")
         if expanded_checkpoint is not None:
-            expanded_checkpoint = _validate_checkpoint(expanded_checkpoint)
+            expanded_checkpoint = _validate_expanded_checkpoint(expanded_checkpoint)
         return cls(
             event_id=event_id,
             session_id=session_id,
@@ -362,7 +362,6 @@ class PreparedRecord:
             "ciphertext_size": self.ciphertext_size,
             "metadata": self.metadata,
         }
-
     @classmethod
     def from_dict(cls, body: object) -> PreparedRecord:
         if not isinstance(body, dict) or set(body) != {
@@ -491,6 +490,45 @@ def _validate_checkpoint(value: object) -> dict[str, object]:
     if not isinstance(prefix, str) or not _DIGEST.fullmatch(prefix):
         raise ValueError("checkpoint digest is invalid")
     return {"source": source, "representation": representation, "start": start, "end": end, "prefix_sha256": prefix}
+
+
+def _validate_expanded_checkpoint(value: object) -> dict[str, object]:
+    """Validate the cursor published after a trigger is expanded.
+
+    The trigger checkpoint remains the hook's legacy byte range.  Expanded
+    checkpoints are the only queue surface that carries the source adapter's
+    record cursor, observed size, and evidence chain head.
+    """
+    if not isinstance(value, Mapping):
+        raise TypeError("expanded checkpoint is invalid")
+    required = {"source", "representation", "start", "end", "prefix_sha256"}
+    cursor = {"next_record_index", "next_byte_offset", "observed_size", "chain_head_sha256"}
+    if set(value) == required:
+        # Preserve readability of pre-follow-up expanded records.  They are
+        # not resumable successors until a host emits the expanded cursor.
+        return _validate_checkpoint(value)
+    if set(value) != required | cursor:
+        raise ValueError("expanded checkpoint fields are invalid")
+    base = _validate_checkpoint({key: value[key] for key in required})
+    next_record_index = value["next_record_index"]
+    next_byte_offset = value["next_byte_offset"]
+    observed_size = value["observed_size"]
+    if any(type(item) is not int or item < 0 for item in (next_record_index, next_byte_offset, observed_size)):
+        raise ValueError("expanded checkpoint cursor is invalid")
+    if next_byte_offset != base["end"] or base["start"] > base["end"]:
+        raise ValueError("expanded checkpoint boundary is invalid")
+    if observed_size < next_byte_offset:
+        raise ValueError("expanded checkpoint size is invalid")
+    chain = value["chain_head_sha256"]
+    if chain is not None and (not isinstance(chain, str) or not _DIGEST.fullmatch(chain)):
+        raise ValueError("expanded checkpoint chain is invalid")
+    return {
+        **base,
+        "next_record_index": next_record_index,
+        "next_byte_offset": next_byte_offset,
+        "observed_size": observed_size,
+        "chain_head_sha256": chain,
+    }
 
 
 def _validate_metadata(value: object) -> dict[str, object]:
@@ -1777,7 +1815,7 @@ class PccOutbox:
         children = tuple(_identifier(value) for value in child_event_ids)
         if len(children) > _MAX_EVENT_IDS or len(set(children)) != len(children):
             raise ValueError("expanded event ids are invalid")
-        expanded_checkpoint = _validate_checkpoint(checkpoint)
+        expanded_checkpoint = _validate_expanded_checkpoint(checkpoint)
         with _exclusive_file_lock(self._lock_path):
             record = self._must_read_unlocked(event_id)
             if record.state is QueueState.TRIGGER_EXPANDED:

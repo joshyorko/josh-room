@@ -35,13 +35,68 @@ def _public_mapping(value: object) -> dict[str, object]:
         }:
             continue
         item = value[key]
-        if isinstance(item, str):
+        if isinstance(item, Mapping):
+            if len(result) < 32:
+                result[key] = _public_mapping(item)
+        elif isinstance(item, (list, tuple)):
+            if len(result) < 32:
+                result[key] = [
+                    _public_mapping(part) if isinstance(part, Mapping) else part
+                    for part in list(item)[:32]
+                    if item is None or isinstance(part, (str, int, float, bool, Mapping))
+                ]
+        elif isinstance(item, str):
             if len(item) > 256 or any(marker in item.lower() for marker in ("secret", "token", "credential", "/")):
                 continue
             result[key] = item
         elif item is None or isinstance(item, (bool, int, float)):
             result[key] = item
     return result
+
+
+_READINESS_COMPONENTS = ("policy", "source", "hook", "keyring", "device", "scheduler")
+_UNKNOWN_READINESS = {
+    name: {"state": "unknown", "reason": "host-authority-unavailable"}
+    for name in _READINESS_COMPONENTS
+}
+
+
+def _host_snapshot(provider: object | None) -> dict[str, object]:
+    if provider is None:
+        return {"readiness": {key: dict(value) for key, value in _UNKNOWN_READINESS.items()}}
+    try:
+        value = provider() if callable(provider) else provider
+    except Exception:  # noqa: BLE001 - host diagnostics fail closed
+        return {
+            "readiness": {
+                key: {"state": "error", "reason": "host-authority-error"}
+                for key in _READINESS_COMPONENTS
+            }
+        }
+    snapshot = _public_mapping(value)
+    readiness = snapshot.get("readiness")
+    if not isinstance(readiness, Mapping):
+        readiness = {}
+    normalized = {}
+    for key in _READINESS_COMPONENTS:
+        item = readiness.get(key, snapshot.get(key))
+        normalized[key] = dict(item) if isinstance(item, Mapping) else dict(_UNKNOWN_READINESS[key])
+    snapshot["readiness"] = normalized
+    return snapshot
+
+
+def _readiness_ready(readiness: Mapping[str, object]) -> bool:
+    return all(
+        isinstance(readiness.get(key), Mapping)
+        and readiness[key].get("state") in {"ready", "healthy", "available"}
+        for key in _READINESS_COMPONENTS
+    )
+
+
+def _estimate_value(value: object) -> int | None:
+    if type(value) is not int or value < 0 or value > 1_000_000_000_000:
+        return None
+    return value
 _SAFE_CODES = frozenset({
     "device-unavailable", "capture-authority-unavailable", "normalization-event-required",
     "normalized-event-invalid", "child-lease-unavailable", "provider-authority-unavailable",
@@ -141,6 +196,9 @@ class HarvestController:
         backend: object | None = None,
         index_ciphertext: bytes | Path | None = None,
         policy_check: Callable[[QueueRecord], Mapping[str, object]] | None = None,
+        host_status: object | None = None,
+        readiness: object | None = None,
+        estimate: Callable[[QueueRecord], Mapping[str, object]] | None = None,
     ) -> None:
         if not isinstance(outbox, PccOutbox):
             raise TypeError("outbox is required")
@@ -150,6 +208,12 @@ class HarvestController:
         self.backend = backend
         self.index_ciphertext = index_ciphertext
         self.policy_check = policy_check
+        self.host_status = host_status if host_status is not None else readiness
+        self.estimate = estimate
+        self._last_operation: dict[str, object] = {
+            "state": "unknown",
+            "reason": "operation-not-observed",
+        }
         self.prepare = prepare or self._prepare_default
         self.publish = publish or self._publish_default
         self.owner_factory = owner_factory
@@ -282,9 +346,72 @@ class HarvestController:
             "object_key": getattr(getattr(result, "object", None), "key", None),
             "index_event_id": index_event_id,
         }
+    def _host(self) -> dict[str, object]:
+        return _host_snapshot(self.host_status)
+
+    def _record_estimate(self, record: QueueRecord) -> dict[str, object]:
+        value: Mapping[str, object] | None = None
+        if self.estimate is not None:
+            try:
+                candidate = self.estimate(record)
+                if isinstance(candidate, Mapping):
+                    value = candidate
+            except Exception:  # noqa: BLE001 - estimates fail closed
+                return {"records": None, "bytes": None, "state": "error", "reason": "estimate-unavailable"}
+        if value is None:
+            value = record.metadata
+        estimated_records = _estimate_value(value.get("estimated_records", value.get("records")))
+        estimated_bytes = _estimate_value(value.get("estimated_bytes", value.get("bytes")))
+        if estimated_records is None and record.metadata.get("object_kind") not in {"trigger", None}:
+            estimated_records = 1
+        if estimated_bytes is None:
+            estimated_bytes = _estimate_value(value.get("content_size"))
+        state = "ready" if estimated_records is not None and estimated_bytes is not None else "unknown"
+        return {
+            "records": estimated_records,
+            "bytes": estimated_bytes,
+            "state": state,
+            **({"reason": "source-estimate-unavailable"} if state != "ready" else {}),
+        }
+
+    def _profile_status(self) -> dict[str, object]:
+        destination = getattr(self.profile, "destination", None)
+        profile_id = getattr(self.profile, "profile_id", None)
+        workspace_id = getattr(self.profile, "workspace_id", None)
+        result = {
+            "profile": profile_id if isinstance(profile_id, str) else None,
+            "workspace": workspace_id if isinstance(workspace_id, str) else None,
+            "destination": getattr(destination, "kind", None),
+        }
+        return {key: value for key, value in result.items() if value is not None}
+
+    def _last_operation_status(self, visible_records: list[QueueRecord]) -> dict[str, object]:
+        if self._last_operation.get("state") != "unknown":
+            return dict(self._last_operation)
+        if visible_records:
+            latest = max(visible_records, key=lambda item: item.sequence)
+            return {
+                "state": "failed" if latest.failure_code else latest.state.value,
+                "operation": "queue",
+                **({"diagnostic": latest.failure_code} if latest.failure_code else {}),
+            }
+        return dict(self._last_operation)
+
+    def _remember_operation(self, command: str, result: Mapping[str, object]) -> None:
+        self._last_operation = {
+            "state": "succeeded" if result.get("ok") is True else "failed",
+            "operation": command,
+            **({"diagnostic": result.get("error")} if result.get("error") else {}),
+        }
+
     def plan(self, event_id: str | None = None) -> dict[str, object]:
         inspection = self.outbox.inspect(event_id)
+        host = self._host()
+        readiness = host["readiness"]
         plans = []
+        aggregate_records = 0
+        aggregate_bytes = 0
+        aggregate_known = True
         for record in inspection.records:
             if record.metadata.get("object_kind") == "index-event":
                 continue
@@ -297,21 +424,54 @@ class HarvestController:
                 action = "none"
             else:
                 action = "inspect"
+            estimate = self._record_estimate(record)
+            if estimate["records"] is None or estimate["bytes"] is None:
+                aggregate_known = False
+            else:
+                aggregate_records += int(estimate["records"])
+                aggregate_bytes += int(estimate["bytes"])
+            reasons = [] if action in {"prepare", "drain"} else [f"state:{state.value}"]
+            operation_ready = action == "none" or (
+                action in {"prepare", "drain"} and _readiness_ready(readiness)
+            )
+            if action in {"prepare", "drain"} and not operation_ready:
+                reasons.extend(
+                    f"{key}:{value.get('state', 'unknown')}"
+                    for key, value in readiness.items()
+                    if isinstance(value, Mapping) and value.get("state") not in {"ready", "healthy", "available"}
+                )
             plan = HarvestPlan(record.event_id, record.session_id, state.value, action, record.checkpoint, record.metadata).to_dict()
             plan.update({
-                "ready": action in {"prepare", "drain"},
-                "reasons": [] if action in {"prepare", "drain"} else [f"state:{state.value}"],
+                "ready": operation_ready,
+                "reasons": reasons,
                 "limits": {"bounded": True},
                 "destination": record.metadata.get("destination_class"),
                 "policy_decision": record.metadata.get("policy_decision"),
+                "estimated": estimate,
+                "readiness": readiness,
             })
             plans.append(plan)
+        estimated = {
+            "records": aggregate_records if aggregate_known else None,
+            "bytes": aggregate_bytes if aggregate_known else None,
+            "state": "ready" if aggregate_known else "unknown",
+        }
+        overall_ready = all(item["ready"] for item in plans) if plans else _readiness_ready(readiness)
         return _envelope(
-            ok=not bool(inspection.diagnostics),
+            ok=not bool(inspection.diagnostics) and overall_ready,
             command="plan",
             content_free=True,
             source={"session_id": event_id, "checkpoints": len(plans)},
-            estimated={"records": 0, "bytes": 0},
+            profile=self._profile_status(),
+            policy=readiness["policy"],
+            source_readiness=readiness["source"],
+            hook=readiness["hook"],
+            keyring=readiness["keyring"],
+            device=readiness["device"],
+            scheduler=readiness["scheduler"],
+            readiness=readiness,
+            ready=overall_ready,
+            estimated=estimated,
             plans=plans,
             diagnostics=[item.to_dict() for item in inspection.diagnostics],
         )
@@ -320,9 +480,32 @@ class HarvestController:
         inspection = self.outbox.inspect()
         visible_records = [record for record in inspection.records if record.metadata.get("object_kind") != "index-event"]
         counts = Counter(record.state.value for record in visible_records)
+        host = self._host()
+        readiness = host["readiness"]
+        estimate_items = [self._record_estimate(record) for record in visible_records]
+        estimate_known = all(item["records"] is not None and item["bytes"] is not None for item in estimate_items)
+        source_adapter = next(
+            (
+                {
+                    "state": readiness["source"].get("state", "unknown"),
+                    "adapter": record.metadata.get("source_adapter"),
+                    "version": record.metadata.get("source_adapter_version"),
+                    "surface": record.metadata.get("source_surface"),
+                }
+                for record in reversed(visible_records)
+                if record.metadata.get("source_adapter")
+            ),
+            readiness["source"],
+        )
+        queue_unhealthy = any(
+            counts.get(state.value, 0)
+            for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED, QueueState.RETRYABLE_FAILURE)
+        )
         result = _envelope(
-            ok=not any(item.code == "storage-unavailable" for item in inspection.diagnostics) and not any(
-                counts.get(state.value, 0) for state in (QueueState.CAPTURE_GAP, QueueState.QUARANTINED, QueueState.POLICY_DENIED, QueueState.RETRYABLE_FAILURE)
+            ok=(
+                not any(item.code == "storage-unavailable" for item in inspection.diagnostics)
+                and not queue_unhealthy
+                and _readiness_ready(readiness)
             ),
             command="status",
             states={key: counts[key] for key in sorted(counts)},
@@ -334,15 +517,32 @@ class HarvestController:
             oldest_sequence=min((record.sequence for record in visible_records), default=None),
             last_states=[record.state.value for record in visible_records[-8:]],
             local_bytes=sum((record.ciphertext_size or 0) for record in inspection.records),
-            scheduler="unknown",
+            estimated={
+                "records": sum(int(item["records"]) for item in estimate_items) if estimate_known else None,
+                "bytes": sum(int(item["bytes"]) for item in estimate_items) if estimate_known else None,
+                "state": "ready" if estimate_known else "unknown",
+            },
+            profile=self._profile_status(),
+            policy=host.get("policy", readiness["policy"]),
+            source=source_adapter,
+            adapter=source_adapter,
+            hook=host.get("hook", readiness["hook"]),
+            keyring=host.get("keyring", readiness["keyring"]),
+            device=host.get("device", readiness["device"]),
+            enrollment=host.get("enrollment", readiness["device"]),
+            scheduler=host.get("scheduler", readiness["scheduler"]),
+            readiness=readiness,
+            ready=_readiness_ready(readiness) and not queue_unhealthy and not bool(inspection.diagnostics),
+            last_operation=host.get("last_operation", self._last_operation_status(visible_records)),
             partial=inspection.partial_count,
             orphan_prepared=list(inspection.orphan_prepared or []),
             diagnostics=[item.to_dict() for item in inspection.diagnostics],
         )
+        if not _readiness_ready(readiness) and not inspection.diagnostics and not queue_unhealthy:
+            result["error"] = "host-readiness-unavailable"
         if inspection.diagnostics:
             result["error"] = inspection.diagnostics[0].code
         return result
-
     def inspect(self, event_id: str | None = None) -> dict[str, object]:
         inspection = self.outbox.inspect(event_id)
         return _envelope(
@@ -440,7 +640,7 @@ class HarvestController:
                 except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": str(code)})
-        return _envelope(
+        result = _envelope(
             ok=not failures,
             command="run",
             offline=bool(offline),
@@ -448,6 +648,8 @@ class HarvestController:
             failures=failures,
             remaining=self.status()["queued"],
         )
+        self._remember_operation("run", result)
+        return result
 
     def drain(self, *, limit: int = 1, max_seconds: float | None = None) -> dict[str, object]:
         if type(limit) is not int or not 0 < limit <= 1000:
@@ -511,7 +713,9 @@ class HarvestController:
                 except Exception:  # noqa: BLE001, S110 - preserve original lifecycle failure
                     pass
                 failures.append({"event_id": record.event_id, "code": str(code)})
-        return _envelope(ok=not failures, command="drain", delivered=delivered, failures=failures, rescanned=False)
+        result = _envelope(ok=not failures, command="drain", delivered=delivered, failures=failures, rescanned=False)
+        self._remember_operation("drain", result)
+        return result
 
     def _transition(self, event_id: str, state: QueueState, reason: str) -> dict[str, object]:
         owner = self.owner_factory()
@@ -538,6 +742,7 @@ class HarvestController:
             raise HarvestError("not-retryable")
         return self._transition(event_id, QueueState.RETRYABLE_FAILURE, reason)
 
+    def quarantine(self, event_id: str, reason: str = "operator-quarantine") -> dict[str, object]:
         record = self.outbox.inspect_record(event_id)
         if record is None or record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.POLICY_DENIED}:
             raise HarvestError("not-quarantinable")
