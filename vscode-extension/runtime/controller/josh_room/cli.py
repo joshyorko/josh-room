@@ -494,8 +494,29 @@ def main(argv=None):
     result = _bounded_json_result(result)
     _write_runtime_result(result)
     emit(result, getattr(args, "json", False))
-    return 0 if result["ok"] else 2
+    return _exit_code(result)
 
+def _exit_code(result: dict) -> int:
+    if result.get("ok") is True:
+        return 0
+    error = result.get("error")
+    if error in {"backlog", "not-prepared"}:
+        return 3
+    if error in {"quarantined", "not-quarantinable"}:
+        return 4
+    if error in {"capture-gap", "child-lease-unavailable"}:
+        return 5
+    if error in {"policy-denied", "not-retryable"}:
+        return 6
+    if error in {"config-invalid", "scheduler-path-invalid", "capture-authority-unavailable"}:
+        return 78
+    if error in {"internal", "storage-unavailable"}:
+        return 70
+    if result.get("command") == "status":
+        states = result.get("states", {})
+        if isinstance(states, dict) and any(states.get(value, 0) for value in ("queued", "retryable-failure")):
+            return 3
+    return 2
 
 def _write_runtime_result(result):
     target_value = os.environ.get("JOSH_ROOM_RESULT_FILE")
