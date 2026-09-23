@@ -52,13 +52,13 @@ class QueueState(StrEnum):
     SOURCE_SNAPSHOTTED = "source-snapshotted"
     PREPARED_ENCRYPTED = "prepared-encrypted"
     OBJECT_UPLOADED = "object-uploaded"
-    COMMITTED = "committed"
+    INDEX_PUBLISHED = "index-published"
     TRIGGER_EXPANDED = "trigger-expanded"
+    COMMITTED = "committed"
     RETRYABLE_FAILURE = "retryable-failure"
     QUARANTINED = "quarantined"
     POLICY_DENIED = "policy-denied"
     CAPTURE_GAP = "capture-gap"
-
 
 OutboxState = QueueState
 
