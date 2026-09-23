@@ -433,6 +433,8 @@ def install(
         selected, home = _platform(platform_name), _trusted_home(home)
     except (OSError, ValueError):
         return _envelope(ok=False, action="install", error="scheduler-path-invalid")
+    if selected in {"windows", "unsupported"}:
+        return _envelope(ok=False, action="install", platform=selected, error="scheduler-unsupported-platform")
     try:
         _launcher(home)
     except (OSError, ValueError):
