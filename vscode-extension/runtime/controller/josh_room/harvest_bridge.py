@@ -308,6 +308,11 @@ class HostHarvestBridge:
         event_id = event.document.get("event_id")
         if not isinstance(event_id, str) or not event_id:
             raise HarvestError("normalized-event-invalid")
+        source = event.document.get("source")
+        capture = event.document.get("capture")
+        trigger = parent.metadata.get("trigger")
+        if trigger not in {"stop", "subagent-stop", "session-end"}:
+            raise HarvestError("policy-denied")
         metadata = {
             "object_kind": event.kind,
             "policy_decision": "allow",
@@ -315,6 +320,10 @@ class HostHarvestBridge:
             "workspace_id": self.profile.workspace_id,
             "source_adapter": "codex-transcript",
             "source_adapter_version": "1",
+            "source_surface": source.get("surface", "unknown") if isinstance(source, Mapping) else "unknown",
+            "capture_status": capture.get("status", "complete") if isinstance(capture, Mapping) else "complete",
+            "sensitivity": event.document.get("sensitivity", "unknown"),
+            "trigger": trigger,
         }
         receipt = enqueue_trigger(
             outbox,
