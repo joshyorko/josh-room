@@ -988,6 +988,8 @@ class PccOutbox:
         session_id: str,
         checkpoint: Mapping[str, object],
         is_final: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        policy_decision: str = "allow",
         diagnostic_detail: object | None = None,
         coalesce: bool = True,
     ) -> QueueReceipt:
@@ -1011,6 +1013,7 @@ class PccOutbox:
         checkpoint: Mapping[str, object],
         is_final: bool = False,
         metadata: Mapping[str, object] | None = None,
+        policy_decision: str = "allow",
         diagnostic_detail: object | None = None,
         lock_timeout: float | None = None,
         coalesce: bool = True,
