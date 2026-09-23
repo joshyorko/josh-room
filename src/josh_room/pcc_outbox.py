@@ -1234,7 +1234,7 @@ class PccOutbox:
         except (OutboxStorageError, OSError):
             return Inspection([], [Diagnostic("storage-unavailable")])
 
-    def _now(self) -> float:
+        value = self.clock()
         if not _finite_number(value) or value < 0:
             raise OutboxStorageError("clock-invalid")
         return float(value)
