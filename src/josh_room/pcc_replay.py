@@ -687,9 +687,6 @@ class ReplayReader:
                         "ciphertext-too-large",
                         cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
                     ))
-                else:
-                    scan_limited = True
-                    break
                 continue
             index_scan_bytes = ref.ciphertext_size + 1
             if scanned_bytes + index_scan_bytes > self.limits.max_scan_bytes:

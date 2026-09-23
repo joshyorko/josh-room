@@ -698,6 +698,56 @@ def test_failed_index_reads_still_consume_cumulative_scan_budget():
     assert page.complete is False
     assert page.inspected_indexes == 0
 
+def test_unselected_oversized_index_does_not_stall_cursor():
+    items = []
+    mapping = {}
+    for event_id in ("event-valid-index", "event-oversized-index"):
+        segment = fixture("golden-session-segment.json")
+        segment["event_id"] = event_id
+        segment["session_id"] = f"session-{event_id}"
+        segment["asset_refs"] = []
+        item = entry(segment, payload=canonical_json(segment))
+        items.append(item)
+        mapping[item["index_body"]] = item["index_envelope"]
+        mapping[item["object_body"]] = item["evidence_envelope"]
+    items.sort(key=lambda item: item["index_key"])
+    oversized_key = items[-1]["index_key"]
+
+    class Backend(FakeBackend):
+        def discover_evidence_indexes(self, *, max_events, page_size, max_pages):
+            refs = super().discover_evidence_indexes(
+                max_events=max_events,
+                page_size=page_size,
+                max_pages=max_pages,
+            )
+            refs[-1]["ciphertext_size"] = ReplayLimits().max_ciphertext_bytes + 1
+            return refs
+
+        def get_evidence_index_bytes(self, key, expected_size=None):
+            if key == oversized_key:
+                pytest.fail("oversized index body fetched")
+            return super().get_evidence_index_bytes(key, expected_size)
+
+    replay = ReplayReader(
+        Backend(items),
+        profile_id="profile-personal",
+        destination="private-r2",
+        workspace_id="workspace-synthetic",
+        decryptor=lambda body, **_kwargs: mapping[body],
+    )
+
+    first_page = replay.export(limit=1)
+    assert len(first_page.records) == 1
+    assert first_page.complete is False
+    assert first_page.cursor is not None
+
+    second_page = replay.export(cursor=first_page.cursor, limit=1)
+
+    assert second_page.records == ()
+    assert {item["reason_code"] for item in second_page.quarantines} == {"ciphertext-too-large"}
+    assert second_page.cursor != first_page.cursor
+    assert second_page.complete is True
+
 @pytest.mark.parametrize("local_only_at", ["index", "evidence"])
 def test_local_only_evidence_is_not_exported_from_private_r2(local_only_at):
     segment = fixture("golden-session-segment.json")
