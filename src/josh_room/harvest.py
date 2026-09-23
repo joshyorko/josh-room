@@ -164,6 +164,7 @@ class HarvestController:
         if self.profile is not None and getattr(getattr(self.profile, "destination", None), "kind", None) != "private-r2":
             return False
         destination = record.metadata.get("destination_class")
+        decision = record.metadata.get("policy_decision")
         return decision == "allow" and destination == "private-r2"
 
     def _prepare_default(self, outbox: PccOutbox, record: QueueRecord, owner: str) -> object:
