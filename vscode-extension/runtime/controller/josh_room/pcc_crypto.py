@@ -267,6 +267,105 @@ def _profile_binding(document: Mapping[str, Any], profile: CaptureProfile) -> di
     return {"id": profile.profile_id, "workspace_id": profile.workspace_id}
 
 
+def _effective_capture(document: Mapping[str, Any]) -> Mapping[str, Any]:
+    capture = document.get("capture")
+    if isinstance(capture, Mapping):
+        return capture
+    if document.get("kind") == "index-event":
+        return {"status": "complete", "policy_decision": "allow", "sensitivity": "unknown"}
+    _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+
+def _index_queue_identity(document: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "evidence_kind": document["evidence_kind"],
+        "evidence_event_id": document["evidence_event_id"],
+        "content_sha256": document["content_sha256"],
+        "ciphertext_sha256": document["ciphertext_sha256"],
+        "ciphertext_size": document["ciphertext_size"],
+    }
+
+
+def _validate_index_queue_binding(document: Mapping[str, Any], metadata: Mapping[str, Any]) -> None:
+    effective_capture = _effective_capture(document)
+    for metadata_key, expected in (
+        ("policy_decision", effective_capture.get("policy_decision")),
+        ("capture_status", effective_capture.get("status")),
+        ("sensitivity", effective_capture.get("sensitivity")),
+    ):
+        if metadata.get(metadata_key) != expected:
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    for key, expected in _index_queue_identity(document).items():
+        if metadata.get(key) != expected:
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+
+def _validate_queue_binding(
+    event: NormalizationEvent,
+    document: Mapping[str, Any],
+    queued: Any,
+    profile: CaptureProfile,
+) -> None:
+    """Bind the #8 queue record to the exact normalized #9 event."""
+
+    kind = document.get("kind")
+    document_session = document.get("session_id")
+    if (
+        queued.event_id != document.get("event_id")
+        or queued.event_id not in queued.event_ids
+        or event.kind != kind
+        or kind != "index-event"
+        and (not isinstance(document_session, str) or queued.session_id != document_session)
+        or (
+            kind != "index-event"
+            and "checkpoint" in document
+            and queued.checkpoint != document["checkpoint"]
+        )
+    ):
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+    metadata = queued.metadata
+    expected_workspace = document.get("workspace_id")
+    if kind != "index-event" and (
+        not isinstance(expected_workspace, str) or metadata.get("workspace_id") != expected_workspace
+    ):
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if metadata.get("object_kind") != kind:
+        _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+    if metadata.get("destination_class") != profile.destination.kind:
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if profile.destination.binding_id is not None and metadata.get("destination_binding_id") != profile.destination.binding_id:
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+    if kind == "index-event":
+        _validate_index_queue_binding(document, metadata)
+        return
+    source = document.get("source")
+    if not isinstance(source, Mapping):
+        if kind == "session-asset":
+            source = None
+        else:
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if source is not None:
+        for metadata_key, document_key in (
+            ("source_surface", "surface"),
+            ("source_adapter", "adapter"),
+            ("source_adapter_version", "adapter_version"),
+        ):
+            if metadata.get(metadata_key) != source.get(document_key):
+                _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+
+    effective_capture = _effective_capture(document)
+    for metadata_key, document_key in (
+        ("policy_decision", "policy_decision"),
+        ("capture_status", "status"),
+    ):
+        if metadata.get(metadata_key) != effective_capture.get(document_key):
+            _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    if "sensitivity" in effective_capture and metadata.get("sensitivity") != effective_capture["sensitivity"]:
+        _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+
+
 def _references(document: Mapping[str, Any]) -> dict[str, Any]:
     kind = document["kind"]
     if kind == "session-segment":
@@ -308,17 +407,7 @@ def _source_provenance(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _policy_result(document: Mapping[str, Any], profile: CaptureProfile) -> dict[str, Any]:
-    capture = document.get("capture")
-    if not isinstance(capture, Mapping):
-        if document.get("kind") == "index-event":
-            return {
-                "decision": "allow",
-                "sensitivity": "unknown",
-                "status": "complete",
-                "policy_version": profile.policy_version,
-                "provenance": profile.provenance,
-            }
-        _fail(CryptoErrorCode.DOCUMENT_INVALID)
+    capture = _effective_capture(document)
     return {
         "decision": capture.get("policy_decision"),
         "sensitivity": capture.get("sensitivity"),
@@ -767,16 +856,12 @@ def _prepared_metadata(
         "session-final": "application/vnd.josh.codex-session-final+json",
         "index-event": "application/vnd.josh.codex-index-event+json",
     }.get(kind)
-    capture = document.get("capture")
     if not isinstance(kind, str) or content_type not in CONTENT_TYPES:
         _fail(CryptoErrorCode.DOCUMENT_INVALID)
-    if not isinstance(capture, Mapping):
-        if kind != "index-event":
-            _fail(CryptoErrorCode.DOCUMENT_INVALID)
-        capture = {"status": "complete", "policy_decision": "allow"}
+    capture = _effective_capture(document)
     # Deliberately omit content_sha256/content_size.  Those values belong in
     # the encrypted manifest and are not public delivery metadata.
-    return {
+    result = {
         "object_kind": kind,
         "content_type": content_type,
         "destination_class": profile.destination.kind,
@@ -784,6 +869,9 @@ def _prepared_metadata(
         "capture_status": capture.get("status"),
         "policy_decision": capture.get("policy_decision"),
     }
+    if profile.destination.binding_id is not None:
+        result["destination_binding_id"] = profile.destination.binding_id
+    return result
 
 
 def encrypt_and_prepare(
@@ -818,9 +906,9 @@ def encrypt_and_prepare(
     document = _document_or_fail(dict(event.document))
     if event.kind != document.get("kind"):
         _fail(CryptoErrorCode.MANIFEST_MISMATCH)
+    _profile_binding(document, profile)
     if require_device:
         from .device import require_prepare_upload
-
         require_prepare_upload()
     try:
         queued = outbox.inspect_record(event_id)
@@ -828,6 +916,7 @@ def encrypt_and_prepare(
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
     if queued is None or queued.owner != owner:
         _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
+    _validate_queue_binding(event, document, queued, profile)
     if queued.resume_state in {
         QueueState.PREPARED_ENCRYPTED,
         QueueState.OBJECT_UPLOADED,
@@ -835,7 +924,7 @@ def encrypt_and_prepare(
     } or queued.state is QueueState.COMMITTED:
         if queued.ciphertext_sha256 is None or queued.ciphertext_size is None:
             _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
-        if queued.metadata.get("object_kind") != document["kind"]:
+        if "object_kind" in queued.metadata and queued.metadata["object_kind"] != document["kind"]:
             _fail(CryptoErrorCode.OUTBOX_PRECONDITION)
         return PreparedReceipt(event_id, document["kind"], queued.ciphertext_sha256, queued.ciphertext_size)
     if queued.resume_state is not QueueState.SOURCE_SNAPSHOTTED:

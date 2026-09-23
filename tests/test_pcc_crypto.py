@@ -278,13 +278,17 @@ def test_manifest_validation_rejects_unknown_document_major_and_wrong_document_k
 
 def _event(kind: str) -> NormalizationEvent:
     if kind == "session-segment":
-        return NormalizationEvent(kind, _segment())
-    if kind == "session-final":
-        return NormalizationEvent(kind, _fixture("golden-session-final.json"))
-    if kind == "index-event":
-        return NormalizationEvent(kind, _fixture("golden-index-event.json"))
-    document = _fixture("golden-session-asset.json")
-    document.update({"profile_id": "profile-personal", "workspace_id": "workspace-synthetic"})
+        document = _segment()
+    elif kind == "session-final":
+        document = _fixture("golden-session-final.json")
+    elif kind == "index-event":
+        document = _fixture("golden-index-event.json")
+    else:
+        document = _fixture("golden-session-asset.json")
+        document.update({"profile_id": "profile-personal", "workspace_id": "workspace-synthetic"})
+    document["session_id"] = "session-synthetic"
+    if kind != "session-asset":
+        return NormalizationEvent(kind, document)
     payload = b"synthetic asset payload\n"
     document["sha256"] = __import__("hashlib").sha256(payload).hexdigest()
     document["size"] = len(payload)
@@ -485,13 +489,42 @@ def _queue_checkpoint(event_number: int = 1) -> dict[str, object]:
 
 
 def _prepare_queue(outbox: PccOutbox, event: NormalizationEvent, number: int = 1) -> None:
-    receipt = outbox.enqueue(
+    source = event.document.get("source")
+    capture = event.document.get("capture")
+    source_surface = source.get("surface", "cli") if isinstance(source, dict) else "cli"
+    source_adapter = source.get("adapter", "codex.transcript") if isinstance(source, dict) else "codex.transcript"
+    source_adapter_version = source.get("adapter_version", "1") if isinstance(source, dict) else "1"
+    capture_status = capture.get("status", "complete") if isinstance(capture, dict) else "complete"
+    policy_decision = capture.get("policy_decision", "allow") if isinstance(capture, dict) else "allow"
+    sensitivity = capture.get("sensitivity", "unknown") if isinstance(capture, dict) else "unknown"
+    metadata: dict[str, object] = {
+        "workspace_id": "workspace-synthetic",
+        "source_surface": source_surface,
+        "source_adapter": source_adapter,
+        "source_adapter_version": source_adapter_version,
+        "object_kind": event.kind,
+        "destination_class": "private-r2",
+        "destination_binding_id": "binding-synthetic",
+        "policy_decision": policy_decision,
+        "capture_status": capture_status,
+        "sensitivity": sensitivity,
+    }
+    if event.kind == "index-event":
+        metadata.update(
+            {
+                "evidence_kind": event.document["evidence_kind"],
+                "evidence_event_id": event.document["evidence_event_id"],
+                "content_sha256": event.document["content_sha256"],
+                "ciphertext_sha256": event.document["ciphertext_sha256"],
+                "ciphertext_size": event.document["ciphertext_size"],
+            }
+        )
+    outbox.enqueue(
         event_id=event.document["event_id"],
         session_id=event.document.get("session_id", "session-synthetic"),
         checkpoint=event.document.get("checkpoint", _queue_checkpoint(number)),
-        metadata={"workspace_id": "workspace-synthetic", "source_surface": "cli"},
+        metadata=metadata,
     )
-    assert receipt.state is QueueState.QUEUED
     outbox.claim("worker-one")
     outbox.transition(event.document["event_id"], "worker-one", QueueState.SOURCE_SNAPSHOTTED)
 
@@ -717,3 +750,133 @@ def test_production_normalizer_asset_dedupe_to_real_age_prepared_outbox(tmp_path
     state = "".join(path.read_text() for path in outbox.prepared.directory.glob("*.json"))
     assert asset_body.decode() not in state
     assert str(tmp_path) not in state
+
+def test_encrypt_prepare_rejects_queue_document_identity_mismatch(tmp_path: Path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    event = _event("session-segment")
+    _prepare_queue(outbox, event)
+    profile = _profile()
+    passthrough = tmp_path / "passthrough-age"
+    passthrough.write_text("#!/bin/sh\ncat\n")
+    passthrough.chmod(passthrough.stat().st_mode | stat.S_IXUSR)
+
+    mismatches = []
+    session_changed = copy.deepcopy(event.document)
+    session_changed["session_id"] = "other-session"
+    mismatches.append(session_changed)
+    checkpoint_changed = copy.deepcopy(event.document)
+    checkpoint_changed["checkpoint"] = dict(checkpoint_changed["checkpoint"])
+    checkpoint_changed["checkpoint"]["end"] += 1
+    mismatches.append(checkpoint_changed)
+    kind_changed = copy.deepcopy(event.document)
+    kind_changed["kind"] = "session-final"
+    mismatches.append(kind_changed)
+
+    for document in mismatches:
+        candidate = NormalizationEvent("session-segment", document)
+        with pytest.raises(CryptoError) as error:
+            encrypt_and_prepare(
+                candidate,
+                outbox,
+                "worker-one",
+                profile,
+                lambda _: _recipient_set(),
+                age_executable=passthrough,
+            )
+        assert error.value.code in {CryptoErrorCode.OUTBOX_PRECONDITION, CryptoErrorCode.MANIFEST_MISMATCH}
+
+
+def test_encrypt_prepare_rejects_queue_workspace_metadata_mismatch(tmp_path: Path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    event = _event("session-segment")
+    _prepare_queue(outbox, event)
+    queue_path = outbox.queue_directory / f"{event.document['event_id']}.json"
+    record = json.loads(queue_path.read_text())
+    record["metadata"]["workspace_id"] = "workspace-other"
+    queue_path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")))
+    with pytest.raises(CryptoError) as error:
+        encrypt_and_prepare(
+            event,
+            outbox,
+            "worker-one",
+            _profile(),
+            lambda _: _recipient_set(),
+        )
+    assert error.value.code is CryptoErrorCode.OUTBOX_PRECONDITION
+
+
+@pytest.mark.parametrize(
+    ("metadata_key", "value"),
+    [
+        ("evidence_event_id", "evt-other"),
+        ("evidence_kind", "session-final"),
+        ("content_sha256", "e" * 64),
+        ("ciphertext_sha256", "f" * 64),
+        ("ciphertext_size", 901),
+    ],
+)
+def test_index_event_requires_complete_persisted_payload_identity_before_preparation(
+    tmp_path: Path, metadata_key: str, value: object
+):
+    outbox = PccOutbox(tmp_path / "outbox")
+    event = _event("index-event")
+    _prepare_queue(outbox, event)
+    queue_path = outbox.queue_directory / f"{event.document['event_id']}.json"
+    record = json.loads(queue_path.read_text())
+    record["metadata"][metadata_key] = value
+    queue_path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")))
+    passthrough = tmp_path / "passthrough-age"
+    passthrough.write_text("#!/bin/sh\ncat\n")
+    passthrough.chmod(passthrough.stat().st_mode | stat.S_IXUSR)
+
+    with pytest.raises(CryptoError) as error:
+        encrypt_and_prepare(
+            event,
+            outbox,
+            "worker-one",
+            _profile(),
+            lambda _: _recipient_set(),
+            age_executable=passthrough,
+        )
+    assert error.value.code is CryptoErrorCode.OUTBOX_PRECONDITION
+    assert not (outbox.prepared.directory / f"{event.document['event_id']}.age").exists()
+
+
+@pytest.mark.parametrize(
+    ("metadata_key", "value"),
+    [("policy_decision", "deny"), ("capture_status", "partial")],
+)
+def test_index_event_requires_effective_policy_and_capture_status_before_preparation(
+    tmp_path: Path, metadata_key: str, value: str
+):
+    outbox = PccOutbox(tmp_path / "outbox")
+    event = _event("index-event")
+    _prepare_queue(outbox, event)
+    queue_path = outbox.queue_directory / f"{event.document['event_id']}.json"
+    record = json.loads(queue_path.read_text())
+    record["metadata"][metadata_key] = value
+    queue_path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")))
+
+    with pytest.raises(CryptoError) as error:
+        encrypt_and_prepare(event, outbox, "worker-one", _profile(), lambda _: _recipient_set())
+    assert error.value.code is CryptoErrorCode.OUTBOX_PRECONDITION
+    assert not (outbox.prepared.directory / f"{event.document['event_id']}.age").exists()
+
+
+def test_index_event_revalidates_payload_identity_before_reuse(tmp_path: Path):
+    outbox = PccOutbox(tmp_path / "outbox")
+    event = _event("index-event")
+    _prepare_queue(outbox, event)
+    passthrough = tmp_path / "passthrough-age"
+    passthrough.write_text("#!/bin/sh\ncat\n")
+    passthrough.chmod(passthrough.stat().st_mode | stat.S_IXUSR)
+    encrypt_and_prepare(event, outbox, "worker-one", _profile(), lambda _: _recipient_set(), age_executable=passthrough)
+
+    queue_path = outbox.queue_directory / f"{event.document['event_id']}.json"
+    record = json.loads(queue_path.read_text())
+    record["metadata"]["content_sha256"] = "e" * 64
+    queue_path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")))
+
+    with pytest.raises(CryptoError) as error:
+        encrypt_and_prepare(event, outbox, "worker-one", _profile(), lambda _: _recipient_set(), age_executable=passthrough)
+    assert error.value.code is CryptoErrorCode.OUTBOX_PRECONDITION
