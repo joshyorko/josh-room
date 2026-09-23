@@ -199,7 +199,7 @@ def _load_context_state(home: Path, context_id: str) -> tuple[SchedulerContext, 
             raise ValueError("scheduler context is invalid")
         context_body = body["context"]
         if not isinstance(context_body, dict):
-            raise ValueError("scheduler context is invalid")
+            raise TypeError("scheduler context is invalid")
         return SchedulerContext.from_values(**context_body), executable
     except (OSError, KeyError, TypeError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise ValueError("scheduler context is invalid") from error
