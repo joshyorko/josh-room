@@ -497,7 +497,7 @@ def _prepare_queue(outbox: PccOutbox, event: NormalizationEvent, number: int = 1
     capture_status = capture.get("status", "complete") if isinstance(capture, dict) else "complete"
     policy_decision = capture.get("policy_decision", "allow") if isinstance(capture, dict) else "allow"
     sensitivity = capture.get("sensitivity", "unknown") if isinstance(capture, dict) else "unknown"
-    receipt = outbox.enqueue(
+    outbox.enqueue(
         event_id=event.document["event_id"],
         session_id=event.document.get("session_id", "session-synthetic"),
         checkpoint=event.document.get("checkpoint", _queue_checkpoint(number)),
