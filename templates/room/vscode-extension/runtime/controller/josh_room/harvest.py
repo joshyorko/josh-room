@@ -463,13 +463,19 @@ class HarvestController:
         if record is None or record.state not in {QueueState.RETRYABLE_FAILURE, QueueState.CAPTURE_GAP, QueueState.POLICY_DENIED}:
             raise HarvestError("not-quarantinable")
         return self._transition(event_id, QueueState.QUARANTINED, reason)
+
     def quarantine_list(self) -> dict[str, object]:
         inspection = self.outbox.inspect()
-        return _envelope(
-            ok=True,
+        diagnostics = [item.to_dict() for item in inspection.diagnostics]
+        result = _envelope(
+            ok=not diagnostics,
             command="quarantine-list",
             records=[_record_public(record) for record in inspection.records if record.state is QueueState.QUARANTINED],
+            diagnostics=diagnostics,
         )
+        if diagnostics:
+            result["error"] = inspection.diagnostics[0].code
+        return result
     def quarantine_inspect(self, event_id: str) -> dict[str, object]:
         record = self.outbox.inspect_record(event_id)
         if record is None:
