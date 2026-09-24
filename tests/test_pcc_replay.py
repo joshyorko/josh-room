@@ -758,6 +758,12 @@ def test_unselected_invalid_index_blocks_record_emission(listed_size, expected_r
     page = replay.export(limit=1)
     inspection = replay.inspect(cursor=cursor_after_first, limit=1)
 
+    resumed_page = replay.export(cursor=cursor_after_first, limit=1)
+    assert resumed_page.records == ()
+    assert {item["reason_code"] for item in resumed_page.quarantines} == {expected_reason}
+    assert resumed_page.cursor == cursor_after_first
+    assert resumed_page.complete is False
+
     assert page.records == ()
     assert {item["reason_code"] for item in page.quarantines} == {expected_reason}
     assert page.cursor is None
@@ -770,7 +776,11 @@ def test_unselected_invalid_index_blocks_record_emission(listed_size, expected_r
         assert inspection["indexes"][0]["ciphertext_size"] == ReplayLimits().max_ciphertext_bytes + 1
 
 
-def test_corrupt_off_page_index_blocks_complete_record_emission():
+@pytest.mark.parametrize(
+    "failure_kind",
+    ["index-read", "index-decrypt", "evidence-read", "semantic-validation"],
+)
+def test_off_page_same_session_failure_blocks_cursor_resume(failure_kind):
     items = []
     mapping = {}
     for event_id in ("event-unreadable-index", "event-selected-index"):
@@ -783,7 +793,8 @@ def test_corrupt_off_page_index_blocks_complete_record_emission():
         mapping[item["index_body"]] = item["index_envelope"]
         mapping[item["object_body"]] = item["evidence_envelope"]
     items.sort(key=lambda item: item["index_key"])
-    unreadable_key = items[0]["index_key"]
+    unreadable_item = items[0]
+    unreadable_key = unreadable_item["index_key"]
     previous = ReplayCursor(
         "profile-personal",
         "private-r2",
@@ -792,24 +803,47 @@ def test_corrupt_off_page_index_blocks_complete_record_emission():
 
     class Backend(FakeBackend):
         def get_evidence_index_bytes(self, key, expected_size=None):
-            if key == unreadable_key:
+            if failure_kind == "index-read" and key == unreadable_key:
                 raise OSError("synthetic unreadable index")
             return super().get_evidence_index_bytes(key, expected_size)
+
+        def get_evidence_bytes(self, key, expected_size=None):
+            if failure_kind == "evidence-read" and key == unreadable_item["object_key"]:
+                raise OSError("synthetic unreadable evidence")
+            return super().get_evidence_bytes(key, expected_size)
+
+    if failure_kind == "semantic-validation":
+        index_envelope = mapping[unreadable_item["index_body"]]
+        mapping[unreadable_item["index_body"]] = {
+            **index_envelope,
+            "manifest": {
+                **index_envelope["manifest"],
+                "profile": {
+                    "id": "profile-work",
+                    "workspace_id": "workspace-synthetic",
+                },
+            },
+        }
+
+    def decrypt(body, **_kwargs):
+        if failure_kind == "index-decrypt" and body == unreadable_item["index_body"]:
+            raise ValueError("synthetic index decryption failure")
+        return mapping[body]
 
     page = ReplayReader(
         Backend(items),
         profile_id="profile-personal",
         destination="private-r2",
         workspace_id="workspace-synthetic",
-        decryptor=lambda body, **_kwargs: mapping[body],
+        decryptor=decrypt,
     ).export(cursor=previous, limit=1)
 
     assert page.records == ()
-    assert {item["reason_code"] for item in page.quarantines} == {"index-read-failed"}
+    assert page.quarantines
+    assert page.quarantines[0]["index_key"] == unreadable_key
     assert page.cursor == previous
     assert page.complete is False
     assert page.inspected_indexes == 0
-
 @pytest.mark.parametrize("local_only_at", ["index", "evidence"])
 def test_local_only_evidence_is_not_exported_from_private_r2(local_only_at):
     segment = fixture("golden-session-segment.json")
