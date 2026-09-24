@@ -702,22 +702,28 @@ class ReplayReader:
         evidence: list[_ChainEvidence] = []
         scanned_bytes = 0
         scan_limited = False
+
+        validation_incomplete = False
+        offpage_quarantine_reported = False
+
+        def quarantine_unverified(ref: _IndexRef, reason: str) -> None:
+            nonlocal validation_incomplete, offpage_quarantine_reported
+            validation_incomplete = True
+            if ref.key not in selected_keys and offpage_quarantine_reported:
+                return
+            quarantines.append(self._quarantine(
+                ref,
+                reason,
+                cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
+            ))
+            if ref.key not in selected_keys:
+                offpage_quarantine_reported = True
         for ref in refs:
             if ref.listing_error is not None:
-                if ref.key in selected_keys:
-                    quarantines.append(self._quarantine(
-                        ref,
-                        ref.listing_error,
-                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
-                    ))
+                quarantine_unverified(ref, ref.listing_error)
                 continue
             if ref.ciphertext_size > self.limits.max_ciphertext_bytes:
-                if ref.key in selected_keys:
-                    quarantines.append(self._quarantine(
-                        ref,
-                        "ciphertext-too-large",
-                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
-                    ))
+                quarantine_unverified(ref, "ciphertext-too-large")
                 continue
             index_scan_bytes = ref.ciphertext_size + 1
             if scanned_bytes + index_scan_bytes > self.limits.max_scan_bytes:
@@ -743,19 +749,13 @@ class ReplayReader:
                 retain = ref.key in selected_keys and item.document.get("kind") == "session-segment"
                 evidence.append(self._chain_evidence(item, retain_segment=retain))
             except ReplayError as error:
-                if ref.key in selected_keys:
-                    quarantines.append(self._quarantine(
-                        ref,
-                        error.code,
-                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
-                    ))
+                quarantine_unverified(ref, error.code)
             except Exception:  # noqa: BLE001 - untrusted failures map to quarantine
-                if ref.key in selected_keys:
-                    quarantines.append(self._quarantine(
-                        ref,
-                        "corrupt-ciphertext",
-                        cursor=ReplayCursor(self.profile_id, self.destination, ref.key).encode(),
-                    ))
+                quarantine_unverified(ref, "corrupt-ciphertext")
+        if validation_incomplete:
+            resume_cursor = ReplayCursor(self.profile_id, self.destination, decoded.last_index_key).encode() if decoded.last_index_key else None
+            return ReplayPage((), tuple(quarantines), resume_cursor, False, 0)
+
         if scan_limited:
             resume_cursor = ReplayCursor(self.profile_id, self.destination, decoded.last_index_key).encode() if decoded.last_index_key else None
             return ReplayPage((), (), resume_cursor, False, 0)
