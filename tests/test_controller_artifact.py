@@ -213,6 +213,26 @@ def test_manifest_pin_integration_updates_root_and_template_atomically(tmp_path)
     with pytest.raises(ValueError, match="archive SHA256"):
         pin_manifest(root, template, artifact, receipt, "v0.1.7-controller-artifact")
 
+def test_manifest_pin_requires_specification_digest(tmp_path):
+    root = tmp_path / "runtime-manifest.json"
+    template = tmp_path / "template-runtime-manifest.json"
+    for target in (root, template):
+        target.write_text(json.dumps({"schema_version": 1, "controller": {}}))
+    artifact = tmp_path / "josh-room-controller-linux-amd64.rcca"
+    artifact.write_bytes(b"controller-artifact")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({
+        "artifact_digest": "sha256:" + "a" * 64,
+        "archive": {
+            "sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(),
+            "size": artifact.stat().st_size,
+        },
+        "rcc_version": "v18.19.5",
+        "platform": "linux-x64",
+    }))
+    with pytest.raises(ValueError, match="specification digest"):
+        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts")
+
 
 def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
     root = tmp_path / "runtime-manifest.json"
@@ -226,6 +246,7 @@ def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
     receipt.write_text(json.dumps({
         "format_version": 1,
         "artifact_digest": "sha256:" + "a" * 64,
+        "specification_digest": "sha256:" + "c" * 64,
         "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
         "rcc_version": "v18.19.5",
         "platform": "win32-x64",
