@@ -98,5 +98,5 @@
     "Align exact candidate release-promotion metadata with the accepted immutable VSIX or explicitly replace the candidate; do not mix post-candidate metadata into this receipt",
     "Reconcile exact installed -I -S hook p95 on a supported release-like host without lowering 250 ms"
   ],
-  "authority": "Evidence only. Candidate 5937f6... remains immutable. PR #85 remains draft. No release/tag/publish/merge/#83 action was taken for this acceptance."
+  "authority": "Evidence only. Candidate 5937f6... remains immutable. PR #85 remains draft. No release/tag/publish/#83 action was taken for this acceptance. A separate metadata-only PR #86 was merged before this continuation and is excluded from candidate evidence."
 }
