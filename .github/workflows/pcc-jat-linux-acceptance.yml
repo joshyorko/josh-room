@@ -14,7 +14,7 @@ env:
 
 jobs:
   pinned-jat-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - name: Checkout immutable candidate
@@ -65,7 +65,6 @@ jobs:
           cat "$work/acquire.json"
           cat "$work/acquire.stderr" >&2
           python - "$work" "$rcc_sha" "$jat_sha" "$jat_digest" "$acquire_status" <<'PY'
-          import hashlib
           import json
           import os
           import pathlib
@@ -101,12 +100,11 @@ jobs:
           assert acquire.get("verification", {}).get("valid") is True, acquire
           PY
           ROBOCORP_HOME="$home" RCC_HOLOTREE_MODE=private "$rcc" --no-build env exec --artifact "$jat_digest" --permissive-local --json -- python -m jat.cli --help > "$work/jat-help.json"
-          python - "$work" "$rcc_sha" "$jat_sha" "$jat_digest" <<'PY'
+          python - "$work" <<'PY'
           import hashlib
           import json
           import os
           import pathlib
-          import platform
           import sys
           root = pathlib.Path(sys.argv[1])
           result = json.loads(pathlib.Path("pcc15-jat-result.json").read_text())
