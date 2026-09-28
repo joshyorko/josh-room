@@ -17,8 +17,8 @@ def fixture(tmp_path):
     extension = root / "vscode-extension"
     (extension / "runtime").mkdir(parents=True)
     files = {
-        "package.json": json.dumps({"version": "0.1.24"}),
-        "runtime/manifest.json": json.dumps({"extension_version": "0.1.24"}),
+        "package.json": json.dumps({"version": "0.1.25"}),
+        "runtime/manifest.json": json.dumps({"extension_version": "0.1.25"}),
         "extension.js": "module.exports = {};\n",
         "README.md": "Synthetic readme\n",
         "LICENSE": "Synthetic license\n",
@@ -32,12 +32,12 @@ def fixture(tmp_path):
             archive.writestr("extension/" + name, body)
         archive.writestr("extension.vsixmanifest", "synthetic metadata")
         archive.writestr("[Content_Types].xml", "synthetic metadata")
-    pin = {"version": "0.1.24", "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()}
+    pin = {"version": "0.1.25", "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()}
     (root / "release-promotion.json").write_text(json.dumps(pin))
     return root, candidate, pin
 
 
-def verify(root, candidate, tag="v0.1.24-standalone-vsix"):
+def verify(root, candidate, tag="v0.1.25-standalone-vsix"):
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--root", str(root), "--candidate", str(candidate), "--tag", tag],
         capture_output=True, text=True, check=False,
@@ -57,7 +57,7 @@ def test_verifies_exact_candidate_without_modifying_archive(tmp_path):
 @pytest.mark.parametrize("failure", ["missing", "checksum", "source", "missing-source", "unpackaged-source", "tag", "version", "extra-member"])
 def test_rejects_candidate_or_source_drift_without_rebuilding(tmp_path, failure):
     root, candidate, pin = fixture(tmp_path)
-    tag = "v0.1.24-standalone-vsix"
+    tag = "v0.1.25-standalone-vsix"
     if failure == "missing":
         candidate.unlink()
     elif failure == "checksum":
@@ -69,10 +69,10 @@ def test_rejects_candidate_or_source_drift_without_rebuilding(tmp_path, failure)
     elif failure == "unpackaged-source":
         (root / "vscode-extension/new-runtime.js").write_text("required source")
     elif failure == "tag":
-        tag = "v0.1.25-standalone-vsix"
+        tag = "v0.1.26-standalone-vsix"
     elif failure == "version":
-        pin["version"] = "0.1.25"
-        tag = "v0.1.25-standalone-vsix"
+        pin["version"] = "0.1.26"
+        tag = "v0.1.26-standalone-vsix"
     elif failure == "extra-member":
         with zipfile.ZipFile(candidate, "a") as archive:
             archive.writestr("extension/../outside", "unsafe")
@@ -89,7 +89,7 @@ def workflow_step(name):
     workflow = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
     step = workflow.split(f"      - name: {name}\n", 1)[1].split("\n      - ", 1)[0]
     return textwrap.dedent(step.split("        run: |\n", 1)[1]).replace(
-        "${{ steps.version.outputs.version }}", "0.1.24",
+        "${{ steps.version.outputs.version }}", "0.1.25",
     )
 
 
@@ -138,7 +138,7 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
         (root / "vscode-extension/extension.js").write_text("changed")
     before = candidate.read_bytes()
     env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
-           "GITHUB_REPOSITORY": "joshyorko/josh-room", "GITHUB_REF_NAME": "v0.1.24-standalone-vsix",
+           "GITHUB_REPOSITORY": "joshyorko/josh-room", "GITHUB_REF_NAME": "v0.1.25-standalone-vsix",
            "GITHUB_SHA": "a" * 40, "CANDIDATE": str(candidate), "SCENARIO": failure or ""}
     result = subprocess.run(["bash", "-c", workflow_step("Verify staged tested VSIX")], cwd=root, env=env, capture_output=True, text=True, check=False)
     if result.returncode == 0:
