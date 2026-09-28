@@ -628,6 +628,24 @@ test("selectJatArtifact fails closed when Windows has no platform artifact", () 
   );
 });
 
+test("ensureManagedRcc keeps the Windows executable extension in its private path", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-rcc-path-test-"));
+  const binary = Buffer.from("managed-rcc-binary");
+  const manifest = manifestFor(binary);
+  manifest.rcc.platforms["win32-x64"] = {
+    asset: "rcc-windows64.exe",
+    url: "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-windows64.exe",
+    sha256: digest(binary),
+  };
+  const result = await ensureManagedRcc(context(root), manifest, {
+    platform: "win32-x64",
+    download: async (_url, destination) => fs.writeFileSync(destination, binary),
+    verifyVersion: async () => {},
+  });
+  assert.match(result.executable, /[\\/]win32-x64[\\/]rcc\.exe$/);
+  assert.deepEqual(fs.readFileSync(result.executable), binary);
+});
+
 test("ensureJatRuntime validates and acquires the selected Windows artifact", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-jat-runtime-test-"));
   const rccBinary = Buffer.from("managed-rcc-binary");

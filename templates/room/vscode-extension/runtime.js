@@ -293,7 +293,8 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
     throw new Error(`Josh Room cannot start on ${platform}: ${detail}`);
   }
   const paths = privatePaths(context);
-  const executable = path.join(paths.runtimeRoot, "rcc", manifest.rcc.version, platform, "rcc");
+  const executableName = platform === "win32-x64" ? "rcc.exe" : "rcc";
+  const executable = path.join(paths.runtimeRoot, "rcc", manifest.rcc.version, platform, executableName);
   const directory = path.dirname(executable);
   await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
   const verifyVersion = (executable, expected) => cancellableCall(options.verifyVersion || verifyRccVersion, [executable, expected], options);

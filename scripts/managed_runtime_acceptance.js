@@ -17,6 +17,16 @@ function run(command, args, options = {}) {
   });
 }
 
+function evidenceDirectory(platform) {
+  const configured = process.env.JOSH_ROOM_RUNTIME_EVIDENCE_DIR || path.join("dist", "managed-runtime-evidence", platform);
+  return path.isAbsolute(configured) ? configured : path.join(repository, configured);
+}
+
+async function fileIdentity(runtime, filename) {
+  const stat = await fsp.stat(filename);
+  return { sha256: await runtime.sha256File(filename), size: stat.size };
+}
+
 async function expectRejected(label, operation, pattern) {
   try {
     await operation();
@@ -30,6 +40,7 @@ async function expectRejected(label, operation, pattern) {
 
 async function main() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "josh-room-managed-runtime-"));
+  let evidence;
   try {
     const candidate = path.join(root, "josh-room.vsix");
     const installed = path.join(root, "installed");
@@ -42,6 +53,12 @@ async function main() {
     const runtime = require(path.join(extension, "runtime.js"));
     const manifest = runtime.readManifest();
     const platform = runtime.resolvePlatform();
+    const evidenceDir = evidenceDirectory(platform);
+    await fsp.rm(evidenceDir, { recursive: true, force: true });
+    await fsp.mkdir(evidenceDir, { recursive: true, mode: 0o700 });
+    await fsp.copyFile(candidate, path.join(evidenceDir, "candidate.vsix"));
+
+    const lock = JSON.parse(await fsp.readFile(path.join(repository, "release-lock.json"), "utf8"));
     const storage = path.join(root, "consumer-storage");
     const context = { globalStorageUri: { fsPath: storage }, extensionPath: extension };
     const events = [];
@@ -52,9 +69,9 @@ async function main() {
     const jat = await runtime.ensureJatRuntime(context, manifest, rcc, options);
 
     const controllerPin = runtime.selectControllerArtifact(manifest.controller, platform);
+    const jatPin = runtime.selectJatArtifact(manifest.jat, platform);
     const paths = runtime.privatePaths(context);
     const controllerRoot = path.join(extension, "runtime", "controller");
-    const receipt = path.join(paths.logsRoot, "managed-controller-acceptance.json");
     const environment = {
       ...process.env,
       ROBOCORP_HOME: paths.rccHome,
@@ -68,10 +85,18 @@ async function main() {
       JOSH_ROOM_JAT_ARTIFACT: jat.artifact,
       PYTHONPATH: controllerRoot,
     };
-    childProcess.execFileSync(rcc.executable, [
-      "--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local",
-      "--inherit-streams", "--receipt-file", receipt, "--", "python", "-m", "josh_room", "dimensions", "list", "--json",
-    ], { cwd: controllerRoot, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    const executeController = (args, name) => {
+      const receipt = path.join(paths.logsRoot, `managed-controller-${name}.json`);
+      return childProcess.execFileSync(rcc.executable, [
+        "--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local",
+        "--inherit-streams", "--receipt-file", receipt, "--", "python", "-m", "josh_room", ...args,
+      ], { cwd: controllerRoot, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    };
+
+    executeController(["dimensions", "list", "--json"], "dimensions-list");
+    executeController(["snapshot", "create", "--help"], "save-command");
+    executeController(["hydrate", "--help"], "enter-command");
+    executeController(["jat", "--help"], "jat-command");
 
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
@@ -122,15 +147,41 @@ async function main() {
       controller_artifact_digest: controller.artifact,
     })) throw new Error("stale runtime receipt was accepted");
 
-    console.log(JSON.stringify({
+    const rccPin = manifest.rcc.platforms[platform];
+    evidence = {
       result: "managed-runtime-consumer-pass",
       platform,
-      vsix: candidate,
-      rcc: { version: rcc.version, executable: rcc.executable },
-      controller: controller.artifact,
-      jat: { artifact: jat.artifact, source: jat.sourceSha },
-      checks: ["cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "jat-env-exec"],
-    }, null, 2));
+      source_sha: lock.controller.source_sha,
+      vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
+      rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
+      controller: {
+        release_tag: lock.controller.release_tag,
+        artifact_digest: controllerPin.digest,
+        specification_digest: controllerPin.specification_digest,
+        archive: { asset: controllerPin.archive.asset, ...(await fileIdentity(runtime, controller.archive)) },
+        source_sha: lock.controller.source_sha,
+        rcc_version: rcc.version,
+      },
+      jat: {
+        release_tag: lock.jat.environment_artifact.release_tag,
+        artifact_digest: jatPin.digest,
+        specification_digest: jatPin.specification_digest,
+        archive: { asset: jatPin.archive.asset, ...(await fileIdentity(runtime, jat.archive)) },
+        source_sha: jat.sourceSha,
+        rcc_version: rcc.version,
+      },
+      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save-command-path", "enter-command-path", "jat-env-exec", "jat-command-path"],
+    };
+    if (fs.existsSync(path.join(paths.logsRoot, "jat-artifact-receipt.json"))) {
+      await fsp.copyFile(path.join(paths.logsRoot, "jat-artifact-receipt.json"), path.join(evidenceDir, "jat-artifact-receipt.json"));
+    }
+    for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
+      if (filename.startsWith("managed-controller-") && filename.endsWith(".json")) {
+        await fsp.copyFile(path.join(paths.logsRoot, filename), path.join(evidenceDir, filename));
+      }
+    }
+    await fsp.writeFile(path.join(evidenceDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+    console.log(JSON.stringify(evidence, null, 2));
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
