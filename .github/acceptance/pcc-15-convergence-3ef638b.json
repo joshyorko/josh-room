@@ -1,0 +1,254 @@
+{
+  "schema": "josh-room.pcc-exact-candidate.v2",
+  "issue": 15,
+  "status": "PCC_ACCEPTANCE_BLOCKED",
+  "candidate": {
+    "repository": "joshyorko/josh-room",
+    "ref": "main",
+    "sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+    "url": "https://github.com/joshyorko/josh-room/commit/3ef638b686b6390390d23f00b796b59ce2e4fe51",
+    "merge_lineage": [
+      {
+        "pr": 93,
+        "merge_sha": "2d8d2b17ed39ef38b7e957f55923d944d9484976",
+        "url": "https://github.com/joshyorko/josh-room/pull/93"
+      },
+      {
+        "pr": 94,
+        "merge_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+        "url": "https://github.com/joshyorko/josh-room/pull/94"
+      }
+    ],
+    "acceptance_workflow_carrier_sha": "71cfe2c7cc1a75303f8c03d2e2263f56b42d1008",
+    "carrier_is_not_candidate": true
+  },
+  "artifacts": [
+    {
+      "kind": "wheel",
+      "name": "josh_room-0.1.0.dev0-py3-none-any.whl",
+      "sha256": "435551eb86790ffc96069101eb9df3ef188821688a625244b0cb3cdb7ed57abc",
+      "size": 229277
+    },
+    {
+      "kind": "sdist",
+      "name": "josh_room-0.1.0.dev0.tar.gz",
+      "sha256": "41a692c812b06b6c2b09343067c9436a98d22e4458d5b99889582fee149118a6",
+      "size": 1046909
+    },
+    {
+      "kind": "vsix",
+      "name": "josh-room-0.1.24.vsix",
+      "version": "0.1.24",
+      "sha256": "761d4ab6dc6ceb0cdfa9535fa9935178b1e36a2c5cf5ced9bd48ea594add8d0c",
+      "size": 298420
+    }
+  ],
+  "artifact_verification": {
+    "wheel_install": "PASS",
+    "wheel_import_source": "candidate wheel site-packages",
+    "vsix_source_files": 55,
+    "vsix_source_parity": "PASS",
+    "vsix_archive_integrity": "PASS",
+    "checked_in_release_promotion_sha256": "6b8b1d7fbdec193a68e032189b24e4f0ba8c5b47a95ec44fbb541bb25896d2c9",
+    "promotion_pin_result": "FAIL/UNPROVEN: checked-in pin does not match fresh exact-candidate VSIX; no metadata changed"
+  },
+  "tools": {
+    "python": "3.14.7",
+    "build": "1.6.1",
+    "hatchling": "1.32.4",
+    "node": "22.14.0",
+    "npm": "10.9.2",
+    "vsce": "3.6.0",
+    "age": "v1.2.1",
+    "codex_cli": "codex-cli 0.158.0",
+    "rcc": "v18.19.3"
+  },
+  "platforms": {
+    "linux_build": {
+      "machine": "x86_64",
+      "uname": "Linux devsy-default-wo-79cff 5.14.0-687.10.1.el9_8.0.1.x86_64 #1 SMP PREEMPT_DYNAMIC Sun May 24 12:01:19 UTC 2026 x86_64 GNU/Linux",
+      "python_platform": "Linux-5.14.0-687.10.1.el9_8.0.1.x86_64-x86_64-with-glibc2.44",
+      "container_headless": true,
+      "result": "PASS synthetic; Linux Secret Service SKIPPED/LIMITED"
+    },
+    "macos_arm64": {
+      "runner": "macos-14",
+      "result": "PASS real Keychain and device enrollment",
+      "workflow_run": "https://github.com/joshyorko/josh-room/actions/runs/36439533779",
+      "job": "https://github.com/joshyorko/josh-room/actions/runs/36439533779/job/108986111818"
+    },
+    "windows_amd64": {
+      "runner": "windows-latest",
+      "result": "PASS real Credential Manager and device enrollment",
+      "workflow_run": "https://github.com/joshyorko/josh-room/actions/runs/36439533779",
+      "job": "https://github.com/joshyorko/josh-room/actions/runs/36439533779/job/108986111452"
+    },
+    "wsl_container_headless": "LIMITED: capture/enqueue and local ciphertext work; native authority requires a supported host session"
+  },
+  "workflow_evidence": {
+    "main_ci": {
+      "run": "https://github.com/joshyorko/josh-room/actions/runs/36437585712",
+      "head_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "result": "PASS",
+      "python": "ruff passed; pytest 1145 passed, 7 skipped",
+      "node": "232 passed, 2 skipped, 0 failed",
+      "diff_check": "PASS"
+    },
+    "native_authority": {
+      "run": "https://github.com/joshyorko/josh-room/actions/runs/36439533779",
+      "workflow_head_sha": "71cfe2c7cc1a75303f8c03d2e2263f56b42d1008",
+      "candidate_checkout_and_assertion_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "result": "PASS macOS arm64 and Windows amd64"
+    },
+    "pinned_jat": {
+      "run": "https://github.com/joshyorko/josh-room/actions/runs/36439533841",
+      "job": "https://github.com/joshyorko/josh-room/actions/runs/36439533841/job/108986115468",
+      "workflow_head_sha": "71cfe2c7cc1a75303f8c03d2e2263f56b42d1008",
+      "candidate_checkout_and_assertion_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "result": "BLOCKED: immutable v0.1.10 acquisition fails on hosted Ubuntu 22.04 loader/libc compatibility after candidate/download/hash checks"
+    }
+  },
+  "jat": {
+    "authorized_lock_version": "v0.1.10-jat-runtime",
+    "upstream_pr14_merge": "d7c3c06004d1aca927db91c5ed895fb0a822738d",
+    "published_post_pr14_version": "v0.1.11-jat-runtime",
+    "published_url": "https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.11-jat-runtime",
+    "v0.1.11_used_for_issue15": false,
+    "result": "BLOCKED"
+  },
+  "cells": [
+    {
+      "cell": "CandidateBuild",
+      "worker": "local detached exact-main build lane",
+      "final_candidate_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "status": "PASS",
+      "evidence": "fresh wheel/sdist/VSIX hashes, source parity, exact wheel install, main CI",
+      "next_action": "none for #15"
+    },
+    {
+      "cell": "HookLatency",
+      "worker": "local exact-wheel installed venv",
+      "final_candidate_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "status": "PASS",
+      "evidence": "three 32-call batches; p95 190.243/182.393/189.402 ms; max 227.411/184.228/214.733 ms; lock-timeout fail-open 367.523 ms",
+      "next_action": "none for #15"
+    },
+    {
+      "cell": "NativePlatforms",
+      "worker": "GitHub Actions macos-14/windows-latest plus Linux headless lane",
+      "final_candidate_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "status": "PASS macOS/Windows; SKIPPED/LIMITED Linux Secret Service",
+      "evidence": "native workflow run 36439533779; exact candidate checkout/assertion and native round-trips pass",
+      "next_action": "provide supported Linux secure session only if Linux native authority is claimed"
+    },
+    {
+      "cell": "RealCodexHooks",
+      "worker": "local exact-wheel plus public Codex CLI 0.158.0",
+      "final_candidate_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "status": "PASS synthetic; BLOCKED live trust/auth",
+      "evidence": "install/status plus Stop/SubagentStop/SessionEnd smoke; one final record; zero stdout/stderr; lock-timeout fail-open",
+      "next_action": "provide disposable trusted/authenticated Codex session for model-backed vertical"
+    },
+    {
+      "cell": "StableJatRcc",
+      "worker": "GitHub Actions ubuntu-22.04 pinned-JAT job",
+      "final_candidate_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "status": "BLOCKED",
+      "evidence": "run 36439533841 exact assertion/download/hash pass; v0.1.10 acquisition fails at immutable loader/libc boundary",
+      "next_action": "provide compatible host for authorized v0.1.10/RCC v18.19.3; do not repin"
+    },
+    {
+      "cell": "ExactVSIX",
+      "worker": "local exact-main Node/vsce build and verifier",
+      "final_candidate_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "status": "PASS build/source verification; SKIPPED real-host install",
+      "evidence": "Node tests 232 passed/2 skipped; VSIX verifier 55 files and archive integrity pass",
+      "next_action": "Josh/operator installs in a supported fresh VS Code host if required"
+    },
+    {
+      "cell": "LiveR2",
+      "worker": "secret-gated operator lane",
+      "final_candidate_sha": "3ef638b686b6390390d23f00b796b59ce2e4fe51",
+      "status": "BLOCKED",
+      "evidence": "no authorized private endpoint/profile/credentials; synthetic outbox/encryption/recovery only",
+      "next_action": "provision Josh-approved private R2 and native personal keyring session"
+    }
+  ],
+  "child_ledger": {
+    "2": "PASS",
+    "3": "PASS",
+    "4": "PASS",
+    "5": "PASS",
+    "6": "PASS",
+    "7": "PASS exact installed latency and fail-open behavior",
+    "8": "PASS contained; native process-lock scope limited",
+    "9": "PASS contained",
+    "10": "PASS synthetic age/daily/recovery; live recovery unavailable",
+    "11": "BLOCKED live R2; fake-client contract PASS",
+    "12": "PASS macOS/Windows; Linux Secret Service SKIPPED/LIMITED",
+    "13": "BLOCKED managed device-ready path",
+    "14": "PASS contained neutral replay; live discovery blocked"
+  },
+  "vertical": {
+    "exact_install_and_hashes": "PASS",
+    "real_os_authority": "PASS macOS/Windows; Linux SKIPPED/LIMITED",
+    "codex_hooks": "PASS installed synthetic lifecycle; live trust/auth BLOCKED",
+    "lifecycle_reconciliation_normalization": "PASS contained synthetic",
+    "asset_externalization_dedupe": "PASS contained synthetic",
+    "credential_rejection": "PASS contained synthetic",
+    "age_daily_and_recovery": "PASS synthetic",
+    "ciphertext_only_outbox": "PASS",
+    "live_r2_object_index": "BLOCKED/SKIPPED",
+    "neutral_replay": "PASS contained; live R2 read-back BLOCKED",
+    "enter_ide_workspace_rcc": "PASS contract tests; real managed execution BLOCKED"
+  },
+  "metrics": {
+    "hook_latency_ms": {
+      "batches": [
+        {"p50": 160.954, "p95": 190.243, "max": 227.411, "failures": 0, "queue_records": 32},
+        {"p50": 160.027, "p95": 182.393, "max": 184.228, "failures": 0, "queue_records": 32},
+        {"p50": 160.302, "p95": 189.402, "max": 214.733, "failures": 0, "queue_records": 32}
+      ],
+      "hard_completion_seconds": 1,
+      "result": "PASS"
+    },
+    "hook_lock_timeout": {"elapsed_ms": 367.523, "returncode": 0, "stdout_bytes": 0, "stderr_bytes": 0, "queue_files": 0, "result": "PASS"},
+    "memory": [
+      {"records": 128, "peak_working_bytes": 4801, "peak_tracemalloc": 54616},
+      {"records": 2048, "peak_working_bytes": 4801, "peak_tracemalloc": 56072}
+    ],
+    "asset_dedupe": {"input_asset_records": 4, "logical_asset_bytes_each": 65542, "sinks_opened": 2, "commits": 1, "asset_refs": 1, "externalized_sha256": "e2babe89eb7a93bc2c7624644ed1c3ee1244fbaef5f38da7de05584fb4e61086"},
+    "age": {"plaintext_bytes": 1062, "ciphertext_bytes": 10538, "recipients": 2, "daily_decrypt": true, "recovery_decrypt": true, "event_id_absent": true, "sha256": "7961d03eb977a19bb563a92d2aa59c4024f16e42859b48c9d0268861b4418baf"},
+    "outbox": {"ciphertext_size": 27, "ciphertext_mode": "0600", "source_removed": true, "plaintext_absent_from_state": true, "ciphertext_b64_absent": true, "ciphertext_sha256": "524985fcc9e58e58d8b4ded548d6bacbc8c7621a92bbd9765a8bf26791642ee8"},
+    "quarantine": {"records_quarantined": 0, "gaps": 0},
+    "r2_contract": "synthetic retry/timeout/429/multipart/index/quota/corrupt-state matrix PASS; live provider unavailable"
+  },
+  "privacy": {
+    "targeted_high_confidence_scan": "no matches",
+    "github_advanced_security": "unavailable",
+    "real_private_data_used": false,
+    "real_credentials_used": false,
+    "argv_env_temp_logs_receipts_git_r2_metadata": "synthetic scans found no secret values",
+    "capture_dependencies": "no Action Server, MCP, memoryd, model call, or always-on daemon",
+    "failure_non_blocking": true,
+    "policy_uncertainty_upload": false
+  },
+  "limitations": [
+    "Linux device authority is operator-bound: headless/secret-tool-missing; native device command is not claimed PASS.",
+    "Pinned JAT v0.1.10/RCC v18.19.3 managed runtime cannot materialize on available hosted Ubuntu lane.",
+    "Live private R2 and fresh-device live recovery/replay were not run without approved credentials and endpoint.",
+    "Codex trust/authenticated model execution was not run.",
+    "Exact VSIX build/source verification passed; real VS Code install/activation remains Josh/operator-owned.",
+    "Checked-in release promotion pin does not match the fresh VSIX.",
+    "GitHub Advanced Security secret scanning is unavailable."
+  ],
+  "unblock_list": [
+    "Supported host/container for authorized JAT v0.1.10/RCC v18.19.3 tuple; do not repin to v0.1.11.",
+    "Josh-approved disposable private R2 endpoint/bucket/profile/credentials and native personal keyring session.",
+    "Disposable authenticated/trusted Codex session and device-ready host.",
+    "Supported VS Code host for operator-owned install/activation acceptance.",
+    "Authorized promotion pin/archive alignment without silent metadata mixing.",
+    "Josh's explicit release decision."
+  ],
+  "release_decision": "not granted"
+}
