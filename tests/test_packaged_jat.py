@@ -123,8 +123,9 @@ def test_packaged_jat_inspect_managed_argv_matches_src_contract(tmp_path, monkey
         "--artifact",
         "sha256:" + "a" * 64,
     ]
-    for flag in ("--permissive-local", "--inherit-streams", "--receipt-file", "--json"):
+    for flag in ("--permissive-local", "--inherit-streams", "--receipt-file"):
         assert flag in seen["argv"]
+    assert seen["argv"].count("--json") == 1
     command = seen["argv"][seen["argv"].index("--") + 1:]
     assert command == ["python", "-m", "jat.cli", "inspect", "--haul", str(haul), "--json"]
     assert result["inventory"] == [{"reference": "hauler/rcc-environment.rcca:latest", "type": "file", "size": 12}]

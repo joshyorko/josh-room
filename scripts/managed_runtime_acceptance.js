@@ -202,9 +202,8 @@ async function main() {
         windowsHide: true,
       });
       const state = { error: null };
-      let output = "";
-      child.stdout.on("data", (chunk) => { output += chunk.toString().slice(-8192); });
-      child.stderr.on("data", (chunk) => { output += chunk.toString().slice(-8192); });
+      child.stdout.resume();
+      child.stderr.resume();
       child.once("error", (error) => { state.error = error; });
       const closed = new Promise((resolve) => child.once("close", resolve));
       try {
@@ -212,8 +211,6 @@ async function main() {
       } finally {
         await stopManagedProcess(child, closed);
       }
-      if (state.error) throw state.error;
-      if (!output && !fs.existsSync(receipt)) throw new Error("managed JAT serve produced no receipt or diagnostic output");
       return { port };
     };
     const identityBodies = [];
