@@ -14,12 +14,9 @@ import math
 import os
 import re
 import stat
-import tempfile
 import time
-import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -116,11 +113,33 @@ def _validate_root_path(path: Path) -> None:
         raise ValueError("outbox root is unavailable") from error
 
 
-@dataclass(frozen=True)
-class CaptureGap:
+class _FrozenValue:
+    __slots__ = ("_frozen",)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_frozen", False):
+            raise AttributeError(f"cannot assign to field {name!r}")
+        object.__setattr__(self, name, value)
+
+    def _freeze(self) -> None:
+        object.__setattr__(self, "_frozen", True)
+
+    def __eq__(self, other: object) -> bool:
+        return type(self) is type(other) and self.__dict__ == other.__dict__
+
+    def __repr__(self) -> str:
+        fields = ", ".join(f"{key}={value!r}" for key, value in self.__dict__.items())
+        return f"{type(self).__name__}({fields})"
+
+class CaptureGap(_FrozenValue):
     reason_code: str
     pending_preserved: bool
     retryable: bool = True
+    def __init__(self, reason_code: str, pending_preserved: bool, retryable: bool = True) -> None:
+        self.reason_code = reason_code
+        self.pending_preserved = pending_preserved
+        self.retryable = retryable
+        self._freeze()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -130,14 +149,29 @@ class CaptureGap:
         }
 
 
-@dataclass(frozen=True)
-class QueueReceipt:
+class QueueReceipt(_FrozenValue):
     event_id: str
     state: QueueState
     coalesced: bool = False
     sequence: int | None = None
     is_final: bool = False
     diagnostic: CaptureGap | None = None
+    def __init__(
+        self,
+        event_id: str,
+        state: QueueState,
+        coalesced: bool = False,
+        sequence: int | None = None,
+        is_final: bool = False,
+        diagnostic: CaptureGap | None = None,
+    ) -> None:
+        self.event_id = event_id
+        self.state = state
+        self.coalesced = coalesced
+        self.sequence = sequence
+        self.is_final = is_final
+        self.diagnostic = diagnostic
+        self._freeze()
 
     def to_dict(self) -> dict[str, object]:
         body: dict[str, object] = {
@@ -153,8 +187,7 @@ class QueueReceipt:
         return body
 
 
-@dataclass(frozen=True)
-class QueueRecord:
+class QueueRecord(_FrozenValue):
     event_id: str
     session_id: str
     checkpoint: dict[str, object]
@@ -175,6 +208,50 @@ class QueueRecord:
     index_id: str | None = None
     expanded_event_ids: tuple[str, ...] = ()
     expanded_checkpoint: dict[str, object] | None = None
+    def __init__(
+        self,
+        event_id: str,
+        session_id: str,
+        checkpoint: dict[str, object],
+        metadata: dict[str, object],
+        state: QueueState,
+        sequence: int,
+        event_ids: tuple[str, ...],
+        is_final: bool = False,
+        final_event_id: str | None = None,
+        owner: str | None = None,
+        lease_until: float | None = None,
+        lease_seconds: float = 60.0,
+        resume_state: QueueState = QueueState.QUEUED,
+        failure_code: str | None = None,
+        object_key: str | None = None,
+        ciphertext_sha256: str | None = None,
+        ciphertext_size: int | None = None,
+        index_id: str | None = None,
+        expanded_event_ids: tuple[str, ...] = (),
+        expanded_checkpoint: dict[str, object] | None = None,
+    ) -> None:
+        self.event_id = event_id
+        self.session_id = session_id
+        self.checkpoint = checkpoint
+        self.metadata = metadata
+        self.state = state
+        self.sequence = sequence
+        self.event_ids = event_ids
+        self.is_final = is_final
+        self.final_event_id = final_event_id
+        self.owner = owner
+        self.lease_until = lease_until
+        self.lease_seconds = lease_seconds
+        self.resume_state = resume_state
+        self.failure_code = failure_code
+        self.object_key = object_key
+        self.ciphertext_sha256 = ciphertext_sha256
+        self.ciphertext_size = ciphertext_size
+        self.index_id = index_id
+        self.expanded_event_ids = expanded_event_ids
+        self.expanded_checkpoint = expanded_checkpoint
+        self._freeze()
     def to_dict(self) -> dict[str, object]:
         body: dict[str, object] = {
             "event_id": self.event_id,
@@ -346,13 +423,26 @@ class QueueRecord:
         )
 
 
-@dataclass(frozen=True)
-class PreparedRecord:
+class PreparedRecord(_FrozenValue):
     event_id: str
     ciphertext: bytes
     metadata: dict[str, object]
     ciphertext_sha256: str
     ciphertext_size: int
+    def __init__(
+        self,
+        event_id: str,
+        ciphertext: bytes,
+        metadata: dict[str, object],
+        ciphertext_sha256: str,
+        ciphertext_size: int,
+    ) -> None:
+        self.event_id = event_id
+        self.ciphertext = ciphertext
+        self.metadata = metadata
+        self.ciphertext_sha256 = ciphertext_sha256
+        self.ciphertext_size = ciphertext_size
+        self._freeze()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -394,13 +484,26 @@ class PreparedRecord:
         return cls(event_id, ciphertext, metadata, digest, size)
 
 
-@dataclass(frozen=True)
-class PreparedFileRecord:
+class PreparedFileRecord(_FrozenValue):
     event_id: str
     ciphertext_file: str
     metadata: dict[str, object]
     ciphertext_sha256: str
     ciphertext_size: int
+    def __init__(
+        self,
+        event_id: str,
+        ciphertext_file: str,
+        metadata: dict[str, object],
+        ciphertext_sha256: str,
+        ciphertext_size: int,
+    ) -> None:
+        self.event_id = event_id
+        self.ciphertext_file = ciphertext_file
+        self.metadata = metadata
+        self.ciphertext_sha256 = ciphertext_sha256
+        self.ciphertext_size = ciphertext_size
+        self._freeze()
 
     def __post_init__(self) -> None:
         _identifier(self.event_id)
@@ -445,21 +548,36 @@ class PreparedFileRecord:
         )
 
 
-@dataclass(frozen=True)
-class Diagnostic:
+class Diagnostic(_FrozenValue):
     code: str
+    def __init__(self, code: str) -> None:
+        self.code = code
+        self._freeze()
 
     def to_dict(self) -> dict[str, str]:
         return {"code": self.code}
 
 
-@dataclass(frozen=True)
-class Inspection:
+class Inspection(_FrozenValue):
     records: list[QueueRecord]
     diagnostics: list[Diagnostic]
     quarantined_count: int = 0
     partial_count: int = 0
     orphan_prepared: list[str] | None = None
+    def __init__(
+        self,
+        records: list[QueueRecord],
+        diagnostics: list[Diagnostic],
+        quarantined_count: int = 0,
+        partial_count: int = 0,
+        orphan_prepared: list[str] | None = None,
+    ) -> None:
+        self.records = records
+        self.diagnostics = diagnostics
+        self.quarantined_count = quarantined_count
+        self.partial_count = partial_count
+        self.orphan_prepared = orphan_prepared
+        self._freeze()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -678,11 +796,21 @@ def _sync_directory(directory: Path, *, platform_name: str | None = None) -> Non
         os.close(descriptor)
 
 
+def _create_private_temp(path: Path) -> tuple[int, Path]:
+    prefix = f".{path.name}.{os.getpid()}.{time.monotonic_ns()}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    for attempt in range(16):
+        temporary = path.parent / f"{prefix}.{attempt}"
+        try:
+            return os.open(temporary, flags, 0o600), temporary
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"temporary path collision: {path}")
+
 class _DurablePublisher:
     def publish(self, path: Path, body: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-        temporary = Path(temporary_name)
+        fd, temporary = _create_private_temp(path)
         try:
             if hasattr(os, "fchmod"):
                 os.fchmod(fd, 0o600)
@@ -770,6 +898,8 @@ class PreparedOutbox:
             raise OutboxStorageError("publication-failed", pending_preserved=False) from error
 
     def _quarantine_unlocked(self, path: Path) -> None:
+        import uuid
+
         target_directory = self.root / "quarantine"
         _ensure_directory(target_directory)
         target = target_directory / f"prepared-corrupt-{uuid.uuid4().hex}{path.suffix if path.suffix in {'.json', '.age'} else '.json'}"
@@ -996,6 +1126,8 @@ class PccOutbox:
         return result
 
     def _quarantine_corrupt_unlocked(self, path: Path) -> None:
+        import uuid
+
         _ensure_directory(self.quarantine_directory)
         target = self.quarantine_directory / f"corrupt-{uuid.uuid4().hex}.json"
         try:
