@@ -843,7 +843,7 @@ test("cached JAT archive reuses local artifact digest without reimporting 6596 a
     },
   });
   const calls = [];
-  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
     ensureSource: async () => path.join(root, "jat-source"),
     runJson: async (_executable, args) => {
       calls.push(args);
@@ -876,7 +876,7 @@ test("cached JAT archive imports only when the local RCC artifact is genuinely a
     },
   });
   const calls = [];
-  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
     ensureSource: async () => path.join(root, "jat-source"),
     runJson: async (_executable, args) => {
       calls.push(args);
@@ -984,7 +984,7 @@ test("cached controller archive reuses local artifact digest without archive imp
     },
   });
   const calls = [];
-  await ensureControllerRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+  await ensureControllerRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
     runJson: async (_executable, args) => {
       calls.push(args);
       return { artifactDigest: artifact, verification: { valid: true }, cacheHit: "local-materialization" };

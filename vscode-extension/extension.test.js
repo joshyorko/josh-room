@@ -321,7 +321,7 @@ function stubRuntimeAcquisition(t, extension, acquire) {
   runtime.ensureManagedRcc = async (_context, _manifest, options) => {
     starts += 1;
     options.onProgress?.({ message: "Downloading RCC" });
-    return { executable: "/synthetic/managed-rcc", version: "v18.19.3" };
+    return { executable: "/synthetic/managed-rcc", version: "v18.19.5" };
   };
   runtime.ensureControllerRuntime = async (_context, _manifest, _rcc, options) => {
     options.onProgress?.({ message: "Importing controller Environment Artifact" });
@@ -445,11 +445,11 @@ test("initial runtime readiness acquires controller and defers JAT", async () =>
   liveRuntime.readManifest = () => ({
     schema_version: 1,
     extension_version: "test",
-    rcc: { version: "v18.19.3", platforms: {} },
+    rcc: { version: "v18.19.5", platforms: {} },
     controller: { robot: "runtime/controller/robot.yaml" },
     jat: { git_sha: "a".repeat(40) },
   });
-  liveRuntime.ensureManagedRcc = async () => ({ executable: "/managed/rcc", version: "v18.19.3" });
+  liveRuntime.ensureManagedRcc = async () => ({ executable: "/managed/rcc", version: "v18.19.5" });
   liveRuntime.ensureControllerRuntime = async () => {
     controllerCalls += 1;
     return { artifact: "sha256:" + "b".repeat(64) };

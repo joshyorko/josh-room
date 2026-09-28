@@ -32,7 +32,7 @@ from josh_room.workspace_state import read_workspace_marker, workspace_fingerpri
 
 
 def test_environment_artifact_receipt_shape_is_accepted():
-    for rcc_version in ("v18.19.2", "v18.19.3"):
+    for rcc_version in ("v18.19.2", "v18.19.3", "v18.19.5"):
         manifest = {"format_version": 1, "project_id": "demo", "snapshot_id": "s", "created_at": "now", "payload": {"size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, "source": {}, "environment_artifact": {"artifact": "sha256:" + "b" * 64, "specification_digest": "sha256:" + "c" * 64, "legacy_blueprint_key": "legacy", "archive": "jat-runtime.rcca", "archive_sha256": "d" * 64, "archive_size": 1, "rcc_version": rcc_version, "robot": "robot.yaml", "provider": "local", "acquired": False}}
         build_envelope(manifest, b"x")
 

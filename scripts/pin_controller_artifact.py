@@ -14,8 +14,8 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
     observed = hashlib.sha256(artifact.read_bytes()).hexdigest()
     if observed != archive.get("sha256") or artifact.stat().st_size != archive.get("size"):
         raise ValueError("controller artifact archive SHA256 or size does not match receipt")
-    if receipt_value.get("rcc_version") != "v18.19.3":
-        raise ValueError("controller artifact receipt must use RCC v18.19.3")
+    if receipt_value.get("rcc_version") != "v18.19.5":
+        raise ValueError("controller artifact receipt must use RCC v18.19.5")
     if receipt_value.get("platform") != platform:
         raise ValueError("controller artifact receipt platform does not match the requested pin")
     asset = artifact.name

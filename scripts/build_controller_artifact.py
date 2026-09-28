@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-EXPECTED_RCC = "v18.19.3"
+EXPECTED_RCC = "v18.19.5"
 SHA256_LENGTH = 64
 
 
@@ -33,9 +33,9 @@ def resolve_rcc_pin(manifest: dict, platform: str, checksum: str | None = None) 
         raise TypeError(f"no RCC pin for {platform}")
     value = checksum or pin.get("sha256")
     if not isinstance(value, str) or len(value) != SHA256_LENGTH or any(char not in "0123456789abcdef" for char in value.lower()):
-        raise ValueError(f"RCC {platform} checksum is pending; supply the real v18.19.3 release SHA256")
-    if not str(pin.get("url", "")).startswith("https://github.com/joshyorko/rcc/releases/download/v18.19.3/"):
-        raise ValueError(f"RCC {platform} URL is outside the official v18.19.3 release")
+        raise ValueError(f"RCC {platform} checksum is pending; supply the real v18.19.5 release SHA256")
+    if not str(pin.get("url", "")).startswith("https://github.com/joshyorko/rcc/releases/download/v18.19.5/"):
+        raise ValueError(f"RCC {platform} URL is outside the official v18.19.5 release")
     return {**pin, "version": EXPECTED_RCC, "sha256": value}
 
 
@@ -160,7 +160,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
     if version.returncode != 0 or EXPECTED_RCC not in f"{version.stdout}\n{version.stderr}":
         raise RuntimeError(f"managed RCC version verification failed: expected {EXPECTED_RCC}")
     if _sha256(rcc) != pin["sha256"]:
-        raise ValueError("managed RCC checksum does not match the canonical v18.19.3 pin")
+        raise ValueError("managed RCC checksum does not match the canonical v18.19.5 pin")
     output_dir.mkdir(parents=True, exist_ok=True)
     asset_names = manifest["controller"].get("artifact_assets", {})
     asset = asset_names.get(platform, manifest["controller"].get("artifact_asset"))

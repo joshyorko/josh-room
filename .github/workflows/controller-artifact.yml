@@ -12,7 +12,7 @@ on:
           - win32-x64
         default: linux-x64
       rcc_sha256:
-        description: Exact SHA256 of the official RCC v18.19.3 platform asset
+        description: Exact SHA256 of the official RCC v18.19.5 platform asset
         required: true
         type: string
 
@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Download and verify pinned RCC v18.19.3
+      - name: Download and verify pinned RCC v18.19.5
         shell: bash
         env:
           RCC_SHA256: ${{ inputs.rcc_sha256 }}
@@ -66,12 +66,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Download and verify pinned RCC v18.19.3
+      - name: Download and verify pinned RCC v18.19.5
         shell: pwsh
         env:
           RCC_SHA256: ${{ inputs.rcc_sha256 }}
         run: |
-          if ($env:RCC_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'A real v18.19.3 Windows RCC SHA256 is required.' }
+          if ($env:RCC_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'A real v18.19.5 Windows RCC SHA256 is required.' }
           $manifest = Get-Content vscode-extension/runtime/controller-artifact-manifest.json | ConvertFrom-Json
           $url = $manifest.rcc.platforms.'win32-x64'.url
           $rcc = Join-Path $env:RUNNER_TEMP 'rcc-windows64.exe'

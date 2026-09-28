@@ -21,11 +21,11 @@ def manifest():
     return {
         "schema_version": 1,
         "rcc": {
-            "version": "v18.19.3",
+            "version": "v18.19.5",
             "platforms": {
                 "linux-x64": {
                     "asset": "rcc-linux64",
-                    "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
+                    "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-linux64",
                     "sha256": None,
                 },
             },
@@ -37,28 +37,28 @@ def manifest():
     }
 
 
-def test_rcc_pin_requires_real_v18_19_3_checksum_before_build():
+def test_rcc_pin_requires_real_v18_19_5_checksum_before_build():
     with pytest.raises(ValueError, match="checksum is pending"):
         resolve_rcc_pin(manifest(), "linux-x64")
 
     pin = resolve_rcc_pin(manifest(), "linux-x64", "a" * 64)
-    assert pin["version"] == "v18.19.3"
+    assert pin["version"] == "v18.19.5"
     assert pin["sha256"] == "a" * 64
 
 
-def test_checked_in_controller_manifest_is_v18_19_3_only_and_has_no_fake_checksums():
+def test_checked_in_controller_manifest_is_v18_19_5_only_and_has_no_fake_checksums():
     root = Path(__file__).parents[1]
     value = load_manifest(root / "vscode-extension/runtime/controller-artifact-manifest.json")
     template = root / "templates/room/vscode-extension/runtime/controller-artifact-manifest.json"
     assert (root / "vscode-extension/runtime/controller-artifact-manifest.json").read_bytes() == template.read_bytes()
-    assert value["rcc"]["version"] == "v18.19.3"
+    assert value["rcc"]["version"] == "v18.19.5"
     assert value["rcc"]["platforms"]["linux-x64"] == {
         "asset": "rcc-linux64",
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.3/rcc-linux64",
-        "sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428",
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-linux64",
+        "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
         "size": 22282402,
     }
-    assert value["rcc"]["platforms"]["win32-x64"]["sha256"] == "523a6be8ad92235fbe0a4e4732699f2cd66f9ef6ad57e045df434257c46112e4"
+    assert value["rcc"]["platforms"]["win32-x64"]["sha256"] == "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731"
     workflow = (root / ".github/workflows/controller-artifact.yml").read_text()
     assert "workflow_dispatch" in workflow
     assert "v18.19.2" not in workflow
@@ -143,7 +143,7 @@ def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
         "specification_digest": "sha256:" + "c" * 64,
         "legacy_blueprint_key": "blueprint-1",
         "archive": {"sha256": "d" * 64, "size": 123},
-        "rcc_version": "v18.19.3",
+        "rcc_version": "v18.19.5",
         "source": "e" * 40,
         "platform": "linux-x64",
         "verified_acquire": True,
@@ -151,14 +151,14 @@ def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
         "verified_exec": True,
         "verified_crypto": True,
     }
-    validate_receipt(receipt, expected_platform="linux-x64", expected_rcc="v18.19.3")
-    broken = {**receipt, "rcc_version": "v18.19.2"}
+    validate_receipt(receipt, expected_platform="linux-x64", expected_rcc="v18.19.5")
+    broken = {**receipt, "rcc_version": "v18.19.3"}
     with pytest.raises(ValueError, match="RCC version"):
-        validate_receipt(broken, expected_platform="linux-x64", expected_rcc="v18.19.3")
+        validate_receipt(broken, expected_platform="linux-x64", expected_rcc="v18.19.5")
     missing_crypto = dict(receipt)
     missing_crypto.pop("verified_crypto")
     with pytest.raises(ValueError, match="provenance fields"):
-        validate_receipt(missing_crypto, expected_platform="linux-x64", expected_rcc="v18.19.3")
+        validate_receipt(missing_crypto, expected_platform="linux-x64", expected_rcc="v18.19.5")
 
 
 def test_manifest_pin_integration_updates_root_and_template_atomically(tmp_path):
@@ -173,7 +173,7 @@ def test_manifest_pin_integration_updates_root_and_template_atomically(tmp_path)
         "format_version": 1,
         "artifact_digest": "sha256:" + "a" * 64,
         "archive": {"sha256": "f" * 64, "size": artifact.stat().st_size},
-        "rcc_version": "v18.19.3",
+        "rcc_version": "v18.19.5",
         "platform": "linux-x64",
         "source": "b" * 40,
     }))
@@ -194,12 +194,12 @@ def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
         "format_version": 1,
         "artifact_digest": "sha256:" + "a" * 64,
         "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
-        "rcc_version": "v18.19.3",
+        "rcc_version": "v18.19.5",
         "platform": "win32-x64",
         "source": "b" * 40,
     }))
 
-    pin_manifest(root, template, artifact, receipt, "v0.1.10-controller-artifacts", platform="win32-x64")
+    pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts", platform="win32-x64")
     for target in (root, template):
         value = json.loads(target.read_text())
         assert value["controller"]["environment_artifact"]["digest"] == "linux"
