@@ -653,7 +653,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
       ? (args) => ["run", "--silent", "-r", path.join(state.controllerRoot, "robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"]
       : (args, receiptFile) => [
         "--no-build", "env", "exec", "--artifact", state.controller.artifact,
-        "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile,
+        "--permissive-local", "--receipt-file", receiptFile, "--json",
         "--", "python", "-m", "josh_room", ...args, "--json",
       ],
     env: managedRuntime.runtimeEnvironment(extensionContext, {

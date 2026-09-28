@@ -46,7 +46,7 @@ def build_commands(*, rcc: str, robot: str, archive: str, artifact: str, receipt
         ["env", "export", "--artifact", artifact, "--provider", "local", "--output", archive],
         ["env", "acquire", "--archive", archive, "--permissive-local", "--json"],
         ["--no-build", "ht", "vars", "--robot", robot, "--json"],
-        ["--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--inherit-streams", "--receipt-file", receipt, "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
+        ["--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--receipt-file", receipt, "--json", "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
     ]
 
 
@@ -58,9 +58,9 @@ def controller_crypto_command(*, artifact: str, receipt: str, script: str) -> li
         "--artifact",
         artifact,
         "--permissive-local",
-        "--inherit-streams",
         "--receipt-file",
         receipt,
+        "--json",
         "--",
         "python",
         script,
@@ -200,7 +200,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
             exec_receipt = Path(temporary) / "exec-receipt.json"
             execution = _run(
                 rcc,
-                ["--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--inherit-streams", "--receipt-file", str(exec_receipt), "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
+                ["--no-build", "env", "exec", "--artifact", artifact, "--permissive-local", "--receipt-file", str(exec_receipt), "--json", "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
                 home=consumer_home,
                 cwd=robot.parent,
                 receipt=exec_receipt,

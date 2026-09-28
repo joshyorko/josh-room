@@ -366,6 +366,35 @@ test("extension backend commands use the managed RCC controller boundary", async
   assert.notEqual(spawnHarness.calls[0].command, "josh-room");
 });
 
+test("managed extension controller invocation keeps receipt handling without inherited streams", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-argv-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ options }) => {
+    fs.writeFileSync(options.env.JOSH_ROOM_RESULT_FILE, '{"ok":true,"operation":"status"}');
+    return { stdout: "" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({
+    extensionPath: root,
+    globalStorageUri: { fsPath: root },
+    secrets: { get: async () => undefined },
+  });
+  extension.__test__.setRuntimeReadinessForTests(Promise.resolve({
+    rcc: { executable: "/private/runtime/rcc" },
+    controller: { artifact: "sha256:" + "b".repeat(64) },
+    controllerRoot: "/private/controller",
+    mode: "managed",
+  }));
+
+  assert.deepEqual(await extension.__test__.runJoshRoom(["status"], root), { ok: true, operation: "status" });
+  const args = spawnHarness.calls[0].args;
+  assert.equal(args.includes("--inherit-streams"), false);
+  assert.equal(args.includes("--receipt-file"), true);
+  assert.equal(args.includes("--json"), true);
+  assert.deepEqual(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 4), ["python", "-m", "josh_room"]);
+});
+
 test("Windows terminal launch passes environment through terminal options", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-terminal-test-"));
   const { vscode } = createVscodeMock(root);

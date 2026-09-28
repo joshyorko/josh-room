@@ -183,14 +183,16 @@ async function main() {
     };
     const executeController = (args, name) => runManaged(["python", "-m", "josh_room", ...args], "managed-controller", name, controllerRoot, { inheritStreams: false });
     const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
-    const runManagedJatServe = async (haul) => {
+    const runManagedJatServe = async (haul, name) => {
       const port = await reservePort();
+      const receipt = path.join(paths.logsRoot, `managed-jat-${name}.json`);
       const jatEnvironment = {
         ...environment,
         PYTHONPATH: [path.join(jat.jatRoot, "src"), jat.jatRoot, controllerRoot].join(path.delimiter),
       };
       const child = childProcess.spawn(rcc.executable, [
-        "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local", "--json", "--",
+        "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local",
+        "--inherit-streams", "--receipt-file", receipt, "--",
         "python", "-m", "jat.cli", "serve", "--haul", haul, "--mode", "files",
         "--fileserver-port", String(port), "--json",
       ], {
@@ -254,7 +256,7 @@ async function main() {
     const haul = path.join(root, "managed-runtime.haul.tar.zst");
     executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
     executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
-    await runManagedJatServe(haul);
+    await runManagedJatServe(haul, "jat-serve");
 
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };

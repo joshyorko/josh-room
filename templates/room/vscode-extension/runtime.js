@@ -229,7 +229,7 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
     options.onProgress?.({ phase: "reuse", message: "Verifying cached local JAT artifact" });
     const verified = await runJson(
       rccRuntime.executable,
-      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
+      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--receipt-file", receiptFile, "--json", "--", "hauler", "version"],
       { cwd: privatePaths(context).storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
     );
     const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
@@ -437,7 +437,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   const receiptFile = path.join(paths.logsRoot, "jat-artifact-receipt.json");
   const executed = await runJson(
     rccRuntime.executable,
-    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
+    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
     { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
   );
   if (executed.artifactDigest !== artifact.digest || executed.exitCode !== 0) {
