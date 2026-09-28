@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  CANDIDATE_SHA: 8aa0173670f3b17ad3b6968c32202cb2675c39bb
+  CANDIDATE_SHA: 72214b29f78314e0f4325e15501ffcfc89bf0e1f
 
 jobs:
   pinned-jat-linux:
@@ -20,7 +20,7 @@ jobs:
       - name: Checkout immutable candidate
         uses: actions/checkout@v7
         with:
-          ref: 8aa0173670f3b17ad3b6968c32202cb2675c39bb
+          ref: 72214b29f78314e0f4325e15501ffcfc89bf0e1f
           fetch-depth: 1
 
       - name: Assert exact candidate
