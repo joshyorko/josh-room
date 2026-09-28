@@ -65,7 +65,10 @@ def test_checked_in_controller_manifest_is_v18_19_5_only_and_has_no_fake_checksu
         "sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731",
         "size": 20084224,
     }
-    controller = value["controller"]["environment_artifacts"]
+    runtime_value = json.loads((root / "vscode-extension/runtime/manifest.json").read_text())
+    runtime_template = root / "templates/room/vscode-extension/runtime/manifest.json"
+    assert runtime_value == json.loads(runtime_template.read_text())
+    controller = runtime_value["controller"]["environment_artifacts"]
     assert controller["linux-x64"] == {
         "digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
         "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
