@@ -40,7 +40,6 @@ async function expectRejected(label, operation, pattern) {
 
 async function main() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "josh-room-managed-runtime-"));
-  let evidence;
   try {
     const candidate = path.join(root, "josh-room.vsix");
     const installed = path.join(root, "installed");
@@ -122,6 +121,10 @@ async function main() {
       identityBodies.push(identityBody.trimEnd());
       recipients.push(recipient);
     }
+    const dependencyProbe = runManagedTool([
+      "python", "-c", "import boto3, josh_room; print(boto3.__version__)",
+    ], "dependencies").trim();
+    if (!dependencyProbe) throw new Error("managed controller dependency probe returned no boto3 version");
     const identityPath = path.join(root, "age-identity.txt");
     await fsp.writeFile(identityPath, `${identityBodies.join("\n")}\n`, { mode: 0o600 });
     const instance = path.join(root, "room-instance");
@@ -195,12 +198,13 @@ async function main() {
     })) throw new Error("stale runtime receipt was accepted");
 
     const rccPin = manifest.rcc.platforms[platform];
-    evidence = {
+    const evidence = {
       result: "managed-runtime-consumer-pass",
       platform,
       source_sha: lock.controller.source_sha,
       vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
+      dependencies: { boto3: dependencyProbe },
       controller: {
         release_tag: lock.controller.release_tag,
         artifact_digest: controllerPin.digest,
