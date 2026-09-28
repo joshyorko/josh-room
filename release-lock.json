@@ -54,7 +54,15 @@
         "artifact_digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
         "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
         "archive_sha256": "3dd7d542b2fdd35633152a400e30d7c6bb861c5bb128f6e22ef6bdbc3b048f88",
-        "archive_size": 130993088
+        "archive_size": 130993088,
+        "rcc_sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e"
+      },
+      "win32-x64": {
+        "artifact_digest": "sha256:3d6389a89a8cbc068208bbcf198eae3b63d5c46a5d18f1ac1e6b250ebcff228a",
+        "specification_digest": "sha256:1a864c001fc21b59ba5129e884d5a5060bf2aebb047760fda45d5a0c5285a3e0",
+        "archive_sha256": "1d16ffca8958bd19b32e2747653983d7e2a9755d8534b97192eac5a915ca16d0",
+        "archive_size": 77963976,
+        "rcc_sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731"
       }
     }
   },
@@ -63,7 +71,19 @@
     "version": "v18.19.5",
     "source_sha": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
     "managed_asset": "rcc-linux64",
-    "managed_asset_sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e"
+    "managed_asset_sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
+    "platforms": {
+      "linux-x64": {
+        "asset": "rcc-linux64",
+        "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
+        "size": 22360226
+      },
+      "win32-x64": {
+        "asset": "rcc-windows64.exe",
+        "sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731",
+        "size": 20084224
+      }
+    }
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",

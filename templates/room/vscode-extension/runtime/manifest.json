@@ -33,13 +33,14 @@
         }
       },
       "win32-x64": {
-        "digest": "sha256:9f681a9a4b402d37fb098ac33679c01e48960fa7f33ba08e33ad249170759391",
+        "digest": "sha256:3d6389a89a8cbc068208bbcf198eae3b63d5c46a5d18f1ac1e6b250ebcff228a",
+        "specification_digest": "sha256:1a864c001fc21b59ba5129e884d5a5060bf2aebb047760fda45d5a0c5285a3e0",
         "platform": "win32-x64",
         "archive": {
           "asset": "josh-room-controller-windows-amd64.rcca",
-          "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.10-controller-artifacts/josh-room-controller-windows-amd64.rcca",
-          "sha256": "cfbda1cfae16e2f538036b09094f2c7b03d9af6e6071b7fb080d35da5da20719",
-          "size": 77076530
+          "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.11-controller-artifacts/josh-room-controller-windows-amd64.rcca",
+          "sha256": "1d16ffca8958bd19b32e2747653983d7e2a9755d8534b97192eac5a915ca16d0",
+          "size": 77963976
         }
       }
     },
