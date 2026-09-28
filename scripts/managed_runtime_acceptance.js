@@ -112,10 +112,13 @@ async function main() {
     const recipients = [];
     for (const name of ["primary", "recovery"]) {
       const identityPath = path.join(root, `${name}-age-identity.txt`);
-      runManagedTool(["age-keygen", "-o", identityPath], `age-keygen-${name}`);
+      const recipient = runManagedTool([
+        "python", "-c",
+        "import sys; from pathlib import Path; from josh_room.crypto import generate_identity, derive_recipient; path = Path(sys.argv[1]); generate_identity(path); print(derive_recipient(path))",
+        identityPath,
+      ], `age-identity-${name}`).trim();
+      if (!/^age1[0-9a-z]{58}$/.test(recipient)) throw new Error(`managed age identity generation returned an invalid recipient for ${name}`);
       const identityBody = await fsp.readFile(identityPath, "utf8");
-      const recipient = identityBody.match(/^# public key: (age1\S+)$/m)?.[1];
-      if (!recipient) throw new Error(`age-keygen did not return a recipient for ${name}`);
       identityBodies.push(identityBody.trimEnd());
       recipients.push(recipient);
     }
