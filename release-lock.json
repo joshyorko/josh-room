@@ -43,6 +43,21 @@
       }
     }
   },
+  "controller": {
+    "repository": "https://github.com/joshyorko/josh-room",
+    "release_tag": "v0.1.11-controller-artifacts",
+    "source_sha": "b4da2846fee429a2e2878f817faac6a48e4384fd",
+    "rcc_version": "v18.19.5",
+    "rcc_source_sha": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
+    "platforms": {
+      "linux-x64": {
+        "artifact_digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
+        "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
+        "archive_sha256": "3dd7d542b2fdd35633152a400e30d7c6bb861c5bb128f6e22ef6bdbc3b048f88",
+        "archive_size": 130993088
+      }
+    }
+  },
   "rcc": {
     "repository": "https://github.com/joshyorko/rcc",
     "version": "v18.19.5",

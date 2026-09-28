@@ -21,6 +21,7 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
     asset = artifact.name
     update = {
         "digest": receipt_value["artifact_digest"],
+        "specification_digest": receipt_value.get("specification_digest"),
         "platform": platform,
         "archive": {
             "asset": asset,

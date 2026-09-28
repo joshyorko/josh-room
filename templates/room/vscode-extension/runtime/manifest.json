@@ -22,13 +22,14 @@
     "robot": "runtime/controller/robot.yaml",
     "environment_artifacts": {
       "linux-x64": {
-        "digest": "sha256:22109a276162252953df47134458e4cb94d19566fc9e5430f15f398d6c2abf1a",
+        "digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
+        "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
         "platform": "linux-x64",
         "archive": {
           "asset": "josh-room-controller-linux-amd64.rcca",
-          "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.10-controller-artifacts/josh-room-controller-linux-amd64.rcca",
-          "sha256": "7fd9a87a2a39714e2fcfaba34d394b7553e3979518d5bbf833ee6bdc14a1d548",
-          "size": 124494418
+          "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.11-controller-artifacts/josh-room-controller-linux-amd64.rcca",
+          "sha256": "3dd7d542b2fdd35633152a400e30d7c6bb861c5bb128f6e22ef6bdbc3b048f88",
+          "size": 130993088
         }
       },
       "win32-x64": {
@@ -43,13 +44,14 @@
       }
     },
     "environment_artifact": {
-      "digest": "sha256:22109a276162252953df47134458e4cb94d19566fc9e5430f15f398d6c2abf1a",
+      "digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
+      "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
       "platform": "linux-x64",
       "archive": {
         "asset": "josh-room-controller-linux-amd64.rcca",
-        "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.10-controller-artifacts/josh-room-controller-linux-amd64.rcca",
-        "sha256": "7fd9a87a2a39714e2fcfaba34d394b7553e3979518d5bbf833ee6bdc14a1d548",
-        "size": 124494418
+        "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.11-controller-artifacts/josh-room-controller-linux-amd64.rcca",
+        "sha256": "3dd7d542b2fdd35633152a400e30d7c6bb861c5bb128f6e22ef6bdbc3b048f88",
+        "size": 130993088
       }
     }
   },
