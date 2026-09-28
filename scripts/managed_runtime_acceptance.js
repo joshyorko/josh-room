@@ -45,11 +45,14 @@ async function main() {
     const installed = path.join(root, "installed");
     const extension = path.join(installed, "extension");
     if (process.platform === "win32") {
-      const packageCommand = `npm run package -- --out "${candidate.replaceAll("\"", "\\\"")}"`;
-      run(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", packageCommand], { cwd: path.join(repository, "vscode-extension") });
+      run("npm.cmd", ["run", "package", "--", "--out", candidate], {
+        cwd: path.join(repository, "vscode-extension"),
+        shell: true,
+      });
     } else {
       run("npm", ["run", "package", "--", "--out", candidate], { cwd: path.join(repository, "vscode-extension") });
     }
+    if (!fs.existsSync(candidate)) throw new Error(`VSIX packaging did not create ${candidate}`);
     await fsp.mkdir(installed, { recursive: true, mode: 0o700 });
     if (process.platform === "win32") {
       run("tar", ["-xf", candidate, "-C", installed]);
