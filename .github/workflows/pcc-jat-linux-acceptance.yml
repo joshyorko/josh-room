@@ -58,38 +58,64 @@ jobs:
           curl --fail --location --proto "=https" --tlsv1.2 "$jat_url" -o "$jat"
           printf "%s  %s\n" "$jat_sha" "$jat" | sha256sum --check --status
           "$rcc" version | tee "$work/rcc-version.txt"
-          acquire_json=$(ROBOCORP_HOME="$home" RCC_HOLOTREE_MODE=private "$rcc" env acquire --archive "$jat" --permissive-local --json)
-          printf "%s\n" "$acquire_json" > "$work/acquire.json"
-          python - "$work/acquire.json" "$jat_digest" <<'PY'
-          import json
-          import sys
-          result = json.load(open(sys.argv[1]))
-          expected = sys.argv[2]
-          observed = result.get("artifactDigest", result.get("artifact_digest"))
-          assert observed == expected, (observed, expected)
-          assert result.get("verification", {}).get("valid") is True, result
-          PY
-          ROBOCORP_HOME="$home" RCC_HOLOTREE_MODE=private "$rcc" --no-build env exec --artifact "$jat_digest" --permissive-local --json -- python -m jat.cli --help > "$work/jat-help.json"
-          python - "$work" "$rcc_sha" "$jat_sha" "$jat_digest" <<'PY'
+          set +e
+          ROBOCORP_HOME="$home" RCC_HOLOTREE_MODE=private "$rcc" env acquire --archive "$jat" --permissive-local --json >"$work/acquire.json" 2>"$work/acquire.stderr"
+          acquire_status=$?
+          set -e
+          cat "$work/acquire.json"
+          cat "$work/acquire.stderr" >&2
+          python - "$work" "$rcc_sha" "$jat_sha" "$jat_digest" "$acquire_status" <<'PY'
           import hashlib
           import json
+          import os
           import pathlib
+          import platform
           import sys
           root = pathlib.Path(sys.argv[1])
+          acquire_status = int(sys.argv[5])
+          raw = (root / "acquire.json").read_text(errors="replace")
+          try:
+              acquire = json.loads(raw)
+          except json.JSONDecodeError:
+              acquire = {"raw_stdout": raw[-8192:]}
           result = {
-              "candidate": __import__("os").environ["CANDIDATE_SHA"],
-              "platform": __import__("platform").platform(),
+              "candidate": os.environ["CANDIDATE_SHA"],
+              "platform": platform.platform(),
               "rcc_sha256": sys.argv[2],
               "rcc_version": (root / "rcc-version.txt").read_text().strip(),
               "jat_archive_sha256": sys.argv[3],
               "jat_archive_size": (root / "jat-runtime-linux-amd64.rcca").stat().st_size,
               "jat_artifact_digest": sys.argv[4],
-              "acquire": json.loads((root / "acquire.json").read_text()),
-              "jat_help_exit": 0,
-              "jat_help_sha256": hashlib.sha256((root / "jat-help.json").read_bytes()).hexdigest(),
+              "acquire_exit_status": acquire_status,
+              "acquire": acquire,
+              "acquire_stderr": (root / "acquire.stderr").read_text(errors="replace")[-8192:],
           }
           pathlib.Path("pcc15-jat-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
-          summary = __import__("os").environ.get("GITHUB_STEP_SUMMARY")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              pathlib.Path(summary).write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+          if acquire_status:
+              raise SystemExit(acquire_status)
+          observed = acquire.get("artifactDigest", acquire.get("artifact_digest"))
+          assert observed == sys.argv[4], (observed, sys.argv[4])
+          assert acquire.get("verification", {}).get("valid") is True, acquire
+          PY
+          ROBOCORP_HOME="$home" RCC_HOLOTREE_MODE=private "$rcc" --no-build env exec --artifact "$jat_digest" --permissive-local --json -- python -m jat.cli --help > "$work/jat-help.json"
+          python - "$work" "$rcc_sha" "$jat_sha" "$jat_digest" <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import platform
+          import sys
+          root = pathlib.Path(sys.argv[1])
+          result = json.loads(pathlib.Path("pcc15-jat-result.json").read_text())
+          result.update({
+              "jat_help_exit": 0,
+              "jat_help_sha256": hashlib.sha256((root / "jat-help.json").read_bytes()).hexdigest(),
+          })
+          pathlib.Path("pcc15-jat-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
           if summary:
               pathlib.Path(summary).write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
           PY
@@ -103,5 +129,6 @@ jobs:
             pcc15-jat-result.json
             ${{ runner.temp }}/pcc15-jat/rcc-version.txt
             ${{ runner.temp }}/pcc15-jat/acquire.json
+            ${{ runner.temp }}/pcc15-jat/acquire.stderr
             ${{ runner.temp }}/pcc15-jat/jat-help.json
           if-no-files-found: ignore
