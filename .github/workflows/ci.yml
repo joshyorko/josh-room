@@ -35,3 +35,10 @@ jobs:
           node-version: "22"
       - name: Consume the clean candidate VSIX through managed RCC
         run: node scripts/managed_runtime_acceptance.js
+      - name: Upload managed-runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-runtime-evidence-${{ matrix.os }}
+          path: dist/managed-runtime-evidence
+          if-no-files-found: ignore

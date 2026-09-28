@@ -93,10 +93,46 @@ async function main() {
       ], { cwd: controllerRoot, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
     };
 
+    const runManagedTool = (args, name) => {
+      const receipt = path.join(paths.logsRoot, `managed-tool-${name}.json`);
+      return childProcess.execFileSync(rcc.executable, [
+        "--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local",
+        "--inherit-streams", "--receipt-file", receipt, "--", ...args,
+      ], { cwd: root, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    };
+    const identityBodies = [];
+    const recipients = [];
+    for (const name of ["primary", "recovery"]) {
+      const identityPath = path.join(root, `${name}-age-identity.txt`);
+      runManagedTool(["age-keygen", "-o", identityPath], `age-keygen-${name}`);
+      const identityBody = await fsp.readFile(identityPath, "utf8");
+      const recipient = identityBody.match(/^# public key: (age1\S+)$/m)?.[1];
+      if (!recipient) throw new Error(`age-keygen did not return a recipient for ${name}`);
+      identityBodies.push(identityBody.trimEnd());
+      recipients.push(recipient);
+    }
+    const identityPath = path.join(root, "age-identity.txt");
+    await fsp.writeFile(identityPath, `${identityBodies.join("\n")}\n`, { mode: 0o600 });
+    const instance = path.join(root, "room-instance");
+    const workspaceRoot = path.join(root, "workspaces");
+    Object.assign(environment, {
+      JOSH_ROOM_CONFIG_DIR: path.join(root, "config"),
+      JOSH_ROOM_IDENTITY: identityPath,
+      JOSH_ROOM_INSTANCE: instance,
+      JOSH_ROOM_RECIPIENTS: recipients.join(","),
+      JOSH_ROOM_WORKSPACE_ROOT: workspaceRoot,
+    });
+    const source = path.join(root, "save-source");
+    await fsp.mkdir(source, { recursive: true, mode: 0o700 });
+    await fsp.writeFile(path.join(source, "README.md"), "managed runtime Save/Enter acceptance\n");
     executeController(["dimensions", "list", "--json"], "dimensions-list");
-    executeController(["snapshot", "create", "--help"], "save-command");
-    executeController(["hydrate", "--help"], "enter-command");
-    executeController(["jat", "--help"], "jat-command");
+    executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "save");
+    executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "enter");
+    const restored = path.join(workspaceRoot, "demo", "README.md");
+    if ((await fsp.readFile(restored, "utf8")) !== "managed runtime Save/Enter acceptance\n") {
+      throw new Error("managed runtime Enter did not restore the saved workspace");
+    }
+    executeController(["jat", "inspect", "--help"], "jat-command");
 
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
@@ -170,13 +206,13 @@ async function main() {
         source_sha: jat.sourceSha,
         rcc_version: rcc.version,
       },
-      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save-command-path", "enter-command-path", "jat-env-exec", "jat-command-path"],
+      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-env-exec", "jat-command-path"],
     };
     if (fs.existsSync(path.join(paths.logsRoot, "jat-artifact-receipt.json"))) {
       await fsp.copyFile(path.join(paths.logsRoot, "jat-artifact-receipt.json"), path.join(evidenceDir, "jat-artifact-receipt.json"));
     }
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
-      if (filename.startsWith("managed-controller-") && filename.endsWith(".json")) {
+      if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-")) && filename.endsWith(".json")) {
         await fsp.copyFile(path.join(paths.logsRoot, filename), path.join(evidenceDir, filename));
       }
     }
