@@ -45,10 +45,18 @@ async function main() {
     const candidate = path.join(root, "josh-room.vsix");
     const installed = path.join(root, "installed");
     const extension = path.join(installed, "extension");
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    run(npm, ["run", "package", "--", "--out", candidate], { cwd: path.join(repository, "vscode-extension") });
+    if (process.platform === "win32") {
+      const packageCommand = `npm run package -- --out "${candidate.replaceAll("\"", "\\\"")}"`;
+      run(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", packageCommand], { cwd: path.join(repository, "vscode-extension") });
+    } else {
+      run("npm", ["run", "package", "--", "--out", candidate], { cwd: path.join(repository, "vscode-extension") });
+    }
     await fsp.mkdir(installed, { recursive: true, mode: 0o700 });
-    run("tar", ["-xf", candidate, "-C", installed]);
+    if (process.platform === "win32") {
+      run("tar", ["-xf", candidate, "-C", installed]);
+    } else {
+      run("unzip", ["-q", candidate, "-d", installed]);
+    }
 
     const runtime = require(path.join(extension, "runtime.js"));
     const manifest = runtime.readManifest();
