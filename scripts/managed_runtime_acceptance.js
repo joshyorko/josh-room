@@ -39,7 +39,7 @@ async function expectRejected(label, operation, pattern) {
 }
 
 async function main() {
-  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "josh-room-managed-runtime-"));
+  const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "josh-room-managed-runtime-")));
   try {
     const candidate = path.join(root, "josh-room.vsix");
     const installed = path.join(root, "installed");
