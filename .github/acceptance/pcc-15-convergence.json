@@ -1,0 +1,43 @@
+{
+  "schema": "josh-room.pcc-15-convergence-checkpoint.v1",
+  "issue": 15,
+  "status": "BLOCKED",
+  "candidate": {
+    "repository": "joshyorko/josh-room",
+    "source_branch": "main",
+    "git_sha": "5937f6a84b0fedb9dc26523c6e8a18da92d6be30",
+    "artifacts": [
+      {"name": "josh_room-0.1.0.dev0-py3-none-any.whl", "sha256": "b5222d170c327490e21b618c3453b2424534c7128d423bd992542d31eb5321bd"},
+      {"name": "josh_room-0.1.0.dev0.tar.gz", "sha256": "eb5b65c60602db5f87232fc2a5b3b9398d56483ed1863c40b9c6d8900bb96923"},
+      {"name": "josh-room-0.1.24.vsix", "sha256": "b25d2ba781694e3ec608ff8ce4f1560095c7bda14732cf69a56c07c5f47d8c5a"}
+    ]
+  },
+  "toolchain": {
+    "platform": "Linux amd64 container/headless",
+    "python": "3.14.7",
+    "uv": "0.12.19",
+    "pytest": "9.1.1",
+    "ruff": "0.16.9",
+    "node": "v22.23.3",
+    "npm": "10.9.9",
+    "age": "v1.3.2",
+    "git": "2.55.0"
+  },
+  "observed": {
+    "linux_synthetic": "PASS",
+    "hosted_exact_candidate_ci": "PASS; run 35936907015",
+    "local_python_suite": "1141 passed, 7 skipped; installed-hook p95 gate failed locally",
+    "local_node_suite": "232 passed, 2 skipped",
+    "real_os_keyring": "BLOCKED: headless and secret-tool-missing",
+    "live_private_r2": "BLOCKED: no approved credentials/configuration",
+    "macos_arm64": "BLOCKED: no host or Josh Room acceptance lane",
+    "windows_amd64": "BLOCKED: no Josh Room acceptance lane; candidate pins JAT v0.1.10",
+    "local_hook_latency": "FAIL/UNPROVEN: observed p95 exceeded 250 ms; hard completion remained below 1 s"
+  },
+  "upstream": {
+    "jat_runtime": "v0.1.11-jat-runtime is published",
+    "candidate_pin": "v0.1.10-jat-runtime",
+    "action": "external unblock; no speculative lock-only repin"
+  },
+  "authority": "This checkpoint records evidence only. It does not change the release candidate, publish a release, or grant release approval. Final receipt remains on issue #15."
+}
