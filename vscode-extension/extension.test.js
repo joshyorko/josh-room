@@ -375,6 +375,7 @@ test("managed extension controller invocation keeps receipt handling without inh
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests(undefined);
   extension.__test__.setExtensionContextForTests({
     extensionPath: root,
     globalStorageUri: { fsPath: root },
