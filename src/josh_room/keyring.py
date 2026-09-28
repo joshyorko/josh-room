@@ -10,6 +10,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -387,6 +388,26 @@ def _windows_delete(profile: str, field: str) -> None:
             raise SecureBackendError("secure secret removal failed")
 
 
+def _macos_store(profile: str, field: str, value: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError("secret value is invalid")
+    command = " ".join(
+        (
+            "add-generic-password",
+            "-U",
+            "-a",
+            shlex.quote(_validate_identifier(profile, "profile")),
+            "-s",
+            shlex.quote(_validate_field(field)),
+            "-w",
+            shlex.quote(value),
+        )
+    )
+    result = _run([_KEYCHAIN_COMMAND, "-i"], input=command + "\n")
+    if int(getattr(result, "returncode", 1)):
+        raise SecureBackendError("secure secret import failed")
+
+
 def secure_lookup(profile: str, field: str) -> str:
     status = _require_secure_backend()
     if status.backend == "linux-secret-service":
@@ -405,12 +426,7 @@ def secure_store(profile: str, field: str, value: str) -> None:
     if status.backend == "linux-secret-service":
         _linux_store(profile, field, value)
     elif status.backend == "macos-keychain":
-        result = _run(
-            [_KEYCHAIN_COMMAND, "add-generic-password", "-U", "-a", _validate_identifier(profile, "profile"), "-s", _validate_field(field), "-w"],
-            input=value + "\n",
-        )
-        if int(getattr(result, "returncode", 1)):
-            raise SecureBackendError("secure secret import failed")
+        _macos_store(profile, field, value)
     else:
         _windows_store(profile, field, value)
 
