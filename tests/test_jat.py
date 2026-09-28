@@ -187,7 +187,6 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
     assert "--permissive-local" in seen["argv"]
     assert "--inherit-streams" in seen["argv"]
     assert "--receipt-file" in seen["argv"]
-    assert "--json" in seen["argv"]
     command = seen["argv"][seen["argv"].index("--") + 1:]
     assert command[:6] == [
         "python", "-m", "jat.task_runner", "run", str(tmp_path / "tasks.py"), "-t",

@@ -183,7 +183,6 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
             "--inherit-streams",
             "--receipt-file",
             str(rcc_receipt),
-            "--json",
             "--",
             "python",
             "-m",
