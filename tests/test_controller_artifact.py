@@ -111,7 +111,7 @@ def test_controller_build_commands_use_canonical_artifact_flow():
         ["env", "export", "--artifact", "sha256:" + "b" * 64, "--provider", "local", "--output", "/dist/josh-room-controller-linux-amd64.rcca"],
         ["env", "acquire", "--archive", "/dist/josh-room-controller-linux-amd64.rcca", "--permissive-local", "--json"],
         ["--no-build", "ht", "vars", "--robot", "/workspace/vscode-extension/runtime/controller/robot.yaml", "--json"],
-        ["--no-build", "env", "exec", "--artifact", "sha256:" + "b" * 64, "--permissive-local", "--receipt-file", "/dist/controller-receipt.json", "--json", "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
+        ["--no-build", "env", "exec", "--artifact", "sha256:" + "b" * 64, "--permissive-local", "--inherit-streams", "--receipt-file", "/dist/controller-receipt.json", "--", "python", "-m", "josh_room", "dimensions", "list", "--json"],
     ]
 
 
@@ -149,9 +149,9 @@ def test_controller_crypto_proof_runs_inside_acquired_artifact():
         "--artifact",
         artifact,
         "--permissive-local",
+        "--inherit-streams",
         "--receipt-file",
         "/dist/crypto-receipt.json",
-        "--json",
         "--",
         "python",
         "/repo/scripts/controller_crypto_smoke.py",

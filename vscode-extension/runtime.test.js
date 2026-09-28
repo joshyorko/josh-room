@@ -771,8 +771,7 @@ test("ensureJatRuntime acquires the pinned archive and proves Hauler through the
   assert.equal(calls[0].args.includes("--permissive-local"), true);
   assert.equal(calls[1].args.includes("--permissive-local"), true);
   assert.equal(calls[1].args.includes("--no-build"), true);
-  assert.equal(calls[1].args.includes("--inherit-streams"), false);
-  assert.equal(calls[1].args.includes("--json"), true);
+  assert.equal(calls[1].args.includes("--inherit-streams"), true);
   assert.equal(calls[1].args.includes("--receipt-file"), true);
   assert.ok(calls[1].args[calls[1].args.indexOf("--receipt-file") + 1].startsWith(root));
   assert.deepEqual(calls[1].args.slice(-3), ["python", "-c", HAULER_VERSION_CHECK]);

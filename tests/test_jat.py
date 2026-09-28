@@ -185,7 +185,7 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
         "sha256:" + "a" * 64,
     ]
     assert "--permissive-local" in seen["argv"]
-    assert "--inherit-streams" not in seen["argv"]
+    assert "--inherit-streams" in seen["argv"]
     assert "--receipt-file" in seen["argv"]
     command = seen["argv"][seen["argv"].index("--") + 1:]
     assert command[:6] == [
@@ -232,9 +232,8 @@ def test_jat_cli_inspect_managed_mode_invokes_pinned_artifact_and_validates_rece
         "--artifact",
         "sha256:" + "a" * 64,
     ]
-    for flag in ("--permissive-local", "--receipt-file", "--json"):
+    for flag in ("--permissive-local", "--inherit-streams", "--receipt-file", "--json"):
         assert flag in seen["argv"]
-    assert "--inherit-streams" not in seen["argv"]
     command = seen["argv"][seen["argv"].index("--") + 1:]
     assert command == ["python", "-m", "jat.cli", "inspect", "--haul", str(haul), "--json"]
     assert seen["kwargs"]["env"]["ROBOCORP_HOME"] == "/private/runtime/robocorp"
