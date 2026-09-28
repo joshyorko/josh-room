@@ -10,7 +10,6 @@ from __future__ import annotations
 import ctypes
 import json
 import os
-import shlex
 import shutil
 import stat
 import subprocess
@@ -388,6 +387,12 @@ def _windows_delete(profile: str, field: str) -> None:
             raise SecureBackendError("secure secret removal failed")
 
 
+def _macos_quote(value: str) -> str:
+    if any(character in value for character in ("\x00", "\r", "\n")):
+        raise ValueError("secret value contains unsupported control character")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _macos_store(profile: str, field: str, value: str) -> None:
     if not isinstance(value, str) or not value:
         raise ValueError("secret value is invalid")
@@ -396,11 +401,11 @@ def _macos_store(profile: str, field: str, value: str) -> None:
             "add-generic-password",
             "-U",
             "-a",
-            shlex.quote(_validate_identifier(profile, "profile")),
+            _validate_identifier(profile, "profile"),
             "-s",
-            shlex.quote(_validate_field(field)),
+            _validate_field(field),
             "-w",
-            shlex.quote(value),
+            _macos_quote(value),
         )
     )
     result = _run([_KEYCHAIN_COMMAND, "-i"], input=command + "\n")
