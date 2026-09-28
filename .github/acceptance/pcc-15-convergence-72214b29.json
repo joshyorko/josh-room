@@ -47,8 +47,8 @@
   "workflows": {
     "candidate_branch": "https://github.com/joshyorko/josh-room/tree/acceptance/pcc-15-final-8aa0173",
     "acceptance_branch_sha": "88388e09541c2cadbdfa18915bb6874cd07d571f",
-    "hosted_exact_candidate_ci": "https://github.com/joshyorko/josh-room/actions/runs/36424294626",
-    "hosted_exact_candidate_ci_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294626/job/108934340636",
+    "acceptance_branch_ci": "https://github.com/joshyorko/josh-room/actions/runs/36424294626",
+    "acceptance_branch_ci_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294626/job/108934340636",
     "native_matrix_run": "https://github.com/joshyorko/josh-room/actions/runs/36424294596",
     "native_macos_arm64_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294596/job/108934340912",
     "native_windows_amd64_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294596/job/108934341269",
@@ -56,19 +56,19 @@
     "pinned_jat_ubuntu22_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294641/job/108934340590"
   },
   "platform_matrix": {
-    "linux_amd64": "PASS: exact candidate checkout; 1144 Python tests passed, 7 skipped; 232 Node tests passed, 2 skipped; exact wheel installed locally",
+    "linux_amd64": "PASS: acceptance-branch CI ran the source-equivalent repaired tree; 1144 Python tests passed, 7 skipped; 232 Node tests passed, 2 skipped; exact wheel installed locally",
     "macos_arm64": "PASS: macos-14 arm64 native Keychain round-trip, device enrollment, inspection redaction, cleanup, and native gate",
     "windows_amd64": "PASS: windows-2025 amd64 Credential Manager round-trip, device enrollment, inspection redaction, cleanup, and native gate",
     "wsl_container_headless": "LIMITED: synthetic capture/enqueue works; native keyring and live preparation/upload are unavailable without an explicit host authority/session",
     "linux_secret_service": "SKIPPED: interactive host has no usable Secret Service session"
   },
   "gates": {
-    "candidate_identity": "PASS: hosted jobs checked out and asserted 72214b29f78314e0f4325e15501ffcfc89bf0e1f",
+    "candidate_identity": "PASS: native and pinned-JAT hosted acceptance jobs checked out and asserted 72214b29f78314e0f4325e15501ffcfc89bf0e1f; standard CI ran the source-equivalent acceptance branch",
     "candidate_artifact_identity": "PASS: wheel, sdist, and one exact VSIX archive hash recorded",
     "candidate_source_parity": "PASS: exact VSIX archive verified against candidate source with a temporary matching pin",
     "exact_wheel_install": "PASS: exact wheel installed into a clean Python 3.14 virtual environment and imported the repaired keyring encoder",
-    "python_node_ci": "PASS: hosted exact-candidate CI",
-    "synthetic_adversarial_suite": "PASS: full exact-candidate Python and Node suites; synthetic lifecycle, malformed-source, policy, privacy, retry, quarantine, crash, replay, and hostile-content coverage",
+    "python_node_ci": "PASS: acceptance-branch CI on the source-equivalent repaired tree; native and pinned-JAT jobs separately asserted the exact candidate SHA",
+    "synthetic_adversarial_suite": "PASS: Python and Node suites on the source-equivalent repaired tree; exact wheel metrics and native jobs bind the repaired implementation to the candidate",
     "large_asset_externalization": "PASS: exact-candidate bounded-memory synthetic run",
     "native_macos_keychain": "PASS: real macos-14 arm64 Keychain",
     "native_windows_credential_manager": "PASS: real windows-2025 amd64 Credential Manager",
