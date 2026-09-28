@@ -93,7 +93,7 @@ def workflow_step(name):
     )
 
 
-@pytest.mark.parametrize("failure", [None, "checksum", "source", "not-draft", "wrong-source-sha", "missing-download", "changed-before-publish", "changed-after-publish"])
+@pytest.mark.parametrize("failure", [None, "checksum", "source", "not-draft", "wrong-source-sha", "wrong-tag-sha", "tag-moved-before-publish", "missing-download", "changed-before-publish", "changed-after-publish"])
 def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
     root, candidate, _pin = fixture(tmp_path)
     (root / "scripts").mkdir()
@@ -102,6 +102,24 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
     bin_dir.mkdir()
     (bin_dir / "python").symlink_to(sys.executable)
     gh = bin_dir / "gh"
+    git = bin_dir / "git"
+    git.write_text(f"#!{sys.executable}\n" + textwrap.dedent('''\
+        import os, pathlib, sys
+        args = sys.argv[1:]
+        if args[:2] != ["ls-remote", "origin"]:
+            raise AssertionError(args)
+        root = pathlib.Path.cwd()
+        count_file = root / "git-calls"
+        count = int(count_file.read_text()) + 1 if count_file.exists() else 1
+        count_file.write_text(str(count))
+        failure = os.environ["SCENARIO"]
+        if failure == "wrong-tag-sha" or (failure == "tag-moved-before-publish" and count > 1):
+            tag_sha = "b" * 40
+        else:
+            tag_sha = os.environ["GITHUB_SHA"]
+        print(f"{tag_sha}\t{args[2]}")
+    '''))
+    git.chmod(0o700)
     gh.write_text(f"#!{sys.executable}\n" + textwrap.dedent('''\
         import json, os, pathlib, shutil, sys
         args = sys.argv[1:]
@@ -148,5 +166,5 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
     assert (result.returncode == 0) == (failure is None), result.stderr
     assert (root / "published").exists() == (failure in [None, "changed-after-publish"])
     assert candidate.read_bytes() == before
-    calls = [json.loads(line) for line in (root / "gh-calls.jsonl").read_text().splitlines()]
+    calls = [json.loads(line) for line in (root / "gh-calls.jsonl").read_text().splitlines()] if (root / "gh-calls.jsonl").exists() else []
     assert all(call[:2] in [["release", action] for action in ["view", "download", "upload", "edit"]] for call in calls)
