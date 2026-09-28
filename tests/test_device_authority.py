@@ -27,6 +27,11 @@ def test_backend_allowlist_and_session_diagnostics(monkeypatch):
     assert missing.reason == "session-bus-missing"
 
 
+def test_require_secure_backend_returns_available_status(monkeypatch):
+    expected = BackendStatus("linux-secret-service", "linux", True, False, "available")
+    monkeypatch.setattr(keyring, "backend_status", lambda: expected)
+    assert keyring._require_secure_backend() is expected
+
 def test_receipt_names_are_length_delimited():
     assert device._receipt_profile("a", "b.c") != device._receipt_profile("a.b", "c")
 
