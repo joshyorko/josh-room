@@ -193,6 +193,7 @@ async function main() {
       const receipt = path.join(paths.logsRoot, `managed-jat-${name}.json`);
       const jatEnvironment = {
         ...environment,
+        JAT_RUN_DIR: path.join(root, `jat-run-${name}`),
         PYTHONPATH: [path.join(jat.jatRoot, "src"), jat.jatRoot, controllerRoot].join(path.delimiter),
       };
       const child = childProcess.spawn(rcc.executable, [
@@ -201,7 +202,7 @@ async function main() {
         "python", "-m", "jat.cli", "serve", "--haul", haul, "--mode", "files",
         "--fileserver-port", String(port), "--json",
       ], {
-        cwd: jat.jatRoot,
+        cwd: root,
         env: jatEnvironment,
         detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
