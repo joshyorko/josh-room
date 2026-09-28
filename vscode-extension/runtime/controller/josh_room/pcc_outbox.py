@@ -120,6 +120,10 @@ class _FrozenValue:
         if getattr(self, "_frozen", False):
             raise AttributeError(f"cannot assign to field {name!r}")
         object.__setattr__(self, name, value)
+    def __delattr__(self, name: str) -> None:
+        if getattr(self, "_frozen", False):
+            raise AttributeError(f"cannot delete field {name!r}")
+        object.__delattr__(self, name)
 
     def _freeze(self) -> None:
         object.__setattr__(self, "_frozen", True)
@@ -503,6 +507,7 @@ class PreparedFileRecord(_FrozenValue):
         self.metadata = metadata
         self.ciphertext_sha256 = ciphertext_sha256
         self.ciphertext_size = ciphertext_size
+        self.__post_init__()
         self._freeze()
 
     def __post_init__(self) -> None:
@@ -797,10 +802,15 @@ def _sync_directory(directory: Path, *, platform_name: str | None = None) -> Non
 
 
 def _create_private_temp(path: Path) -> tuple[int, Path]:
-    prefix = f".{path.name}.{os.getpid()}.{time.monotonic_ns()}"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
-    for attempt in range(16):
-        temporary = path.parent / f"{prefix}.{attempt}"
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    for _ in range(16):
+        temporary = path.parent / f".{path.name}.{os.urandom(16).hex()}"
         try:
             return os.open(temporary, flags, 0o600), temporary
         except FileExistsError:

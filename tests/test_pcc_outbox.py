@@ -216,6 +216,22 @@ def _prepared_source(tmp_path, name="ciphertext.age", body=b"synthetic-ciphertex
     return source, body
 
 
+def test_value_records_preserve_frozen_validation_contract():
+    gap = CaptureGap("synthetic", pending_preserved=True)
+    with pytest.raises(AttributeError):
+        gap.retryable = False
+    with pytest.raises(AttributeError):
+        del gap.reason_code
+
+    with pytest.raises(ValueError):
+        PreparedFileRecord(
+            "event-invalid",
+            "not-the-event.age",
+            {"content_type": "application/vnd.josh.codex-session-segment+json"},
+            "a" * 64,
+            1,
+        )
+
 def test_file_backed_preparation_publishes_ciphertext_only_state_without_loading_bytes(tmp_path):
     outbox = PccOutbox(tmp_path / "outbox")
     receipt = _enqueue(outbox, "event-file")
