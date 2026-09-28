@@ -1,0 +1,132 @@
+name: PCC pinned JAT Linux acceptance
+
+on:
+  push:
+    branches:
+      - acceptance/pcc-15-convergence-3ef638b
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: 3ef638b686b6390390d23f00b796b59ce2e4fe51
+
+jobs:
+  pinned-jat-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable candidate
+        uses: actions/checkout@v7
+        with:
+          ref: 3ef638b686b6390390d23f00b796b59ce2e4fe51
+          fetch-depth: 1
+
+      - name: Assert exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Sync existing development environment
+        run: uv sync --group dev
+
+      - name: Acquire and execute pinned JAT runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/pcc15-jat"
+          home="$work/robocorp-home"
+          mkdir -p "$work" "$home"
+          rcc="$work/rcc-linux64"
+          jat="$work/jat-runtime-linux-amd64.rcca"
+          rcc_url=$(python -c 'import json; print(json.load(open("vscode-extension/runtime/controller-artifact-manifest.json"))["rcc"]["platforms"]["linux-x64"]["url"])')
+          rcc_sha=$(python -c 'import json; print(json.load(open("vscode-extension/runtime/controller-artifact-manifest.json"))["rcc"]["platforms"]["linux-x64"]["sha256"])')
+          jat_url=$(python -c 'import json; print(json.load(open("release-lock.json"))["jat"]["environment_artifact"]["archive_url"])')
+          jat_sha=$(python -c 'import json; print(json.load(open("release-lock.json"))["jat"]["environment_artifact"]["archive_sha256"])')
+          jat_digest=$(python -c 'import json; print(json.load(open("release-lock.json"))["jat"]["environment_artifact"]["rcc_artifact_digest"])')
+          curl --fail --location --proto "=https" --tlsv1.2 "$rcc_url" -o "$rcc"
+          printf "%s  %s\n" "$rcc_sha" "$rcc" | sha256sum --check --status
+          chmod 0700 "$rcc"
+          curl --fail --location --proto "=https" --tlsv1.2 "$jat_url" -o "$jat"
+          printf "%s  %s\n" "$jat_sha" "$jat" | sha256sum --check --status
+          "$rcc" version | tee "$work/rcc-version.txt"
+          set +e
+          ROBOCORP_HOME="$home" RCC_HOLOTREE_MODE=private "$rcc" env acquire --archive "$jat" --permissive-local --json >"$work/acquire.json" 2>"$work/acquire.stderr"
+          acquire_status=$?
+          set -e
+          cat "$work/acquire.json"
+          cat "$work/acquire.stderr" >&2
+          python - "$work" "$rcc_sha" "$jat_sha" "$jat_digest" "$acquire_status" <<'PY'
+          import json
+          import os
+          import pathlib
+          import platform
+          import sys
+          root = pathlib.Path(sys.argv[1])
+          acquire_status = int(sys.argv[5])
+          raw = (root / "acquire.json").read_text(errors="replace")
+          try:
+              acquire = json.loads(raw)
+          except json.JSONDecodeError:
+              acquire = {"raw_stdout": raw[-8192:]}
+          result = {
+              "candidate": os.environ["CANDIDATE_SHA"],
+              "platform": platform.platform(),
+              "rcc_sha256": sys.argv[2],
+              "rcc_version": (root / "rcc-version.txt").read_text().strip(),
+              "jat_archive_sha256": sys.argv[3],
+              "jat_archive_size": (root / "jat-runtime-linux-amd64.rcca").stat().st_size,
+              "jat_artifact_digest": sys.argv[4],
+              "acquire_exit_status": acquire_status,
+              "acquire": acquire,
+              "acquire_stderr": (root / "acquire.stderr").read_text(errors="replace")[-8192:],
+          }
+          pathlib.Path("pcc15-jat-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              pathlib.Path(summary).write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+          if acquire_status:
+              raise SystemExit(acquire_status)
+          observed = acquire.get("artifactDigest", acquire.get("artifact_digest"))
+          assert observed == sys.argv[4], (observed, sys.argv[4])
+          assert acquire.get("verification", {}).get("valid") is True, acquire
+          PY
+          ROBOCORP_HOME="$home" RCC_HOLOTREE_MODE=private "$rcc" --no-build env exec --artifact "$jat_digest" --permissive-local --json -- python -m jat.cli --help > "$work/jat-help.json"
+          python - "$work" <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import sys
+          root = pathlib.Path(sys.argv[1])
+          result = json.loads(pathlib.Path("pcc15-jat-result.json").read_text())
+          result.update({
+              "jat_help_exit": 0,
+              "jat_help_sha256": hashlib.sha256((root / "jat-help.json").read_bytes()).hexdigest(),
+          })
+          pathlib.Path("pcc15-jat-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              pathlib.Path(summary).write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
+          PY
+
+      - name: Upload pinned JAT evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcc15-jat-linux-${{ github.run_id }}
+          path: |
+            pcc15-jat-result.json
+            ${{ runner.temp }}/pcc15-jat/rcc-version.txt
+            ${{ runner.temp }}/pcc15-jat/acquire.json
+            ${{ runner.temp }}/pcc15-jat/acquire.stderr
+            ${{ runner.temp }}/pcc15-jat/jat-help.json
+          if-no-files-found: ignore
