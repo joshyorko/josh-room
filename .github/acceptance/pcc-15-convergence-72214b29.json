@@ -1,0 +1,138 @@
+{
+  "schema": "josh-room.pcc-15-convergence-candidate-record.v1",
+  "issue": 15,
+  "status": "BLOCKED",
+  "candidate": {
+    "repository": "joshyorko/josh-room",
+    "source_branch": "main",
+    "git_sha": "72214b29f78314e0f4325e15501ffcfc89bf0e1f",
+    "artifacts": [
+      {
+        "name": "josh_room-0.1.0.dev0-py3-none-any.whl",
+        "sha256": "9789ca54851d7c68b2b4ffb4da470e772b3d30461fa654e1dd09ff0f45a31f6c",
+        "built_from_candidate": true
+      },
+      {
+        "name": "josh_room-0.1.0.dev0.tar.gz",
+        "sha256": "f4835063f41032b6cd7ad313136a0c3b83825cdddd19577fa2a28643148a7ef0",
+        "built_from_candidate": true
+      },
+      {
+        "name": "josh-room-0.1.24.vsix",
+        "sha256": "5236ab7a6b7072e2c268951a604a04522fa7434d86f8d42bd222c8532236a2e5",
+        "built_from_candidate": true,
+        "source_parity": "PASS: temporary candidate pin verified 55 packaged source files",
+        "installed_acceptance": "BLOCKED: no hosted exact-VSIX install lane and no Josh-reported promotion authorization"
+      }
+    ],
+    "release_promotion_pin_at_candidate": {
+      "sha256": "6b8b1d7fbdec193a68e032189b24e4f0ba8c5b47a95ec44fbb541bb25896d2c9",
+      "status": "BLOCKED: authorized release pin remains unchanged; the exact rebuilt acceptance VSIX is not promoted"
+    }
+  },
+  "toolchain": {
+    "host_platform": "Linux amd64 container/headless",
+    "kernel": "5.14.0-687.10.1.el9_8.0.1.x86_64",
+    "python": "3.14.7",
+    "uv": "0.12.19",
+    "node": "v22.23.3",
+    "npm": "10.9.9",
+    "git": "2.55.0",
+    "codex_cli": {
+      "version": "0.158.0",
+      "sha256": "167c0148a849d2444f1b5a7fb5f8bb2de1de5ae13a2a504b833fc765980f5cd9"
+    },
+    "age": "UNAVAILABLE on the interactive host; hosted CI installed distro age but did not emit a version"
+  },
+  "workflows": {
+    "candidate_branch": "https://github.com/joshyorko/josh-room/tree/acceptance/pcc-15-final-8aa0173",
+    "acceptance_branch_sha": "88388e09541c2cadbdfa18915bb6874cd07d571f",
+    "hosted_exact_candidate_ci": "https://github.com/joshyorko/josh-room/actions/runs/36424294626",
+    "hosted_exact_candidate_ci_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294626/job/108934340636",
+    "native_matrix_run": "https://github.com/joshyorko/josh-room/actions/runs/36424294596",
+    "native_macos_arm64_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294596/job/108934340912",
+    "native_windows_amd64_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294596/job/108934341269",
+    "pinned_jat_ubuntu22_run": "https://github.com/joshyorko/josh-room/actions/runs/36424294641",
+    "pinned_jat_ubuntu22_job": "https://github.com/joshyorko/josh-room/actions/runs/36424294641/job/108934340590"
+  },
+  "platform_matrix": {
+    "linux_amd64": "PASS: exact candidate checkout; 1144 Python tests passed, 7 skipped; 232 Node tests passed, 2 skipped; exact wheel installed locally",
+    "macos_arm64": "PASS: macos-14 arm64 native Keychain round-trip, device enrollment, inspection redaction, cleanup, and native gate",
+    "windows_amd64": "PASS: windows-2025 amd64 Credential Manager round-trip, device enrollment, inspection redaction, cleanup, and native gate",
+    "wsl_container_headless": "LIMITED: synthetic capture/enqueue works; native keyring and live preparation/upload are unavailable without an explicit host authority/session",
+    "linux_secret_service": "SKIPPED: interactive host has no usable Secret Service session"
+  },
+  "gates": {
+    "candidate_identity": "PASS: hosted jobs checked out and asserted 72214b29f78314e0f4325e15501ffcfc89bf0e1f",
+    "candidate_artifact_identity": "PASS: wheel, sdist, and one exact VSIX archive hash recorded",
+    "candidate_source_parity": "PASS: exact VSIX archive verified against candidate source with a temporary matching pin",
+    "exact_wheel_install": "PASS: exact wheel installed into a clean Python 3.14 virtual environment and imported the repaired keyring encoder",
+    "python_node_ci": "PASS: hosted exact-candidate CI",
+    "synthetic_adversarial_suite": "PASS: full exact-candidate Python and Node suites; synthetic lifecycle, malformed-source, policy, privacy, retry, quarantine, crash, replay, and hostile-content coverage",
+    "large_asset_externalization": "PASS: exact-candidate bounded-memory synthetic run",
+    "native_macos_keychain": "PASS: real macos-14 arm64 Keychain",
+    "native_windows_credential_manager": "PASS: real windows-2025 amd64 Credential Manager",
+    "native_linux_secret_service": "SKIPPED: no interactive Secret Service authority on the current host",
+    "pinned_jat_rcc": "BLOCKED: authorized v0.1.10 JAT archive requires libc >=2.36; Ubuntu 22.04 runner has libc 2.35",
+    "josh_room_enter_ide_workspace_rcc": "BLOCKED: the authorized pinned JAT/RCC lane cannot materialize",
+    "hook_latency_p95": "FAIL: exact-candidate installed wheel benchmark p95 355.589 ms, above 250 ms",
+    "hook_latency_hard_bound": "PASS: exact-candidate installed wheel benchmark max 407.797 ms, below 1 second",
+    "live_codex_vertical": "BLOCKED: no approved disposable authenticated real Codex/model session",
+    "live_private_r2": "BLOCKED: no Josh-approved private endpoint, bucket, profile, or credentials",
+    "fresh_device_live_discovery_replay": "BLOCKED: depends on unavailable live private R2; synthetic neutral replay remains PASS",
+    "exact_vsix_installed_acceptance": "BLOCKED: exact VSIX was built and source-verified but not installed on hosted acceptance lanes",
+    "release_promotion": "BLOCKED: Josh-reported installed acceptance and explicit promotion authorization are required",
+    "github_advanced_security_scan": "SKIPPED: Advanced Security is unavailable in the repository"
+  },
+  "metrics": {
+    "hook_exact_candidate_installed_wheel": {
+      "runs": 32,
+      "min_ms": 265.9518440050306,
+      "p50_ms": 283.78500799590256,
+      "p95_ms": 355.58937799942214,
+      "max_ms": 407.7971119986614,
+      "queue_files": 1
+    },
+    "large_asset_exact_candidate": {
+      "one_asset": {
+        "body_bytes": 4194304,
+        "source_bytes": 5595667,
+        "records_seen": 23,
+        "records_emitted": 2,
+        "assets_externalized": 1,
+        "assets_deduped": 0,
+        "externalized_bytes": 4194304,
+        "peak_working_bytes": 262290,
+        "peak_tracemalloc_bytes": 1120009
+      },
+      "two_repeated_assets": {
+        "body_bytes": 4194304,
+        "source_bytes": 11191276,
+        "records_seen": 45,
+        "records_emitted": 3,
+        "assets_externalized": 1,
+        "assets_deduped": 1,
+        "externalized_bytes": 4194304,
+        "deduped_bytes": 4194304,
+        "peak_working_bytes": 262290,
+        "peak_tracemalloc_bytes": 1122589
+      }
+    },
+    "hosted_python": "1144 passed, 7 skipped",
+    "hosted_node": "232 passed, 2 skipped"
+  },
+  "upstream": {
+    "jat_v0_1_11": "PASS prerequisite observed immutable at https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.11-jat-runtime; not repinned into this authorized 0.1.24 acceptance",
+    "authorized_release_lock": "retains v0.1.10-jat-runtime / d8ca0779d14897c10ca6e0ec8b22ef2d70b6b57c"
+  },
+  "known_limitations": [
+    "Native hosted lanes exercised candidate source checkout, not installation of the exact VSIX archive.",
+    "The exact VSIX archive contains identical source bytes across builds but ZIP metadata is not reproducible; only 5236ab7a... is the candidate archive recorded here.",
+    "No live private R2 object, encrypted discovery/index event, fresh-device fetch, recovery-identity decrypt, or live replay was created.",
+    "No real authenticated Codex/model session was run.",
+    "The authorized JAT/RCC release tuple cannot run on the available Ubuntu 22.04 worker.",
+    "The exact installed hook p95 exceeds the 250 ms acceptance target; ownership is child contract #7 and requires a separately authorized repair and new candidate.",
+    "WSL/container/headless native keyring behavior is limited without an explicit host session."
+  ],
+  "authority": "Evidence only. This record does not authorize merge, release promotion, tag, publication, announcement, or #83. Historical 5937f6... evidence remains in .github/acceptance/pcc-15-convergence.json and is not reattributed here."
+}
