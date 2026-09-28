@@ -1,0 +1,162 @@
+name: PCC native authority acceptance
+
+on:
+  push:
+    branches:
+      - acceptance/pcc-15-convergence-5937f6a
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: 5937f6a84b0fedb9dc26523c6e8a18da92d6be30
+
+jobs:
+  native-authority:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: macos-arm64
+            runner: macos-14
+            expected_platform: macos
+          - lane: windows-amd64
+            runner: windows-latest
+            expected_platform: windows
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable candidate
+        uses: actions/checkout@v7
+        with:
+          ref: 5937f6a84b0fedb9dc26523c6e8a18da92d6be30
+          fetch-depth: 1
+
+      - name: Assert candidate and platform
+        shell: python
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.expected_platform }}
+          EXPECTED_LANE: ${{ matrix.lane }}
+        run: |
+          import json
+          import os
+          import platform
+          import subprocess
+          import sys
+
+          expected_sha = os.environ["CANDIDATE_SHA"]
+          actual_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          assert actual_sha == expected_sha, (actual_sha, expected_sha)
+          expected_platform = os.environ["EXPECTED_PLATFORM"]
+          actual_platform = {"Darwin": "macos", "Windows": "windows"}.get(platform.system(), platform.system().lower())
+          assert actual_platform == expected_platform, (actual_platform, expected_platform)
+          machine = platform.machine().lower()
+          if expected_platform == "macos":
+              assert machine in {"arm64", "aarch64"}, machine
+          else:
+              assert machine in {"amd64", "x86_64"}, machine
+          print(json.dumps({"candidate": actual_sha, "lane": os.environ["EXPECTED_LANE"], "platform": actual_platform, "machine": machine, "python": sys.version.split()[0]}))
+
+      - name: Install candidate test environment
+        uses: astral-sh/setup-uv@v10.0.1
+
+      - name: Sync existing development environment
+        run: uv sync --group dev
+
+      - name: Run native authority and device enrollment round trip
+        shell: python
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.expected_platform }}
+          EXPECTED_LANE: ${{ matrix.lane }}
+        run: |
+          import json
+          import os
+          import platform
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "src")
+          from josh_room import device, keyring
+
+          expected_sha = os.environ["CANDIDATE_SHA"]
+          expected_platform = os.environ["EXPECTED_PLATFORM"]
+          lane = os.environ["EXPECTED_LANE"]
+          status = keyring.backend_status()
+          assert status.available, status.to_dict()
+          assert status.platform == expected_platform, status.to_dict()
+          profile = f"pcc15-{os.environ.get('GITHUB_RUN_ID', 'local')}-{expected_platform}"
+          credentials = {
+              "access-key-id": "synthetic-access",
+              "secret-access-key": "synthetic-secret",
+              "session-token": "synthetic-session",
+          }
+          direct_fields = tuple(credentials)
+          config_dir = Path(tempfile.mkdtemp(prefix="pcc15-device-"))
+          os.environ["JOSH_ROOM_CONFIG_DIR"] = str(config_dir)
+          recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"
+          age_identity = "AGE-SECRET-KEY-1SYNTHETIC"
+          recovery_identity = "AGE-SECRET-KEY-1RECOVERY"
+          direct_ok = False
+          enrolled = False
+          cleaned = False
+          try:
+              for field, value in credentials.items():
+                  keyring.store_value(profile, field, value)
+              for field, value in credentials.items():
+                  assert keyring.lookup_value(profile, field) == value
+              direct_ok = True
+              result = device.enroll(
+                  profile="synthetic",
+                  credential_profile=profile,
+                  credentials=credentials,
+                  age_identity=age_identity,
+                  age_profile=f"{profile}-age",
+                  recovery_identity=recovery_identity,
+                  recovery_profile=f"{profile}-recovery",
+                  recipients=[recipient],
+                  device_id="device-pcc15-native",
+                  issued_at=1,
+              )
+              assert result["ok"] is True
+              inspection = device.inspect(profile="synthetic")
+              assert inspection["ok"] is True
+              assert "synthetic-secret" not in json.dumps(inspection, sort_keys=True)
+              enrolled = True
+          finally:
+              if enrolled:
+                  device.remove_local(profile="synthetic")
+              for field in direct_fields:
+                  try:
+                      keyring.secure_delete(profile, field)
+                  except Exception:
+                      pass
+              cleaned = not (config_dir / "device.json").exists()
+          assert direct_ok and enrolled and cleaned
+          result = {
+              "candidate": expected_sha,
+              "lane": lane,
+              "platform": status.platform,
+              "backend": status.backend,
+              "machine": platform.machine(),
+              "native_round_trip": direct_ok,
+              "device_enrollment": enrolled,
+              "cleanup": cleaned,
+          }
+          Path("native-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              Path(summary).write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps({k: v for k, v in result.items() if k not in {"candidate"}}))
+
+      - name: Run existing native gate
+        run: uv run pytest -q tests/test_device_authority.py::test_real_native_authority_gate
+
+      - name: Upload bounded native evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcc15-${{ matrix.lane }}-${{ github.run_id }}
+          path: native-result.json
+          if-no-files-found: ignore
