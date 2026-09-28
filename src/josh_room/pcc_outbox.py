@@ -115,6 +115,7 @@ def _validate_root_path(path: Path) -> None:
 
 class _FrozenValue:
     __slots__ = ("_frozen",)
+    _value_fields: tuple[str, ...] = ()
 
     def __setattr__(self, name: str, value: object) -> None:
         if getattr(self, "_frozen", False):
@@ -129,13 +130,20 @@ class _FrozenValue:
         object.__setattr__(self, "_frozen", True)
 
     def __eq__(self, other: object) -> bool:
-        return type(self) is type(other) and self.__dict__ == other.__dict__
+        return type(self) is type(other) and all(
+            getattr(self, name) == getattr(other, name) for name in self._value_fields
+        )
+
+    def __hash__(self) -> int:
+        return hash(tuple(getattr(self, name) for name in self._value_fields))
 
     def __repr__(self) -> str:
         fields = ", ".join(f"{key}={value!r}" for key, value in self.__dict__.items())
         return f"{type(self).__name__}({fields})"
 
 class CaptureGap(_FrozenValue):
+    _value_fields = ("reason_code", "pending_preserved", "retryable")
+    __match_args__ = _value_fields
     reason_code: str
     pending_preserved: bool
     retryable: bool = True
@@ -154,6 +162,8 @@ class CaptureGap(_FrozenValue):
 
 
 class QueueReceipt(_FrozenValue):
+    _value_fields = ("event_id", "state", "coalesced", "sequence", "is_final", "diagnostic")
+    __match_args__ = _value_fields
     event_id: str
     state: QueueState
     coalesced: bool = False
@@ -192,6 +202,29 @@ class QueueReceipt(_FrozenValue):
 
 
 class QueueRecord(_FrozenValue):
+    _value_fields = (
+        "event_id",
+        "session_id",
+        "checkpoint",
+        "metadata",
+        "state",
+        "sequence",
+        "event_ids",
+        "is_final",
+        "final_event_id",
+        "owner",
+        "lease_until",
+        "lease_seconds",
+        "resume_state",
+        "failure_code",
+        "object_key",
+        "ciphertext_sha256",
+        "ciphertext_size",
+        "index_id",
+        "expanded_event_ids",
+        "expanded_checkpoint",
+    )
+    __match_args__ = _value_fields
     event_id: str
     session_id: str
     checkpoint: dict[str, object]
@@ -428,6 +461,8 @@ class QueueRecord(_FrozenValue):
 
 
 class PreparedRecord(_FrozenValue):
+    _value_fields = ("event_id", "ciphertext", "metadata", "ciphertext_sha256", "ciphertext_size")
+    __match_args__ = _value_fields
     event_id: str
     ciphertext: bytes
     metadata: dict[str, object]
@@ -489,6 +524,8 @@ class PreparedRecord(_FrozenValue):
 
 
 class PreparedFileRecord(_FrozenValue):
+    _value_fields = ("event_id", "ciphertext_file", "metadata", "ciphertext_sha256", "ciphertext_size")
+    __match_args__ = _value_fields
     event_id: str
     ciphertext_file: str
     metadata: dict[str, object]
@@ -554,6 +591,8 @@ class PreparedFileRecord(_FrozenValue):
 
 
 class Diagnostic(_FrozenValue):
+    _value_fields = ("code",)
+    __match_args__ = _value_fields
     code: str
     def __init__(self, code: str) -> None:
         self.code = code
@@ -564,6 +603,8 @@ class Diagnostic(_FrozenValue):
 
 
 class Inspection(_FrozenValue):
+    _value_fields = ("records", "diagnostics", "quarantined_count", "partial_count", "orphan_prepared")
+    __match_args__ = _value_fields
     records: list[QueueRecord]
     diagnostics: list[Diagnostic]
     quarantined_count: int = 0
