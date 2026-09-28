@@ -1163,19 +1163,25 @@ class PccOutbox:
         return total
 
     def _read_record(self, path: Path) -> QueueRecord:
-        if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
             raise ValueError("queue record is not regular")
-        body = json.loads(path.read_text(encoding="utf-8"))
+        with path.open("rb") as handle:
+            body = json.load(handle)
         return QueueRecord.from_dict(body)
 
     def _records_unlocked(self) -> list[QueueRecord]:
         result = []
         if not self.queue_directory.is_dir():
             return result
-        for path in sorted(self.queue_directory.glob("*.json")):
+        with os.scandir(self.queue_directory) as entries:
+            paths = sorted(
+                (Path(entry.path) for entry in entries if entry.name.endswith(".json")),
+                key=lambda path: path.name,
+            )
+        for path in paths:
             result.append(self._read_record(path))
         return result
-
     def _quarantine_corrupt_unlocked(self, path: Path) -> None:
         import uuid
 
@@ -1192,14 +1198,18 @@ class PccOutbox:
         quarantined = 0
         if not self.queue_directory.is_dir():
             return records, diagnostics, quarantined
-        for path in sorted(self.queue_directory.glob("*.json")):
-            try:
-                records.append(self._read_record(path))
-            except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-                self._quarantine_corrupt_unlocked(path)
-                quarantined += 1
-                diagnostics.append(Diagnostic("corrupt-record"))
-        records.sort(key=lambda item: item.sequence)
+        with os.scandir(self.queue_directory) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".json"):
+                    continue
+                path = Path(entry.path)
+                try:
+                    records.append(self._read_record(path))
+                except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                    self._quarantine_corrupt_unlocked(path)
+                    quarantined += 1
+                    diagnostics.append(Diagnostic("corrupt-record"))
+        records.sort(key=lambda item: (item.sequence, item.event_id))
         return records, diagnostics, quarantined
 
     def enqueue(
