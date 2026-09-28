@@ -51,7 +51,7 @@ def build_envelope_file(manifest: dict, payload: Path, output: Path) -> None:
             payload_info.mode = 0o600
             with payload.open("rb") as source:
                 archive.addfile(payload_info, source)
-        with temp.open("rb") as handle:
+        with temp.open("r+b") as handle:
             os.fsync(handle.fileno())
         temp.chmod(0o600)
         os.replace(temp, output)

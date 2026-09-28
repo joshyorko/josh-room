@@ -158,6 +158,9 @@ def encrypt_file(source: Path, recipients: list[str], output: Path) -> None:
         proc = subprocess.run([*args, "-o", str(temp), str(source)], capture_output=True, check=False)
         if proc.returncode:
             raise CryptoError(proc.stderr.decode(errors="replace"))
+        with temp.open("r+b") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
         temp.chmod(0o600)
         os.replace(temp, output)
     finally:
