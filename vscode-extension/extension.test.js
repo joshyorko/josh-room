@@ -2580,8 +2580,8 @@ test("choosing Build Locally prewarms the controller before local runtime readin
   assert.equal(events.some((event) => /JAT.*materializ/i.test(event.message)), false);
 });
 
-test("local JAT fallback publishes once and warm reuse performs only no-build checks", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-once-test-"));
+test("local fallback keeps the pinned JAT artifact lazy and never rebuilds JAT", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-lazy-test-"));
   const controllerRoot = path.join(root, "controller");
   const jatRoot = path.join(root, "jat");
   fs.mkdirSync(controllerRoot, { recursive: true });
@@ -2589,12 +2589,7 @@ test("local JAT fallback publishes once and warm reuse performs only no-build ch
   fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
   fs.writeFileSync(path.join(jatRoot, "robot.yaml"), "tasks: {}\n");
   const { vscode, warningResponses } = createVscodeMock(root);
-  const localArtifact = "sha256:" + "d".repeat(64);
-  const spawnHarness = createSpawnHarness(({ args }) => {
-    if (args[0] === "env" && args[1] === "publish") return { stdout: JSON.stringify({ artifactDigest: localArtifact }) };
-    if (args[0] === "--no-build" && args.includes("hauler")) return { stdout: JSON.stringify({ artifactDigest: localArtifact, exitCode: 0 }) };
-    return { stdout: JSON.stringify({ ok: true }) };
-  });
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
   const extension = loadExtension(vscode, spawnHarness.spawn);
   warningResponses.push("Build Locally");
   const manifest = {
@@ -2609,8 +2604,8 @@ test("local JAT fallback publishes once and warm reuse performs only no-build ch
     { version: "v18.19.2", executable: "/private/managed/rcc" },
     { jatRoot, sourceSha: manifest.jat.git_sha }, error, { event() {} }, controllerRoot,
   );
-  assert.equal(first.jat.artifact, localArtifact);
-  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "env" && call.args[1] === "publish").length, 1);
+  assert.equal(first.jat.artifact, undefined);
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
 
   const beforeWarm = spawnHarness.calls.length;
   const second = await extension.__test__.localRuntimeState(
@@ -2621,7 +2616,6 @@ test("local JAT fallback publishes once and warm reuse performs only no-build ch
   assert.equal(second.localReady, true);
   const warmCalls = spawnHarness.calls.slice(beforeWarm);
   assert.equal(warmCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
-  assert.equal(warmCalls.some((call) => call.args[0] === "run"), false);
   assert.equal(warmCalls.every((call) => call.args[0] === "--no-build"), true);
 });
 

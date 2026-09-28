@@ -115,7 +115,6 @@ test("pre-cancelled runtime preparation does not create storage or invoke seams"
     () => runtime.ensureJatSource(target, {}, options),
     () => runtime.prepareLocalController(target, rcc, "robot.yaml", options),
     () => runtime.verifyLocalFallback(target, rcc, "robot.yaml", {}, options),
-    () => runtime.buildLocalJatArtifact(target, rcc, "robot.yaml", options),
   ]) await assert.rejects(prepare(), cancelledError);
   assert.equal(fs.existsSync(target.globalStorageUri.fsPath), false);
   assert.equal(source.listeners.size, 0);
@@ -314,44 +313,6 @@ test("controller does not claim cached materialization reuse when RCC must impor
   assert.ok(events.some((event) => event.phase === "import"));
 });
 
-test("local JAT publish cancellation releases its lock and skips verification on retryable cancellation", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-publish-cancel-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const source = cancellationSource();
-  const runtime = require("./runtime");
-  const artifact = "sha256:" + "a".repeat(64);
-  const calls = [];
-  await assert.rejects(runtime.buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
-    cancellationToken: source.token,
-    runJson: async (_executable, args, options) => {
-      assert.equal(options.cancellationToken, source.token);
-      calls.push(args);
-      source.cancel();
-      return { artifactDigest: artifact };
-    },
-  }), cancelledError);
-  assert.equal(calls.length, 1);
-  assert.equal(fs.existsSync(path.join(root, "runtime", "local-jat-build.lock")), false);
-  const result = await runtime.buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
-    runJson: async () => ({ artifactDigest: artifact, exitCode: 0 }),
-  });
-  assert.equal(result.artifact, artifact);
-});
-
-test("cancelling a JAT lock waiter leaves the other builder's lock intact", { timeout: 2000 }, async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-lock-cancel-"));
-  const lock = path.join(root, "runtime", "local-jat-build.lock");
-  fs.mkdirSync(lock, { recursive: true });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const source = cancellationSource();
-  const timer = setTimeout(() => source.cancel(), 20);
-  t.after(() => clearTimeout(timer));
-  await assert.rejects(require("./runtime").buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
-    cancellationToken: source.token,
-    runJson: async () => { throw new Error("must not start a second builder"); },
-  }), cancelledError);
-  assert.equal(fs.existsSync(lock), true);
-});
 
 test("RCC version cancellation kills a real child that ignores SIGTERM before settling", { skip: process.platform === "win32", timeout: 5000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-version-child-cancel-"));
@@ -526,30 +487,6 @@ test("warm local fallback proof uses no-build ht vars and the exact private RCC 
   assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
 });
 
-test("local JAT fallback publishes once and verifies Hauler through the local artifact", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-artifact-test-"));
-  const calls = [];
-  const artifact = "sha256:" + "d".repeat(64);
-  const result = await require("./runtime").buildLocalJatArtifact(
-    context(root),
-    { executable: "/private/managed/rcc", version: "v18.19.2" },
-    "/private/jat/robot.yaml",
-    {
-      runJson: async (_executable, args, options) => {
-        calls.push({ args, options });
-        if (args[1] === "publish") return { artifactDigest: artifact, specificationDigest: "sha256:" + "e".repeat(64), legacyBlueprintKey: "blueprint" };
-        return { artifactDigest: artifact, exitCode: 0, verification: { valid: true } };
-      },
-    },
-  );
-  assert.equal(result.artifact, artifact);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].args, ["env", "publish", "--robot", "/private/jat/robot.yaml", "--provider", "local", "--json"]);
-  assert.equal(calls[1].args.includes("--no-build"), true);
-  assert.equal(calls[1].args.includes("--artifact"), true);
-  assert.equal(calls[1].args.includes("hauler"), true);
-  assert.equal(calls[1].options.env.RCC_HOLOTREE_MODE, "private");
-});
 
 test("readManifest rejects an RCC pin without an exact digest", () => {
   assert.throws(
