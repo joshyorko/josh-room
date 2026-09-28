@@ -95,21 +95,26 @@ async function main() {
       JOSH_ROOM_JAT_ARTIFACT: jat.artifact,
       PYTHONPATH: controllerRoot,
     };
-    const executeController = (args, name) => {
-      const receipt = path.join(paths.logsRoot, `managed-controller-${name}.json`);
-      return childProcess.execFileSync(rcc.executable, [
-        "--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local",
-        "--inherit-streams", "--receipt-file", receipt, "--", "python", "-m", "josh_room", ...args,
-      ], { cwd: controllerRoot, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    const runManaged = (args, prefix, name, cwd) => {
+      const receipt = path.join(paths.logsRoot, `${prefix}-${name}.json`);
+      try {
+        return childProcess.execFileSync(rcc.executable, [
+          "--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local",
+          "--inherit-streams", "--receipt-file", receipt, "--", ...args,
+        ], { cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+      } catch (error) {
+        for (const stream of ["stderr", "stdout"]) {
+          const value = error?.[stream];
+          if (value) {
+            const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
+            process.stderr.write(`[${prefix}-${name}] ${text.slice(-8192)}\n`);
+          }
+        }
+        throw error;
+      }
     };
-
-    const runManagedTool = (args, name) => {
-      const receipt = path.join(paths.logsRoot, `managed-tool-${name}.json`);
-      return childProcess.execFileSync(rcc.executable, [
-        "--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local",
-        "--inherit-streams", "--receipt-file", receipt, "--", ...args,
-      ], { cwd: root, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
-    };
+    const executeController = (args, name) => runManaged(["python", "-m", "josh_room", ...args], "managed-controller", name, controllerRoot);
+    const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
     const identityBodies = [];
     const recipients = [];
     for (const name of ["primary", "recovery"]) {
