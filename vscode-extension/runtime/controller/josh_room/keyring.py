@@ -269,6 +269,7 @@ def _require_secure_backend() -> BackendStatus:
         if status.diagnostics:
             detail += " (" + ",".join(status.diagnostics) + ")"
         raise SecureBackendError(f"secure secret backend unavailable: {detail}")
+    return status
 def _secret_attributes(profile: str, field: str) -> list[str]:
     service = "josh-room-device" if field == "receipt" else "josh-room"
     return ["service", service, "profile", _validate_identifier(profile, "profile"), "field", _validate_field(field)]
