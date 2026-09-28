@@ -51,10 +51,14 @@ async function reservePort() {
   return port;
 }
 
-async function waitForPort(port, child, timeoutMs = 20000, state = {}) {
+async function waitForPort(port, timeoutMs = 120000, state = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (state.error) throw state.error;
+    if (state.exitCode !== undefined && state.exitCode !== null) {
+      const diagnostics = [state.stdout, state.stderr].filter(Boolean).join("\n").slice(-8192);
+      throw new Error(`managed JAT serve exited with code ${state.exitCode}${state.signal ? ` (${state.signal})` : ""}${diagnostics ? `: ${diagnostics}` : ""}`);
+    }
     const connected = await new Promise((resolve) => {
       const socket = net.createConnection({ host: "127.0.0.1", port });
       socket.once("connect", () => {
@@ -69,7 +73,8 @@ async function waitForPort(port, child, timeoutMs = 20000, state = {}) {
     if (connected) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`managed JAT serve did not open port ${port}`);
+  const diagnostics = [state.stdout, state.stderr].filter(Boolean).join("\n").slice(-8192);
+  throw new Error(`managed JAT serve did not open port ${port}${diagnostics ? `: ${diagnostics}` : ""}`);
 }
 
 async function stopManagedProcess(child, closed) {
@@ -202,13 +207,22 @@ async function main() {
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
-      const state = { error: null };
+      const state = { error: null, exitCode: null, signal: null, stdout: "", stderr: "" };
+      const capture = (key, chunk) => {
+        state[key] = `${state[key]}${Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk)}`.slice(-8192);
+      };
+      child.stdout.on("data", (chunk) => capture("stdout", chunk));
+      child.stderr.on("data", (chunk) => capture("stderr", chunk));
       child.stdout.resume();
       child.stderr.resume();
       child.once("error", (error) => { state.error = error; });
-      const closed = new Promise((resolve) => child.once("close", resolve));
+      const closed = new Promise((resolve) => child.once("close", (code, signal) => {
+        state.exitCode = code;
+        state.signal = signal;
+        resolve();
+      }));
       try {
-        await waitForPort(port, child, 20000, state);
+        await waitForPort(port, 120000, state);
       } finally {
         await stopManagedProcess(child, closed);
       }
