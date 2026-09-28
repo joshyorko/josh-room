@@ -1,5 +1,4 @@
 import json
-import shlex
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,13 +43,18 @@ def test_macos_store_keeps_secret_off_argv(monkeypatch):
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(keyring, "_run", fake_run)
-    secret = "secret ' value"
+    secret = 'a\\b"c\'s'
     keyring.secure_store("profile", "access-key-id", secret)
 
     command, kwargs = calls[0]
     assert command == ["security", "-i"]
     assert secret not in command
-    assert shlex.quote(secret) in kwargs["input"]
+    assert kwargs["input"] == (
+        'add-generic-password -U -a profile -s access-key-id -w "a\\\\b\\"c\'s"\n'
+    )
+    for invalid in ("line\nbreak", "line\rbreak", "line\x00break"):
+        with pytest.raises(ValueError, match="unsupported control character"):
+            keyring.secure_store("profile", "access-key-id", invalid)
 
 def test_receipt_names_are_length_delimited():
     assert device._receipt_profile("a", "b.c") != device._receipt_profile("a.b", "c")
