@@ -162,13 +162,14 @@ async function main() {
       JOSH_ROOM_JAT_ARTIFACT: jat.artifact,
       PYTHONPATH: controllerRoot,
     };
-    const runManaged = (args, prefix, name, cwd) => {
+    const runManaged = (args, prefix, name, cwd, { inheritStreams = true } = {}) => {
       const receipt = path.join(paths.logsRoot, `${prefix}-${name}.json`);
+      const command = ["--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local"];
+      if (inheritStreams) command.push("--inherit-streams", "--receipt-file", receipt);
+      else command.push("--json");
+      command.push("--", ...args);
       try {
-        return childProcess.execFileSync(rcc.executable, [
-          "--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local",
-          "--inherit-streams", "--receipt-file", receipt, "--", ...args,
-        ], { cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+        return childProcess.execFileSync(rcc.executable, command, { cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
       } catch (error) {
         for (const stream of ["stderr", "stdout"]) {
           const value = error?.[stream];
@@ -180,18 +181,16 @@ async function main() {
         throw error;
       }
     };
-    const executeController = (args, name) => runManaged(["python", "-m", "josh_room", ...args], "managed-controller", name, controllerRoot);
+    const executeController = (args, name) => runManaged(["python", "-m", "josh_room", ...args], "managed-controller", name, controllerRoot, { inheritStreams: false });
     const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
-    const runManagedJatServe = async (haul, name) => {
+    const runManagedJatServe = async (haul) => {
       const port = await reservePort();
-      const receipt = path.join(paths.logsRoot, `managed-jat-${name}.json`);
       const jatEnvironment = {
         ...environment,
         PYTHONPATH: [path.join(jat.jatRoot, "src"), jat.jatRoot, controllerRoot].join(path.delimiter),
       };
       const child = childProcess.spawn(rcc.executable, [
-        "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local",
-        "--inherit-streams", "--receipt-file", receipt, "--",
+        "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local", "--json", "--",
         "python", "-m", "jat.cli", "serve", "--haul", haul, "--mode", "files",
         "--fileserver-port", String(port), "--json",
       ], {
@@ -255,7 +254,7 @@ async function main() {
     const haul = path.join(root, "managed-runtime.haul.tar.zst");
     executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
     executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
-    await runManagedJatServe(haul, "jat-serve");
+    await runManagedJatServe(haul);
 
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
