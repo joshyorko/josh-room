@@ -27,6 +27,20 @@
       "legacy_blueprint_key": "91ad9c0ba23e9008",
       "rcc_version": "v18.19.5",
       "platform": "linux_amd64"
+    },
+    "environment_artifacts": {
+      "linux_amd64": {
+        "rcc_artifact_digest": "sha256:ae6b5802103c780de49b42768885a8c66073747272caf759784e9eb23f44e4f1",
+        "rcc_specification_digest": "sha256:899025175bc2bfceb1f41778e6feaa4341ca84e4dbe97a5ddd97384ee9fa586d",
+        "archive_sha256": "eb5a2f5634b6bc78a66bc070493f7d7df81a775cfe421160b8b1ac34c2589d5f",
+        "archive_size": 170822706
+      },
+      "windows_amd64": {
+        "rcc_artifact_digest": "sha256:9d35d565d53ede7e05aa1ded75758578c34a92a032b3623b7801ce84c3631827",
+        "rcc_specification_digest": "sha256:e19095b0e079d03357a70e50a517d7e865ed1f7cb76fa57d1bd75f3ab7d04db2",
+        "archive_sha256": "894841785490e4643d12a08340af3da5e45eb29dec4eaf9ddc358406a284deaa",
+        "archive_size": 104191913
+      }
     }
   },
   "rcc": {

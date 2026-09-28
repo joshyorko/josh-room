@@ -454,14 +454,6 @@ async function localRuntimeState(context, manifest, rcc, jat, error, progressRep
       path.join(controllerRoot, "robot.yaml"),
       options,
     );
-    if (error.fallbackReason === "environment-compatibility") {
-      localJat = await managedRuntime.buildLocalJatArtifact(
-        context,
-        rcc,
-        path.join(jatRoot, "robot.yaml"),
-        options,
-      );
-    }
     readyIdentity = fallbackIdentity(manifest, rcc, controllerRoot, localJat?.artifact || jat?.artifact);
     await managedRuntime.writeLocalFallbackRecord(context, { ...readyIdentity, ...(localJat ? { local_jat_artifact_digest: localJat.artifact } : {}) });
     progressReporter?.event({

@@ -63,6 +63,7 @@
     },
     "environment_artifact": {
       "digest": "sha256:ae6b5802103c780de49b42768885a8c66073747272caf759784e9eb23f44e4f1",
+      "specification_digest": "sha256:899025175bc2bfceb1f41778e6feaa4341ca84e4dbe97a5ddd97384ee9fa586d",
       "archive": {
         "asset": "jat-runtime-linux-amd64.rcca",
         "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.11-jat-runtime/jat-runtime-linux-amd64.rcca",
@@ -73,6 +74,7 @@
     "environment_artifacts": {
       "linux-x64": {
         "digest": "sha256:ae6b5802103c780de49b42768885a8c66073747272caf759784e9eb23f44e4f1",
+        "specification_digest": "sha256:899025175bc2bfceb1f41778e6feaa4341ca84e4dbe97a5ddd97384ee9fa586d",
         "archive": {
           "asset": "jat-runtime-linux-amd64.rcca",
           "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.11-jat-runtime/jat-runtime-linux-amd64.rcca",
@@ -82,6 +84,7 @@
       },
       "win32-x64": {
         "digest": "sha256:9d35d565d53ede7e05aa1ded75758578c34a92a032b3623b7801ce84c3631827",
+        "specification_digest": "sha256:e19095b0e079d03357a70e50a517d7e865ed1f7cb76fa57d1bd75f3ab7d04db2",
         "archive": {
           "asset": "jat-runtime-windows-amd64.rcca",
           "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.11-jat-runtime/jat-runtime-windows-amd64.rcca",
