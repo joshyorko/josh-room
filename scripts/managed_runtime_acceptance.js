@@ -55,9 +55,9 @@ async function waitForPort(port, timeoutMs = 120000, state = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (state.error) throw state.error;
-    if (state.exitCode !== undefined && state.exitCode !== null) {
+    if ((state.exitCode !== undefined && state.exitCode !== null) || state.signal) {
       const diagnostics = [state.stdout, state.stderr].filter(Boolean).join("\n").slice(-8192);
-      throw new Error(`managed JAT serve exited with code ${state.exitCode}${state.signal ? ` (${state.signal})` : ""}${diagnostics ? `: ${diagnostics}` : ""}`);
+      throw new Error(`managed JAT serve exited with code ${state.exitCode ?? "unknown"}${state.signal ? ` (${state.signal})` : ""}${diagnostics ? `: ${diagnostics}` : ""}`);
     }
     const connected = await new Promise((resolve) => {
       const socket = net.createConnection({ host: "127.0.0.1", port });
@@ -78,6 +78,10 @@ async function waitForPort(port, timeoutMs = 120000, state = {}) {
 }
 
 async function stopManagedProcess(child, closed) {
+  const waitClosed = (timeoutMs) => Promise.race([
+    closed,
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
   if (child.exitCode === null) {
     if (process.platform === "win32") {
       await new Promise((resolve) => {
@@ -96,7 +100,7 @@ async function stopManagedProcess(child, closed) {
       }
     }
   }
-  await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5000))]);
+  await waitClosed(5000);
   if (child.exitCode === null) {
     if (process.platform === "win32") child.kill();
     else if (child.pid) {
@@ -106,8 +110,11 @@ async function stopManagedProcess(child, closed) {
         if (error.code !== "ESRCH") child.kill("SIGKILL");
       }
     }
-    await closed;
   }
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  await waitClosed(1000);
+  if (child.exitCode === null) child.unref();
 }
 
 async function main() {
@@ -167,38 +174,63 @@ async function main() {
       JOSH_ROOM_JAT_ARTIFACT: jat.artifact,
       PYTHONPATH: controllerRoot,
     };
-    const runManaged = (args, prefix, name, cwd, { inheritStreams = true } = {}) => {
+    const readManagedResult = (filename) => {
+      if (!filename || !fs.existsSync(filename)) return null;
+      try {
+        const result = JSON.parse(fs.readFileSync(filename, "utf8"));
+        return result && typeof result === "object" ? result : null;
+      } catch {
+        return null;
+      }
+    };
+    const runManaged = (args, prefix, name, cwd, { inheritStreams = true, resultFile = null } = {}) => {
       const receipt = path.join(paths.logsRoot, `${prefix}-${name}.json`);
+      const invocationEnvironment = { ...environment };
+      if (resultFile) {
+        fs.rmSync(resultFile, { force: true });
+        fs.mkdirSync(path.dirname(resultFile), { recursive: true, mode: 0o700 });
+        invocationEnvironment.JOSH_ROOM_RESULT_FILE = resultFile;
+      }
       const command = ["--no-build", "env", "exec", "--artifact", controllerPin.digest, "--permissive-local"];
       if (inheritStreams) command.push("--inherit-streams", "--receipt-file", receipt);
       else command.push("--json");
       command.push("--", ...args);
       try {
-        return childProcess.execFileSync(rcc.executable, command, { cwd, env: environment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+        const output = childProcess.execFileSync(rcc.executable, command, { cwd, env: invocationEnvironment, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+        if (resultFile && !readManagedResult(resultFile)) {
+          throw new Error(`${prefix}-${name} did not produce a valid Josh Room result`);
+        }
+        return output;
       } catch (error) {
-        for (const stream of ["stderr", "stdout"]) {
-          const value = error?.[stream];
-          if (value) {
-            const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
-            process.stderr.write(`[${prefix}-${name}] ${text.slice(-8192)}\n`);
-          }
+        const result = readManagedResult(resultFile);
+        if (result) {
+          process.stderr.write(`[${prefix}-${name}-result] ${JSON.stringify(result).slice(0, 8192)}\n`);
+        }
+        const value = error?.stderr;
+        if (value) {
+          const text = Buffer.isBuffer(value) ? value.toString("utf8") : String(value);
+          process.stderr.write(`[${prefix}-${name}-stderr] ${text.slice(-8192)}\n`);
         }
         throw error;
       }
     };
-    const executeController = (args, name) => runManaged(["python", "-m", "josh_room", ...args], "managed-controller", name, controllerRoot, { inheritStreams: false });
+    const executeController = (args, name) => runManaged(
+      ["python", "-m", "josh_room", ...args],
+      "managed-controller",
+      name,
+      controllerRoot,
+      { inheritStreams: false, resultFile: path.join(paths.logsRoot, `managed-controller-${name}-result.json`) },
+    );
     const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
     const runManagedJatServe = async (haul, name) => {
       const port = await reservePort();
-      const receipt = path.join(paths.logsRoot, `managed-jat-${name}.json`);
       const jatEnvironment = {
         ...environment,
         JAT_RUN_DIR: path.join(root, `jat-run-${name}`),
         PYTHONPATH: [path.join(jat.jatRoot, "src"), jat.jatRoot, controllerRoot].join(path.delimiter),
       };
       const child = childProcess.spawn(rcc.executable, [
-        "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local",
-        "--inherit-streams", "--receipt-file", receipt, "--",
+        "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local", "--json", "--",
         "python", "-m", "jat.cli", "serve", "--haul", haul, "--mode", "files",
         "--fileserver-port", String(port), "--json",
       ], {
