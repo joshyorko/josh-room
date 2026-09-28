@@ -38,6 +38,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
+          if [ -z "$tag_sha" ]; then
+            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
+          fi
+          test "$tag_sha" = "$GITHUB_SHA"
           version="${{ steps.version.outputs.version }}"
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --json isDraft,targetCommitish,tagName | \
@@ -74,6 +80,12 @@ jobs:
             --pattern "josh-room-${version}.vsix" --dir "$verify_dir"
           python scripts/verify_release_candidate.py \
             --candidate "$verify_dir/josh-room-${version}.vsix" --tag "$GITHUB_REF_NAME"
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
+          if [ -z "$tag_sha" ]; then
+            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
+          fi
+          test "$tag_sha" = "$GITHUB_SHA"
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
             --json isDraft,targetCommitish,tagName | \
             jq -e --arg sha "$GITHUB_SHA" --arg tag "$GITHUB_REF_NAME" \
