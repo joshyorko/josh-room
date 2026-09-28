@@ -1,0 +1,102 @@
+{
+  "schema": "josh-room.pcc-15-convergence-checkpoint.v1",
+  "issue": 15,
+  "status": "BLOCKED",
+  "candidate": {
+    "repository": "joshyorko/josh-room",
+    "source_branch": "main",
+    "git_sha": "5937f6a84b0fedb9dc26523c6e8a18da92d6be30",
+    "artifacts": [
+      {"name": "josh_room-0.1.0.dev0-py3-none-any.whl", "sha256": "b5222d170c327490e21b618c3453b2424534c7128d423bd992542d31eb5321bd"},
+      {"name": "josh_room-0.1.0.dev0.tar.gz", "sha256": "eb5b65c60602db5f87232fc2a5b3b9398d56483ed1863c40b9c6d8900bb96923"},
+      {"name": "josh-room-0.1.24.vsix", "sha256": "b25d2ba781694e3ec608ff8ce4f1560095c7bda14732cf69a56c07c5f47d8c5a", "accepted_immutable_archive": true},
+      {"name": "josh-room-0.1.24.vsix", "sha256": "c6234719a1f43a48dd726c29f15aa53552caaf210b3944b060b2b5aca3c4c39d", "rebuild": true, "payload_sha256": "4a14a5f4feb887ccc1a546155e1f5b75abb6d8ea889a4da5cda8b63532c56a61"}
+    ],
+    "artifact_promotion_pin_at_candidate": {
+      "sha256": "c2768bf96edf70f4cd8b187754d89d6ea84a59afb7634224a6830873b0e48e7d",
+      "status": "FAIL: exact-candidate verifier rejects the accepted b25 archive because release-promotion.json still names the older staged pin"
+    }
+  },
+  "toolchain": {
+    "local_platform": "Linux amd64 container/headless",
+    "kernel": "5.14.0-687.10.1.el9_8.0.1.x86_64",
+    "python": "3.14.7",
+    "uv": "0.12.19",
+    "pytest": "9.1.1",
+    "ruff": "0.16.9",
+    "node": "v22.23.3",
+    "npm": "10.9.9",
+    "age": "v1.3.2",
+    "git": "2.55.0",
+    "pinned_rcc": "v18.19.3",
+    "pinned_jat": "v0.1.10-jat-runtime / d8ca0779d14897c10ca6e0ec8b22ef2d70b6b57c"
+  },
+  "workflows": {
+    "exact_candidate_ci": "https://github.com/joshyorko/josh-room/actions/runs/35936907015",
+    "latest_checkpoint_ci": "https://github.com/joshyorko/josh-room/actions/runs/36419497981",
+    "native_matrix": {
+      "run": "https://github.com/joshyorko/josh-room/actions/runs/36419491015",
+      "macos_arm64_job": "https://github.com/joshyorko/josh-room/actions/runs/36419491015/job/108918514211",
+      "windows_amd64_job": "https://github.com/joshyorko/josh-room/actions/runs/36419491015/job/108918513951"
+    },
+    "pinned_jat_ubuntu22": {
+      "run": "https://github.com/joshyorko/josh-room/actions/runs/36419491023",
+      "job": "https://github.com/joshyorko/josh-room/actions/runs/36419491023/job/108918513945",
+      "result": "BLOCKED after exact download/hash/version: v0.1.10 archive requires libc >=2.36; Ubuntu 22.04 runner has 2.35"
+    },
+    "pinned_jat_ubuntu24": "https://github.com/joshyorko/josh-room/actions/runs/36419214687"
+  },
+  "observed": {
+    "candidate_identity": "PASS: every hosted acceptance job checked out and asserted 5937f6a84b0fedb9dc26523c6e8a18da92d6be30",
+    "linux_synthetic": "PASS: exact wheel install, hook enqueue/privacy, focused/full synthetic suites",
+    "hosted_exact_candidate_ci": "PASS: 35936907015; latest checkpoint CI also PASS",
+    "native_macos_arm64": "FAIL: real macos-14-arm64 runner reached candidate keyring code; _require_secure_backend() returned None and secure_store dereferenced status.backend",
+    "native_windows_amd64": "FAIL: real windows-2025 amd64 runner reached the same candidate defect",
+    "pinned_jat_rcc": "PASS pin/download/hash/version; BLOCKED materialization on Ubuntu 24.04 (system-library/ld-linux) and Ubuntu 22.04 (libc 2.35 < required 2.36)",
+    "public_codex_cli": "PASS: codex-cli 0.158.0, binary SHA-256 af9f5aa6e6662accf9d707cef0d9ca083880a173a9c2b6c22947edb7830e5778; exact-candidate synthetic install/status/lifecycle smoke PASS",
+    "real_codex_vertical": "BLOCKED: approved disposable authentication/model session unavailable",
+    "live_private_r2": "BLOCKED: no approved private endpoint/bucket/profile/credentials; no live object or index event created",
+    "local_python_suite": "PASS: 1141 passed, 7 skipped; focused exact-candidate rerun 23 passed; no source edits",
+    "local_node_suite": "PASS: 232 passed, 2 skipped",
+    "exact_installed_hook_latency": "FAIL p95 427.444 ms / max 437.672 ms under -I -S; hard max <1 s PASS; in-process enqueue p95 0.705 ms",
+    "hosted_hook_latency": "PASS only for existing bounded CI assertion; quantiles not exposed and it invokes -I rather than installer-generated -I -S",
+    "replay": "PASS synthetic neutral consumer/cursor/idempotency/chain fail-closed/recovery tests; live discovery BLOCKED",
+    "privacy_security": "PASS targeted storage/secret/quarantine scans; GitHub Advanced Security scan unavailable",
+    "wsl_container_headless": "LIMITED: capture/enqueue works; native keyring/preparation/upload unavailable"
+  },
+  "metrics": {
+    "normalizer_memory": "20 records/875960 source bytes -> 87533 working bytes, tracemalloc peak 466892; 60 records/2627880 -> 87533 working, 469988 peak",
+    "asset_dedupe": "synthetic repeated references externalized/deduped; 9/29 repeated references -> one durable asset; 98-GB shape fixture-only",
+    "age_outbox": "71 plaintext bytes -> 10538 ciphertext bytes; daily and recovery synthetic decryptions passed; plaintext marker absent",
+    "error_matrix": "24 focused synthetic R2/error tests passed: timeout/429/retry, multipart ambiguity, conflict, digest/read-back, index/quarantine, crash/resume",
+    "hook": "32 exact installed -I -S calls: min 271.373 ms, p50 323.593 ms, p95 427.444 ms, max 437.672 ms"
+  },
+  "child_ledger": {
+    "2": "PASS synthetic contract",
+    "3": "PASS synthetic policy/deny/precedence",
+    "4": "PASS synthetic material-security/quarantine",
+    "5": "PASS adapter contract",
+    "6": "PASS synthetic Codex adapter cases",
+    "7": "FAIL/UNPROVEN exact installed p95; artifact promotion pin mismatch at candidate; hosted bounded assertion PASS",
+    "8": "PASS synthetic crash/concurrency/quota/corrupt-state; native process-lock proof limited",
+    "9": "PASS synthetic incremental/asset/memory/credential rejection",
+    "10": "PASS synthetic age/daily/recovery; native authority BLOCKED/FAIL",
+    "11": "PASS fake-client contract only; live R2 BLOCKED",
+    "12": "FAIL exact macOS/Windows native store round-trip due _require_secure_backend missing return; Linux native session unavailable",
+    "13": "PASS CLI/scheduler contracts; real device-ready path BLOCKED",
+    "14": "PASS synthetic neutral replay; live-R2 discovery BLOCKED"
+  },
+  "upstream": {
+    "jat_runtime_1_11": "available post-#15/#83 context only",
+    "candidate_action": "retain verified v0.1.10 tuple; do not repin for #15"
+  },
+  "unblock_list": [
+    "Repair #12's _require_secure_backend return defect through a separately authorized repair, then choose a new candidate only if that repair is accepted; 5937 remains immutable for this receipt",
+    "Provide a compatible supported Linux environment for the pinned v0.1.10 RCC/JAT archive and rerun enter/IDE/workspace/RCC smoke",
+    "Provide disposable authenticated real Codex session and native device-ready host for one non-production vertical run",
+    "Provide Josh-approved private R2 endpoint/bucket/profile/credentials for live write/index/fresh-device/recovery/replay",
+    "Align exact candidate release-promotion metadata with the accepted immutable VSIX or explicitly replace the candidate; do not mix post-candidate metadata into this receipt",
+    "Reconcile exact installed -I -S hook p95 on a supported release-like host without lowering 250 ms"
+  ],
+  "authority": "Evidence only. Candidate 5937f6... remains immutable. PR #85 remains draft. No release/tag/publish/#83 action was taken for this acceptance. A separate metadata-only PR #86 was merged before this continuation and is excluded from candidate evidence."
+}
