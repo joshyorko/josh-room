@@ -20,11 +20,8 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
         raise ValueError("controller artifact receipt platform does not match the requested pin")
     asset = artifact.name
     specification_digest = receipt_value.get("specification_digest")
-    if not isinstance(specification_digest, str) or not specification_digest.startswith("sha256:"):
-        raise ValueError("controller artifact receipt specification digest is invalid")
     update = {
         "digest": receipt_value["artifact_digest"],
-        "specification_digest": specification_digest,
         "platform": platform,
         "archive": {
             "asset": asset,
@@ -33,6 +30,10 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
             "size": archive["size"],
         },
     }
+    if specification_digest is not None:
+        if not isinstance(specification_digest, str) or not specification_digest.startswith("sha256:"):
+            raise ValueError("controller artifact receipt specification digest is invalid")
+        update["specification_digest"] = specification_digest
     values = [json.loads(path.read_text()) for path in (root, template)]
     for value in values:
         controller = value.setdefault("controller", {})
