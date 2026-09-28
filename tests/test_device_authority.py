@@ -1,5 +1,7 @@
 import json
+import shlex
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +33,24 @@ def test_require_secure_backend_returns_available_status(monkeypatch):
     expected = BackendStatus("linux-secret-service", "linux", True, False, "available")
     monkeypatch.setattr(keyring, "backend_status", lambda: expected)
     assert keyring._require_secure_backend() is expected
+
+def test_macos_store_keeps_secret_off_argv(monkeypatch):
+    calls = []
+    expected = BackendStatus("macos-keychain", "macos", True, False, "available")
+    monkeypatch.setattr(keyring, "_require_secure_backend", lambda: expected)
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(keyring, "_run", fake_run)
+    secret = "secret ' value"
+    keyring.secure_store("profile", "access-key-id", secret)
+
+    command, kwargs = calls[0]
+    assert command == ["security", "-i"]
+    assert secret not in command
+    assert shlex.quote(secret) in kwargs["input"]
 
 def test_receipt_names_are_length_delimited():
     assert device._receipt_profile("a", "b.c") != device._receipt_profile("a.b", "c")
