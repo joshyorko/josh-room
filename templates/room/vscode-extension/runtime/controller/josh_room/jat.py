@@ -316,7 +316,6 @@ def _run_jat_cli(jat_root: Path, cli_args: list[str], *, foreground: bool = Fals
             "--inherit-streams",
             "--receipt-file",
             str(rcc_receipt),
-            "--json",
             "--",
             "python",
             "-m",

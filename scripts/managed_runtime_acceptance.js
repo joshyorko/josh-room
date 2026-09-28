@@ -3,9 +3,9 @@
 
 const childProcess = require("child_process");
 const fs = require("fs");
+const net = require("net");
 const os = require("os");
 const path = require("path");
-
 const fsp = fs.promises;
 const repository = path.resolve(__dirname, "..");
 
@@ -36,6 +36,73 @@ async function expectRejected(label, operation, pattern) {
     return;
   }
   throw new Error(`${label} unexpectedly succeeded`);
+}
+
+async function reservePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port = address && typeof address === "object" ? address.port : 0;
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  if (!port) throw new Error("managed JAT serve did not receive a TCP port");
+  return port;
+}
+
+async function waitForPort(port, child, timeoutMs = 20000, state = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (state.error) throw state.error;
+    const connected = await new Promise((resolve) => {
+      const socket = net.createConnection({ host: "127.0.0.1", port });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once("error", () => {
+        socket.destroy();
+        resolve(false);
+      });
+    });
+    if (connected) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`managed JAT serve did not open port ${port}`);
+}
+
+async function stopManagedProcess(child, closed) {
+  if (child.exitCode === null) {
+    if (process.platform === "win32") {
+      await new Promise((resolve) => {
+        const killer = childProcess.spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        killer.once("error", resolve);
+        killer.once("close", resolve);
+      });
+    } else if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch (error) {
+        if (error.code !== "ESRCH") child.kill("SIGTERM");
+      }
+    }
+  }
+  await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5000))]);
+  if (child.exitCode === null) {
+    if (process.platform === "win32") child.kill();
+    else if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") child.kill("SIGKILL");
+      }
+    }
+    await closed;
+  }
 }
 
 async function main() {
@@ -115,6 +182,40 @@ async function main() {
     };
     const executeController = (args, name) => runManaged(["python", "-m", "josh_room", ...args], "managed-controller", name, controllerRoot);
     const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
+    const runManagedJatServe = async (haul, name) => {
+      const port = await reservePort();
+      const receipt = path.join(paths.logsRoot, `managed-jat-${name}.json`);
+      const jatEnvironment = {
+        ...environment,
+        PYTHONPATH: [path.join(jat.jatRoot, "src"), jat.jatRoot, controllerRoot].join(path.delimiter),
+      };
+      const child = childProcess.spawn(rcc.executable, [
+        "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local",
+        "--inherit-streams", "--receipt-file", receipt, "--",
+        "python", "-m", "jat.cli", "serve", "--haul", haul, "--mode", "files",
+        "--fileserver-port", String(port), "--json",
+      ], {
+        cwd: jat.jatRoot,
+        env: jatEnvironment,
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      const state = { error: null };
+      let output = "";
+      child.stdout.on("data", (chunk) => { output += chunk.toString().slice(-8192); });
+      child.stderr.on("data", (chunk) => { output += chunk.toString().slice(-8192); });
+      child.once("error", (error) => { state.error = error; });
+      const closed = new Promise((resolve) => child.once("close", resolve));
+      try {
+        await waitForPort(port, child, 20000, state);
+      } finally {
+        await stopManagedProcess(child, closed);
+      }
+      if (state.error) throw state.error;
+      if (!output && !fs.existsSync(receipt)) throw new Error("managed JAT serve produced no receipt or diagnostic output");
+      return { port };
+    };
     const identityBodies = [];
     const recipients = [];
     for (const name of ["primary", "recovery"]) {
@@ -154,7 +255,10 @@ async function main() {
     if ((await fsp.readFile(restored, "utf8")) !== "managed runtime Save/Enter acceptance\n") {
       throw new Error("managed runtime Enter did not restore the saved workspace");
     }
-    executeController(["jat", "inspect", "--help"], "jat-command");
+    const haul = path.join(root, "managed-runtime.haul.tar.zst");
+    executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
+    executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
+    await runManagedJatServe(haul, "jat-serve");
 
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
@@ -229,13 +333,13 @@ async function main() {
         source_sha: jat.sourceSha,
         rcc_version: rcc.version,
       },
-      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-env-exec", "jat-command-path"],
+      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec"],
     };
     if (fs.existsSync(path.join(paths.logsRoot, "jat-artifact-receipt.json"))) {
       await fsp.copyFile(path.join(paths.logsRoot, "jat-artifact-receipt.json"), path.join(evidenceDir, "jat-artifact-receipt.json"));
     }
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
-      if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-")) && filename.endsWith(".json")) {
+      if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-")) && filename.endsWith(".json")) {
         await fsp.copyFile(path.join(paths.logsRoot, filename), path.join(evidenceDir, filename));
       }
     }
