@@ -380,11 +380,8 @@ async function main() {
       },
       checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec"],
     };
-    if (fs.existsSync(path.join(paths.logsRoot, "jat-artifact-receipt.json"))) {
-      await fsp.copyFile(path.join(paths.logsRoot, "jat-artifact-receipt.json"), path.join(evidenceDir, "jat-artifact-receipt.json"));
-    }
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
-      if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-")) && filename.endsWith(".json")) {
+      if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-") || filename.startsWith("jat-artifact-")) && filename.endsWith(".json")) {
         await fsp.copyFile(path.join(paths.logsRoot, filename), path.join(evidenceDir, filename));
       }
     }
