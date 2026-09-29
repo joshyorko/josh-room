@@ -99,9 +99,13 @@ async function acquirePinnedArtifact({
       const artifact = acquired?.artifactDigest ?? acquired?.artifact_digest;
       if (artifact === artifactDigest && acquired?.verification?.valid === true) {
         onProgress?.({ phase: "reuse", message: `Reusing cached ${label} materialization` });
+        throwIfCancelled(options);
+        return acquired;
       }
-      throwIfCancelled(options);
-      return acquired;
+      const detail = acquired?.error || acquired?.message;
+      if (typeof detail === "string" && /incompatib|os[-_ ]?version|minimum[-_ ]?version|kernel|compatibility/i.test(detail)) {
+        throw new Error(detail);
+      }
     } catch (error) {
       throwIfCancelled(options);
       if (!localArtifactMissing(error)) throw error;

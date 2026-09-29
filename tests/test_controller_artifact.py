@@ -233,6 +233,7 @@ def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
     receipt.write_text(json.dumps({
         "format_version": 1,
         "artifact_digest": "sha256:" + "a" * 64,
+        "specification_digest": "sha256:" + "c" * 64,
         "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
         "rcc_version": "v18.19.5",
         "platform": "win32-x64",
