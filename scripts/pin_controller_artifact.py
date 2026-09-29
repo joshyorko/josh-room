@@ -15,7 +15,7 @@ def _is_sha256_digest(value: object) -> bool:
         isinstance(value, str)
         and len(value) == SHA256_DIGEST_LENGTH
         and value.startswith("sha256:")
-        and all(char in "0123456789abcdef" for char in value[7:].lower())
+        and all(char in "0123456789abcdef" for char in value[7:])
     )
 
 def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, release_tag: str, platform: str = "linux-x64") -> None:

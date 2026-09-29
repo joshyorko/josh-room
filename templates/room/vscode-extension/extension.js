@@ -465,7 +465,7 @@ async function localRuntimeState(context, manifest, rcc, jat, error, progressRep
       options,
     );
     readyIdentity = fallbackIdentity(manifest, rcc, controllerRoot, jat?.artifact);
-    await managedRuntime.writeLocalFallbackRecord(context, { ...readyIdentity, ...(jat?.artifact ? { local_jat_artifact_digest: jat.artifact } : {}) });
+    await managedRuntime.writeLocalFallbackRecordWithLock(context, { ...readyIdentity, ...(jat?.artifact ? { local_jat_artifact_digest: jat.artifact } : {}) }, options);
     progressReporter?.event({
       stage: "runtime",
       message: "Controller environment ready (LOCAL BUILD FALLBACK); JAT remains lazy",

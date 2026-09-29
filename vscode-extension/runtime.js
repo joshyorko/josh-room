@@ -350,6 +350,30 @@ async function writeLocalFallbackRecord(context, record) {
   await fs.promises.rename(temporary, filename);
 }
 
+async function writeLocalFallbackRecordWithLock(context, record, options = {}) {
+  const release = await acquireProcessLock(path.join(privatePaths(context).runtimeRoot, "local-jat-build.lock"), options);
+  try {
+    const current = readLocalFallbackRecord(context);
+    const identityKeys = [
+      "mode", "extension_version", "rcc_version", "platform", "jat_source_sha",
+      "portable_jat_artifact_digest", "controller_source_version", "controller_artifact_digest",
+    ];
+    const sameIdentity = identityKeys.every((key) => current?.[key] === record?.[key]);
+    const merged = { ...record };
+    if (sameIdentity) {
+      if (!merged.local_jat_artifact_digest && current?.local_jat_artifact_digest) {
+        merged.local_jat_artifact_digest = current.local_jat_artifact_digest;
+      }
+      if (!merged.jat_artifact_digest && current?.jat_artifact_digest) {
+        merged.jat_artifact_digest = current.jat_artifact_digest;
+      }
+    }
+    await writeLocalFallbackRecord(context, merged);
+  } finally {
+    await release();
+  }
+}
+
 async function clearLocalFallbackRecord(context) {
   await fs.promises.rm(localFallbackRecordPath(context), { force: true });
 }
@@ -361,8 +385,9 @@ async function processLockIsStale(filename, staleAfterMs) {
       || entries.find((entry) => entry.isFile() && entry.name === "owner.json");
     if (ownerEntry) {
       const owner = JSON.parse(await fs.promises.readFile(path.join(filename, ownerEntry.name), "utf8"));
-      if (!owner || typeof owner !== "object" || typeof owner.token !== "string" || !owner.token) return true;
-      if (Number.isInteger(owner.pid) && owner.pid > 0) {
+      const validOwner = owner && typeof owner === "object" && !Array.isArray(owner)
+        && typeof owner.token === "string" && Boolean(owner.token);
+      if (validOwner && Number.isInteger(owner.pid) && owner.pid > 0) {
         try {
           process.kill(owner.pid, 0);
           return false;
@@ -1194,6 +1219,7 @@ module.exports = {
   prepareLocalController,
   buildLocalJatArtifact,
   writeLocalFallbackRecord,
+  writeLocalFallbackRecordWithLock,
   privatePaths,
   readManifest,
   resolvePlatform,

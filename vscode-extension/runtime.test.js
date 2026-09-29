@@ -498,6 +498,31 @@ test("local fallback warm reuse requires the complete scoped identity", async ()
   assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.10" }), false);
 });
 
+test("locked fallback marker writes preserve matching JAT artifact identities", async () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-marker-lock-test-"));
+  const runtimeContext = context(runtimeRoot);
+  const api = require("./runtime");
+  const identity = {
+    mode: "local-build-fallback",
+    extension_version: "0.1.5",
+    rcc_version: "v18.19.2",
+    platform: "linux-x64",
+    jat_source_sha: "a".repeat(40),
+    portable_jat_artifact_digest: "sha256:" + "c".repeat(64),
+    controller_source_version: "d".repeat(64),
+    controller_artifact_digest: "unpublished",
+  };
+  await api.writeLocalFallbackRecord(runtimeContext, {
+    ...identity,
+    jat_artifact_digest: "sha256:" + "b".repeat(64),
+    local_jat_artifact_digest: "sha256:" + "e".repeat(64),
+  });
+  await api.writeLocalFallbackRecordWithLock(runtimeContext, identity);
+  const saved = api.readLocalFallbackRecord(runtimeContext);
+  assert.equal(saved.jat_artifact_digest, "sha256:" + "b".repeat(64));
+  assert.equal(saved.local_jat_artifact_digest, "sha256:" + "e".repeat(64));
+});
+
 test("local fallback controller preparation runs managed RCC before readiness resolves", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-test-"));
   const calls = [];

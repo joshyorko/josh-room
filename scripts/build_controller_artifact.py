@@ -32,7 +32,7 @@ def _is_sha256_digest(value: object) -> bool:
         isinstance(value, str)
         and len(value) == len("sha256:") + SHA256_LENGTH
         and value.startswith("sha256:")
-        and all(char in "0123456789abcdef" for char in value[7:].lower())
+        and all(char in "0123456789abcdef" for char in value[7:])
     )
 
 def load_manifest(path: Path) -> dict:
@@ -161,9 +161,9 @@ def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str
         raise ValueError("controller artifact receipt RCC version does not match")
     if receipt["platform"] != expected_platform:
         raise ValueError("controller artifact receipt platform does not match")
-    if not isinstance(receipt["artifact_digest"], str) or not receipt["artifact_digest"].startswith("sha256:"):
+    if not _is_sha256_digest(receipt["artifact_digest"]):
         raise ValueError("controller artifact receipt artifact digest is invalid")
-    if not isinstance(receipt["specification_digest"], str) or not receipt["specification_digest"].startswith("sha256:"):
+    if not _is_sha256_digest(receipt["specification_digest"]):
         raise ValueError("controller artifact receipt specification digest is invalid")
     if not isinstance(receipt["source"], str) or len(receipt["source"]) != 40:
         raise ValueError("controller artifact receipt source commit is invalid")
