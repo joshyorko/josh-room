@@ -238,14 +238,19 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
     await fs.promises.mkdir(privatePaths(context).logsRoot, { recursive: true, mode: 0o700 });
     const receiptFile = path.join(privatePaths(context).logsRoot, `local-jat-warm-${process.pid}-${Date.now()}.json`);
     options.onProgress?.({ phase: "reuse", message: "Verifying cached local JAT artifact" });
-    const verified = await runJson(
-      rccRuntime.executable,
-      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
-      { cwd: privatePaths(context).storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
-    );
-    const artifactDigest = verified?.artifactDigest ?? verified?.artifact_digest;
-    const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
-    return verified !== undefined && verified.error === undefined && artifactDigest === artifact && exitCode === 0;
+    let verified;
+    try {
+      verified = await runJson(
+        rccRuntime.executable,
+        ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
+        { cwd: privatePaths(context).storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
+      );
+      const artifactDigest = verified?.artifactDigest ?? verified?.artifact_digest;
+      const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
+      return verified !== undefined && verified.error === undefined && artifactDigest === artifact && exitCode === 0;
+    } finally {
+      await fs.promises.rm(receiptFile, { force: true }).catch(() => {});
+    }
   } catch (error) {
     throwIfCancelled(options);
     if (error.code === "ABORT_ERR" || error.name === "AbortError") throw error;
@@ -325,20 +330,24 @@ async function buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, opti
   await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
   const receiptFile = path.join(paths.logsRoot, `local-jat-${process.pid}-${Date.now()}.json`);
   options.onProgress?.({ phase: "local-jat", message: "Verifying Hauler through local JAT artifact" });
-  const verified = await runJson(
-    rccRuntime.executable,
-    ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
-    { cwd: path.dirname(jatRobot), env: environment, receiptFile, onOutput: options.onOutput },
-  );
-  const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
-  if ((verified?.artifactDigest !== artifact && verified?.artifact_digest !== artifact) || exitCode !== 0) {
-    throw new Error("local JAT artifact failed Hauler version verification");
+  let verified;
+  try {
+    verified = await runJson(
+      rccRuntime.executable,
+      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
+      { cwd: path.dirname(jatRobot), env: environment, receiptFile, onOutput: options.onOutput },
+    );
+    const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
+    if ((verified?.artifactDigest !== artifact && verified?.artifact_digest !== artifact) || exitCode !== 0) {
+      throw new Error("local JAT artifact failed Hauler version verification");
+    }
+  } finally {
+    await fs.promises.rm(receiptFile, { force: true }).catch(() => {});
   }
   return {
     artifact,
     specification: published.specificationDigest || published.specification_digest,
     blueprint: published.legacyBlueprintKey || published.legacy_blueprint_key,
-    receiptFile,
   };
 }
 
