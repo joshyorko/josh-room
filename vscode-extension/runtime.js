@@ -1030,7 +1030,10 @@ async function runJsonCommand(executable, args, options = {}) {
   if (options.receiptFile) await fs.promises.rm(options.receiptFile, { force: true });
   const { stdout, stderr, code } = await runCapturedCommand(executable, args, options);
   throwIfCancelled(options);
-  if (options.receiptFile && fs.existsSync(options.receiptFile)) {
+  if (options.receiptFile) {
+    if (!fs.existsSync(options.receiptFile)) {
+      throw new Error("managed RCC did not produce an execution receipt");
+    }
     try {
       return JSON.parse(fs.readFileSync(options.receiptFile, "utf8"));
     } catch (_error) {

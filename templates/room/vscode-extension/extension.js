@@ -593,7 +593,7 @@ async function initializeManagedRuntime(context, progressReporter, cancellationT
 
 function operationNeedsJat(args) {
   if (!Array.isArray(args) || !args.length) return false;
-  if (["hydrate", "serve", "jat", "doctor"].includes(args[0])) return true;
+  if (["hydrate", "serve", "jat", "doctor", "enter"].includes(args[0])) return true;
   return args[0] === "snapshot" && args[1] === "create";
 }
 

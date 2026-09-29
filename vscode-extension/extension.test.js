@@ -88,6 +88,10 @@ async function createLocalFallbackFixture(t) {
       };
     }
     if (args[0] === "--no-build" && args[1] === "env") {
+      const receiptIndex = args.indexOf("--receipt-file");
+      if (receiptIndex >= 0) {
+        fs.writeFileSync(args[receiptIndex + 1], JSON.stringify({ artifactDigest: artifact, exitCode: 0 }));
+      }
       return { stdout: JSON.stringify({ artifactDigest: artifact, exitCode: 0 }) };
     }
     if ((args[0] === "--no-build" && args[1] === "ht") || args[0] === "ht") {
@@ -527,6 +531,7 @@ test("JAT runtime acquisition is lazy and limited to JAT-backed operations", () 
   assert.equal(needsJat(["serve"]), true);
   assert.equal(needsJat(["jat", "build"]), true);
   assert.equal(needsJat(["doctor"]), true);
+  assert.equal(needsJat(["enter"]), true);
 });
 
 test("initial runtime readiness acquires controller and defers JAT", async () => {
