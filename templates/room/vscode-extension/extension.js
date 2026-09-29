@@ -606,7 +606,6 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       runtimeProgressOptions(progressReporter, cancellationToken),
     );
     state.jat = { ...state.jat, jatRoot };
-    if (state.jat?.artifact) return state.jat;
     const localJat = await managedRuntime.buildLocalJatArtifact(
       context,
       state.rcc,
