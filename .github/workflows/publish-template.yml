@@ -13,6 +13,10 @@ on:
       - ".github/workflows/publish-template.yml"
   workflow_dispatch:
 
+concurrency:
+  group: template-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
