@@ -649,7 +649,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
         context,
         state.manifest,
         state.rcc,
-        runtimeProgressOptions(progressReporter, cancellationToken),
+        { ...runtimeProgressOptions(progressReporter, cancellationToken), forceArchive: true },
       );
       state.jat = jat;
       return jat;

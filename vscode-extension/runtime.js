@@ -84,11 +84,11 @@ function runtimeCommand(options) {
 }
 
 async function acquirePinnedArtifact({
-  rccExecutable, artifactDigest, archivePath, archiveCached, runJson, cwd, environment, onProgress, onOutput, label, cancellationToken,
+  rccExecutable, artifactDigest, archivePath, archiveCached, forceArchive, runJson, cwd, environment, onProgress, onOutput, label, cancellationToken,
 }) {
   const options = { cwd, env: environment, onOutput, cancellationToken };
   throwIfCancelled(options);
-  if (archiveCached) {
+  if (archiveCached && !forceArchive) {
     onProgress?.({ phase: "verify", message: `Checking cached ${label} materialization` });
     try {
       const acquired = await runJson(
@@ -719,6 +719,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
       artifactDigest: artifact.digest,
       archivePath,
       archiveCached,
+      forceArchive: options.forceArchive === true,
       runJson,
       cwd: paths.storageRoot,
       environment,
