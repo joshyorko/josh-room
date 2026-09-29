@@ -635,6 +635,25 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       state.manifest.jat,
       runtimeProgressOptions(progressReporter, cancellationToken),
     );
+    try {
+      await managedRuntime.verifyJatArtifact(
+        context,
+        state.manifest,
+        state.rcc,
+        state.jat.artifact,
+        runtimeProgressOptions(progressReporter, cancellationToken),
+      );
+    } catch (error) {
+      if (cancellationToken?.isCancellationRequested) throw cancellationError();
+      const jat = await managedRuntime.ensureJatRuntime(
+        context,
+        state.manifest,
+        state.rcc,
+        runtimeProgressOptions(progressReporter, cancellationToken),
+      );
+      state.jat = jat;
+      return jat;
+    }
     state.jat = { ...state.jat, jatRoot };
     return state.jat;
   }
@@ -4269,6 +4288,7 @@ Object.assign(module.exports.__test__, {
   chooseLocalFallback,
   localRuntimeState,
   initializeManagedRuntime,
+  ensureJatForState,
   operationNeedsJat,
   clearLocalFallback,
   buildTerminalLaunch,

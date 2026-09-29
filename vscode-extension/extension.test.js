@@ -576,6 +576,48 @@ test("initial runtime readiness acquires controller and defers JAT", async () =>
   }
 });
 
+test("cached managed JAT operations reverify after source materialization is removed", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-jat-reverify-"));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const runtime = require("./runtime");
+  const originals = {
+    ensureJatSource: runtime.ensureJatSource,
+    verifyJatArtifact: runtime.verifyJatArtifact,
+    ensureJatRuntime: runtime.ensureJatRuntime,
+  };
+  let sourceCalls = 0;
+  let verifyCalls = 0;
+  let reacquireCalls = 0;
+  runtime.ensureJatSource = async () => {
+    sourceCalls += 1;
+    fs.mkdirSync(root, { recursive: true });
+    return root;
+  };
+  runtime.verifyJatArtifact = async () => {
+    verifyCalls += 1;
+    assert.equal(fs.existsSync(root), true);
+  };
+  runtime.ensureJatRuntime = async () => {
+    reacquireCalls += 1;
+    return { artifact: "sha256:" + "c".repeat(64), jatRoot: root };
+  };
+  t.after(() => Object.assign(runtime, originals));
+  const state = {
+    mode: "managed",
+    manifest: { jat: { git_sha: "a".repeat(40) } },
+    rcc: { executable: "/managed/rcc", version: "v18.19.5" },
+    jat: { artifact: "sha256:" + "c".repeat(64), jatRoot: root },
+  };
+  const context = { globalStorageUri: { fsPath: root }, extensionPath: root };
+  await extension.__test__.ensureJatForState(context, state);
+  fs.rmSync(root, { recursive: true, force: true });
+  await extension.__test__.ensureJatForState(context, state);
+  assert.equal(sourceCalls, 2);
+  assert.equal(verifyCalls, 2);
+  assert.equal(reacquireCalls, 0);
+});
+
 test("extension consumes the private controller result receipt when RCC suppresses stdout", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-result-receipt-test-"));
   const { vscode, statusItem } = createVscodeMock(root);

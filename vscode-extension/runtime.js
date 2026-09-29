@@ -614,6 +614,39 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
   return { executable, storageRoot: paths.storageRoot, platform, version: manifest.rcc.version };
 }
 
+async function verifyJatArtifact(context, manifestSource, rccRuntime, artifactDigest, options = {}) {
+  throwIfCancelled(options);
+  const manifest = readManifest(manifestSource);
+  const platform = options.platform || resolvePlatform();
+  const artifact = selectJatArtifact(manifest.jat, platform);
+  if (!artifactDigest || artifact?.digest !== artifactDigest) {
+    throw new Error("managed JAT artifact does not match the pinned manifest artifact");
+  }
+  if (!rccRuntime?.executable || !rccRuntime?.version) {
+    throw new Error("managed RCC runtime is required for JAT verification");
+  }
+  const paths = privatePaths(context);
+  await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
+  const environment = {
+    ...process.env,
+    ROBOCORP_HOME: paths.rccHome,
+    RCC_HOLOTREE_MODE: "private",
+  };
+  const runJson = runtimeCommand(options);
+  const receiptFile = path.join(paths.logsRoot, `jat-artifact-${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}.json`);
+  const executed = await runJson(
+    rccRuntime.executable,
+    ["--no-build", "env", "exec", "--artifact", artifactDigest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
+    { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
+  );
+  const observedArtifact = executed?.artifactDigest ?? executed?.artifact_digest;
+  const exitCode = executed?.exitCode ?? executed?.exit_code ?? executed?.exit;
+  if (observedArtifact !== artifactDigest || exitCode !== 0) {
+    throw new Error("acquired JAT environment failed Hauler version verification");
+  }
+  return artifactDigest;
+}
+
 async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {}) {
   throwIfCancelled(options);
   const manifest = readManifest(manifestSource);
@@ -708,18 +741,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   }
   options.onProgress?.({ phase: "compatibility", message: "Checking host/artifact compatibility" });
   throwIfCancelled(options);
-  await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
-  const receiptFile = path.join(paths.logsRoot, `jat-artifact-${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}.json`);
-  const executed = await runJson(
-    rccRuntime.executable,
-    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
-    { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
-  );
-  const artifactDigest = executed?.artifactDigest ?? executed?.artifact_digest;
-  const exitCode = executed?.exitCode ?? executed?.exit_code ?? executed?.exit;
-  if (artifactDigest !== artifact.digest || exitCode !== 0) {
-    throw new Error("acquired JAT environment failed Hauler version verification");
-  }
+  await verifyJatArtifact(context, manifestSource, rccRuntime, artifact.digest, options);
   options.onProgress?.({ phase: "holotree", message: "Materializing JAT Holotree" });
   throwIfCancelled(options);
   return {
@@ -1161,6 +1183,7 @@ module.exports = {
   ensureManagedRcc,
   ensureControllerRuntime,
   ensureJatRuntime,
+  verifyJatArtifact,
   ensureJatSource,
   clearLocalFallbackRecord,
   localFallbackRecordMatches,
