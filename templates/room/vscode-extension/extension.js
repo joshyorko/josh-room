@@ -2515,6 +2515,21 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         }
       },
     );
+    if (runtime.controllerArtifact) {
+      let receipt;
+      try {
+        if (!fs.existsSync(receiptPath)) throw new Error("RCC did not produce a controller receipt");
+        receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
+      } catch (error) {
+        throw new Error(`Managed controller receipt is invalid: ${error.message}`);
+      }
+      const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
+      const receiptArtifact = receiptObject && (receiptObject.artifactDigest ?? receiptObject.artifact_digest);
+      const receiptExit = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
+      if (!receiptObject || receiptArtifact !== runtime.controllerArtifact || typeof receiptExit !== "number" || !Number.isFinite(receiptExit) || receiptExit !== 0) {
+        throw new Error("Managed controller receipt does not match the selected artifact");
+      }
+    }
     if (!outcome || outcome.kind === "files") {
       setStatus("$(server-process) Serving files", title);
       outputChannel?.info(`READY · JAT fileserver · ${title}`);

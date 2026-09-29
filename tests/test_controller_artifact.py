@@ -237,7 +237,7 @@ def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
         "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
         "rcc_version": "v18.19.5",
         "platform": "win32-x64",
-        "source": "b" * 40,
+        "source": "b4da2846fee429a2e2878f817faac6a48e4384fd",
     }))
 
     pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts", platform="win32-x64")
@@ -283,6 +283,25 @@ def test_manifest_pin_rejects_malformed_artifact_digest(tmp_path):
     with pytest.raises(ValueError, match="artifact digest"):
         pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts")
 
+
+def test_manifest_pin_rejects_unexpected_controller_source(tmp_path):
+    root = tmp_path / "runtime-manifest.json"
+    template = tmp_path / "template-runtime-manifest.json"
+    for target in (root, template):
+        target.write_text(json.dumps({"schema_version": 1, "controller": {}}))
+    artifact = tmp_path / "controller.rcca"
+    artifact.write_bytes(b"controller")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({
+        "artifact_digest": "sha256:" + "a" * 64,
+        "specification_digest": "sha256:" + "b" * 64,
+        "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
+        "rcc_version": "v18.19.5",
+        "platform": "linux-x64",
+        "source": "c" * 40,
+    }))
+    with pytest.raises(ValueError, match="source commit"):
+        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts")
 def test_packaged_controller_python_file_sets_are_byte_identical_and_importable(tmp_path):
     root = Path(__file__).parents[1]
     canonical = {path.name: path.read_bytes() for path in (root / "src/josh_room").glob("*.py")}

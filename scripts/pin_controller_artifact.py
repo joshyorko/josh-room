@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 SHA256_DIGEST_LENGTH = len("sha256:") + 64
-
+EXPECTED_CONTROLLER_SOURCE = "b4da2846fee429a2e2878f817faac6a48e4384fd"
 
 def _is_sha256_digest(value: object) -> bool:
     return (
@@ -35,6 +35,8 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
     specification_digest = receipt_value.get("specification_digest")
     if not _is_sha256_digest(specification_digest):
         raise ValueError("controller artifact receipt specification digest is invalid")
+    if receipt_value.get("source") != EXPECTED_CONTROLLER_SOURCE:
+        raise ValueError("controller artifact receipt source commit does not match the pinned controller provenance")
     update = {
         "digest": artifact_digest,
         "specification_digest": specification_digest,

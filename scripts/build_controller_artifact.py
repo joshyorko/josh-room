@@ -27,6 +27,13 @@ def _execution_exit_code(value: dict | list, label: str) -> int:
     return exit_code
 
 
+def _is_git_sha(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
 def _is_sha256_digest(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -165,7 +172,7 @@ def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str
         raise ValueError("controller artifact receipt artifact digest is invalid")
     if not _is_sha256_digest(receipt["specification_digest"]):
         raise ValueError("controller artifact receipt specification digest is invalid")
-    if not isinstance(receipt["source"], str) or len(receipt["source"]) != 40:
+    if not _is_git_sha(receipt["source"]):
         raise ValueError("controller artifact receipt source commit is invalid")
     if not isinstance(receipt["archive"].get("sha256"), str) or len(receipt["archive"]["sha256"]) != SHA256_LENGTH:
         raise ValueError("controller artifact receipt archive SHA256 is invalid")
