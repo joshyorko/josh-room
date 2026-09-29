@@ -443,7 +443,12 @@ test("extension backend commands use the managed RCC controller boundary", async
 test("managed extension controller invocation keeps receipt handling without inherited streams", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-argv-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(({ options }) => {
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    const receiptIndex = args.indexOf("--receipt-file");
+    fs.writeFileSync(args[receiptIndex + 1], JSON.stringify({
+      artifactDigest: "sha256:" + "b".repeat(64),
+      exitCode: 0,
+    }));
     fs.writeFileSync(options.env.JOSH_ROOM_RESULT_FILE, '{"ok":true,"operation":"status"}');
     return { stdout: "" };
   });
@@ -464,10 +469,42 @@ test("managed extension controller invocation keeps receipt handling without inh
 
   assert.deepEqual(await extension.__test__.runJoshRoom(["status"], root), { ok: true, operation: "status" });
   const args = spawnHarness.calls[0].args;
+
   assert.equal(args.includes("--inherit-streams"), false);
   assert.equal(args.includes("--receipt-file"), true);
   assert.equal(args.includes("--json"), true);
   assert.deepEqual(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 4), ["python", "-m", "josh_room"]);
+});
+test("managed extension controller execution requires a matching RCC receipt", async () => {
+  for (const receipt of [undefined, { artifactDigest: "sha256:" + "c".repeat(64), exitCode: 0 }]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-receipt-required-"));
+    const { vscode, statusItem } = createVscodeMock(root);
+    const spawnHarness = createSpawnHarness(({ args }) => {
+      if (receipt) {
+        const receiptIndex = args.indexOf("--receipt-file");
+        fs.writeFileSync(args[receiptIndex + 1], JSON.stringify(receipt));
+      }
+      return { stdout: "" };
+    });
+    const extension = loadExtension(vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(statusItem);
+    extension.__test__.setRuntimeForTests(undefined);
+    extension.__test__.setExtensionContextForTests({
+      extensionPath: root,
+      globalStorageUri: { fsPath: root },
+      secrets: { get: async () => undefined },
+    });
+    extension.__test__.setRuntimeReadinessForTests(Promise.resolve({
+      rcc: { executable: "/private/runtime/rcc" },
+      controller: { artifact: "sha256:" + "b".repeat(64) },
+      controllerRoot: "/private/controller",
+      mode: "managed",
+    }));
+    await assert.rejects(
+      extension.__test__.runJoshRoom(["status"], root),
+      /controller receipt/,
+    );
+  }
 });
 
 test("Windows terminal launch passes environment through terminal options", () => {

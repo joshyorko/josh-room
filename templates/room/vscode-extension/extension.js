@@ -731,6 +731,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
     }, cwd),
     jatRoot: state.jat?.jatRoot,
     jatArtifact: state.jat?.artifact,
+    controllerArtifact: state.controller?.artifact,
     mode: state.mode,
     markLocalReady: undefined,
   };
@@ -1166,6 +1167,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     child.on("close", (code) => {
       cancellation?.dispose();
       let result;
+      const managedController = runtime.mode !== "local-build-fallback";
       let receipt;
       let receiptPresent = false;
       try {
@@ -1174,21 +1176,30 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       } catch (error) {
         outputChannel?.warn(`Unable to read RCC receipt: ${error.message}`);
       }
-      if (receiptPresent) {
-        const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
-        const receiptExitValue = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
-        const receiptExit = receiptExitValue;
-        if (!receiptObject || typeof receiptExitValue !== "number" || !Number.isFinite(receiptExitValue) || receiptExitValue !== 0) {
-          const detail = controllerErrorText(receiptObject?.error) || controllerErrorText(receiptObject?.message)
-            || controllerErrorText(receiptObject?.compatibility) || "RCC returned an invalid controller receipt";
-          cleanup();
-          const failure = new Error(String(detail));
-          if (Number.isFinite(receiptExit)) failure.receipt_exit_status = receiptExit;
-          failure.stdout = sanitizeControllerText(stdout);
-          failure.stderr = sanitizeControllerText(stderr);
-          reject(failure);
-          return;
-        }
+      const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
+      const receiptExitValue = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
+      const receiptExit = receiptExitValue;
+      const receiptArtifact = receiptObject && (receiptObject.artifactDigest ?? receiptObject.artifact_digest);
+      const receiptValid = receiptObject
+        && typeof receiptExitValue === "number"
+        && Number.isFinite(receiptExitValue)
+        && receiptExitValue === 0
+        && (!runtime.controllerArtifact || receiptArtifact === runtime.controllerArtifact);
+      if ((managedController && !receiptPresent) || (receiptPresent && !receiptValid)) {
+        const detail = !receiptPresent
+          ? "RCC did not produce a controller receipt"
+          : controllerErrorText(receiptObject?.error) || controllerErrorText(receiptObject?.message)
+            || controllerErrorText(receiptObject?.compatibility)
+            || (runtime.controllerArtifact && receiptArtifact !== runtime.controllerArtifact
+              ? "RCC returned a controller receipt for an unexpected artifact"
+              : "RCC returned an invalid controller receipt");
+        cleanup();
+        const failure = new Error(String(detail));
+        if (Number.isFinite(receiptExit)) failure.receipt_exit_status = receiptExit;
+        failure.stdout = sanitizeControllerText(stdout);
+        failure.stderr = sanitizeControllerText(stderr);
+        reject(failure);
+        return;
       }
       try {
         if (fs.existsSync(resultPath)) result = parseControllerOutput(fs.readFileSync(resultPath, "utf8"));
