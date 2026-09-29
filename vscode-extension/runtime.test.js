@@ -375,6 +375,27 @@ test("stale JAT locks are reclaimed and old owners cannot remove replacements", 
   assert.equal(JSON.parse(fs.readFileSync(path.join(lock, "owner.json"), "utf8")).token, "replacement");
 });
 
+test("fresh malformed JAT lock owners are not reclaimed immediately", { timeout: 2000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fresh-malformed-lock-"));
+  const lock = path.join(root, "runtime", "local-jat-build.lock");
+  fs.mkdirSync(lock, { recursive: true });
+  fs.writeFileSync(path.join(lock, "owner.json"), "[]");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const timer = setTimeout(() => source.cancel(), 20);
+  t.after(() => clearTimeout(timer));
+  let started = false;
+  await assert.rejects(require("./runtime").buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
+    cancellationToken: source.token,
+    runJson: async () => {
+      started = true;
+      throw new Error("fresh malformed lock was reclaimed");
+    },
+  }), cancelledError);
+  assert.equal(started, false);
+  assert.equal(fs.existsSync(lock), true);
+});
+
 
 test("RCC version cancellation kills a real child that ignores SIGTERM before settling", { skip: process.platform === "win32", timeout: 5000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-version-child-cancel-"));
