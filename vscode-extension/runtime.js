@@ -464,12 +464,32 @@ async function reclaimStaleProcessLock(filename, staleAfterMs) {
   if (markerToken && currentOwner?.token && currentOwner.token !== markerToken) return;
   if (!markerToken && observedToken !== undefined && currentOwner?.token !== observedToken) return;
   if (!markerToken && observedToken === undefined && currentOwner?.token) return;
+  const directoryStat = await fs.promises.stat(filename).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!directoryStat) return;
   try {
     await fs.promises.unlink(ownerFilename);
   } catch (error) {
     if (error.code === "ENOENT") return;
     throw error;
   }
+  const currentEntries = await fs.promises.readdir(filename, { withFileTypes: true }).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  const currentStat = await fs.promises.stat(filename).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (
+    !currentEntries
+    || currentEntries.length
+    || !currentStat
+    || currentStat.dev !== directoryStat.dev
+    || currentStat.ino !== directoryStat.ino
+  ) return;
   try {
     await fs.promises.rmdir(filename);
   } catch (error) {
@@ -494,15 +514,24 @@ async function acquireProcessLock(filename, options = {}, timeoutMs = 30 * 60 * 
         `${JSON.stringify({ pid: process.pid, started_at: Date.now(), token })}\n`,
         { mode: 0o600, flag: "wx" },
       );
+      const lockStat = await fs.promises.stat(filename);
       return async () => {
         try {
           await fs.promises.unlink(marker);
+          const currentEntries = await fs.promises.readdir(filename, { withFileTypes: true });
+          const currentStat = await fs.promises.stat(filename);
+          if (
+            currentEntries.length
+            || currentStat.dev !== lockStat.dev
+            || currentStat.ino !== lockStat.ino
+          ) return;
           await fs.promises.rmdir(filename);
         } catch (error) {
           if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
         }
       };
     } catch (error) {
+      if (error.code === "ENOENT") continue;
       if (error.code === "EEXIST" && await processLockIsStale(filename, staleAfterMs)) {
         await reclaimStaleProcessLock(filename, staleAfterMs);
         continue;
@@ -1034,12 +1063,20 @@ async function ensureJatSource(context, jat, options = {}) {
   }
   const target = path.join(paths.jatRoot, jat.git_sha);
   const marker = path.join(target, ".josh-room-source");
-  if (await isRealDirectory(target) && await isRegularFile(marker)
-    && (await fs.promises.readFile(marker, "utf8")).trim() === jat.git_sha) {
+  const verifiedTarget = async () => (
+    await isRealDirectory(target)
+    && await isRegularFile(marker)
+    && (await fs.promises.readFile(marker, "utf8")).trim() === jat.git_sha
+  );
+  if (await verifiedTarget()) {
     throwIfCancelled(options);
     return target;
   }
   if (await pathExists(target)) {
+    if (await verifiedTarget()) {
+      throwIfCancelled(options);
+      return target;
+    }
     throw new Error(`JAT source target is not a verified directory: ${target}`);
   }
   throwIfCancelled(options);
