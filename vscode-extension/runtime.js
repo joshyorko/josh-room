@@ -233,24 +233,7 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
       { cwd: privatePaths(context).storageRoot, env: environment, onOutput: options.onOutput },
     );
     if (!validHtVarsResult(result)) return false;
-    const artifact = record.jat_artifact_digest;
-    if (!artifact) return true;
-    await fs.promises.mkdir(privatePaths(context).logsRoot, { recursive: true, mode: 0o700 });
-    const receiptFile = path.join(privatePaths(context).logsRoot, `local-jat-warm-${process.pid}-${Date.now()}.json`);
-    options.onProgress?.({ phase: "reuse", message: "Verifying cached local JAT artifact" });
-    let verified;
-    try {
-      verified = await runJson(
-        rccRuntime.executable,
-        ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
-        { cwd: privatePaths(context).storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
-      );
-      const artifactDigest = verified?.artifactDigest ?? verified?.artifact_digest;
-      const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
-      return verified !== undefined && verified.error === undefined && artifactDigest === artifact && exitCode === 0;
-    } finally {
-      await fs.promises.rm(receiptFile, { force: true }).catch(() => {});
-    }
+    return true;
   } catch (error) {
     throwIfCancelled(options);
     if (error.code === "ABORT_ERR" || error.name === "AbortError") throw error;
@@ -418,9 +401,11 @@ async function reclaimStaleProcessLock(filename, staleAfterMs) {
     return;
   }
   const ownerFilename = path.join(filename, ownerEntry.name);
+  let observedToken;
   try {
     const owner = JSON.parse(await fs.promises.readFile(ownerFilename, "utf8"));
     const validOwner = owner && typeof owner === "object" && typeof owner.token === "string" && owner.token;
+    observedToken = validOwner ? owner.token : undefined;
     let ownerDead = false;
     if (validOwner && Number.isInteger(owner.pid) && owner.pid > 0) {
       try {
@@ -448,6 +433,17 @@ async function reclaimStaleProcessLock(filename, staleAfterMs) {
     });
     if (!stat || Date.now() - stat.mtimeMs < staleAfterMs) return;
   }
+  let currentOwner;
+  try {
+    currentOwner = JSON.parse(await fs.promises.readFile(ownerFilename, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    if (error.name !== "SyntaxError") throw error;
+  }
+  const markerToken = ownerEntry.name.startsWith(".owner-") ? ownerEntry.name.slice(".owner-".length) : undefined;
+  if (markerToken && currentOwner?.token && currentOwner.token !== markerToken) return;
+  if (!markerToken && observedToken !== undefined && currentOwner?.token !== observedToken) return;
+  if (!markerToken && observedToken === undefined && currentOwner?.token) return;
   try {
     await fs.promises.unlink(ownerFilename);
   } catch (error) {
@@ -806,6 +802,16 @@ async function isRegularFile(filename) {
     throw error;
   }
 }
+async function isRealDirectory(filename) {
+  try {
+    const stat = await fs.promises.lstat(filename);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 
 async function pathExists(filename) {
   try {
@@ -1008,7 +1014,8 @@ async function ensureJatSource(context, jat, options = {}) {
   }
   const target = path.join(paths.jatRoot, jat.git_sha);
   const marker = path.join(target, ".josh-room-source");
-  if (await isRegularFile(marker) && (await fs.promises.readFile(marker, "utf8")).trim() === jat.git_sha) {
+  if (await isRealDirectory(target) && await isRegularFile(marker)
+    && (await fs.promises.readFile(marker, "utf8")).trim() === jat.git_sha) {
     throwIfCancelled(options);
     return target;
   }
@@ -1036,12 +1043,14 @@ async function ensureJatSource(context, jat, options = {}) {
     } catch (error) {
       if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error.code)) throw error;
       const targetMarker = path.join(target, ".josh-room-source");
-      const verifiedTarget = await isRegularFile(targetMarker)
+      const verifiedTarget = await isRealDirectory(target)
+        && await isRegularFile(targetMarker)
         && (await fs.promises.readFile(targetMarker, "utf8")).trim() === jat.git_sha;
       if (!verifiedTarget) throw error;
     }
     const targetMarker = path.join(target, ".josh-room-source");
-    if (!(await isRegularFile(targetMarker))
+    if (!(await isRealDirectory(target))
+      || !(await isRegularFile(targetMarker))
       || (await fs.promises.readFile(targetMarker, "utf8")).trim() !== jat.git_sha) {
       throw new Error(`JAT source target is not a verified directory: ${target}`);
     }

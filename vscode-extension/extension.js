@@ -626,7 +626,15 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
     if (cancellationToken?.isCancellationRequested) throw cancellationError();
     return state.jat;
   }
-  if (state.jat?.artifact) return state.jat;
+  if (state.jat?.artifact) {
+    const jatRoot = await managedRuntime.ensureJatSource(
+      context,
+      state.manifest.jat,
+      runtimeProgressOptions(progressReporter, cancellationToken),
+    );
+    state.jat = { ...state.jat, jatRoot };
+    return state.jat;
+  }
   if (!managedJatPromise) {
     const preparation = { controller: createCancellationController(), consumers: new Set(), latest: undefined };
     jatPreparation = preparation;

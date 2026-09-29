@@ -2762,11 +2762,7 @@ test("warm local fallback verifies and reuses its saved JAT artifact", async (t)
   const warmPreparationCalls = spawnHarness.calls.slice(beforeWarm);
   assert.equal(state.localReady, true);
   assert.equal(state.jat.artifact, artifact);
-  const verify = warmPreparationCalls.find((call) => call.args[0] === "--no-build" && call.args[1] === "env");
-  assert.ok(verify);
-  assert.equal(verify.args.includes(artifact), true);
-  assert.equal(verify.args.includes("hauler"), true);
-  assert.equal(warmPreparationCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
+  assert.equal(warmPreparationCalls.some((call) => call.args[0] === "--no-build" && call.args[1] === "env"), false);
   extension.__test__.setRuntimeReadinessForTests(state);
   const beforeOperation = spawnHarness.calls.length;
 
@@ -2775,6 +2771,10 @@ test("warm local fallback verifies and reuses its saved JAT artifact", async (t)
   assert.equal(result.ok, true);
   assert.equal(result.operation, "jat");
   const operationCalls = spawnHarness.calls.slice(beforeOperation);
+  const verify = operationCalls.find((call) => call.args[0] === "--no-build" && call.args[1] === "env");
+  assert.ok(verify);
+  assert.equal(verify.args.includes(artifact), true);
+  assert.equal(verify.args.includes("hauler"), true);
   assert.equal(operationCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
   const operation = operationCalls.find((call) => call.args[0] === "run");
   assert.equal(operation.options.env.JOSH_ROOM_JAT_ARTIFACT, artifact);
