@@ -282,6 +282,11 @@ async function verifyLocalJatArtifact(context, rccRuntime, artifact, jatRobot, o
 async function buildLocalJatArtifact(context, rccRuntime, jatRobot, options = {}) {
   throwIfCancelled(options);
   const release = await acquireProcessLock(path.join(privatePaths(context).runtimeRoot, "local-jat-build.lock"), options);
+  const persistArtifact = async (result) => {
+    throwIfCancelled(options);
+    await options.onArtifact?.(result);
+    return result;
+  };
   try {
     const record = readLocalFallbackRecord(context);
     const cachedArtifact = record?.jat_source_sha === options.expectedJatSourceSha
@@ -289,9 +294,9 @@ async function buildLocalJatArtifact(context, rccRuntime, jatRobot, options = {}
       : undefined;
     if (isDigest(cachedArtifact)
       && await verifyLocalJatArtifact(context, rccRuntime, cachedArtifact, jatRobot, options)) {
-      return { artifact: cachedArtifact };
+      return persistArtifact({ artifact: cachedArtifact });
     }
-    return await buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options);
+    return persistArtifact(await buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options));
   } finally {
     await release();
   }

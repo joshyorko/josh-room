@@ -606,6 +606,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       runtimeProgressOptions(progressReporter, cancellationToken),
     );
     state.jat = { ...state.jat, jatRoot };
+    let identity;
     const localJat = await managedRuntime.buildLocalJatArtifact(
       context,
       state.rcc,
@@ -613,14 +614,16 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       {
         ...runtimeProgressOptions(progressReporter, cancellationToken),
         expectedJatSourceSha: state.manifest.jat.git_sha,
+        onArtifact: async (result) => {
+          identity = {
+            ...fallbackIdentity(state.manifest, state.rcc, state.controllerRoot, result.artifact),
+            local_jat_artifact_digest: result.artifact,
+          };
+          await managedRuntime.writeLocalFallbackRecord(context, identity);
+        },
       },
     );
     if (cancellationToken?.isCancellationRequested) throw cancellationError();
-    const identity = {
-      ...fallbackIdentity(state.manifest, state.rcc, state.controllerRoot, localJat.artifact),
-      local_jat_artifact_digest: localJat.artifact,
-    };
-    await managedRuntime.writeLocalFallbackRecord(context, identity);
     state.localIdentity = identity;
     state.jat = { ...state.jat, artifact: localJat.artifact };
     if (cancellationToken?.isCancellationRequested) throw cancellationError();
