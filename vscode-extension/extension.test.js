@@ -448,7 +448,7 @@ test("extension backend commands use the managed RCC controller boundary", async
   assert.notEqual(spawnHarness.calls[0].command, "josh-room");
 });
 
-test("managed extension controller invocation keeps receipt handling without inherited streams", async () => {
+test("managed extension controller invocation keeps receipt handling and stream inheritance", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-argv-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args, options }) => {
@@ -478,7 +478,7 @@ test("managed extension controller invocation keeps receipt handling without inh
   assert.deepEqual(await extension.__test__.runJoshRoom(["status"], root), { ok: true, operation: "status" });
   const args = spawnHarness.calls[0].args;
 
-  assert.equal(args.includes("--inherit-streams"), false);
+  assert.equal(args.includes("--inherit-streams"), true);
   assert.equal(args.includes("--receipt-file"), true);
   assert.equal(args.includes("--json"), true);
   assert.deepEqual(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 4), ["python", "-m", "josh_room"]);

@@ -718,7 +718,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
       ? (args) => ["run", "--silent", "-r", path.join(state.controllerRoot, "robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"]
       : (args, receiptFile) => [
         "--no-build", "env", "exec", "--artifact", state.controller.artifact,
-        "--permissive-local", "--receipt-file", receiptFile, "--json",
+        "--permissive-local", "--receipt-file", receiptFile, "--inherit-streams", "--json",
         "--", "python", "-m", "josh_room", ...args, "--json",
       ],
     env: managedRuntime.runtimeEnvironment(extensionContext, {
@@ -2477,11 +2477,29 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     encryptionCleanup();
     fs.rmSync(progressDirectory, { recursive: true, force: true });
   };
+  const controllerReceiptError = () => {
+    if (!runtime.controllerArtifact) return undefined;
+    try {
+      if (!fs.existsSync(receiptPath)) return new Error("RCC did not produce a controller receipt");
+      const receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
+      const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
+      const receiptArtifact = receiptObject && (receiptObject.artifactDigest ?? receiptObject.artifact_digest);
+      const receiptExit = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
+      if (!receiptObject || receiptArtifact !== runtime.controllerArtifact || typeof receiptExit !== "number" || !Number.isFinite(receiptExit) || receiptExit !== 0) {
+        return new Error("Managed controller receipt does not match the selected artifact");
+      }
+    } catch (error) {
+      return new Error(`Managed controller receipt is invalid: ${error.message}`);
+    }
+    return undefined;
+  };
   const terminalClosed = vscode.window.onDidCloseTerminal((closed) => {
     if (closed !== terminal) return;
+    const receiptError = controllerReceiptError();
     stopFollowing();
     terminalClosed.dispose();
-    outputChannel?.info("REGISTRY · Stopped");
+    if (receiptError) outputChannel?.error(`REGISTRY · ${receiptError.message}`);
+    else outputChannel?.info("REGISTRY · Stopped");
     refreshRoomStatus();
   });
   outputChannel?.info(`START · ${title}`);
@@ -2515,21 +2533,6 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         }
       },
     );
-    if (runtime.controllerArtifact) {
-      let receipt;
-      try {
-        if (!fs.existsSync(receiptPath)) throw new Error("RCC did not produce a controller receipt");
-        receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
-      } catch (error) {
-        throw new Error(`Managed controller receipt is invalid: ${error.message}`);
-      }
-      const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
-      const receiptArtifact = receiptObject && (receiptObject.artifactDigest ?? receiptObject.artifact_digest);
-      const receiptExit = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
-      if (!receiptObject || receiptArtifact !== runtime.controllerArtifact || typeof receiptExit !== "number" || !Number.isFinite(receiptExit) || receiptExit !== 0) {
-        throw new Error("Managed controller receipt does not match the selected artifact");
-      }
-    }
     if (!outcome || outcome.kind === "files") {
       setStatus("$(server-process) Serving files", title);
       outputChannel?.info(`READY · JAT fileserver · ${title}`);
