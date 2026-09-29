@@ -655,12 +655,17 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   options.onProgress?.({ phase: "compatibility", message: "Checking host/artifact compatibility" });
   throwIfCancelled(options);
   await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
-  const receiptFile = path.join(paths.logsRoot, "jat-artifact-receipt.json");
-  const executed = await runJson(
-    rccRuntime.executable,
-    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
-    { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
-  );
+  const receiptFile = path.join(paths.logsRoot, `jat-artifact-${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}.json`);
+  let executed;
+  try {
+    executed = await runJson(
+      rccRuntime.executable,
+      ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
+      { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
+    );
+  } finally {
+    await fs.promises.rm(receiptFile, { force: true }).catch(() => {});
+  }
   const artifactDigest = executed?.artifactDigest ?? executed?.artifact_digest;
   const exitCode = executed?.exitCode ?? executed?.exit_code ?? executed?.exit;
   if (artifactDigest !== artifact.digest || exitCode !== 0) {
