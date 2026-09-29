@@ -109,7 +109,7 @@ def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
         raise JATError("managed RCC did not produce its execution receipt")
     try:
         receipt = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise JATError("managed RCC produced an invalid execution receipt") from error
     if not isinstance(receipt, dict):
         raise JATError("managed RCC produced an incomplete execution receipt")
