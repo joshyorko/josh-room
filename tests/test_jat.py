@@ -130,6 +130,37 @@ def test_jat_rejects_inconsistent_receipt_exit_status(tmp_path, monkeypatch):
     with pytest.raises(JATError, match="exit status"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
 
+@pytest.mark.parametrize("receipt", ["null", "[]", '"scalar"', "{bad"])
+def test_jat_rejects_malformed_task_receipts(tmp_path, monkeypatch, receipt):
+    result_path = tmp_path / "output" / "result.json"
+    result_path.parent.mkdir()
+
+    def write_malformed(*_args, **_kwargs):
+        result_path.write_text(receipt)
+        return 0, ""
+
+    monkeypatch.setattr("josh_room.jat._run", write_malformed)
+    with pytest.raises(JATError, match="invalid|incomplete"):
+        __import__("josh_room.jat", fromlist=["run_build"]).run_build(
+            tmp_path, tmp_path / "source", tmp_path / "haul"
+        )
+
+
+@pytest.mark.parametrize("exit_status", [False, 0.0])
+def test_jat_rejects_non_integer_task_exit_status(tmp_path, monkeypatch, exit_status):
+    result_path = tmp_path / "output" / "result.json"
+    result_path.parent.mkdir()
+
+    def write_non_integer(*_args, **_kwargs):
+        result_path.write_text(json.dumps({"operation": "build", "success": True, "exit_status": exit_status}))
+        return 0, ""
+
+    monkeypatch.setattr("josh_room.jat._run", write_non_integer)
+    with pytest.raises(JATError, match="exit status"):
+        __import__("josh_room.jat", fromlist=["run_build"]).run_build(
+            tmp_path, tmp_path / "source", tmp_path / "haul"
+        )
+
 
 def test_local_fallback_jat_pins_cwd_and_result_directory(tmp_path, monkeypatch):
     result_path = tmp_path / "output" / "result.json"
@@ -325,6 +356,15 @@ def test_jat_cli_rejects_inconsistent_receipt_exit_status(tmp_path, monkeypatch)
     monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "0")
     stdout = _cli_stdout("inspect", exit_status=0)
     monkeypatch.setattr("josh_room.jat._run_cli", lambda *_args, **_kwargs: (1, stdout, ""))
+    with pytest.raises(JATError, match="inconsistent with RCC"):
+        __import__("josh_room.jat", fromlist=["run_inspect"]).run_inspect(tmp_path, tmp_path / "workspace.haul")
+
+
+@pytest.mark.parametrize("exit_status", [False, 0.0])
+def test_jat_cli_rejects_non_integer_exit_status(tmp_path, monkeypatch, exit_status):
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "0")
+    stdout = _cli_stdout("inspect", exit_status=exit_status)
+    monkeypatch.setattr("josh_room.jat._run_cli", lambda *_args, **_kwargs: (0, stdout, ""))
     with pytest.raises(JATError, match="inconsistent with RCC"):
         __import__("josh_room.jat", fromlist=["run_inspect"]).run_inspect(tmp_path, tmp_path / "workspace.haul")
 

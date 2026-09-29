@@ -209,11 +209,16 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
             if diagnostic:
                 message += f": {diagnostic}"
             raise JATError(message, {"argv": argv, "exit_status": exit_status, "diagnostic": diagnostic})
-        result = json.loads(result_path.read_text())
+        try:
+            result = json.loads(result_path.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise JATError("JAT task produced an invalid output/result.json") from error
+        if not isinstance(result, dict):
+            raise JATError("JAT task produced an incomplete output/result.json")
         expected_operation = task.lower()
         if result.get("operation") != expected_operation:
             raise JATError(f"JAT receipt operation mismatch: expected {expected_operation}", result)
-        if result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
+        if type(result.get("exit_status")) is not int or result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
             raise JATError("JAT receipt exit status is inconsistent with RCC", result)
         result.setdefault("diagnostics", diagnostic)
         result["executable"] = argv[0]
@@ -341,7 +346,7 @@ def _run_jat_cli(jat_root: Path, cli_args: list[str], *, foreground: bool = Fals
             raise JATError(message, {"argv": argv, "exit_status": exit_status, "diagnostic": diagnostic})
         if result.get("operation") != operation:
             raise JATError(f"JAT receipt operation mismatch: expected {operation}", result)
-        if result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
+        if type(result.get("exit_status")) is not int or result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
             raise JATError("JAT receipt exit status is inconsistent with RCC", result)
         result.setdefault("diagnostics", diagnostic)
         result["executable"] = argv[0]

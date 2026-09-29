@@ -398,6 +398,21 @@ async function reclaimStaleProcessLock(filename, staleAfterMs) {
       throw error;
     });
     if (!stat || Date.now() - stat.mtimeMs < staleAfterMs) return;
+    const currentEntries = await fs.promises.readdir(filename, { withFileTypes: true }).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!currentEntries || currentEntries.length) return;
+    const currentStat = await fs.promises.stat(filename).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (
+      !currentStat
+      || currentStat.dev !== stat.dev
+      || currentStat.ino !== stat.ino
+      || Date.now() - currentStat.mtimeMs < staleAfterMs
+    ) return;
     try {
       await fs.promises.rmdir(filename);
     } catch (error) {
