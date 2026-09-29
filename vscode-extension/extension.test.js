@@ -66,6 +66,76 @@ function createSpawnHarness(respond) {
   return { calls, spawn };
 }
 
+async function createLocalFallbackFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-fallback-regression-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const controllerRoot = path.join(root, "controller");
+  const jatRoot = path.join(root, "runtime", "jat", "a".repeat(40));
+  fs.mkdirSync(controllerRoot, { recursive: true });
+  fs.mkdirSync(jatRoot, { recursive: true });
+  fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
+  fs.writeFileSync(path.join(jatRoot, "robot.yaml"), "tasks: {}\n");
+  fs.writeFileSync(path.join(jatRoot, ".josh-room-source"), `${"a".repeat(40)}\n`);
+  const artifact = "sha256:" + "c".repeat(64);
+  const spawnHarness = createSpawnHarness(({ command, args, options }) => {
+    if (args[0] === "env" && args[1] === "publish") {
+      return {
+        stdout: JSON.stringify({
+          artifactDigest: artifact,
+          specificationDigest: "sha256:" + "d".repeat(64),
+          legacyBlueprintKey: "local",
+        }),
+      };
+    }
+    if (args[0] === "--no-build" && args[1] === "env") {
+      return { stdout: JSON.stringify({ artifactDigest: artifact, exitCode: 0 }) };
+    }
+    if ((args[0] === "--no-build" && args[1] === "ht") || args[0] === "ht") {
+      return { stdout: JSON.stringify([]) };
+    }
+    if (args[0] === "run") {
+      if (args.includes("jat") && !options.env.JOSH_ROOM_JAT_ARTIFACT) {
+        return { stderr: "managed Josh Room runtime is incomplete", code: 1 };
+      }
+      return { stdout: JSON.stringify({ ok: true, operation: args[args.indexOf("--") + 1] }) };
+    }
+    throw new Error(`unexpected fallback command: ${command} ${args.join(" ")}`);
+  });
+  const { vscode, warningResponses, statusItem } = createVscodeMock(root);
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  warningResponses.push("Build Locally");
+  const context = {
+    globalStorageUri: { fsPath: root },
+    extensionPath: __dirname,
+    secrets: { get: async () => undefined },
+  };
+  const manifest = {
+    extension_version: "0.1.25",
+    jat: {
+      git_sha: "a".repeat(40),
+      source_archive: {
+        asset: "josh-all-the-things.tar.gz",
+        url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "a".repeat(40),
+        sha256: "a".repeat(64),
+      },
+      environment_artifact: { digest: "sha256:" + "b".repeat(64) },
+    },
+    controller: {},
+  };
+  const rcc = { executable: "/private/managed/rcc", version: "v18.19.5" };
+  const jat = { jatRoot, sourceSha: manifest.jat.git_sha };
+  const error = new Error("controller artifact is unpublished");
+  error.fallbackReason = "controller-artifact-unpublished";
+  const state = await extension.__test__.localRuntimeState(
+    context, manifest, rcc, jat, error, { event() {} }, controllerRoot,
+  );
+  extension.__test__.setRuntimeForTests(undefined);
+  extension.__test__.setExtensionContextForTests(context);
+  extension.__test__.setRuntimeReadinessForTests(state);
+  extension.__test__.setStatusItem(statusItem);
+  return { root, context, controllerRoot, jatRoot, manifest, rcc, jat, error, state, artifact, spawnHarness, extension };
+}
+
 function createVscodeMock(workspaceFolder, textDocuments = []) {
   const quickPickCalls = [];
   const openDialogCalls = [];
@@ -2586,7 +2656,7 @@ test("choosing Build Locally prewarms the controller before local runtime readin
   fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
   const { vscode, warningResponses } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => args[0] === "ht"
-    ? { stdout: JSON.stringify({ ok: true }) }
+    ? { stdout: JSON.stringify([]) }
     : { stdout: JSON.stringify({ ok: true }) });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   warningResponses.push("Build Locally");
@@ -2610,16 +2680,15 @@ test("choosing Build Locally prewarms the controller before local runtime readin
   assert.equal(events.some((event) => /JAT.*materializ/i.test(event.message)), false);
 });
 
-test("local fallback keeps the pinned JAT artifact lazy and never rebuilds JAT", async () => {
+test("local fallback keeps JAT artifacts lazy until a JAT-backed operation", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-lazy-test-"));
   const controllerRoot = path.join(root, "controller");
-  const jatRoot = path.join(root, "jat");
   fs.mkdirSync(controllerRoot, { recursive: true });
-  fs.mkdirSync(jatRoot, { recursive: true });
   fs.writeFileSync(path.join(controllerRoot, "robot.yaml"), "tasks: {}\n");
-  fs.writeFileSync(path.join(jatRoot, "robot.yaml"), "tasks: {}\n");
   const { vscode, warningResponses } = createVscodeMock(root);
-  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const spawnHarness = createSpawnHarness(({ args }) => args.includes("ht")
+    ? { stdout: JSON.stringify([]) }
+    : { stdout: JSON.stringify({ ok: true }) });
   const extension = loadExtension(vscode, spawnHarness.spawn);
   warningResponses.push("Build Locally");
   const manifest = {
@@ -2632,7 +2701,7 @@ test("local fallback keeps the pinned JAT artifact lazy and never rebuilds JAT",
   const first = await extension.__test__.localRuntimeState(
     { globalStorageUri: { fsPath: root } }, manifest,
     { version: "v18.19.2", executable: "/private/managed/rcc" },
-    { jatRoot, sourceSha: manifest.jat.git_sha }, error, { event() {} }, controllerRoot,
+    { sourceSha: manifest.jat.git_sha }, error, { event() {} }, controllerRoot,
   );
   assert.equal(first.jat.artifact, undefined);
   assert.equal(spawnHarness.calls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
@@ -2647,6 +2716,83 @@ test("local fallback keeps the pinned JAT artifact lazy and never rebuilds JAT",
   const warmCalls = spawnHarness.calls.slice(beforeWarm);
   assert.equal(warmCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
   assert.equal(warmCalls.every((call) => call.args[0] === "--no-build"), true);
+});
+
+test("cold local fallback builds and verifies JAT lazily before the operation handoff", async (t) => {
+  const fixture = await createLocalFallbackFixture(t);
+  const { root, state, artifact, spawnHarness, extension, rcc, jatRoot, context } = fixture;
+  assert.equal(state.jat.artifact, undefined);
+
+  const result = await extension.__test__.runJoshRoom(["jat", "build"], root);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.operation, "jat");
+  const publish = spawnHarness.calls.find((call) => call.args[0] === "env" && call.args[1] === "publish");
+  assert.ok(publish);
+  assert.equal(publish.command, rcc.executable);
+  assert.equal(publish.args.includes(path.join(jatRoot, "robot.yaml")), true);
+  assert.equal(publish.args.includes("--provider"), true);
+  assert.equal(publish.args.includes("local"), true);
+  const verify = spawnHarness.calls.find((call) => call.args[0] === "--no-build" && call.args[1] === "env");
+  assert.ok(verify);
+  assert.equal(verify.command, rcc.executable);
+  assert.equal(verify.args.includes(artifact), true);
+  assert.equal(verify.args.includes("hauler"), true);
+  const operation = spawnHarness.calls.find((call) => call.args[0] === "run");
+  assert.ok(operation);
+  assert.equal(operation.options.env.JOSH_ROOM_JAT_ARTIFACT, artifact);
+  const record = managedRuntime.readLocalFallbackRecord(context);
+  assert.equal(record.jat_artifact_digest, artifact);
+  assert.equal(record.local_jat_artifact_digest, artifact);
+});
+
+test("warm local fallback verifies and reuses its saved JAT artifact", async (t) => {
+  const fixture = await createLocalFallbackFixture(t);
+  const { root, context, manifest, rcc, jat, error, controllerRoot, artifact, spawnHarness, extension } = fixture;
+  const record = managedRuntime.readLocalFallbackRecord(context);
+  await managedRuntime.writeLocalFallbackRecord(context, {
+    ...record,
+    jat_artifact_digest: artifact,
+    local_jat_artifact_digest: artifact,
+  });
+  const beforeWarm = spawnHarness.calls.length;
+  const state = await extension.__test__.localRuntimeState(
+    context, manifest, rcc, jat, error, { event() {} }, controllerRoot,
+  );
+  const warmPreparationCalls = spawnHarness.calls.slice(beforeWarm);
+  assert.equal(state.localReady, true);
+  assert.equal(state.jat.artifact, artifact);
+  const verify = warmPreparationCalls.find((call) => call.args[0] === "--no-build" && call.args[1] === "env");
+  assert.ok(verify);
+  assert.equal(verify.args.includes(artifact), true);
+  assert.equal(verify.args.includes("hauler"), true);
+  assert.equal(warmPreparationCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
+  extension.__test__.setRuntimeReadinessForTests(state);
+  const beforeOperation = spawnHarness.calls.length;
+
+  const result = await extension.__test__.runJoshRoom(["jat", "build"], root);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.operation, "jat");
+  const operationCalls = spawnHarness.calls.slice(beforeOperation);
+  assert.equal(operationCalls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
+  const operation = operationCalls.find((call) => call.args[0] === "run");
+  assert.equal(operation.options.env.JOSH_ROOM_JAT_ARTIFACT, artifact);
+});
+
+test("non-JAT operation leaves the local fallback JAT artifact lazy", async (t) => {
+  const fixture = await createLocalFallbackFixture(t);
+  const { root, state, spawnHarness, extension } = fixture;
+  assert.equal(state.jat.artifact, undefined);
+
+  const result = await extension.__test__.runJoshRoom(["status"], root);
+
+  assert.equal(result.ok, true);
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "env" && call.args[1] === "publish"), false);
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "--no-build" && call.args[1] === "env"), false);
+  const operation = spawnHarness.calls.find((call) => call.args[0] === "run");
+  assert.ok(operation);
+  assert.equal(operation.options.env.JOSH_ROOM_JAT_ARTIFACT, "");
 });
 
 test("failed local controller prewarm writes no marker and never reports runtime ready", async () => {

@@ -416,16 +416,24 @@ function controllerSourceVersion(controllerRoot) {
 }
 
 function fallbackIdentity(manifest, rcc, controllerRoot, jatArtifactDigest) {
+  const platform = managedRuntime.resolvePlatform();
+  const jatEnvironmentArtifact = managedRuntime.selectJatArtifact(manifest.jat, platform);
+  let controllerEnvironmentArtifact;
+  try {
+    controllerEnvironmentArtifact = managedRuntime.selectControllerArtifact(manifest.controller, platform);
+  } catch (error) {
+    if (error.fallbackReason !== "controller-artifact-unpublished") throw error;
+  }
   return {
     mode: "local-build-fallback",
     extension_version: manifest.extension_version,
     rcc_version: rcc.version,
-    platform: managedRuntime.resolvePlatform(),
+    platform,
     jat_source_sha: manifest.jat.git_sha,
     ...(jatArtifactDigest ? { jat_artifact_digest: jatArtifactDigest } : {}),
-    portable_jat_artifact_digest: manifest.jat.environment_artifact.digest,
+    portable_jat_artifact_digest: jatEnvironmentArtifact.digest,
     controller_source_version: controllerSourceVersion(controllerRoot),
-    controller_artifact_digest: manifest.controller.environment_artifact?.digest || "unpublished",
+    controller_artifact_digest: controllerEnvironmentArtifact?.digest || "unpublished",
   };
 }
 
@@ -434,15 +442,17 @@ async function localRuntimeState(context, manifest, rcc, jat, error, progressRep
   const options = runtimeProgressOptions(progressReporter, cancellationToken);
   progressReporter?.event({ stage: "runtime", message: `LOCAL BUILD FALLBACK: ${error.message}` });
   progressReporter?.event({ stage: "runtime", message: "Building controller environment locally; JAT remains lazy until a JAT operation" });
-  const jatRoot = jat?.jatRoot || await managedRuntime.ensureJatSource(context, manifest.jat, options);
+  const jatRoot = jat?.jatRoot;
   const identityBase = fallbackIdentity(manifest, rcc, controllerRoot);
   const warm = await managedRuntime.verifyLocalFallback(
     context, rcc, path.join(controllerRoot, "robot.yaml"), identityBase, options,
   );
   const marker = managedRuntime.readLocalFallbackRecord(context);
-  const localJatDigest = marker?.jat_artifact_digest || jat?.artifact;
-  const identity = fallbackIdentity(manifest, rcc, controllerRoot, localJatDigest);
-  let localJat;
+  const localJatDigest = (warm ? marker?.jat_artifact_digest : undefined) || jat?.artifact;
+  const identity = {
+    ...fallbackIdentity(manifest, rcc, controllerRoot, localJatDigest),
+    ...(warm && marker?.jat_artifact_digest ? { local_jat_artifact_digest: marker.jat_artifact_digest } : {}),
+  };
   let readyIdentity = identity;
   if (warm) {
     progressReporter?.event({ stage: "runtime", message: "Reusing verified LOCAL BUILD FALLBACK controller environment" });
@@ -454,16 +464,14 @@ async function localRuntimeState(context, manifest, rcc, jat, error, progressRep
       path.join(controllerRoot, "robot.yaml"),
       options,
     );
-    readyIdentity = fallbackIdentity(manifest, rcc, controllerRoot, localJat?.artifact || jat?.artifact);
-    await managedRuntime.writeLocalFallbackRecord(context, { ...readyIdentity, ...(localJat ? { local_jat_artifact_digest: localJat.artifact } : {}) });
+    readyIdentity = fallbackIdentity(manifest, rcc, controllerRoot, jat?.artifact);
+    await managedRuntime.writeLocalFallbackRecord(context, { ...readyIdentity, ...(jat?.artifact ? { local_jat_artifact_digest: jat.artifact } : {}) });
     progressReporter?.event({
       stage: "runtime",
-      message: localJat
-        ? "Controller and local JAT artifacts ready (LOCAL BUILD FALLBACK)"
-        : "Controller environment ready (LOCAL BUILD FALLBACK); JAT remains lazy",
+      message: "Controller environment ready (LOCAL BUILD FALLBACK); JAT remains lazy",
     });
   }
-  const effectiveJatDigest = localJat?.artifact || localJatDigest || jat?.artifact;
+  const effectiveJatDigest = localJatDigest || jat?.artifact;
   return {
     manifest,
     rcc,
@@ -591,7 +599,35 @@ function operationNeedsJat(args) {
 
 async function ensureJatForState(context, state, progressReporter, cancellationToken) {
   if (cancellationToken?.isCancellationRequested) throw cancellationError();
-  if (state.mode === "local-build-fallback" || state.jat?.artifact) return state.jat;
+  if (state.mode === "local-build-fallback") {
+    const jatRoot = await managedRuntime.ensureJatSource(
+      context,
+      state.manifest.jat,
+      runtimeProgressOptions(progressReporter, cancellationToken),
+    );
+    state.jat = { ...state.jat, jatRoot };
+    if (state.jat?.artifact) return state.jat;
+    const localJat = await managedRuntime.buildLocalJatArtifact(
+      context,
+      state.rcc,
+      path.join(jatRoot, "robot.yaml"),
+      {
+        ...runtimeProgressOptions(progressReporter, cancellationToken),
+        expectedJatSourceSha: state.manifest.jat.git_sha,
+      },
+    );
+    if (cancellationToken?.isCancellationRequested) throw cancellationError();
+    const identity = {
+      ...fallbackIdentity(state.manifest, state.rcc, state.controllerRoot, localJat.artifact),
+      local_jat_artifact_digest: localJat.artifact,
+    };
+    await managedRuntime.writeLocalFallbackRecord(context, identity);
+    state.localIdentity = identity;
+    state.jat = { ...state.jat, artifact: localJat.artifact };
+    if (cancellationToken?.isCancellationRequested) throw cancellationError();
+    return state.jat;
+  }
+  if (state.jat?.artifact) return state.jat;
   if (!managedJatPromise) {
     const preparation = { controller: createCancellationController(), consumers: new Set(), latest: undefined };
     jatPreparation = preparation;
@@ -1104,22 +1140,28 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       cancellation?.dispose();
       let result;
       let receipt;
+      let receiptPresent = false;
       try {
-        if (fs.existsSync(receiptPath)) receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
+        receiptPresent = fs.existsSync(receiptPath);
+        if (receiptPresent) receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
       } catch (error) {
         outputChannel?.warn(`Unable to read RCC receipt: ${error.message}`);
       }
-      const receiptExit = receipt && (receipt.exitCode ?? receipt.exit_code ?? receipt.exit);
-      if (receiptExit !== undefined && Number(receiptExit) !== 0) {
-        const detail = controllerErrorText(receipt.error) || controllerErrorText(receipt.message)
-          || controllerErrorText(receipt.compatibility) || `RCC controller exited with status ${receiptExit}`;
-        cleanup();
-        const failure = new Error(String(detail));
-        failure.receipt_exit_status = Number(receiptExit);
-        failure.stdout = sanitizeControllerText(stdout);
-        failure.stderr = sanitizeControllerText(stderr);
-        reject(failure);
-        return;
+      if (receiptPresent) {
+        const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
+        const receiptExitValue = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
+        const receiptExit = receiptExitValue;
+        if (!receiptObject || typeof receiptExitValue !== "number" || !Number.isFinite(receiptExitValue) || receiptExitValue !== 0) {
+          const detail = controllerErrorText(receiptObject?.error) || controllerErrorText(receiptObject?.message)
+            || controllerErrorText(receiptObject?.compatibility) || "RCC returned an invalid controller receipt";
+          cleanup();
+          const failure = new Error(String(detail));
+          if (Number.isFinite(receiptExit)) failure.receipt_exit_status = receiptExit;
+          failure.stdout = sanitizeControllerText(stdout);
+          failure.stderr = sanitizeControllerText(stderr);
+          reject(failure);
+          return;
+        }
       }
       try {
         if (fs.existsSync(resultPath)) result = parseControllerOutput(fs.readFileSync(resultPath, "utf8"));
