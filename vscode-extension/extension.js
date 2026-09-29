@@ -1167,7 +1167,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     child.on("close", (code) => {
       cancellation?.dispose();
       let result;
-      const managedController = runtime.mode !== "local-build-fallback";
+      const managedController = runtime.mode !== "local-build-fallback" && Boolean(runtime.controllerArtifact);
       let receipt;
       let receiptPresent = false;
       try {

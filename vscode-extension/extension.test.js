@@ -58,6 +58,14 @@ function createSpawnHarness(respond) {
     };
     calls.push({ command, args, options, child });
     const response = respond({ command, args, options, child, calls });
+    const receiptIndex = args.indexOf("--receipt-file");
+    const artifactIndex = args.indexOf("--artifact");
+    if (!response?.skipReceipt && receiptIndex >= 0 && artifactIndex >= 0 && !fs.existsSync(args[receiptIndex + 1])) {
+      fs.writeFileSync(args[receiptIndex + 1], JSON.stringify({
+        artifactDigest: args[artifactIndex + 1],
+        exitCode: 0,
+      }));
+    }
     if (response?.autoClose !== false) {
       setImmediate(() => child.closeWith(response));
     }
@@ -484,7 +492,7 @@ test("managed extension controller execution requires a matching RCC receipt", a
         const receiptIndex = args.indexOf("--receipt-file");
         fs.writeFileSync(args[receiptIndex + 1], JSON.stringify(receipt));
       }
-      return { stdout: "" };
+      return receipt ? { stdout: "" } : { stdout: "", skipReceipt: true };
     });
     const extension = loadExtension(vscode, spawnHarness.spawn);
     extension.__test__.setStatusItem(statusItem);
