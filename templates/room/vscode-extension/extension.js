@@ -713,9 +713,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
     jatRoot: state.jat?.jatRoot,
     jatArtifact: state.jat?.artifact,
     mode: state.mode,
-    markLocalReady: state.mode === "local-build-fallback"
-      ? () => managedRuntime.writeLocalFallbackRecord(extensionContext, state.localIdentity)
-      : undefined,
+    markLocalReady: undefined,
   };
 }
 
