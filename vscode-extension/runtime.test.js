@@ -907,6 +907,39 @@ test("cached JAT archive reuses local artifact digest without reimporting 6596 a
   assert.equal(calls[0].includes(artifact), true);
 });
 
+test("forced JAT recovery imports the pinned archive instead of reusing cached materialization", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-forced-jat-recovery-"));
+  const archive = Buffer.from("cached-jat-rcca");
+  const artifact = "sha256:" + "d".repeat(64);
+  const asset = "jat-runtime-linux-amd64.rcca";
+  const artifactRoot = path.join(root, "runtime", "jat-artifact");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  const manifest = manifestFor(Buffer.from("rcc"), {
+    jat: {
+      git_sha: "e".repeat(40),
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "e".repeat(40), sha256: "f".repeat(64) },
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset, url: "https://github.com/joshyorko/josh-all-the-things/releases/download/test/" + asset, sha256: digest(archive), size: archive.length },
+      },
+    },
+  });
+  const calls = [];
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
+    forceArchive: true,
+    ensureSource: async () => path.join(root, "jat-source"),
+    runJson: async (_executable, args) => {
+      calls.push(args);
+      return args[1] === "acquire"
+        ? { artifactDigest: artifact, verification: { valid: true } }
+        : { artifactDigest: artifact, exitCode: 0 };
+    },
+  });
+  assert.equal(calls[0].includes("--archive"), true);
+  assert.equal(calls[0].includes("--artifact"), false);
+});
+
 test("cached JAT archive imports only when the local RCC artifact is genuinely absent", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cached-jat-recovery-"));
   const archive = Buffer.from("cached-jat-rcca");
