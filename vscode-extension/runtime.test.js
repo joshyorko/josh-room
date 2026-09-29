@@ -114,8 +114,8 @@ test("pre-cancelled runtime preparation does not create storage or invoke seams"
     () => runtime.ensureJatRuntime(target, manifest, rcc, options),
     () => runtime.ensureJatSource(target, {}, options),
     () => runtime.prepareLocalController(target, rcc, "robot.yaml", options),
-    () => runtime.verifyLocalFallback(target, rcc, "robot.yaml", {}, options),
     () => runtime.buildLocalJatArtifact(target, rcc, "robot.yaml", options),
+    () => runtime.verifyLocalFallback(target, rcc, "robot.yaml", {}, options),
   ]) await assert.rejects(prepare(), cancelledError);
   assert.equal(fs.existsSync(target.globalStorageUri.fsPath), false);
   assert.equal(source.listeners.size, 0);
@@ -353,6 +353,50 @@ test("cancelling a JAT lock waiter leaves the other builder's lock intact", { ti
   assert.equal(fs.existsSync(lock), true);
 });
 
+test("stale JAT locks are reclaimed and old owners cannot remove replacements", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-stale-lock-"));
+  const lock = path.join(root, "runtime", "local-jat-build.lock");
+  fs.mkdirSync(lock, { recursive: true });
+  fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: 99999999, token: "stale" }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const artifact = "sha256:" + "b".repeat(64);
+  let replacement;
+  const result = await require("./runtime").buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
+    runJson: async () => {
+      const ownerFile = path.join(lock, "owner.json");
+      fs.rmSync(lock, { recursive: true, force: true });
+      fs.mkdirSync(lock, { recursive: true });
+      replacement = { pid: process.pid, token: "replacement" };
+      fs.writeFileSync(ownerFile, JSON.stringify(replacement));
+      return { artifactDigest: artifact, exitCode: 0 };
+    },
+  });
+  assert.equal(result.artifact, artifact);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(lock, "owner.json"), "utf8")).token, "replacement");
+});
+
+test("fresh malformed JAT lock owners are not reclaimed immediately", { timeout: 2000 }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fresh-malformed-lock-"));
+  const lock = path.join(root, "runtime", "local-jat-build.lock");
+  fs.mkdirSync(lock, { recursive: true });
+  fs.writeFileSync(path.join(lock, "owner.json"), "[]");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = cancellationSource();
+  const timer = setTimeout(() => source.cancel(), 20);
+  t.after(() => clearTimeout(timer));
+  let started = false;
+  await assert.rejects(require("./runtime").buildLocalJatArtifact(context(root), { executable: process.execPath }, "robot.yaml", {
+    cancellationToken: source.token,
+    runJson: async () => {
+      started = true;
+      throw new Error("fresh malformed lock was reclaimed");
+    },
+  }), cancelledError);
+  assert.equal(started, false);
+  assert.equal(fs.existsSync(lock), true);
+});
+
+
 test("RCC version cancellation kills a real child that ignores SIGTERM before settling", { skip: process.platform === "win32", timeout: 5000 }, async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-version-child-cancel-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -475,6 +519,31 @@ test("local fallback warm reuse requires the complete scoped identity", async ()
   assert.equal(api.localFallbackRecordMatches(api.readLocalFallbackRecord(runtimeContext), { ...expected, extension_version: "0.1.10" }), false);
 });
 
+test("locked fallback marker writes preserve matching JAT artifact identities", async () => {
+  const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fallback-marker-lock-test-"));
+  const runtimeContext = context(runtimeRoot);
+  const api = require("./runtime");
+  const identity = {
+    mode: "local-build-fallback",
+    extension_version: "0.1.5",
+    rcc_version: "v18.19.2",
+    platform: "linux-x64",
+    jat_source_sha: "a".repeat(40),
+    portable_jat_artifact_digest: "sha256:" + "c".repeat(64),
+    controller_source_version: "d".repeat(64),
+    controller_artifact_digest: "unpublished",
+  };
+  await api.writeLocalFallbackRecord(runtimeContext, {
+    ...identity,
+    jat_artifact_digest: "sha256:" + "b".repeat(64),
+    local_jat_artifact_digest: "sha256:" + "e".repeat(64),
+  });
+  await api.writeLocalFallbackRecordWithLock(runtimeContext, identity);
+  const saved = api.readLocalFallbackRecord(runtimeContext);
+  assert.equal(saved.jat_artifact_digest, "sha256:" + "b".repeat(64));
+  assert.equal(saved.local_jat_artifact_digest, "sha256:" + "e".repeat(64));
+});
+
 test("local fallback controller preparation runs managed RCC before readiness resolves", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-prewarm-test-"));
   const calls = [];
@@ -526,30 +595,39 @@ test("warm local fallback proof uses no-build ht vars and the exact private RCC 
   assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
 });
 
-test("local JAT fallback publishes once and verifies Hauler through the local artifact", async () => {
+test("local JAT fallback publishes through private RCC and verifies Hauler in the artifact", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-local-jat-artifact-test-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const calls = [];
   const artifact = "sha256:" + "d".repeat(64);
   const result = await require("./runtime").buildLocalJatArtifact(
     context(root),
-    { executable: "/private/managed/rcc", version: "v18.19.2" },
+    { executable: "/private/managed/rcc", version: "v18.19.5" },
     "/private/jat/robot.yaml",
     {
-      runJson: async (_executable, args, options) => {
-        calls.push({ args, options });
-        if (args[1] === "publish") return { artifactDigest: artifact, specificationDigest: "sha256:" + "e".repeat(64), legacyBlueprintKey: "blueprint" };
-        return { artifactDigest: artifact, exitCode: 0, verification: { valid: true } };
+      runJson: async (executable, args, options) => {
+        calls.push({ executable, args, options });
+        if (args[1] === "publish") {
+          return { artifactDigest: artifact, specificationDigest: "sha256:" + "e".repeat(64), legacyBlueprintKey: "blueprint" };
+        }
+        return { artifactDigest: artifact, exitCode: 0 };
       },
     },
   );
   assert.equal(result.artifact, artifact);
   assert.equal(calls.length, 2);
+  assert.equal(calls.every((call) => call.executable === "/private/managed/rcc"), true);
   assert.deepEqual(calls[0].args, ["env", "publish", "--robot", "/private/jat/robot.yaml", "--provider", "local", "--json"]);
   assert.equal(calls[1].args.includes("--no-build"), true);
   assert.equal(calls[1].args.includes("--artifact"), true);
+  assert.equal(calls[1].args.includes(artifact), true);
+  assert.equal(calls[1].args.includes("--provider"), true);
+  assert.equal(calls[1].args.includes("local"), true);
   assert.equal(calls[1].args.includes("hauler"), true);
-  assert.equal(calls[1].options.env.RCC_HOLOTREE_MODE, "private");
+  assert.equal(calls[0].options.env.RCC_HOLOTREE_MODE, "private");
+  assert.equal(calls[0].options.env.ROBOCORP_HOME, path.join(root, "robocorp"));
 });
+
 
 test("readManifest rejects an RCC pin without an exact digest", () => {
   assert.throws(
@@ -689,6 +767,24 @@ test("selectJatArtifact fails closed when Windows has no platform artifact", () 
     () => selectJatArtifact({ environment_artifact: { digest: "sha256:" + "a".repeat(64) } }, "win32-x64"),
     /missing a JAT environment artifact pin for win32-x64/,
   );
+});
+
+test("ensureManagedRcc keeps the Windows executable extension in its private path", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-rcc-path-test-"));
+  const binary = Buffer.from("managed-rcc-binary");
+  const manifest = manifestFor(binary);
+  manifest.rcc.platforms["win32-x64"] = {
+    asset: "rcc-windows64.exe",
+    url: "https://github.com/joshyorko/rcc/releases/download/v18.19.2/rcc-windows64.exe",
+    sha256: digest(binary),
+  };
+  const result = await ensureManagedRcc(context(root), manifest, {
+    platform: "win32-x64",
+    download: async (_url, destination) => fs.writeFileSync(destination, binary),
+    verifyVersion: async () => {},
+  });
+  assert.match(result.executable, /[\\/]win32-x64[\\/]rcc\.exe$/);
+  assert.deepEqual(fs.readFileSync(result.executable), binary);
 });
 
 test("ensureJatRuntime validates and acquires the selected Windows artifact", async () => {
@@ -843,7 +939,7 @@ test("cached JAT archive reuses local artifact digest without reimporting 6596 a
     },
   });
   const calls = [];
-  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
     ensureSource: async () => path.join(root, "jat-source"),
     runJson: async (_executable, args) => {
       calls.push(args);
@@ -855,6 +951,72 @@ test("cached JAT archive reuses local artifact digest without reimporting 6596 a
   assert.equal(calls[0].includes("--artifact"), true);
   assert.equal(calls[0].includes("--archive"), false);
   assert.equal(calls[0].includes(artifact), true);
+});
+
+test("forced JAT recovery imports the pinned archive instead of reusing cached materialization", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-forced-jat-recovery-"));
+  const archive = Buffer.from("cached-jat-rcca");
+  const artifact = "sha256:" + "d".repeat(64);
+  const asset = "jat-runtime-linux-amd64.rcca";
+  const artifactRoot = path.join(root, "runtime", "jat-artifact");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  const manifest = manifestFor(Buffer.from("rcc"), {
+    jat: {
+      git_sha: "e".repeat(40),
+      source_archive: { asset: "source.tar.gz", url: "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/" + "e".repeat(40), sha256: "f".repeat(64) },
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset, url: "https://github.com/joshyorko/josh-all-the-things/releases/download/test/" + asset, sha256: digest(archive), size: archive.length },
+      },
+    },
+  });
+  const calls = [];
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
+    forceArchive: true,
+    ensureSource: async () => path.join(root, "jat-source"),
+    runJson: async (_executable, args) => {
+      calls.push(args);
+      return args[1] === "acquire"
+        ? { artifactDigest: artifact, verification: { valid: true } }
+        : { artifactDigest: artifact, exitCode: 0 };
+    },
+  });
+  assert.equal(calls[0].includes("--archive"), true);
+  assert.equal(calls[0].includes("--artifact"), false);
+});
+
+test("invalid cached JAT verification imports the pinned archive", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-invalid-cached-jat-"));
+  const archive = Buffer.from("cached-jat-rcca");
+  const artifact = "sha256:" + "f".repeat(64);
+  const asset = "jat-runtime-linux-amd64.rcca";
+  const artifactRoot = path.join(root, "runtime", "jat-artifact");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  const manifest = manifestFor(Buffer.from("rcc"), {
+    jat: {
+      git_sha: "1".repeat(40),
+      source_archive: { asset: "source.tar.gz", url: "https://github.com/joshyorko/josh-all-the-things/tarball/" + "1".repeat(40), sha256: "2".repeat(64) },
+      environment_artifact: {
+        digest: artifact,
+        archive: { asset, url: "https://github.com/joshyorko/josh-all-the-things/releases/download/test/" + asset, sha256: digest(archive), size: archive.length },
+      },
+    },
+  });
+  const calls = [];
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
+    ensureSource: async () => path.join(root, "jat-source"),
+    runJson: async (_executable, args) => {
+      calls.push(args);
+      if (calls.length === 1) return { artifactDigest: artifact, verification: { valid: false } };
+      return args[1] === "acquire"
+        ? { artifactDigest: artifact, verification: { valid: true } }
+        : { artifactDigest: artifact, exitCode: 0 };
+    },
+  });
+  assert.equal(calls[0].includes("--artifact"), true);
+  assert.equal(calls[1].includes("--archive"), true);
 });
 
 test("cached JAT archive imports only when the local RCC artifact is genuinely absent", async () => {
@@ -876,7 +1038,7 @@ test("cached JAT archive imports only when the local RCC artifact is genuinely a
     },
   });
   const calls = [];
-  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+  await ensureJatRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
     ensureSource: async () => path.join(root, "jat-source"),
     runJson: async (_executable, args) => {
       calls.push(args);
@@ -984,7 +1146,7 @@ test("cached controller archive reuses local artifact digest without archive imp
     },
   });
   const calls = [];
-  await ensureControllerRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.3" }, {
+  await ensureControllerRuntime(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.5" }, {
     runJson: async (_executable, args) => {
       calls.push(args);
       return { artifactDigest: artifact, verification: { valid: true }, cacheHit: "local-materialization" };

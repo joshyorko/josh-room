@@ -12,12 +12,13 @@ const JAT_SOURCE_URL_PREFIX = "https://api.github.com/repos/joshyorko/josh-all-t
 const MANIFEST_PATH = path.join(__dirname, "runtime", "manifest.json");
 const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)";
 
-function isDigest(value) {
-  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
-}
 
 function haulerVersionCommand() {
   return ["python", "-c", HAULER_VERSION_CHECK];
+}
+
+function isDigest(value) {
+  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
 }
 
 function rccPathIsSafe(filename) {
@@ -83,11 +84,11 @@ function runtimeCommand(options) {
 }
 
 async function acquirePinnedArtifact({
-  rccExecutable, artifactDigest, archivePath, archiveCached, runJson, cwd, environment, onProgress, onOutput, label, cancellationToken,
+  rccExecutable, artifactDigest, archivePath, archiveCached, forceArchive, runJson, cwd, environment, onProgress, onOutput, label, cancellationToken,
 }) {
   const options = { cwd, env: environment, onOutput, cancellationToken };
   throwIfCancelled(options);
-  if (archiveCached) {
+  if (archiveCached && !forceArchive) {
     onProgress?.({ phase: "verify", message: `Checking cached ${label} materialization` });
     try {
       const acquired = await runJson(
@@ -95,11 +96,16 @@ async function acquirePinnedArtifact({
         ["env", "acquire", "--artifact", artifactDigest, "--permissive-local", "--json"],
         options,
       );
-      if (acquired.artifactDigest === artifactDigest && acquired.verification?.valid === true) {
+      const artifact = acquired?.artifactDigest ?? acquired?.artifact_digest;
+      if (artifact === artifactDigest && acquired?.verification?.valid === true) {
         onProgress?.({ phase: "reuse", message: `Reusing cached ${label} materialization` });
+        throwIfCancelled(options);
+        return acquired;
       }
-      throwIfCancelled(options);
-      return acquired;
+      const detail = acquired?.error || acquired?.message;
+      if (typeof detail === "string" && /incompatib|os[-_ ]?version|minimum[-_ ]?version|kernel|compatibility/i.test(detail)) {
+        throw new Error(detail);
+      }
     } catch (error) {
       throwIfCancelled(options);
       if (!localArtifactMissing(error)) throw error;
@@ -211,6 +217,12 @@ function localFallbackRecordMatches(record, expected) {
   return Object.entries(expected).every(([key, value]) => record[key] === value);
 }
 
+function validHtVarsResult(result) {
+  return result && typeof result === "object"
+    && result.error === undefined
+    && (Array.isArray(result) || Array.isArray(result.vars));
+}
+
 async function verifyLocalFallback(context, rccRuntime, controllerRobot, expected, options = {}) {
   throwIfCancelled(options);
   const record = readLocalFallbackRecord(context);
@@ -224,19 +236,8 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
       ["--no-build", "ht", "vars", "--robot", controllerRobot, "--json"],
       { cwd: privatePaths(context).storageRoot, env: environment, onOutput: options.onOutput },
     );
-    if (result === undefined || result.error !== undefined) return false;
-    const artifact = record.jat_artifact_digest;
-    if (!artifact) return true;
-    await fs.promises.mkdir(privatePaths(context).logsRoot, { recursive: true, mode: 0o700 });
-    const receiptFile = path.join(privatePaths(context).logsRoot, `local-jat-warm-${process.pid}-${Date.now()}.json`);
-    options.onProgress?.({ phase: "reuse", message: "Verifying cached local JAT artifact" });
-    const verified = await runJson(
-      rccRuntime.executable,
-      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
-      { cwd: privatePaths(context).storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
-    );
-    const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
-    return verified !== undefined && verified.error === undefined && verified.artifactDigest === artifact && exitCode === 0;
+    if (!validHtVarsResult(result)) return false;
+    return true;
   } catch (error) {
     throwIfCancelled(options);
     if (error.code === "ABORT_ERR" || error.name === "AbortError") throw error;
@@ -254,15 +255,52 @@ async function prepareLocalController(context, rccRuntime, controllerRobot, opti
     ["ht", "vars", "-r", controllerRobot, "--json"],
     { cwd: path.dirname(controllerRobot), env: environment, onOutput: options.onOutput },
   );
-  if (!result || result.error !== undefined) throw new Error("managed RCC did not prepare the local controller environment");
+  if (!validHtVarsResult(result)) throw new Error("managed RCC did not prepare the local controller environment");
   return result;
+}
+
+async function verifyLocalJatArtifact(context, rccRuntime, artifact, jatRobot, options = {}) {
+  throwIfCancelled(options);
+  const paths = privatePaths(context);
+  const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
+  await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
+  const receiptFile = path.join(paths.logsRoot, `local-jat-reuse-${process.pid}-${Date.now()}.json`);
+  try {
+    const verified = await runtimeCommand(options)(
+      rccRuntime.executable,
+      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
+      { cwd: path.dirname(jatRobot), env: environment, receiptFile, onOutput: options.onOutput },
+    );
+    const artifactDigest = verified?.artifactDigest ?? verified?.artifact_digest;
+    const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
+    return artifactDigest === artifact && exitCode === 0;
+  } catch (error) {
+    throwIfCancelled(options);
+    if (error.code === "ABORT_ERR" || error.name === "AbortError") throw error;
+    return false;
+  } finally {
+    await fs.promises.rm(receiptFile, { force: true }).catch(() => {});
+  }
 }
 
 async function buildLocalJatArtifact(context, rccRuntime, jatRobot, options = {}) {
   throwIfCancelled(options);
   const release = await acquireProcessLock(path.join(privatePaths(context).runtimeRoot, "local-jat-build.lock"), options);
+  const persistArtifact = async (result) => {
+    throwIfCancelled(options);
+    await options.onArtifact?.(result);
+    return result;
+  };
   try {
-    return await buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options);
+    const record = readLocalFallbackRecord(context);
+    const cachedArtifact = record?.jat_source_sha === options.expectedJatSourceSha
+      ? (record?.local_jat_artifact_digest || record?.jat_artifact_digest)
+      : undefined;
+    if (isDigest(cachedArtifact)
+      && await verifyLocalJatArtifact(context, rccRuntime, cachedArtifact, jatRobot, options)) {
+      return persistArtifact({ artifact: cachedArtifact });
+    }
+    return persistArtifact(await buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options));
   } finally {
     await release();
   }
@@ -284,22 +322,27 @@ async function buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, opti
   await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
   const receiptFile = path.join(paths.logsRoot, `local-jat-${process.pid}-${Date.now()}.json`);
   options.onProgress?.({ phase: "local-jat", message: "Verifying Hauler through local JAT artifact" });
-  const verified = await runJson(
-    rccRuntime.executable,
-    ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
-    { cwd: path.dirname(jatRobot), env: environment, receiptFile, onOutput: options.onOutput },
-  );
-  const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
-  if (verified?.artifactDigest !== artifact && verified?.artifact_digest !== artifact || exitCode !== 0) {
-    throw new Error("local JAT artifact failed Hauler version verification");
+  let verified;
+  try {
+    verified = await runJson(
+      rccRuntime.executable,
+      ["--no-build", "env", "exec", "--artifact", artifact, "--provider", "local", "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--", "hauler", "version"],
+      { cwd: path.dirname(jatRobot), env: environment, receiptFile, onOutput: options.onOutput },
+    );
+    const exitCode = verified?.exitCode ?? verified?.exit_code ?? verified?.exit;
+    if ((verified?.artifactDigest !== artifact && verified?.artifact_digest !== artifact) || exitCode !== 0) {
+      throw new Error("local JAT artifact failed Hauler version verification");
+    }
+  } finally {
+    await fs.promises.rm(receiptFile, { force: true }).catch(() => {});
   }
   return {
     artifact,
     specification: published.specificationDigest || published.specification_digest,
     blueprint: published.legacyBlueprintKey || published.legacy_blueprint_key,
-    receiptFile,
   };
 }
+
 
 async function writeLocalFallbackRecord(context, record) {
   const filename = localFallbackRecordPath(context);
@@ -311,20 +354,217 @@ async function writeLocalFallbackRecord(context, record) {
   await fs.promises.rename(temporary, filename);
 }
 
+async function writeLocalFallbackRecordWithLock(context, record, options = {}) {
+  const release = await acquireProcessLock(path.join(privatePaths(context).runtimeRoot, "local-jat-build.lock"), options);
+  try {
+    const current = readLocalFallbackRecord(context);
+    const identityKeys = [
+      "mode", "extension_version", "rcc_version", "platform", "jat_source_sha",
+      "portable_jat_artifact_digest", "controller_source_version", "controller_artifact_digest",
+    ];
+    const sameIdentity = identityKeys.every((key) => current?.[key] === record?.[key]);
+    const merged = { ...record };
+    if (sameIdentity) {
+      if (!merged.local_jat_artifact_digest && current?.local_jat_artifact_digest) {
+        merged.local_jat_artifact_digest = current.local_jat_artifact_digest;
+      }
+      if (!merged.jat_artifact_digest && current?.jat_artifact_digest) {
+        merged.jat_artifact_digest = current.jat_artifact_digest;
+      }
+    }
+    await writeLocalFallbackRecord(context, merged);
+  } finally {
+    await release();
+  }
+}
+
 async function clearLocalFallbackRecord(context) {
   await fs.promises.rm(localFallbackRecordPath(context), { force: true });
 }
+
+async function processLockIsStale(filename, staleAfterMs) {
+  try {
+    const entries = await fs.promises.readdir(filename, { withFileTypes: true });
+    const ownerEntry = entries.find((entry) => entry.isFile() && entry.name.startsWith(".owner-"))
+      || entries.find((entry) => entry.isFile() && entry.name === "owner.json");
+    if (ownerEntry) {
+      const owner = JSON.parse(await fs.promises.readFile(path.join(filename, ownerEntry.name), "utf8"));
+      const validOwner = owner && typeof owner === "object" && !Array.isArray(owner)
+        && typeof owner.token === "string" && Boolean(owner.token);
+      if (validOwner && Number.isInteger(owner.pid) && owner.pid > 0) {
+        try {
+          process.kill(owner.pid, 0);
+          return false;
+        } catch (error) {
+          if (error.code === "EPERM") return false;
+          if (error.code === "ESRCH") return true;
+        }
+      }
+    }
+  } catch (error) {
+    if (error.name !== "SyntaxError" && error.code !== "ENOENT" && error.code !== "EISDIR") throw error;
+  }
+  const stat = await fs.promises.stat(filename).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  return Boolean(stat && Date.now() - stat.mtimeMs >= staleAfterMs);
+}
+
+async function reclaimStaleProcessLock(filename, staleAfterMs) {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(filename, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  const ownerEntry = entries.find((entry) => entry.isFile() && entry.name.startsWith(".owner-"))
+    || entries.find((entry) => entry.isFile() && entry.name === "owner.json");
+  if (!ownerEntry) {
+    const stat = await fs.promises.stat(filename).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!stat || Date.now() - stat.mtimeMs < staleAfterMs) return;
+    const currentEntries = await fs.promises.readdir(filename, { withFileTypes: true }).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!currentEntries || currentEntries.length) return;
+    const currentStat = await fs.promises.stat(filename).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (
+      !currentStat
+      || currentStat.dev !== stat.dev
+      || currentStat.ino !== stat.ino
+      || Date.now() - currentStat.mtimeMs < staleAfterMs
+    ) return;
+    try {
+      await fs.promises.rmdir(filename);
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+    }
+    return;
+  }
+  const ownerFilename = path.join(filename, ownerEntry.name);
+  let observedToken;
+  try {
+    const owner = JSON.parse(await fs.promises.readFile(ownerFilename, "utf8"));
+    const validOwner = owner && typeof owner === "object" && typeof owner.token === "string" && owner.token;
+    observedToken = validOwner ? owner.token : undefined;
+    let ownerDead = false;
+    if (validOwner && Number.isInteger(owner.pid) && owner.pid > 0) {
+      try {
+        process.kill(owner.pid, 0);
+        return;
+      } catch (error) {
+        if (error.code === "EPERM") return;
+        if (error.code !== "ESRCH") throw error;
+        ownerDead = true;
+      }
+    }
+    if (validOwner && !ownerDead) {
+      const stat = await fs.promises.stat(filename).catch((error) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (!stat || Date.now() - stat.mtimeMs < staleAfterMs) return;
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    if (error.name !== "SyntaxError") throw error;
+    const stat = await fs.promises.stat(filename).catch((statError) => {
+      if (statError.code === "ENOENT") return undefined;
+      throw statError;
+    });
+    if (!stat || Date.now() - stat.mtimeMs < staleAfterMs) return;
+  }
+  let currentOwner;
+  try {
+    currentOwner = JSON.parse(await fs.promises.readFile(ownerFilename, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    if (error.name !== "SyntaxError") throw error;
+  }
+  const markerToken = ownerEntry.name.startsWith(".owner-") ? ownerEntry.name.slice(".owner-".length) : undefined;
+  if (markerToken && currentOwner?.token && currentOwner.token !== markerToken) return;
+  if (!markerToken && observedToken !== undefined && currentOwner?.token !== observedToken) return;
+  if (!markerToken && observedToken === undefined && currentOwner?.token) return;
+  const directoryStat = await fs.promises.stat(filename).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!directoryStat) return;
+  try {
+    await fs.promises.unlink(ownerFilename);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  const currentEntries = await fs.promises.readdir(filename, { withFileTypes: true }).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  const currentStat = await fs.promises.stat(filename).catch((error) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (
+    !currentEntries
+    || currentEntries.length
+    || !currentStat
+    || currentStat.dev !== directoryStat.dev
+    || currentStat.ino !== directoryStat.ino
+  ) return;
+  try {
+    await fs.promises.rmdir(filename);
+  } catch (error) {
+    if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+  }
+}
+
 
 async function acquireProcessLock(filename, options = {}, timeoutMs = 30 * 60 * 1000) {
   throwIfCancelled(options);
   await fs.promises.mkdir(path.dirname(filename), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + timeoutMs;
+  const staleAfterMs = 30 * 1000;
   while (true) {
     throwIfCancelled(options);
     try {
       await fs.promises.mkdir(filename, { recursive: false, mode: 0o700 });
-      return async () => fs.promises.rm(filename, { recursive: true, force: true });
+      const token = crypto.randomUUID();
+      const marker = path.join(filename, `.owner-${token}`);
+      await fs.promises.writeFile(
+        marker,
+        `${JSON.stringify({ pid: process.pid, started_at: Date.now(), token })}\n`,
+        { mode: 0o600, flag: "wx" },
+      );
+      const lockStat = await fs.promises.stat(filename);
+      return async () => {
+        try {
+          await fs.promises.unlink(marker);
+          const currentEntries = await fs.promises.readdir(filename, { withFileTypes: true });
+          const currentStat = await fs.promises.stat(filename);
+          if (
+            currentEntries.length
+            || currentStat.dev !== lockStat.dev
+            || currentStat.ino !== lockStat.ino
+          ) return;
+          await fs.promises.rmdir(filename);
+        } catch (error) {
+          if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+        }
+      };
     } catch (error) {
+      if (error.code === "ENOENT") continue;
+      if (error.code === "EEXIST" && await processLockIsStale(filename, staleAfterMs)) {
+        await reclaimStaleProcessLock(filename, staleAfterMs);
+        continue;
+      }
       if (error.code !== "EEXIST" || Date.now() >= deadline) {
         throw new Error(`managed runtime lock unavailable at ${filename}: ${error.message}`);
       }
@@ -332,6 +572,7 @@ async function acquireProcessLock(filename, options = {}, timeoutMs = 30 * 60 * 
     }
   }
 }
+
 
 async function ensureFreeSpace(root, requiredBytes, label) {
   if (!Number.isInteger(requiredBytes) || requiredBytes < 1 || typeof fs.promises.statfs !== "function") return;
@@ -355,7 +596,8 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
     throw new Error(`Josh Room cannot start on ${platform}: ${detail}`);
   }
   const paths = privatePaths(context);
-  const executable = path.join(paths.runtimeRoot, "rcc", manifest.rcc.version, platform, "rcc");
+  const executableName = platform === "win32-x64" ? "rcc.exe" : "rcc";
+  const executable = path.join(paths.runtimeRoot, "rcc", manifest.rcc.version, platform, executableName);
   const directory = path.dirname(executable);
   await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
   const verifyVersion = (executable, expected) => cancellableCall(options.verifyVersion || verifyRccVersion, [executable, expected], options);
@@ -399,6 +641,39 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
   report("Managed RCC ready");
   throwIfCancelled(options);
   return { executable, storageRoot: paths.storageRoot, platform, version: manifest.rcc.version };
+}
+
+async function verifyJatArtifact(context, manifestSource, rccRuntime, artifactDigest, options = {}) {
+  throwIfCancelled(options);
+  const manifest = readManifest(manifestSource);
+  const platform = options.platform || resolvePlatform();
+  const artifact = selectJatArtifact(manifest.jat, platform);
+  if (!artifactDigest || artifact?.digest !== artifactDigest) {
+    throw new Error("managed JAT artifact does not match the pinned manifest artifact");
+  }
+  if (!rccRuntime?.executable || !rccRuntime?.version) {
+    throw new Error("managed RCC runtime is required for JAT verification");
+  }
+  const paths = privatePaths(context);
+  await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
+  const environment = {
+    ...process.env,
+    ROBOCORP_HOME: paths.rccHome,
+    RCC_HOLOTREE_MODE: "private",
+  };
+  const runJson = runtimeCommand(options);
+  const receiptFile = path.join(paths.logsRoot, `jat-artifact-${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}.json`);
+  const executed = await runJson(
+    rccRuntime.executable,
+    ["--no-build", "env", "exec", "--artifact", artifactDigest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
+    { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
+  );
+  const observedArtifact = executed?.artifactDigest ?? executed?.artifact_digest;
+  const exitCode = executed?.exitCode ?? executed?.exit_code ?? executed?.exit;
+  if (observedArtifact !== artifactDigest || exitCode !== 0) {
+    throw new Error("acquired JAT environment failed Hauler version verification");
+  }
+  return artifactDigest;
 }
 
 async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {}) {
@@ -473,6 +748,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
       artifactDigest: artifact.digest,
       archivePath,
       archiveCached,
+      forceArchive: options.forceArchive === true,
       runJson,
       cwd: paths.storageRoot,
       environment,
@@ -484,8 +760,9 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   } catch (error) {
     throw compatibilityError(error);
   }
-  if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
-    const detail = acquired.error || acquired.message || "RCC did not validate the pinned JAT environment artifact";
+  const acquiredArtifact = acquired?.artifactDigest ?? acquired?.artifact_digest;
+  if (acquiredArtifact !== artifact.digest || acquired?.verification?.valid !== true) {
+    const detail = acquired?.error || acquired?.message || "RCC did not validate the pinned JAT environment artifact";
     const error = new Error(`RCC rejected the pinned JAT environment artifact: ${detail}`);
     if (/incompatib|os[-_ ]?version|minimum[-_ ]?version|kernel|compatibility/i.test(String(detail))) {
       error.fallbackReason = "environment-compatibility";
@@ -494,16 +771,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   }
   options.onProgress?.({ phase: "compatibility", message: "Checking host/artifact compatibility" });
   throwIfCancelled(options);
-  await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
-  const receiptFile = path.join(paths.logsRoot, "jat-artifact-receipt.json");
-  const executed = await runJson(
-    rccRuntime.executable,
-    ["--no-build", "env", "exec", "--artifact", artifact.digest, "--permissive-local", "--inherit-streams", "--receipt-file", receiptFile, "--json", "--", ...haulerVersionCommand()],
-    { cwd: paths.storageRoot, env: environment, receiptFile, onOutput: options.onOutput },
-  );
-  if (executed.artifactDigest !== artifact.digest || executed.exitCode !== 0) {
-    throw new Error("acquired JAT environment failed Hauler version verification");
-  }
+  await verifyJatArtifact(context, manifestSource, rccRuntime, artifact.digest, options);
   options.onProgress?.({ phase: "holotree", message: "Materializing JAT Holotree" });
   throwIfCancelled(options);
   return {
@@ -590,8 +858,9 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   } catch (error) {
     throw compatibilityError(error);
   }
-  if (acquired.artifactDigest !== artifact.digest || acquired.verification?.valid !== true) {
-    const detail = acquired.error || acquired.message || "RCC did not validate the pinned controller environment artifact";
+  const acquiredArtifact = acquired?.artifactDigest ?? acquired?.artifact_digest;
+  if (acquiredArtifact !== artifact.digest || acquired?.verification?.valid !== true) {
+    const detail = acquired?.error || acquired?.message || "RCC did not validate the pinned controller environment artifact";
     const error = new Error(`RCC rejected the pinned controller environment artifact: ${detail}`);
     if (/incompatib|os[-_ ]?version|minimum[-_ ]?version|kernel|compatibility/i.test(String(detail))) {
       error.fallbackReason = "environment-compatibility";
@@ -634,6 +903,16 @@ async function isRegularFile(filename) {
     throw error;
   }
 }
+async function isRealDirectory(filename) {
+  try {
+    const stat = await fs.promises.lstat(filename);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 
 async function pathExists(filename) {
   try {
@@ -800,9 +1079,13 @@ function parseJsonOutput(output) {
 }
 
 async function runJsonCommand(executable, args, options = {}) {
+  if (options.receiptFile) await fs.promises.rm(options.receiptFile, { force: true });
   const { stdout, stderr, code } = await runCapturedCommand(executable, args, options);
   throwIfCancelled(options);
-  if (options.receiptFile && fs.existsSync(options.receiptFile)) {
+  if (options.receiptFile) {
+    if (!fs.existsSync(options.receiptFile)) {
+      throw new Error("managed RCC did not produce an execution receipt");
+    }
     try {
       return JSON.parse(fs.readFileSync(options.receiptFile, "utf8"));
     } catch (_error) {
@@ -835,11 +1118,20 @@ async function ensureJatSource(context, jat, options = {}) {
   }
   const target = path.join(paths.jatRoot, jat.git_sha);
   const marker = path.join(target, ".josh-room-source");
-  if (await isRegularFile(marker) && (await fs.promises.readFile(marker, "utf8")).trim() === jat.git_sha) {
+  const verifiedTarget = async () => (
+    await isRealDirectory(target)
+    && await isRegularFile(marker)
+    && (await fs.promises.readFile(marker, "utf8")).trim() === jat.git_sha
+  );
+  if (await verifiedTarget()) {
     throwIfCancelled(options);
     return target;
   }
   if (await pathExists(target)) {
+    if (await verifiedTarget()) {
+      throwIfCancelled(options);
+      return target;
+    }
     throw new Error(`JAT source target is not a verified directory: ${target}`);
   }
   throwIfCancelled(options);
@@ -858,7 +1150,22 @@ async function ensureJatSource(context, jat, options = {}) {
     throwIfCancelled(options);
     await fs.promises.writeFile(path.join(staged, ".josh-room-source"), `${jat.git_sha}\n`, { mode: 0o600 });
     throwIfCancelled(options);
-    await fs.promises.rename(staged, target);
+    try {
+      await fs.promises.rename(staged, target);
+    } catch (error) {
+      if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error.code)) throw error;
+      const targetMarker = path.join(target, ".josh-room-source");
+      const verifiedTarget = await isRealDirectory(target)
+        && await isRegularFile(targetMarker)
+        && (await fs.promises.readFile(targetMarker, "utf8")).trim() === jat.git_sha;
+      if (!verifiedTarget) throw error;
+    }
+    const targetMarker = path.join(target, ".josh-room-source");
+    if (!(await isRealDirectory(target))
+      || !(await isRegularFile(targetMarker))
+      || (await fs.promises.readFile(targetMarker, "utf8")).trim() !== jat.git_sha) {
+      throw new Error(`JAT source target is not a verified directory: ${target}`);
+    }
   } finally {
     await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -906,6 +1213,7 @@ module.exports = {
   ensureManagedRcc,
   ensureControllerRuntime,
   ensureJatRuntime,
+  verifyJatArtifact,
   ensureJatSource,
   clearLocalFallbackRecord,
   localFallbackRecordMatches,
@@ -915,6 +1223,7 @@ module.exports = {
   prepareLocalController,
   buildLocalJatArtifact,
   writeLocalFallbackRecord,
+  writeLocalFallbackRecordWithLock,
   privatePaths,
   readManifest,
   resolvePlatform,

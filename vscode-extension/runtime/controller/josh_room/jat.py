@@ -109,11 +109,13 @@ def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
         raise JATError("managed RCC did not produce its execution receipt")
     try:
         receipt = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise JATError("managed RCC produced an invalid execution receipt") from error
+    if not isinstance(receipt, dict):
+        raise JATError("managed RCC produced an incomplete execution receipt")
     observed = receipt.get("artifactDigest", receipt.get("artifact_digest"))
     reported = receipt.get("exitCode", receipt.get("exit_code", receipt.get("exit")))
-    if observed != artifact or reported is not None and int(reported) != exit_status:
+    if observed != artifact or type(reported) is not int or reported != exit_status:
         raise JATError("managed RCC execution receipt does not match the selected artifact")
 
 
@@ -207,11 +209,16 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
             if diagnostic:
                 message += f": {diagnostic}"
             raise JATError(message, {"argv": argv, "exit_status": exit_status, "diagnostic": diagnostic})
-        result = json.loads(result_path.read_text())
+        try:
+            result = json.loads(result_path.read_text())
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise JATError("JAT task produced an invalid output/result.json") from error
+        if not isinstance(result, dict):
+            raise JATError("JAT task produced an incomplete output/result.json")
         expected_operation = task.lower()
         if result.get("operation") != expected_operation:
             raise JATError(f"JAT receipt operation mismatch: expected {expected_operation}", result)
-        if result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
+        if type(result.get("exit_status")) is not int or result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
             raise JATError("JAT receipt exit status is inconsistent with RCC", result)
         result.setdefault("diagnostics", diagnostic)
         result["executable"] = argv[0]
@@ -339,7 +346,7 @@ def _run_jat_cli(jat_root: Path, cli_args: list[str], *, foreground: bool = Fals
             raise JATError(message, {"argv": argv, "exit_status": exit_status, "diagnostic": diagnostic})
         if result.get("operation") != operation:
             raise JATError(f"JAT receipt operation mismatch: expected {operation}", result)
-        if result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
+        if type(result.get("exit_status")) is not int or result.get("exit_status") != exit_status or not isinstance(result.get("success"), bool):
             raise JATError("JAT receipt exit status is inconsistent with RCC", result)
         result.setdefault("diagnostics", diagnostic)
         result["executable"] = argv[0]

@@ -259,8 +259,6 @@ class CatalogFile:
         temp = Path(temp_name)
         try:
             encrypt(json.dumps(catalog.body, sort_keys=True).encode(), recipients, temp)
-            with temp.open("rb") as handle:
-                os.fsync(handle.fileno())
             os.replace(temp, self.path)
         finally:
             temp.unlink(missing_ok=True)

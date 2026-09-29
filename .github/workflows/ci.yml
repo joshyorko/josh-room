@@ -20,3 +20,25 @@ jobs:
       - run: uv run pytest -q
       - run: node --test vscode-extension/*.test.js
       - run: git diff --check
+
+  managed-runtime-consumer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Consume the clean candidate VSIX through managed RCC
+        run: node scripts/managed_runtime_acceptance.js
+      - name: Upload managed-runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-runtime-evidence-${{ matrix.os }}
+          path: dist/managed-runtime-evidence
+          if-no-files-found: ignore

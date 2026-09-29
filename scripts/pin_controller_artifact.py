@@ -7,6 +7,16 @@ import json
 import os
 from pathlib import Path
 
+SHA256_DIGEST_LENGTH = len("sha256:") + 64
+EXPECTED_CONTROLLER_SOURCE = "b4da2846fee429a2e2878f817faac6a48e4384fd"
+
+def _is_sha256_digest(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == SHA256_DIGEST_LENGTH
+        and value.startswith("sha256:")
+        and all(char in "0123456789abcdef" for char in value[7:])
+    )
 
 def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, release_tag: str, platform: str = "linux-x64") -> None:
     receipt_value = json.loads(receipt.read_text())
@@ -14,13 +24,22 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
     observed = hashlib.sha256(artifact.read_bytes()).hexdigest()
     if observed != archive.get("sha256") or artifact.stat().st_size != archive.get("size"):
         raise ValueError("controller artifact archive SHA256 or size does not match receipt")
-    if receipt_value.get("rcc_version") != "v18.19.3":
-        raise ValueError("controller artifact receipt must use RCC v18.19.3")
+    artifact_digest = receipt_value.get("artifact_digest")
+    if not _is_sha256_digest(artifact_digest):
+        raise ValueError("controller artifact receipt artifact digest is invalid")
+    if receipt_value.get("rcc_version") != "v18.19.5":
+        raise ValueError("controller artifact receipt must use RCC v18.19.5")
     if receipt_value.get("platform") != platform:
         raise ValueError("controller artifact receipt platform does not match the requested pin")
     asset = artifact.name
+    specification_digest = receipt_value.get("specification_digest")
+    if not _is_sha256_digest(specification_digest):
+        raise ValueError("controller artifact receipt specification digest is invalid")
+    if receipt_value.get("source") != EXPECTED_CONTROLLER_SOURCE:
+        raise ValueError("controller artifact receipt source commit does not match the pinned controller provenance")
     update = {
-        "digest": receipt_value["artifact_digest"],
+        "digest": artifact_digest,
+        "specification_digest": specification_digest,
         "platform": platform,
         "archive": {
             "asset": asset,

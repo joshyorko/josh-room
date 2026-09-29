@@ -15,26 +15,75 @@
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
-    "version": "git-d8ca077",
-    "git_sha": "d8ca0779d14897c10ca6e0ec8b22ef2d70b6b57c",
+    "version": "git-5b59fcaf",
+    "git_sha": "5b59fcafc832be67eaca3b8f42ff9f7b06719b76",
     "environment_artifact": {
-      "release_tag": "v0.1.10-jat-runtime",
-      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.10-jat-runtime/jat-runtime-linux-amd64.rcca",
-      "archive_sha256": "0b6d7d297fbe0a14a0c3ad93f31cff437fb5b2e75c0a4d5bf59e8f33a79676cc",
-      "archive_size": 169755602,
-      "rcc_artifact_digest": "sha256:62b8b7d5c796712148633973f1b7d011254ece84d37b5979fe3a37f6e956f2c8",
-      "rcc_specification_digest": "sha256:62d517dbb857bba63835d83c8d3ad1c2154006a8e260070b909a56e7f9bacff4",
+      "release_tag": "v0.1.11-jat-runtime",
+      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.11-jat-runtime/jat-runtime-linux-amd64.rcca",
+      "archive_sha256": "eb5a2f5634b6bc78a66bc070493f7d7df81a775cfe421160b8b1ac34c2589d5f",
+      "archive_size": 170822706,
+      "rcc_artifact_digest": "sha256:ae6b5802103c780de49b42768885a8c66073747272caf759784e9eb23f44e4f1",
+      "rcc_specification_digest": "sha256:899025175bc2bfceb1f41778e6feaa4341ca84e4dbe97a5ddd97384ee9fa586d",
       "legacy_blueprint_key": "91ad9c0ba23e9008",
-      "rcc_version": "v18.19.3",
+      "rcc_version": "v18.19.5",
       "platform": "linux_amd64"
+    },
+    "environment_artifacts": {
+      "linux_amd64": {
+        "rcc_artifact_digest": "sha256:ae6b5802103c780de49b42768885a8c66073747272caf759784e9eb23f44e4f1",
+        "rcc_specification_digest": "sha256:899025175bc2bfceb1f41778e6feaa4341ca84e4dbe97a5ddd97384ee9fa586d",
+        "archive_sha256": "eb5a2f5634b6bc78a66bc070493f7d7df81a775cfe421160b8b1ac34c2589d5f",
+        "archive_size": 170822706
+      },
+      "windows_amd64": {
+        "rcc_artifact_digest": "sha256:9d35d565d53ede7e05aa1ded75758578c34a92a032b3623b7801ce84c3631827",
+        "rcc_specification_digest": "sha256:e19095b0e079d03357a70e50a517d7e865ed1f7cb76fa57d1bd75f3ab7d04db2",
+        "archive_sha256": "894841785490e4643d12a08340af3da5e45eb29dec4eaf9ddc358406a284deaa",
+        "archive_size": 104191913
+      }
+    }
+  },
+  "controller": {
+    "repository": "https://github.com/joshyorko/josh-room",
+    "release_tag": "v0.1.11-controller-artifacts",
+    "source_sha": "b4da2846fee429a2e2878f817faac6a48e4384fd",
+    "rcc_version": "v18.19.5",
+    "rcc_source_sha": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
+    "platforms": {
+      "linux-x64": {
+        "artifact_digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
+        "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
+        "archive_sha256": "3dd7d542b2fdd35633152a400e30d7c6bb861c5bb128f6e22ef6bdbc3b048f88",
+        "archive_size": 130993088,
+        "rcc_sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e"
+      },
+      "win32-x64": {
+        "artifact_digest": "sha256:3d6389a89a8cbc068208bbcf198eae3b63d5c46a5d18f1ac1e6b250ebcff228a",
+        "specification_digest": "sha256:1a864c001fc21b59ba5129e884d5a5060bf2aebb047760fda45d5a0c5285a3e0",
+        "archive_sha256": "1d16ffca8958bd19b32e2747653983d7e2a9755d8534b97192eac5a915ca16d0",
+        "archive_size": 77963976,
+        "rcc_sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731"
+      }
     }
   },
   "rcc": {
     "repository": "https://github.com/joshyorko/rcc",
-    "version": "v18.19.3",
-    "source_sha": "4148c2b71705c9d2baf0e88b48d08a79cb7bda0f",
+    "version": "v18.19.5",
+    "source_sha": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
     "managed_asset": "rcc-linux64",
-    "managed_asset_sha256": "7e588c01751ca2ae15ba13ef67f2f4b7567697a5a8389737059a73936f509428"
+    "managed_asset_sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
+    "platforms": {
+      "linux-x64": {
+        "asset": "rcc-linux64",
+        "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
+        "size": 22360226
+      },
+      "win32-x64": {
+        "asset": "rcc-windows64.exe",
+        "sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731",
+        "size": 20084224
+      }
+    }
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",

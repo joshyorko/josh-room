@@ -51,7 +51,7 @@ def build_envelope_file(manifest: dict, payload: Path, output: Path) -> None:
             payload_info.mode = 0o600
             with payload.open("rb") as source:
                 archive.addfile(payload_info, source)
-        with temp.open("rb") as handle:
+        with temp.open("r+b") as handle:
             os.fsync(handle.fileno())
         temp.chmod(0o600)
         os.replace(temp, output)
@@ -170,7 +170,7 @@ def _validate_manifest(
     if artifact is not None:
         required = {"artifact", "specification_digest", "legacy_blueprint_key", "archive", "archive_sha256", "archive_size", "rcc_version", "robot", "provider", "acquired"}
         paths = ("archive", "robot")
-        if (set(artifact) != required or any(not isinstance(artifact[k], str) for k in required - {"archive_size", "acquired"}) or not isinstance(artifact["archive_size"], int) or artifact["archive_size"] <= 0 or not isinstance(artifact["acquired"], bool) or not SHA256.fullmatch(artifact["artifact"].removeprefix("sha256:")) or not SHA256.fullmatch(artifact["specification_digest"].removeprefix("sha256:")) or not SHA256.fullmatch(artifact["archive_sha256"]) or artifact["rcc_version"] not in {"v18.19.2", "v18.19.3"} or not artifact["legacy_blueprint_key"] or any(not artifact[k] or Path(artifact[k]).is_absolute() or "." in Path(artifact[k]).parts or ".." in Path(artifact[k]).parts for k in paths) or artifact["provider"] != "local"):
+        if (set(artifact) != required or any(not isinstance(artifact[k], str) for k in required - {"archive_size", "acquired"}) or not isinstance(artifact["archive_size"], int) or artifact["archive_size"] <= 0 or not isinstance(artifact["acquired"], bool) or not SHA256.fullmatch(artifact["artifact"].removeprefix("sha256:")) or not SHA256.fullmatch(artifact["specification_digest"].removeprefix("sha256:")) or not SHA256.fullmatch(artifact["archive_sha256"]) or artifact["rcc_version"] not in {"v18.19.2", "v18.19.3", "v18.19.5"} or not artifact["legacy_blueprint_key"] or any(not artifact[k] or Path(artifact[k]).is_absolute() or "." in Path(artifact[k]).parts or ".." in Path(artifact[k]).parts for k in paths) or artifact["provider"] != "local"):
             raise EnvelopeError("invalid environment artifact metadata")
     if not isinstance(payload_meta, dict) or not isinstance(payload_meta.get("size"), int) or payload_meta["size"] < 0 or payload_meta["size"] > MAX_PAYLOAD_SIZE:
         raise EnvelopeError("invalid payload size")

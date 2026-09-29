@@ -42,7 +42,7 @@ def test_environment_artifact_boundary_is_current_and_other_projections_deferred
     architecture = (ROOT / "docs/architecture.md").read_text()
     readme = (ROOT / "README.md").read_text()
     deferred = (ROOT / "docs/DEFERRED-INTEGRATIONS.md").read_text()
-    assert "immutable JAT RCC v18.19.3 Environment" in architecture
+    assert "immutable JAT RCC v18.19.5 Environment" in architecture
     assert "rcc_environment=auto" in readme
     assert "Actions Runtime integration" in deferred and "remain deferred" in deferred
 
@@ -147,7 +147,7 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     assert "runtime/controller/**/__pycache__/**" in vscodeignore
     assert "runtime/controller/**/*.pyc" in vscodeignore
     assert runtime["extension_version"] == package["version"]
-    assert runtime["rcc"]["version"] == "v18.19.3"
+    assert runtime["rcc"]["version"] == "v18.19.5"
     assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
     assert runtime["jat"]["environment_artifact"]["digest"].startswith("sha256:")
     assert "ensureManagedRcc" in extension and "ensureJatRuntime" in extension
@@ -333,13 +333,13 @@ def test_v0_1_candidate_tuple_is_immutable_and_consumed_by_both_entries():
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
-    assert artifact["release_tag"] == "v0.1.10-jat-runtime"
+    assert artifact["release_tag"] == "v0.1.11-jat-runtime"
     assert len(artifact["archive_sha256"]) == 64
     assert artifact["archive_size"] > 0
     assert artifact["rcc_artifact_digest"].startswith("sha256:")
-    assert artifact["rcc_version"] == "v18.19.3"
-    assert lock["rcc"]["version"] == "v18.19.3"
-    assert lock["rcc"]["source_sha"] == "4148c2b71705c9d2baf0e88b48d08a79cb7bda0f"
+    assert artifact["rcc_version"] == "v18.19.5"
+    assert lock["rcc"]["version"] == "v18.19.5"
+    assert lock["rcc"]["source_sha"] == "d1aec7d0bb897a81274423c7a6bb747233f9c263"
     assert lock["rcc"]["managed_asset"] == "rcc-linux64"
     assert len(lock["rcc"]["managed_asset_sha256"]) == 64
     for config_path in (

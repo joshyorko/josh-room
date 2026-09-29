@@ -9,9 +9,38 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-EXPECTED_RCC = "v18.19.3"
+EXPECTED_RCC = "v18.19.5"
 SHA256_LENGTH = 64
 
+
+def _execution_exit_code(value: dict | list, label: str) -> int:
+    if not isinstance(value, dict):
+        raise TypeError(f"{label} receipt must be a JSON object")
+    if "exitCode" in value:
+        exit_code = value["exitCode"]
+    elif "exit_code" in value:
+        exit_code = value["exit_code"]
+    else:
+        raise ValueError(f"{label} receipt is missing exitCode")
+    if type(exit_code) is not int:
+        raise ValueError(f"{label} receipt exitCode must be an integer")
+    return exit_code
+
+
+def _is_git_sha(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+def _is_sha256_digest(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == len("sha256:") + SHA256_LENGTH
+        and value.startswith("sha256:")
+        and all(char in "0123456789abcdef" for char in value[7:])
+    )
 
 def load_manifest(path: Path) -> dict:
     value = json.loads(Path(path).read_text())
@@ -33,9 +62,9 @@ def resolve_rcc_pin(manifest: dict, platform: str, checksum: str | None = None) 
         raise TypeError(f"no RCC pin for {platform}")
     value = checksum or pin.get("sha256")
     if not isinstance(value, str) or len(value) != SHA256_LENGTH or any(char not in "0123456789abcdef" for char in value.lower()):
-        raise ValueError(f"RCC {platform} checksum is pending; supply the real v18.19.3 release SHA256")
-    if not str(pin.get("url", "")).startswith("https://github.com/joshyorko/rcc/releases/download/v18.19.3/"):
-        raise ValueError(f"RCC {platform} URL is outside the official v18.19.3 release")
+        raise ValueError(f"RCC {platform} checksum is pending; supply the real v18.19.5 release SHA256")
+    if not str(pin.get("url", "")).startswith("https://github.com/joshyorko/rcc/releases/download/v18.19.5/"):
+        raise ValueError(f"RCC {platform} URL is outside the official v18.19.5 release")
     return {**pin, "version": EXPECTED_RCC, "sha256": value}
 
 
@@ -139,11 +168,11 @@ def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str
         raise ValueError("controller artifact receipt RCC version does not match")
     if receipt["platform"] != expected_platform:
         raise ValueError("controller artifact receipt platform does not match")
-    if not isinstance(receipt["artifact_digest"], str) or not receipt["artifact_digest"].startswith("sha256:"):
+    if not _is_sha256_digest(receipt["artifact_digest"]):
         raise ValueError("controller artifact receipt artifact digest is invalid")
-    if not isinstance(receipt["specification_digest"], str) or not receipt["specification_digest"].startswith("sha256:"):
+    if not _is_sha256_digest(receipt["specification_digest"]):
         raise ValueError("controller artifact receipt specification digest is invalid")
-    if not isinstance(receipt["source"], str) or len(receipt["source"]) != 40:
+    if not _is_git_sha(receipt["source"]):
         raise ValueError("controller artifact receipt source commit is invalid")
     if not isinstance(receipt["archive"].get("sha256"), str) or len(receipt["archive"]["sha256"]) != SHA256_LENGTH:
         raise ValueError("controller artifact receipt archive SHA256 is invalid")
@@ -160,7 +189,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
     if version.returncode != 0 or EXPECTED_RCC not in f"{version.stdout}\n{version.stderr}":
         raise RuntimeError(f"managed RCC version verification failed: expected {EXPECTED_RCC}")
     if _sha256(rcc) != pin["sha256"]:
-        raise ValueError("managed RCC checksum does not match the canonical v18.19.3 pin")
+        raise ValueError("managed RCC checksum does not match the canonical v18.19.5 pin")
     output_dir.mkdir(parents=True, exist_ok=True)
     asset_names = manifest["controller"].get("artifact_assets", {})
     asset = asset_names.get(platform, manifest["controller"].get("artifact_asset"))
@@ -206,7 +235,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
                 receipt=exec_receipt,
                 environment_overrides=controller_environment,
             )
-            if execution.get("exitCode", execution.get("exit_code", 0)) != 0:
+            if _execution_exit_code(execution, "controller dimensions list") != 0:
                 raise RuntimeError("controller dimensions list failed in the acquired artifact")
             crypto_receipt = Path(temporary) / "crypto-exec-receipt.json"
             crypto_execution = _run(
@@ -221,11 +250,11 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
                 receipt=crypto_receipt,
                 environment_overrides=controller_environment,
             )
-            if crypto_execution.get("exitCode", crypto_execution.get("exit_code", 0)) != 0:
+            if _execution_exit_code(crypto_execution, "controller crypto") != 0:
                 raise RuntimeError("controller age encrypt/decrypt smoke failed in the acquired artifact")
             specification = publish.get("specificationDigest") or publish.get("specification_digest")
             blueprint = publish.get("legacyBlueprintKey") or publish.get("legacy_blueprint_key")
-            if not isinstance(specification, str) or not specification.startswith("sha256:") or not isinstance(blueprint, str) or not blueprint:
+            if not _is_sha256_digest(specification) or not isinstance(blueprint, str) or not blueprint:
                 raise ValueError("RCC publish did not return specificationDigest and legacyBlueprintKey")
             receipt = {
                 "format_version": 1,
