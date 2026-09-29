@@ -7,6 +7,16 @@ import json
 import os
 from pathlib import Path
 
+SHA256_DIGEST_LENGTH = len("sha256:") + 64
+
+
+def _is_sha256_digest(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == SHA256_DIGEST_LENGTH
+        and value.startswith("sha256:")
+        and all(char in "0123456789abcdef" for char in value[7:].lower())
+    )
 
 def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, release_tag: str, platform: str = "linux-x64") -> None:
     receipt_value = json.loads(receipt.read_text())
@@ -31,7 +41,7 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
         },
     }
     if specification_digest is not None:
-        if not isinstance(specification_digest, str) or not specification_digest.startswith("sha256:"):
+        if not _is_sha256_digest(specification_digest):
             raise ValueError("controller artifact receipt specification digest is invalid")
         update["specification_digest"] = specification_digest
     values = [json.loads(path.read_text()) for path in (root, template)]

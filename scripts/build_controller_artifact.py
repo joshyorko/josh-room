@@ -13,6 +13,28 @@ EXPECTED_RCC = "v18.19.5"
 SHA256_LENGTH = 64
 
 
+def _execution_exit_code(value: dict | list, label: str) -> int:
+    if not isinstance(value, dict):
+        raise TypeError(f"{label} receipt must be a JSON object")
+    if "exitCode" in value:
+        exit_code = value["exitCode"]
+    elif "exit_code" in value:
+        exit_code = value["exit_code"]
+    else:
+        raise ValueError(f"{label} receipt is missing exitCode")
+    if type(exit_code) is not int:
+        raise ValueError(f"{label} receipt exitCode must be an integer")
+    return exit_code
+
+
+def _is_sha256_digest(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == len("sha256:") + SHA256_LENGTH
+        and value.startswith("sha256:")
+        and all(char in "0123456789abcdef" for char in value[7:].lower())
+    )
+
 def load_manifest(path: Path) -> dict:
     value = json.loads(Path(path).read_text())
     if value.get("schema_version") != 1:
@@ -206,7 +228,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
                 receipt=exec_receipt,
                 environment_overrides=controller_environment,
             )
-            if execution.get("exitCode", execution.get("exit_code", 0)) != 0:
+            if _execution_exit_code(execution, "controller dimensions list") != 0:
                 raise RuntimeError("controller dimensions list failed in the acquired artifact")
             crypto_receipt = Path(temporary) / "crypto-exec-receipt.json"
             crypto_execution = _run(
@@ -221,11 +243,11 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
                 receipt=crypto_receipt,
                 environment_overrides=controller_environment,
             )
-            if crypto_execution.get("exitCode", crypto_execution.get("exit_code", 0)) != 0:
+            if _execution_exit_code(crypto_execution, "controller crypto") != 0:
                 raise RuntimeError("controller age encrypt/decrypt smoke failed in the acquired artifact")
             specification = publish.get("specificationDigest") or publish.get("specification_digest")
             blueprint = publish.get("legacyBlueprintKey") or publish.get("legacy_blueprint_key")
-            if not isinstance(specification, str) or not specification.startswith("sha256:") or not isinstance(blueprint, str) or not blueprint:
+            if not _is_sha256_digest(specification) or not isinstance(blueprint, str) or not blueprint:
                 raise ValueError("RCC publish did not return specificationDigest and legacyBlueprintKey")
             receipt = {
                 "format_version": 1,

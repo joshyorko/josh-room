@@ -7,6 +7,7 @@ import pytest
 
 import scripts.build_controller_artifact as builder_module
 from scripts.build_controller_artifact import (
+    _execution_exit_code,
     _json_result,
     _run,
     build_commands,
@@ -118,6 +119,11 @@ def test_controller_build_commands_use_canonical_artifact_flow():
 def test_rcc_json_result_accepts_ht_vars_array():
     assert _json_result('[{"key": "value"}]\n') == [{"key": "value"}]
 
+
+@pytest.mark.parametrize("receipt", [{}, [], {"exitCode": False}])
+def test_controller_execution_receipts_require_explicit_integer_exit_code(receipt):
+    with pytest.raises((ValueError, TypeError), match="receipt"):
+        _execution_exit_code(receipt, "controller")
 
 def test_rcc_exec_receives_vsix_controller_source_path(tmp_path):
     controller = tmp_path / "controller"
@@ -239,6 +245,24 @@ def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
         assert value["controller"]["environment_artifact"]["digest"] == "linux"
         assert value["controller"]["environment_artifacts"]["win32-x64"]["platform"] == "win32-x64"
 
+
+def test_manifest_pin_rejects_malformed_specification_digest(tmp_path):
+    root = tmp_path / "runtime-manifest.json"
+    template = tmp_path / "template-runtime-manifest.json"
+    for target in (root, template):
+        target.write_text(json.dumps({"schema_version": 1, "controller": {}}))
+    artifact = tmp_path / "controller.rcca"
+    artifact.write_bytes(b"controller")
+    receipt = tmp_path / "receipt.json"
+    receipt.write_text(json.dumps({
+        "artifact_digest": "sha256:" + "a" * 64,
+        "specification_digest": "sha256:not-a-digest",
+        "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
+        "rcc_version": "v18.19.5",
+        "platform": "linux-x64",
+    }))
+    with pytest.raises(ValueError, match="specification digest"):
+        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts")
 
 def test_packaged_controller_python_file_sets_are_byte_identical_and_importable(tmp_path):
     root = Path(__file__).parents[1]
