@@ -178,6 +178,16 @@ def _copy_bounded(source: BinaryIO, destination: Path) -> None:
         raise InstallError("restic archive contains an empty binary")
 
 
+def _fsync_directory(directory: Path, platform: str) -> None:
+    if platform == "win32-x64":
+        return
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _safe_zip_member(info: zipfile.ZipInfo) -> bool:
     name = info.filename
     member_path = PurePosixPath(name)
@@ -280,12 +290,15 @@ def install_restic(
         check_version(extracted)
         binary_digest = _sha256_file(extracted)
         marker_temporary = temporary_directory / (pin["binary"] + ".sha256")
-        marker_temporary.write_text(binary_digest + "\n", encoding="ascii")
-        marker_temporary.chmod(0o600)
-        with marker_temporary.open("rb") as marker_file:
+        with marker_temporary.open("xb") as marker_file:
+            marker_file.write((binary_digest + "\n").encode("ascii"))
+            marker_file.flush()
             os.fsync(marker_file.fileno())
+        if os.name != "nt":
+            marker_temporary.chmod(0o600)
         os.replace(marker_temporary, digest_marker)
         os.replace(extracted, executable)
+        _fsync_directory(version_root, platform)
     return {"executable": str(executable), "version": VERSION, "platform": platform, "cached": False}
 
 
@@ -302,6 +315,18 @@ def main() -> int:
         if exc.diagnostic:
             result["diagnostic"] = exc.diagnostic
         print(json.dumps(result, sort_keys=True), file=sys.stderr)
+        return 1
+    except OSError as exc:
+        diagnostic: dict[str, int | str] = {
+            "boundary": "local-io",
+            "exception": type(exc).__name__,
+        }
+        if isinstance(exc.errno, int):
+            diagnostic["errno"] = exc.errno
+        print(
+            json.dumps({"error": "restic runtime installation failed", "diagnostic": diagnostic}, sort_keys=True),
+            file=sys.stderr,
+        )
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0

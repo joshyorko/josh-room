@@ -47,6 +47,14 @@ modules and does not call host package managers, shell extraction tools,
 archive, or version check leaves no promoted executable. Cached executables are
 rechecked against their local verified digest marker and version.
 
+The installer flushes the extracted binary and digest marker through writable
+file handles before atomic replacement. On POSIX it also fsyncs the containing
+directory after promotion. Windows keeps file fsync, `os.replace`, and cache
+digest/version checks; it skips directory fsync because Windows does not provide
+the same supported directory-handle fsync operation. After sudden power loss,
+directory-entry durability therefore follows the Windows filesystem's rename
+guarantees.
+
 This packaging prerequisite is lazy and standalone. It does not run during
 extension activation or change catalogs, Room startup, repository format, or
 provider configuration. Repository initialization remains explicit and uses

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import bz2
+import errno
 import hashlib
 import json
+import os
 import ssl
 import stat
 import urllib.error
@@ -186,6 +188,94 @@ def test_windows_zip_extracts_only_expected_regular_binary(tmp_path: Path) -> No
         verify_version=lambda binary: None if binary.read_bytes() == b"fixture executable" else pytest.fail("bad binary"),
     )
     assert Path(result["executable"]).read_bytes() == b"fixture executable"
+
+
+def test_windows_install_fsyncs_files_but_skips_unsupported_directory_fsync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive_path, "w") as bundle:
+        bundle.writestr("restic_0.19.1_windows_amd64.exe", b"fixture executable")
+    archive = archive_path.read_bytes()
+    manifest = _manifest(tmp_path, "win32-x64", archive)
+    real_fsync = installer.os.fsync
+    file_fsyncs: list[int] = []
+
+    def fsync_file_only(descriptor: int) -> None:
+        assert stat.S_ISREG(installer.os.fstat(descriptor).st_mode), "Windows must not fsync a directory"
+        file_fsyncs.append(descriptor)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(installer.os, "fsync", fsync_file_only)
+    result = install_restic(
+        manifest,
+        tmp_path / "owned-runtime",
+        "win32-x64",
+        download=_download_fixture(archive),
+        verify_version=lambda _binary: None,
+    )
+
+    assert file_fsyncs
+    assert Path(result["executable"]).read_bytes() == b"fixture executable"
+
+
+def test_digest_marker_is_fsynced_through_writable_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fcntl = pytest.importorskip("fcntl")
+    archive = bz2.compress(_script())
+    manifest = _manifest(tmp_path, "linux-x64", archive)
+    real_fsync = installer.os.fsync
+    access_modes: list[tuple[bool, int]] = []
+
+    def require_writable(descriptor: int) -> None:
+        is_directory = stat.S_ISDIR(installer.os.fstat(descriptor).st_mode)
+        access_mode = fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE
+        access_modes.append((is_directory, access_mode))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(installer.os, "fsync", require_writable)
+    install_restic(manifest, tmp_path / "owned-runtime", "linux-x64", download=_download_fixture(archive))
+
+    assert access_modes
+    assert all(mode != os.O_RDONLY for is_directory, mode in access_modes if not is_directory)
+    assert any(is_directory for is_directory, _mode in access_modes)
+
+
+def test_posix_install_retains_directory_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_fsync = installer.os.fsync
+    synced_directories: list[bool] = []
+
+    def record_fsync(descriptor: int) -> None:
+        synced_directories.append(stat.S_ISDIR(installer.os.fstat(descriptor).st_mode))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(installer.os, "fsync", record_fsync)
+    installer._fsync_directory(tmp_path, "linux-x64")
+
+    assert synced_directories == [True]
+
+
+def test_main_reports_unexpected_oserror_without_traceback_or_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    private_path = str(tmp_path / "private-managed-runtime")
+
+    def fail_install(*_args) -> None:
+        raise OSError(errno.EBADF, "Bad file descriptor", private_path)
+
+    monkeypatch.setattr(installer, "install_restic", fail_install)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["install_restic.py", "--manifest", "manifest.json", "--destination", private_path, "--platform", "linux-x64"],
+    )
+
+    assert installer.main() == 1
+    stderr = capsys.readouterr().err
+    assert '"boundary": "local-io"' in stderr
+    assert '"errno": 9' in stderr
+    assert private_path not in stderr
+    assert "Traceback" not in stderr
 
 
 def test_windows_zip_symlink_is_rejected(tmp_path: Path) -> None:
