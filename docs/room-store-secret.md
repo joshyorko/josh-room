@@ -31,32 +31,40 @@ identity in the native OS secret store, scoped to the encryption-domain ID and
 Room Store metadata generation. They do not write it to config, workspace
 markers, logs, argv, or receipts. Binding the repository advances the metadata
 generation, so the integration must cache the same winning secret under the
-new generation after the bind succeeds.
+new generation after the bind succeeds. The prior generation cache entry is
+retained because the password did not rotate and an in-flight operation may
+still hold the old generation; this metadata update is not secret rotation or
+cache garbage collection.
 
 ## Required remote-writer handshake
 
-This change adds pure keyset APIs and OS-keyring cache helpers; it does not
-change the auth writer. The S3 backend already exposes
-`replace_control(key, body, expected_etag)` with conditional replacement and
-readback, but the current auth writer does not use it. A caller must not
-persist an upgrade or start Restic initialization until the auth writer uses
-that seam and verifies its results.
+`auth.ensure_room_store_keyset(dimension, backend)` is the explicit MinIO
+upgrade API. It uses the existing S3 backend
+`replace_control(key, body, expected_etag)` seam, reloads the keyset after
+every write outcome, and caches only the durable winner. If another first
+writer wins, it discards its candidate and uses the winner's secret. It fails
+closed when the Dimension keyset is absent or the backend lacks conditional
+replacement. It does not enroll encryption identities or invoke normal Save.
+
+`auth.bind_room_store_repository(dimension, backend, repository_id,
+expected_generation=...)` is the explicit post-initialization bind API. It
+conditionally publishes the one-time repository ID, then reloads and validates
+the durable value before caching under the current metadata generation. Same-ID
+retries are idempotent. A competing password, repository ID, domain, or
+generation fails closed. These APIs support MinIO only; R2's keyset authority
+remains owned by the Cloudflare auth service.
 
 The owner integrating remote writes must:
 
-1. Read and validate the current keyset and its backend version/ETag.
-2. For format 1, generate one format-2 candidate and call
-   `replace_control(KEYSET_CONTROL_KEY, candidate.to_json(), observed_etag)`.
-   If the condition loses, reload and use the remote winner; never store or
-   use the losing candidate secret.
-3. Cache only the winning keyset secret in the native keyring. If the keyring
-   is unavailable, fail before Restic starts.
-4. Initialize only `room-store/v1` with repository format 2 and the winning
-   secret. Verify the resulting repository ID and format.
-5. Bind the repository ID by conditionally replacing the exact current
-   keyset generation. On a lost condition, reload and accept only the same
-   repository ID and secret. A different ID, secret, physical binding, or
-   unexpected generation is a hard conflict requiring explicit maintenance.
+1. Call `ensure_room_store_keyset()` before Restic initialization. If the
+   keyring is unavailable, fail before Restic starts.
+2. Initialize only `room-store/v1` with repository format 2 and the returned
+   winner's secret. Verify the resulting repository ID and format.
+3. Call `bind_room_store_repository()` with the repository ID and the metadata
+   generation returned by step 1. If a conditional write loses, accept only a
+   winner with the same repository ID, secret, physical binding, and exact
+   next metadata generation. A different value is a hard conflict requiring
+   explicit maintenance.
 
 The backend's conditional replacement and readback semantics must be proven
 for each provider before this handshake is enabled. The keyset JSON currently

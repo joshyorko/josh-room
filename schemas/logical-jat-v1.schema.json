@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/logical-jat-v1.schema.json",
+  "title": "Josh Room Logical JAT v1",
+  "description": "Closed, sanitized descriptor for one complete Room Store recovery point. Maximum canonical UTF-8 JSON size is 65536 bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "payload_kind",
+    "logical_jat_id",
+    "dimension_id",
+    "encryption_domain_id",
+    "room_id",
+    "created_at",
+    "capture_policy_sha256",
+    "workspace",
+    "components",
+    "source",
+    "producer"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "payload_kind": { "const": "room-store-v1" },
+    "logical_jat_id": { "$ref": "#/$defs/opaque_id" },
+    "dimension_id": { "$ref": "#/$defs/opaque_id" },
+    "encryption_domain_id": { "$ref": "#/$defs/opaque_id" },
+    "room_id": { "$ref": "#/$defs/opaque_id" },
+    "created_at": { "type": "string", "format": "date-time", "maxLength": 40 },
+    "parent_logical_jat_id": { "$ref": "#/$defs/opaque_id" },
+    "origin_room_id": { "$ref": "#/$defs/opaque_id" },
+    "capture_policy_sha256": { "$ref": "#/$defs/sha256" },
+    "workspace": { "$ref": "#/$defs/workspace" },
+    "components": { "$ref": "#/$defs/components" },
+    "source": { "$ref": "#/$defs/source" },
+    "producer": { "$ref": "#/$defs/producer" }
+  },
+  "$defs": {
+    "opaque_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "repository_id",
+        "repository_format",
+        "snapshot_id",
+        "tree_id",
+        "source_path",
+        "logical_bytes",
+        "data_added",
+        "data_added_packed"
+      ],
+      "properties": {
+        "engine": { "const": "restic" },
+        "repository_id": { "$ref": "#/$defs/sha256" },
+        "repository_format": { "const": 2 },
+        "snapshot_id": { "$ref": "#/$defs/sha256" },
+        "tree_id": { "$ref": "#/$defs/sha256" },
+        "parent_snapshot_id": { "$ref": "#/$defs/sha256" },
+        "source_path": { "const": "." },
+        "logical_bytes": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "data_added": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+        "data_added_packed": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 }
+      }
+    },
+    "components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rcc_environment", "homebrew_recovery", "hauler_content"],
+      "properties": {
+        "rcc_environment": {
+          "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/rcca_component" }]
+        },
+        "homebrew_recovery": {
+          "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/homebrew_component" }]
+        },
+        "hauler_content": {
+          "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/hauler_component" }]
+        }
+      }
+    },
+    "snapshot_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository_id", "repository_format", "snapshot_id", "tree_id"],
+      "properties": {
+        "repository_id": { "$ref": "#/$defs/sha256" },
+        "repository_format": { "const": 2 },
+        "snapshot_id": { "$ref": "#/$defs/sha256" },
+        "tree_id": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "rcca_component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "snapshot", "archive_sha256", "archive_size", "member_basename", "artifact_digest", "specification_digest", "platform", "rcc_version", "robot_relative_path"],
+      "properties": {
+        "kind": { "const": "rcca" },
+        "snapshot": { "$ref": "#/$defs/snapshot_reference" },
+        "archive_sha256": { "$ref": "#/$defs/sha256" },
+        "archive_size": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+        "member_basename": { "const": "rcc-environment.rcca" },
+        "artifact_digest": { "$ref": "#/$defs/content_digest" },
+        "specification_digest": { "$ref": "#/$defs/content_digest" },
+        "platform": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$" },
+        "rcc_version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$" },
+        "robot_relative_path": { "type": "string", "maxLength": 256, "pattern": "^(?!\\.?$)(?!/)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\/$)[A-Za-z0-9._/-]+$" }
+      }
+    },
+    "homebrew_component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "snapshot", "archive_sha256", "archive_size", "member_basename"],
+      "properties": {
+        "kind": { "const": "homebrew-recovery" },
+        "snapshot": { "$ref": "#/$defs/snapshot_reference" },
+        "archive_sha256": { "$ref": "#/$defs/sha256" },
+        "archive_size": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+        "member_basename": { "const": "homebrew-recovery.tar.zst" }
+      }
+    },
+    "hauler_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "media_type"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/content_digest" },
+        "media_type": { "type": "string", "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}$" }
+      }
+    },
+    "hauler_component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "snapshot", "archive_sha256", "archive_size", "member_basename", "references"],
+      "properties": {
+        "kind": { "const": "hauler-content" },
+        "snapshot": { "$ref": "#/$defs/snapshot_reference" },
+        "archive_sha256": { "$ref": "#/$defs/sha256" },
+        "archive_size": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+        "member_basename": { "const": "hauler-content.tar.zst" },
+        "references": { "type": "array", "minItems": 1, "maxItems": 4096, "uniqueItems": true, "items": { "$ref": "#/$defs/hauler_reference" } }
+      }
+    },
+    "content_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "git_commit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
+        "dirty": { "type": "boolean" }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["josh_room_version", "restic_version", "source_platform", "restore_platforms"],
+      "properties": {
+        "josh_room_version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$" },
+        "restic_version": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$" },
+        "source_platform": { "enum": ["linux-x64", "win32-x64"] },
+        "restore_platforms": { "type": "array", "items": { "enum": ["linux-x64", "win32-x64"] }, "minItems": 1, "uniqueItems": true }
+      }
+    }
+  }
+}

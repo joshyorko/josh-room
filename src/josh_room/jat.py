@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import subprocess
 import tempfile
 import uuid
@@ -8,6 +7,7 @@ from pathlib import Path
 
 from robocorp import log
 
+from .cancellation import terminate_owned_process as _terminate_process
 from .progress import report_progress
 
 _STDOUT_LIMIT = 1_048_576
@@ -18,15 +18,6 @@ class JATError(RuntimeError):
     def __init__(self, message, result=None):
         super().__init__(message)
         self.result = result or {}
-
-
-def _terminate_process(process, platform: str | None = None) -> None:
-    platform = platform or os.name
-    if platform == "nt":
-        process.terminate()
-    else:
-        os.killpg(process.pid, signal.SIGTERM)
-    process.communicate()
 
 
 def _version(jat_root: Path) -> str:

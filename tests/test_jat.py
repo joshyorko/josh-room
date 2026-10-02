@@ -1,5 +1,7 @@
 import json
 import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -46,6 +48,64 @@ def test_jat_timeout_returns_bounded_metadata_and_terminates_process_group():
     assert error.value.result["timed_out"] is True
     assert error.value.result["exit_status"] is None
     assert len(error.value.result["argv"]) == 3
+
+
+@pytest.mark.skipif(os.name == "nt", reason="detached POSIX sessions are platform-specific")
+def test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes(tmp_path):
+    import time
+
+    source_root = Path(__file__).resolve().parents[1]
+    pid_file = tmp_path / "detached-child.pid"
+    descendant = (
+        "import os, signal, sys, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid())); "
+        "print('descendant-ready', flush=True); time.sleep(30)"
+    )
+    rcc = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {descendant!r}], start_new_session=True); "
+        "print('rcc-ready', flush=True); time.sleep(30)"
+    )
+    runner = (
+        "import sys\n"
+        "from josh_room.cancellation import CLICancelled, sigterm_cancellation\n"
+        "from josh_room.jat import _run_cli\n"
+        "try:\n"
+        "    with sigterm_cancellation():\n"
+        f"        _run_cli([sys.executable, '-c', {rcc!r}], 30)\n"
+        "except CLICancelled:\n"
+        "    print('unwound', flush=True)\n"
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(source_root / "src"), environment.get("PYTHONPATH")])
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", runner],
+        cwd=source_root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while not pid_file.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert pid_file.exists(), "detached JAT descendant did not start"
+        descendant_pid = int(pid_file.read_text())
+        process.send_signal(signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=3)
+        assert process.returncode == 0, stderr
+        assert "unwound" in stdout
+        descendant_stat = Path(f"/proc/{descendant_pid}/stat")
+        if descendant_stat.exists():
+            assert descendant_stat.read_text().split()[2] == "Z"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
 
 
 def test_jat_contract_uses_rcc_tasks_and_python_surface(tmp_path):

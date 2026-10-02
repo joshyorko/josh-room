@@ -31,6 +31,7 @@ from .auth import (
     start_oauth_session,
     wait_oauth_session,
 )
+from .cancellation import CLICancelled, sigterm_cancellation
 from .catalog import Catalog
 from .config import (
     DimensionRegistry,
@@ -101,7 +102,7 @@ from .pcc_replay import ReplayLimits, ReplayReader
 from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
 from .tls import initialize_system_trust
-from .workspace_state import local_status
+from .workspace_state import context_status, local_status
 
 R2Backend = _r2.R2Backend
 R2Config = _r2.R2Config
@@ -377,6 +378,9 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(status)
+    context = commands.add_parser("context", help="read offline workspace linkage context")
+    context.add_argument("--workspace", type=Path, required=True)
+    _json_option(context)
     for action in ("link", "repair"):
         state_command = commands.add_parser(action)
         state_command.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -524,34 +528,55 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:2] == ["hook", "codex"]:
         return codex_hook_main()
+    if argv[:1] == ["context"]:
+        args = build_parser().parse_args(argv)
+        result = context_status(args.workspace)
+        emit(result, True)
+        return _exit_code(result)
     initialize_system_trust()
     args = build_parser().parse_args(argv)
-    instance = _instance_root()
+    cancelled = False
     try:
-        runtime_loaded = False
-        scoped_minio = _uses_minio_encryption(args)
-        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
-        with identity_context:
-            if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook"} and not scoped_minio:
-                runtime_loaded = load_runtime_session()
-            with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext():
-                if _requires_oauth(args):
-                    requested_dimension = getattr(args, "dimension", None)
-                    selected = None
-                    if getattr(args, "snapshot_command", None) != "copy":
-                        try:
-                            selected = _effective_dimension(args)
-                        except ValueError:
-                            if requested_dimension != "r2":
-                                raise
-                    ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
-                elif _requires_encryption(args) and args.command != "dimensions" and not runtime_loaded and not _encryption_material_ready():
-                    raise _encryption_authorization_required()
-                result = dispatch(args, instance)
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
-        result = {"ok": False, "error": str(error)}
-        if isinstance(getattr(error, "result", None), dict):
-            result.update(error.result)
+        with sigterm_cancellation():
+            instance = _instance_root()
+            try:
+                runtime_loaded = False
+                scoped_minio = _uses_minio_encryption(args)
+                identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
+                with identity_context:
+                    if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook"} and not scoped_minio:
+                        runtime_loaded = load_runtime_session()
+                    with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext():
+                        if _requires_oauth(args):
+                            requested_dimension = getattr(args, "dimension", None)
+                            selected = None
+                            if getattr(args, "snapshot_command", None) != "copy":
+                                try:
+                                    selected = _effective_dimension(args)
+                                except ValueError:
+                                    if requested_dimension != "r2":
+                                        raise
+                            ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
+                        elif _requires_encryption(args) and args.command != "dimensions" and not runtime_loaded and not _encryption_material_ready():
+                            raise _encryption_authorization_required()
+                        result = dispatch(args, instance)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                result = {"ok": False, "error": str(error)}
+                if isinstance(getattr(error, "result", None), dict):
+                    result.update(error.result)
+    except CLICancelled as error:
+        cancelled = True
+        result = {"ok": False, "state": "cancelled", "cancelled": True}
+        result.update(error.result)
+        result.update({"ok": False, "state": "cancelled", "cancelled": True})
+    if cancelled:
+        result = _bounded_json_result(result)
+        try:
+            _write_runtime_result(result)
+        except (OSError, RuntimeError) as error:
+            result["runtime_result_error_type"] = type(error).__name__
+        emit(result, True)
+        return 130
     if getattr(args, "jsonl", False) and isinstance(result, dict) and "_jsonl_lines" in result:
         lines = tuple(result.pop("_jsonl_lines"))
         record_count = len(result.pop("records", ()))

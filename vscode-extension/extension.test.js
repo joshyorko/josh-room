@@ -242,8 +242,9 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
       workspace: {
         workspaceFolders: workspaceFolder ? [{ uri: { fsPath: workspaceFolder } }] : [],
         textDocuments,
-        createFileSystemWatcher() {
+        createFileSystemWatcher(pattern) {
           const watcher = {
+            pattern,
             didChange: undefined,
             didCreate: undefined,
             didDelete: undefined,
@@ -728,6 +729,46 @@ test("failed controller result exposes bounded layered statuses and one redacted
   assert.deepEqual(originalResult.jat.argv, originalArgv);
 });
 
+test("nonzero RCC receipt preserves the sanitized structured JAT failure", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-failed-rcc-jat-receipt-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const artifact = "sha256:" + "b".repeat(64);
+  const actionable = "archive member workspace/example-project/service/.venv/bin/python has an absolute symlink target";
+  const secret = "Bearer synthetic-rcc-token";
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    fs.writeFileSync(args[args.indexOf("--receipt-file") + 1], JSON.stringify({
+      artifactDigest: artifact,
+      exitCode: 2,
+      error: { message: `Controller failed for /home/synthetic-user/private-room: ${secret}` },
+    }));
+    fs.writeFileSync(options.env.JOSH_ROOM_RESULT_FILE, JSON.stringify({
+      ok: false,
+      error: `JAT build failed: ${actionable}; source /home/synthetic-user/private-room`,
+      jat: { exit_status: 1, diagnostic: actionable },
+    }));
+    return { code: 2, stdout: "" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests({
+    command: "/test/rcc",
+    args: (args, receipt) => [...args, "--artifact", artifact, "--receipt-file", receipt],
+    env: {},
+    controllerArtifact: artifact,
+    jatRoot: root,
+  });
+
+  await assert.rejects(extension.__test__.runJoshRoom(["jat", "build"], root), (error) => {
+    assert.ok(error.message.includes(actionable), error.message);
+    assert.equal(error.controller_exit_status, 2);
+    assert.equal(error.receipt_exit_status, undefined);
+    assert.equal(error.jat_exit_status, 1);
+    assert.doesNotMatch(JSON.stringify(error), /synthetic-rcc-token|\/home\/synthetic-user/);
+    assert.match(JSON.stringify(error), /\[REDACTED PATH\]/);
+    return true;
+  });
+});
+
 test("failed controller result also accepts top-level JAT status and diagnostics", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-top-level-failure-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
@@ -1142,6 +1183,70 @@ test("startup refuses to mark a workspace Saved when authoritative status is not
 
   assert.match(statusItem.text, /Save/);
   assert.doesNotMatch(statusItem.text, /Saved/);
+});
+
+test("dirty tracking uses the capture policy and recompiles an explicitly watched ignore file", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-capture-policy-watcher-"));
+  writeMarker(root);
+  fs.writeFileSync(path.join(root, ".josh-roomignore"), "generated/cache\n.josh-roomignore\n");
+  const { vscode, statusItem, watcherCallbacks } = createVscodeMock(root);
+  let liveFingerprint = "a".repeat(64);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "status") {
+      const matches = liveFingerprint === "a".repeat(64);
+      return { stdout: JSON.stringify({
+        ok: true,
+        path_matches: true,
+        fingerprint_matches: matches,
+        state: matches ? "clean" : "changed",
+        current_workspace_fingerprint: liveFingerprint,
+        saved_workspace_fingerprint: "a".repeat(64),
+      }) };
+    }
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  await extension.__test__.startDirtyTracking({ subscriptions: [] });
+  const statusCalls = () => spawnHarness.calls.filter((call) => call.args[0] === "status").length;
+  const startupStatusCalls = statusCalls();
+
+  watcherCallbacks[0].didChange({ fsPath: path.join(root, "service", ".venv", "lib", "python", "site.py") });
+  watcherCallbacks[0].didChange({ fsPath: path.join(root, "generated", "cache", "build.json") });
+  await new Promise(setImmediate);
+  assert.equal(statusCalls(), startupStatusCalls);
+
+  liveFingerprint = "b".repeat(64);
+  watcherCallbacks[0].didChange({ fsPath: path.join(root, "nested", "generated", "cache", "build.json") });
+  await new Promise(setImmediate);
+  assert.equal(statusCalls(), startupStatusCalls + 1);
+  assert.match(statusItem.text, /Save/);
+
+  liveFingerprint = "c".repeat(64);
+  fs.writeFileSync(path.join(root, ".josh-roomignore"), "generated/cache\n.josh-roomignore\n# policy changed\n");
+  const policyWatcher = watcherCallbacks.find((watcher) => watcher.pattern.pattern === ".josh-roomignore");
+  assert.ok(policyWatcher);
+  policyWatcher.didChange({ fsPath: path.join(root, ".josh-roomignore") });
+  await new Promise(setImmediate);
+  assert.equal(statusCalls(), startupStatusCalls + 2);
+});
+
+test("invalid or symlinked capture policy fails closed without starting workspace status", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-invalid-capture-policy-"));
+  writeMarker(root);
+  const target = path.join(root, "private-ignore-target");
+  fs.writeFileSync(target, "generated\n");
+  fs.symlinkSync(target, path.join(root, ".josh-roomignore"));
+  const { vscode, statusItem, watcherCallbacks } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  await extension.__test__.startDirtyTracking({ subscriptions: [] });
+
+  assert.equal(spawnHarness.calls.length, 0);
+  assert.match(statusItem.text, /Save/);
+  assert.equal(watcherCallbacks.some((watcher) => watcher.pattern.pattern === ".josh-roomignore"), true);
 });
 
 test("startup queues workspace changes that happen before the first authoritative status returns", async () => {

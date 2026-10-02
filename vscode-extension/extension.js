@@ -4,7 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
-const { WorkspaceBaseline, isRoomMarker, shouldMarkDirty } = require("./dirty");
+const { WorkspaceBaseline, isRoomMarker, loadCapturePolicy, shouldMarkDirty } = require("./dirty");
 const managedRuntime = require("./runtime");
 const {
   createProgressTracker,
@@ -23,6 +23,11 @@ let extensionContext;
 let roomDirty = false;
 let workspaceBaseline;
 let workspaceWatcher;
+let capturePolicyWatcher;
+let workspaceCapturePolicy;
+let capturePolicySavedFingerprint;
+let capturePolicyFingerprintProvider;
+let capturePolicyRefreshGeneration = 0;
 let dirtyTrackingGeneration = 0;
 const dirtyBuffers = new Set();
 let activeAuthAttempt;
@@ -970,7 +975,9 @@ function sanitizeControllerText(value) {
   return String(value || "")
     .replace(/\0/g, "")
     .split(/\r?\n/)
-    .map((line) => sanitizeRuntimeLine(line))
+    .map((line) => sanitizeRuntimeLine(line)
+      .replace(/(?:\/home|\/private|\/Users|\/var\/home)\/[^\s,;)}\]]+/g, "[REDACTED PATH]")
+      .replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s,;)}\]]+/g, "[REDACTED PATH]"))
     .filter(Boolean)
     .join(" ")
     .slice(-CONTROLLER_DIAGNOSTIC_LIMIT);
@@ -1183,8 +1190,14 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       const receiptValid = receiptObject
         && typeof receiptExitValue === "number"
         && Number.isFinite(receiptExitValue)
-        && receiptExitValue === 0
+        && Number.isFinite(code)
+        && receiptExitValue === code
         && (!runtime.controllerArtifact || receiptArtifact === runtime.controllerArtifact);
+      try {
+        if (fs.existsSync(resultPath)) result = parseControllerOutput(fs.readFileSync(resultPath, "utf8"));
+      } catch (error) {
+        outputChannel?.warn(`Unable to read controller result receipt: ${sanitizeControllerText(error.message)}`);
+      }
       if ((managedController && !receiptPresent) || (receiptPresent && !receiptValid)) {
         const detail = !receiptPresent
           ? "RCC did not produce a controller receipt"
@@ -1198,13 +1211,23 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         if (Number.isFinite(receiptExit)) failure.receipt_exit_status = receiptExit;
         failure.stdout = sanitizeControllerText(stdout);
         failure.stderr = sanitizeControllerText(stderr);
+        if (Number.isFinite(code)) failure.controller_exit_status = code;
         reject(failure);
         return;
       }
-      try {
-        if (fs.existsSync(resultPath)) result = parseControllerOutput(fs.readFileSync(resultPath, "utf8"));
-      } catch (error) {
-        outputChannel?.warn(`Unable to read controller result receipt: ${error.message}`);
+      if (receiptPresent && receiptExit !== 0) {
+        cleanup();
+        if (result && result.ok === false) {
+          reject(controllerFailure(result, { controllerExitStatus: code, controllerStderr: stderr }));
+        } else {
+          const failure = new Error(controllerErrorText(receiptObject?.error) || `RCC controller exited with status ${code}`);
+          failure.receipt_exit_status = receiptExit;
+          failure.controller_exit_status = code;
+          failure.stdout = sanitizeControllerText(stdout);
+          failure.stderr = sanitizeControllerText(stderr);
+          reject(failure);
+        }
+        return;
       }
       cleanup();
       if (cancelled || cancellationToken?.isCancellationRequested) {
@@ -1544,10 +1567,61 @@ function relativeWorkspacePath(uri) {
     return undefined;
   }
   const relative = path.relative(root, uri.fsPath);
-  return shouldMarkDirty(relative) ? relative : undefined;
+  if (path.resolve(uri.fsPath) === path.join(root, ".josh-roomignore")) return ".josh-roomignore";
+  return shouldMarkDirty(relative, workspaceCapturePolicy) ? relative : undefined;
+}
+
+function isCapturePolicyUri(root, uri) {
+  return Boolean(uri?.fsPath && path.resolve(uri.fsPath) === path.join(root, ".josh-roomignore"));
+}
+
+function handleCapturePolicyChange(root) {
+  const generation = ++capturePolicyRefreshGeneration;
+  try {
+    workspaceCapturePolicy = loadCapturePolicy(root);
+  } catch (error) {
+    workspaceCapturePolicy = undefined;
+    workspaceBaseline = undefined;
+    workspaceBindingTrusted = false;
+    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${error.message}`);
+    setRoomDirty(true);
+    return;
+  }
+  if (!workspaceBaseline) {
+    workspaceBaseline = new WorkspaceBaseline(root, {
+      savedFingerprint: capturePolicySavedFingerprint,
+      fingerprintProvider: capturePolicyFingerprintProvider,
+      capturePolicy: workspaceCapturePolicy,
+    });
+  } else {
+    workspaceBaseline.capturePolicy = workspaceCapturePolicy;
+    workspaceBaseline.currentFingerprint = undefined;
+  }
+  const baseline = workspaceBaseline;
+  baseline.dirty.add(".");
+  setRoomDirty(true);
+  if (!baseline.savedFingerprint) return;
+  baseline.compare().then((dirty) => {
+    if (generation !== capturePolicyRefreshGeneration || workspaceBaseline !== baseline) return;
+    setRoomDirty(dirty || dirtyBuffers.size > 0);
+  }).catch((error) => {
+    if (generation !== capturePolicyRefreshGeneration || workspaceBaseline !== baseline) return;
+    outputChannel?.warn(`Unable to compare the updated capture policy: ${error.message}`);
+    setRoomDirty(true);
+  });
 }
 
 async function markWorkspaceChange(uri) {
+  let root;
+  try {
+    root = activeWorkspace();
+  } catch (_error) {
+    return;
+  }
+  if (isCapturePolicyUri(root, uri)) {
+    handleCapturePolicyChange(root);
+    return;
+  }
   const relative = relativeWorkspacePath(uri);
   if (!relative || !workspaceBaseline) return;
   try {
@@ -1562,8 +1636,11 @@ async function markWorkspaceChange(uri) {
 async function startDirtyTracking(context) {
   const generation = ++dirtyTrackingGeneration;
   workspaceWatcher?.dispose();
+  capturePolicyWatcher?.dispose();
   workspaceWatcher = undefined;
+  capturePolicyWatcher = undefined;
   workspaceBaseline = undefined;
+  workspaceCapturePolicy = undefined;
   dirtyBuffers.clear();
   let root;
   try {
@@ -1581,7 +1658,16 @@ async function startDirtyTracking(context) {
   workspaceWatcher.onDidCreate(compare);
   workspaceWatcher.onDidDelete(compare);
   context.subscriptions.push(workspaceWatcher);
-  workspaceBaseline = new WorkspaceBaseline(root);
+  try {
+    workspaceCapturePolicy = loadCapturePolicy(root);
+    workspaceBaseline = new WorkspaceBaseline(root, { capturePolicy: workspaceCapturePolicy });
+  } catch (error) {
+    workspaceCapturePolicy = undefined;
+    workspaceBaseline = undefined;
+    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${error.message}`);
+    setRoomDirty(true);
+    return;
+  }
   setStatus("$(sync~spin) Indexing saved Room", "Preparing exact change detection…");
   await workspaceBaseline.capture();
   if (generation !== dirtyTrackingGeneration) return;
@@ -3680,6 +3766,7 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
   if (!marker) return legacyStartDirtyTracking(context);
   const generation = ++dirtyTrackingGeneration;
   workspaceWatcher && workspaceWatcher.dispose();
+  capturePolicyWatcher && capturePolicyWatcher.dispose();
   pendingWorkspaceEvents = [];
   baselineLoading = true;
   const savedFingerprint = marker.workspace_fingerprint;
@@ -3687,27 +3774,61 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     const live = await runJoshRoom(["status"], root);
     return live.current_workspace_fingerprint || live.current_fingerprint || live.workspace_fingerprint;
   };
+  capturePolicySavedFingerprint = savedFingerprint;
+  capturePolicyFingerprintProvider = fingerprintProvider;
   workspaceBindingTrusted = false;
-  workspaceBaseline = new WorkspaceBaseline(root, {
-    savedFingerprint,
-    fingerprintProvider,
-  });
+  try {
+    workspaceCapturePolicy = loadCapturePolicy(root);
+    workspaceBaseline = new WorkspaceBaseline(root, {
+      savedFingerprint,
+      fingerprintProvider,
+      capturePolicy: workspaceCapturePolicy,
+    });
+  } catch (error) {
+    workspaceCapturePolicy = undefined;
+    workspaceBaseline = undefined;
+    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${error.message}`);
+  }
   for (const document of vscode.workspace.textDocuments || []) {
     const relative = relativeWorkspacePath(document.uri);
     if (relative && document.isDirty) dirtyBuffers.add(relative);
   }
   workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
-  const compare = (uri) => baselineLoading ? pendingWorkspaceEvents.push(uri) : markWorkspaceChange(uri);
+  const compare = (uri) => {
+    if (isCapturePolicyUri(root, uri)) {
+      if (baselineLoading) {
+        pendingWorkspaceEvents.push(uri);
+        return;
+      }
+      handleCapturePolicyChange(root);
+      return;
+    }
+    if (baselineLoading) pendingWorkspaceEvents.push(uri);
+    else markWorkspaceChange(uri);
+  };
   workspaceWatcher.onDidChange(compare);
   workspaceWatcher.onDidCreate(compare);
   workspaceWatcher.onDidDelete(compare);
   context.subscriptions.push(workspaceWatcher);
+  capturePolicyWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, ".josh-roomignore"));
+  capturePolicyWatcher.onDidChange(compare);
+  capturePolicyWatcher.onDidCreate(compare);
+  capturePolicyWatcher.onDidDelete(compare);
+  context.subscriptions.push(capturePolicyWatcher);
   context.subscriptions.push(vscode.workspace.onDidRenameFiles((event) => {
     for (const file of event.files || []) {
       compare(file.oldUri);
       compare(file.newUri);
     }
   }));
+  if (!workspaceBaseline) {
+    baselineLoading = false;
+    setRoomDirty(true);
+    for (const uri of pendingWorkspaceEvents.splice(0)) {
+      if (isCapturePolicyUri(root, uri)) handleCapturePolicyChange(root);
+    }
+    return;
+  }
   const statusPromise = runJoshRoom(["status"], root)
     .then((result) => result)
     .catch((error) => {

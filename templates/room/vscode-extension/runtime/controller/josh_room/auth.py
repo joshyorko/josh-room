@@ -6,19 +6,27 @@ import time
 import urllib.request
 import uuid
 import webbrowser
+from hmac import compare_digest
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
+from botocore.exceptions import BotoCoreError
+
 from .config import config_dir
 from .encryption_domain import (
     KEYSET_CONTROL_KEY,
+    ROOM_STORE_KEYSET_FORMAT_VERSION,
     EncryptionKeyset,
     EncryptionMaterial,
     validate_minio_transport,
     validate_operational_identity,
 )
-from .keyring import lookup_encryption_identity, store_encryption_identity
+from .keyring import (
+    lookup_encryption_identity,
+    store_encryption_identity,
+    store_room_store_secret,
+)
 from .progress import report_progress
 from .tls import system_ssl_context
 
@@ -661,12 +669,17 @@ def _normalize_generated_identity(value: str) -> str:
 
 
 def _keyset_from_backend(dimension, backend):
+    keyset, _etag = _read_keyset_record_from_backend(dimension, backend)
+    return keyset
+
+
+def _read_keyset_record_from_backend(dimension, backend):
     _validate_minio_backend_transport(dimension, backend)
-    body, _etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
+    body, etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
     if body is None:
-        return None
+        return None, etag
     try:
-        return EncryptionKeyset.from_json(
+        keyset = EncryptionKeyset.from_json(
             body,
             provider=dimension.provider,
             endpoint=dimension.endpoint,
@@ -679,6 +692,7 @@ def _keyset_from_backend(dimension, backend):
             state="failed",
             dimension_id=dimension.dimension_id,
         ) from error
+    return keyset, etag
 
 
 def _validate_minio_backend_transport(dimension, backend):
@@ -701,6 +715,193 @@ def _assert_keyset_matches_dimension(dimension, keyset):
             dimension_id=dimension.dimension_id,
         )
     return keyset
+
+
+def _require_minio_room_store(dimension):
+    if dimension.provider != "minio":
+        raise EncryptionStateError(
+            "Room Store keyset is unsupported for this provider",
+            error_code="room-store-keyset-unsupported",
+            state="unsupported",
+            dimension_id=dimension.dimension_id,
+        )
+
+
+def _room_store_keyset_error(dimension, message, error_code, cause=None):
+    error = EncryptionStateError(
+        message,
+        error_code=error_code,
+        state="failed",
+        dimension_id=dimension.dimension_id,
+    )
+    if cause is not None:
+        raise error from cause
+    raise error
+
+
+def _cache_room_store_secret(keyset):
+    metadata = keyset.room_store
+    store_room_store_secret(keyset.encryption_domain_id, metadata.generation, metadata.secret)
+
+
+def _validate_room_store_winner(dimension, keyset):
+    if keyset is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset is unavailable",
+            "room-store-keyset-unavailable",
+        )
+    _assert_keyset_matches_dimension(dimension, keyset)
+    if keyset.format_version != ROOM_STORE_KEYSET_FORMAT_VERSION or keyset.room_store is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade outcome is unknown",
+            "room-store-keyset-write-unknown",
+        )
+    return keyset
+
+
+def _same_room_store_secret(first, second):
+    return compare_digest(first.room_store.secret, second.room_store.secret)
+
+
+def ensure_room_store_keyset(dimension, backend) -> EncryptionKeyset:
+    """Explicitly upgrade a MinIO keyset and cache only its durable winner."""
+    _require_minio_room_store(dimension)
+    keyset, etag = _read_keyset_record_from_backend(dimension, backend)
+    if keyset is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset is uninitialized; initialize encryption first",
+            "room-store-keyset-uninitialized",
+        )
+    _assert_keyset_matches_dimension(dimension, keyset)
+    if keyset.format_version == ROOM_STORE_KEYSET_FORMAT_VERSION:
+        _cache_room_store_secret(keyset)
+        return keyset
+    if not etag:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade requires a backend version token",
+            "room-store-keyset-version-unavailable",
+        )
+    replace_control = getattr(backend, "replace_control", None)
+    if not callable(replace_control):
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade requires conditional control replacement",
+            "room-store-keyset-conditional-write-unavailable",
+        )
+
+    candidate = keyset.upgrade_for_room_store()
+    try:
+        replace_control(KEYSET_CONTROL_KEY, candidate.to_json(), etag)
+    except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as write_error:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError):
+            raise write_error
+    else:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as read_error:
+            _room_store_keyset_error(
+                dimension,
+                "Room Store keyset write could not be verified",
+                "room-store-keyset-write-unverified",
+                read_error,
+            )
+        if not _same_room_store_secret(candidate, winner):
+            _room_store_keyset_error(
+                dimension,
+                "Room Store keyset changed during upgrade",
+                "room-store-keyset-upgrade-conflict",
+            )
+        if winner.room_store.generation < candidate.room_store.generation:
+            _room_store_keyset_error(
+                dimension,
+                "Room Store keyset generation regressed during upgrade",
+                "room-store-keyset-generation-conflict",
+            )
+    _cache_room_store_secret(winner)
+    return winner
+
+
+def bind_room_store_repository(
+    dimension,
+    backend,
+    repository_id: str,
+    *,
+    expected_generation: int,
+) -> EncryptionKeyset:
+    """Conditionally bind the initialized repository to the winning Room Store keyset."""
+    _require_minio_room_store(dimension)
+    keyset, etag = _read_keyset_record_from_backend(dimension, backend)
+    if keyset is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset is uninitialized",
+            "room-store-keyset-uninitialized",
+        )
+    _assert_keyset_matches_dimension(dimension, keyset)
+    if keyset.format_version != ROOM_STORE_KEYSET_FORMAT_VERSION:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade is required before repository binding",
+            "room-store-keyset-upgrade-required",
+        )
+    candidate = keyset.bind_repository(repository_id, expected_generation=expected_generation)
+    if candidate is keyset:
+        _cache_room_store_secret(keyset)
+        return keyset
+    if not etag:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store repository binding requires a backend version token",
+            "room-store-keyset-version-unavailable",
+        )
+    replace_control = getattr(backend, "replace_control", None)
+    if not callable(replace_control):
+        _room_store_keyset_error(
+            dimension,
+            "Room Store repository binding requires conditional control replacement",
+            "room-store-keyset-conditional-write-unavailable",
+        )
+
+    try:
+        replace_control(KEYSET_CONTROL_KEY, candidate.to_json(), etag)
+    except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as write_error:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError):
+            raise write_error
+    else:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as read_error:
+            _room_store_keyset_error(
+                dimension,
+                "Room Store repository binding could not be verified",
+                "room-store-keyset-write-unverified",
+                read_error,
+            )
+
+    if (
+        not _same_room_store_secret(candidate, winner)
+        or winner.room_store.repository_id != repository_id
+        or winner.room_store.generation != candidate.room_store.generation
+    ):
+        _room_store_keyset_error(
+            dimension,
+            "Room Store repository binding conflicted with another writer",
+            "room-store-repository-binding-conflict",
+        )
+    _cache_room_store_secret(winner)
+    return winner
 
 
 def _resolve_recovery_recipients(recovery_recipients, recovery_handoff):

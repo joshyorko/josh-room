@@ -279,6 +279,19 @@ async function main() {
       "python", "-c", "import boto3, josh_room; print(boto3.__version__)",
     ], "dependencies").trim();
     if (!dependencyProbe) throw new Error("managed controller dependency probe returned no boto3 version");
+    const resticInstallation = JSON.parse(runManagedTool([
+      "python", path.join(controllerRoot, "install_restic.py"),
+      "--manifest", path.join(extension, "runtime", "restic-manifest.json"),
+      "--destination", paths.runtimeRoot, "--platform", platform,
+    ], "restic-install").trim());
+    const resticPhase0 = JSON.parse(runManagedTool([
+      "python", path.join(repository, "scripts", "room_store_probe.py"),
+      "--restic", resticInstallation.executable,
+      "--evidence-file", path.join(evidenceDir, "restic-phase0.json"),
+    ], "restic-phase0").trim());
+    if (resticPhase0.status !== "passed" || resticPhase0.engine_version !== "0.19.1") {
+      throw new Error("managed restic feasibility did not pass on the selected platform");
+    }
     const identityPath = path.join(root, "age-identity.txt");
     await fsp.writeFile(identityPath, `${identityBodies.join("\n")}\n`, { mode: 0o600 });
     const instance = path.join(root, "room-instance");
@@ -358,10 +371,11 @@ async function main() {
     const evidence = {
       result: "managed-runtime-consumer-pass",
       platform,
-      source_sha: lock.controller.source_sha,
+      source_sha: childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
       vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
       dependencies: { boto3: dependencyProbe },
+      restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {
         release_tag: lock.controller.release_tag,
         artifact_digest: controllerPin.digest,
@@ -378,7 +392,7 @@ async function main() {
         source_sha: jat.sourceSha,
         rcc_version: rcc.version,
       },
-      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec"],
+      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec", "restic-package", "restic-phase0"],
     };
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
       if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-") || filename.startsWith("jat-artifact-")) && filename.endsWith(".json")) {

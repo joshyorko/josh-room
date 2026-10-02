@@ -216,7 +216,7 @@ def test_v1_cross_room_copy_preserves_source_origin_provenance(tmp_path):
     assert copied["origin_project_id"] == "source-room"
 
 
-def test_save_local_transition_precedes_catalog_publication(monkeypatch, tmp_path):
+def test_save_marker_failure_after_catalog_commit_preserves_committed_snapshot(monkeypatch, tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "README.md").write_text("Room")
@@ -246,9 +246,11 @@ def test_save_local_transition_precedes_catalog_publication(monkeypatch, tmp_pat
     monkeypatch.setattr("josh_room.operations._read_remote_catalog", lambda *_args, **_kwargs: (Catalog.empty("archive"), None))
     monkeypatch.setattr("josh_room.operations._encrypt_catalog", lambda *_args: b"catalog")
     monkeypatch.setattr("josh_room.operations.write_workspace_marker", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("local transition failed")))
-    with pytest.raises(RuntimeError, match="local transition failed"):
+    with pytest.raises(RuntimeError, match="local transition failed") as failure:
         create_snapshot(tmp_path / "instance", "room", source, tmp_path / "jat", ["age1daily", "age1recovery"], Backend())
-    assert "catalog" not in events
+    assert events == ["object", "catalog"]
+    assert failure.value.result["publication_state"] == "committed"
+    assert failure.value.result["marker_state"] == "stale"
 
 
 def test_save_marker_snapshot_failure_after_upload_records_orphan_before_catalog(monkeypatch, tmp_path):
@@ -341,15 +343,22 @@ def test_save_post_publication_verification_failure_keeps_committed_marker_hones
     assert failure.value.result == {
         "ok": False,
         "publication_state": "published_verification_unknown",
-        "marker_state": "committed",
+        "marker_state": "updated",
         "marker": str(source / ".josh-room.json"),
+        "project_id": "room",
+        "snapshot_id": marker["snapshot_id"],
     }
 
 
 def test_python_fingerprint_matches_native_noise_exclusions(tmp_path):
-    native = Path("vscode-extension/dirty.js").read_text()
     excluded = (".josh-room.json", ".DS_Store", ".git", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules", "__pycache__")
-    assert all(literal in native for literal in excluded)
+    import subprocess
+
+    native = subprocess.run(
+        ["node", "-e", "const d=require('./vscode-extension/dirty');process.stdout.write(JSON.stringify(process.argv.slice(1).map(p=>d.shouldMarkDirty(p))));", *excluded],
+        check=True, capture_output=True, text=True,
+    )
+    assert json.loads(native.stdout) == [False] * len(excluded)
     root = tmp_path / "workspace"
     root.mkdir()
     (root / "tracked.txt").write_text("tracked")
