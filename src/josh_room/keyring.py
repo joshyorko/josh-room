@@ -14,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +29,7 @@ SECURE_BACKENDS = frozenset(
 _SECRET_SERVICE_COMMAND = "secret-tool"
 _KEYCHAIN_COMMAND = "security"
 _WINDOWS_COMMAND = "cmdkey"
-_FIELD_NAMES = frozenset({"access-key-id", "secret-access-key", "session-token", "age-identity", "receipt"})
+_FIELD_NAMES = frozenset({"access-key-id", "secret-access-key", "session-token", "age-identity", "room-store-secret", "receipt"})
 _IDENTIFIER_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
 
 
@@ -648,3 +649,43 @@ def store_encryption_identity(domain_id: str, key_generation: int, value: str) -
 def encryption_identity_scope(domain_id: str, key_generation: int) -> tuple[str, int]:
     _scoped_attributes(domain_id, key_generation)
     return domain_id, key_generation
+
+
+def _room_store_secret_scope(domain_id: str, generation: int) -> str:
+    if not isinstance(domain_id, str):
+        raise TypeError("Room Store secret scope is invalid")
+    try:
+        parsed = uuid.UUID(domain_id)
+    except ValueError as error:
+        raise ValueError("Room Store secret scope is invalid") from error
+    if parsed.version != 4 or str(parsed) != domain_id or type(generation) is not int or generation < 1:
+        raise ValueError("Room Store secret scope is invalid")
+    return f"room-store-{domain_id}-{generation}"
+
+
+def lookup_room_store_secret(domain_id: str, generation: int) -> str:
+    """Read the Room Store secret from the native OS keyring only."""
+    from .encryption_domain import validate_room_store_secret
+
+    profile = _room_store_secret_scope(domain_id, generation)
+    if not available():
+        raise RuntimeError("OS Secret Service is unavailable")
+    try:
+        value = secure_lookup(profile, "room-store-secret")
+    except SecureBackendError as error:
+        raise RuntimeError("OS Secret Service Room Store secret is unavailable") from error
+    return validate_room_store_secret(value)
+
+
+def store_room_store_secret(domain_id: str, generation: int, value: str) -> None:
+    """Cache a Room Store secret under a domain/generation-scoped native keyring entry."""
+    from .encryption_domain import validate_room_store_secret
+
+    profile = _room_store_secret_scope(domain_id, generation)
+    validate_room_store_secret(value)
+    if not available():
+        raise RuntimeError("OS Secret Service is unavailable")
+    try:
+        secure_store(profile, "room-store-secret", value)
+    except SecureBackendError as error:
+        raise RuntimeError("OS Secret Service Room Store secret import failed") from error

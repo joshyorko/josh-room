@@ -11,8 +11,47 @@ const {
   fingerprintFile,
   fingerprintWorkspace,
   isRoomMarker,
+  loadCapturePolicy,
   shouldMarkDirty,
 } = require("./dirty");
+
+test("capture policy rejects an ignore file replaced after lstat", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-ignore-race-test-"));
+  const ignore = path.join(root, ".josh-roomignore");
+  const replacement = path.join(root, "replacement");
+  fs.writeFileSync(ignore, "src/generated\n");
+  fs.writeFileSync(replacement, "secrets/**\n");
+  const originalLstat = fs.lstatSync;
+  fs.lstatSync = function lstatThenReplace(filePath, ...args) {
+    const metadata = originalLstat.call(fs, filePath, ...args);
+    if (filePath === ignore) fs.renameSync(replacement, ignore);
+    return metadata;
+  };
+  try {
+    assert.throws(() => loadCapturePolicy(root), /changed while opening/);
+  } finally {
+    fs.lstatSync = originalLstat;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture policy rejects an ignore file grown after lstat", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-ignore-growth-test-"));
+  const ignore = path.join(root, ".josh-roomignore");
+  fs.writeFileSync(ignore, "src/generated\n");
+  const originalLstat = fs.lstatSync;
+  fs.lstatSync = function lstatThenGrow(filePath, ...args) {
+    const metadata = originalLstat.call(fs, filePath, ...args);
+    if (filePath === ignore) fs.appendFileSync(ignore, "x".repeat(64 * 1024 + 1));
+    return metadata;
+  };
+  try {
+    assert.throws(() => loadCapturePolicy(root), /changed while opening/);
+  } finally {
+    fs.lstatSync = originalLstat;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("dirty tracking notices workspace content and ignores bookkeeping noise", () => {
   assert.equal(shouldMarkDirty("src/app.py"), true);
