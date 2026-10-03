@@ -18,9 +18,10 @@ with ResticStore(
     repository=repository_locator,
     cache_dir=private_cache,
     password_file=private_password_file,
+    ca_bundle=dimension_ca_bundle,
     provider_env=provider_environment,
 ) as store:
-    repository_info = store.initialize()
+    repository_info = store.open_existing()
 ```
 
 The caller supplies the password file; the adapter never writes or reads its
@@ -32,6 +33,10 @@ settings. It does not inherit HOME/XDG auth files, AWS profiles, or arbitrary
 prompt/configuration variables. Secrets and repository paths never enter argv,
 error text, or progress values.
 
+An optional CA bundle must be a bounded regular file, not a symlink. It is
+passed through `RESTIC_CACERT`; TLS verification remains enabled. Arbitrary
+`RESTIC_*` variables are never inherited.
+
 Local repository locators are resolved to absolute filesystem paths. S3
 locators must use HTTPS and cannot contain URL user information, query
 parameters, or fragments; pass access material through `provider_env`.
@@ -42,6 +47,13 @@ file, and password file must be separate so backup cannot capture its own
 authorities.
 
 ## Repository initialization
+
+`open_existing()` first checks the pinned executable and reads `cat config`. A
+missing repository returns a stable `repository-missing` error and never runs
+`init`. `validate_existing()` is its explicit alias for read-only callers.
+Both existing-open and initialization expose the validated repository identity
+through the read-only `repository_info` property for callers that need to bind
+components to that repository.
 
 `initialize()` first checks the pinned executable and reads `cat config`. It
 initializes format 2 only when restic reports the repository does not exist,

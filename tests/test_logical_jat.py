@@ -62,6 +62,7 @@ def _component(kind):
             "archive_sha256": "e" * 64,
             "archive_size": 123,
             "member_basename": "rcc-environment.rcca",
+            "source_input_sha256": "6" * 64,
             "artifact_digest": "sha256:" + "3" * 64,
             "specification_digest": "sha256:" + "4" * 64,
             "platform": "linux_amd64",
@@ -125,7 +126,9 @@ def test_v1_schema_accepts_small_complete_snapshot_and_components():
         lambda body: body["components"].update(homebrew_recovery={**_component("homebrew-recovery"), "token": "secret"}),
         lambda body: body["components"].update(rcc_environment={**_component("rcca"), "member_basename": "private.rcca"}),
         lambda body: body["components"].update(rcc_environment={**_component("rcca"), "archive_sha256": "not-a-digest"}),
+        lambda body: body["components"].update(rcc_environment={**_component("rcca"), "source_input_sha256": "invalid"}),
         lambda body: body["components"].update(rcc_environment={**_component("rcca"), "artifact_digest": "sha256:invalid"}),
+        lambda body: body["components"].update(rcc_environment={**_component("rcca"), "unexpected": "field"}),
         lambda body: body["components"].update(rcc_environment={**_component("rcca"), "robot_relative_path": "../outside/robot.yaml"}),
         lambda body: body.update(source={"workspace_path": "/private/workspace"}),
         lambda body: body.update(producer={**body["producer"], "private_repo": "owner/private"}),
@@ -184,6 +187,81 @@ def test_python_contract_rejects_component_repository_mismatch():
 
     with pytest.raises(ValueError, match="repository"):
         LogicalJat.from_dict(descriptor)
+
+
+@pytest.mark.parametrize("kind", ["image", "chart", "file"])
+def test_hauler_native_digest_and_known_type_need_no_fabricated_media_type(kind):
+    descriptor = _valid_descriptor()
+    component = _component("hauler-content")
+    component["references"] = [{"digest": "sha256:" + "5" * 64, "kind": kind}]
+    descriptor["components"]["hauler_content"] = component
+
+    _validator().validate(descriptor)
+    assert LogicalJat.from_dict(descriptor).to_dict()["components"]["hauler_content"]["references"] == component["references"]
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        {"digest": "sha256:" + "5" * 64},
+        {"digest": "sha256:" + "5" * 64, "kind": "unknown"},
+        {"digest": "sha256:" + "5" * 64, "kind": "unknown", "media_type": "application/octet-stream"},
+        {"digest": "sha256:" + "5" * 64, "kind": "image", "media_type": 42},
+        {"digest": "sha256:" + "5" * 64, "kind": "image", "unexpected": "field"},
+    ],
+)
+def test_hauler_reference_requires_valid_known_evidence(reference):
+    descriptor = _valid_descriptor()
+    component = _component("hauler-content")
+    component["references"] = [reference]
+    descriptor["components"]["hauler_content"] = component
+
+    with pytest.raises(ValidationError):
+        _validator().validate(descriptor)
+    with pytest.raises((TypeError, ValueError)):
+        LogicalJat.from_dict(descriptor)
+
+
+def test_hauler_reference_identity_uses_digest_and_kind_or_media_evidence():
+    descriptor = _valid_descriptor()
+    component = _component("hauler-content")
+    component["references"] = [
+        {"digest": "sha256:" + "5" * 64, "kind": "image"},
+        {"digest": "sha256:" + "5" * 64, "kind": "image"},
+    ]
+    descriptor["components"]["hauler_content"] = component
+
+    with pytest.raises(ValidationError):
+        _validator().validate(descriptor)
+    with pytest.raises(ValueError, match="unique"):
+        LogicalJat.from_dict(descriptor)
+
+
+@pytest.mark.parametrize("field", ["source_input_sha256", "hauler_version"])
+def test_hauler_optional_source_and_binary_metadata_are_validated(field):
+    descriptor = _valid_descriptor()
+    component = _component("hauler-content")
+    component[field] = "6" * 64 if field == "source_input_sha256" else "v2.0.3"
+    descriptor["components"]["hauler_content"] = component
+
+    _validator().validate(descriptor)
+    assert LogicalJat.from_dict(descriptor).to_dict()["components"]["hauler_content"][field] == component[field]
+
+    component[field] = "invalid" if field == "source_input_sha256" else "hauler v2"
+    with pytest.raises(ValidationError):
+        _validator().validate(descriptor)
+    with pytest.raises(ValueError):
+        LogicalJat.from_dict(descriptor)
+
+
+def test_rcca_source_input_digest_is_optional():
+    descriptor = _valid_descriptor()
+    component = _component("rcca")
+    component.pop("source_input_sha256")
+    descriptor["components"]["rcc_environment"] = component
+
+    _validator().validate(descriptor)
+    assert LogicalJat.from_dict(descriptor).to_dict()["components"]["rcc_environment"] == component
 
 
 def test_python_contract_requires_explicit_distinct_origin_for_copied_room():

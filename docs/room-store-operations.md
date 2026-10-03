@@ -14,7 +14,8 @@ references, plus three catalog callbacks:
 - `read_snapshot_entries(snapshot_id)` is the read-only path Preview uses to
   inspect the selected parent tree. It must not upgrade the keyset, initialize
   a repository, or mutate provider state.
-- `publish_descriptor(descriptor, expected_etag=...)` owns the existing age
+- `publish_descriptor(descriptor, expected_etag=..., workspace_signature=...,
+  signature_algorithm=...)` owns the existing age
   encryption material and concrete backend. It must publish immutable data
   first, then conditionally replace the catalog using the supplied token. The
   callback reports known failure through an exception with `published=False`,
@@ -47,9 +48,9 @@ malformed output, or source/policy drift prevents descriptor publication. The
 saved tree is checked again through Restic's entry stream. A no-op creates no
 descriptor or marker update only when the selected latest descriptor has the
 same policy, components, source, producer, Room scope, and Restic parent.
-`SaveResult.scanned_bytes` is the source file-size total; `uploaded_bytes` is
-Restic's `data_added` count. Preview does not claim that scanned bytes were
-uploaded. Suspicious deletions (at least 25 paths and at least one quarter of
+`SaveResult.scanned_bytes` is the source file-size total; `data_added_bytes` is
+Restic's `data_added` count and is not a network-transfer measurement. Preview
+does not claim that scanned bytes were added. Suspicious deletions (at least 25 paths and at least one quarter of
 the prior entry count) require the exact token returned by the current preview.
 
 Restore validates the descriptor's Room Store scope, repository and tree

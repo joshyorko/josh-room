@@ -4,6 +4,7 @@ import io
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -425,6 +426,219 @@ def test_initialize_rejects_unknown_init_exit_even_if_config_can_be_read(tmp_pat
         ["cat", "config"],
         ["init", "--repository-version", "2"],
     ]
+
+
+def test_open_existing_missing_repository_fails_without_init(tmp_path):
+    module = api()
+    store, factory = make_store(
+        tmp_path,
+        [FakeProcess(restic_version()), FakeProcess(b"", returncode=10)],
+    )
+    with store, pytest.raises(module.ResticStoreError) as failure:
+        store.open_existing()
+
+    assert failure.value.code == module.ResticStoreErrorCode.REPOSITORY_MISSING
+    assert [call.args[1:] for call in factory.calls] == [["version"], ["cat", "config"]]
+
+
+@pytest.mark.parametrize(
+    ("config_payload", "expected_code"),
+    [
+        (config(version=1), "repository-format-mismatch"),
+        (config(repository_id="bad-id"), "repository-id-invalid"),
+    ],
+)
+def test_open_existing_rejects_format_and_repository_id(tmp_path, config_payload, expected_code):
+    module = api()
+    store, _ = make_store(
+        tmp_path,
+        [FakeProcess(restic_version()), FakeProcess(config_payload)],
+    )
+    with store, pytest.raises(module.ResticStoreError) as failure:
+        store.open_existing()
+    assert failure.value.code.value == expected_code
+
+
+def test_ca_bundle_is_explicit_child_tls_environment_and_never_argv(tmp_path, monkeypatch):
+    module = api()
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n")
+    password.chmod(0o600)
+    ca_bundle = tmp_path / "ca.pem"
+    ca_bundle.write_text("synthetic public CA bundle\n")
+    factory = FakeProcesses([FakeProcess(restic_version()), FakeProcess(config()), FakeProcess()])
+    store = module.ResticStore(
+        repository=tmp_path / "repository",
+        cache_dir=tmp_path / "cache",
+        password_file=password,
+        ca_bundle=ca_bundle,
+        executable="/managed/restic",
+        process_factory=factory,
+    )
+    monkeypatch.setenv("RESTIC_TLS_SKIP_VERIFY", "true")
+    monkeypatch.setenv("RESTIC_PASSWORD", "unrelated-secret")
+    with store:
+        store.open_existing()
+        assert store.repository_info.repository_format == 2
+        store.check()
+
+    check_call = factory.calls[-1]
+    assert check_call.kwargs["env"]["RESTIC_CACERT"] == str(ca_bundle)
+    assert "RESTIC_TLS_SKIP_VERIFY" not in check_call.kwargs["env"]
+    assert "RESTIC_PASSWORD" not in check_call.kwargs["env"]
+    assert str(ca_bundle) not in " ".join(check_call.args)
+    assert "unrelated-secret" not in " ".join(check_call.args)
+
+
+def test_ca_bundle_must_be_regular_non_symlink_and_bounded(tmp_path, monkeypatch):
+    module = api()
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n")
+    password.chmod(0o600)
+    target = tmp_path / "ca-target.pem"
+    target.write_text("synthetic CA\n")
+    link = tmp_path / "ca-link.pem"
+    link.symlink_to(target)
+    large = tmp_path / "large-ca.pem"
+    large.write_bytes(b"synthetic CA bundle")
+    monkeypatch.setattr(module, "MAX_CA_BUNDLE_BYTES", 4)
+
+    for path in (link, tmp_path, large):
+        store = module.ResticStore(
+            repository=tmp_path / "repository",
+            cache_dir=tmp_path / "cache",
+            password_file=password,
+            ca_bundle=path,
+        )
+        with pytest.raises(module.ResticStoreError) as failure:
+            store.__enter__()
+        assert failure.value.code == module.ResticStoreErrorCode.INVALID_CONFIGURATION
+
+
+@pytest.mark.parametrize("unsafe", ["mode", "symlink", "owner", "size"])
+def test_password_file_uses_canonical_posix_private_path_validation(
+    tmp_path, monkeypatch, unsafe
+):
+    module = api()
+    from josh_room import private_paths
+
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n")
+    password.chmod(0o600)
+    if unsafe == "mode":
+        password.chmod(0o644)
+    elif unsafe == "symlink":
+        target = tmp_path / "password-target"
+        target.write_text("synthetic-password\n")
+        target.chmod(0o600)
+        password.unlink()
+        password.symlink_to(target)
+    elif unsafe == "owner":
+        actual_uid = os.getuid()
+        monkeypatch.setattr(private_paths.os, "getuid", lambda: actual_uid + 1)
+    else:
+        monkeypatch.setattr(module, "MAX_PASSWORD_FILE_BYTES", 3)
+
+    store = module.ResticStore(
+        repository=tmp_path / "repository",
+        cache_dir=tmp_path / "cache",
+        password_file=password,
+    )
+    with pytest.raises(module.ResticStoreError) as failure:
+        store.__enter__()
+    assert failure.value.code == module.ResticStoreErrorCode.INVALID_CONFIGURATION
+    assert str(tmp_path) not in str(failure.value)
+
+
+def test_existing_cache_must_pass_canonical_posix_private_path_validation(tmp_path):
+    module = api()
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n")
+    password.chmod(0o600)
+    cache = tmp_path / "cache"
+    cache.mkdir(mode=0o755)
+    cache.chmod(0o755)
+    store = module.ResticStore(
+        repository=tmp_path / "repository",
+        cache_dir=cache,
+        password_file=password,
+    )
+
+    with pytest.raises(module.ResticStoreError) as failure:
+        store.__enter__()
+    assert failure.value.code == module.ResticStoreErrorCode.INVALID_CONFIGURATION
+
+
+def test_windows_private_paths_delegate_to_protected_dacl_verification(tmp_path, monkeypatch):
+    module = api()
+    from josh_room import private_paths
+
+    sid = "S-1-5-21-1000"
+
+    class FakeWindowsAPI:
+        def __init__(self):
+            self.applied = []
+            self.verified = []
+
+        def current_user_sid(self):
+            return sid
+
+        def apply_private_acl(self, path, owner_sid, *, directory):
+            self.applied.append((Path(path), owner_sid, directory))
+
+        def read_security(self, path):
+            target = Path(path)
+            self.verified.append(target)
+            return sid, True, private_paths._expected_aces(sid, directory=target.is_dir())
+
+    fake_api = FakeWindowsAPI()
+    monkeypatch.setattr(private_paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(private_paths, "_windows_api", lambda: fake_api)
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n")
+    password.chmod(0o644)  # Windows ACL, not POSIX mode bits, is authoritative here.
+    cache = tmp_path / "cache"
+    store = module.ResticStore(
+        repository=tmp_path / "repository",
+        cache_dir=cache,
+        password_file=password,
+    )
+
+    with store:
+        pass
+
+    assert fake_api.applied == [(cache, sid, True)]
+    assert password in fake_api.verified
+    assert cache in fake_api.verified
+
+
+def test_windows_private_paths_reject_unprotected_or_wrong_owner_dacl(tmp_path, monkeypatch):
+    module = api()
+    from josh_room import private_paths
+
+    sid = "S-1-5-21-1000"
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n")
+    password.chmod(0o600)
+
+    class UnsafeWindowsAPI:
+        def current_user_sid(self):
+            return sid
+
+        def read_security(self, _path):
+            return "S-1-5-21-other", False, ()
+
+    monkeypatch.setattr(private_paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(private_paths, "_windows_api", UnsafeWindowsAPI)
+    store = module.ResticStore(
+        repository=tmp_path / "repository",
+        cache_dir=tmp_path / "cache",
+        password_file=password,
+    )
+
+    with pytest.raises(module.ResticStoreError) as failure:
+        store.__enter__()
+    assert failure.value.code == module.ResticStoreErrorCode.INVALID_CONFIGURATION
 
 
 def test_backup_uses_parent_relative_dot_and_returns_noop_without_snapshot(tmp_path):

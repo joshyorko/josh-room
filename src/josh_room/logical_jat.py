@@ -109,10 +109,13 @@ def _validate_component(value: object, name: str, workspace: dict[str, Any]) -> 
                 "kind", "snapshot", "archive_sha256", "archive_size", "member_basename",
                 "artifact_digest", "specification_digest", "platform", "rcc_version", "robot_relative_path",
             },
+            {"source_input_sha256"},
         )
         if component["kind"] != "rcca":
             raise ValueError(f"logical JAT component {name} kind mismatch")
         _archive(component, name, "rcc-environment.rcca")
+        if "source_input_sha256" in component:
+            _sha256(component["source_input_sha256"], f"component {name} source input digest")
         _content_digest(component["artifact_digest"], f"component {name} artifact digest")
         _content_digest(component["specification_digest"], f"component {name} specification digest")
         _id(component["platform"], f"component {name} platform")
@@ -141,24 +144,41 @@ def _validate_component(value: object, name: str, workspace: dict[str, Any]) -> 
             value,
             f"component {name}",
             {"kind", "snapshot", "archive_sha256", "archive_size", "member_basename", "references"},
+            {"source_input_sha256", "hauler_version"},
         )
         if component["kind"] != "hauler-content":
             raise ValueError(f"logical JAT component {name} kind mismatch")
         _archive(component, name, "hauler-content.tar.zst")
+        if "source_input_sha256" in component:
+            _sha256(component["source_input_sha256"], f"component {name} source input digest")
+        if "hauler_version" in component:
+            _version(component["hauler_version"], f"component {name} Hauler version")
         references = component["references"]
         if not isinstance(references, list) or not 1 <= len(references) <= 4096:
             raise ValueError("logical JAT Hauler references are invalid")
         seen = set()
         for reference_value in references:
-            reference = _object(reference_value, "Hauler reference", {"digest", "media_type"})
+            reference = _object(
+                reference_value,
+                "Hauler reference",
+                {"digest"},
+                {"kind", "media_type"},
+            )
             _content_digest(reference["digest"], "Hauler reference digest")
-            media_type = reference["media_type"]
-            if (
-                not isinstance(media_type, str)
-                or re.fullmatch(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}", media_type) is None
-            ):
-                raise ValueError("logical JAT Hauler reference media type is invalid")
-            key = (reference["digest"], media_type)
+            if "media_type" in reference:
+                media_type = reference["media_type"]
+                if (
+                    not isinstance(media_type, str)
+                    or re.fullmatch(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,63}/[a-z0-9][a-z0-9!#$&^_.+-]{0,63}", media_type) is None
+                ):
+                    raise ValueError("logical JAT Hauler reference media type is invalid")
+            else:
+                media_type = None
+            if "kind" in reference and reference["kind"] not in {"image", "chart", "file"}:
+                raise ValueError("logical JAT Hauler reference kind is invalid")
+            if "kind" not in reference and "media_type" not in reference:
+                raise ValueError("logical JAT Hauler reference needs kind or media type")
+            key = (reference["digest"], reference.get("kind"), media_type)
             if key in seen:
                 raise ValueError("logical JAT Hauler references must be unique")
             seen.add(key)

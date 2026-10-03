@@ -279,6 +279,12 @@ async function main() {
       "python", "-c", "import boto3, josh_room; print(boto3.__version__)",
     ], "dependencies").trim();
     if (!dependencyProbe) throw new Error("managed controller dependency probe returned no boto3 version");
+    const privateRuntime = JSON.parse(runManagedTool([
+      "python", path.join(repository, "scripts", "verify_private_runtime.py"),
+    ], "private-runtime").trim());
+    if (privateRuntime.status !== "passed") {
+      throw new Error("managed private runtime protection did not pass");
+    }
     const resticInstallation = JSON.parse(runManagedTool([
       "python", path.join(controllerRoot, "install_restic.py"),
       "--manifest", path.join(extension, "runtime", "restic-manifest.json"),
@@ -375,6 +381,7 @@ async function main() {
       vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
       dependencies: { boto3: dependencyProbe },
+      private_runtime: privateRuntime,
       restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {
         release_tag: lock.controller.release_tag,
@@ -392,7 +399,7 @@ async function main() {
         source_sha: jat.sourceSha,
         rcc_version: rcc.version,
       },
-      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec", "restic-package", "restic-phase0"],
+      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec", "restic-package", "restic-phase0", "private-runtime"],
     };
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
       if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-") || filename.startsWith("jat-artifact-")) && filename.endsWith(".json")) {

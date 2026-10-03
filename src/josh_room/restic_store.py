@@ -19,13 +19,21 @@ from urllib.parse import urlsplit
 
 from .adapter_contract import CancellationToken
 from .cancellation import terminate_owned_process
+from .private_paths import (
+    PrivatePathError,
+    protect_private_directory,
+    verify_private_path,
+)
 
 RESTIC_VERSION = "0.19.1"
 SUPPORTED_REPOSITORY_FORMAT = 2
 MAX_JSON_EVENT_BYTES = 1024 * 1024
 MAX_CAPTURE_BYTES = 4 * 1024 * 1024
 MAX_ENTRIES = 1_000_000
+MAX_CA_BUNDLE_BYTES = 4 * 1024 * 1024
+MAX_PASSWORD_FILE_BYTES = 64 * 1024
 MAX_INTEGER = (1 << 63) - 1
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _REPOSITORY_ID = re.compile(r"^[0-9a-f]{64}$")
 _SNAPSHOT_ID = re.compile(r"^[0-9a-f]{64}$")
 _ENTRY_TYPE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -61,6 +69,7 @@ class ResticStoreErrorCode(StrEnum):
     VERSION_MISMATCH = "version-mismatch"
     REPOSITORY_FORMAT = "repository-format-mismatch"
     REPOSITORY_ID = "repository-id-invalid"
+    REPOSITORY_MISSING = "repository-missing"
     INITIALIZE_FAILED = "initialize-failed"
     COMMAND_FAILED = "command-failed"
     UNKNOWN_EXIT = "unknown-exit"
@@ -78,6 +87,7 @@ _ERROR_MESSAGES = {
     ResticStoreErrorCode.VERSION_MISMATCH: "restic version does not match the pinned version",
     ResticStoreErrorCode.REPOSITORY_FORMAT: "restic repository format is unsupported",
     ResticStoreErrorCode.REPOSITORY_ID: "restic repository identity is invalid",
+    ResticStoreErrorCode.REPOSITORY_MISSING: "restic repository does not exist",
     ResticStoreErrorCode.INITIALIZE_FAILED: "restic repository initialization failed",
     ResticStoreErrorCode.COMMAND_FAILED: "restic command failed",
     ResticStoreErrorCode.UNKNOWN_EXIT: "restic returned an unknown exit status",
@@ -452,6 +462,7 @@ class ResticStore:
         repository: str | Path,
         cache_dir: Path,
         password_file: Path,
+        ca_bundle: Path | None = None,
         provider_env: Mapping[str, str] | None = None,
         executable: str = "restic",
         process_factory: Callable[..., Any] = subprocess.Popen,
@@ -488,6 +499,7 @@ class ResticStore:
         self._repository = repository_value
         self._cache_dir = Path(cache_dir)
         self._password_file = Path(password_file)
+        self._ca_bundle = Path(ca_bundle) if ca_bundle is not None else None
         self._provider_env = self._validate_provider_env(provider_env or {})
         self._executable = executable
         self._process_factory = process_factory
@@ -520,19 +532,46 @@ class ResticStore:
             password_stat = self._password_file.lstat()
         except OSError:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION) from None
-        if not stat.S_ISREG(password_stat.st_mode) or stat.S_ISLNK(password_stat.st_mode):
-            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
-        if stat.S_IMODE(password_stat.st_mode) != 0o600:
+        if (
+            not stat.S_ISREG(password_stat.st_mode)
+            or password_stat.st_size <= 0
+            or password_stat.st_size > MAX_PASSWORD_FILE_BYTES
+        ):
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
         try:
-            self._cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            cache_stat = self._cache_dir.lstat()
-        except OSError:
+            verify_private_path(self._password_file, directory=False)
+        except PrivatePathError:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION) from None
-        if not stat.S_ISDIR(cache_stat.st_mode) or stat.S_ISLNK(cache_stat.st_mode):
-            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
-        if cache_stat.st_mode & 0o077:
-            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        if self._ca_bundle is not None:
+            try:
+                ca_stat = self._ca_bundle.lstat()
+            except OSError:
+                raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION) from None
+            if (
+                not stat.S_ISREG(ca_stat.st_mode)
+                or stat.S_ISLNK(ca_stat.st_mode)
+                or getattr(ca_stat, "st_file_attributes", 0)
+                & _FILE_ATTRIBUTE_REPARSE_POINT
+                or ca_stat.st_size <= 0
+                or ca_stat.st_size > MAX_CA_BUNDLE_BYTES
+            ):
+                raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+            try:
+                self._ca_bundle = self._ca_bundle.resolve(strict=True)
+            except OSError:
+                raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION) from None
+        try:
+            try:
+                cache_stat = self._cache_dir.lstat()
+            except FileNotFoundError:
+                self._cache_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+                protect_private_directory(self._cache_dir)
+            else:
+                if not stat.S_ISDIR(cache_stat.st_mode):
+                    raise PrivatePathError("private cache directory is invalid")
+                verify_private_path(self._cache_dir, directory=True)
+        except (OSError, PrivatePathError):
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION) from None
         self._entered = True
         return self
 
@@ -559,6 +598,8 @@ class ResticStore:
                 "RESTIC_PROGRESS_FPS": "2",
             }
         )
+        if self._ca_bundle is not None:
+            env["RESTIC_CACERT"] = str(self._ca_bundle)
         env.update(self._provider_env)
         return env
 
@@ -737,10 +778,32 @@ class ResticStore:
         self._repository_info = info
         return info
 
+    def open_existing(self) -> RepositoryInfo:
+        """Validate an existing repository without creating or migrating it."""
+        self._ensure_open()
+        self._snapshot_info.clear()
+        self._ensure_version()
+        info = self._read_repository_info(allow_missing=True)
+        if info is None:
+            self._repository_info = None
+            raise ResticStoreError(ResticStoreErrorCode.REPOSITORY_MISSING)
+        self._repository_info = info
+        return info
+
+    def validate_existing(self) -> RepositoryInfo:
+        """Read-only alias for :meth:`open_existing`."""
+        return self.open_existing()
+
     def _require_initialized(self) -> None:
         self._ensure_open()
         if self._repository_info is None:
             raise ResticStoreError(ResticStoreErrorCode.NOT_OPEN)
+
+    @property
+    def repository_info(self) -> RepositoryInfo:
+        self._require_initialized()
+        assert self._repository_info is not None
+        return self._repository_info
 
     def _validate_workspace(self, workspace: Path, exclude_file: Path | None) -> Path:
         try:
@@ -750,6 +813,8 @@ class ResticStore:
         if not root.is_dir():
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
         protected = [self._password_file, self._cache_dir]
+        if self._ca_bundle is not None:
+            protected.append(self._ca_bundle)
         if not self._repository.startswith("s3:"):
             protected.append(Path(self._repository))
         if exclude_file is not None:

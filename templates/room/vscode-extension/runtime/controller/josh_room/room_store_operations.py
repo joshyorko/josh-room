@@ -60,6 +60,7 @@ class RoomStorePublicationError(RoomStoreOperationsError):
             "ok": False,
             "publication_state": publication_state,
             "marker_state": self.marker_state,
+            "error_type": type(error).__name__,
         }
         if self.reconciliation_required:
             self.result["reconciliation_required"] = True
@@ -93,7 +94,7 @@ class SaveResult:
     status: str
     descriptor: LogicalJat | None
     scanned_bytes: int
-    uploaded_bytes: int
+    data_added_bytes: int
     snapshot_id: str | None
     publication_state: str
     workspace_signature: str
@@ -305,6 +306,17 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
     )
 
 
+def scan_workspace_for_status(root: Path) -> WorkspaceScan:
+    """Run the same metadata-only, policy-aware scanner used by Room Store Save."""
+    root = Path(root)
+    runtime_value = os.environ.get("ROBOCORP_HOME")
+    runtime = Path(runtime_value) if runtime_value else None
+    policy = load_capture_policy(
+        root, active_runtime_root=runtime if runtime and runtime.is_dir() else None
+    )
+    return _scan_workspace(root, policy)
+
+
 def _deletion_token(parent_id: str, deleted: tuple[str, ...], scan: WorkspaceScan) -> str:
     value = json.dumps([parent_id, scan.signature, deleted], separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(value.encode()).hexdigest()
@@ -338,7 +350,8 @@ class RoomStoreOperations:
     """Run complete-snapshot save/restore with catalog work injected at the edge.
 
     ``read_latest`` returns ``(LogicalJat | None, etag)``. ``publish_descriptor``
-    receives a validated descriptor and the observed ETag; it must age-encrypt
+    receives the validated descriptor, stat signature metadata, and observed
+    ETag; it must age-encrypt
     the canonical bytes using the selected Dimension material, publish referenced
     immutable data first, and conditionally replace the catalog last. A callback
     error must expose ``published`` as True/False only when that outcome is known.
@@ -361,6 +374,7 @@ class RoomStoreOperations:
         publish_descriptor: Callable[..., None],
         write_marker: Callable[..., None],
         descriptor_metadata: Mapping[str, Any],
+        resolve_components: Callable[[Any, LogicalJat | None], Mapping[str, Any]] | None = None,
         active_runtime_root: Path | None = None,
         secure_private_file: Callable[[int, Path, int], None] | None = None,
         validate_private_directory: Callable[[Path], None] | None = None,
@@ -379,6 +393,7 @@ class RoomStoreOperations:
         self.publish_descriptor = publish_descriptor
         self.write_marker = write_marker
         self.descriptor_metadata = copy.deepcopy(dict(descriptor_metadata))
+        self.resolve_components = resolve_components
         self.active_runtime_root = active_runtime_root
         self.secure_private_file = secure_private_file
         self.validate_private_directory = validate_private_directory
@@ -434,11 +449,11 @@ class RoomStoreOperations:
             raise RoomStoreOperationsError("Room Store password could not be prepared safely") from error
 
     def _protect_private_file(self, descriptor: int, path: Path) -> None:
-        if os.name == "nt":
-            if self.secure_private_file is None:
-                raise RoomStoreOperationsError("Windows private-file ACL handoff is unavailable")
+        if self.secure_private_file is not None:
             self.secure_private_file(descriptor, path, 0o600)
             return
+        if os.name == "nt":
+            raise RoomStoreOperationsError("Windows private-file ACL handoff is unavailable")
         os.fchmod(descriptor, 0o600)
 
     def _validate_private_roots(self) -> None:
@@ -551,12 +566,28 @@ class RoomStoreOperations:
             selected_parent = latest
         if selected_parent is None:
             return self._deletion_preview(None, scan, None)
+        parent_body = selected_parent.to_dict()
+        if (
+            parent_body["dimension_id"] != self.descriptor_metadata["dimension_id"]
+            or parent_body["encryption_domain_id"] != self.descriptor_metadata["encryption_domain_id"]
+            or parent_body["room_id"] != self.descriptor_metadata["room_id"]
+        ):
+            raise RoomStoreOperationsError("selected parent belongs to another Room Store scope")
         if self.read_snapshot_entries is None:
             raise RoomStoreOperationsError("read-only snapshot entry reader is required for deletion preview")
-        entries = self.read_snapshot_entries(selected_parent.to_dict()["workspace"]["snapshot_id"])
+        entries = self.read_snapshot_entries(parent_body["workspace"]["snapshot_id"])
         return self._deletion_preview(selected_parent, scan, entries)
 
-    def _descriptor(self, parent: LogicalJat | None, repository_id: str, snapshot, summary, policy: CapturePolicy, logical_bytes: int) -> LogicalJat:
+    def _descriptor(
+        self,
+        parent: LogicalJat | None,
+        repository_id: str,
+        snapshot,
+        summary,
+        policy: CapturePolicy,
+        logical_bytes: int,
+        components: Mapping[str, Any],
+    ) -> LogicalJat:
         parent_body = parent.to_dict() if parent is not None else None
         body = {
             "format_version": 1,
@@ -578,7 +609,7 @@ class RoomStoreOperations:
                 "data_added": summary.data_added if summary else 0,
                 "data_added_packed": summary.data_added_packed if summary else 0,
             },
-            "components": self.descriptor_metadata["components"],
+            "components": components,
             "source": self.descriptor_metadata["source"],
             "producer": self.descriptor_metadata["producer"],
         }
@@ -590,7 +621,13 @@ class RoomStoreOperations:
                 body[key] = self.descriptor_metadata[key]
         return LogicalJat.from_dict(body)
 
-    def _is_unchanged(self, latest: LogicalJat | None, parent: LogicalJat | None, policy: CapturePolicy) -> bool:
+    def _is_unchanged(
+        self,
+        latest: LogicalJat | None,
+        parent: LogicalJat | None,
+        policy: CapturePolicy,
+        components: Mapping[str, Any],
+    ) -> bool:
         if latest is None or parent is None:
             return False
         latest_body = latest.to_dict()
@@ -598,7 +635,7 @@ class RoomStoreOperations:
         return (
             latest_body["logical_jat_id"] == parent_body["logical_jat_id"]
             and latest_body["capture_policy_sha256"] == policy.sha256
-            and latest_body["components"] == self.descriptor_metadata["components"]
+            and latest_body["components"] == components
             and latest_body["source"] == self.descriptor_metadata["source"]
             and latest_body["producer"] == self.descriptor_metadata["producer"]
             and latest_body["dimension_id"] == self.descriptor_metadata["dimension_id"]
@@ -643,6 +680,15 @@ class RoomStoreOperations:
                         raise RoomStoreOperationsError("selected parent belongs to another Room Store scope")
                 if latest is not None and repository_info.repository_id != latest.to_dict()["workspace"]["repository_id"]:
                     raise RoomStoreOperationsError("Room Store catalog points to another repository")
+                components = copy.deepcopy(self.descriptor_metadata["components"])
+                if self.resolve_components is not None:
+                    resolved_components = self.resolve_components(opened, latest)
+                    if (
+                        not isinstance(resolved_components, Mapping)
+                        or set(resolved_components) != set(components)
+                    ):
+                        raise RoomStoreOperationsError("native component resolver returned an invalid component set")
+                    components = copy.deepcopy(dict(resolved_components))
                 preview = self._deletion_preview(
                     selected_parent,
                     before,
@@ -666,7 +712,9 @@ class RoomStoreOperations:
                     )
                 finally:
                     exclude_file.unlink(missing_ok=True)
-                if summary.snapshot_id is None and self._is_unchanged(latest, selected_parent, policy):
+                if summary.snapshot_id is None and self._is_unchanged(
+                    latest, selected_parent, policy, components
+                ):
                     return SaveResult(
                         "already-saved",
                         latest,
@@ -701,14 +749,27 @@ class RoomStoreOperations:
                 after = _scan_workspace(self.workspace, after_policy)
                 if before.signature != after.signature or policy.sha256 != after_policy.sha256:
                     raise RoomStoreOperationsError("workspace or capture policy changed during save")
-                descriptor = self._descriptor(selected_parent, repository_info.repository_id, snapshot, summary, policy, logical_bytes)
+                descriptor = self._descriptor(
+                    selected_parent,
+                    repository_info.repository_id,
+                    snapshot,
+                    summary,
+                    policy,
+                    logical_bytes,
+                    components,
+                )
                 commit_state = "committed"
                 commit_error: BaseException | None = None
                 deferred_cancel: CLICancelled | None = None
                 try:
                     with defer_sigterm_cancellation():
                         try:
-                            self.publish_descriptor(descriptor, expected_etag=etag)
+                            self.publish_descriptor(
+                                descriptor,
+                                expected_etag=etag,
+                                workspace_signature=before.signature,
+                                signature_algorithm=before.signature_algorithm,
+                            )
                         except BaseException as error:  # noqa: BLE001 - assign catalog outcome before deferred SIGTERM.
                             commit_error = error
                             commit_state = self._publication_state(error)
@@ -817,9 +878,14 @@ class RoomStoreOperations:
         keyset, password_file, store = self._open_store()
         stage = parent_dir / f".{target.name}.josh-room-{uuid.uuid4().hex}"
         try:
+            keyset_metadata = getattr(keyset, "room_store", None)
+            bound_repository_id = getattr(keyset_metadata, "repository_id", None)
+            if bound_repository_id is None:
+                raise RoomStoreOperationsError("restore requires a bound Room Store repository")
             with store as opened:
-                repository_info = opened.initialize()
-                self._bind_repository(keyset, repository_info.repository_id)
+                repository_info = opened.open_existing()
+                if bound_repository_id != repository_info.repository_id:
+                    raise RoomStoreOperationsError("Room Store repository binding does not match")
                 workspace = body["workspace"]
                 if (
                     workspace["repository_id"] != repository_info.repository_id

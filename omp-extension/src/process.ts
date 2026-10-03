@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 
 const OUTPUT_LIMIT = 256 * 1024;
+const TERMINATION_GRACE_MS = 2_000;
 const SAFE_ENVIRONMENT = [
 	"PATH",
 	"HOME",
@@ -94,7 +95,9 @@ export function createRoomProcessRunner(
 		let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 		const killTree = () => {
 			processGroupSignal(child.pid, "SIGTERM");
-			forceKillTimer ??= setTimeout(() => processGroupSignal(child.pid, "SIGKILL"), 500);
+			// Give Josh Room's SIGTERM unwind and owned-child cleanup time to finish;
+			// SIGKILL is only the bounded last resort if the CLI remains alive.
+			forceKillTimer ??= setTimeout(() => processGroupSignal(child.pid, "SIGKILL"), TERMINATION_GRACE_MS);
 		};
 		const onAbort = () => {
 			aborted = true;
@@ -126,16 +129,22 @@ export function createRoomProcessRunner(
 		try {
 			const result = await finished;
 			if (spawnFailed) throw new RoomCliError("missing-runtime");
-			if (aborted || options.signal?.aborted) throw new RoomCliError("cancelled");
-			if (timedOut) throw new RoomCliError("timeout");
 			if (overflow) throw new RoomCliError("output-limit");
 			const text = new TextDecoder("utf-8", { fatal: true }).decode(concat(stdout, stdoutBytes));
+			const interrupted = aborted || options.signal?.aborted === true;
+			if (!text && interrupted) throw new RoomCliError("cancelled");
+			if (!text && timedOut) throw new RoomCliError("timeout");
 			let parsed: unknown;
 			try {
 				parsed = JSON.parse(text);
 			} catch {
+				if (interrupted) throw new RoomCliError("cancelled");
+				if (timedOut) throw new RoomCliError("timeout");
 				throw new RoomCliError("invalid-result");
 			}
+			if ((result.code === 0 || interrupted) && typeof parsed === "object" && parsed !== null && "ok" in parsed && parsed.ok === true) return parsed;
+			if (interrupted) throw new RoomCliError("cancelled");
+			if (timedOut) throw new RoomCliError("timeout");
 			if (!options.allowFailure && typeof parsed === "object" && parsed !== null && "ok" in parsed && parsed.ok === false) {
 				const diagnostic = "error" in parsed ? safeDiagnostic(parsed.error) : undefined;
 				throw new RoomCliError("failed", diagnostic);

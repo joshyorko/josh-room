@@ -13,6 +13,12 @@ import pytest
 from josh_room import room_store_operations
 from josh_room.cancellation import CLICancelled
 from josh_room.logical_jat import LogicalJat
+from josh_room.private_paths import (
+    protect_private_directory,
+    secure_private_file,
+    validate_private_directory,
+    verify_private_path,
+)
 from josh_room.restic_store import (
     BackupSummary,
     RepositoryInfo,
@@ -109,6 +115,10 @@ class _Store:
         self.initialized = True
         return RepositoryInfo(REPOSITORY_ID, 2)
 
+    def open_existing(self):
+        self.initialized = True
+        return RepositoryInfo(REPOSITORY_ID, 2)
+
     def backup(self, workspace, *, parent=None, excludes=None, on_progress=None, cancellation=None):
         self.parents.append(parent)
         return self.summary
@@ -141,8 +151,10 @@ class _Catalog:
     def read_latest(self):
         return self.latest, self.etag
 
-    def publish(self, descriptor, *, expected_etag):
+    def publish(self, descriptor, *, expected_etag, workspace_signature, signature_algorithm):
         assert expected_etag == self.etag
+        assert signature_algorithm == "josh-room-stat-v1"
+        assert len(workspace_signature) == 64
         self.order.append("publish")
         self.published.append(descriptor)
         self.latest = descriptor
@@ -168,6 +180,8 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
     cache_dir = tmp_path / "cache"
     private_dir.mkdir(exist_ok=True, mode=0o700)
     cache_dir.mkdir(exist_ok=True, mode=0o700)
+    protect_private_directory(private_dir)
+    protect_private_directory(cache_dir)
     keyset = _Keyset(_RoomStoreSecret(repository_id=binding))
 
     def bind(_dimension, _backend, repository_id, *, expected_generation):
@@ -202,6 +216,8 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
                 "restore_platforms": ["linux-x64", "win32-x64"],
             },
         },
+        secure_private_file=secure_private_file,
+        validate_private_directory=validate_private_directory,
     )
 
 
@@ -238,7 +254,7 @@ def test_unchanged_save_publishes_no_descriptor_or_marker(tmp_path):
     result = operations.save()
 
     assert result.status == "already-saved"
-    assert result.uploaded_bytes == 0
+    assert result.data_added_bytes == 0
     assert catalog.published == []
     assert catalog.marker_rows == []
 
@@ -371,9 +387,14 @@ def test_edit_during_publication_is_reported_as_saved_but_dirty(tmp_path):
     catalog = _Catalog()
     operations = _operations(tmp_path, workspace, store, catalog)
 
-    def publish(descriptor, *, expected_etag):
+    def publish(descriptor, *, expected_etag, workspace_signature, signature_algorithm):
         (workspace / "file.txt").write_text("edited after backup", encoding="utf-8")
-        catalog.publish(descriptor, expected_etag=expected_etag)
+        catalog.publish(
+            descriptor,
+            expected_etag=expected_etag,
+            workspace_signature=workspace_signature,
+            signature_algorithm=signature_algorithm,
+        )
 
     operations.publish_descriptor = publish
 
@@ -418,6 +439,7 @@ def test_restic_password_is_a_private_transient_ascii_file(tmp_path):
 
     def create_store(**kwargs):
         password_file = kwargs["password_file"]
+        verify_private_path(password_file, directory=False)
         captured.update(
             path=password_file,
             content=password_file.read_bytes(),
@@ -430,7 +452,8 @@ def test_restic_password_is_a_private_transient_ascii_file(tmp_path):
     operations.save()
 
     assert captured["content"] == PASSWORD.encode("ascii") + b"\n"
-    assert captured["mode"] == 0o600
+    if os.name != "nt":
+        assert captured["mode"] == 0o600
     assert not captured["path"].exists()
     assert workspace not in captured["path"].parents
 
@@ -464,6 +487,7 @@ def test_snapshot_symlink_cycle_and_special_entries_fail_closed():
         _validate_snapshot_entries([SnapshotEntry("socket", "socket", 0, 0o600, None)])
 
 
+@pytest.mark.skipif(os.name == "nt", reason="FIFO creation is POSIX-only")
 def test_nfc_casefold_collisions_and_special_workspace_files_fail_closed(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -486,7 +510,8 @@ def test_device_boundary_validation_is_fail_closed():
         _require_same_device(42, 43)
 
 
-@pytest.mark.skipif(os.name == "nt" or shutil.which("restic") is None, reason="requires POSIX and pinned restic")
+@pytest.mark.integration
+@pytest.mark.skipif(shutil.which("restic") is None, reason="requires pinned restic")
 def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -496,6 +521,8 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
     cache_dir = tmp_path / "cache"
     private_dir.mkdir(mode=0o700)
     cache_dir.mkdir(mode=0o700)
+    protect_private_directory(private_dir)
+    protect_private_directory(cache_dir)
     repository = tmp_path / "repository"
     keyset = _Keyset(_RoomStoreSecret())
     state = {"latest": None, "etag": "first"}
@@ -506,8 +533,16 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
         keyset.room_store.repository_id = repository_id
         return keyset
 
-    def publish(descriptor, *, expected_etag):
+    def publish(
+        descriptor,
+        *,
+        expected_etag,
+        workspace_signature,
+        signature_algorithm,
+    ):
         assert expected_etag == state["etag"]
+        assert signature_algorithm == "josh-room-stat-v1"
+        assert len(workspace_signature) == 64
         state["latest"] = descriptor
         state["etag"] = f"etag-{len(markers) + 1}"
 
@@ -537,6 +572,8 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
                 "restore_platforms": ["linux-x64", "win32-x64"],
             },
         },
+        secure_private_file=secure_private_file,
+        validate_private_directory=validate_private_directory,
     )
 
     first = operations.save()
@@ -550,7 +587,7 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
     assert first.descriptor is not None
     assert unchanged.status == "already-saved"
     assert unchanged.descriptor is first.descriptor
-    assert unchanged.uploaded_bytes == 0
+    assert unchanged.data_added_bytes == 0
     assert second.status == "saved"
     assert second.descriptor is not None
     assert second.descriptor.to_dict()["workspace"]["parent_snapshot_id"] == first.snapshot_id

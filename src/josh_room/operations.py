@@ -110,6 +110,18 @@ def _bounded_catalog_result(catalog: Catalog, project_id: str, snapshot_id: str)
     return CatalogResult(body)
 
 
+def snapshot_payload_kind(snapshot: dict) -> str:
+    """Return the restore path selected by a catalog snapshot record."""
+    if not isinstance(snapshot, dict):
+        raise TypeError("catalog snapshot record is invalid")
+    if "payload_kind" not in snapshot:
+        return "portable-jat"
+    payload_kind = snapshot["payload_kind"]
+    if payload_kind == "room-store-v1":
+        return payload_kind
+    raise ValueError("unsupported snapshot payload kind")
+
+
 def create_snapshot(
     instance: Path,
     project_id: str,

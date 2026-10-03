@@ -74,6 +74,15 @@ test("abort terminates the CLI process group, including inherited descendants", 
 	await rm(directory, { recursive: true, force: true });
 });
 
+test("a completed success receipt wins a late abort", async () => {
+	const runner = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", "process.stdout.write(JSON.stringify({ok:true,snapshot_id:'jat-committed'})+'\\n');setInterval(()=>{},1000)"], options));
+	const abort = new AbortController();
+	const operation = runner(["snapshot", "create"], { cwd: process.cwd(), signal: abort.signal, timeoutMs: 5_000 });
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	abort.abort();
+	assert.deepEqual(await operation, { ok: true, snapshot_id: "jat-committed" });
+});
+
 test("CLI diagnostics omit private paths and sensitive terms", async () => {
 	const runner = createRoomProcessRunner((_command, _args, options) => {
 		const child = spawn(process.execPath, ["-e", "process.stdout.write(JSON.stringify({ok:false,error:'room marker is invalid'}));process.exit(2)"], options);
