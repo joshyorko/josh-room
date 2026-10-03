@@ -111,6 +111,15 @@ def test_windows_protection_applies_protected_user_and_system_acl(
     }
 
 
+def test_windows_private_sddl_keeps_empty_file_ace_flags_field():
+    assert private_paths._private_sddl(_USER_SID, directory=False) == (
+        f"D:P(A;;FA;;;{_USER_SID})(A;;FA;;;SY)"
+    )
+    assert private_paths._private_sddl(_USER_SID, directory=True) == (
+        f"D:P(A;OICI;FA;;;{_USER_SID})(A;OICI;FA;;;SY)"
+    )
+
+
 @pytest.mark.parametrize(
     ("owner", "aces", "protected"),
     [

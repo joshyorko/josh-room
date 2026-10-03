@@ -105,3 +105,21 @@ def test_probe_failure_includes_static_helper_failure_code(monkeypatch):
     assert failure.value.error_type == "PrivatePathError"
     assert failure.value.winerror == 5
     assert failure.value.checks_completed == []
+
+
+def test_probe_keeps_file_protection_failure_stage_through_descriptor_close(monkeypatch):
+    def fail(_descriptor, _path, _mode):
+        raise private_paths.PrivatePathError(
+            "private path security could not be applied", winerror=87
+        )
+
+    monkeypatch.setattr(private_paths, "secure_private_file", fail)
+
+    with pytest.raises(verify_private_runtime._ProbeFailure) as failure:
+        verify_private_runtime.run_probe()
+
+    assert failure.value.failed_check == (
+        "protect-private-file-handoff:private_path_security_could_not_be_applied"
+    )
+    assert failure.value.winerror == 87
+    assert failure.value.checks_completed == ["private-directory-owner-and-access"]

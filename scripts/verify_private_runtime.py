@@ -70,6 +70,7 @@ def run_probe() -> dict[str, object]:
         failed_check = "create-private-file-handoff"
         descriptor, filename = tempfile.mkstemp(prefix="handoff-", dir=root)
         handoff = Path(filename)
+        file_handoff_in_progress = True
         try:
             failed_check = "protect-private-file-handoff"
             private_paths.secure_private_file(descriptor, handoff, 0o600)
@@ -110,8 +111,10 @@ def run_probe() -> dict[str, object]:
                 ):
                     raise RuntimeError
                 _check(checks, "same-size-edit-restored-mtime-changes-native-changetime")
+            file_handoff_in_progress = False
         finally:
-            failed_check = "close-private-file-handoff"
+            if not file_handoff_in_progress:
+                failed_check = "close-private-file-handoff"
             os.close(descriptor)
 
         failed_check = "create-symlink-probe"

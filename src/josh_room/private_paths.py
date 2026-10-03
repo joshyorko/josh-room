@@ -48,6 +48,11 @@ _ACCESS_ALLOWED_ACE_TYPE = 0
 _INHERITED_ACE = 0x10
 
 
+def _private_sddl(user_sid: str, *, directory: bool) -> str:
+    flags = "OICI" if directory else ""
+    return f"D:P(A;{flags};FA;;;{user_sid})(A;{flags};FA;;;SY)"
+
+
 def _is_windows() -> bool:
     return os.name == "nt"
 
@@ -235,8 +240,7 @@ class _WindowsSecurityAPI:
             self.kernel.CloseHandle(token)
 
     def apply_private_acl(self, path: Path, owner_sid: str, *, directory: bool) -> None:
-        flags = ";OICI" if directory else ""
-        sddl = f"D:P(A{flags};FA;;;{owner_sid})(A{flags};FA;;;SY)"
+        sddl = _private_sddl(owner_sid, directory=directory)
         descriptor = ctypes.c_void_p()
         self._checked(
             self.advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
