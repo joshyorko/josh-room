@@ -17,12 +17,12 @@ import json
 import os
 import posixpath
 import re
-import shutil
 import stat
 import tempfile
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,16 +33,37 @@ from .cancellation import CLICancelled, defer_sigterm_cancellation
 from .catalog import CatalogConflict
 from .logical_jat import LogicalJat
 from .restic_store import BackupProgress, ResticStore, SnapshotEntry
+from .windows_file_metadata import WindowsFileMetadataError
+from .windows_file_metadata import change_time_ns as _native_windows_change_time_ns
 from .workspace_policy import CapturePolicy, load_capture_policy
 
-_WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+_WINDOWS_RESERVED = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 _ENTRY_TYPES = {"dir", "file", "symlink"}
+_WINDOWS_HOST = os.name == "nt"
+
+
+def _windows_change_time_ns(path: Path, expected_stat: os.stat_result) -> int:
+    try:
+        return _native_windows_change_time_ns(path, expected_stat)
+    except WindowsFileMetadataError as error:
+        raise RoomStoreOperationsError(
+            "workspace changed during safety scan"
+        ) from error
 
 
 class RoomStoreOperationsError(RuntimeError):
     """Stable, path-free failure at the Room Store operation boundary."""
 
-    def __init__(self, message: str, *, deletion_confirmation_token: str | None = None) -> None:
+    def __init__(
+        self, message: str, *, deletion_confirmation_token: str | None = None
+    ) -> None:
         self.deletion_confirmation_token = deletion_confirmation_token
         super().__init__(message)
 
@@ -52,8 +73,10 @@ class RoomStorePublicationError(RoomStoreOperationsError):
         self.publication_state = publication_state
         self.reconciliation_required = publication_state == "uncertain"
         self.marker_state = (
-            "stale" if publication_state == "committed-marker-stale"
-            else "updated" if publication_state in {"committed", "committed-verification-unknown"}
+            "stale"
+            if publication_state == "committed-marker-stale"
+            else "updated"
+            if publication_state in {"committed", "committed-verification-unknown"}
             else "unchanged"
         )
         self.result = {
@@ -122,7 +145,12 @@ def _validate_name(name: str) -> None:
 def _relative_parts(value: str, *, allow_root: bool = False) -> tuple[str, ...]:
     if allow_root and value == ".":
         return ()
-    if not isinstance(value, str) or not value or value.startswith(("/", "\\")) or "\\" in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith(("/", "\\"))
+        or "\\" in value
+    ):
         raise RoomStoreOperationsError("snapshot contains an unsafe path")
     parts = tuple(value.split("/"))
     if any(part in {"", ".", ".."} for part in parts):
@@ -142,7 +170,11 @@ def _require_same_device(root_device: int, device: int) -> None:
 
 
 def _validate_link_graph(entries: Mapping[str, SnapshotEntry]) -> None:
-    links = {path: row.link_target for path, row in entries.items() if row.entry_type == "symlink"}
+    links = {
+        path: row.link_target
+        for path, row in entries.items()
+        if row.entry_type == "symlink"
+    }
     for original_path, original_target in links.items():
         if (
             not isinstance(original_target, str)
@@ -157,14 +189,18 @@ def _validate_link_graph(entries: Mapping[str, SnapshotEntry]) -> None:
         pending = original_target.split("/")
         seen: set[str] = set()
         while pending:
-            if "\\" in "/".join(pending) or (pending and re.match(r"^[A-Za-z]:", pending[0])):
+            if "\\" in "/".join(pending) or (
+                pending and re.match(r"^[A-Za-z]:", pending[0])
+            ):
                 raise RoomStoreOperationsError("snapshot contains an unsafe symlink")
             part = pending.pop(0)
             if part in {"", "."}:
                 continue
             if part == "..":
                 if not stack:
-                    raise RoomStoreOperationsError("snapshot contains an external symlink")
+                    raise RoomStoreOperationsError(
+                        "snapshot contains an external symlink"
+                    )
                 stack.pop()
                 continue
             _validate_name(part)
@@ -172,7 +208,9 @@ def _validate_link_graph(entries: Mapping[str, SnapshotEntry]) -> None:
             row = entries.get(candidate)
             if row is None:
                 if pending:
-                    raise RoomStoreOperationsError("snapshot contains a dangling symlink parent")
+                    raise RoomStoreOperationsError(
+                        "snapshot contains a dangling symlink parent"
+                    )
                 stack.append(part)
                 continue
             if row.entry_type == "symlink":
@@ -187,18 +225,24 @@ def _validate_link_graph(entries: Mapping[str, SnapshotEntry]) -> None:
                     or "\\" in target
                     or re.match(r"^[A-Za-z]:", target)
                 ):
-                    raise RoomStoreOperationsError("snapshot contains an unsafe symlink")
+                    raise RoomStoreOperationsError(
+                        "snapshot contains an unsafe symlink"
+                    )
                 pending = target.split("/") + pending
                 continue
             if pending and row.entry_type != "dir":
-                raise RoomStoreOperationsError("snapshot symlink traverses a non-directory")
+                raise RoomStoreOperationsError(
+                    "snapshot symlink traverses a non-directory"
+                )
             stack.append(part)
         resolved = "/".join(stack) or "."
         if resolved not in entries:
             raise RoomStoreOperationsError("snapshot contains a dangling symlink")
 
 
-def _validate_snapshot_entries(rows: Iterable[SnapshotEntry]) -> dict[str, SnapshotEntry]:
+def _validate_snapshot_entries(
+    rows: Iterable[SnapshotEntry],
+) -> dict[str, SnapshotEntry]:
     entries: dict[str, SnapshotEntry] = {}
     folded: set[str] = set()
     for row in rows:
@@ -248,13 +292,19 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
     def visit(directory: Path) -> None:
         nonlocal logical_bytes
         try:
-            _require_same_device(root_device, directory.stat(follow_symlinks=False).st_dev)
+            _require_same_device(
+                root_device, directory.stat(follow_symlinks=False).st_dev
+            )
         except OSError as error:
-            raise RoomStoreOperationsError("workspace cannot be scanned safely") from error
+            raise RoomStoreOperationsError(
+                "workspace cannot be scanned safely"
+            ) from error
         try:
             children = sorted(os.scandir(directory), key=lambda entry: entry.name)
         except OSError as error:
-            raise RoomStoreOperationsError("workspace cannot be scanned safely") from error
+            raise RoomStoreOperationsError(
+                "workspace cannot be scanned safely"
+            ) from error
         for child in children:
             path = Path(child.path)
             relative = path.relative_to(resolved_root).as_posix()
@@ -262,24 +312,37 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
                 continue
             _relative_parts(relative)
             if _portable_path_key(relative) in folded_paths:
-                raise RoomStoreOperationsError("workspace has paths that conflict on Windows")
+                raise RoomStoreOperationsError(
+                    "workspace has paths that conflict on Windows"
+                )
             folded_paths.add(_portable_path_key(relative))
             try:
                 metadata = child.stat(follow_symlinks=False)
             except OSError as error:
-                raise RoomStoreOperationsError("workspace changed during safety scan") from error
+                raise RoomStoreOperationsError(
+                    "workspace changed during safety scan"
+                ) from error
             mode = stat.S_IMODE(metadata.st_mode)
             _require_same_device(root_device, metadata.st_dev)
             if stat.S_ISLNK(metadata.st_mode):
                 target = os.readlink(path)
-                if not target or os.path.isabs(target) or "\\" in target or re.match(r"^[A-Za-z]:", target):
-                    raise RoomStoreOperationsError("workspace contains an unsafe symlink")
+                if (
+                    not target
+                    or os.path.isabs(target)
+                    or "\\" in target
+                    or re.match(r"^[A-Za-z]:", target)
+                ):
+                    raise RoomStoreOperationsError(
+                        "workspace contains an unsafe symlink"
+                    )
                 try:
                     resolved = path.resolve(strict=True)
                     resolved.relative_to(resolved_root)
                     _require_same_device(root_device, resolved.stat().st_dev)
                 except (OSError, RuntimeError, ValueError) as error:
-                    raise RoomStoreOperationsError("workspace contains a dangling, cyclic, or external symlink") from error
+                    raise RoomStoreOperationsError(
+                        "workspace contains a dangling, cyclic, or external symlink"
+                    ) from error
                 paths.add(relative)
                 records.append(f"{relative}\0link\0{target}\0{mode}".encode())
             elif stat.S_ISDIR(metadata.st_mode):
@@ -289,8 +352,13 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
             elif stat.S_ISREG(metadata.st_mode):
                 paths.add(relative)
                 logical_bytes += metadata.st_size
+                change_time = (
+                    _windows_change_time_ns(path, metadata)
+                    if _WINDOWS_HOST
+                    else metadata.st_ctime_ns
+                )
                 records.append(
-                    f"{relative}\0file\0{metadata.st_size}\0{metadata.st_mtime_ns}\0{metadata.st_ctime_ns}\0{mode}".encode()
+                    f"{relative}\0file\0{metadata.st_size}\0{metadata.st_mtime_ns}\0{change_time}\0{mode}".encode()
                 )
             else:
                 raise RoomStoreOperationsError("workspace contains a special file")
@@ -317,8 +385,12 @@ def scan_workspace_for_status(root: Path) -> WorkspaceScan:
     return _scan_workspace(root, policy)
 
 
-def _deletion_token(parent_id: str, deleted: tuple[str, ...], scan: WorkspaceScan) -> str:
-    value = json.dumps([parent_id, scan.signature, deleted], separators=(",", ":"), ensure_ascii=True)
+def _deletion_token(
+    parent_id: str, deleted: tuple[str, ...], scan: WorkspaceScan
+) -> str:
+    value = json.dumps(
+        [parent_id, scan.signature, deleted], separators=(",", ":"), ensure_ascii=True
+    )
     return hashlib.sha256(value.encode()).hexdigest()
 
 
@@ -329,7 +401,9 @@ def _rename_directory_noreplace(source: Path, destination: Path) -> None:
         return
     renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
     if renameat2 is None:
-        raise RoomStoreOperationsError("atomic no-replace restore promotion is unavailable")
+        raise RoomStoreOperationsError(
+            "atomic no-replace restore promotion is unavailable"
+        )
     at_fdcwd = -100
     result = renameat2(
         at_fdcwd,
@@ -370,11 +444,13 @@ class RoomStoreOperations:
         ensure_keyset: Callable[..., Any] = ensure_room_store_keyset,
         bind_repository: Callable[..., Any] = bind_room_store_repository,
         read_latest: Callable[[], tuple[LogicalJat | None, str | None]],
+        read_catalog_signature: Callable[[], tuple[str, str, str] | None] | None = None,
         read_snapshot_entries: Callable[[str], Iterable[SnapshotEntry]] | None = None,
         publish_descriptor: Callable[..., None],
         write_marker: Callable[..., None],
         descriptor_metadata: Mapping[str, Any],
-        resolve_components: Callable[[Any, LogicalJat | None], Mapping[str, Any]] | None = None,
+        resolve_components: Callable[[Any, LogicalJat | None], Mapping[str, Any]]
+        | None = None,
         active_runtime_root: Path | None = None,
         secure_private_file: Callable[[int, Path, int], None] | None = None,
         validate_private_directory: Callable[[Path], None] | None = None,
@@ -389,6 +465,7 @@ class RoomStoreOperations:
         self.ensure_keyset = ensure_keyset
         self.bind_repository = bind_repository
         self.read_latest = read_latest
+        self.read_catalog_signature = read_catalog_signature
         self.read_snapshot_entries = read_snapshot_entries
         self.publish_descriptor = publish_descriptor
         self.write_marker = write_marker
@@ -398,14 +475,22 @@ class RoomStoreOperations:
         self.secure_private_file = secure_private_file
         self.validate_private_directory = validate_private_directory
 
-    def _restic_store_factory(self, *, repository: str, cache_dir: Path, password_file: Path):
-        return ResticStore(repository=repository, cache_dir=cache_dir, password_file=password_file)
+    def _restic_store_factory(
+        self, *, repository: str, cache_dir: Path, password_file: Path
+    ):
+        return ResticStore(
+            repository=repository, cache_dir=cache_dir, password_file=password_file
+        )
 
     def _policy(self) -> CapturePolicy:
-        return load_capture_policy(self.workspace, active_runtime_root=self.active_runtime_root)
+        return load_capture_policy(
+            self.workspace, active_runtime_root=self.active_runtime_root
+        )
 
     def _exclude_file(self, policy: CapturePolicy) -> Path:
-        descriptor, name = tempfile.mkstemp(prefix="room-store-excludes-", dir=self.password_dir)
+        descriptor, name = tempfile.mkstemp(
+            prefix="room-store-excludes-", dir=self.password_dir
+        )
         try:
             self._protect_private_file(descriptor, Path(name))
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
@@ -427,9 +512,14 @@ class RoomStoreOperations:
             if not isinstance(secret, str) or len(secret) != 43:
                 raise ValueError
             password = base64.urlsafe_b64decode(secret + "=")
-            if len(password) != 32 or base64.urlsafe_b64encode(password).decode().rstrip("=") != secret:
+            if (
+                len(password) != 32
+                or base64.urlsafe_b64encode(password).decode().rstrip("=") != secret
+            ):
                 raise ValueError
-            descriptor, name = tempfile.mkstemp(prefix="room-store-password-", dir=self.password_dir)
+            descriptor, name = tempfile.mkstemp(
+                prefix="room-store-password-", dir=self.password_dir
+            )
             self._protect_private_file(descriptor, Path(name))
             with os.fdopen(descriptor, "wb") as stream:
                 stream.write(secret.encode("ascii") + b"\n")
@@ -446,14 +536,18 @@ class RoomStoreOperations:
                 Path(name).unlink(missing_ok=True)
             if isinstance(error, RoomStoreOperationsError):
                 raise
-            raise RoomStoreOperationsError("Room Store password could not be prepared safely") from error
+            raise RoomStoreOperationsError(
+                "Room Store password could not be prepared safely"
+            ) from error
 
     def _protect_private_file(self, descriptor: int, path: Path) -> None:
         if self.secure_private_file is not None:
             self.secure_private_file(descriptor, path, 0o600)
             return
         if os.name == "nt":
-            raise RoomStoreOperationsError("Windows private-file ACL handoff is unavailable")
+            raise RoomStoreOperationsError(
+                "Windows private-file ACL handoff is unavailable"
+            )
         os.fchmod(descriptor, 0o600)
 
     def _validate_private_roots(self) -> None:
@@ -462,30 +556,48 @@ class RoomStoreOperations:
             cache = self.cache_dir.resolve()
             private = self.password_dir.resolve()
             cache.relative_to(root)
-            raise RoomStoreOperationsError("Room Store cache must be outside the workspace")
+            raise RoomStoreOperationsError(
+                "Room Store cache must be outside the workspace"
+            )
         except ValueError:
             pass
         try:
             private.relative_to(root)
-            raise RoomStoreOperationsError("Room Store private files must be outside the workspace")
+            raise RoomStoreOperationsError(
+                "Room Store private files must be outside the workspace"
+            )
         except ValueError:
             pass
         cache = self.cache_dir.resolve()
         private = self.password_dir.resolve()
-        if cache == private or cache.is_relative_to(private) or private.is_relative_to(cache):
-            raise RoomStoreOperationsError("Room Store cache and credential directory must be separate")
+        if (
+            cache == private
+            or cache.is_relative_to(private)
+            or private.is_relative_to(cache)
+        ):
+            raise RoomStoreOperationsError(
+                "Room Store cache and credential directory must be separate"
+            )
         self.cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.password_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         if os.name == "nt":
             if self.validate_private_directory is None:
-                raise RoomStoreOperationsError("Windows private-directory ACL validation is unavailable")
+                raise RoomStoreOperationsError(
+                    "Windows private-directory ACL validation is unavailable"
+                )
             self.validate_private_directory(self.cache_dir)
             self.validate_private_directory(self.password_dir)
             return
         for directory in (self.cache_dir, self.password_dir):
             info = directory.lstat()
-            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_mode & 0o077:
-                raise RoomStoreOperationsError("Room Store private directory permissions are unsafe")
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)
+                or info.st_mode & 0o077
+            ):
+                raise RoomStoreOperationsError(
+                    "Room Store private directory permissions are unsafe"
+                )
 
     def _open_store(self):
         self._validate_private_roots()
@@ -497,7 +609,11 @@ class RoomStoreOperations:
             raise RoomStoreOperationsError("Room Store keyset is unavailable")
         password_file = self._password_file(secret)
         try:
-            store = self.store_factory(repository=self.repository, cache_dir=self.cache_dir, password_file=password_file)
+            store = self.store_factory(
+                repository=self.repository,
+                cache_dir=self.cache_dir,
+                password_file=password_file,
+            )
         except BaseException:
             password_file.unlink(missing_ok=True)
             raise
@@ -518,7 +634,9 @@ class RoomStoreOperations:
             metadata = getattr(keyset, "room_store", None)
             bound_id = getattr(metadata, "repository_id", None)
         if bound_id != repository_id:
-            raise RoomStoreOperationsError("Room Store repository binding does not match")
+            raise RoomStoreOperationsError(
+                "Room Store repository binding does not match"
+            )
         return keyset
 
     def _deletion_preview(
@@ -539,13 +657,19 @@ class RoomStoreOperations:
                 None,
             )
         if rows is None:
-            raise RoomStoreOperationsError("read-only snapshot entry reader is required for deletion preview")
+            raise RoomStoreOperationsError(
+                "read-only snapshot entry reader is required for deletion preview"
+            )
         previous_rows = _validate_snapshot_entries(rows)
         prior_paths = frozenset(path for path in previous_rows if path != ".")
         current_paths = scan.paths
         deleted = tuple(sorted(prior_paths - current_paths))
         threshold = max(25, (len(prior_paths) + 3) // 4)
-        token = _deletion_token(parent.to_dict()["logical_jat_id"], deleted, scan) if deleted and len(deleted) >= threshold else None
+        token = (
+            _deletion_token(parent.to_dict()["logical_jat_id"], deleted, scan)
+            if deleted and len(deleted) >= threshold
+            else None
+        )
         return SavePreview(
             scan.logical_bytes,
             scan.signature,
@@ -569,12 +693,17 @@ class RoomStoreOperations:
         parent_body = selected_parent.to_dict()
         if (
             parent_body["dimension_id"] != self.descriptor_metadata["dimension_id"]
-            or parent_body["encryption_domain_id"] != self.descriptor_metadata["encryption_domain_id"]
+            or parent_body["encryption_domain_id"]
+            != self.descriptor_metadata["encryption_domain_id"]
             or parent_body["room_id"] != self.descriptor_metadata["room_id"]
         ):
-            raise RoomStoreOperationsError("selected parent belongs to another Room Store scope")
+            raise RoomStoreOperationsError(
+                "selected parent belongs to another Room Store scope"
+            )
         if self.read_snapshot_entries is None:
-            raise RoomStoreOperationsError("read-only snapshot entry reader is required for deletion preview")
+            raise RoomStoreOperationsError(
+                "read-only snapshot entry reader is required for deletion preview"
+            )
         entries = self.read_snapshot_entries(parent_body["workspace"]["snapshot_id"])
         return self._deletion_preview(selected_parent, scan, entries)
 
@@ -615,7 +744,9 @@ class RoomStoreOperations:
         }
         if parent_body is not None:
             body["parent_logical_jat_id"] = parent_body["logical_jat_id"]
-            body["workspace"]["parent_snapshot_id"] = parent_body["workspace"]["snapshot_id"]
+            body["workspace"]["parent_snapshot_id"] = parent_body["workspace"][
+                "snapshot_id"
+            ]
         for key in ("origin_room_id",):
             if key in self.descriptor_metadata:
                 body[key] = self.descriptor_metadata[key]
@@ -627,8 +758,21 @@ class RoomStoreOperations:
         parent: LogicalJat | None,
         policy: CapturePolicy,
         components: Mapping[str, Any],
+        workspace_signature: str,
+        catalog_signature: tuple[str, str, str] | None,
+        force_scan: bool,
     ) -> bool:
-        if latest is None or parent is None:
+        expected_catalog_evidence = (
+            workspace_signature,
+            "josh-room-stat-v1",
+            policy.sha256,
+        )
+        if (
+            latest is None
+            or parent is None
+            or force_scan
+            or catalog_signature != expected_catalog_evidence
+        ):
             return False
         latest_body = latest.to_dict()
         parent_body = parent.to_dict()
@@ -639,14 +783,19 @@ class RoomStoreOperations:
             and latest_body["source"] == self.descriptor_metadata["source"]
             and latest_body["producer"] == self.descriptor_metadata["producer"]
             and latest_body["dimension_id"] == self.descriptor_metadata["dimension_id"]
-            and latest_body["encryption_domain_id"] == self.descriptor_metadata["encryption_domain_id"]
+            and latest_body["encryption_domain_id"]
+            == self.descriptor_metadata["encryption_domain_id"]
             and latest_body["room_id"] == self.descriptor_metadata["room_id"]
-            and latest_body.get("origin_room_id") == self.descriptor_metadata.get("origin_room_id")
+            and latest_body.get("origin_room_id")
+            == self.descriptor_metadata.get("origin_room_id")
         )
 
     @staticmethod
     def _publication_state(error: BaseException) -> str:
-        if isinstance(error, CatalogConflict) or getattr(error, "published", None) is False:
+        if (
+            isinstance(error, CatalogConflict)
+            or getattr(error, "published", None) is False
+        ):
             return "rejected"
         if getattr(error, "published", None) is True:
             return "committed-verification-unknown"
@@ -672,48 +821,103 @@ class RoomStoreOperations:
                 if selected_parent is not None:
                     parent_body = selected_parent.to_dict()
                     if (
-                        parent_body["workspace"]["repository_id"] != repository_info.repository_id
-                        or parent_body["dimension_id"] != self.descriptor_metadata["dimension_id"]
-                        or parent_body["encryption_domain_id"] != self.descriptor_metadata["encryption_domain_id"]
+                        parent_body["workspace"]["repository_id"]
+                        != repository_info.repository_id
+                        or parent_body["dimension_id"]
+                        != self.descriptor_metadata["dimension_id"]
+                        or parent_body["encryption_domain_id"]
+                        != self.descriptor_metadata["encryption_domain_id"]
                         or parent_body["room_id"] != self.descriptor_metadata["room_id"]
                     ):
-                        raise RoomStoreOperationsError("selected parent belongs to another Room Store scope")
-                if latest is not None and repository_info.repository_id != latest.to_dict()["workspace"]["repository_id"]:
-                    raise RoomStoreOperationsError("Room Store catalog points to another repository")
+                        raise RoomStoreOperationsError(
+                            "selected parent belongs to another Room Store scope"
+                        )
+                if (
+                    latest is not None
+                    and repository_info.repository_id
+                    != latest.to_dict()["workspace"]["repository_id"]
+                ):
+                    raise RoomStoreOperationsError(
+                        "Room Store catalog points to another repository"
+                    )
                 components = copy.deepcopy(self.descriptor_metadata["components"])
                 if self.resolve_components is not None:
                     resolved_components = self.resolve_components(opened, latest)
-                    if (
-                        not isinstance(resolved_components, Mapping)
-                        or set(resolved_components) != set(components)
-                    ):
-                        raise RoomStoreOperationsError("native component resolver returned an invalid component set")
+                    if not isinstance(resolved_components, Mapping) or set(
+                        resolved_components
+                    ) != set(components):
+                        raise RoomStoreOperationsError(
+                            "native component resolver returned an invalid component set"
+                        )
                     components = copy.deepcopy(dict(resolved_components))
                 preview = self._deletion_preview(
                     selected_parent,
                     before,
-                    opened.entries(selected_parent.to_dict()["workspace"]["snapshot_id"])
+                    opened.entries(
+                        selected_parent.to_dict()["workspace"]["snapshot_id"]
+                    )
                     if selected_parent is not None
                     else None,
                 )
-                if preview.deletion_confirmation_token and deletion_confirmation_token != preview.deletion_confirmation_token:
+                if (
+                    preview.deletion_confirmation_token
+                    and deletion_confirmation_token
+                    != preview.deletion_confirmation_token
+                ):
                     raise RoomStoreOperationsError(
                         "suspicious deletions require the current preview confirmation token",
                         deletion_confirmation_token=preview.deletion_confirmation_token,
+                    )
+                catalog_signature = (
+                    self.read_catalog_signature()
+                    if self.read_catalog_signature is not None
+                    else None
+                )
+                if _WINDOWS_HOST and self._is_unchanged(
+                    latest,
+                    selected_parent,
+                    policy,
+                    components,
+                    before.signature,
+                    catalog_signature,
+                    False,
+                ):
+                    return SaveResult(
+                        "already-saved",
+                        latest,
+                        before.logical_bytes,
+                        0,
+                        latest.to_dict()["workspace"]["snapshot_id"],
+                        "not-published",
+                        before.signature,
+                        before.signature_algorithm,
+                        policy.sha256,
                     )
                 exclude_file = self._exclude_file(policy)
                 try:
                     summary = opened.backup(
                         self.workspace,
-                        parent=selected_parent.to_dict()["workspace"]["snapshot_id"] if selected_parent else None,
+                        parent=selected_parent.to_dict()["workspace"]["snapshot_id"]
+                        if selected_parent
+                        else None,
                         excludes=exclude_file,
                         on_progress=on_progress,
                         cancellation=cancellation,
                     )
                 finally:
                     exclude_file.unlink(missing_ok=True)
+                if summary.snapshot_id is None and summary.force_scan:
+                    raise RoomStoreOperationsError(
+                        "Restic reported a no-op after a forced content scan"
+                    )
                 if summary.snapshot_id is None and self._is_unchanged(
-                    latest, selected_parent, policy, components
+                    latest,
+                    selected_parent,
+                    policy,
+                    components,
+                    before.signature,
+                    catalog_signature,
+                    summary.force_scan,
                 ):
                     return SaveResult(
                         "already-saved",
@@ -728,29 +932,72 @@ class RoomStoreOperations:
                     )
                 if summary.snapshot_id is None:
                     if selected_parent is None:
-                        raise RoomStoreOperationsError("restic reported a no-op without a parent snapshot")
-                    snapshot = opened.snapshot(selected_parent.to_dict()["workspace"]["snapshot_id"])
-                    if snapshot.tree_id != selected_parent.to_dict()["workspace"]["tree_id"]:
-                        raise RoomStoreOperationsError("selected parent tree identity does not match the repository")
+                        raise RoomStoreOperationsError(
+                            "restic reported a no-op without a parent snapshot"
+                        )
+                    if (
+                        summary.effective_parent_id
+                        != selected_parent.to_dict()["workspace"]["snapshot_id"]
+                    ):
+                        raise RoomStoreOperationsError(
+                            "Restic no-op parent does not match the selected logical JAT"
+                        )
+                    snapshot = opened.snapshot(
+                        selected_parent.to_dict()["workspace"]["snapshot_id"]
+                    )
+                    if (
+                        snapshot.tree_id
+                        != selected_parent.to_dict()["workspace"]["tree_id"]
+                    ):
+                        raise RoomStoreOperationsError(
+                            "selected parent tree identity does not match the repository"
+                        )
                 else:
                     snapshot = opened.snapshot(summary.snapshot_id)
                     expected_parent_snapshot = (
-                        selected_parent.to_dict()["workspace"]["snapshot_id"]
-                        if selected_parent is not None
-                        else None
+                        None
+                        if summary.force_scan
+                        else (
+                            selected_parent.to_dict()["workspace"]["snapshot_id"]
+                            if selected_parent is not None
+                            else None
+                        )
                     )
+                    if summary.effective_parent_id != expected_parent_snapshot:
+                        raise RoomStoreOperationsError(
+                            "Restic backup parent does not match its effective parent"
+                        )
                     if snapshot.parent_snapshot_id != expected_parent_snapshot:
-                        raise RoomStoreOperationsError("Restic snapshot parent does not match the selected logical JAT")
-                entries = _validate_snapshot_entries(opened.entries(snapshot.snapshot_id))
-                logical_bytes = sum(row.size or 0 for row in entries.values() if row.entry_type == "file")
-                if (set(entries) - {"."}) != before.paths or logical_bytes != before.logical_bytes:
-                    raise RoomStoreOperationsError("Restic snapshot inventory does not match the validated workspace")
+                        raise RoomStoreOperationsError(
+                            "Restic snapshot parent does not match its effective parent"
+                        )
+                entries = _validate_snapshot_entries(
+                    opened.entries(snapshot.snapshot_id)
+                )
+                logical_bytes = sum(
+                    row.size or 0
+                    for row in entries.values()
+                    if row.entry_type == "file"
+                )
+                if (
+                    set(entries) - {"."}
+                ) != before.paths or logical_bytes != before.logical_bytes:
+                    raise RoomStoreOperationsError(
+                        "Restic snapshot inventory does not match the validated workspace"
+                    )
                 after_policy = self._policy()
                 after = _scan_workspace(self.workspace, after_policy)
-                if before.signature != after.signature or policy.sha256 != after_policy.sha256:
-                    raise RoomStoreOperationsError("workspace or capture policy changed during save")
+                if (
+                    before.signature != after.signature
+                    or policy.sha256 != after_policy.sha256
+                ):
+                    raise RoomStoreOperationsError(
+                        "workspace or capture policy changed during save"
+                    )
                 descriptor = self._descriptor(
-                    selected_parent,
+                    selected_parent
+                    if snapshot.parent_snapshot_id is not None
+                    else None,
                     repository_info.repository_id,
                     snapshot,
                     summary,
@@ -788,7 +1035,9 @@ class RoomStoreOperations:
                         )
                         raise deferred_cancel
                     assert commit_error is not None
-                    raise RoomStorePublicationError(commit_error, commit_state) from commit_error
+                    raise RoomStorePublicationError(
+                        commit_error, commit_state
+                    ) from commit_error
                 dirty = False
                 try:
                     current = _scan_workspace(self.workspace, self._policy())
@@ -813,15 +1062,19 @@ class RoomStoreOperations:
                                 "publication_state": "committed",
                                 "marker_state": "stale",
                                 "marker_error_type": type(error).__name__,
-                                    "logical_jat_id": descriptor.to_dict()["logical_jat_id"],
-                                    "snapshot_id": snapshot.snapshot_id,
-                                    "workspace_signature": before.signature,
-                                    "signature_algorithm": before.signature_algorithm,
-                                    "capture_policy_sha256": policy.sha256,
+                                "logical_jat_id": descriptor.to_dict()[
+                                    "logical_jat_id"
+                                ],
+                                "snapshot_id": snapshot.snapshot_id,
+                                "workspace_signature": before.signature,
+                                "signature_algorithm": before.signature_algorithm,
+                                "capture_policy_sha256": policy.sha256,
                             }
                         )
                         raise deferred_cancel
-                    raise RoomStorePublicationError(error, "committed-marker-stale") from error
+                    raise RoomStorePublicationError(
+                        error, "committed-marker-stale"
+                    ) from error
                 if commit_state == "committed-verification-unknown":
                     if deferred_cancel is not None:
                         deferred_cancel.result.update(
@@ -829,7 +1082,9 @@ class RoomStoreOperations:
                                 "publication_state": commit_state,
                                 "marker_state": "updated",
                                 "saved_but_dirty": dirty,
-                                "logical_jat_id": descriptor.to_dict()["logical_jat_id"],
+                                "logical_jat_id": descriptor.to_dict()[
+                                    "logical_jat_id"
+                                ],
                                 "snapshot_id": snapshot.snapshot_id,
                                 "workspace_signature": before.signature,
                                 "signature_algorithm": before.signature_algorithm,
@@ -838,7 +1093,9 @@ class RoomStoreOperations:
                         )
                         raise deferred_cancel
                     assert commit_error is not None
-                    raise RoomStorePublicationError(commit_error, commit_state) from commit_error
+                    raise RoomStorePublicationError(
+                        commit_error, commit_state
+                    ) from commit_error
                 if deferred_cancel is not None:
                     deferred_cancel.result.update(
                         {
@@ -867,45 +1124,105 @@ class RoomStoreOperations:
         finally:
             password_file.unlink(missing_ok=True)
 
-    def restore(self, descriptor: LogicalJat, destination: Path) -> RestoreResult:
+    def restore(
+        self,
+        descriptor: LogicalJat,
+        destination: Path,
+        *,
+        prepare_restored_workspace: Callable[[Path, LogicalJat, Any], None]
+        | None = None,
+        write_restore_marker: Callable[[Path, Path, LogicalJat], None] | None = None,
+        restic_store: Any | None = None,
+        repository_info: Any | None = None,
+    ) -> RestoreResult:
         body = descriptor.to_dict()
+        if write_restore_marker is None:
+            raise RoomStoreOperationsError("staged restore requires a marker writer")
+        has_components = any(
+            component is not None for component in body["components"].values()
+        )
+        if has_components and prepare_restored_workspace is None:
+            raise RoomStoreOperationsError(
+                "logical JAT components require a restore preparation callback"
+            )
         target = Path(destination)
         if target.exists() or target.is_symlink():
             raise RoomStoreOperationsError("restore destination must be absent")
         parent_dir = target.parent.resolve(strict=True)
         if not parent_dir.is_dir():
-            raise RoomStoreOperationsError("restore destination parent must be a directory")
-        keyset, password_file, store = self._open_store()
-        stage = parent_dir / f".{target.name}.josh-room-{uuid.uuid4().hex}"
+            raise RoomStoreOperationsError(
+                "restore destination parent must be a directory"
+            )
+        keyset = None
+        password_file = None
+        if restic_store is None:
+            keyset, password_file, store = self._open_store()
+        else:
+            store = restic_store
         try:
-            keyset_metadata = getattr(keyset, "room_store", None)
-            bound_repository_id = getattr(keyset_metadata, "repository_id", None)
-            if bound_repository_id is None:
-                raise RoomStoreOperationsError("restore requires a bound Room Store repository")
-            with store as opened:
-                repository_info = opened.open_existing()
-                if bound_repository_id != repository_info.repository_id:
-                    raise RoomStoreOperationsError("Room Store repository binding does not match")
+            if keyset is not None:
+                keyset_metadata = getattr(keyset, "room_store", None)
+                bound_repository_id = getattr(keyset_metadata, "repository_id", None)
+                if bound_repository_id is None:
+                    raise RoomStoreOperationsError(
+                        "Room Store repository binding does not match"
+                    )
+            store_context = store if restic_store is None else nullcontext(store)
+            with store_context as opened:
+                if repository_info is None:
+                    repository_info = opened.open_existing()
+                if (
+                    keyset is not None
+                    and bound_repository_id != repository_info.repository_id
+                ):
+                    raise RoomStoreOperationsError(
+                        "Room Store repository binding does not match"
+                    )
                 workspace = body["workspace"]
                 if (
                     workspace["repository_id"] != repository_info.repository_id
-                    or workspace["repository_format"] != repository_info.repository_format
+                    or workspace["repository_format"]
+                    != repository_info.repository_format
                     or body["dimension_id"] != self.descriptor_metadata["dimension_id"]
-                    or body["encryption_domain_id"] != self.descriptor_metadata["encryption_domain_id"]
+                    or body["encryption_domain_id"]
+                    != self.descriptor_metadata["encryption_domain_id"]
                     or body["room_id"] != self.descriptor_metadata["room_id"]
                 ):
-                    raise RoomStoreOperationsError("logical JAT belongs to another Room Store repository")
+                    raise RoomStoreOperationsError(
+                        "logical JAT belongs to another Room Store repository"
+                    )
                 snapshot = opened.snapshot(workspace["snapshot_id"])
                 if snapshot.tree_id != workspace["tree_id"]:
-                    raise RoomStoreOperationsError("logical JAT tree identity does not match the repository")
+                    raise RoomStoreOperationsError(
+                        "logical JAT tree identity does not match the repository"
+                    )
                 _validate_snapshot_entries(opened.entries(snapshot.snapshot_id))
-                opened.restore(snapshot.snapshot_id, stage)
-                _scan_workspace(stage, None)
-                _rename_directory_noreplace(stage, target)
-                return RestoreResult(descriptor, target)
-        except BaseException:
-            if stage.exists():
-                shutil.rmtree(stage, ignore_errors=True)
-            raise
+                with tempfile.TemporaryDirectory(
+                    prefix=f".{target.name}.josh-room-",
+                    dir=parent_dir,
+                ) as staging_name:
+                    staging_root = Path(staging_name)
+                    if self.validate_private_directory is not None:
+                        self.validate_private_directory(staging_root)
+                    else:
+                        staging_stat = staging_root.lstat()
+                        if (
+                            os.name == "nt"
+                            or not stat.S_ISDIR(staging_stat.st_mode)
+                            or staging_stat.st_mode & 0o077
+                        ):
+                            raise RoomStoreOperationsError(
+                                "private restore staging permissions are unsafe"
+                            )
+                    stage = staging_root / "workspace"
+                    opened.restore(snapshot.snapshot_id, stage)
+                    _scan_workspace(stage, None)
+                    if prepare_restored_workspace is not None:
+                        prepare_restored_workspace(stage, descriptor, opened)
+                    _scan_workspace(stage, None)
+                    write_restore_marker(stage, target, descriptor)
+                    _rename_directory_noreplace(stage, target)
+                    return RestoreResult(descriptor, target)
         finally:
-            password_file.unlink(missing_ok=True)
+            if password_file is not None:
+                password_file.unlink(missing_ok=True)

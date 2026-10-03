@@ -112,6 +112,30 @@ test("room marker validation accepts v2 bindings while retaining readable v1", (
     display_name: "Demo",
     snapshot_id: "jat-1",
   }), false);
+  assert.equal(isRoomMarker({
+    format_version: 3,
+    dimension_id: "archive",
+    encryption_domain_id: "domain-a",
+    project_id: "demo",
+    display_name: "Demo",
+    snapshot_id: "jat-1",
+    workspace_path_sha256: "b".repeat(64),
+    workspace_signature: "c".repeat(64),
+    signature_algorithm: "josh-room-stat-v1",
+    capture_policy_sha256: "d".repeat(64),
+  }), true);
+  assert.equal(isRoomMarker({
+    format_version: 3,
+    dimension_id: "archive",
+    encryption_domain_id: "domain-a",
+    project_id: "demo",
+    display_name: "Demo",
+    snapshot_id: "jat-1",
+    workspace_path_sha256: "b".repeat(64),
+    workspace_signature: "c".repeat(64),
+    signature_algorithm: "future-stat-v2",
+    capture_policy_sha256: "d".repeat(64),
+  }), false);
 });
 
 

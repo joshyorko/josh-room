@@ -202,6 +202,19 @@ async function main() {
         }
         return output;
       } catch (error) {
+        if (prefix === "managed-tool" && name === "private-runtime") {
+          for (const line of String(error?.stdout || "").split(/\r?\n/)) {
+            try {
+              const probe = JSON.parse(line);
+              if (probe.status !== "failed") continue;
+              const safe = {};
+              for (const key of ["status", "platform", "failed_check", "error_type", "winerror", "checks_completed"]) {
+                if (Object.hasOwn(probe, key)) safe[key] = probe[key];
+              }
+              process.stderr.write(`[managed-private-runtime-result] ${JSON.stringify(safe)}\n`);
+            } catch { /* Ignore non-probe RCC output. */ }
+          }
+        }
         const result = readManagedResult(resultFile);
         if (result) {
           process.stderr.write(`[${prefix}-${name}-result] ${JSON.stringify(result).slice(0, 8192)}\n`);

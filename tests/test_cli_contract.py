@@ -47,9 +47,11 @@ def test_extension_controller_writes_a_private_result_receipt(tmp_path, monkeypa
 def test_auth_logout_is_a_local_session_operation_and_never_requires_a_connection(tmp_path, monkeypatch, capsys):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     for name in ("r2.json", "age.identity", "config.json", "session.json"):
         (runtime / name).write_text("synthetic-local-session")
+        (runtime / name).chmod(0o600)
 
     assert main(["auth", "logout", "--json"]) == 0
     result = json.loads(capsys.readouterr().out)
@@ -66,10 +68,15 @@ def test_minio_snapshot_keeps_keyring_identity_when_expired_runtime_is_cleared(t
     }))
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     (runtime / "r2.json").write_text("synthetic-stale-credentials")
+    (runtime / "r2.json").chmod(0o600)
     (runtime / "age.identity").write_text("synthetic-stale-identity")
+    (runtime / "age.identity").chmod(0o600)
     (runtime / "config.json").write_text("synthetic-stale-config")
+    (runtime / "config.json").chmod(0o600)
     (runtime / "session.json").write_text(json.dumps({"expires_at": 0}))
+    (runtime / "session.json").chmod(0o600)
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(config))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY", "JOSH_ROOM_RUNTIME_PROFILE"):
@@ -93,14 +100,17 @@ def test_minio_snapshot_keeps_keyring_identity_when_expired_runtime_is_cleared(t
 def test_auth_status_reports_encryption_only_runtime_as_r2_missing(tmp_path, monkeypatch, capsys):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     identity = runtime / "age.identity"
     identity.write_text(synthetic_identity("encryption-only") + "\n")
     identity.chmod(0o600)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "config.json").chmod(0o600)
     (runtime / "session.json").write_text(json.dumps({
         "expires_at": 4102444800,
         "capabilities": ["encryption"],
     }))
+    (runtime / "session.json").chmod(0o600)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
 

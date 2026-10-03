@@ -20,15 +20,14 @@ let roomsProvider;
 let statusItem;
 let activeOperationId = 0;
 let extensionContext;
-let roomDirty = false;
+let roomStatus = Object.freeze({ kind: "unknown" });
 let workspaceBaseline;
 let workspaceWatcher;
 let capturePolicyWatcher;
 let workspaceCapturePolicy;
-let capturePolicySavedFingerprint;
-let capturePolicyFingerprintProvider;
-let capturePolicyRefreshGeneration = 0;
 let dirtyTrackingGeneration = 0;
+let workspaceEventGeneration = 0;
+let cleanEventGeneration = -1;
 const dirtyBuffers = new Set();
 let activeAuthAttempt;
 let managedRuntimePromise;
@@ -1429,14 +1428,14 @@ class RoomsProvider {
       return treeItem;
     }
     const current = sameRoomBinding(currentRoom(activeWorkspace()), item);
-    const saved = current && !roomDirty && workspaceBindingTrusted;
+    const saved = current && roomStatus.kind === "clean" && workspaceBindingTrusted;
     const treeItem = new vscode.TreeItem(item.display_name, vscode.TreeItemCollapsibleState.None);
     treeItem.description = current ? saved ? "Current • Saved" : "Current • Needs save" : "";
     treeItem.tooltip = current
       ? saved ? `${item.display_name} is saved` : `${item.display_name} has workspace changes to save`
       : item.display_name;
     treeItem.contextValue = "room";
-    treeItem.iconPath = new vscode.ThemeIcon(current ? roomDirty ? "circle-filled" : "home" : "archive");
+    treeItem.iconPath = new vscode.ThemeIcon(current ? roomStatus.kind === "clean" ? "home" : "circle-filled" : "archive");
     if (!current) {
       treeItem.command = { command: "joshRoom.enter", title: "Enter Room", arguments: [item] };
     }
@@ -1537,8 +1536,24 @@ function refreshRoomStatus() {
     setStatus("$(archive) Josh Room");
     return;
   }
-  const saved = !roomDirty && workspaceBindingTrusted;
-  if (!saved) {
+  if (roomStatus.kind === "clean" && workspaceBindingTrusted) {
+    statusItem.command = "workbench.view.extension.josh-room";
+    setStatus(`$(check) ${marker.display_name} — Saved`, "This Room matches the last successful Save in this session.");
+    return;
+  }
+  if (roomStatus.kind === "unknown" || roomStatus.kind === "reconciling") {
+    statusItem.command = "joshRoom.save";
+    setStatus(
+      `$(question) ${marker.display_name} — Status unknown · Save`,
+      "This workspace has not been proven clean in this session. Save performs an authoritative check.",
+    );
+  } else if (roomStatus.kind === "saved-but-still-dirty") {
+    statusItem.command = "joshRoom.save";
+    setStatus(
+      `$(warning) ${marker.display_name} — Saved, changes remain · Save`,
+      "The Room was saved while workspace changes were still arriving. Save again to capture them.",
+    );
+  } else {
     statusItem.command = "joshRoom.save";
     setStatus(
       `$(circle-filled) ${marker.display_name} — Save`,
@@ -1546,17 +1561,26 @@ function refreshRoomStatus() {
         ? "Workspace changed. Click to save this Room."
         : "Workspace binding is not trusted. Link or Repair this Room before trusting it.",
     );
-  } else {
-    statusItem.command = "workbench.view.extension.josh-room";
-    setStatus(`$(check) ${marker.display_name} — Saved`, "This Room matches its last saved workspace state.");
   }
 }
 
-function setRoomDirty(dirty) {
-  if (roomDirty === dirty) return;
-  roomDirty = dirty;
+function setRoomState(kind, { bindingTrusted } = {}) {
+  if (bindingTrusted !== undefined) workspaceBindingTrusted = bindingTrusted;
+  if (roomStatus.kind === kind) {
+    refreshRoomStatus();
+    return;
+  }
+  roomStatus = Object.freeze({ kind });
+  if (kind === "clean") cleanEventGeneration = workspaceEventGeneration;
+  else cleanEventGeneration = -1;
   roomsProvider?.emitter.fire(undefined);
   refreshRoomStatus();
+}
+
+function setRoomDirty(dirty) {
+  if (dirty) setRoomState("dirty");
+  else if (workspaceBindingTrusted) setRoomState("clean");
+  else setRoomState("unknown");
 }
 
 function relativeWorkspacePath(uri) {
@@ -1576,39 +1600,18 @@ function isCapturePolicyUri(root, uri) {
 }
 
 function handleCapturePolicyChange(root) {
-  const generation = ++capturePolicyRefreshGeneration;
+  workspaceEventGeneration += 1;
   try {
     workspaceCapturePolicy = loadCapturePolicy(root);
   } catch (error) {
     workspaceCapturePolicy = undefined;
     workspaceBaseline = undefined;
-    workspaceBindingTrusted = false;
     outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${error.message}`);
-    setRoomDirty(true);
+    setRoomState("unknown", { bindingTrusted: false });
     return;
   }
-  if (!workspaceBaseline) {
-    workspaceBaseline = new WorkspaceBaseline(root, {
-      savedFingerprint: capturePolicySavedFingerprint,
-      fingerprintProvider: capturePolicyFingerprintProvider,
-      capturePolicy: workspaceCapturePolicy,
-    });
-  } else {
-    workspaceBaseline.capturePolicy = workspaceCapturePolicy;
-    workspaceBaseline.currentFingerprint = undefined;
-  }
-  const baseline = workspaceBaseline;
-  baseline.dirty.add(".");
-  setRoomDirty(true);
-  if (!baseline.savedFingerprint) return;
-  baseline.compare().then((dirty) => {
-    if (generation !== capturePolicyRefreshGeneration || workspaceBaseline !== baseline) return;
-    setRoomDirty(dirty || dirtyBuffers.size > 0);
-  }).catch((error) => {
-    if (generation !== capturePolicyRefreshGeneration || workspaceBaseline !== baseline) return;
-    outputChannel?.warn(`Unable to compare the updated capture policy: ${error.message}`);
-    setRoomDirty(true);
-  });
+  if (workspaceBaseline) workspaceBaseline.capturePolicy = workspaceCapturePolicy;
+  setRoomState("dirty", { bindingTrusted: true });
 }
 
 async function markWorkspaceChange(uri) {
@@ -1623,14 +1626,9 @@ async function markWorkspaceChange(uri) {
     return;
   }
   const relative = relativeWorkspacePath(uri);
-  if (!relative || !workspaceBaseline) return;
-  try {
-    const changed = await workspaceBaseline.check(relative);
-    setRoomDirty(changed || dirtyBuffers.size > 0);
-  } catch (error) {
-    outputChannel?.warn(`Unable to compare ${relative} with the saved Room: ${error.message}`);
-    setRoomDirty(true);
-  }
+  if (!relative) return;
+  workspaceEventGeneration += 1;
+  setRoomState("dirty");
 }
 
 async function startDirtyTracking(context) {
@@ -1673,6 +1671,124 @@ async function startDirtyTracking(context) {
   if (generation !== dirtyTrackingGeneration) return;
   setRoomDirty(false);
   refreshRoomStatus();
+}
+
+function roomStorePreviewText(preview) {
+  const currentEntries = Number.isSafeInteger(preview.current_entry_count) ? preview.current_entry_count : "unknown";
+  const previousEntries = Number.isSafeInteger(preview.previous_entry_count) ? preview.previous_entry_count : undefined;
+  const initial = previousEntries === 0 ? "Initial full capture" : "Save Preview";
+  const scanned = formatHaulerSize(preview.scanned_bytes) || "unknown";
+  const resticAdded = preview.restic_data_added_bytes === null || preview.restic_data_added_bytes === undefined
+    ? "determined by Save"
+    : formatHaulerSize(preview.restic_data_added_bytes) || "unknown";
+  const lines = [
+    `${initial} · Logical entries: ${currentEntries}`,
+    `Workspace scan: ${scanned}`,
+    `Restic data estimate: ${resticAdded}`,
+  ];
+  if (preview.deleted_paths?.length) lines.push(`${preview.deleted_paths.length} deleted entries`);
+  if (preview.rcc_capture_pending) lines.push("RCC environment capture runs during Save.");
+  return lines.join("\n");
+}
+
+function assertValidRoomStorePreview(preview) {
+  const digest = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+  if (!preview || preview.ok !== true
+    || !Number.isSafeInteger(preview.scanned_bytes) || preview.scanned_bytes < 0
+    || !Number.isSafeInteger(preview.previous_entry_count) || preview.previous_entry_count < 0
+    || !Number.isSafeInteger(preview.current_entry_count) || preview.current_entry_count < 0
+    || (preview.restic_data_added_bytes !== null
+      && (!Number.isSafeInteger(preview.restic_data_added_bytes) || preview.restic_data_added_bytes < 0))
+    || !Array.isArray(preview.deleted_paths) || !preview.deleted_paths.every((item) => typeof item === "string")
+    || (preview.deletion_confirmation_token !== null
+      && preview.deletion_confirmation_token !== undefined
+      && (typeof preview.deletion_confirmation_token !== "string" || !preview.deletion_confirmation_token))
+    || typeof preview.rcc_capture_pending !== "boolean"
+    || preview.signature_algorithm !== "josh-room-stat-v1"
+    || !digest(preview.workspace_signature)
+    || !digest(preview.capture_policy_sha256)) {
+    throw new Error("Room Store Save Preview returned an invalid receipt.");
+  }
+}
+
+async function approveRoomStorePreview(preview) {
+  const message = roomStorePreviewText(preview);
+  if (preview.deletion_confirmation_token) {
+    const action = await vscode.window.showWarningMessage(
+      `${message}\n\nThis deletion plan needs confirmation before Save.`,
+      { modal: true },
+      "Confirm Save",
+      "Cancel",
+    );
+    return action === "Confirm Save" ? preview.deletion_confirmation_token : undefined;
+  }
+  const action = await vscode.window.showInformationMessage(message, "Save", "Cancel");
+  return action === "Save" ? "" : undefined;
+}
+
+function nativeSaveBindingMatches(result, marker, source, policy) {
+  if (!result || !marker || marker.format_version !== 3 || !policy) return false;
+  const canonicalPathSha = crypto.createHash("sha256").update(path.resolve(source)).digest("hex");
+  return marker.signature_algorithm === "josh-room-stat-v1"
+    && result.dimension_id === marker.dimension_id
+    && result.encryption_domain_id === marker.encryption_domain_id
+    && result.project_id === marker.project_id
+    && result.signature_algorithm === marker.signature_algorithm
+    && typeof result.workspace_signature === "string"
+    && result.workspace_signature === marker.workspace_signature
+    && result.capture_policy_sha256 === marker.capture_policy_sha256
+    && marker.capture_policy_sha256 === policy.sha256
+    && marker.workspace_path_sha256 === canonicalPathSha
+    && result.snapshot_id === marker.snapshot_id;
+}
+
+function canSkipRoomStoreSave(source, cwd, marker, project, allImages) {
+  if (allImages || path.resolve(source) !== path.resolve(cwd) || roomStatus.kind !== "clean"
+    || !workspaceBindingTrusted || !workspaceBaseline || cleanEventGeneration !== workspaceEventGeneration
+    || path.resolve(workspaceBaseline.root) !== path.resolve(source)
+    || !workspaceCapturePolicy || !marker || marker.format_version !== 3
+    || !sameRoomBinding(marker, project)) return false;
+  const projectDimension = project?.dimension || {};
+  const canonicalPathSha = crypto.createHash("sha256").update(path.resolve(source)).digest("hex");
+  return marker.workspace_path_sha256 === canonicalPathSha
+    && marker.capture_policy_sha256 === workspaceCapturePolicy.sha256
+    && marker.signature_algorithm === "josh-room-stat-v1"
+    && marker.encryption_domain_id === projectDimension.encryption_domain_id
+    && marker.snapshot_id === latestSnapshotId(project);
+}
+
+function finishRoomStoreSave(result, source, saveEventGeneration) {
+  if (path.resolve(source) !== path.resolve(activeWorkspace())) return;
+  let policy;
+  try {
+    policy = workspaceCapturePolicy || loadCapturePolicy(source);
+  } catch (_error) {
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  const marker = currentRoom(source);
+  const bindingMatches = nativeSaveBindingMatches(result, marker, source, policy);
+  if (result.status === "saved-but-dirty" || saveEventGeneration !== workspaceEventGeneration) {
+    setRoomState("saved-but-still-dirty", { bindingTrusted: bindingMatches });
+    return;
+  }
+  if (!bindingMatches) {
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  workspaceCapturePolicy = policy;
+  workspaceBaseline = new WorkspaceBaseline(source, {
+    savedFingerprint: marker.workspace_signature,
+    currentFingerprint: result.workspace_signature,
+    capturePolicy: policy,
+  });
+  workspaceBaseline.reset({
+    savedFingerprint: marker.workspace_signature,
+    currentFingerprint: result.workspace_signature,
+  });
+  workspaceBindingTrusted = true;
+  dirtyBuffers.clear();
+  setRoomState("clean", { bindingTrusted: true });
 }
 
 async function saveRoom(options = {}) {
@@ -1753,17 +1869,22 @@ async function saveRoom(options = {}) {
     const connected = await connectCloudflare({ dimension: targetDimension });
     if (connected !== "connected") return connected;
   }
+  let encryptionMaterial;
   if (targetProvider === "minio") {
-    const authStatus = await runJoshRoom(
-      ["encryption", "status", "--dimension", targetDimensionId], cwd, undefined, undefined,
-    );
-    const encryptionReady = authStatus.state === "ready"
-      || (authStatus.state === undefined && authStatus.encryption_state === undefined);
-    if (!encryptionReady) {
-      const connected = await connectEncryption({
-        dimension: targetDimension || { id: targetDimensionId, provider: targetProvider },
-      });
-      if (connected !== "initialized") return connected;
+    encryptionMaterial = await readEncryptionMaterial(targetDimension || { id: targetDimensionId, provider: targetProvider });
+    if (!encryptionMaterial) {
+      const authStatus = await runJoshRoom(
+        ["encryption", "status", "--dimension", targetDimensionId], cwd, undefined, undefined,
+      );
+      const encryptionReady = authStatus.state === "ready"
+        || (authStatus.state === undefined && authStatus.encryption_state === undefined);
+      if (!encryptionReady) {
+        const connected = await connectEncryption({
+          dimension: targetDimension || { id: targetDimensionId, provider: targetProvider },
+        });
+        if (connected !== "initialized") return connected;
+        encryptionMaterial = await readEncryptionMaterial(targetDimension || { id: targetDimensionId, provider: targetProvider });
+      }
     }
   }
   const imageChoice = await vscode.window.showQuickPick([
@@ -1771,20 +1892,79 @@ async function saveRoom(options = {}) {
     { label: "Workspace + all tagged local OCI images", allImages: true },
   ], { title: "Include local OCI images?", ignoreFocusOut: true });
   if (!imageChoice) return "cancelled";
+  if (targetProvider === "minio" && canSkipRoomStoreSave(
+    source,
+    cwd,
+    currentRoom(source),
+    selected.project,
+    imageChoice.allImages,
+  )) {
+    await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded");
+    refreshRoomStatus();
+    return "already-saved";
+  }
   const buildArgs = nativeRegistry.dimensionArgs(
     ["snapshot", "create", name, "--source", source, "--backend", targetProvider],
     targetDimensionId || selectedDimensionId,
   );
   if (imageChoice.allImages) buildArgs.push("--all-images");
+  let preview;
+  let deletionConfirmationToken;
+  if (targetProvider === "minio") {
+    const previewArgs = nativeRegistry.dimensionArgs(
+      ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
+      targetDimensionId || selectedDimensionId,
+    );
+    preview = await runSelectedEncryption(
+      previewArgs,
+      source,
+      targetDimension || { id: targetDimensionId, provider: targetProvider },
+      { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
+    );
+    assertValidRoomStorePreview(preview);
+    deletionConfirmationToken = await approveRoomStorePreview(preview);
+    if (deletionConfirmationToken === undefined) return "cancelled";
+    if (deletionConfirmationToken) buildArgs.push("--confirm-deletion", deletionConfirmationToken);
+  }
+  const saveEventGeneration = workspaceEventGeneration;
   const result = targetProvider === "minio"
     ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
       title: `Saving ${name}…`,
       action: "save a Room",
+      encryptionMaterial,
     })
     : await runOperation(`Saving ${name}…`, buildArgs, source);
-  const size = (result.ciphertext_size / (1024 * 1024)).toFixed(1);
-  await vscode.window.showInformationMessage(`Saved “${name}” (${size} MiB).`);
-  if (path.resolve(source) === path.resolve(cwd)) {
+  if (targetProvider === "minio") {
+    if (!["saved", "saved-but-dirty", "already-saved"].includes(result.status)) {
+      throw new Error("Room Store Save returned an unsupported receipt.");
+    }
+    if (result.status === "already-saved") {
+      await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded");
+    } else if (result.status === "saved-but-dirty") {
+      const logicalEntries = Number.isSafeInteger(preview?.current_entry_count)
+        ? preview.current_entry_count : "unknown";
+      const scanned = formatHaulerSize(result.scanned_bytes ?? preview?.scanned_bytes) || "unknown";
+      const added = formatHaulerSize(result.data_added_bytes) || "unknown";
+      await vscode.window.showWarningMessage(
+        `Saved “${name}”, but workspace changes remain · Logical entries: ${logicalEntries} · Workspace scan: ${scanned} · Restic data added: ${added}`,
+      );
+    } else {
+      const logicalEntries = Number.isSafeInteger(preview?.current_entry_count)
+        ? preview.current_entry_count : "unknown";
+      const scanned = formatHaulerSize(result.scanned_bytes ?? preview?.scanned_bytes) || "unknown";
+      const added = formatHaulerSize(result.data_added_bytes) || "unknown";
+      await vscode.window.showInformationMessage(
+        `Saved “${name}” · Logical entries: ${logicalEntries} · Workspace scan: ${scanned} · Restic data added: ${added}`,
+      );
+    }
+    finishRoomStoreSave(result, source, saveEventGeneration);
+  } else {
+    const size = Number.isFinite(result.ciphertext_size)
+      ? `${(result.ciphertext_size / (1024 * 1024)).toFixed(1)} MiB`
+      : "unknown size";
+    await vscode.window.showInformationMessage(`Saved “${name}” (encrypted snapshot object: ${size}).`);
+  }
+  if (targetProvider !== "minio" && path.resolve(source) === path.resolve(cwd)) {
     await startDirtyTracking(extensionContext);
   }
   try {
@@ -1792,7 +1972,7 @@ async function saveRoom(options = {}) {
   } catch (_error) {
     await vscode.window.showWarningMessage("Room saved, but storage refresh did not finish. Use Refresh to reload the list; you do not need to save again.");
   }
-  return "saved";
+  return targetProvider === "minio" ? result.status : "saved";
 }
 
 async function enterRoom(preferredProject) {
@@ -2768,6 +2948,7 @@ module.exports.__test__ = {
   enterRoom,
   resetNativeBaseline,
   saveRoom,
+  getRoomStatusForTests: () => roomStatus,
   setSelectedDimensionId(value) {
     selectedDimensionId = value;
   },
@@ -3755,8 +3936,6 @@ currentRoom = function nativeCurrentRoom(cwd) {
   }
 };
 
-let baselineLoading = false;
-let pendingWorkspaceEvents = [];
 let workspaceBindingTrusted = false;
 const legacyStartDirtyTracking = startDirtyTracking;
 startDirtyTracking = async function nativeStartDirtyTracking(context) {
@@ -3767,45 +3946,32 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
   const generation = ++dirtyTrackingGeneration;
   workspaceWatcher && workspaceWatcher.dispose();
   capturePolicyWatcher && capturePolicyWatcher.dispose();
-  pendingWorkspaceEvents = [];
-  baselineLoading = true;
-  const savedFingerprint = marker.workspace_fingerprint;
-  const fingerprintProvider = async () => {
-    const live = await runJoshRoom(["status"], root);
-    return live.current_workspace_fingerprint || live.current_fingerprint || live.workspace_fingerprint;
-  };
-  capturePolicySavedFingerprint = savedFingerprint;
-  capturePolicyFingerprintProvider = fingerprintProvider;
+  const eventGenerationAtStart = workspaceEventGeneration;
+  const savedFingerprint = marker.format_version === 3
+    ? marker.workspace_signature
+    : marker.workspace_fingerprint;
   workspaceBindingTrusted = false;
   try {
     workspaceCapturePolicy = loadCapturePolicy(root);
     workspaceBaseline = new WorkspaceBaseline(root, {
       savedFingerprint,
-      fingerprintProvider,
       capturePolicy: workspaceCapturePolicy,
     });
   } catch (error) {
     workspaceCapturePolicy = undefined;
     workspaceBaseline = undefined;
-    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${error.message}`);
+    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${sanitizeControllerText(error.message)}`);
+    setRoomState("unknown", { bindingTrusted: false });
   }
   for (const document of vscode.workspace.textDocuments || []) {
     const relative = relativeWorkspacePath(document.uri);
     if (relative && document.isDirty) dirtyBuffers.add(relative);
   }
-  workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
   const compare = (uri) => {
-    if (isCapturePolicyUri(root, uri)) {
-      if (baselineLoading) {
-        pendingWorkspaceEvents.push(uri);
-        return;
-      }
-      handleCapturePolicyChange(root);
-      return;
-    }
-    if (baselineLoading) pendingWorkspaceEvents.push(uri);
+    if (isCapturePolicyUri(root, uri)) handleCapturePolicyChange(root);
     else markWorkspaceChange(uri);
   };
+  workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
   workspaceWatcher.onDidChange(compare);
   workspaceWatcher.onDidCreate(compare);
   workspaceWatcher.onDidDelete(compare);
@@ -3822,53 +3988,72 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     }
   }));
   if (!workspaceBaseline) {
-    baselineLoading = false;
-    setRoomDirty(true);
-    for (const uri of pendingWorkspaceEvents.splice(0)) {
-      if (isCapturePolicyUri(root, uri)) handleCapturePolicyChange(root);
-    }
+    setRoomState("unknown", { bindingTrusted: false });
     return;
   }
-  const statusPromise = runJoshRoom(["status"], root)
-    .then((result) => result)
-    .catch((error) => {
-      outputChannel && outputChannel.warn("Auth-free Room status unavailable: " + error.message);
-      return undefined;
-    });
-  await workspaceBaseline.capture();
+  let status;
+  try {
+    status = await runJoshRoom(["status"], root);
+  } catch (error) {
+    outputChannel?.warn("Auth-free Room status unavailable: " + sanitizeControllerText(error.message));
+  }
   if (generation !== dirtyTrackingGeneration) return;
-  const initialStatus = await statusPromise;
-  if (generation !== dirtyTrackingGeneration) return;
-  const status = await runJoshRoom(["status"], root).catch((error) => {
-    outputChannel && outputChannel.warn("Auth-free Room status unavailable: " + error.message);
-    return undefined;
-  });
-  if (generation !== dirtyTrackingGeneration) return;
-  const authoritativeStatus = status || initialStatus;
   const currentFingerprint = status && (
-    status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
+    status.workspace_signature || status.current_workspace_signature
+    || status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
   );
-  workspaceBindingTrusted = Boolean(authoritativeStatus
-    && authoritativeStatus.ok
-    && authoritativeStatus.path_matches
-    && authoritativeStatus.state === "clean"
-    && authoritativeStatus.fingerprint_matches !== false);
-  await workspaceBaseline.capture({
-    savedFingerprint,
-    currentFingerprint: currentFingerprint || savedFingerprint,
-    fingerprintProvider,
-  });
+  const localPathSha = crypto.createHash("sha256").update(path.resolve(root)).digest("hex");
+  const v3BindingMatches = marker.format_version === 3
+    && Boolean(status?.path_matches)
+    && status?.workspace_path_sha256 === marker.workspace_path_sha256
+    && marker.workspace_path_sha256 === localPathSha
+    && status?.signature_algorithm === marker.signature_algorithm
+    && status?.capture_policy_sha256 === marker.capture_policy_sha256
+    && marker.capture_policy_sha256 === workspaceCapturePolicy.sha256;
+  workspaceBindingTrusted = marker.format_version === 3
+    ? v3BindingMatches
+    : Boolean(status?.ok && status?.path_matches && status?.state === "clean" && status?.fingerprint_matches !== false);
+  await workspaceBaseline.capture({ savedFingerprint, currentFingerprint: currentFingerprint || savedFingerprint });
   if (generation !== dirtyTrackingGeneration) return;
-  baselineLoading = false;
-  for (const uri of pendingWorkspaceEvents.splice(0)) await markWorkspaceChange(uri);
-  setRoomDirty(workspaceBaseline.dirty.size > 0 || dirtyBuffers.size > 0);
-  refreshRoomStatus();
+  const eventArrived = workspaceEventGeneration !== eventGenerationAtStart || dirtyBuffers.size > 0;
+  if (eventArrived) {
+    setRoomState("dirty", { bindingTrusted: workspaceBindingTrusted });
+  } else if (!status || status.state === "unknown" || !workspaceBindingTrusted) {
+    setRoomState("unknown", { bindingTrusted: false });
+  } else if (marker.format_version === 3) {
+    const signatureChanged = status.state === "changed"
+      || status.signature_matches === false
+      || status.policy_matches === false
+      || currentFingerprint !== marker.workspace_signature;
+    setRoomState(signatureChanged ? "dirty" : "unknown", { bindingTrusted: workspaceBindingTrusted });
+  } else {
+    const isClean = status.ok && status.state === "clean" && !workspaceBaseline.dirty.size;
+    setRoomState(isClean ? "clean" : "dirty", { bindingTrusted: workspaceBindingTrusted });
+  }
 };
 
 module.exports.__test__.startDirtyTracking = startDirtyTracking;
 
 async function resetNativeBaseline(result) {
   if (!workspaceBaseline) return;
+  const marker = currentRoom(activeWorkspace());
+  if (marker?.format_version === 3) {
+    const policy = workspaceCapturePolicy;
+    const pathSha = crypto.createHash("sha256").update(path.resolve(activeWorkspace())).digest("hex");
+    const bindingTrusted = Boolean(policy
+      && marker.workspace_path_sha256 === pathSha
+      && marker.capture_policy_sha256 === policy.sha256
+      && marker.signature_algorithm === "josh-room-stat-v1"
+      && result?.workspace_signature === marker.workspace_signature
+      && result?.capture_policy_sha256 === marker.capture_policy_sha256);
+    workspaceBaseline.reset({
+      savedFingerprint: marker.workspace_signature,
+      currentFingerprint: marker.workspace_signature,
+    });
+    dirtyBuffers.clear();
+    setRoomState("unknown", { bindingTrusted });
+    return;
+  }
   let fingerprint = result && (result.workspace_fingerprint || result.current_workspace_fingerprint);
   if (!fingerprint && workspaceBaseline.fingerprintProvider) {
     try {
@@ -3877,7 +4062,6 @@ async function resetNativeBaseline(result) {
       outputChannel && outputChannel.warn("Unable to refresh authoritative Room status: " + error.message);
     }
   }
-  const marker = currentRoom(activeWorkspace());
   const savedFingerprint = result && result.saved_workspace_fingerprint
     || marker && marker.workspace_fingerprint
     || fingerprint;
@@ -4125,9 +4309,10 @@ function activateNative(context) {
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
     const relative = relativeWorkspacePath(event.document.uri);
     if (!relative) return;
+    workspaceEventGeneration += 1;
     if (event.document.isDirty) dirtyBuffers.add(relative);
     else dirtyBuffers.delete(relative);
-    setRoomDirty(!workspaceBaseline || workspaceBaseline.dirty.size > 0 || dirtyBuffers.size > 0);
+    if (event.document.isDirty) setRoomState("dirty");
   }));
   context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
     const relative = relativeWorkspacePath(document.uri);

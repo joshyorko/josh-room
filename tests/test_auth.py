@@ -68,7 +68,7 @@ def test_worker_request_uses_explicit_auth_authority(monkeypatch):
     assert captured[0][0].full_url == "https://auth.example.invalid/session/synthetic"
 
 
-def test_worker_request_uses_official_authority_without_override(monkeypatch):
+def test_worker_request_uses_synthetic_authority(monkeypatch):
     captured = []
 
     class Response(BytesIO):
@@ -82,12 +82,12 @@ def test_worker_request_uses_official_authority_without_override(monkeypatch):
         captured.append((request, timeout))
         return Response(b'{"status":"pending"}')
 
-    monkeypatch.delenv("JOSH_ROOM_AUTH_URL", raising=False)
+    monkeypatch.setenv("JOSH_ROOM_AUTH_URL", "https://auth.example.invalid")
     monkeypatch.setattr("josh_room.auth.urllib.request.urlopen", open_request)
 
     auth._request("/session/synthetic")
 
-    assert captured[0][0].full_url == "https://josh-room-auth.joshua-yorko.workers.dev/session/synthetic"
+    assert captured[0][0].full_url == "https://auth.example.invalid/session/synthetic"
 
 
 def test_start_oauth_session_surfaces_advertised_non_sensitive_contract(monkeypatch):
@@ -144,6 +144,7 @@ def test_cancel_oauth_session_invalidates_worker_transaction(monkeypatch):
 def test_cancel_oauth_session_treats_vanished_session_as_idempotent_cleanup(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     for name in ("r2.json", "age.identity", "config.json", "session.json"):
         (runtime / name).write_text("stale")
@@ -159,6 +160,7 @@ def test_cancel_oauth_session_treats_vanished_session_as_idempotent_cleanup(tmp_
 def test_cancel_oauth_session_preserves_non_404_authority_failures_and_cleans_local_state(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     (runtime / "session.json").write_text("stale")
 
@@ -302,16 +304,237 @@ def test_extension_oauth_boundary_returns_url_then_persists_only_authorized_runt
         os.environ.pop(name, None)
 
 
+def test_r2_room_store_handoff_is_private_and_kept_out_of_config_and_environment(tmp_path, monkeypatch):
+    session_id = "a" * 64
+    capability = "b" * 43
+    domain_id = "c" * 64
+    session = {
+        "status": "authorized", "purpose": "r2",
+        "accessKeyId": "synthetic-access", "secretAccessKey": "synthetic-secret",
+        "sessionToken": "synthetic-token", "ageIdentity": TEST_IDENTITY,
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "endpoint": "https://account.r2.example.invalid", "bucket": "synthetic-room",
+        "expiresIn": 21600, "roomStoreDomainId": domain_id,
+        "roomStoreCapability": capability, "roomStoreCapabilityExpiresIn": 600,
+    }
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr("josh_room.auth._request", lambda *_args, **_kwargs: session)
+
+    assert poll_oauth_session(session_id) == {"status": "authorized"}
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    metadata_path = runtime / "session.json"
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata_path.stat().st_mode & 0o777 == 0o600
+    assert metadata["room_store_session_id"] == session_id
+    assert metadata["room_store_domain_id"] == domain_id
+    assert metadata["room_store_capability"] == capability
+    assert metadata["room_store_capability_expires_at"] <= metadata["expires_at"]
+    assert capability not in (runtime / "config.json").read_text()
+    assert capability not in (runtime / "r2.json").read_text()
+    assert capability not in os.environ.values()
+
+
+def test_runtime_read_unlinks_symlink_without_following_handoff_target(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    auth._write_runtime({
+        "purpose": "r2", "ageIdentity": TEST_IDENTITY,
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-access", "secretAccessKey": "synthetic-secret",
+        "sessionToken": "synthetic-token", "endpoint": "https://account.r2.example.invalid",
+        "bucket": "synthetic-room", "expiresIn": 21600,
+        "roomStoreDomainId": "c" * 64, "roomStoreCapability": "b" * 43,
+        "roomStoreCapabilityExpiresIn": 300,
+    }, session_id="a" * 64)
+    target = tmp_path / "handoff-target.json"
+    target.write_text("preserve-target")
+    metadata = runtime / "session.json"
+    metadata.unlink()
+    metadata.symlink_to(target)
+
+    assert auth.runtime_session_state() == "missing"
+    assert target.read_text() == "preserve-target"
+    assert not metadata.is_symlink()
+
+
+@pytest.mark.parametrize(
+    ("rejected_name", "native_failure"),
+    [
+        ("session.json", "foreign owner"),
+        ("session.json", "inherited ACL"),
+        ("age.identity", "foreign owner"),
+        ("config.json", "inherited ACL"),
+    ],
+)
+def test_private_session_rejects_native_owner_or_acl_failures(
+    tmp_path, monkeypatch, rejected_name, native_failure
+):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    auth._write_runtime({
+        "purpose": "r2", "ageIdentity": TEST_IDENTITY,
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-access", "secretAccessKey": "synthetic-secret",
+        "sessionToken": "synthetic-token", "endpoint": "https://account.r2.example.invalid",
+        "bucket": "synthetic-room", "expiresIn": 21600,
+        "roomStoreDomainId": "c" * 64, "roomStoreCapability": "b" * 43,
+        "roomStoreCapabilityExpiresIn": 300,
+    }, session_id="a" * 64)
+    real_verify = auth.verify_private_path
+    rejected_path = (tmp_path / "runtime" / "josh-room" / "session" / rejected_name)
+
+    def reject_path(path, *, directory=None):
+        if Path(path) == rejected_path:
+            raise RuntimeError(f"private path {native_failure} is unsafe")
+        return real_verify(path, directory=directory)
+
+    monkeypatch.setattr(auth, "verify_private_path", reject_path)
+    assert auth.runtime_session_state() == "missing"
+
+
+def test_expired_room_store_capability_is_cleared_without_expiring_r2_session(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    auth._write_runtime({
+        "purpose": "r2", "ageIdentity": TEST_IDENTITY,
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-access", "secretAccessKey": "synthetic-secret",
+        "sessionToken": "synthetic-token", "endpoint": "https://account.r2.example.invalid",
+        "bucket": "synthetic-room", "expiresIn": 21600,
+        "roomStoreDomainId": "c" * 64, "roomStoreCapability": "b" * 43,
+        "roomStoreCapabilityExpiresIn": 300,
+    }, session_id="a" * 64)
+    now = time.time()
+    monkeypatch.setattr(auth.time, "time", lambda: now + 400)
+
+    assert auth.runtime_session_state() == "connected"
+    metadata = json.loads((runtime / "session.json").read_text())
+    assert not any(name.startswith("room_store_") for name in metadata)
+    assert (runtime / "r2.json").is_file()
+    assert auth.r2_session_state() == "connected"
+
+
+def test_r2_logout_removes_room_store_capability(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime" / "josh-room" / "session"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    auth._write_runtime({
+        "purpose": "r2", "ageIdentity": TEST_IDENTITY,
+        "ageRecipients": ["age1daily", "age1recovery"],
+        "accessKeyId": "synthetic-access", "secretAccessKey": "synthetic-secret",
+        "sessionToken": "synthetic-token", "endpoint": "https://account.r2.example.invalid",
+        "bucket": "synthetic-room", "expiresIn": 21600,
+        "roomStoreDomainId": "c" * 64, "roomStoreCapability": "b" * 43,
+        "roomStoreCapabilityExpiresIn": 300,
+    }, session_id="a" * 64)
+
+    assert logout_runtime_session("r2")["encryption_preserved"] is True
+    metadata = json.loads((runtime / "session.json").read_text())
+    assert not any(name.startswith("room_store_") for name in metadata)
+    assert not (runtime / "r2.json").exists()
+
+
+def test_r2_room_store_factory_uses_same_broker_uuid_for_encryption_material(tmp_path, monkeypatch):
+    import base64
+    import uuid
+    from types import SimpleNamespace
+
+    from josh_room import crypto
+    from josh_room.encryption_domain import RoomStoreKeyset
+    from josh_room.r2_room_store_material import R2RoomStoreMaterial
+
+    recipients = [
+        "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq",
+        "age1qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpquuzgag",
+    ]
+    physical_binding = "c" * 64
+    encryption_domain_id = str(uuid.uuid4())
+    secret = base64.urlsafe_b64encode(b"s" * 32).decode().rstrip("=")
+    details = R2RoomStoreMaterial(
+        RoomStoreKeyset(secret, physical_binding), encryption_domain_id, 1
+    )
+
+    class FakeAuthority:
+        material = details
+        read_calls = 0
+        ensure_calls = 0
+        missing = False
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def read_material_details(self):
+            type(self).read_calls += 1
+            if type(self).missing:
+                raise auth.R2RoomStoreError("room_store_material_missing")
+            return self.material
+
+        def ensure_material_details(self):
+            type(self).ensure_calls += 1
+            return self.material
+
+    monkeypatch.setattr(auth, "R2RoomStoreAuthority", FakeAuthority)
+    monkeypatch.setattr(crypto, "derive_recipient", lambda _path: recipients[0])
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    auth._write_runtime({
+        "purpose": "r2", "ageIdentity": TEST_IDENTITY,
+        "ageRecipients": recipients, "accessKeyId": "synthetic-access",
+        "secretAccessKey": "synthetic-secret", "sessionToken": "synthetic-token",
+        "endpoint": "https://synthetic-account.r2.example.invalid",
+        "bucket": "synthetic-room", "expiresIn": 21600,
+        "roomStoreDomainId": physical_binding, "roomStoreCapability": "b" * 43,
+        "roomStoreCapabilityExpiresIn": 600,
+    }, session_id="a" * 64)
+    dimension = SimpleNamespace(
+        provider="r2", endpoint="https://synthetic-account.r2.example.invalid",
+        bucket="synthetic-room", encryption_domain_id=None,
+    )
+
+    selected = auth.create_r2_room_store_authority(
+        dimension, endpoint_transport=lambda *_args: None
+    )
+
+    assert selected.room_store.encryption_domain_id == encryption_domain_id
+    assert selected.encryption_material.encryption_domain_id == encryption_domain_id
+    assert selected.encryption_material.key_generation == 1
+    assert selected.room_store.physical_binding == physical_binding
+    assert selected.room_store.encryption_domain_id != physical_binding
+    assert selected.authority.kwargs["session_id"] == "a" * 64
+    assert FakeAuthority.read_calls == 1
+    assert FakeAuthority.ensure_calls == 0
+    assert "b" * 43 not in repr(selected)
+    assert secret not in repr(selected)
+
+    auth.create_r2_room_store_authority(
+        dimension, allow_initialize=True, endpoint_transport=lambda *_args: None
+    )
+    assert FakeAuthority.ensure_calls == 1
+
+    FakeAuthority.missing = True
+    monkeypatch.setattr(auth.webbrowser, "open", lambda *_args: pytest.fail("factory opened a browser"))
+    with pytest.raises(auth.R2RoomStoreError, match="material_missing"):
+        auth.create_r2_room_store_authority(
+            dimension, endpoint_transport=lambda *_args: None
+        )
+    assert FakeAuthority.ensure_calls == 1
+
+
 def test_runtime_session_state_distinguishes_missing_and_expired_authority(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
 
     assert runtime_session_state() == "missing"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     for name in ("r2.json", "age.identity", "config.json"):
         (runtime / name).write_text("synthetic")
     assert runtime_session_state() == "missing"
     (runtime / "session.json").write_text(json.dumps({"expires_at": 0}))
+    (runtime / "session.json").chmod(0o600)
 
     assert runtime_session_state() == "expired"
 
@@ -319,10 +542,13 @@ def test_runtime_session_state_distinguishes_missing_and_expired_authority(tmp_p
 def test_load_runtime_session_reuses_age_material_without_contacting_authority(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     (runtime / "age.identity").write_text(TEST_IDENTITY + "\n")
     (runtime / "age.identity").chmod(0o600)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "config.json").chmod(0o600)
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600}))
+    (runtime / "session.json").chmod(0o600)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     for name in ("JOSH_ROOM_RUNTIME_CREDENTIALS", "JOSH_ROOM_RUNTIME_CONFIG", "JOSH_ROOM_IDENTITY"):
         monkeypatch.delenv(name, raising=False)
@@ -349,6 +575,7 @@ def test_non_r2_snapshot_loads_existing_runtime_session_before_dispatch(monkeypa
 def test_logout_runtime_session_clears_only_local_r2_session_material(tmp_path, monkeypatch):
     root = tmp_path / "runtime" / "josh-room" / "session"
     root.mkdir(parents=True)
+    root.chmod(0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     for name in ("r2.json", "age.identity", "config.json", "session.json"):
         (root / name).write_text("local-session-material")
@@ -369,10 +596,12 @@ def test_logout_runtime_session_clears_only_local_r2_session_material(tmp_path, 
 def test_expired_runtime_session_is_removed_before_a_new_login(tmp_path, monkeypatch):
     root = tmp_path / "runtime" / "josh-room" / "session"
     root.mkdir(parents=True)
+    root.chmod(0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     for name in ("r2.json", "age.identity", "config.json"):
         (root / name).write_text("stale-secret-material")
     (root / "session.json").write_text(json.dumps({"expires_at": 0}))
+    (root / "session.json").chmod(0o600)
 
     assert runtime_session_state() == "expired"
     assert not any((root / name).exists() for name in ("r2.json", "age.identity", "config.json", "session.json"))
@@ -381,6 +610,7 @@ def test_expired_runtime_session_is_removed_before_a_new_login(tmp_path, monkeyp
 def test_canceled_oauth_removes_stale_runtime_material_so_next_login_is_unmasked(tmp_path, monkeypatch):
     root = tmp_path / "runtime" / "josh-room" / "session"
     root.mkdir(parents=True)
+    root.chmod(0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setattr("josh_room.auth.webbrowser.open", lambda _url: True)
     for name in ("r2.json", "age.identity", "config.json"):
@@ -706,11 +936,14 @@ def test_r2_logout_interruption_after_credential_removal_recovers(tmp_path, monk
 def test_permissive_runtime_identity_is_cleared(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     identity = runtime / "age.identity"
     identity.write_text(TEST_IDENTITY + "\n")
     identity.chmod(0o644)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "config.json").chmod(0o600)
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))
+    (runtime / "session.json").chmod(0o600)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
 
     assert auth.runtime_session_state() == "missing"
@@ -721,10 +954,13 @@ def test_permissive_runtime_identity_is_cleared(tmp_path, monkeypatch):
 def test_malformed_runtime_config_is_cleared_fail_closed(tmp_path, monkeypatch, config_body):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     (runtime / "age.identity").write_text(TEST_IDENTITY + "\n")
     (runtime / "age.identity").chmod(0o600)
     (runtime / "config.json").write_text(json.dumps(config_body))
+    (runtime / "config.json").chmod(0o600)
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))
+    (runtime / "session.json").chmod(0o600)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
 
     assert auth.runtime_session_state() == "missing"
@@ -734,10 +970,13 @@ def test_malformed_runtime_config_is_cleared_fail_closed(tmp_path, monkeypatch, 
 def test_malformed_runtime_identity_is_cleared_fail_closed(tmp_path, monkeypatch):
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     runtime.mkdir(parents=True)
+    runtime.chmod(0o700)
     (runtime / "age.identity").write_text("not-an-age-identity\n")
     (runtime / "age.identity").chmod(0o600)
     (runtime / "config.json").write_text(json.dumps({"age_recipients": ["age1daily", "age1recovery"]}))
+    (runtime / "config.json").chmod(0o600)
     (runtime / "session.json").write_text(json.dumps({"expires_at": time.time() + 600, "capabilities": ["encryption"]}))
+    (runtime / "session.json").chmod(0o600)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
 
     assert auth.runtime_session_state() == "missing"
@@ -748,13 +987,18 @@ def test_wait_oauth_session_polls_until_authorized_in_one_long_lived_operation(m
     responses = iter([{"status": "pending"}, {"status": "authorized"}])
     writes = []
     monkeypatch.setattr("josh_room.auth._request", lambda *_args, **_kwargs: next(responses))
-    monkeypatch.setattr("josh_room.auth._write_runtime", lambda session, dimension_id=None: writes.append((session, dimension_id)))
+    monkeypatch.setattr(
+        "josh_room.auth._write_runtime",
+        lambda session, dimension_id=None, purpose=None, *, session_id=None: writes.append(
+            (session, dimension_id, session_id)
+        ),
+    )
     monkeypatch.setattr("josh_room.auth.time.sleep", lambda _seconds: None)
 
     assert wait_oauth_session("session-one", timeout=10, poll_interval=0, dimension_id="archive") == {
         "status": "authorized"
     }
-    assert writes == [({"status": "authorized"}, "archive")]
+    assert writes == [({"status": "authorized"}, "archive", "session-one")]
 
 
 def test_wait_oauth_session_reports_browser_wait_and_validation_elapsed_without_extra_processes(monkeypatch):

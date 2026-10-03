@@ -71,6 +71,19 @@ returns a typed summary. A no-op is `BackupSummary(snapshot_id=None)`. Progress
 callbacks receive only bounded counts and byte totals; restic paths and raw
 diagnostics are discarded.
 
+On Windows, the adapter adds `--force` because restic 0.19.1 maps Windows
+`ChangeTime` to `ModTime` and lacks a stable inode in its quickcheck. This
+forces content reads so a same-size edit with a restored mtime cannot reuse
+stale bytes. Restic's `--force` disables parent selection and its parent-based
+`--skip-if-unchanged` behavior, so `BackupSummary.force_scan` is true and
+`effective_parent_id` is null. Restic can still deduplicate stored data
+content-addressably, but it rereads the workspace and may create a new snapshot
+even when content is unchanged. Linux retains the explicit parent and no-op
+path; a trusted no-event UI may avoid invoking the controller entirely. A
+Windows caller may claim a metadata no-op only after its native ChangeTime
+signature and saved descriptor bindings are verified. Unknown metadata must
+run the forced content scan; this adapter does not implement that preflight.
+
 Only exit status 0 plus one terminal, supported, zero-error summary returns a
 backup result. Exit 3 is incomplete; cancellation, unknown exit codes, malformed
 or oversized JSON, unknown message types, and missing/multiple summaries fail
@@ -78,7 +91,10 @@ closed. Failures carry a stable error code and may carry a validated bounded
 orphan snapshot ID. They never carry restic's raw diagnostic text.
 
 `snapshot()` validates one exact snapshot, tree identity, timestamp, and source
-paths. Treat `SnapshotInfo.paths` as private workspace metadata. `entries()`
+paths. Treat `SnapshotInfo.paths` as private workspace metadata.
+`snapshots()` returns a bounded tuple of path-free `SnapshotInventoryItem`
+records with only full ID, tree ID, time, and parent ID; malformed, duplicate,
+short-ID, and oversized inventories fail closed. `entries()`
 streams bounded `restic ls --json` node records and checks the header's
 snapshot ID, tree ID, and source paths against that metadata. Restic's
 virtual-root absolute node paths are returned as relative paths (`/a/b` becomes
@@ -89,8 +105,18 @@ adapter does not decide which entry types are safe. Closing the iterator early
 cancels the owned command through the shared process cleanup helper.
 
 `restore()` requires a new destination path and delegates staging/promotion
-policy to its caller. `check(read_data=False)` runs only `restic check` and may
-optionally request `--read-data`; it never runs forget, prune, unlock, or repair.
+policy to its caller. `check(read_data=False, read_data_subset=None)` runs only
+`restic check`; the legacy full-read boolean remains supported, or callers may
+request a positive `n/d` subset fraction (with `n <= d`), never both.
+
+Maintenance is always explicit. `plan_forget(ids)` first validates IDs against
+the current inventory and runs restic `forget --dry-run`. `forget(ids, plan=...,
+confirmed=True)` revalidates the repository, inventory IDs, and tree bindings
+before removing only those snapshot references; it never runs prune. `prune()`
+defaults to `--dry-run`; a destructive prune requires `dry_run=False` and
+`confirmed=True`. The adapter adds no parallel lock/retry system and exposes no
+unlock or repair operation. Restic's native locking errors are sanitized and
+returned without retry.
 
 ## Not proven by this adapter
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from josh_room import private_paths
+from scripts import verify_private_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,3 +63,45 @@ def test_posix_helpers_check_owner_mode_and_nofollow(tmp_path, monkeypatch):
     monkeypatch.setattr(private_paths.os, "getuid", lambda: file.lstat().st_uid + 1)
     with pytest.raises(private_paths.PrivatePathError, match="owner"):
         private_paths.verify_private_path(file, directory=False)
+
+
+def test_probe_failure_json_keeps_safe_check_and_error_metadata(monkeypatch, capsys):
+    def failed_probe():
+        raise verify_private_runtime._ProbeFailure(
+            "native-directory-owner-dacl-inheritance",
+            "PrivatePathError",
+            5,
+            ["protect-private-runtime-root"],
+        )
+
+    monkeypatch.setattr(verify_private_runtime, "run_probe", failed_probe)
+
+    assert verify_private_runtime.main() == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "status": "failed",
+        "platform": sys.platform,
+        "failed_check": "native-directory-owner-dacl-inheritance",
+        "error_type": "PrivatePathError",
+        "winerror": 5,
+        "checks_completed": ["protect-private-runtime-root"],
+    }
+
+
+def test_probe_failure_includes_static_helper_failure_code(monkeypatch):
+    def fail(_path):
+        raise private_paths.PrivatePathError(
+            "private path security is unsafe", winerror=5
+        )
+
+    monkeypatch.setattr(private_paths, "protect_private_directory", fail)
+
+    with pytest.raises(verify_private_runtime._ProbeFailure) as failure:
+        verify_private_runtime.run_probe()
+
+    assert failure.value.failed_check == (
+        "protect-private-runtime-root:private_path_security_is_unsafe"
+    )
+    assert failure.value.error_type == "PrivatePathError"
+    assert failure.value.winerror == 5
+    assert failure.value.checks_completed == []

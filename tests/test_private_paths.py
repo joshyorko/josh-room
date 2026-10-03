@@ -177,3 +177,31 @@ def test_windows_verification_rejects_reparse_point_before_security_api(
     with pytest.raises(private_paths.PrivatePathError, match="reparse"):
         private_paths.verify_private_path(file, directory=False)
     assert api.applied == []
+
+
+class _NativeFunction:
+    argtypes = None
+    restype = None
+
+
+class _NativeLibrary:
+    def __init__(self):
+        self.functions = {}
+
+    def __getattr__(self, name):
+        function = self.functions.setdefault(name, _NativeFunction())
+        return function
+
+
+def test_windows_security_control_prototype_uses_dword_revision(monkeypatch):
+    libraries = {}
+
+    def load_library(name, **_kwargs):
+        return libraries.setdefault(name, _NativeLibrary())
+
+    monkeypatch.setattr(private_paths.ctypes, "WinDLL", load_library, raising=False)
+    api = private_paths._WindowsSecurityAPI()
+
+    prototype = api.advapi.GetSecurityDescriptorControl.argtypes
+    assert prototype[1] == private_paths.ctypes.POINTER(private_paths.ctypes.c_uint16)
+    assert prototype[2] == private_paths.ctypes.POINTER(private_paths.ctypes.c_uint32)

@@ -55,6 +55,31 @@ class R2RoomStoreError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class R2RoomStoreMaterial:
+    """Winning password metadata plus the independent age-encryption domain."""
+
+    keyset: RoomStoreKeyset = field(repr=False)
+    encryption_domain_id: str
+    key_generation: int
+
+    @property
+    def physical_binding(self) -> str:
+        return self.keyset.physical_binding
+
+    @property
+    def generation(self) -> int:
+        return self.keyset.generation
+
+    @property
+    def repository_id(self) -> str | None:
+        return self.keyset.repository_id
+
+    @property
+    def secret(self) -> str:
+        return self.keyset.secret
+
+
+@dataclass(frozen=True, slots=True)
 class R2RoomStoreAuthority:
     session_id: str
     capability: str = field(repr=False)
@@ -107,7 +132,15 @@ class R2RoomStoreAuthority:
         )
 
     def ensure_material(self) -> RoomStoreKeyset:
-        """Create or recover material, then cache only the broker's durable winner."""
+        """Create or recover material and return the compatible password keyset."""
+        return self.ensure_material_details().keyset
+
+    def read_material_details(self) -> R2RoomStoreMaterial:
+        """Read an existing winner without creating broker material."""
+        return self._material_details(self._read_material())
+
+    def ensure_material_details(self) -> R2RoomStoreMaterial:
+        """Create or recover material and retain the winner's independent UUID4 domain."""
         try:
             record = self._read_material()
         except R2RoomStoreError as error:
@@ -128,12 +161,18 @@ class R2RoomStoreAuthority:
                 except R2RoomStoreError:
                     raise error from None
 
+        return self._material_details(record)
+
+    def _material_details(self, record: dict) -> R2RoomStoreMaterial:
         material = self._decrypt_record(record)
-        result = RoomStoreKeyset(
+        keyset = RoomStoreKeyset(
             secret=material["secret"],
             physical_binding=self.physical_binding,
             generation=record["keysetGeneration"],
             repository_id=record["repositoryId"],
+        )
+        result = R2RoomStoreMaterial(
+            keyset, material["encryption_domain_id"], material["key_generation"]
         )
         self._cache(material["encryption_domain_id"], result.generation, result.secret)
         return result
@@ -142,9 +181,15 @@ class R2RoomStoreAuthority:
         self, repository_id: str, expected_generation: int | None = None
     ) -> RoomStoreKeyset:
         """Bind an initialized Restic repository using broker CAS metadata."""
+        return self.bind_repository_details(repository_id, expected_generation).keyset
+
+    def bind_repository_details(
+        self, repository_id: str, expected_generation: int | None = None
+    ) -> R2RoomStoreMaterial:
+        """Bind a repository while preserving its winning age-encryption domain."""
         if not isinstance(repository_id, str) or not _HASH.fullmatch(repository_id):
             raise ValueError("R2 Room Store repository id is invalid")
-        current = self.ensure_material()
+        current = self.ensure_material_details()
         expected = (
             current.generation if expected_generation is None else expected_generation
         )
@@ -179,8 +224,11 @@ class R2RoomStoreAuthority:
             or bound_record["keysetGeneration"] != generation
         ):
             raise R2RoomStoreError("room_store_repository_readback_mismatch")
-        result = RoomStoreKeyset(
+        keyset = RoomStoreKeyset(
             material["secret"], self.physical_binding, generation, repository_id
+        )
+        result = R2RoomStoreMaterial(
+            keyset, material["encryption_domain_id"], material["key_generation"]
         )
         self._cache(material["encryption_domain_id"], generation, result.secret)
         return result

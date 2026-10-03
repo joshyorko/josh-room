@@ -12,6 +12,12 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .private_paths import (
+    protect_private_directory,
+    protect_private_file,
+    verify_private_path,
+)
+
 MAX_SOURCE_FILE = 8 * 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_SOURCES = 4096
@@ -272,16 +278,20 @@ def capture_hauler_component(
     _check_cancel(cancellation)
     with tempfile.TemporaryDirectory(prefix="josh-room-hauler-") as temporary:
         private = Path(temporary)
+        protect_private_directory(private)
+        verify_private_path(private, directory=True)
         hauler_store = private / "store"
         hauler_temp = private / "hauler-temp"
         hauler_temp.mkdir(mode=0o700)
+        protect_private_directory(hauler_temp)
         component_stage = private / "component"
         component_stage.mkdir(mode=0o700)
+        protect_private_directory(component_stage)
         try:
             if images:
                 image_list = private / "selected-images.txt"
                 image_list.write_text("".join(f"{image}\n" for image in images), encoding="utf-8")
-                image_list.chmod(0o600)
+                protect_private_file(image_list)
                 _check_cancel(cancellation)
                 _hauler_call(lambda: hauler.sync_image_txt(hauler_store, hauler_temp, [str(image_list)]))
                 _check_cancel(cancellation)
@@ -293,6 +303,8 @@ def capture_hauler_component(
                 _check_cancel(cancellation)
                 _hauler_call(lambda: hauler.sync_files(hauler_store, hauler_temp, list(file_inputs)))
                 _check_cancel(cancellation)
+            protect_private_directory(hauler_store)
+            protect_private_directory(hauler_temp)
             inventory = _hauler_call(lambda: hauler.inventory(hauler_store, hauler_temp))
             _verify_requested_images(images, inventory)
             references = _native_references(inventory)
@@ -305,6 +317,7 @@ def capture_hauler_component(
             metadata = archive.lstat()
             if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or metadata.st_size <= 0:
                 raise RoomStoreHaulerError("Hauler produced an invalid component archive")
+            protect_private_file(archive)
             archive_digest = hashlib.sha256()
             with archive.open("rb") as source:
                 for chunk in iter(lambda: source.read(1024 * 1024), b""):
@@ -319,7 +332,8 @@ def capture_hauler_component(
             }
             metadata_path = component_stage / "metadata.json"
             metadata_path.write_text(json.dumps(metadata_value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
-            metadata_path.chmod(0o600)
+            protect_private_file(metadata_path)
+            verify_private_path(component_stage, directory=True)
             if _source_identity(
                 images=images,
                 manifests=manifest_paths,

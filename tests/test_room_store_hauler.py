@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import stat
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from josh_room import room_store_hauler as component
+from josh_room import room_store_hauler_runner as runner
+from josh_room.cancellation import CLICancelled
 
 REPOSITORY_ID = "a" * 64
 SNAPSHOT_ID = "b" * 64
 TREE_ID = "c" * 64
 IMAGE_DIGEST = "sha256:" + "d" * 64
 FILE_DIGEST = "sha256:" + "e" * 64
+JAT_ARTIFACT = "sha256:" + "a" * 64
 
 
 class _Restic:
@@ -33,7 +41,12 @@ class _Hauler:
         self.calls = []
         self.archive_bytes = b"synthetic native Hauler archive"
 
+    @staticmethod
+    def _touch_store(store):
+        Path(store).mkdir(parents=True, exist_ok=True)
+
     def sync_image_txt(self, store, temp, sources, **kwargs):
+        self._touch_store(store)
         selected = Path(sources[0]).read_text(encoding="utf-8").splitlines()
         self.calls.append(("images", selected, kwargs))
         self.rows.extend(
@@ -42,6 +55,7 @@ class _Hauler:
         )
 
     def sync(self, store, temp, *manifests, **kwargs):
+        self._touch_store(store)
         self.calls.append(("manifests", tuple(Path(path).name for path in manifests), kwargs))
         for manifest in manifests:
             text = Path(manifest).read_text(encoding="utf-8")
@@ -51,6 +65,7 @@ class _Hauler:
                     self.rows.append({"Reference": image, "Type": "image", "Digest": IMAGE_DIGEST})
 
     def sync_files(self, store, temp, files, **kwargs):
+        self._touch_store(store)
         self.calls.append(("files", tuple(name for _path, name in files), kwargs))
         self.rows.extend({"Reference": name, "Type": "file", "Digest": FILE_DIGEST} for _path, name in files)
 
@@ -229,6 +244,324 @@ def test_empty_selection_is_no_component(tmp_path):
     hauler = _Hauler()
     assert _capture(tmp_path, hauler=hauler) is None
     assert hauler.calls == []
+
+
+def test_managed_adapter_factory_observes_hauler_inside_selected_artifact(tmp_path, monkeypatch):
+    calls = []
+    private_home = tmp_path / "rcc-home"
+    private_home.mkdir(mode=0o700)
+    runner.private_paths.protect_private_directory(private_home)
+
+    def run(argv, timeout, *, cwd, env):
+        calls.append((argv, timeout, cwd, dict(env)))
+        receipt = Path(argv[argv.index("--receipt-file") + 1])
+        receipt.write_text(json.dumps({"artifactDigest": JAT_ARTIFACT, "exitCode": 0}), encoding="utf-8")
+        return 0, "hauler version v2.1.1\n", ""
+
+    monkeypatch.setattr(
+        runner.jat,
+        "_managed_runtime",
+        lambda _root: ("/managed/rcc", JAT_ARTIFACT, {"PYTHONPATH": "/jat/src", "PATH": "/managed/bin", "ROBOCORP_HOME": str(private_home)}),
+    )
+    monkeypatch.setattr(runner.jat, "_run_cli", run)
+    monkeypatch.setattr(runner.jat, "_validate_rcc_receipt", lambda path, artifact, status: None)
+    adapter = runner.create_managed_hauler_adapter(tmp_path)
+    assert adapter.hauler_version == "v2.1.1"
+    argv, timeout, cwd, env = calls[0]
+    assert argv[:6] == ["/managed/rcc", "--no-build", "env", "exec", "--artifact", JAT_ARTIFACT]
+    assert "hauler" not in argv
+    assert argv[-3:] == ["python", "-c", runner._HAULER_VERSION_PROBE]
+    assert timeout <= 120
+    assert cwd == tmp_path.resolve()
+    assert env["PYTHONPATH"].split(os.pathsep)[0] == str(Path(runner.__file__).resolve().parent.parent)
+
+
+def test_managed_operation_writes_private_closed_request_and_validates_receipts(tmp_path, monkeypatch):
+    adapter = runner.ManagedHaulerAdapter.__new__(runner.ManagedHaulerAdapter)
+    adapter.jat_root = tmp_path
+    adapter.cancellation = _Cancellation()
+    adapter.executable = "/managed/rcc"
+    adapter.artifact = JAT_ARTIFACT
+    adapter.environment = {"PATH": "/managed/bin"}
+    adapter.timeout = 12
+    captured = {}
+    private_path_events = []
+    for helper_name in ("protect_private_directory", "verify_private_path", "secure_private_file", "protect_private_file"):
+        original = getattr(runner.private_paths, helper_name)
+
+        def wrapped(*args, _name=helper_name, _original=original, **kwargs):
+            private_path_events.append((_name, args[0]))
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(runner.private_paths, helper_name, wrapped)
+
+    def run(argv, timeout, *, cwd, env):
+        captured["argv"] = argv
+        captured["timeout"] = timeout
+        request = Path(argv[argv.index("--request-file") + 1])
+        result = Path(argv[argv.index("--result-file") + 1])
+        captured["request"] = json.loads(request.read_text(encoding="utf-8"))
+        captured["request_mode"] = stat.S_IMODE(request.stat().st_mode)
+        captured["private_root"] = request.parent
+        result.write_text(json.dumps({
+            "format_version": 1,
+            "operation": "inventory",
+            "success": True,
+            "exit_status": 0,
+            "value": [{"Reference": "private/app:tag", "Type": "image", "Digest": IMAGE_DIGEST}],
+            "error": None,
+        }), encoding="utf-8")
+        receipt = Path(argv[argv.index("--receipt-file") + 1])
+        receipt.write_text("{}", encoding="utf-8")
+        return 0, "", ""
+
+    monkeypatch.setattr(runner.jat, "_run_cli", run)
+    monkeypatch.setattr(runner.jat, "_validate_rcc_receipt", lambda path, artifact, status: None)
+    result = adapter.inventory(tmp_path / "store", tmp_path / "temp")
+    assert result == [{"Reference": "private/app:tag", "Type": "image", "Digest": IMAGE_DIGEST}]
+    assert captured["request"] == {
+        "format_version": 1,
+        "operation": "inventory",
+        "store": str(tmp_path / "store"),
+        "temp": str(tmp_path / "temp"),
+        "check": False,
+    }
+    assert captured["request_mode"] == 0o600
+    assert captured["timeout"] == 12
+    assert captured["argv"][1:5] == ["--no-build", "env", "exec", "--artifact"]
+    assert "--artifact" in captured["argv"] and "--no-build" in captured["argv"]
+    assert not captured["private_root"].exists()
+    assert {name for name, _path in private_path_events} == {
+        "protect_private_directory",
+        "verify_private_path",
+        "secure_private_file",
+        "protect_private_file",
+    }
+
+
+def test_managed_runner_uses_windows_private_acl_helpers(tmp_path, monkeypatch):
+    owner = "S-1-5-21-1000-2000-3000-1001"
+
+    class FakeWindowsSecurity:
+        def __init__(self):
+            self.applied = []
+
+        def current_user_sid(self):
+            return owner
+
+        def apply_private_acl(self, path, owner_sid, *, directory):
+            self.applied.append((Path(path), directory))
+
+        def read_security(self, path):
+            directory = Path(path).is_dir()
+            return owner, True, tuple(runner.private_paths._expected_aces(owner, directory=directory))
+
+    security = FakeWindowsSecurity()
+    monkeypatch.setattr(runner.private_paths, "_is_windows", lambda: True)
+    monkeypatch.setattr(runner.private_paths, "_windows_api", lambda: security)
+    adapter = runner.ManagedHaulerAdapter.__new__(runner.ManagedHaulerAdapter)
+    adapter.jat_root = tmp_path
+    adapter.cancellation = _Cancellation()
+    adapter.executable = "/managed/rcc"
+    adapter.artifact = JAT_ARTIFACT
+    adapter.environment = {}
+    adapter.timeout = 12
+
+    def run(argv, timeout, *, cwd, env):
+        result = Path(argv[argv.index("--result-file") + 1])
+        result.write_text(json.dumps({
+            "format_version": 1,
+            "operation": "inventory",
+            "success": True,
+            "exit_status": 0,
+            "value": [{"Reference": "private/app:tag", "Type": "image", "Digest": IMAGE_DIGEST}],
+            "error": None,
+        }), encoding="utf-8")
+        receipt = Path(argv[argv.index("--receipt-file") + 1])
+        receipt.write_text("{}", encoding="utf-8")
+        return 0, "", ""
+
+    monkeypatch.setattr(runner.jat, "_run_cli", run)
+    monkeypatch.setattr(runner.jat, "_validate_rcc_receipt", lambda path, artifact, status: None)
+    assert adapter.inventory(tmp_path / "store", tmp_path / "temp")
+    assert any(directory for _path, directory in security.applied)
+    assert any(not directory for _path, directory in security.applied)
+
+
+def test_managed_adapter_propagates_cancellation_after_owned_process_cleanup(tmp_path, monkeypatch):
+    adapter = runner.ManagedHaulerAdapter.__new__(runner.ManagedHaulerAdapter)
+    adapter.jat_root = tmp_path
+    adapter.cancellation = _Cancellation()
+    adapter.executable = "/managed/rcc"
+    adapter.artifact = JAT_ARTIFACT
+    adapter.environment = {}
+    adapter.timeout = 12
+    paths = []
+
+    def run(argv, timeout, *, cwd, env):
+        paths.append(Path(argv[argv.index("--request-file") + 1]).parent)
+        raise CLICancelled()
+
+    monkeypatch.setattr(runner.jat, "_run_cli", run)
+    with pytest.raises(CLICancelled):
+        adapter._invoke("inventory", {"store": str(tmp_path / "store"), "temp": str(tmp_path / "temp"), "check": False})
+    assert paths and not paths[0].exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"format_version": 1, "operation": "unknown"},
+        {"format_version": 1, "operation": "inventory", "store": "s", "temp": "t", "check": False, "extra": 1},
+        {"format_version": 1, "operation": "inventory", "store": "s", "temp": "t", "check": "false"},
+    ],
+)
+def test_worker_rejects_unknown_or_malformed_requests(tmp_path, body):
+    runner.private_paths.protect_private_directory(tmp_path)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps(body), encoding="utf-8")
+    runner.private_paths.protect_private_file(request)
+    with pytest.raises(runner.ManagedHaulerError):
+        runner._worker_request(request)
+
+
+def test_worker_dispatches_native_adapter_without_docker_local_images(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeAdapter:
+        def __init__(self, process_runner, timeout):
+            calls.append(("init", process_runner, timeout))
+
+        def sync_files(self, store, temp, files, **kwargs):
+            calls.append(("sync_files", store, temp, files, kwargs))
+
+    process_module = ModuleType("jat.process")
+    process_module.ProcessRunner = lambda: "native-process-runner"
+    hauler_module = ModuleType("jat.hauler")
+    hauler_module.HaulerAdapter = FakeAdapter
+    monkeypatch.setitem(sys.modules, "jat.process", process_module)
+    monkeypatch.setitem(sys.modules, "jat.hauler", hauler_module)
+    value = runner._worker_value({
+        "operation": "sync_files",
+        "store": str(tmp_path / "store"),
+        "temp": str(tmp_path / "temp"),
+        "files": [[str(tmp_path / "payload"), "payload.bin"]],
+        "retries": None,
+        "exclude_extras": False,
+    })
+    assert value is None
+    call = calls[-1]
+    assert call[0] == "sync_files"
+    assert call[3] == [(tmp_path / "payload", "payload.bin")]
+    assert "images" not in call[4]
+
+
+def test_worker_acquires_and_verifies_rcc_through_native_jat_adapter(monkeypatch, tmp_path):
+    root = tmp_path / "private-component"
+    root.mkdir(mode=0o700)
+    runner.private_paths.protect_private_directory(root)
+    archive = root / "rcc-environment.rcca"
+    archive.write_bytes(b"synthetic rcca")
+    runner.private_paths.protect_private_file(archive)
+    metadata = root / "metadata.json"
+    payload = {
+        "format_version": 1,
+        "source_input_sha256": "a" * 64,
+        "artifact_digest": "sha256:" + "1" * 64,
+        "specification_digest": "sha256:" + "2" * 64,
+        "legacy_blueprint_key": "synthetic-legacy-key",
+        "archive_sha256": hashlib.sha256(b"synthetic rcca").hexdigest(),
+        "archive_size": len(b"synthetic rcca"),
+        "rcc_version": "v18.19.5",
+        "platform": "linux-x64",
+        "robot_relative_path": "robot.yaml",
+    }
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+    runner.private_paths.protect_private_file(metadata)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    robot_file = workspace / "robot.yaml"
+    robot_file.write_text("tasks: {}\n", encoding="utf-8")
+    private_home = tmp_path / "rcc-home"
+    private_home.mkdir(mode=0o700)
+    runner.private_paths.protect_private_directory(private_home)
+    monkeypatch.setenv("ROBOCORP_HOME", str(private_home))
+    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", "/managed/rcc")
+    calls = []
+
+    class FakeEnvironmentMetadata:
+        @classmethod
+        def model_validate(cls, value):
+            calls.append(("metadata", value))
+            return SimpleNamespace(**value)
+
+    class FakeRCCArtifactAdapter:
+        def __init__(self, process_runner, *, executable, timeout):
+            calls.append(("adapter", process_runner, executable, timeout))
+
+        def acquire(self, *args, **kwargs):
+            calls.append(("acquire", args, kwargs))
+            return SimpleNamespace(
+                artifact=payload["artifact_digest"],
+                specification_digest=payload["specification_digest"],
+                legacy_blueprint_key=payload["legacy_blueprint_key"],
+                platform="linux_amd64",
+            )
+
+        def verify(self, robot):
+            calls.append(("verify", robot))
+
+    models = ModuleType("jat.models")
+    models.EnvironmentArtifactMetadata = FakeEnvironmentMetadata
+    process = ModuleType("jat.process")
+    process.ProcessRunner = lambda: "native-process-runner"
+    rcc_artifacts = ModuleType("jat.rcc_artifacts")
+    rcc_artifacts.RCCArtifactAdapter = FakeRCCArtifactAdapter
+    rcc_artifacts.EXPECTED_RCC_VERSION = "v18.19.5"
+    services = ModuleType("jat.services")
+    services._source_robot_path = lambda root, relative: Path(root) / relative
+    monkeypatch.setitem(sys.modules, "jat.models", models)
+    monkeypatch.setitem(sys.modules, "jat.process", process)
+    monkeypatch.setitem(sys.modules, "jat.rcc_artifacts", rcc_artifacts)
+    monkeypatch.setitem(sys.modules, "jat.services", services)
+    result = runner._worker_value({
+        "operation": "acquire_rcc",
+        "archive": str(archive),
+        "metadata": str(metadata),
+        "workspace": str(workspace),
+        "robot_file": str(robot_file),
+    })
+    assert result == {
+        "artifact": payload["artifact_digest"],
+        "specification_digest": payload["specification_digest"],
+        "platform": "linux_amd64",
+    }
+    acquire = next(item for item in calls if item[0] == "acquire")
+    assert acquire[1][1:] == (
+        robot_file,
+        "v18.19.5",
+        payload["specification_digest"],
+        payload["legacy_blueprint_key"],
+    )
+    assert acquire[2]["strict_identity"] is True
+    assert acquire[2]["artifact_digest"] == payload["artifact_digest"]
+    assert acquire[2]["expected_platform"] == "linux_amd64"
+    assert acquire[2]["runtime_home"] == private_home
+    assert [item[0] for item in calls if item[0] == "verify"] == ["verify"]
+    assert str(archive) not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "descriptor,native",
+    [("linux-x64", "linux_amd64"), ("win32-x64", "windows_amd64")],
+)
+def test_jat_platform_normalization_has_only_admitted_mappings(descriptor, native):
+    assert runner.normalize_jat_platform(descriptor) == native
+
+
+def test_jat_platform_normalization_rejects_unknown_values():
+    with pytest.raises(runner.ManagedHaulerError, match="platform is invalid"):
+        runner.normalize_jat_platform("darwin-arm64")
 
 
 def _manifest(root: Path) -> Path:

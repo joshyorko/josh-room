@@ -33,6 +33,29 @@ function writeMarker(root, {
   })}\n`);
 }
 
+function writeStatMarker(root, {
+  dimension_id = "backup",
+  encryption_domain_id = "domain-a",
+  project_id = "demo-room",
+  display_name = "Demo Room",
+  snapshot_id = "jat-1",
+  workspace_signature = "b".repeat(64),
+  capture_policy_sha256 = require("./dirty").loadCapturePolicy(root).sha256,
+} = {}) {
+  fs.writeFileSync(path.join(root, ".josh-room.json"), `${JSON.stringify({
+    format_version: 3,
+    dimension_id,
+    encryption_domain_id,
+    project_id,
+    display_name,
+    snapshot_id,
+    workspace_path_sha256: sha256Hex(path.resolve(root)),
+    workspace_signature,
+    signature_algorithm: "josh-room-stat-v1",
+    capture_policy_sha256,
+  })}\n`);
+}
+
 function createSpawnHarness(respond) {
   const calls = [];
   function spawn(command, args, options) {
@@ -1006,8 +1029,11 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
         }),
       };
     }
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      return { stdout: JSON.stringify(nativePreview()) };
+    }
     if (args[0] === "snapshot" && args[1] === "create") {
-      return { stdout: JSON.stringify({ ok: true, project_id: args[2], ciphertext_size: 1048576 }) };
+      return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: args[2], snapshot_id: "jat-1", data_added_bytes: 0, scanned_bytes: 0 }) };
     }
     return { stdout: JSON.stringify({ ok: true }) };
   });
@@ -1022,6 +1048,7 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
     { dimension: { id: "backup", display_name: "Backup", provider: "minio" } },
     { label: "Workspace only", allImages: false },
   );
+  vscode.infoResponses.push("Save");
 
   await extension.__test__.saveRoom();
 
@@ -1041,11 +1068,14 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
     if (args[0] === "dimensions" && saved && refreshFailure) return { code: 1, stdout: JSON.stringify({ ok: false, error: "synthetic storage unavailable" }) };
     if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{ ...dimension, rooms: saved ? [{ id: "test-room", display_name: "Test Room", snapshots: [{ snapshot_id: "new-jat" }] }] : [] }] }) };
     if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, ...dimension, state: "ready" }) };
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      return { stdout: JSON.stringify(nativePreview()) };
+    }
     if (args[0] === "snapshot" && args[1] === "create") {
       assert.equal(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL, undefined);
       assert.equal(args[args.indexOf("--dimension") + 1], "backup");
       saved = true;
-      return { stdout: JSON.stringify({ ok: true, project_id: "test-room", ciphertext_size: 1024 }) };
+      return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "test-room", snapshot_id: "new-jat", data_added_bytes: 5, scanned_bytes: 10 }) };
     }
     throw new Error(`Unexpected controller operation: ${args[0]} ${args[1]}`);
   });
@@ -1059,8 +1089,9 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
   vscode.inputBoxResponses.push("Test Room");
   if (!forceCreate) vscode.quickPickResponses.push({ create: true });
   vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+  vscode.infoResponses.push("Save");
   assert.equal(await extension.__test__.saveRoom({ forceCreate }), "saved");
-  assert.equal(spawnHarness.calls.filter(({ args }) => args[0] === "snapshot").length, 1);
+  assert.equal(spawnHarness.calls.filter(({ args }) => args[0] === "snapshot" && args[1] === "create").length, 1);
   if (refreshFailure) {
     assert.equal(provider.state, "error");
     assert.ok(warningCalls.some(([message]) => /saved.*refresh/i.test(message)));
@@ -1096,8 +1127,11 @@ test("Save Room to a fresh MinIO Dimension authorizes encryption once and preser
     if (args[0] === "encryption" && args[1] === "initialize") {
       return { stdout: JSON.stringify({ ok: true, state: "ready", encryption_domain_id: "domain-a", key_generation: 1, encryption_material: "AGE-SECRET-KEY-operational\n" }) };
     }
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      return { stdout: JSON.stringify(nativePreview()) };
+    }
     if (args[0] === "snapshot" && args[1] === "create") {
-      return { stdout: JSON.stringify({ ok: true, project_id: "new-room", ciphertext_size: 1024 }) };
+      return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "new-room", snapshot_id: "jat-1", data_added_bytes: 0, scanned_bytes: 0 }) };
     }
     return { stdout: JSON.stringify({ ok: true }) };
   });
@@ -1117,6 +1151,7 @@ test("Save Room to a fresh MinIO Dimension authorizes encryption once and preser
     { label: "Import Existing Recovery Key", action: "import" },
     { label: "Workspace only", allImages: false },
   );
+  vscode.infoResponses.push(undefined, "Save");
 
   assert.equal(await extension.__test__.saveRoom(), "saved");
   assert.deepEqual(openExternalCalls, []);
@@ -1185,7 +1220,64 @@ test("startup refuses to mark a workspace Saved when authoritative status is not
   assert.doesNotMatch(statusItem.text, /Saved/);
 });
 
-test("dirty tracking uses the capture policy and recompiles an explicitly watched ignore file", async () => {
+test("v3 stat status starts unknown and uses one scan after extension restart", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-stat-status-test-"));
+  writeStatMarker(root);
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => args[0] === "status"
+    ? { stdout: JSON.stringify({
+      ok: true,
+      state: "clean",
+      path_matches: true,
+      signature_matches: true,
+      policy_matches: true,
+      workspace_signature: "b".repeat(64),
+      signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256,
+    }) }
+    : { stdout: JSON.stringify({ ok: true }) });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+
+  await extension.__test__.startDirtyTracking({ subscriptions: [] });
+
+  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "status").length, 1);
+  assert.match(statusItem.text, /unknown|checking/i);
+  assert.doesNotMatch(statusItem.text, /Saved/);
+  const state = extension.__test__.getRoomStatusForTests();
+  assert.equal(state.kind, "unknown");
+  assert.equal(Object.isFrozen(state), true);
+});
+
+test("a v3 stat baseline reset cannot promote unknown to clean without a verified Save receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-stat-reset-test-"));
+  writeStatMarker(root);
+  const { vscode, statusItem } = createVscodeMock(root);
+  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "status") return { stdout: JSON.stringify({
+      ok: true,
+      state: "clean",
+      path_matches: true,
+      workspace_path_sha256: sha256Hex(path.resolve(root)),
+      workspace_signature: "b".repeat(64),
+      signature_algorithm: "josh-room-stat-v1",
+      signature_matches: true,
+      capture_policy_sha256: policySha,
+      policy_matches: true,
+    }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  await extension.__test__.startDirtyTracking({ subscriptions: [] });
+  await extension.__test__.resetNativeBaseline({});
+
+  assert.equal(extension.__test__.getRoomStatusForTests().kind, "unknown");
+  assert.doesNotMatch(statusItem.text, /Saved/);
+});
+
+test("dirty tracking marks watcher changes immediately without rescanning each event", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-capture-policy-watcher-"));
   writeMarker(root);
   fs.writeFileSync(path.join(root, ".josh-roomignore"), "generated/cache\n.josh-roomignore\n");
@@ -1208,6 +1300,7 @@ test("dirty tracking uses the capture policy and recompiles an explicitly watche
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
   await extension.__test__.startDirtyTracking({ subscriptions: [] });
+  const cleanState = extension.__test__.getRoomStatusForTests();
   const statusCalls = () => spawnHarness.calls.filter((call) => call.args[0] === "status").length;
   const startupStatusCalls = statusCalls();
 
@@ -1216,11 +1309,13 @@ test("dirty tracking uses the capture policy and recompiles an explicitly watche
   await new Promise(setImmediate);
   assert.equal(statusCalls(), startupStatusCalls);
 
-  liveFingerprint = "b".repeat(64);
-  watcherCallbacks[0].didChange({ fsPath: path.join(root, "nested", "generated", "cache", "build.json") });
+  watcherCallbacks[0].didChange({ fsPath: path.join(root, "src", "main.py") });
   await new Promise(setImmediate);
-  assert.equal(statusCalls(), startupStatusCalls + 1);
+  assert.equal(statusCalls(), startupStatusCalls);
   assert.match(statusItem.text, /Save/);
+  assert.equal(cleanState.kind, "clean");
+  assert.equal(Object.isFrozen(cleanState), true);
+  assert.equal(extension.__test__.getRoomStatusForTests().kind, "dirty");
 
   liveFingerprint = "c".repeat(64);
   fs.writeFileSync(path.join(root, ".josh-roomignore"), "generated/cache\n.josh-roomignore\n# policy changed\n");
@@ -1228,7 +1323,243 @@ test("dirty tracking uses the capture policy and recompiles an explicitly watche
   assert.ok(policyWatcher);
   policyWatcher.didChange({ fsPath: path.join(root, ".josh-roomignore") });
   await new Promise(setImmediate);
-  assert.equal(statusCalls(), startupStatusCalls + 2);
+  assert.equal(statusCalls(), startupStatusCalls);
+});
+
+function createNativeSaveFixture(root, { preview, saveResult, onSave } = {}) {
+  const dimension = {
+    id: "backup",
+    display_name: "Backup",
+    provider: "minio",
+    encryption_domain_id: "domain-a",
+    key_generation: 1,
+    encryption_state: "ready",
+  };
+  const project = {
+    id: "demo-room",
+    display_name: "Demo Room",
+    provider: "minio",
+    dimension: { ...dimension, rooms: undefined },
+    latest: "jat-1",
+    snapshots: [{ snapshot_id: "jat-1" }],
+  };
+  dimension.rooms = [project];
+  const { vscode, statusItem, infoCalls, warningCalls, watcherCallbacks } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args[1] === "list") {
+      return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
+    }
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      return { stdout: JSON.stringify(preview) };
+    }
+    if (args[0] === "snapshot" && args[1] === "create") {
+      onSave?.(args, { root, project, dimension, vscode });
+      return { stdout: JSON.stringify(saveResult) };
+    }
+    if (args[0] === "status") {
+      return { stdout: JSON.stringify({ ok: false, state: "unknown" }) };
+    }
+    if (args[0] === "encryption" && args[1] === "status") {
+      return { stdout: JSON.stringify({ ok: true, state: "ready" }) };
+    }
+    throw new Error(`unexpected native save operation: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({
+    subscriptions: [],
+    secrets: { get: async (key) => key.startsWith("josh-room.encryption.v1:")
+      ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic" }) : undefined },
+  });
+  writeStatMarker(root, { project_id: project.id, display_name: project.display_name });
+  vscode.openDialogResponses.push([{ fsPath: root }]);
+  vscode.quickPickResponses.push({ label: "Demo Room", project });
+  vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+  return { vscode, extension, project, dimension, statusItem, infoCalls, warningCalls, watcherCallbacks, spawnHarness };
+}
+
+const nativePreview = (overrides = {}) => ({
+  ok: true,
+  previous_entry_count: 0,
+  current_entry_count: 3,
+  scanned_bytes: 12345,
+  restic_data_added_bytes: null,
+  deleted_paths: [],
+  deletion_confirmation_token: null,
+  workspace_signature: "b".repeat(64),
+  signature_algorithm: "josh-room-stat-v1",
+  capture_policy_sha256: "d".repeat(64),
+  rcc_capture_pending: true,
+  ...overrides,
+});
+
+test("native Save previews the Room Store and reports logical, scanned, and Restic bytes separately", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-preview-"));
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview(),
+    saveResult: {
+      ok: true,
+      status: "saved",
+      project_id: "demo-room",
+      snapshot_id: "jat-2",
+      current_entry_count: 3,
+      scanned_bytes: 12345,
+      data_added_bytes: 4096,
+      workspace_signature: "c".repeat(64),
+      signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256,
+    },
+  });
+  fixture.vscode.infoResponses.push("Save", undefined);
+
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+
+  const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot");
+  assert.deepEqual(snapshotCalls.map((call) => call.args[1]), ["preview", "create"]);
+  assert.ok(fixture.infoCalls.some(([message]) => /Initial full capture/.test(message)));
+  assert.ok(fixture.infoCalls.some(([message]) => /Logical entries: 3/.test(message)));
+  assert.ok(fixture.infoCalls.some(([message]) => /Workspace scan: 12\.1 KB/.test(message)));
+  assert.ok(fixture.infoCalls.some(([message]) => /Restic data added: 4\.0 KB/.test(message)));
+  assert.ok(fixture.infoCalls.some(([message]) => /RCC environment capture runs during Save/.test(message)));
+  assert.ok(fixture.infoCalls.every(([message]) => !/ciphertext|Encrypted snapshot/.test(message)));
+});
+
+test("native Save fails closed on a malformed Preview receipt before creating a snapshot", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-invalid-preview-"));
+  const fixture = createNativeSaveFixture(root, {
+    preview: { ok: true, deleted_paths: [] },
+    saveResult: { ok: true, status: "saved" },
+  });
+
+  await assert.rejects(fixture.extension.__test__.saveRoom(), /invalid receipt/i);
+
+  assert.equal(fixture.spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"), false);
+});
+
+test("native Save trusts the controller's exact already-saved receipt after preview", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-noop-"));
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview({ previous_entry_count: 3, restic_data_added_bytes: 0, rcc_capture_pending: false }),
+    saveResult: {
+      ok: true,
+      status: "already-saved",
+      project_id: "demo-room",
+      snapshot_id: "jat-1",
+      scanned_bytes: 12345,
+      data_added_bytes: 0,
+    },
+  });
+  fixture.vscode.infoResponses.push("Save", undefined);
+  await fixture.extension.__test__.startDirtyTracking({ subscriptions: [] });
+  fixture.watcherCallbacks[0].didChange({ fsPath: path.join(root, "src", "changed-before-save.py") });
+
+  assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
+
+  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "create").length, 1);
+  assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
+});
+
+test("native Save confirms suspicious deletions with the exact preview token", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-delete-"));
+  const preview = nativePreview({
+    previous_entry_count: 40,
+    deleted_paths: Array.from({ length: 25 }, (_, index) => `deleted-${index}.txt`),
+    deletion_confirmation_token: "synthetic-deletion-plan",
+  });
+  const fixture = createNativeSaveFixture(root, {
+    preview,
+    saveResult: { ok: true, status: "saved", snapshot_id: "jat-2", data_added_bytes: 10, scanned_bytes: 20 },
+  });
+  fixture.vscode.warningResponses.push("Confirm Save");
+
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+
+  const create = fixture.spawnHarness.calls.find((call) => call.args[0] === "snapshot" && call.args[1] === "create");
+  assert.equal(create.args[create.args.indexOf("--confirm-deletion") + 1], "synthetic-deletion-plan");
+  assert.equal(fixture.warningCalls[0][1].modal, true);
+  assert.match(fixture.warningCalls[0][0], /25 deleted entries/);
+});
+
+test("a trusted same-session no-event Save skips Preview and reports the exact no-op receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-fast-noop-"));
+  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview({ previous_entry_count: 3, restic_data_added_bytes: 1024, rcc_capture_pending: false }),
+    saveResult: {
+      ok: true,
+      status: "saved",
+      project_id: "demo-room",
+      snapshot_id: "jat-2",
+      scanned_bytes: 12345,
+      data_added_bytes: 1024,
+      dimension_id: "backup",
+      encryption_domain_id: "domain-a",
+      workspace_signature: "c".repeat(64),
+      signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha,
+    },
+    onSave: (_args, { root: saveRoot, project }) => {
+      project.latest = "jat-2";
+      project.snapshots = [{ snapshot_id: "jat-2" }];
+      writeStatMarker(saveRoot, {
+        snapshot_id: "jat-2",
+        workspace_signature: "c".repeat(64),
+        capture_policy_sha256: policySha,
+      });
+    },
+  });
+  fixture.vscode.infoResponses.push("Save", undefined);
+
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
+  fixture.vscode.quickPickResponses.push(
+    { label: "Demo Room", project: fixture.project },
+    { label: "Workspace only", allImages: false },
+  );
+
+  assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
+
+  assert.deepEqual(fixture.spawnHarness.calls
+    .filter((call) => call.args[0] === "snapshot")
+    .map((call) => call.args[1]), ["preview", "create"]);
+  assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
+  assert.equal(fixture.statusItem.text.includes("Saved"), true);
+});
+
+test("workspace events during native Save keep the new Room marked dirty", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-race-"));
+  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
+    saveResult: {
+      ok: true,
+      status: "saved",
+      project_id: "demo-room",
+      snapshot_id: "jat-2",
+      scanned_bytes: 12345,
+      data_added_bytes: 1024,
+      dimension_id: "backup",
+      encryption_domain_id: "domain-a",
+      workspace_signature: "c".repeat(64),
+      signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha,
+    },
+    onSave: (_args, { root: saveRoot, vscode }) => {
+      fixture.watcherCallbacks[0]?.didChange({ fsPath: path.join(saveRoot, "src", "during-save.py") });
+      writeStatMarker(saveRoot, {
+        snapshot_id: "jat-2",
+        workspace_signature: "c".repeat(64),
+        capture_policy_sha256: policySha,
+      });
+    },
+  });
+  fixture.vscode.infoResponses.push("Save", undefined);
+  await fixture.extension.__test__.startDirtyTracking({ subscriptions: [] });
+
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+
+  assert.match(fixture.statusItem.text, /Saved, changes remain/);
+  assert.match(fixture.statusItem.text, /Save/);
 });
 
 test("invalid or symlinked capture policy fails closed without starting workspace status", async () => {

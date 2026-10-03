@@ -44,7 +44,12 @@ NEW_TREE_ID = "f" * 64
 PASSWORD = base64.urlsafe_b64encode(b"r" * 32).decode().rstrip("=")
 
 
-def _descriptor(*, snapshot_id: str = SNAPSHOT_ID, parent: str | None = None, policy_sha: str = "d" * 64) -> LogicalJat:
+def _descriptor(
+    *,
+    snapshot_id: str = SNAPSHOT_ID,
+    parent: str | None = None,
+    policy_sha: str = "d" * 64,
+) -> LogicalJat:
     body = {
         "format_version": 1,
         "payload_kind": "room-store-v1",
@@ -65,7 +70,11 @@ def _descriptor(*, snapshot_id: str = SNAPSHOT_ID, parent: str | None = None, po
             "data_added": 5,
             "data_added_packed": 5,
         },
-        "components": {"rcc_environment": None, "homebrew_recovery": None, "hauler_content": None},
+        "components": {
+            "rcc_environment": None,
+            "homebrew_recovery": None,
+            "hauler_content": None,
+        },
         "source": {},
         "producer": {
             "josh_room_version": "0.1.26",
@@ -96,7 +105,8 @@ class _Store:
     def __init__(self, *, summary: BackupSummary | None = None, entries=None):
         self.summary = summary or BackupSummary(NEW_SNAPSHOT_ID, 1, 0, 0, 5, 5, 5, 0)
         self.entry_rows = list(
-            entries or [
+            entries
+            or [
                 SnapshotEntry(".", "dir", 0, 0o700, None),
                 SnapshotEntry("file.txt", "file", 5, 0o600, None),
             ]
@@ -119,14 +129,39 @@ class _Store:
         self.initialized = True
         return RepositoryInfo(REPOSITORY_ID, 2)
 
-    def backup(self, workspace, *, parent=None, excludes=None, on_progress=None, cancellation=None):
-        self.parents.append(parent)
-        return self.summary
+    def backup(
+        self,
+        workspace,
+        *,
+        parent=None,
+        excludes=None,
+        on_progress=None,
+        cancellation=None,
+    ):
+        self.parents.append(None if self.summary.force_scan else parent)
+        return BackupSummary(
+            self.summary.snapshot_id,
+            self.summary.files_new,
+            self.summary.files_changed,
+            self.summary.files_unmodified,
+            self.summary.data_added,
+            self.summary.data_added_packed,
+            self.summary.total_bytes_processed,
+            self.summary.errors,
+            self.summary.force_scan,
+            None if self.summary.force_scan else parent,
+        )
 
     def snapshot(self, snapshot_id):
         tree_id = NEW_TREE_ID if snapshot_id == NEW_SNAPSHOT_ID else TREE_ID
-        parent_id = self.parents[-1] if self.parents and snapshot_id != self.parents[-1] else None
-        return SnapshotInfo(snapshot_id, tree_id, parent_id, "2026-10-02T12:00:00Z", ("/workspace",))
+        parent_id = (
+            self.parents[-1]
+            if self.parents and snapshot_id != self.parents[-1]
+            else None
+        )
+        return SnapshotInfo(
+            snapshot_id, tree_id, parent_id, "2026-10-02T12:00:00Z", ("/workspace",)
+        )
 
     def entries(self, snapshot_id):
         yield from self.entry_rows
@@ -144,6 +179,7 @@ class _Catalog:
     def __init__(self, latest=None):
         self.latest = latest
         self.etag = "etag-1"
+        self.workspace_signature = None
         self.published = []
         self.marker_rows = []
         self.order = []
@@ -151,12 +187,15 @@ class _Catalog:
     def read_latest(self):
         return self.latest, self.etag
 
-    def publish(self, descriptor, *, expected_etag, workspace_signature, signature_algorithm):
+    def publish(
+        self, descriptor, *, expected_etag, workspace_signature, signature_algorithm
+    ):
         assert expected_etag == self.etag
         assert signature_algorithm == "josh-room-stat-v1"
         assert len(workspace_signature) == 64
         self.order.append("publish")
         self.published.append(descriptor)
+        self.workspace_signature = workspace_signature
         self.latest = descriptor
         self.etag = "etag-2"
 
@@ -171,7 +210,13 @@ class _Catalog:
     ):
         self.order.append("marker")
         self.marker_rows.append(
-            (descriptor, clean, workspace_signature, signature_algorithm, capture_policy_sha256)
+            (
+                descriptor,
+                clean,
+                workspace_signature,
+                signature_algorithm,
+                capture_policy_sha256,
+            )
         )
 
 
@@ -183,6 +228,10 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
     protect_private_directory(private_dir)
     protect_private_directory(cache_dir)
     keyset = _Keyset(_RoomStoreSecret(repository_id=binding))
+    if catalog.latest is not None and catalog.workspace_signature is None:
+        catalog.workspace_signature = room_store_operations._scan_workspace(
+            workspace, None
+        ).signature
 
     def bind(_dimension, _backend, repository_id, *, expected_generation):
         assert expected_generation == keyset.room_store.generation
@@ -200,6 +249,15 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
         ensure_keyset=lambda *_args: keyset,
         bind_repository=bind,
         read_latest=catalog.read_latest,
+        read_catalog_signature=lambda: (
+            (
+                catalog.workspace_signature,
+                "josh-room-stat-v1",
+                catalog.latest.to_dict()["capture_policy_sha256"],
+            )
+            if catalog.latest is not None and catalog.workspace_signature is not None
+            else None
+        ),
         read_snapshot_entries=lambda _snapshot_id: store.entry_rows,
         publish_descriptor=catalog.publish,
         write_marker=catalog.write_marker,
@@ -207,7 +265,11 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
             "dimension_id": "dimension-test",
             "encryption_domain_id": "domain-test",
             "room_id": "room-test",
-            "components": {"rcc_environment": None, "homebrew_recovery": None, "hauler_content": None},
+            "components": {
+                "rcc_environment": None,
+                "homebrew_recovery": None,
+                "hauler_content": None,
+            },
             "source": {},
             "producer": {
                 "josh_room_version": "0.1.26",
@@ -221,7 +283,9 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
     )
 
 
-def test_save_publishes_complete_descriptor_before_marker_and_uses_explicit_parent(tmp_path):
+def test_save_publishes_complete_descriptor_before_marker_and_uses_explicit_parent(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "file.txt").write_text("hello", encoding="utf-8")
@@ -238,7 +302,10 @@ def test_save_publishes_complete_descriptor_before_marker_and_uses_explicit_pare
     published = catalog.published[0]
     assert isinstance(published, LogicalJat)
     assert published.to_dict()["workspace"]["snapshot_id"] == NEW_SNAPSHOT_ID
-    assert published.to_dict()["parent_logical_jat_id"] == parent.to_dict()["logical_jat_id"]
+    assert (
+        published.to_dict()["parent_logical_jat_id"]
+        == parent.to_dict()["logical_jat_id"]
+    )
     assert catalog.order == ["publish", "marker"]
 
 
@@ -257,6 +324,78 @@ def test_unchanged_save_publishes_no_descriptor_or_marker(tmp_path):
     assert result.data_added_bytes == 0
     assert catalog.published == []
     assert catalog.marker_rows == []
+
+
+def test_noop_requires_matching_catalog_signature(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello", encoding="utf-8")
+    latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
+    store = _Store(summary=BackupSummary(None, 0, 0, 1, 0, 0, 5, 0))
+    catalog = _Catalog(latest)
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+    catalog.workspace_signature = "0" * 64
+
+    result = operations.save()
+
+    assert result.status == "saved"
+    assert len(catalog.published) == 1
+
+
+def test_forced_scan_noop_fails_closed(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello", encoding="utf-8")
+    latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
+    store = _Store(summary=BackupSummary(None, 0, 0, 1, 0, 0, 5, 0, force_scan=True))
+    catalog = _Catalog(latest)
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+
+    with pytest.raises(RoomStoreOperationsError, match="forced content scan"):
+        operations.save()
+
+
+def test_forced_scan_records_the_restic_parent_that_was_actually_used(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello", encoding="utf-8")
+    latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
+    store = _Store(
+        summary=BackupSummary(NEW_SNAPSHOT_ID, 1, 0, 0, 5, 5, 5, 0, force_scan=True)
+    )
+    catalog = _Catalog(latest)
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+
+    result = operations.save()
+
+    assert result.status == "saved"
+    body = catalog.published[0].to_dict()
+    assert "parent_logical_jat_id" not in body
+    assert "parent_snapshot_id" not in body["workspace"]
+
+
+def test_windows_verified_native_signature_skips_restic_backup_before_any_scan(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello", encoding="utf-8")
+    latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
+    store = _Store()
+    store.backup = lambda *_args, **_kwargs: pytest.fail(
+        "verified Windows signature must avoid the Restic scan"
+    )
+    catalog = _Catalog(latest)
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+    monkeypatch.setattr(room_store_operations, "_WINDOWS_HOST", True)
+    monkeypatch.setattr(
+        room_store_operations,
+        "_windows_change_time_ns",
+        lambda _path, metadata: metadata.st_ctime_ns,
+    )
+
+    result = operations.save()
+
+    assert result.status == "already-saved"
+    assert catalog.published == []
 
 
 def test_save_rejects_external_symlink_before_restic_or_publication(tmp_path):
@@ -284,11 +423,84 @@ def test_restore_validates_then_promotes_a_new_staged_directory(tmp_path):
     operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
     destination = tmp_path / "restored"
 
-    result = operations.restore(_descriptor(), destination)
+    result = operations.restore(
+        _descriptor(),
+        destination,
+        write_restore_marker=lambda stage, final, descriptor: assert_marker_path(
+            stage, final, descriptor
+        ),
+    )
 
     assert result.destination == destination
     assert (destination / "file.txt").read_text(encoding="utf-8") == "hello"
     assert not list(tmp_path.glob(".restored.josh-room-*"))
+
+
+def test_restore_reuses_open_read_only_store_and_runs_callbacks_before_promotion(
+    tmp_path,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = _Store()
+    catalog = _Catalog(_descriptor())
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+    destination = tmp_path / "restore-target"
+    events = []
+
+    def prepare(stage, descriptor, opened):
+        assert opened is store
+        events.append(("prepare", stage, descriptor))
+
+    def marker(stage, target, descriptor):
+        assert not target.exists()
+        (stage / ".josh-room.json").write_text("staged", encoding="utf-8")
+        events.append(("marker", stage, target, descriptor))
+
+    operations.restore(
+        _descriptor(),
+        destination,
+        prepare_restored_workspace=prepare,
+        write_restore_marker=marker,
+        restic_store=store,
+        repository_info=RepositoryInfo(REPOSITORY_ID, 2),
+    )
+
+    assert [event[0] for event in events] == ["prepare", "marker"]
+    assert (
+        destination.joinpath(".josh-room.json").read_text(encoding="utf-8") == "staged"
+    )
+
+
+def test_windows_workspace_signature_uses_native_change_time(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    file_path = workspace / "file.txt"
+    file_path.write_text("hello", encoding="utf-8")
+    observed = []
+
+    change_times = iter((123456789, 987654321))
+
+    def change_time(path, expected_stat):
+        observed.append((path, expected_stat))
+        return next(change_times)
+
+    monkeypatch.setattr(room_store_operations, "_WINDOWS_HOST", True)
+    monkeypatch.setattr(room_store_operations, "_windows_change_time_ns", change_time)
+
+    first = room_store_operations._scan_workspace(workspace, None)
+    second = room_store_operations._scan_workspace(workspace, None)
+
+    assert observed and observed[0][0] == file_path
+    assert observed[0][1].st_ino > 0
+    assert first.signature != second.signature
+
+
+def assert_marker_path(stage, final, descriptor):
+    assert not final.exists()
+    assert stage.parent.parent == final.parent
+    (stage / ".josh-room.json").write_text(
+        descriptor.to_dict()["logical_jat_id"], encoding="utf-8"
+    )
 
 
 def test_incomplete_restic_backup_never_publishes_or_records_an_orphan(tmp_path):
@@ -297,7 +509,11 @@ def test_incomplete_restic_backup_never_publishes_or_records_an_orphan(tmp_path)
     (workspace / "file.txt").write_text("hello", encoding="utf-8")
     store = _Store()
     store.backup = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        ResticStoreError(ResticStoreErrorCode.INCOMPLETE_BACKUP, exit_code=3, orphan_snapshot_id=SNAPSHOT_ID)
+        ResticStoreError(
+            ResticStoreErrorCode.INCOMPLETE_BACKUP,
+            exit_code=3,
+            orphan_snapshot_id=SNAPSHOT_ID,
+        )
     )
     catalog = _Catalog()
     operations = _operations(tmp_path, workspace, store, catalog)
@@ -351,18 +567,25 @@ def test_marker_failure_after_catalog_commit_reports_committed_stale_marker(tmp_
     assert failure.value.marker_state == "stale"
 
 
-def test_preview_requires_confirmation_for_mass_deletion_and_reports_scanned_bytes(tmp_path):
+def test_preview_requires_confirmation_for_mass_deletion_and_reports_scanned_bytes(
+    tmp_path,
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "keep.txt").write_text("12345", encoding="utf-8")
-    previous_entries = [SnapshotEntry(f"removed-{index}.txt", "file", 2, 0o600, None) for index in range(25)]
+    previous_entries = [
+        SnapshotEntry(f"removed-{index}.txt", "file", 2, 0o600, None)
+        for index in range(25)
+    ]
     previous_entries.append(SnapshotEntry("keep.txt", "file", 5, 0o600, None))
     parent = _descriptor()
     store = _Store(entries=previous_entries)
     catalog = _Catalog(parent)
     operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
     ensure_keyset = operations.ensure_keyset
-    operations.ensure_keyset = lambda *_args: pytest.fail("preview must not enroll a Room Store keyset")
+    operations.ensure_keyset = lambda *_args: pytest.fail(
+        "preview must not enroll a Room Store keyset"
+    )
 
     preview = operations.preview()
 
@@ -375,7 +598,9 @@ def test_preview_requires_confirmation_for_mass_deletion_and_reports_scanned_byt
 
     with pytest.raises(RoomStoreOperationsError, match="confirmation token") as failure:
         operations.save()
-    assert failure.value.deletion_confirmation_token == preview.deletion_confirmation_token
+    assert (
+        failure.value.deletion_confirmation_token == preview.deletion_confirmation_token
+    )
     assert store.parents == []
 
 
@@ -404,7 +629,9 @@ def test_edit_during_publication_is_reported_as_saved_but_dirty(tmp_path):
     assert catalog.marker_rows[0][1] is False
 
 
-def test_sigterm_during_catalog_commit_finalizes_marker_before_cancellation(tmp_path, monkeypatch):
+def test_sigterm_during_catalog_commit_finalizes_marker_before_cancellation(
+    tmp_path, monkeypatch
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "file.txt").write_text("hello", encoding="utf-8")
@@ -417,7 +644,9 @@ def test_sigterm_during_catalog_commit_finalizes_marker_before_cancellation(tmp_
         yield
         raise CLICancelled()
 
-    monkeypatch.setattr(room_store_operations, "defer_sigterm_cancellation", cancel_after_commit)
+    monkeypatch.setattr(
+        room_store_operations, "defer_sigterm_cancellation", cancel_after_commit
+    )
 
     with pytest.raises(CLICancelled) as cancelled:
         operations.save()
@@ -525,7 +754,7 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
     protect_private_directory(cache_dir)
     repository = tmp_path / "repository"
     keyset = _Keyset(_RoomStoreSecret())
-    state = {"latest": None, "etag": "first"}
+    state = {"latest": None, "etag": "first", "workspace_signature": None}
     markers = []
 
     def bind(_dimension, _backend, repository_id, *, expected_generation):
@@ -544,6 +773,7 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
         assert signature_algorithm == "josh-room-stat-v1"
         assert len(workspace_signature) == 64
         state["latest"] = descriptor
+        state["workspace_signature"] = workspace_signature
         state["etag"] = f"etag-{len(markers) + 1}"
 
     operations = RoomStoreOperations(
@@ -556,6 +786,15 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
         ensure_keyset=lambda *_args: keyset,
         bind_repository=bind,
         read_latest=lambda: (state["latest"], state["etag"]),
+        read_catalog_signature=lambda: (
+            (
+                state["workspace_signature"],
+                "josh-room-stat-v1",
+                state["latest"].to_dict()["capture_policy_sha256"],
+            )
+            if state["latest"] is not None and state["workspace_signature"] is not None
+            else None
+        ),
         read_snapshot_entries=lambda _snapshot_id: (),
         publish_descriptor=publish,
         write_marker=lambda *args, **kwargs: markers.append((args, kwargs)),
@@ -563,7 +802,11 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
             "dimension_id": "dimension-test",
             "encryption_domain_id": "domain-test",
             "room_id": "room-test",
-            "components": {"rcc_environment": None, "homebrew_recovery": None, "hauler_content": None},
+            "components": {
+                "rcc_environment": None,
+                "homebrew_recovery": None,
+                "hauler_content": None,
+            },
             "source": {},
             "producer": {
                 "josh_room_version": "0.1.26",
@@ -581,7 +824,13 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
     source.write_text("second version with another block\n", encoding="utf-8")
     second = operations.save()
     restored = tmp_path / "restored-first"
-    operations.restore(first.descriptor, restored)
+    operations.restore(
+        first.descriptor,
+        restored,
+        write_restore_marker=lambda stage, _target, _descriptor: (
+            stage / ".josh-room.json"
+        ).write_text("staged marker", encoding="utf-8"),
+    )
 
     assert first.status == "saved"
     assert first.descriptor is not None
@@ -590,6 +839,9 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
     assert unchanged.data_added_bytes == 0
     assert second.status == "saved"
     assert second.descriptor is not None
-    assert second.descriptor.to_dict()["workspace"]["parent_snapshot_id"] == first.snapshot_id
+    assert (
+        second.descriptor.to_dict()["workspace"]["parent_snapshot_id"]
+        == first.snapshot_id
+    )
     assert (restored / "file.txt").read_text(encoding="utf-8") == "first version\n"
     assert len(markers) == 2

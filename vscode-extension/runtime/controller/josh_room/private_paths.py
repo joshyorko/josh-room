@@ -14,8 +14,16 @@ from typing import Any
 class PrivatePathError(RuntimeError):
     """Path-free private-path failure with an optional stable errno."""
 
-    def __init__(self, message: str, *, error_number: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_number: int | None = None,
+        winerror: int | None = None,
+    ) -> None:
+        self.code = message.replace(" ", "_")
         self.errno = error_number
+        self.winerror = winerror
         super().__init__(message)
 
 
@@ -44,9 +52,18 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
+def _windows_api_error(code: int, message: str) -> OSError:
+    error = OSError(code or errno_module.EIO, message)
+    if code:
+        error.winerror = int(code)
+    return error
+
+
 def _raise_path_error(message: str, error: OSError | None = None) -> None:
     raise PrivatePathError(
-        message, error_number=error.errno if error else None
+        message,
+        error_number=error.errno if error else None,
+        winerror=getattr(error, "winerror", None) if error else None,
     ) from None
 
 
@@ -142,7 +159,7 @@ class _WindowsSecurityAPI:
         self.advapi.GetSecurityDescriptorControl.argtypes = [
             ctypes.c_void_p,
             ctypes.POINTER(ctypes.c_uint16),
-            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_uint32),
         ]
         self.advapi.GetSecurityDescriptorControl.restype = ctypes.c_int
         self.advapi.GetAclInformation.argtypes = [
@@ -168,9 +185,7 @@ class _WindowsSecurityAPI:
     def _checked(result: Any) -> Any:
         if not result:
             code = ctypes.get_last_error()
-            raise OSError(
-                code or errno_module.EACCES, "Windows security operation failed"
-            )
+            raise _windows_api_error(code, "Windows security operation failed")
         return result
 
     def _string_to_sid(self, sid_text: str) -> ctypes.c_void_p:
@@ -255,7 +270,7 @@ class _WindowsSecurityAPI:
                 None,
             )
             if result:
-                raise OSError(int(result), "Windows security operation failed")
+                raise _windows_api_error(int(result), "Windows security operation failed")
         finally:
             self.kernel.LocalFree(owner)
             self.kernel.LocalFree(descriptor)
@@ -275,10 +290,10 @@ class _WindowsSecurityAPI:
             ctypes.byref(descriptor),
         )
         if result:
-            raise OSError(int(result), "Windows security operation failed")
+            raise _windows_api_error(int(result), "Windows security operation failed")
         try:
             protected = ctypes.c_uint16()
-            revision = ctypes.c_uint8()
+            revision = ctypes.c_uint32()
             if not self.advapi.GetSecurityDescriptorControl(
                 descriptor, ctypes.byref(protected), ctypes.byref(revision)
             ):
@@ -314,7 +329,7 @@ class _WindowsSecurityAPI:
                     ]
 
                 header = ctypes.cast(ace_pointer, ctypes.POINTER(ACE_HEADER)).contents
-                if header.AceType != _ACCESS_ALLOWED_ACE_TYPE or header.AceSize < 8:
+                if header.AceType != _ACCESS_ALLOWED_ACE_TYPE or header.AceSize < 16:
                     aces.append(_Ace("", -1, int(header.AceFlags)))
                     continue
                 mask = ctypes.cast(

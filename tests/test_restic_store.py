@@ -4,6 +4,7 @@ import io
 import json
 import os
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -680,6 +681,27 @@ def test_backup_uses_parent_relative_dot_and_returns_noop_without_snapshot(tmp_p
     assert result.data_added_packed == 0
     assert progress_events[0].files_done == 1
     assert progress_events[0].total_files == 1
+    assert result.force_scan is False
+    assert result.effective_parent_id == "b" * 64
+
+
+def test_windows_backup_forces_content_reads_when_metadata_quickcheck_is_unsafe(
+    tmp_path, monkeypatch
+):
+    module = api()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store, factory = initialized_store(tmp_path, [FakeProcess(summary("d" * 64))])
+    monkeypatch.setattr(module.sys, "platform", "win32")
+
+    with store:
+        result = store.backup(workspace, parent="b" * 64)
+
+    command = factory.calls[-1].args[1:]
+    assert "--force" in command
+    assert "--parent" not in command
+    assert result.force_scan is True
+    assert result.effective_parent_id is None
 
 
 def test_backup_exit_three_is_incomplete_with_only_bounded_orphan_id(tmp_path):
@@ -1003,3 +1025,180 @@ def test_snapshot_metadata_cache_is_cleared_at_context_boundary(tmp_path):
     assert [call.args[1:] for call in factory.calls].count(
         ["snapshots", "--json", snapshot_id]
     ) == 2
+
+
+def restic_snapshot(snapshot_id, tree_id, *, parent=None):
+    return {
+        "id": snapshot_id,
+        "tree": tree_id,
+        "parent": parent,
+        "time": "2026-10-02T00:00:00Z",
+        "paths": ["/synthetic/room"],
+        "hostname": "synthetic-host",
+        "username": "synthetic-user",
+    }
+
+
+def test_snapshots_inventory_is_typed_bounded_and_rejects_duplicates(tmp_path):
+    module = api()
+    first_id, second_id = "a" * 64, "b" * 64
+    inventory = json.dumps(
+        [
+            restic_snapshot(first_id, "c" * 64),
+            restic_snapshot(second_id, "d" * 64, parent=first_id),
+        ]
+    ).encode()
+    store, factory = initialized_store(tmp_path, [FakeProcess(inventory)])
+    with store:
+        result = store.snapshots()
+
+    assert all(isinstance(item, module.SnapshotInventoryItem) for item in result)
+    assert all(not hasattr(item, "paths") for item in result)
+    assert tuple(item.snapshot_id for item in result) == (first_id, second_id)
+    assert result[1].parent_snapshot_id == first_id
+    assert "/synthetic/room" not in repr(result)
+    assert "synthetic-host" not in repr(result)
+    assert "synthetic-user" not in repr(result)
+    assert not hasattr(result[0], "hostname")
+    assert not hasattr(result[0], "username")
+    assert [call.args[1:] for call in factory.calls][-1] == ["snapshots", "--json"]
+
+    for bad_inventory in (
+        b"not-json",
+        json.dumps([restic_snapshot(first_id, "c" * 64), restic_snapshot(first_id, "d" * 64)]).encode(),
+        json.dumps([restic_snapshot("short-id", "c" * 64)]).encode(),
+    ):
+        parser = getattr(module, "parse_snapshot_inventory", None)
+        assert callable(parser), "snapshot inventory parser is missing"
+        with pytest.raises(module.ResticStoreError):
+            parser(bad_inventory)
+
+
+def test_snapshot_inventory_parser_rejects_oversized_lists():
+    module = api()
+    records = [restic_snapshot("a" * 64, "b" * 64), restic_snapshot("c" * 64, "d" * 64)]
+    parser = getattr(module, "parse_snapshot_inventory", None)
+    assert callable(parser), "snapshot inventory parser is missing"
+    with pytest.raises(module.ResticStoreError):
+        parser(json.dumps(records), max_snapshots=1)
+
+
+@pytest.mark.parametrize("fraction", ["1/2", "2/2", "100/1000"])
+def test_check_accepts_valid_positive_subset_fraction(tmp_path, fraction):
+    store, factory = initialized_store(tmp_path, [FakeProcess()])
+    with store:
+        result = store.check(read_data_subset=fraction)
+
+    assert result.read_data is False
+    assert result.read_data_subset == fraction
+    assert factory.calls[-1].args[1:] == ["check", "--read-data-subset", fraction]
+
+
+@pytest.mark.parametrize("fraction", ["0/1", "1/0", "2/1", "1.5%", "latest", "1/2/3", True])
+def test_check_rejects_invalid_subset_and_conflicting_full_read(tmp_path, fraction):
+    module = api()
+    store, _ = initialized_store(tmp_path, [])
+    with store, pytest.raises(module.ResticStoreError):
+        store.check(read_data_subset=fraction)
+    with store, pytest.raises(module.ResticStoreError):
+        store.check(read_data=True, read_data_subset="1/2")
+
+
+def test_forget_requires_plan_and_confirmation_and_prune_defaults_to_dry_run(tmp_path):
+    module = api()
+    snapshot_id = "a" * 64
+    inventory = json.dumps([restic_snapshot(snapshot_id, "b" * 64)]).encode()
+    store, factory = initialized_store(
+        tmp_path,
+        [
+            FakeProcess(inventory),  # plan inventory
+            FakeProcess(),  # forget dry-run
+            FakeProcess(inventory),  # current inventory revalidation
+            FakeProcess(),  # confirmed forget
+            FakeProcess(),  # prune dry-run
+        ],
+    )
+    with store:
+        plan = store.plan_forget([snapshot_id])
+        with pytest.raises(module.ResticStoreError) as failure:
+            store.forget([snapshot_id], plan=plan)
+        assert failure.value.code == module.ResticStoreErrorCode.CONFIRMATION_REQUIRED
+        forgotten = store.forget([snapshot_id], plan=plan, confirmed=True)
+        prune = store.prune()
+
+    commands = [call.args[1:] for call in factory.calls]
+    assert commands[-4] == ["forget", "--dry-run", snapshot_id]
+    assert commands[-2] == ["forget", snapshot_id]
+    assert commands[-1] == ["prune", "--dry-run"]
+    assert forgotten.snapshot_ids == (snapshot_id,)
+    assert prune.dry_run is True
+    assert not hasattr(store, "unlock")
+
+
+def test_forget_rejects_unbound_ambiguous_or_stale_plan_before_mutation(tmp_path):
+    module = api()
+    snapshot_id = "a" * 64
+    inventory = json.dumps([restic_snapshot(snapshot_id, "b" * 64)]).encode()
+    store, factory = initialized_store(tmp_path, [FakeProcess(inventory), FakeProcess()])
+    with store:
+        with pytest.raises(module.ResticStoreError):
+            store.plan_forget(["a" * 8])
+        plan = store.plan_forget([snapshot_id])
+        with pytest.raises(module.ResticStoreError):
+            store.forget(
+                [snapshot_id],
+                plan=replace(plan, repository_id="c" * 64),
+                confirmed=True,
+            )
+
+    assert [call.args[1:] for call in factory.calls][-1] == ["forget", "--dry-run", snapshot_id]
+
+
+def test_prune_requires_explicit_confirmation_for_destructive_call(tmp_path):
+    module = api()
+    store, factory = initialized_store(tmp_path, [FakeProcess()])
+    with store, pytest.raises(module.ResticStoreError) as failure:
+        store.prune(dry_run=False)
+    assert failure.value.code == module.ResticStoreErrorCode.CONFIRMATION_REQUIRED
+    assert [call.args[1:] for call in factory.calls] == [["version"], ["cat", "config"]]
+
+
+def test_maintenance_lock_error_is_sanitized_and_not_retried(tmp_path):
+    module = api()
+    private_path = "/private/workspace/lockfile"
+    store, factory = initialized_store(
+        tmp_path,
+        [FakeProcess(private_path.encode(), returncode=11)],
+    )
+    with store, pytest.raises(module.ResticStoreError) as failure:
+        store.snapshots()
+
+    assert failure.value.code == module.ResticStoreErrorCode.COMMAND_FAILED
+    assert failure.value.exit_code == 11
+    assert private_path not in str(failure.value)
+    assert len(factory.calls) == 3  # version, config, one inventory attempt
+
+
+def test_maintenance_commands_use_bound_repository_not_inherited_restic_authority(
+    tmp_path, monkeypatch
+):
+    snapshot_id = "a" * 64
+    inventory = json.dumps([restic_snapshot(snapshot_id, "b" * 64)]).encode()
+    store, factory = initialized_store(
+        tmp_path,
+        [FakeProcess(inventory), FakeProcess()],
+    )
+    monkeypatch.setenv("RESTIC_REPOSITORY", "s3:https://unrelated.example/bucket/repo")
+    monkeypatch.setenv("RESTIC_PASSWORD", "synthetic-unrelated-secret")
+    monkeypatch.setenv("AWS_PROFILE", "synthetic-profile")
+
+    with store:
+        store.plan_forget([snapshot_id])
+
+    inventory_call = factory.calls[-2]
+    dry_run_call = factory.calls[-1]
+    for call in (inventory_call, dry_run_call):
+        assert call.kwargs["env"]["RESTIC_REPOSITORY"] == str(tmp_path / "repository")
+        assert "RESTIC_PASSWORD" not in call.kwargs["env"]
+        assert "AWS_PROFILE" not in call.kwargs["env"]
+        assert "synthetic-unrelated-secret" not in " ".join(call.args)

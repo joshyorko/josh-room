@@ -7,10 +7,11 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -30,6 +31,8 @@ SUPPORTED_REPOSITORY_FORMAT = 2
 MAX_JSON_EVENT_BYTES = 1024 * 1024
 MAX_CAPTURE_BYTES = 4 * 1024 * 1024
 MAX_ENTRIES = 1_000_000
+MAX_SNAPSHOT_INVENTORY = 10_000
+MAX_FORGET_SNAPSHOTS = 256
 MAX_CA_BUNDLE_BYTES = 4 * 1024 * 1024
 MAX_PASSWORD_FILE_BYTES = 64 * 1024
 MAX_INTEGER = (1 << 63) - 1
@@ -37,6 +40,7 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _REPOSITORY_ID = re.compile(r"^[0-9a-f]{64}$")
 _SNAPSHOT_ID = re.compile(r"^[0-9a-f]{64}$")
 _ENTRY_TYPE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_SUBSET_FRACTION = re.compile(r"^([1-9][0-9]{0,8})/([1-9][0-9]{0,8})$")
 _BACKUP_MESSAGE_TYPES = frozenset({"status", "verbose_status", "error", "summary"})
 _BASE_ENVIRONMENT = frozenset(
     {
@@ -78,6 +82,7 @@ class ResticStoreErrorCode(StrEnum):
     CANCELLED = "cancelled"
     TIMED_OUT = "timed-out"
     PROGRESS_CALLBACK_FAILED = "progress-callback-failed"
+    CONFIRMATION_REQUIRED = "confirmation-required"
 
 
 _ERROR_MESSAGES = {
@@ -96,6 +101,7 @@ _ERROR_MESSAGES = {
     ResticStoreErrorCode.CANCELLED: "restic operation was cancelled",
     ResticStoreErrorCode.TIMED_OUT: "restic operation timed out",
     ResticStoreErrorCode.PROGRESS_CALLBACK_FAILED: "restic progress handler failed",
+    ResticStoreErrorCode.CONFIRMATION_REQUIRED: "explicit maintenance confirmation is required",
 }
 
 
@@ -141,6 +147,8 @@ class BackupSummary:
     data_added_packed: int
     total_bytes_processed: int
     errors: int
+    force_scan: bool = False
+    effective_parent_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +157,15 @@ class SnapshotInfo:
     tree_id: str
     parent_snapshot_id: str | None
     time: str
-    paths: tuple[str, ...]
+    paths: tuple[str, ...] = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotInventoryItem:
+    snapshot_id: str
+    tree_id: str
+    time: str
+    parent_snapshot_id: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +180,21 @@ class SnapshotEntry:
 @dataclass(frozen=True, slots=True)
 class CheckResult:
     read_data: bool
+    read_data_subset: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ForgetPlan:
+    repository_id: str
+    snapshot_ids: tuple[str, ...]
+    tree_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MaintenanceResult:
+    operation: str
+    dry_run: bool
+    snapshot_ids: tuple[str, ...] = ()
 
 
 def _valid_snapshot_id(value: object) -> bool:
@@ -323,12 +354,22 @@ def _validate_snapshot_id(snapshot_id: str) -> str:
     return snapshot_id
 
 
-def parse_snapshot(raw: bytes | str, expected_snapshot_id: str) -> SnapshotInfo:
-    expected = _validate_snapshot_id(expected_snapshot_id)
-    value = _load_json(raw)
-    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
-        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
-    snapshot = value[0]
+def _explicit_snapshot_ids(snapshot_ids: Iterable[str]) -> tuple[str, ...]:
+    if isinstance(snapshot_ids, (str, bytes)) or not isinstance(snapshot_ids, Iterable):
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+    values: list[str] = []
+    for snapshot_id in snapshot_ids:
+        if len(values) >= MAX_FORGET_SNAPSHOTS:
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        values.append(_validate_snapshot_id(snapshot_id))
+    if not values or len(set(values)) != len(values):
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+    return tuple(sorted(values))
+
+
+def _parse_snapshot_record(
+    snapshot: dict[str, Any], expected_snapshot_id: str | None = None
+) -> SnapshotInfo:
     snapshot_id = _snapshot_identifier(snapshot.get("id"), required=True)
     tree_id = snapshot.get("tree")
     parent = snapshot.get("parent")
@@ -339,7 +380,7 @@ def parse_snapshot(raw: bytes | str, expected_snapshot_id: str) -> SnapshotInfo:
     except (AttributeError, TypeError, ValueError):
         raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT) from None
     if (
-        snapshot_id != expected
+        (expected_snapshot_id is not None and snapshot_id != expected_snapshot_id)
         or not isinstance(tree_id, str)
         or _REPOSITORY_ID.fullmatch(tree_id) is None
         or (parent is not None and not _valid_snapshot_id(parent))
@@ -363,6 +404,52 @@ def parse_snapshot(raw: bytes | str, expected_snapshot_id: str) -> SnapshotInfo:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT) from None
         source_paths.append(path)
     return SnapshotInfo(snapshot_id, tree_id, parent, time_value, tuple(source_paths))
+
+
+def parse_snapshot(raw: bytes | str, expected_snapshot_id: str) -> SnapshotInfo:
+    expected = _validate_snapshot_id(expected_snapshot_id)
+    value = _load_json(raw)
+    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+    return _parse_snapshot_record(value[0], expected)
+
+
+def parse_snapshot_inventory(
+    raw: bytes | str,
+    *,
+    max_snapshots: int = MAX_SNAPSHOT_INVENTORY,
+) -> tuple[SnapshotInventoryItem, ...]:
+    if type(max_snapshots) is not int or not 1 <= max_snapshots <= MAX_SNAPSHOT_INVENTORY:
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+    if not isinstance(raw, (bytes, str)):
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+    try:
+        encoded_length = len(raw) if isinstance(raw, bytes) else len(raw.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT) from None
+    if encoded_length > MAX_CAPTURE_BYTES:
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+    value = _load_json(raw)
+    if not isinstance(value, list) or len(value) > max_snapshots:
+        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+    snapshots: list[SnapshotInventoryItem] = []
+    seen_ids: set[str] = set()
+    for record in value:
+        if not isinstance(record, dict):
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+        private_snapshot = _parse_snapshot_record(record)
+        if private_snapshot.snapshot_id in seen_ids:
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+        seen_ids.add(private_snapshot.snapshot_id)
+        snapshots.append(
+            SnapshotInventoryItem(
+                private_snapshot.snapshot_id,
+                private_snapshot.tree_id,
+                private_snapshot.time,
+                private_snapshot.parent_snapshot_id,
+            )
+        )
+    return tuple(snapshots)
 
 
 def _normalize_virtual_path(path: object, max_event_bytes: int) -> str:
@@ -851,8 +938,11 @@ class ResticStore:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
         if cancellation is not None and cancellation.cancelled:
             raise ResticStoreError(ResticStoreErrorCode.CANCELLED)
+        force_scan = sys.platform.startswith("win")
         args = ["backup", "--json", "--skip-if-unchanged"]
-        if parent is not None:
+        if force_scan:
+            args.append("--force")
+        elif parent is not None:
             args.extend(["--parent", parent])
         if excludes is not None:
             args.extend(["--exclude-file", str(Path(excludes).resolve())])
@@ -881,7 +971,11 @@ class ResticStore:
                     orphan_snapshot_id=summary.snapshot_id,
                 )
             self._raise_exit(code, orphan_snapshot_id=summary.snapshot_id)
-            return summary
+            return replace(
+                summary,
+                force_scan=force_scan,
+                effective_parent_id=None if force_scan else parent,
+            )
 
     @staticmethod
     def _raise_exit(code: int, *, orphan_snapshot_id: str | None = None) -> None:
@@ -922,6 +1016,12 @@ class ResticStore:
         self._snapshot_info[snapshot_id] = snapshot
         return snapshot
 
+    def snapshots(self) -> tuple[SnapshotInventoryItem, ...]:
+        """Return a bounded, read-only inventory with private fields omitted."""
+        self._require_initialized()
+        _code, output = self._capture(["snapshots", "--json"])
+        return parse_snapshot_inventory(output)
+
     def entries(self, snapshot_id: str) -> Iterator[SnapshotEntry]:
         self._require_initialized()
         snapshot_id = _validate_snapshot_id(snapshot_id)
@@ -953,12 +1053,86 @@ class ResticStore:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
         self._capture(["restore", snapshot_id, "--target", str(target)])
 
-    def check(self, read_data: bool = False) -> CheckResult:
+    def check(
+        self,
+        read_data: bool = False,
+        *,
+        read_data_subset: str | None = None,
+    ) -> CheckResult:
         self._require_initialized()
         if type(read_data) is not bool:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        if read_data_subset is not None:
+            if read_data or not isinstance(read_data_subset, str):
+                raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+            fraction = _SUBSET_FRACTION.fullmatch(read_data_subset)
+            if fraction is None:
+                raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+            numerator, denominator = (int(part) for part in fraction.groups())
+            if numerator > denominator:
+                raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
         args = ["check"]
         if read_data:
             args.append("--read-data")
+        elif read_data_subset is not None:
+            args.extend(["--read-data-subset", read_data_subset])
         self._capture(args)
-        return CheckResult(read_data)
+        return CheckResult(read_data, read_data_subset)
+
+    def plan_forget(self, snapshot_ids: Iterable[str]) -> ForgetPlan:
+        """Run restic's native dry-run for an explicit set of full snapshot IDs."""
+        self._require_initialized()
+        selected = _explicit_snapshot_ids(snapshot_ids)
+        inventory = {snapshot.snapshot_id: snapshot for snapshot in self.snapshots()}
+        if any(snapshot_id not in inventory for snapshot_id in selected):
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        self._capture(["forget", "--dry-run", *selected])
+        return ForgetPlan(
+            repository_id=self.repository_info.repository_id,
+            snapshot_ids=selected,
+            tree_ids=tuple(inventory[snapshot_id].tree_id for snapshot_id in selected),
+        )
+
+    def forget(
+        self,
+        snapshot_ids: Iterable[str],
+        *,
+        plan: ForgetPlan,
+        confirmed: bool = False,
+    ) -> MaintenanceResult:
+        """Forget only the explicit snapshots in a matching dry-run plan."""
+        self._require_initialized()
+        selected = _explicit_snapshot_ids(snapshot_ids)
+        if type(confirmed) is not bool or not confirmed:
+            raise ResticStoreError(ResticStoreErrorCode.CONFIRMATION_REQUIRED)
+        if (
+            not isinstance(plan, ForgetPlan)
+            or plan.repository_id != self.repository_info.repository_id
+            or plan.snapshot_ids != selected
+            or len(plan.tree_ids) != len(selected)
+        ):
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        inventory = {snapshot.snapshot_id: snapshot for snapshot in self.snapshots()}
+        if any(
+            snapshot_id not in inventory
+            or inventory[snapshot_id].tree_id != tree_id
+            for snapshot_id, tree_id in zip(selected, plan.tree_ids, strict=True)
+        ):
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        self._capture(["forget", *selected])
+        for snapshot_id in selected:
+            self._snapshot_info.pop(snapshot_id, None)
+        return MaintenanceResult("forget", False, selected)
+
+    def prune(self, dry_run: bool = True, *, confirmed: bool = False) -> MaintenanceResult:
+        """Run an explicit prune plan; destructive prune requires confirmation."""
+        self._require_initialized()
+        if type(dry_run) is not bool or type(confirmed) is not bool:
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        if not dry_run and not confirmed:
+            raise ResticStoreError(ResticStoreErrorCode.CONFIRMATION_REQUIRED)
+        args = ["prune"]
+        if dry_run:
+            args.append("--dry-run")
+        self._capture(args)
+        return MaintenanceResult("prune", dry_run)

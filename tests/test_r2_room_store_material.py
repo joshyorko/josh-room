@@ -24,6 +24,7 @@ class Broker:
         self.compete = False
         self.winner = None
         self.ambiguous = False
+        self.repository_error = None
         self.requests = []
 
     def __call__(self, method, session_id, operation, headers, body):
@@ -53,6 +54,8 @@ class Broker:
                 return 201, {"status": "created", "material": self.record}
             return 409, {"error": "room_store_material_conflict"}
         payload = json.loads(body)
+        if self.repository_error:
+            return 503, {"error": self.repository_error}
         if self.repository_id:
             if self.repository_id != payload["repositoryId"]:
                 return 409, {"error": "room_store_repository_conflict"}
@@ -132,6 +135,45 @@ def test_create_then_readback_caches_only_encrypted_winner(authority, monkeypatc
     assert inner["secret"] == first.secret
 
 
+def test_details_preserve_the_broker_uuid_domain_separate_from_physical_binding(
+    authority,
+):
+    value, _ = authority
+    details = value.ensure_material_details()
+    assert details.physical_binding == PHYSICAL
+    assert uuid.UUID(details.encryption_domain_id).version == 4
+    assert details.encryption_domain_id != details.physical_binding
+    assert details.key_generation == 1
+
+
+def test_read_material_details_is_get_only_and_fails_when_missing(authority):
+    value, broker = authority
+    with pytest.raises(client.R2RoomStoreError, match="material_missing"):
+        value.read_material_details()
+    assert [(method, operation) for method, operation, *_ in broker.requests] == [
+        ("GET", "material")
+    ]
+
+
+def test_read_material_details_validates_and_caches_existing_winner(authority, monkeypatch):
+    value, broker = authority
+    candidate = value._new_candidate()
+    broker.record = {**candidate, "repositoryId": None}
+    cached = []
+    monkeypatch.setattr(
+        client.keyring, "store_room_store_secret", lambda *args: cached.append(args)
+    )
+
+    details = value.read_material_details()
+
+    assert details.physical_binding == PHYSICAL
+    assert details.key_generation == 1
+    assert len(cached) == 1
+    assert [(method, operation) for method, operation, *_ in broker.requests] == [
+        ("GET", "material")
+    ]
+
+
 def test_first_writer_conflict_reloads_winner_and_ambiguous_write_reads_back(authority):
     value, broker = authority
     broker.compete = True
@@ -163,6 +205,36 @@ def test_repository_bind_advances_metadata_without_changing_ciphertext(authority
         ).generation
         == bound.generation
     )
+    method, operation, headers, body = next(
+        request for request in broker.requests if request[1] == "repository"
+    )
+    assert (method, operation) == ("POST", "repository")
+    assert json.loads(body) == {
+        "repositoryId": "d" * 64,
+        "expectedGeneration": bound.generation - 1,
+    }
+    assert headers["Authorization"] == f"Bearer {CAPABILITY}"
+
+
+def test_repository_bind_rejects_conflict_and_unverified_write(authority, tmp_path):
+    value, broker = authority
+    initial = value.ensure_material()
+    bound = value.bind_repository("d" * 64, initial.generation)
+    with pytest.raises(client.R2RoomStoreError, match="repository_conflict"):
+        value.bind_repository("e" * 64, initial.generation)
+    assert broker.record["repositoryId"] == "d" * 64
+    assert broker.record["keysetGeneration"] == bound.generation
+
+    broker2 = Broker()
+    identity = tmp_path / IDENTITY
+    identity.write_text("synthetic identity")
+    value2 = client.R2RoomStoreAuthority(
+        SESSION, CAPABILITY, PHYSICAL, broker2, identity, RECIPIENTS
+    )
+    broker2.repository_error = "room_store_repository_write_unverified"
+    with pytest.raises(client.R2RoomStoreError, match="repository_write_unverified"):
+        value2.bind_repository("f" * 64)
+    assert broker2.record["repositoryId"] is None
 
 
 @pytest.mark.parametrize(
