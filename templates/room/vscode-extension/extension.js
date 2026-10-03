@@ -28,6 +28,7 @@ let workspaceCapturePolicy;
 let dirtyTrackingGeneration = 0;
 let workspaceEventGeneration = 0;
 let cleanEventGeneration = -1;
+let trustedSaveReceipt;
 const dirtyBuffers = new Set();
 let activeAuthAttempt;
 let managedRuntimePromise;
@@ -1565,6 +1566,7 @@ function refreshRoomStatus() {
 }
 
 function setRoomState(kind, { bindingTrusted } = {}) {
+  if (kind !== "clean") trustedSaveReceipt = undefined;
   if (bindingTrusted !== undefined) workspaceBindingTrusted = bindingTrusted;
   if (roomStatus.kind === kind) {
     refreshRoomStatus();
@@ -1728,7 +1730,9 @@ async function approveRoomStorePreview(preview) {
 
 function nativeSaveBindingMatches(result, marker, source, policy) {
   if (!result || !marker || marker.format_version !== 3 || !policy) return false;
-  const canonicalPathSha = crypto.createHash("sha256").update(path.resolve(source)).digest("hex");
+  let canonicalPath;
+  try { canonicalPath = fs.realpathSync(source); } catch (_error) { return false; }
+  const canonicalPathSha = crypto.createHash("sha256").update(canonicalPath).digest("hex");
   return marker.signature_algorithm === "josh-room-stat-v1"
     && result.dimension_id === marker.dimension_id
     && result.encryption_domain_id === marker.encryption_domain_id
@@ -1742,23 +1746,61 @@ function nativeSaveBindingMatches(result, marker, source, policy) {
     && result.snapshot_id === marker.snapshot_id;
 }
 
-function canSkipRoomStoreSave(source, cwd, marker, project, allImages) {
-  if (allImages || path.resolve(source) !== path.resolve(cwd) || roomStatus.kind !== "clean"
-    || !workspaceBindingTrusted || !workspaceBaseline || cleanEventGeneration !== workspaceEventGeneration
-    || path.resolve(workspaceBaseline.root) !== path.resolve(source)
-    || !workspaceCapturePolicy || !marker || marker.format_version !== 3
-    || !sameRoomBinding(marker, project)) return false;
-  const projectDimension = project?.dimension || {};
-  const canonicalPathSha = crypto.createHash("sha256").update(path.resolve(source)).digest("hex");
-  return marker.workspace_path_sha256 === canonicalPathSha
-    && marker.capture_policy_sha256 === workspaceCapturePolicy.sha256
-    && marker.signature_algorithm === "josh-room-stat-v1"
-    && marker.encryption_domain_id === projectDimension.encryption_domain_id
-    && marker.snapshot_id === latestSnapshotId(project);
+function trustedLocalSaveReceipt(source, cwd) {
+  if (roomStatus.kind !== "clean" || !workspaceBindingTrusted || !workspaceBaseline
+    || cleanEventGeneration !== workspaceEventGeneration || !trustedSaveReceipt) return undefined;
+  let canonicalSource;
+  let canonicalCwd;
+  let canonicalBaseline;
+  let policy;
+  try {
+    canonicalSource = fs.realpathSync(source);
+    canonicalCwd = fs.realpathSync(cwd);
+    canonicalBaseline = fs.realpathSync(workspaceBaseline.root);
+    policy = loadCapturePolicy(source);
+  } catch (_error) {
+    trustedSaveReceipt = undefined;
+    return undefined;
+  }
+  if (canonicalSource !== canonicalCwd || canonicalBaseline !== canonicalSource) return undefined;
+  if (trustedSaveReceipt.canonical_source_path !== canonicalSource
+    || trustedSaveReceipt.event_generation !== workspaceEventGeneration
+    || trustedSaveReceipt.capture_policy_sha256 !== policy.sha256) {
+    trustedSaveReceipt = undefined;
+    return undefined;
+  }
+  const marker = currentRoom(source);
+  const canonicalPathSha = crypto.createHash("sha256").update(canonicalSource).digest("hex");
+  if (!marker || marker.format_version !== 3
+    || marker.workspace_path_sha256 !== canonicalPathSha
+    || marker.capture_policy_sha256 !== policy.sha256
+    || marker.workspace_signature !== trustedSaveReceipt.workspace_signature
+    || marker.signature_algorithm !== trustedSaveReceipt.signature_algorithm
+    || marker.project_id !== trustedSaveReceipt.project_id
+    || marker.dimension_id !== trustedSaveReceipt.dimension_id
+    || marker.encryption_domain_id !== trustedSaveReceipt.encryption_domain_id
+    || marker.snapshot_id !== trustedSaveReceipt.snapshot_id) {
+    trustedSaveReceipt = undefined;
+    return undefined;
+  }
+  if (workspaceCapturePolicy?.sha256 !== policy.sha256) {
+    workspaceCapturePolicy = policy;
+    workspaceBaseline.capturePolicy = policy;
+  }
+  return trustedSaveReceipt;
 }
 
-function finishRoomStoreSave(result, source, saveEventGeneration) {
-  if (path.resolve(source) !== path.resolve(activeWorkspace())) return;
+function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
+  let canonicalSource;
+  let canonicalWorkspace;
+  try {
+    canonicalSource = fs.realpathSync(source);
+    canonicalWorkspace = fs.realpathSync(activeWorkspace());
+  } catch (_error) {
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  if (canonicalSource !== canonicalWorkspace) return;
   let policy;
   try {
     policy = workspaceCapturePolicy || loadCapturePolicy(source);
@@ -1789,6 +1831,19 @@ function finishRoomStoreSave(result, source, saveEventGeneration) {
   workspaceBindingTrusted = true;
   dirtyBuffers.clear();
   setRoomState("clean", { bindingTrusted: true });
+  trustedSaveReceipt = Object.freeze({
+    canonical_source_path: canonicalSource,
+    project_id: marker.project_id,
+    dimension_id: marker.dimension_id,
+    encryption_domain_id: marker.encryption_domain_id,
+    snapshot_id: marker.snapshot_id,
+    workspace_signature: marker.workspace_signature,
+    signature_algorithm: marker.signature_algorithm,
+    capture_policy_sha256: marker.capture_policy_sha256,
+    event_generation: workspaceEventGeneration,
+    all_images: Boolean(allImages),
+    display_name: marker.display_name,
+  });
 }
 
 async function saveRoom(options = {}) {
@@ -1804,6 +1859,33 @@ async function saveRoom(options = {}) {
   });
   if (!folders?.length) return "cancelled";
   const source = folders[0].fsPath;
+  const imageChoices = [
+    { label: "Workspace only", allImages: false },
+    { label: "Workspace + all tagged local OCI images", allImages: true },
+  ];
+  let imageChoice;
+  const cachedReceipt = trustedLocalSaveReceipt(source, cwd);
+  if (cachedReceipt) {
+    imageChoice = await vscode.window.showQuickPick(imageChoices, {
+      title: "Include local OCI images?",
+      ignoreFocusOut: true,
+    });
+    if (!imageChoice) return "cancelled";
+    if (Boolean(imageChoice.allImages) === cachedReceipt.all_images) {
+      const action = await vscode.window.showInformationMessage(
+        "Already saved — 0 bytes uploaded",
+        "Done",
+        "Choose another Room",
+      );
+      if (action !== "Choose another Room") {
+        refreshRoomStatus();
+        return "already-saved";
+      }
+      trustedSaveReceipt = undefined;
+    } else {
+      trustedSaveReceipt = undefined;
+    }
+  }
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const marker = currentRoom(source);
@@ -1887,21 +1969,12 @@ async function saveRoom(options = {}) {
       }
     }
   }
-  const imageChoice = await vscode.window.showQuickPick([
-    { label: "Workspace only", allImages: false },
-    { label: "Workspace + all tagged local OCI images", allImages: true },
-  ], { title: "Include local OCI images?", ignoreFocusOut: true });
-  if (!imageChoice) return "cancelled";
-  if (targetProvider === "minio" && canSkipRoomStoreSave(
-    source,
-    cwd,
-    currentRoom(source),
-    selected.project,
-    imageChoice.allImages,
-  )) {
-    await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded");
-    refreshRoomStatus();
-    return "already-saved";
+  if (!imageChoice) {
+    imageChoice = await vscode.window.showQuickPick(imageChoices, {
+      title: "Include local OCI images?",
+      ignoreFocusOut: true,
+    });
+    if (!imageChoice) return "cancelled";
   }
   const buildArgs = nativeRegistry.dimensionArgs(
     ["snapshot", "create", name, "--source", source, "--backend", targetProvider],
@@ -1957,7 +2030,7 @@ async function saveRoom(options = {}) {
         `Saved “${name}” · Logical entries: ${logicalEntries} · Workspace scan: ${scanned} · Restic data added: ${added}`,
       );
     }
-    finishRoomStoreSave(result, source, saveEventGeneration);
+    finishRoomStoreSave(result, source, saveEventGeneration, imageChoice.allImages);
   } else {
     const size = Number.isFinite(result.ciphertext_size)
       ? `${(result.ciphertext_size / (1024 * 1024)).toFixed(1)} MiB`

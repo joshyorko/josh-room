@@ -17,6 +17,7 @@ _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _FILE_ATTRIBUTE_DIRECTORY = 0x0010
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _FILE_INFO_CLASS_BASIC = 0
+_FILE_INFO_CLASS_ID = 18
 
 
 class WindowsFileMetadataError(RuntimeError):
@@ -51,6 +52,17 @@ class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
         ("nNumberOfLinks", ctypes.c_uint32),
         ("nFileIndexHigh", ctypes.c_uint32),
         ("nFileIndexLow", ctypes.c_uint32),
+    ]
+
+
+class _FILE_ID_128_STRUCT(ctypes.Structure):
+    _fields_ = [("Identifier", ctypes.c_ubyte * 16)]
+
+
+class _FILE_ID_INFO_STRUCT(ctypes.Structure):
+    _fields_ = [
+        ("VolumeSerialNumber", ctypes.c_uint64),
+        ("FileId", _FILE_ID_128_STRUCT),
     ]
 
 
@@ -132,11 +144,23 @@ class _WindowsFileAPI:
         return handle
 
     def file_identity(self, handle: ctypes.c_void_p) -> tuple[int, int, int]:
-        information = _BY_HANDLE_FILE_INFORMATION()
-        if not self.kernel.GetFileInformationByHandle(handle, ctypes.byref(information)):
+        identity = _FILE_ID_INFO_STRUCT()
+        if not self.kernel.GetFileInformationByHandleEx(
+            handle,
+            _FILE_INFO_CLASS_ID,
+            ctypes.byref(identity),
+            ctypes.sizeof(identity),
+        ):
             raise self._last_error("identity-failed")
-        index = (int(information.nFileIndexHigh) << 32) | int(information.nFileIndexLow)
-        return int(information.dwVolumeSerialNumber), index, int(information.dwFileAttributes)
+        attributes = _BY_HANDLE_FILE_INFORMATION()
+        if not self.kernel.GetFileInformationByHandle(handle, ctypes.byref(attributes)):
+            raise self._last_error("identity-failed")
+        file_id = int.from_bytes(bytes(identity.FileId.Identifier), byteorder="little")
+        return (
+            int(identity.VolumeSerialNumber),
+            file_id,
+            int(attributes.dwFileAttributes),
+        )
 
     def change_time(self, handle: ctypes.c_void_p) -> tuple[int, int]:
         information = _FILE_BASIC_INFO_STRUCT()

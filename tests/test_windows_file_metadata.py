@@ -82,6 +82,49 @@ def test_change_time_uses_native_ticks_and_closes_handle(tmp_path, monkeypatch):
     assert api.closed == [api.handle]
 
 
+def test_file_identity_matches_128_bit_ids_and_64_bit_volume_serials(tmp_path, monkeypatch):
+    path = tmp_path / "data.bin"
+    path.write_bytes(b"synthetic")
+    expected = SimpleNamespace(
+        st_mode=path.lstat().st_mode,
+        st_dev=0x1_0000_0002,
+        st_ino=(0xFEDCBA9876543210 << 64) | 0x123456789ABCDEF0,
+        st_file_attributes=0,
+    )
+    api = _NativeAPIMock(
+        expected,
+        volume=expected.st_dev,
+        file_id=expected.st_ino,
+        change_time=987654,
+    )
+    _use_api(monkeypatch, api)
+
+    assert metadata.change_time_ns(path, expected) == 987654 * 100
+    assert api.closed == [api.handle]
+
+
+def test_high_file_id_word_mismatch_is_rejected(tmp_path, monkeypatch):
+    path = tmp_path / "data.bin"
+    path.write_bytes(b"synthetic")
+    expected = SimpleNamespace(
+        st_mode=path.lstat().st_mode,
+        st_dev=0x1_0000_0002,
+        st_ino=(0xFEDCBA9876543210 << 64) | 0x123456789ABCDEF0,
+        st_file_attributes=0,
+    )
+    api = _NativeAPIMock(
+        expected,
+        volume=expected.st_dev,
+        file_id=((0xFEDCBA9876543211) << 64) | 0x123456789ABCDEF0,
+    )
+    _use_api(monkeypatch, api)
+
+    with pytest.raises(metadata.WindowsFileMetadataError) as failure:
+        metadata.change_time_ns(path, expected)
+    assert failure.value.code == "file-identity-changed"
+    assert api.closed == [api.handle]
+
+
 @pytest.mark.parametrize(
     ("options", "code"),
     [
@@ -177,23 +220,32 @@ class _FunctionMock:
 def test_ctypes_wrapper_uses_handle_basic_info_and_closes(tmp_path, monkeypatch):
     path = tmp_path / "data.bin"
     path.write_bytes(b"synthetic")
-    expected = _expected(path)
     calls = []
 
     def create_file(path_value, access, share, security, creation, flags, template):
         calls.append(("open", path_value, access, share, creation, flags))
         return 91
 
-    def get_identity(handle, pointer):
+    volume = 0x1_0000_0002
+    file_id = (0xFEDCBA9876543210 << 64) | 0x123456789ABCDEF0
+
+    def get_classic_attributes(handle, pointer):
         assert handle == 91
         value = ctypes.cast(
             pointer, ctypes.POINTER(metadata._BY_HANDLE_FILE_INFORMATION)
         ).contents
-        value.dwVolumeSerialNumber = expected.st_dev
-        value.nFileIndexHigh = expected.st_ino >> 32
-        value.nFileIndexLow = expected.st_ino & 0xFFFFFFFF
         value.dwFileAttributes = 0
-        calls.append(("identity",))
+        calls.append(("classic-attributes",))
+        return 1
+
+    def get_file_id(handle, info_class, pointer, size):
+        assert handle == 91
+        assert info_class == metadata._FILE_INFO_CLASS_ID
+        assert size == ctypes.sizeof(metadata._FILE_ID_INFO_STRUCT)
+        value = ctypes.cast(pointer, ctypes.POINTER(metadata._FILE_ID_INFO_STRUCT)).contents
+        value.VolumeSerialNumber = volume
+        value.FileId.Identifier[:] = file_id.to_bytes(16, byteorder="little")
+        calls.append(("file-id", info_class))
         return 1
 
     def get_basic(handle, info_class, pointer, size):
@@ -208,18 +260,28 @@ def test_ctypes_wrapper_uses_handle_basic_info_and_closes(tmp_path, monkeypatch)
 
     kernel = SimpleNamespace(
         CreateFileW=_FunctionMock(create_file),
-        GetFileInformationByHandle=_FunctionMock(get_identity),
+        GetFileInformationByHandle=_FunctionMock(get_classic_attributes),
         GetFileInformationByHandleEx=_FunctionMock(get_basic),
         CloseHandle=_FunctionMock(lambda handle: calls.append(("close", handle)) or 1),
     )
+    native_file_id = _FunctionMock(get_file_id)
+    original_get_ex = kernel.GetFileInformationByHandleEx
+
+    def get_ex(handle, info_class, pointer, size):
+        if info_class == metadata._FILE_INFO_CLASS_ID:
+            return native_file_id(handle, info_class, pointer, size)
+        return original_get_ex(handle, info_class, pointer, size)
+
+    kernel.GetFileInformationByHandleEx = _FunctionMock(get_ex)
     monkeypatch.setattr(metadata.ctypes, "WinDLL", lambda *_args, **_kwargs: kernel, raising=False)
     api = metadata._WindowsFileAPI()
     handle = api.open_file(path, metadata._FILE_FLAG_OPEN_REPARSE_POINT)
 
-    assert api.file_identity(handle) == (expected.st_dev, expected.st_ino, 0)
+    assert api.file_identity(handle) == (volume, file_id, 0)
     assert api.change_time(handle) == (7654321, 0)
     api.close(handle)
     assert calls[0][0] == "open"
     assert calls[0][-1] == metadata._FILE_FLAG_OPEN_REPARSE_POINT
+    assert ("file-id", metadata._FILE_INFO_CLASS_ID) in calls
     assert ("basic", metadata._FILE_INFO_CLASS_BASIC) in calls
     assert calls[-1] == ("close", 91)
