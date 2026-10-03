@@ -374,7 +374,9 @@ def test_forced_scan_records_the_restic_parent_that_was_actually_used(tmp_path):
     assert "parent_snapshot_id" not in body["workspace"]
 
 
-def test_windows_verified_native_signature_skips_restic_backup_before_any_scan(tmp_path, monkeypatch):
+def test_windows_verified_native_signature_skips_restic_backup_before_any_scan(
+    tmp_path, monkeypatch
+):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "file.txt").write_text("hello", encoding="utf-8")

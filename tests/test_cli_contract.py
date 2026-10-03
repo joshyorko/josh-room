@@ -122,17 +122,21 @@ def test_auth_status_reports_encryption_only_runtime_as_r2_missing(tmp_path, mon
     assert result["capabilities"] == ["encryption"]
 
 
-def test_r2_command_initializes_system_trust_before_auth_and_dispatch(monkeypatch, capsys):
+def test_r2_command_uses_cached_session_after_system_trust_before_dispatch(monkeypatch, capsys):
     events = []
     monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: events.append("tls"))
-    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda **_kwargs: events.append("auth"))
+    monkeypatch.setattr(
+        "josh_room.cli.load_runtime_session",
+        lambda *, require_r2=False: events.append("r2-session" if require_r2 else "runtime-session") or True,
+    )
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda **_kwargs: pytest.fail("normal R2 operations must not start OAuth"))
     monkeypatch.setattr(
         "josh_room.cli.dispatch",
         lambda *_args: events.append("dispatch") or {"ok": True, "projects": []},
     )
 
     assert main(["projects", "list", "--backend", "r2", "--json"]) == 0
-    assert events == ["tls", "auth", "dispatch"]
+    assert events == ["tls", "runtime-session", "r2-session", "dispatch"]
     assert json.loads(capsys.readouterr().out)["projects"] == []
 
 
@@ -660,7 +664,7 @@ def test_cli_rejects_invalid_legacy_r2_source_combinations_before_request(operat
     assert "legacy R2 source requires" in json.loads(capsys.readouterr().out)["error"]
 
 
-def test_runtime_default_r2_is_oauth_routed_before_dimension_resolution(tmp_path, monkeypatch):
+def test_runtime_default_r2_uses_cached_authority_without_interactive_login(tmp_path, monkeypatch):
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
     args = build_parser().parse_args(["snapshot", "create", "demo", "--dimension", "r2"])
     assert _requires_oauth(args) is True
@@ -690,19 +694,41 @@ def test_runtime_default_r2_is_oauth_routed_before_dimension_resolution(tmp_path
         },
     }))
 
-    def restore_runtime(**kwargs):
-        events.append(kwargs)
+    def load_cached_runtime(*, require_r2=False):
+        events.append(require_r2)
         monkeypatch.setenv("JOSH_ROOM_RUNTIME_CONFIG", str(runtime_config))
+        return require_r2
 
     monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
-    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", restore_runtime)
+    monkeypatch.setattr("josh_room.cli.load_runtime_session", load_cached_runtime)
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda **_kwargs: pytest.fail("normal R2 operations must not open a browser"))
     monkeypatch.setattr(
         "josh_room.cli.dispatch",
         lambda parsed, _instance: {"ok": True, "dimension_id": _effective_dimension(parsed).dimension_id},
     )
 
     assert main(["snapshot", "create", "demo", "--dimension", "r2", "--json"]) == 0
-    assert events == [{"dimension_id": "r2"}]
+    assert events == [False, True]
+
+
+def test_missing_r2_authority_fails_closed_without_starting_oauth(tmp_path, monkeypatch, capsys):
+    events = []
+
+    def load_cached_runtime(*, require_r2=False):
+        events.append(require_r2)
+        return False
+
+    monkeypatch.setattr("josh_room.cli.initialize_system_trust", lambda: None)
+    monkeypatch.setattr("josh_room.cli.load_runtime_session", load_cached_runtime)
+    monkeypatch.setattr("josh_room.cli.ensure_runtime_session", lambda **_kwargs: pytest.fail("missing R2 authority must not start OAuth"))
+    monkeypatch.setattr("josh_room.cli.dispatch", lambda *_args: pytest.fail("R2 command must stop before dispatch"))
+
+    assert main(["snapshot", "create", "demo", "--dimension", "r2", "--json"]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["error_code"] == "r2-authorization-required"
+    assert result["authorization_required"] is True
+    assert result["authorization_purpose"] == "r2"
+    assert events == [False, True]
 
 
 def test_minio_snapshot_requires_explicit_encryption_authorization_without_r2_routing(monkeypatch, capsys):
@@ -891,7 +917,17 @@ def test_mixed_provider_copy_requires_distinct_r2_and_minio_material(monkeypatch
             }
         )()
     ))
-    monkeypatch.setattr(cli, "_read_remote_catalog", lambda *_args, **_kwargs: (__import__("josh_room.catalog", fromlist=["Catalog"]).Catalog.empty("archive"), "etag"))
+    from josh_room.catalog import Catalog
+
+    digest = "a" * 64
+    source_catalog = Catalog.empty("r2").add_snapshot(
+        "room", "Room", {
+            "snapshot_id": "legacy-01", "object_key": f"objects/sha256/{digest}",
+            "ciphertext_sha256": digest, "ciphertext_size": 10,
+            "created_at": "2026-10-02T12:00:00+00:00", "workspace_fingerprint": "b" * 64,
+        }
+    )
+    monkeypatch.setattr(cli, "_read_remote_catalog", lambda *_args, **_kwargs: (source_catalog, "etag"))
     monkeypatch.setattr(cli, "copy_snapshot_stream", lambda *_args, **_kwargs: {"ok": True})
 
     assert cli.dispatch(args, tmp_path / "instance")["ok"] is True
@@ -914,7 +950,12 @@ def test_mixed_provider_copy_authorizes_only_the_r2_side(monkeypatch, tmp_path):
     }
     events = []
     monkeypatch.setattr(cli, "private_config", lambda: config)
-    monkeypatch.setattr(cli, "ensure_runtime_session", lambda **_kwargs: events.append("cloudflare"))
+    monkeypatch.setattr(
+        cli,
+        "load_runtime_session",
+        lambda *, require_r2=False: events.append("r2-session" if require_r2 else "runtime-session") or True,
+    )
+    monkeypatch.setattr(cli, "ensure_runtime_session", lambda **_kwargs: pytest.fail("normal R2 Copy must not start OAuth"))
     monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
     monkeypatch.setattr(cli, "_backend", lambda provider, *_args: type("Backend", (), {"provider": provider})())
     monkeypatch.setattr(cli, "_identity", lambda: tmp_path / "r2.identity")
@@ -929,16 +970,24 @@ def test_mixed_provider_copy_authorizes_only_the_r2_side(monkeypatch, tmp_path):
             }
         )()
     ))
-    monkeypatch.setattr(cli, "_read_remote_catalog", lambda *_args, **_kwargs: (
-        __import__("josh_room.catalog", fromlist=["Catalog"]).Catalog.empty("archive"), "etag"
-    ))
+    from josh_room.catalog import Catalog
+
+    digest = "a" * 64
+    source_catalog = Catalog.empty("archive").add_snapshot(
+        "room", "Room", {
+            "snapshot_id": "legacy-01", "object_key": f"objects/sha256/{digest}",
+            "ciphertext_sha256": digest, "ciphertext_size": 10,
+            "created_at": "2026-10-02T12:00:00+00:00", "workspace_fingerprint": "b" * 64,
+        }
+    )
+    monkeypatch.setattr(cli, "_read_remote_catalog", lambda *_args, **_kwargs: (source_catalog, "etag"))
     monkeypatch.setattr(cli, "copy_snapshot_stream", lambda *_args, **_kwargs: {"ok": True})
 
     assert cli.main([
         "snapshot", "copy", "room", "--source-dimension", "archive",
         "--destination-dimension", "cloud", "--destination-room", "copy", "--json",
     ]) == 0
-    assert events == ["cloudflare"]
+    assert events == ["runtime-session", "r2-session"]
 
 
 def test_json_cli_output_sanitizes_catalog_objects_and_private_values(capsys):

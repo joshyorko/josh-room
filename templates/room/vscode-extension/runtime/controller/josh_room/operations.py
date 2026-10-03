@@ -538,6 +538,98 @@ def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: 
         return run_serve(jat_root, haul)
 
 
+def export_snapshot(
+    instance: Path,
+    project_id: str,
+    snapshot_id: str,
+    identity: Path,
+    output: Path,
+    backend=None,
+    *,
+    selected_material: EncryptionMaterial | None = None,
+    selected_domain: EncryptionKeyset | None = None,
+) -> dict:
+    """Publish an existing legacy portable JAT payload without rebuilding it."""
+    identity = _selected_identity(identity, selected_material)
+    target = Path(output)
+    if target.exists() or target.is_symlink():
+        raise FileExistsError("portable JAT output already exists")
+    try:
+        parent = target.parent.resolve(strict=True)
+        if not parent.is_dir():
+            raise ValueError
+        target = parent / target.name
+        if target.exists() or target.is_symlink():
+            raise FileExistsError("portable JAT output already exists")
+    except FileExistsError:
+        raise
+    except OSError as error:
+        raise ValueError("portable JAT output directory is unavailable") from error
+
+    instance = Path(instance)
+    instance.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="export-legacy-", dir=instance) as work:
+        stage = Path(work)
+        report_progress("catalog", "Loading encrypted Room catalog")
+        if backend:
+            domain_id = _selected_domain_id(selected_material, selected_domain)
+            if domain_id:
+                catalog, _etag = _read_remote_catalog(
+                    backend, identity, instance, encryption_domain_id=domain_id
+                )
+            else:
+                catalog, _etag = _read_remote_catalog(backend, identity, instance)
+        else:
+            catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
+        snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
+        if snapshot_payload_kind(snapshot) != "portable-jat":
+            raise ValueError("logical JAT export requires the native materialization path")
+        encrypted = stage / "snapshot.jroom.age"
+        if backend:
+            backend.download_file(
+                snapshot["object_key"], encrypted,
+                snapshot["ciphertext_sha256"], snapshot["ciphertext_size"],
+            )
+        else:
+            ImmutableLocalStore(instance).download_file(
+                snapshot["object_key"], encrypted,
+                snapshot["ciphertext_sha256"], snapshot["ciphertext_size"],
+            )
+        envelope = stage / "snapshot.jroom"
+        report_progress("decrypt", "Decrypting Room snapshot")
+        decrypt_file(encrypted, [identity], envelope)
+        haul = stage / "payload.haul.tar.zst"
+        report_progress("verify", "Verifying portable JAT envelope")
+        manifest = read_envelope_file(envelope, haul)
+        if not _manifest_matches_snapshot(manifest, project_id, snapshot):
+            raise ValueError("manifest project mismatch")
+        size, digest = _file_metadata(haul)
+        temporary = parent / f".{target.name}.josh-room-{uuid.uuid4().hex}"
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as destination, haul.open("rb") as source:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+                destination.flush()
+                os.fsync(destination.fileno())
+            if os.name == "nt":
+                os.rename(temporary, target)
+            else:
+                os.link(temporary, target)
+            temporary.unlink(missing_ok=True)
+        except FileExistsError:
+            raise FileExistsError("portable JAT output already exists") from None
+        finally:
+            temporary.unlink(missing_ok=True)
+        report_progress("complete", "Portable JAT exported")
+    return {
+        "project_id": project_id,
+        "snapshot_id": snapshot["snapshot_id"],
+        "status": "exported",
+        "output_size": size,
+        "output_sha256": digest,
+    }
+
+
 def _write_receipt(path: Path, body: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)

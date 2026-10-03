@@ -20,7 +20,7 @@ from .auth import (
     cancel_oauth_session,
     encryption_status,
     ensure_minio_domain,
-    ensure_runtime_session,
+    ensure_runtime_session,  # noqa: F401 - retained as an observable interactive-auth boundary.
     load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
@@ -104,8 +104,23 @@ from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
 from .room_store_bridge import (
     hydrate_room_store,
+    open_existing_room_store,
+    open_writable_room_store,
     preview_room_store,
     save_room_store,
+)
+from .room_store_lifecycle import (
+    complete_logical_catalog_removal,
+    copy_logical_jat_as_new,
+    copy_logical_jat_to_dimension,
+    export_logical_jat,
+    extract_logical_jat,
+    inspect_logical_jat,
+    optimize_room_store,
+    reconcile_room_store,
+    remove_logical_catalog_records,
+    serve_logical_jat,
+    verify_room_store,
 )
 from .tls import initialize_system_trust
 from .workspace_state import context_status, local_status
@@ -442,6 +457,20 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_preview.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     snapshot_preview.add_argument("--dimension")
     _json_option(snapshot_preview)
+    for action in ("inspect", "export", "serve", "extract"):
+        snapshot_action = snapshot_commands.add_parser(action)
+        snapshot_action.add_argument("project")
+        snapshot_action.add_argument("--snapshot", default="latest")
+        snapshot_action.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+        snapshot_action.add_argument("--dimension")
+        if action == "export":
+            snapshot_action.add_argument("--output", type=Path, required=True)
+        elif action == "serve":
+            snapshot_action.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+        elif action == "extract":
+            snapshot_action.add_argument("reference")
+            snapshot_action.add_argument("--destination", type=Path, required=True)
+        _json_option(snapshot_action)
     snapshot_copy = snapshot_commands.add_parser("copy")
     snapshot_copy.add_argument("project", nargs="?")
     snapshot_copy.add_argument("--source-folder", type=Path)
@@ -471,6 +500,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     serve.add_argument("--dimension")
     _json_option(serve)
+    room_store = commands.add_parser("room-store")
+    room_store_commands = room_store.add_subparsers(dest="room_store_command", required=True)
+    for action in ("verify", "optimize", "reconcile"):
+        room_store_action = room_store_commands.add_parser(action)
+        room_store_action.add_argument("--dimension", required=True)
+        if action == "verify":
+            room_store_action.add_argument("--read-data", action="store_true")
+            room_store_action.add_argument("--read-data-subset")
+        elif action == "optimize":
+            room_store_action.add_argument("--confirm", action="store_true")
+        _json_option(room_store_action)
     jat = commands.add_parser("jat")
     jat_commands = jat.add_subparsers(dest="jat_command", required=True)
     jat_build = jat_commands.add_parser("build")
@@ -566,15 +606,8 @@ def main(argv=None):
                         if selected_material is not None:
                             args._selected_encryption_material = selected_material
                         if _requires_oauth(args):
-                            requested_dimension = getattr(args, "dimension", None)
-                            selected = None
-                            if getattr(args, "snapshot_command", None) != "copy":
-                                try:
-                                    selected = _effective_dimension(args)
-                                except ValueError:
-                                    if requested_dimension != "r2":
-                                        raise
-                            ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
+                            if not load_runtime_session(require_r2=True):
+                                raise _r2_authorization_required()
                         elif _requires_encryption(args) and args.command != "dimensions" and not runtime_loaded and not _encryption_material_ready():
                             raise _encryption_authorization_required()
                         result = dispatch(args, instance)
@@ -684,7 +717,7 @@ def _requires_oauth(args) -> bool:
             return any(dimension.provider == "r2" for dimension in registry.dimensions.values())
         except ValueError:
             return getattr(args, "backend", "r2") == "r2"
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         source_dimension = _copy_source_dimension(args)
@@ -712,9 +745,7 @@ def _requires_oauth(args) -> bool:
 def _requires_encryption(args) -> bool:
     if args.command == "dimensions":
         return getattr(args, "with_hierarchy", False) and _dimensions_have_provider(args, "minio")
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
-        return False
-    if args.command == "snapshot" and getattr(args, "snapshot_command", None) not in {"create", "copy", "preview"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         return False
@@ -809,6 +840,37 @@ def _encryption_material_environment(material):
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+@contextmanager
+def _open_room_store_context(
+    args,
+    instance: Path,
+    *,
+    project_id: str | None = None,
+    snapshot_id: str = "latest",
+    writable: bool = False,
+    dimension_id: str | None = None,
+    material=None,
+):
+    dimension = (
+        DimensionRegistry(private_config() or {}).select(dimension_id)
+        if dimension_id is not None
+        else _effective_dimension(args)
+    )
+    if dimension is None or dimension.provider not in {"minio", "r2"}:
+        raise ValueError("Room Store operations require a configured MinIO or R2 Dimension")
+    if material is None:
+        material = getattr(args, "_selected_encryption_material", None)
+    opener = open_writable_room_store if writable else open_existing_room_store
+    with opener(
+        instance,
+        dimension,
+        material,
+        project_id=project_id,
+        snapshot_id=snapshot_id,
+    ) as context:
+        yield context
 
 
 def _encryption_material_ready() -> bool:
@@ -1886,6 +1948,22 @@ def dispatch(args, instance: Path) -> dict:
         dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
         return {"ok": True, "dimension_id": dimension_id, "projects": [{"id": project_id, "display_name": name} for project_id, name in projects]}
     if args.command == "rooms":
+        dimension = _effective_dimension(args)
+        if dimension is not None and dimension.provider in {"minio", "r2"}:
+            backend = _backend_for_args(args, instance)
+            catalog = load_catalog(instance, backend)
+            project = catalog.body["projects"].get(args.project)
+            if project and any(
+                snapshot_payload_kind(record) == "room-store-v1"
+                for record in project.get("snapshots", {}).values()
+            ):
+                identities = [(args.project, snapshot_id) for snapshot_id in project["snapshots"]]
+                with _open_room_store_context(
+                    args, instance, project_id=args.project, writable=True
+                ) as context:
+                    pending = remove_logical_catalog_records(context, identities)
+                with _open_room_store_context(args, instance, project_id=args.project) as fresh:
+                    return complete_logical_catalog_removal(fresh, pending)
         recipients = _recipients()
         if len(recipients) < 2:
             raise ValueError("room removal requires two age recipients")
@@ -1898,6 +1976,25 @@ def dispatch(args, instance: Path) -> dict:
         }
     if args.command == "snapshots":
         if args.snapshots_command == "remove":
+            dimension = _effective_dimension(args)
+            if dimension is not None and dimension.provider in {"minio", "r2"}:
+                backend = _backend_for_args(args, instance)
+                catalog = load_catalog(instance, backend)
+                record = catalog.resolve_snapshot(args.project, args.snapshot)
+                if snapshot_payload_kind(record) == "room-store-v1":
+                    identity = (args.project, record["snapshot_id"])
+                    with _open_room_store_context(
+                        args,
+                        instance,
+                        project_id=args.project,
+                        snapshot_id=args.snapshot,
+                        writable=True,
+                    ) as context:
+                        pending = remove_logical_catalog_records(context, [identity])
+                    with _open_room_store_context(
+                        args, instance, project_id=args.project
+                    ) as fresh:
+                        return complete_logical_catalog_removal(fresh, pending)
             recipients = _recipients()
             identity = os.environ.get("JOSH_ROOM_IDENTITY")
             if len(recipients) < 2 or not identity:
@@ -1921,6 +2018,32 @@ def dispatch(args, instance: Path) -> dict:
         dimension_id = catalog.dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
         return {"ok": True, "dimension_id": dimension_id, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
+        if args.snapshot_command in {"inspect", "export", "serve", "extract"}:
+            jat_root = _jat_root()
+            with _open_room_store_context(
+                args,
+                instance,
+                project_id=args.project,
+                snapshot_id=args.snapshot,
+            ) as context:
+                if context.selected_record is None or context.selected_descriptor is None:
+                    raise ValueError("selected recovery point is not a native logical JAT")
+                if args.snapshot_command == "inspect":
+                    return {"ok": True, **inspect_logical_jat(context.selected_record, context.selected_descriptor)}
+                if args.snapshot_command == "export":
+                    return export_logical_jat(
+                        context,
+                        jat_root=jat_root,
+                        output=args.output,
+                    )
+                if args.snapshot_command == "serve":
+                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode)
+                return extract_logical_jat(
+                    context,
+                    args.reference,
+                    args.destination,
+                    jat_root=jat_root,
+                )
         if args.snapshot_command == "copy":
             config = private_config() or {}
             registry = DimensionRegistry(config)
@@ -1983,6 +2106,42 @@ def dispatch(args, instance: Path) -> dict:
                     destination_dimension_config.dimension_id,
                     getattr(destination_material, "encryption_domain_id", None),
                 )
+                try:
+                    source_record = source_catalog.resolve_snapshot(source_project, source_snapshot)
+                except (KeyError, ValueError):
+                    source_record = None
+                if source_record is not None and snapshot_payload_kind(source_record) == "room-store-v1":
+                    display_name = _room_identity(args.destination_project)[1]
+                    with ExitStack() as contexts:
+                        source_context = contexts.enter_context(_open_room_store_context(
+                            args,
+                            instance,
+                            project_id=source_project,
+                            snapshot_id=source_snapshot,
+                            dimension_id=source_dimension_config.dimension_id,
+                            material=source_material,
+                        ))
+                        destination_context = contexts.enter_context(_open_room_store_context(
+                            args,
+                            instance,
+                            project_id=args.destination_project,
+                            dimension_id=destination_dimension_config.dimension_id,
+                            material=destination_material,
+                            writable=True,
+                        ))
+                        if source_dimension_config.dimension_id == destination_dimension_config.dimension_id:
+                            return copy_logical_jat_as_new(
+                                source_context,
+                                destination_context,
+                                args.destination_project,
+                                display_name,
+                            )
+                        return copy_logical_jat_to_dimension(
+                            source_context,
+                            destination_context,
+                            args.destination_project,
+                            display_name,
+                        )
                 return copy_snapshot_stream(
                     instance, source_catalog, destination_catalog, source_backend, destination_backend,
                     source_project, args.destination_project, source_snapshot,
@@ -2000,8 +2159,8 @@ def dispatch(args, instance: Path) -> dict:
         source = args.source or Path.cwd()
         dimension = _effective_dimension(args)
         selected_material = getattr(args, "_selected_encryption_material", None)
-        if dimension is not None and dimension.provider == "minio":
-            if selected_material is None:
+        if dimension is not None and dimension.provider in {"minio", "r2"}:
+            if dimension.provider == "minio" and selected_material is None:
                 raise ValueError("selected MinIO encryption material is required for native Save")
             components = _native_component_inputs(args, source)
             if args.snapshot_command == "preview":
@@ -2028,7 +2187,7 @@ def dispatch(args, instance: Path) -> dict:
                 rcc_runtime=None,
             )
         if args.snapshot_command == "preview":
-            raise ValueError("snapshot preview is available for native MinIO Room Store saves")
+            raise ValueError("snapshot preview is available for native Room Store saves")
         recipients = _recipients()
         jat_root = _jat_root()
         if len(recipients) < 2 or len(set(recipients)) < 2:
@@ -2089,6 +2248,19 @@ def dispatch(args, instance: Path) -> dict:
                 _backend_for_args(args, instance),
             ),
         }
+    if args.command == "room-store":
+        config = private_config() or {}
+        dimension = DimensionRegistry(config).select(args.dimension)
+        with _open_room_store_context(args, instance) as context:
+            if args.room_store_command == "verify":
+                return verify_room_store(
+                    context.store,
+                    read_data=args.read_data,
+                    read_data_subset=args.read_data_subset,
+                )
+            if args.room_store_command == "optimize":
+                return optimize_room_store(context.store, confirmed=args.confirm)
+            return reconcile_room_store(context)
     if args.command == "jat":
         jat_root = _jat_root()
         if args.jat_command == "build":
@@ -2299,13 +2471,14 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
         backend = _backend_for_args(args, instance)
     selected_material = getattr(args, "_selected_encryption_material", None)
     dimension = _effective_dimension(args)
-    if dimension is not None and dimension.provider == "minio":
-        if selected_material is None:
+    if dimension is not None and dimension.provider in {"minio", "r2"}:
+        if dimension.provider == "minio" and selected_material is None:
             raise ValueError("selected MinIO encryption material is required to Enter this Dimension")
         catalog = load_catalog(instance, backend)
         record = catalog.resolve_snapshot(args.project, args.snapshot)
         payload_kind = snapshot_payload_kind(record)
         if payload_kind == "room-store-v1":
+            jat_root = _jat_root()
             return {
                 "ok": True,
                 **hydrate_room_store(
@@ -2315,6 +2488,7 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
                     args.destination,
                     selected_material,
                     snapshot_id=args.snapshot,
+                    jat_root=jat_root,
                 ),
             }
     jat_root = _jat_root()
@@ -2761,6 +2935,18 @@ def _encryption_authorization_required() -> RuntimeError:
         "error_code": "encryption-authorization-required",
         "authorization_required": True,
         "authorization_purpose": "encryption",
+    }
+    return error
+
+
+def _r2_authorization_required() -> RuntimeError:
+    error = RuntimeError(
+        "R2 authorization required; connect with `josh-room auth start` before this operation"
+    )
+    error.result = {
+        "error_code": "r2-authorization-required",
+        "authorization_required": True,
+        "authorization_purpose": "r2",
     }
     return error
 

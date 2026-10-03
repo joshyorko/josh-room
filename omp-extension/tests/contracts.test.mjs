@@ -42,14 +42,36 @@ test("context accepts only the v1 bounded Room identity contract", () => {
 	assert.equal(parseContextResult({ format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, project_id: "../private" }), undefined);
 });
 
-test("status and snapshots keep only bounded public fields", () => {
-	assert.deepEqual(parseStatusResult({ ok: true, state: "clean", path_matches: true, project_id: "demo-room", snapshot_id: "jat-a1b2c3", workspace: "/secret", workspace_fingerprint: "sensitive" }), {
+test("status accepts the authoritative path-bound changed receipt and filters private fields", () => {
+	assert.deepEqual(parseStatusResult({ ok: true, state: "clean", path_matches: true, fingerprint_matches: true, project_id: "demo-room", snapshot_id: "jat-a1b2c3", workspace: "/tmp/synthetic-workspace", workspace_fingerprint: "a".repeat(64) }), {
 		kind: "known",
 		state: "clean",
 		projectId: "demo-room",
 		snapshotId: "jat-a1b2c3",
 	});
-	assert.equal(parseStatusResult({ ok: true, state: "future-state" }), undefined);
+	assert.deepEqual(parseStatusResult({
+		ok: false,
+		state: "changed",
+		path_matches: true,
+		fingerprint_matches: false,
+		dimension_id: "synthetic",
+		project_id: "smoke-room",
+		snapshot_id: "jat-old",
+		workspace: "/tmp/synthetic-workspace",
+		workspace_path_sha256: "b".repeat(64),
+		workspace_fingerprint: "c".repeat(64),
+	}), {
+		kind: "known",
+		state: "changed",
+		projectId: "smoke-room",
+		snapshotId: "jat-old",
+	});
+	assert.deepEqual(parseStatusResult({ ok: false, state: "unlinked" }), undefined);
+	assert.equal(parseStatusResult({ ok: false, state: "changed", path_matches: false, fingerprint_matches: false, project_id: "demo-room", snapshot_id: "jat-a1b2c3" }), undefined);
+	assert.equal(parseStatusResult({ ok: false, state: "changed", path_matches: true, fingerprint_matches: true, project_id: "demo-room", snapshot_id: "jat-a1b2c3" }), undefined);
+	assert.equal(parseStatusResult({ ok: true, state: "changed", path_matches: true, fingerprint_matches: false, project_id: "demo-room", snapshot_id: "jat-a1b2c3" }), undefined);
+	assert.equal(parseStatusResult({ ok: false, state: "future-state", path_matches: true, fingerprint_matches: false, project_id: "demo-room", snapshot_id: "jat-a1b2c3" }), undefined);
+	assert.equal(parseStatusResult({ ok: false, state: "changed", path_matches: true, fingerprint_matches: false, project_id: "../private", snapshot_id: "jat-a1b2c3" }), undefined);
 	const result = parseSnapshotsResult({
 		ok: true,
 		project: "demo-room",

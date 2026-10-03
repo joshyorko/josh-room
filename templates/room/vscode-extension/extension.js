@@ -599,7 +599,7 @@ async function initializeManagedRuntime(context, progressReporter, cancellationT
 function operationNeedsJat(args) {
   if (!Array.isArray(args) || !args.length) return false;
   if (["hydrate", "serve", "jat", "doctor", "enter"].includes(args[0])) return true;
-  return args[0] === "snapshot" && args[1] === "create";
+  return args[0] === "snapshot" && ["create", "export", "serve", "extract"].includes(args[1]);
 }
 
 async function ensureJatForState(context, state, progressReporter, cancellationToken) {
@@ -2241,13 +2241,16 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   if (!project.id || !dimension || !["local", "r2", "minio"].includes(provider)) {
     throw new Error("Choose a trusted Provider, Dimension, Room, and JAT recovery point.");
   }
-  const history = await runOperation(
-    `Loading ${project.display_name} recovery points…`,
-    nativeRegistry.dimensionArgs(["snapshots", "list", project.id], dimension),
-    cwd,
-  );
+  const historyTitle = `Loading ${project.display_name} recovery points…`;
+  const historyArgs = nativeRegistry.dimensionArgs(["snapshots", "list", project.id], dimension);
+  const history = provider === "minio"
+    ? await runSelectedEncryption(historyArgs, cwd, project.dimension || { id: dimension, provider }, {
+      title: historyTitle,
+      action: "read Room recovery points",
+    })
+    : await runOperation(historyTitle, historyArgs, cwd);
   const preferredSnapshotId = snapshotIdentity(preferredProject);
-  const markerSnapshotId = marker && marker.format_version === 2 && marker.snapshot_id;
+  const markerSnapshotId = marker && [2, 3].includes(marker.format_version) && marker.snapshot_id;
   if (preferredSnapshotId && !history.snapshots.some((item) => item.snapshot_id === preferredSnapshotId)) {
     throw new Error("The selected JAT is not available in the selected Room.");
   }
@@ -2269,6 +2272,38 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   if (!/^[a-z0-9-]+$/.test(project.id) || !/^[a-z0-9-]+$/.test(snapshotId)
     || !/^[a-z0-9][a-z0-9._-]*$/.test(dimension)) {
     throw new Error("Provider, Dimension, Room, or snapshot identity is unsafe for terminal execution.");
+  }
+  const selectedRecord = history.snapshots.find((item) => (item.snapshot_id || item.id) === snapshotId);
+  const preferredRecord = preferredProject?.snapshot;
+  if ((selectedRecord?.payload_kind || preferredRecord?.payload_kind) === "room-store-v1") {
+    const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
+      title: `Serve ${project.display_name} logical JAT`,
+      placeHolder: "How should JAT expose this recovery point?",
+      ignoreFocusOut: true,
+    });
+    if (!chosen) return "cancelled";
+    let encryptionMaterial;
+    if (provider === "minio") {
+      const status = await runJoshRoom(["encryption", "status", "--dimension", dimension], cwd);
+      encryptionMaterial = await readEncryptionMaterial({ ...(project.dimension || {}), ...status });
+    }
+    const args = nativeRegistry.dimensionArgs(
+      ["snapshot", "serve", project.id, "--snapshot", snapshotId, "--mode", chosen.mode],
+      dimension,
+    );
+    return startRegistry({
+      cwd,
+      title: `Serving ${project.display_name} logical JAT`,
+      terminalName: `JAT: ${project.display_name}`,
+      args,
+      mode: chosen.mode,
+      encryptionMaterial,
+      retry: () => vscode.commands.executeCommand("joshRoom.serve", {
+        ...project,
+        snapshot_id: snapshotId,
+        snapshot: selectedRecord || preferredRecord,
+      }),
+    });
   }
   let encryptionMaterial;
   if (provider === "minio") {
@@ -3106,7 +3141,7 @@ async function chooseServeProject(projects, marker, preferredProject) {
       && explicitDimensionId(project) === explicitDimensionId(preferredProject));
     if (selected) return selected;
   }
-  if (marker && marker.format_version === 2 && marker.dimension_id && marker.snapshot_id) {
+  if (marker && [2, 3].includes(marker.format_version) && marker.dimension_id && marker.snapshot_id) {
     const selected = projects.find((project) => project.id === marker.project_id
       && explicitDimensionId(project) === marker.dimension_id
       && Array.isArray(project.snapshots)
@@ -3569,6 +3604,100 @@ async function importRecovery(item) {
   return connectEncryption(dimension, { recoveryHandoff: recovery });
 }
 
+async function runDimensionRoomStoreOperation(action, item, extraArgs, title) {
+  const dimension = selectedDimension(item);
+  const dimensionIdValue = dimension?.id || dimension?.dimension_id;
+  const provider = nativeRegistry.providerKey(dimension?.provider);
+  if (!dimensionIdValue || !["minio", "r2"].includes(provider)) {
+    throw new Error("Choose a configured MinIO or R2 Dimension for Room Store lifecycle operations.");
+  }
+  const args = nativeRegistry.dimensionArgs(["room-store", action, ...extraArgs], dimensionIdValue);
+  return runSelectedEncryption(args, activeWorkspace(), dimension, {
+    title,
+    action: `${action} the Room Store`,
+  });
+}
+
+async function verifyRoomStore(item) {
+  assertWorkspaceTrusted("verify a Room Store");
+  const scope = await vscode.window.showQuickPick([
+    { label: "Repository metadata", description: "Check repository structure and indexes without reading every stored pack.", scope: "metadata" },
+    { label: "Read a sample", description: "Read a chosen percentage of stored data.", scope: "subset" },
+    { label: "Read all data", description: "Read every stored pack; this can take a long time.", scope: "all" },
+  ], { title: "Josh: Verify Room Store", placeHolder: "Choose verification scope", ignoreFocusOut: true });
+  if (!scope) return "cancelled";
+  const args = [];
+  if (scope.scope === "subset") {
+    const percentage = await vscode.window.showInputBox({
+      title: "Room Store sample verification",
+      prompt: "Percent of stored data to read (1–100%)",
+      value: "5%",
+      ignoreFocusOut: true,
+      validateInput: (value) => /^(?:[1-9]|[1-9][0-9]|100)%$/.test(value.trim())
+        ? undefined : "Enter a whole percentage from 1% to 100%.",
+    });
+    if (!percentage) return "cancelled";
+    args.push("--read-data-subset", percentage.trim());
+  } else if (scope.scope === "all") {
+    const action = await vscode.window.showWarningMessage(
+      "Read all Room Store data? This reads every stored pack from the selected Dimension and can take a long time. It does not change stored data.",
+      { modal: true },
+      "Read all data",
+      "Cancel",
+    );
+    if (action !== "Read all data") return "cancelled";
+    args.push("--read-data");
+  }
+  const result = await runDimensionRoomStoreOperation("verify", item, args, "Verifying Room Store…");
+  if (result.status !== "verified") throw new Error("Room Store Verify returned an invalid receipt.");
+  const scopeText = result.read_data ? "all stored data" : result.read_data_subset || "repository metadata";
+  await vscode.window.showInformationMessage(`Room Store verification completed · Scope: ${scopeText}.`);
+  return "verified";
+}
+
+async function optimizeRoomStore(item) {
+  assertWorkspaceTrusted("optimize a Room Store");
+  const dimension = selectedDimension(item);
+  const label = dimension?.display_name || dimension?.name || dimension?.id || "selected Dimension";
+  const plan = await runDimensionRoomStoreOperation("optimize", item, [], `Planning Room Store optimization for ${label}…`);
+  if (plan.status !== "planned" || plan.dry_run !== true) {
+    throw new Error("Room Store Optimize did not return a dry-run plan; no prune was requested.");
+  }
+  const confirmed = await vscode.window.showWarningMessage(
+    `Permanently remove unreferenced Restic data from ${label}? Confirmed Optimize prunes repository data that no longer appears in the Room Store catalog. Once removed, that data cannot be restored. Verify the catalog and your recovery points before continuing. The first phase only planned this operation; nothing has been removed yet.`,
+    { modal: true },
+    "Optimize and prune",
+    "Cancel",
+  );
+  if (confirmed !== "Optimize and prune") return "planned";
+  const result = await runDimensionRoomStoreOperation(
+    "optimize", item, ["--confirm"], `Pruning unreferenced Room Store data in ${label}…`,
+  );
+  if (result.status !== "completed" || result.dry_run !== false) {
+    throw new Error("Room Store Optimize returned an invalid prune receipt.");
+  }
+  await vscode.window.showInformationMessage(`Room Store Optimize completed for ${label}.`);
+  return "optimized";
+}
+
+async function reconcileRoomStore(item) {
+  assertWorkspaceTrusted("reconcile a Room Store");
+  const dimension = selectedDimension(item);
+  const label = dimension?.display_name || dimension?.name || dimension?.id || "selected Dimension";
+  const result = await runDimensionRoomStoreOperation("reconcile", item, [], `Reconciling Room Store in ${label}…`);
+  if (result.destructive_cleanup_performed !== false) {
+    throw new Error("Room Store Reconcile did not confirm that no cleanup occurred.");
+  }
+  const count = (value) => Array.isArray(value) ? value.length : 0;
+  await vscode.window.showInformationMessage([
+    `Room Store reachability reconciled · Catalog revision ${result.catalog_revision ?? "unknown"}.`,
+    `Catalog references: ${count(result.catalog_referenced)} · Descriptor references: ${count(result.descriptor_referenced)} · Component-only: ${count(result.component_only)}.`,
+    `Restic-only orphans: ${count(result.restic_only_orphans)} · Missing from Restic: ${count(result.missing_from_restic)} · Legacy objects: ${count(result.legacy_objects)}.`,
+    "No cleanup was performed.",
+  ].join("\n"));
+  return "reconciled";
+}
+
 async function configureStorageBucket({ provider, connectionId, dimensionId, connectionMetadata = {}, credentials, cwd }) {
   let bucketResult;
   const commandOptions = credentials === undefined ? {} : { stdin: credentials };
@@ -3886,6 +4015,7 @@ class HierarchyRoomsProvider {
     treeItem.contextValue = item.kind === "connection"
       ? item.state === "expired" ? "provider-connection-expired"
         : item.state === "connected" ? "provider-connection-connected" : "provider-connection"
+      : item.kind === "jat" ? item.snapshot?.payload_kind === "room-store-v1" ? "logical-jat" : "jat"
       : syntheticDimension ? "dimension-synthetic"
         : item.kind === "dimension" && item.encryption_state ? `dimension-${item.encryption_state}` : item.kind;
     treeItem.description = item.description || "";
@@ -4203,6 +4333,159 @@ function contextSnapshot(context) {
   return snapshots.find((snapshot) => (snapshot.snapshot_id || snapshot.id) === context.snapshot_id);
 }
 
+async function selectedLogicalSnapshot(preselected, title) {
+  const context = await explicitRoomContext(preselected, title);
+  if (!context) return undefined;
+  if (contextSnapshot(context)?.payload_kind !== "room-store-v1") {
+    throw new Error("Select a logical Room Store JAT for this action.");
+  }
+  return context;
+}
+
+function logicalSnapshotActionArgs(action, context, extra = []) {
+  const projectId = context?.project_id || context?.id;
+  const snapshotId = context?.snapshot_id;
+  const dimension = explicitDimensionId(context);
+  if (!projectId || !snapshotId || !dimension) {
+    throw new Error("Select a trusted Room, Dimension, and JAT.");
+  }
+  return nativeRegistry.dimensionArgs(
+    ["snapshot", action, projectId, ...extra, "--snapshot", snapshotId],
+    dimension,
+  );
+}
+
+async function runLogicalSnapshotAction(action, context, extra, title) {
+  const cwd = activeWorkspace();
+  const dimension = context.dimension || { id: explicitDimensionId(context), provider: context.provider };
+  const args = logicalSnapshotActionArgs(action, context, extra);
+  return runSelectedEncryption(args, cwd, dimension, {
+    title,
+    action: `${action} a logical JAT`,
+  });
+}
+
+function logicalSnapshotSummary(result) {
+  const components = result.components && typeof result.components === "object"
+    ? Object.entries(result.components).filter(([, value]) => value).map(([name]) => name)
+    : [];
+  return [
+    `Logical JAT ${String(result.logical_jat_id || "").slice(0, 16)}`,
+    `Workspace: ${formatHaulerSize(result.logical_bytes) || "unknown size"}`,
+    `Restic data added: ${formatHaulerSize(result.data_added_bytes) || "unknown"}`,
+    `Components: ${components.length ? components.join(", ") : "none"}`,
+  ].join("\n");
+}
+
+async function inspectLogicalSnapshot(preselected) {
+  assertWorkspaceTrusted("inspect a logical JAT");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Inspect Logical JAT");
+  if (!context) return "cancelled";
+  const result = await runLogicalSnapshotAction(
+    "inspect", context, [], `Inspecting ${context.display_name || context.project_id}…`,
+  );
+  await vscode.window.showInformationMessage(logicalSnapshotSummary(result), "Show Logs");
+  return "inspected";
+}
+
+async function exportPortableJat(preselected) {
+  assertWorkspaceTrusted("export a portable JAT");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Export Portable JAT");
+  if (!context) return "cancelled";
+  const basename = String(context.display_name || context.project_id)
+    .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "room";
+  const output = await vscode.window.showSaveDialog({
+    title: "Save Portable JAT",
+    defaultUri: vscode.Uri.file(path.join(activeWorkspace(), `${basename}.haul.tar.zst`)),
+    filters: { "Portable JAT": ["zst"] },
+  });
+  if (!output) return "cancelled";
+  try {
+    fs.lstatSync(output.fsPath);
+    throw new Error("The selected export file already exists. Choose a new output path.");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const result = await runLogicalSnapshotAction(
+    "export", context, ["--output", output.fsPath], `Exporting ${context.display_name || context.project_id} as Portable JAT…`,
+  );
+  if (result.status !== "exported" || !Number.isSafeInteger(result.output_size) || result.output_size < 0) {
+    throw new Error("Portable JAT export returned an invalid receipt.");
+  }
+  const verified = Array.isArray(result.verified_components) ? result.verified_components.join(", ") : "none";
+  const digest = typeof result.output_sha256 === "string" ? ` · sha256 ${result.output_sha256.slice(0, 16)}…` : "";
+  await vscode.window.showInformationMessage(
+    `Exported Portable JAT ${path.basename(output.fsPath)} · ${formatHaulerSize(result.output_size) || "unknown size"} · Verified components: ${verified}${digest}`,
+  );
+  return "exported";
+}
+
+function logicalReferenceChoices(result) {
+  const references = result.components?.hauler_content?.references;
+  if (!Array.isArray(references)) return [];
+  return references.flatMap((entry) => {
+    const reference = typeof entry === "string" ? entry : entry?.reference || entry?.digest;
+    if (typeof reference !== "string" || !reference) return [];
+    return [{
+      label: `$(package) ${reference}`,
+      description: typeof entry === "object" ? [entry.kind, entry.media_type].filter(Boolean).join(" · ") : "",
+      reference,
+    }];
+  });
+}
+
+async function extractLogicalSnapshot(preselected) {
+  assertWorkspaceTrusted("extract from a logical JAT");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Extract from Logical JAT");
+  if (!context) return "cancelled";
+  const inspected = await runLogicalSnapshotAction(
+    "inspect", context, [], `Reading ${context.display_name || context.project_id} references…`,
+  );
+  const references = logicalReferenceChoices(inspected);
+  if (!references.length) {
+    await vscode.window.showInformationMessage("This logical JAT has no extractable Hauler references.");
+    return "empty";
+  }
+  const selected = await vscode.window.showQuickPick(references, {
+    title: "Extract from Logical JAT",
+    placeHolder: "Choose one reference; the source JAT remains unchanged",
+    ignoreFocusOut: true,
+  });
+  if (!selected) return "cancelled";
+  const parents = await vscode.window.showOpenDialog({
+    title: "Choose extract parent folder",
+    defaultUri: vscode.Uri.file(activeWorkspace()),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Extract here",
+  });
+  if (!parents?.length) return "cancelled";
+  const name = await vscode.window.showInputBox({
+    title: "Extract from Logical JAT",
+    prompt: "New destination folder name (created only if absent)",
+    value: "logical-jat-extract",
+    ignoreFocusOut: true,
+    validateInput: (value) => isSafeRestoreName(value) ? undefined : "Enter one folder name without path separators.",
+  });
+  if (!name) return "cancelled";
+  const destination = path.join(parents[0].fsPath, name);
+  try {
+    fs.lstatSync(destination);
+    throw new Error("The selected extract destination already exists. Choose a new folder name.");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const result = await runLogicalSnapshotAction(
+    "extract", context, [selected.reference, "--destination", destination], `Extracting ${selected.reference}…`,
+  );
+  const action = await vscode.window.showInformationMessage(`Extracted ${selected.reference} into ${name}.`, "Open Folder");
+  if (action === "Open Folder") {
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
+  }
+  return result.ok ? "extracted" : "failed";
+}
+
 function requiresLegacyLinkVerification(context, marker) {
   const snapshot = contextSnapshot(context);
   const fingerprint = snapshot && snapshot.workspace_fingerprint;
@@ -4421,6 +4704,12 @@ function activateNative(context) {
   register(context, "joshRoom.repair", repairRoom);
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
+  register(context, "joshRoom.exportPortableJat", exportPortableJat);
+  register(context, "joshRoom.extractLogicalSnapshot", extractLogicalSnapshot);
+  register(context, "joshRoom.verifyRoomStore", verifyRoomStore);
+  register(context, "joshRoom.optimizeRoomStore", optimizeRoomStore);
+  register(context, "joshRoom.reconcileRoomStore", reconcileRoomStore);
   register(context, "joshRoom.refresh", () => roomsProvider.reload());
   register(context, "joshRoom.prepare", () => roomsProvider.reload());
   register(context, "joshRoom.showLogs", () => outputChannel.show(true));
@@ -4663,6 +4952,13 @@ Object.assign(module.exports.__test__, {
   jatServe,
   jatExport,
   jatCopy,
+  inspectLogicalSnapshot,
+  exportPortableJat,
+  extractLogicalSnapshot,
+  verifyRoomStore,
+  optimizeRoomStore,
+  reconcileRoomStore,
+  logicalReferenceChoices,
   chooseHaul,
   inventoryQuickPickItems,
   isHaulerChunkSize,

@@ -596,6 +596,10 @@ test("JAT runtime acquisition is lazy and limited to JAT-backed operations", () 
   assert.equal(needsJat(["auth", "status"]), false);
   assert.equal(needsJat(["status"]), false);
   assert.equal(needsJat(["snapshot", "create"]), true);
+  assert.equal(needsJat(["snapshot", "inspect"]), false);
+  assert.equal(needsJat(["snapshot", "export"]), true);
+  assert.equal(needsJat(["snapshot", "serve"]), true);
+  assert.equal(needsJat(["snapshot", "extract"]), true);
   assert.equal(needsJat(["hydrate"]), true);
   assert.equal(needsJat(["serve"]), true);
   assert.equal(needsJat(["jat", "build"]), true);
@@ -4082,6 +4086,105 @@ const JAT_COMMAND_IDS = [
   "joshRoom.jatCopy",
 ];
 
+const ROOM_STORE_UI_COMMAND_IDS = [
+  "joshRoom.inspectLogicalSnapshot",
+  "joshRoom.exportPortableJat",
+  "joshRoom.extractLogicalSnapshot",
+  "joshRoom.verifyRoomStore",
+  "joshRoom.optimizeRoomStore",
+  "joshRoom.reconcileRoomStore",
+];
+
+function createLogicalSnapshotFixture(root, { results = {} } = {}) {
+  const snapshotId = "a".repeat(64);
+  const dimension = {
+    id: "backup",
+    display_name: "Backup",
+    provider: "minio",
+    encryption_domain_id: "domain-a",
+    key_generation: 1,
+    encryption_state: "ready",
+  };
+  const project = {
+    id: "demo-room",
+    display_name: "Demo Room",
+    latest: snapshotId,
+    snapshots: [{ snapshot_id: snapshotId, display_name: "Latest", payload_kind: "room-store-v1" }],
+  };
+  dimension.rooms = [project];
+  const { vscode, statusItem, infoCalls, warningCalls, quickPickCalls, progressCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions" && args[1] === "list") {
+      return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
+    }
+    if (args[0] === "encryption" && args[1] === "status") {
+      return { stdout: JSON.stringify({ ok: true, state: "ready", ...dimension }) };
+    }
+    if (args[0] === "room-store" && args[1] === "verify") {
+      return { stdout: JSON.stringify(results.verify || { ok: true, status: "verified", read_data: false }) };
+    }
+    if (args[0] === "room-store" && args[1] === "optimize") {
+      return { stdout: JSON.stringify(results.optimize?.[args.includes("--confirm") ? "confirmed" : "plan"]
+        || { ok: true, operation: "prune", status: args.includes("--confirm") ? "completed" : "planned", dry_run: !args.includes("--confirm") }) };
+    }
+    if (args[0] === "room-store" && args[1] === "reconcile") {
+      return { stdout: JSON.stringify(results.reconcile || {
+        ok: true,
+        catalog_referenced: [],
+        descriptor_referenced: [],
+        restic_only_orphans: [],
+        missing_from_restic: [],
+        component_only: [],
+        legacy_objects: [],
+        destructive_cleanup_performed: false,
+      }) };
+    }
+    if (args[0] === "snapshot" && args[1] === "inspect") {
+      return { stdout: JSON.stringify(results.inspect || {
+        ok: true,
+        logical_jat_id: snapshotId,
+        logical_bytes: 2048,
+        data_added_bytes: 512,
+        components: { hauler_content: { references: ["registry.example.test/demo/app:1.0"] } },
+      }) };
+    }
+    if (args[0] === "snapshot" && args[1] === "export") {
+      return { stdout: JSON.stringify(results.export || {
+        ok: true,
+        logical_jat_id: snapshotId,
+        status: "exported",
+        output_size: 4096,
+        output_sha256: "b".repeat(64),
+        workspace_entry_count: 5,
+        verified_components: ["hauler_content"],
+      }) };
+    }
+    if (args[0] === "snapshot" && args[1] === "extract") {
+      return { stdout: JSON.stringify(results.extract || { ok: true, destination: args[args.indexOf("--destination") + 1] }) };
+    }
+    if (args[0] === "snapshots" && args[1] === "list") {
+      return { stdout: JSON.stringify({ ok: true, latest: snapshotId, snapshots: project.snapshots }) };
+    }
+    throw new Error(`unexpected logical snapshot operation: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => key.startsWith("josh-room.encryption.v1:")
+      ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic" }) : undefined,
+  } });
+  const jat = {
+    kind: "jat",
+    id: snapshotId,
+    snapshot_id: snapshotId,
+    snapshot: project.snapshots[0],
+    project,
+    dimension,
+  };
+  return { vscode, extension, statusItem, infoCalls, warningCalls, quickPickCalls, progressCalls,
+    spawnHarness, dimension, project, jat, snapshotId };
+}
+
 function withWindowExtras(vscode) {
   const saveDialogCalls = [];
   const saveDialogResponses = [];
@@ -4176,6 +4279,173 @@ test("activation registers every JAT capability command", () => {
   for (const id of JAT_COMMAND_IDS) {
     assert.equal(typeof commandCallbacks.get(id), "function", id);
   }
+});
+
+test("native logical JAT and Dimension lifecycle commands are contributed and registered", () => {
+  for (const manifestPath of ["vscode-extension/package.json", "templates/room/vscode-extension/package.json"]) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifestPath), "utf8"));
+    const commands = manifest.contributes.commands.map((command) => command.command);
+    for (const id of ROOM_STORE_UI_COMMAND_IDS) assert.ok(commands.includes(id), id);
+    const contexts = manifest.contributes.menus["view/item/context"];
+    assert.ok(contexts.some((item) => item.command === "joshRoom.inspectLogicalSnapshot" && item.when.includes("logical-jat")));
+    assert.ok(contexts.some((item) => item.command === "joshRoom.exportPortableJat" && item.when.includes("logical-jat")));
+    assert.ok(contexts.some((item) => item.command === "joshRoom.extractLogicalSnapshot" && item.when.includes("logical-jat")));
+    assert.ok(contexts.some((item) => item.command === "joshRoom.verifyRoomStore" && item.when.includes("dimension")));
+    assert.ok(contexts.some((item) => item.command === "joshRoom.optimizeRoomStore" && item.when.includes("dimension")));
+    assert.ok(contexts.some((item) => item.command === "joshRoom.reconcileRoomStore" && item.when.includes("dimension")));
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-lifecycle-command-registration-"));
+  const { vscode, statusItem, commandCallbacks } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  extension.__test__.setStatusItem(statusItem);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [], secrets: { get: async () => undefined } });
+  for (const id of ROOM_STORE_UI_COMMAND_IDS) assert.equal(typeof commandCallbacks.get(id), "function", id);
+});
+
+test("logical JAT rows have separate action context from local portable JATs", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-logical-context-test-"));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const logical = provider.getTreeItem({
+    kind: "jat",
+    id: "logical-jat",
+    label: "Logical JAT",
+    snapshot: { payload_kind: "room-store-v1" },
+  });
+  const portable = provider.getTreeItem({ kind: "jat", id: "portable-jat", label: "Portable JAT", snapshot: {} });
+
+  assert.equal(logical.contextValue, "logical-jat");
+  assert.equal(portable.contextValue, "jat");
+});
+
+test("logical snapshot Inspect uses the selected Dimension and keeps inspection metadata-only", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-logical-inspect-test-"));
+  const fixture = createLogicalSnapshotFixture(root);
+
+  assert.equal(await fixture.extension.__test__.inspectLogicalSnapshot(fixture.jat), "inspected");
+
+  const inspect = fixture.spawnHarness.calls.find((call) => call.args[0] === "snapshot" && call.args[1] === "inspect");
+  assert.ok(inspect);
+  assert.equal(inspect.args[2], "demo-room");
+  assert.equal(inspect.args[inspect.args.indexOf("--snapshot") + 1], fixture.snapshotId);
+  assert.equal(inspect.args[inspect.args.indexOf("--dimension") + 1], "backup");
+  assert.equal(fixture.spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "export"), false);
+  assert.ok(fixture.infoCalls.some(([message]) => /2\.0 KB/.test(message)));
+});
+
+test("portable JAT export requires an explicit output path and reports verified output", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-logical-export-test-"));
+  const fixture = createLogicalSnapshotFixture(root);
+  const extras = withWindowExtras(fixture.vscode);
+  const output = path.join(root, "portable.haul.tar.zst");
+  extras.saveDialogResponses.push({ fsPath: output });
+
+  assert.equal(await fixture.extension.__test__.exportPortableJat(fixture.jat), "exported");
+
+  assert.equal(extras.saveDialogCalls.length, 1);
+  const exported = fixture.spawnHarness.calls.find((call) => call.args[0] === "snapshot" && call.args[1] === "export");
+  assert.ok(exported);
+  assert.equal(exported.args[exported.args.indexOf("--output") + 1], output);
+  assert.equal(exported.args[exported.args.indexOf("--snapshot") + 1], fixture.snapshotId);
+  assert.ok(fixture.progressCalls.some((call) => call.options.cancellable === true && /Exporting/.test(call.options.title)));
+  assert.match(fixture.infoCalls.at(-1)[0], /4\.0 KB/);
+  assert.match(fixture.infoCalls.at(-1)[0], /Verified components: hauler_content/);
+});
+
+test("logical snapshot Extract selects a descriptor reference and creates a new destination", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-logical-extract-test-"));
+  const fixture = createLogicalSnapshotFixture(root);
+  fixture.vscode.quickPickResponses.push({ reference: "registry.example.test/demo/app:1.0" });
+  fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
+  fixture.vscode.inputBoxResponses.push("extracted");
+
+  assert.equal(await fixture.extension.__test__.extractLogicalSnapshot(fixture.jat), "extracted");
+
+  const inspect = fixture.spawnHarness.calls.find((call) => call.args[0] === "snapshot" && call.args[1] === "inspect");
+  const extract = fixture.spawnHarness.calls.find((call) => call.args[0] === "snapshot" && call.args[1] === "extract");
+  assert.ok(inspect);
+  assert.ok(extract);
+  assert.equal(extract.args[3], "registry.example.test/demo/app:1.0");
+  assert.equal(extract.args[extract.args.indexOf("--destination") + 1], path.join(root, "extracted"));
+});
+
+test("Room Serve routes a logical JAT through the explicit snapshot Serve contract", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-logical-serve-test-"));
+  const fixture = createLogicalSnapshotFixture(root);
+  const terminals = [];
+  fixture.vscode.quickPickResponses.push({ label: "Registry", mode: "registry" });
+
+  assert.equal(await fixture.extension.__test__.serveRoom(fixture.jat, {
+    startRegistry: async (options) => {
+      terminals.push(options);
+      return "started";
+    },
+  }), "started");
+
+  assert.equal(terminals.length, 1);
+  assert.deepEqual(terminals[0].args, [
+    "snapshot", "serve", "demo-room", "--snapshot", fixture.snapshotId, "--mode", "registry", "--dimension", "backup",
+  ]);
+});
+
+test("Room Store Verify uses an explicit scope and Optimize never prunes without confirmation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-lifecycle-test-"));
+  const fixture = createLogicalSnapshotFixture(root);
+  const dimension = { ...fixture.dimension, dimension: fixture.dimension };
+  fixture.vscode.quickPickResponses.push({ label: "Repository metadata", scope: "metadata" });
+  assert.equal(await fixture.extension.__test__.verifyRoomStore(dimension), "verified");
+  const verifyArgs = fixture.spawnHarness.calls.find((call) => call.args[0] === "room-store" && call.args[1] === "verify").args;
+  assert.deepEqual(verifyArgs.slice(0, 4), ["room-store", "verify", "--dimension", "backup"]);
+  assert.equal(verifyArgs.includes("--read-data"), false);
+
+  fixture.vscode.quickPickResponses.push({ label: "Read a sample", scope: "subset" });
+  fixture.vscode.inputBoxResponses.push("5%");
+  assert.equal(await fixture.extension.__test__.verifyRoomStore(dimension), "verified");
+  const sampleArgs = fixture.spawnHarness.calls
+    .filter((call) => call.args[0] === "room-store" && call.args[1] === "verify")[1].args;
+  assert.equal(sampleArgs[sampleArgs.indexOf("--read-data-subset") + 1], "5%");
+
+  fixture.vscode.quickPickResponses.push({ label: "Read all data", scope: "all" });
+  fixture.vscode.warningResponses.push("Cancel");
+
+  assert.equal(await fixture.extension.__test__.verifyRoomStore(dimension), "cancelled");
+  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[0] === "room-store" && call.args[1] === "verify").length, 2);
+
+  assert.equal(await fixture.extension.__test__.optimizeRoomStore(dimension), "planned");
+  const optimizeCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "room-store" && call.args[1] === "optimize");
+  assert.equal(optimizeCalls.length, 1);
+  assert.equal(optimizeCalls[0].args.includes("--confirm"), false);
+});
+
+test("confirmed Room Store Optimize runs dry-run first, then requires an explicit destructive action", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-optimize-confirm-test-"));
+  const fixture = createLogicalSnapshotFixture(root);
+  const dimension = { ...fixture.dimension, dimension: fixture.dimension };
+  fixture.vscode.warningResponses.push("Optimize and prune");
+
+  assert.equal(await fixture.extension.__test__.optimizeRoomStore(dimension), "optimized");
+
+  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "room-store" && call.args[1] === "optimize");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].args.includes("--confirm"), false);
+  assert.equal(calls[1].args.includes("--confirm"), true);
+  assert.match(fixture.warningCalls[0][0], /permanently remove/i);
+});
+
+test("Room Store Reconcile reports reachability without requesting cleanup", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-reconcile-test-"));
+  const fixture = createLogicalSnapshotFixture(root, {
+    results: { reconcile: { ok: true, restic_only_orphans: ["orphan"], missing_from_restic: [], destructive_cleanup_performed: false } },
+  });
+
+  assert.equal(await fixture.extension.__test__.reconcileRoomStore(fixture.dimension), "reconciled");
+
+  const reconcile = fixture.spawnHarness.calls.find((call) => call.args[0] === "room-store" && call.args[1] === "reconcile");
+  assert.ok(reconcile);
+  assert.equal(reconcile.args.includes("--confirm"), false);
+  assert.ok(fixture.infoCalls.some(([message]) => /Restic-only orphans: 1/.test(message)));
+  assert.match(fixture.infoCalls.at(-1)[0], /No cleanup was performed/);
 });
 
 test("registered JAT commands wrap controller failures into the error message UX", async () => {

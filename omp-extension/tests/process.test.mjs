@@ -92,3 +92,10 @@ test("CLI diagnostics omit private paths and sensitive terms", async () => {
 	const unsafe = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", "process.stdout.write(JSON.stringify({ok:false,error:'credential unavailable at /private/key'}));process.exit(2)"], options));
 	await assert.rejects(unsafe(["context"], { cwd: process.cwd() }), /Josh Room operation failed/);
 });
+
+test("status forwards the core changed receipt that exits with status 2", async () => {
+	const changed = { ok: false, state: "changed", path_matches: true, fingerprint_matches: false, dimension_id: "synthetic", project_id: "smoke-room", snapshot_id: "jat-old", workspace: "/tmp/synthetic-room" };
+	const runner = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(JSON.stringify(changed))});process.exit(2)`], options));
+	assert.deepEqual(await runner(["status", "--workspace", "/tmp/synthetic-room", "--json"], { cwd: process.cwd() }), changed);
+	await assert.rejects(runner(["projects", "list", "--json"], { cwd: process.cwd() }), RoomCliError);
+});

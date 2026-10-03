@@ -84,8 +84,53 @@ def test_probe_failure_json_keeps_safe_check_and_error_metadata(monkeypatch, cap
         "failed_check": "native-directory-owner-dacl-inheritance",
         "error_type": "PrivatePathError",
         "winerror": 5,
+        "python_version": ".".join(map(str, sys.version_info[:3])),
         "checks_completed": ["protect-private-runtime-root"],
     }
+
+
+def test_changetime_probe_compares_mtime_at_native_100ns_resolution():
+    before = 12_345_600
+    assert verify_private_runtime._changetime_edit_predicates(
+        before_size=28,
+        after_size=28,
+        expected_size=28,
+        before_mtime_ns=before,
+        after_mtime_ns=before + 99,
+        before_change=1000,
+        after_change=1100,
+    ) == (True, True, True)
+
+    assert verify_private_runtime._changetime_edit_predicates(
+        before_size=28,
+        after_size=28,
+        expected_size=28,
+        before_mtime_ns=before,
+        after_mtime_ns=before + 100,
+        before_change=1000,
+        after_change=1100,
+    ) == (True, False, True)
+
+
+def test_changetime_probe_keeps_size_and_native_change_predicates_separate():
+    assert verify_private_runtime._changetime_edit_predicates(
+        before_size=28,
+        after_size=27,
+        expected_size=28,
+        before_mtime_ns=1000,
+        after_mtime_ns=1000,
+        before_change=1000,
+        after_change=1100,
+    ) == (False, True, True)
+    assert verify_private_runtime._changetime_edit_predicates(
+        before_size=28,
+        after_size=28,
+        expected_size=28,
+        before_mtime_ns=1000,
+        after_mtime_ns=1000,
+        before_change=1000,
+        after_change=1000,
+    ) == (True, True, False)
 
 
 def test_probe_failure_includes_static_helper_failure_code(monkeypatch):

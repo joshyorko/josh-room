@@ -622,7 +622,11 @@ def test_writable_room_store_context_initializes_and_binds_only_on_explicit_open
     keyset = SimpleNamespace(
         encryption_domain_id=domain_id,
         recovery_recipients=("age1synthetic-recovery",),
-        room_store=SimpleNamespace(repository_id=None, repository_format=2),
+        room_store=SimpleNamespace(
+            repository_id=None,
+            repository_format=2,
+            repository_prefix=bridge.ROOM_STORE_PREFIX,
+        ),
     )
     backend = object()
     calls = []
@@ -658,14 +662,20 @@ def test_writable_room_store_context_initializes_and_binds_only_on_explicit_open
     monkeypatch.setattr(bridge, "RoomStoreOperations", Operations)
     monkeypatch.setattr(bridge, "_scope", lambda *_args: domain_id)
     monkeypatch.setattr(bridge, "_create_backend", lambda *_args: backend)
-    monkeypatch.setattr(bridge, "_repository_locator", lambda _dimension: "synthetic-repository")
-    monkeypatch.setattr(bridge, "_cache_directory", lambda _dimension: tmp_path / "cache")
+    monkeypatch.setattr(
+        bridge, "_repository_locator", lambda _dimension: "synthetic-repository"
+    )
+    monkeypatch.setattr(
+        bridge, "_cache_directory", lambda _dimension: tmp_path / "cache"
+    )
     monkeypatch.setattr(bridge, "_private_cache", lambda _directory: None)
     monkeypatch.setattr(bridge, "_provider_environment", lambda _dimension: {})
     monkeypatch.setattr(
         bridge,
         "_verified_restic_executable",
-        lambda **kwargs: calls.append(("runtime", kwargs["install"])) or tmp_path / "restic",
+        lambda **kwargs: (
+            calls.append(("runtime", kwargs["install"])) or tmp_path / "restic"
+        ),
     )
     monkeypatch.setattr(bridge.auth, "ensure_room_store_keyset", lambda *_args: keyset)
 
@@ -678,7 +688,10 @@ def test_writable_room_store_context_initializes_and_binds_only_on_explicit_open
     monkeypatch.setattr(
         bridge,
         "_read_catalog",
-        lambda *_args: (Catalog.empty(dimension.dimension_id, domain_id), '"catalog-1"'),
+        lambda *_args: (
+            Catalog.empty(dimension.dimension_id, domain_id),
+            '"catalog-1"',
+        ),
     )
     monkeypatch.setattr(bridge, "_restic_store_factory", lambda **_kwargs: Store())
 
@@ -688,9 +701,13 @@ def test_writable_room_store_context_initializes_and_binds_only_on_explicit_open
         operation.mkdir()
         yield operation
 
-    monkeypatch.setattr(bridge, "_private_operation_directory", private_operation_directory)
+    monkeypatch.setattr(
+        bridge, "_private_operation_directory", private_operation_directory
+    )
 
-    with bridge.open_writable_room_store(tmp_path / "instance", dimension, material) as context:
+    with bridge.open_writable_room_store(
+        tmp_path / "instance", dimension, material
+    ) as context:
         assert context.writable is True
         assert context.repository_info.repository_id == "a" * 64
         assert context.catalog_etag == '"catalog-1"'
@@ -700,6 +717,319 @@ def test_writable_room_store_context_initializes_and_binds_only_on_explicit_open
     assert "bound" in calls
     assert ("runtime", True) in calls
     assert calls[-1] == "closed"
+
+
+def test_r2_existing_context_uses_read_only_authority_and_exposes_physical_binding(
+    tmp_path, monkeypatch
+):
+    domain_id = str(uuid.uuid4())
+    endpoint = "https://auth.example.invalid"
+    bucket = "synthetic-room-store"
+    dimension = bridge.DimensionConfig(
+        dimension_id="r2-main",
+        display_name="Synthetic R2",
+        provider="r2",
+        endpoint=endpoint,
+        bucket=bucket,
+        credential_profile="oauth-runtime",
+        encryption_domain_id=domain_id,
+    )
+    binding = bridge.physical_bucket_identity("r2", endpoint, bucket)
+    material = SimpleNamespace(encryption_domain_id=domain_id)
+    room_store = SimpleNamespace(
+        secret="s" * 43,
+        generation=3,
+        repository_id="a" * 64,
+        physical_binding=binding,
+        encryption_domain_id=domain_id,
+        keyset=SimpleNamespace(
+            repository_id="a" * 64,
+            repository_format=2,
+            repository_prefix=bridge.ROOM_STORE_PREFIX,
+        ),
+    )
+    authority = SimpleNamespace(
+        room_store=room_store,
+        encryption_material=material,
+    )
+
+    class ExistingStore:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+        def open_existing(self):
+            return RepositoryInfo("a" * 64, 2)
+
+    backend = object()
+    store = ExistingStore()
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(
+        bridge, "_r2_authority_session", lambda *args, **kwargs: (authority, material)
+    )
+    monkeypatch.setattr(bridge, "_scope", lambda *_args: domain_id)
+    monkeypatch.setattr(bridge, "_create_backend", lambda *_args: backend)
+    monkeypatch.setattr(
+        bridge,
+        "_repository_locator",
+        lambda _dimension: "s3://r2/synthetic/room-store/v1",
+    )
+    monkeypatch.setattr(
+        bridge, "_cache_directory", lambda _dimension: tmp_path / "cache"
+    )
+    monkeypatch.setattr(bridge, "_provider_environment", lambda _dimension: {})
+    monkeypatch.setattr(
+        bridge, "_verified_restic_executable", lambda **_kwargs: tmp_path / "restic"
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_read_catalog",
+        lambda *_args: (
+            Catalog.empty(dimension.dimension_id, domain_id),
+            '"catalog-1"',
+        ),
+    )
+    monkeypatch.setattr(bridge, "_restic_store_factory", lambda **_kwargs: store)
+    monkeypatch.setattr(
+        keyring, "lookup_room_store_secret", lambda *_args: room_store.secret
+    )
+    monkeypatch.setattr(
+        auth,
+        "_read_keyset_record_from_backend",
+        lambda *_args: pytest.fail("R2 must use its broker authority"),
+    )
+
+    with bridge.open_existing_room_store(
+        tmp_path / "instance",
+        dimension,
+        material,
+        authority_session=authority,
+    ) as context:
+        assert context.authority_session is authority
+        assert context.material is material
+        assert context.physical_binding == binding
+        assert context.repository_info.repository_id == "a" * 64
+
+    assert store.closed
+
+
+def test_r2_writable_context_uses_explicit_authority_ensure_and_bind(
+    tmp_path, monkeypatch
+):
+    domain_id = str(uuid.uuid4())
+    endpoint = "https://auth.example.invalid"
+    bucket = "synthetic-room-store"
+    dimension = bridge.DimensionConfig(
+        dimension_id="r2-main",
+        display_name="Synthetic R2",
+        provider="r2",
+        endpoint=endpoint,
+        bucket=bucket,
+        credential_profile="oauth-runtime",
+        encryption_domain_id=domain_id,
+    )
+    binding = bridge.physical_bucket_identity("r2", endpoint, bucket)
+    material = SimpleNamespace(
+        encryption_domain_id=domain_id,
+        recipient="age1synthetic-operational",
+        keyset=SimpleNamespace(recovery_recipients=("age1synthetic-recovery",)),
+    )
+    room_store = SimpleNamespace(
+        secret="s" * 43,
+        generation=3,
+        repository_id=None,
+        physical_binding=binding,
+        encryption_domain_id=domain_id,
+        keyset=SimpleNamespace(
+            repository_id=None,
+            repository_format=2,
+            repository_prefix=bridge.ROOM_STORE_PREFIX,
+        ),
+    )
+    calls = []
+
+    class Authority:
+        def ensure_material_details(self):
+            calls.append("ensure")
+            return room_store
+
+        def bind_repository_details(self, repository_id, *, expected_generation):
+            calls.append(("bind", repository_id, expected_generation))
+            room_store.repository_id = repository_id
+            room_store.keyset.repository_id = repository_id
+            return room_store
+
+        def read_material_details(self):
+            calls.append("readback")
+            return room_store
+
+    session = auth.R2RoomStoreSession(Authority(), room_store, material)
+
+    class Store:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            calls.append("closed")
+
+        def initialize(self):
+            calls.append("initialized")
+            return RepositoryInfo("a" * 64, 2)
+
+    class Operations:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def _open_store(self):
+            selected = self.kwargs["ensure_keyset"](dimension, object())
+            return selected, tmp_path / "credentials" / "password", Store()
+
+        def _bind_repository(self, selected, repository_id):
+            return self.kwargs["bind_repository"](
+                dimension,
+                object(),
+                repository_id,
+                expected_generation=selected.room_store.generation,
+            )
+
+    monkeypatch.setattr(bridge, "RoomStoreOperations", Operations)
+    monkeypatch.setattr(
+        bridge, "_r2_authority_session", lambda *args, **kwargs: (session, material)
+    )
+    monkeypatch.setattr(bridge, "_scope", lambda *_args: domain_id)
+    monkeypatch.setattr(bridge, "_create_backend", lambda *_args: object())
+    monkeypatch.setattr(
+        bridge,
+        "_repository_locator",
+        lambda _dimension: "s3://r2/synthetic/room-store/v1",
+    )
+    monkeypatch.setattr(
+        bridge, "_cache_directory", lambda _dimension: tmp_path / "cache"
+    )
+    monkeypatch.setattr(bridge, "_private_cache", lambda _directory: None)
+    monkeypatch.setattr(bridge, "_provider_environment", lambda _dimension: {})
+    monkeypatch.setattr(
+        bridge, "_verified_restic_executable", lambda **kwargs: tmp_path / "restic"
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_read_catalog",
+        lambda *_args: (
+            Catalog.empty(dimension.dimension_id, domain_id),
+            '"catalog-1"',
+        ),
+    )
+    monkeypatch.setattr(bridge, "_restic_store_factory", lambda **_kwargs: Store())
+
+    @contextmanager
+    def private_operation_directory():
+        operation = tmp_path / "operation"
+        operation.mkdir()
+        yield operation
+
+    monkeypatch.setattr(
+        bridge, "_private_operation_directory", private_operation_directory
+    )
+
+    with bridge.open_writable_room_store(
+        tmp_path / "instance",
+        dimension,
+        material,
+        authority_session=session,
+    ) as context:
+        assert context.writable is True
+        assert context.authority_session.room_store.repository_id == "a" * 64
+        assert context.physical_binding == binding
+
+    assert "ensure" in calls
+    assert ("bind", "a" * 64, 3) in calls
+    assert calls[-1] == "closed"
+
+
+def test_r2_backend_uses_the_selected_bucket_and_runtime_credentials(monkeypatch):
+    dimension = bridge.DimensionConfig(
+        dimension_id="r2-main",
+        display_name="Synthetic R2",
+        provider="r2",
+        endpoint="https://auth.example.invalid",
+        bucket="synthetic-room-store",
+        credential_profile="oauth-runtime",
+        encryption_domain_id=str(uuid.uuid4()),
+    )
+    credentials = {
+        "access-key-id": "synthetic-access",
+        "secret-access-key": "synthetic-secret",
+        "session-token": "synthetic-session",
+    }
+    observed = []
+    monkeypatch.setattr(
+        bridge.keyring,
+        "lookup",
+        lambda profile, *, allow_runtime: (
+            observed.append((profile, allow_runtime)) or credentials
+        ),
+    )
+    monkeypatch.setattr(bridge, "R2Backend", lambda config: ("r2-backend", config))
+
+    backend, config = bridge._create_backend(dimension, Path("/tmp/instance"))
+    environment = bridge._provider_environment(dimension)
+
+    assert backend == "r2-backend"
+    assert config.bucket == dimension.bucket
+    assert bridge._repository_locator(dimension).endswith(
+        "/synthetic-room-store/room-store/v1"
+    )
+    assert observed == [("oauth-runtime", True)]
+    assert environment["AWS_SESSION_TOKEN"] == "synthetic-session"
+
+
+def test_r2_existing_authority_requests_read_only_material(monkeypatch):
+    domain_id = str(uuid.uuid4())
+    dimension = bridge.DimensionConfig(
+        dimension_id="r2-main",
+        display_name="Synthetic R2",
+        provider="r2",
+        endpoint="https://auth.example.invalid",
+        bucket="synthetic-room-store",
+        credential_profile="oauth-runtime",
+        encryption_domain_id=domain_id,
+    )
+
+    class Material:
+        encryption_domain_id = domain_id
+        recipient = "age1synthetic-operational"
+        keyset = SimpleNamespace(
+            binding=bridge.physical_bucket_identity(
+                "r2", dimension.endpoint, dimension.bucket
+            )
+        )
+
+    material = Material()
+    room_store = SimpleNamespace(
+        secret="s" * 43,
+        physical_binding=material.keyset.binding,
+        encryption_domain_id=domain_id,
+    )
+    session = SimpleNamespace(encryption_material=material, room_store=room_store)
+    observed = []
+    monkeypatch.setattr(bridge, "EncryptionMaterial", Material)
+    monkeypatch.setattr(
+        bridge.auth,
+        "create_r2_room_store_authority",
+        lambda _dimension, *, allow_initialize: (
+            observed.append(allow_initialize) or session
+        ),
+    )
+
+    resolved, selected = bridge._r2_authority_session(
+        dimension, material, None, allow_initialize=False
+    )
+
+    assert resolved is session
+    assert selected is material
+    assert observed == [False]
 
 
 def test_restic_runtime_handoff_rejects_arbitrary_path_and_preview_never_installs(
@@ -769,3 +1099,136 @@ def test_restore_materializes_components_and_acquires_rcc_in_staged_workspace(
 
     assert [call[0] for call in calls] == ["materialized", "acquire", "closed"]
     assert calls[1][1:] == (archive, metadata, stage, robot)
+
+
+def test_hydrate_allows_cache_sibling_to_destination_and_marks_before_promotion(
+    tmp_path, monkeypatch
+):
+    from josh_room import room_store_operations
+
+    domain_id = str(uuid.uuid4())
+    dimension = bridge.DimensionConfig(
+        dimension_id="minio-main",
+        display_name="Synthetic MinIO",
+        provider="minio",
+        endpoint="https://minio.example.test:9443",
+        bucket="synthetic-room-store",
+        credential_profile="synthetic-profile",
+        encryption_domain_id=domain_id,
+        options=(("verify_tls", True),),
+    )
+    parent = tmp_path / "restore-parent"
+    parent.mkdir()
+    destination = parent / "restored"
+    cache_dir = parent / "cache"
+    material = SimpleNamespace(encryption_domain_id=domain_id)
+    tree_id = "b" * 64
+    descriptor_body = {
+        "logical_jat_id": "logical-selected",
+        "dimension_id": dimension.dimension_id,
+        "encryption_domain_id": domain_id,
+        "room_id": "room-synthetic",
+        "workspace": {
+            "repository_id": "a" * 64,
+            "repository_format": 2,
+            "snapshot_id": "c" * 64,
+            "tree_id": tree_id,
+        },
+        "components": {
+            "rcc_environment": None,
+            "homebrew_recovery": None,
+            "hauler_content": None,
+        },
+        "source": {},
+        "producer": {},
+    }
+    descriptor = SimpleNamespace(to_dict=lambda: descriptor_body)
+
+    class ExistingContext:
+        selected_descriptor = descriptor
+        catalog = SimpleNamespace(
+            body={
+                "revision": 2,
+                "projects": {"room-synthetic": {"display_name": "Synthetic"}},
+            }
+        )
+        repository_info = RepositoryInfo("a" * 64, 2)
+        backend = object()
+        private_dir = tmp_path / "private"
+        store = None
+
+        def __enter__(self):
+            self.private_dir.mkdir(mode=0o700)
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    class ExistingStore:
+        def snapshot(self, snapshot_id):
+            return SimpleNamespace(
+                snapshot_id=snapshot_id,
+                tree_id=tree_id,
+                parent_snapshot_id=None,
+            )
+
+        def entries(self, _snapshot_id):
+            return [
+                bridge.SnapshotEntry(".", "dir", 0, 0o700, None),
+                bridge.SnapshotEntry("notes.txt", "file", 5, 0o600, None),
+            ]
+
+        def restore(self, _snapshot_id, stage):
+            stage.mkdir()
+            (stage / "notes.txt").write_text("hello", encoding="utf-8")
+
+    store = ExistingStore()
+    ExistingContext.store = store
+    calls = []
+    promote = room_store_operations._rename_directory_noreplace
+
+    def checked_promote(stage, target):
+        assert (stage / ".josh-room.json").is_file()
+        calls.append("marker-before-promotion")
+        promote(stage, target)
+
+    monkeypatch.setattr(bridge, "_scope", lambda *_args: domain_id)
+    monkeypatch.setattr(
+        bridge, "_resolve_material", lambda *_args, **_kwargs: (material, None)
+    )
+    monkeypatch.setattr(
+        bridge,
+        "open_existing_room_store",
+        lambda *_args, **_kwargs: ExistingContext(),
+    )
+    monkeypatch.setattr(
+        bridge, "_repository_locator", lambda _dimension: "synthetic-repository"
+    )
+    monkeypatch.setattr(bridge, "_cache_directory", lambda _dimension: cache_dir)
+    monkeypatch.setattr(
+        bridge,
+        "_private_cache",
+        lambda path: path.mkdir(mode=0o700, exist_ok=True),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_prepare_restored_components",
+        lambda *_args: calls.append("components"),
+    )
+    monkeypatch.setattr(
+        room_store_operations, "_rename_directory_noreplace", checked_promote
+    )
+
+    restored = bridge.hydrate_room_store(
+        tmp_path / "instance",
+        dimension,
+        "room-synthetic",
+        destination,
+        material,
+        snapshot_id="logical-selected",
+    )
+
+    assert cache_dir.is_dir()
+    assert destination.joinpath("notes.txt").read_text(encoding="utf-8") == "hello"
+    assert calls == ["components", "marker-before-promotion"]
+    assert restored["destination"] == str(destination)

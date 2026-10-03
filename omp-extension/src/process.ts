@@ -145,11 +145,13 @@ export function createRoomProcessRunner(
 			if ((result.code === 0 || interrupted) && typeof parsed === "object" && parsed !== null && "ok" in parsed && parsed.ok === true) return parsed;
 			if (interrupted) throw new RoomCliError("cancelled");
 			if (timedOut) throw new RoomCliError("timeout");
-			if (!options.allowFailure && typeof parsed === "object" && parsed !== null && "ok" in parsed && parsed.ok === false) {
+			const changedStatusExit = args[0] === "status" && result.code === 2 && isRecord(parsed) &&
+				parsed.ok === false && parsed.state === "changed" && parsed.path_matches === true && parsed.fingerprint_matches === false;
+			if (!options.allowFailure && !changedStatusExit && isRecord(parsed) && parsed.ok === false) {
 				const diagnostic = "error" in parsed ? safeDiagnostic(parsed.error) : undefined;
 				throw new RoomCliError("failed", diagnostic);
 			}
-			if (result.code !== 0 && !options.allowFailure) throw new RoomCliError("failed");
+			if (result.code !== 0 && !options.allowFailure && !changedStatusExit) throw new RoomCliError("failed");
 			return parsed;
 		} finally {
 			clearTimeout(timeout);
@@ -157,6 +159,10 @@ export function createRoomProcessRunner(
 			options.signal?.removeEventListener("abort", onAbort);
 		}
 	};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function safeDiagnostic(value: unknown): string | undefined {

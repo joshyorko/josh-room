@@ -555,6 +555,7 @@ def test_load_runtime_session_reuses_age_material_without_contacting_authority(t
 
     assert hasattr(auth, "load_runtime_session")
     assert auth.load_runtime_session() is True
+    assert auth.load_runtime_session(require_r2=True) is False
     assert os.environ["JOSH_ROOM_RUNTIME_CONFIG"] == str(runtime / "config.json")
     assert os.environ["JOSH_ROOM_IDENTITY"] == str(runtime / "age.identity")
 
@@ -789,6 +790,8 @@ def test_r2_runtime_keeps_minio_broker_separate_from_oauth_credentials(tmp_path,
         "bucket": "r2-bucket",
         "expiresIn": 600,
     })
+
+    assert auth.load_runtime_session(require_r2=True) is True
 
     assert os.environ["JOSH_ROOM_PROVIDER_CREDENTIALS"] == str(broker)
     assert keyring.lookup("minio-profile", allow_runtime=False) == {

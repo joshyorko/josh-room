@@ -32,6 +32,23 @@ def _check(checks: list[str], name: str) -> None:
     checks.append(name)
 
 
+def _changetime_edit_predicates(
+    *,
+    before_size: int,
+    after_size: int,
+    expected_size: int,
+    before_mtime_ns: int,
+    after_mtime_ns: int,
+    before_change: int,
+    after_change: int,
+) -> tuple[bool, bool, bool]:
+    return (
+        before_size == after_size == expected_size,
+        before_mtime_ns // 100 == after_mtime_ns // 100,
+        before_change != after_change,
+    )
+
+
 def _verify_windows_acl(path: Path, *, directory: bool) -> None:
     # Read the real ACL through the native API; this proves owner, protected
     # inheritance state, and exact grants independently of POSIX mode bits.
@@ -102,13 +119,24 @@ def run_probe() -> dict[str, object]:
                 failed_check = "native-changetime-after-edit"
                 after_stat = handoff.stat()
                 after_change = change_time_ns(handoff, after_stat)
-                failed_check = "native-changetime-edit-detection"
-                if (
-                    len(b"different ephemeral handoff\n")
-                    != len(b"synthetic ephemeral handoff\n")
-                    or after_stat.st_mtime_ns != before_stat.st_mtime_ns
-                    or after_change == before_change
-                ):
+                same_size, mtime_restored_100ns, change_time_changed = (
+                    _changetime_edit_predicates(
+                        before_size=before_stat.st_size,
+                        after_size=after_stat.st_size,
+                        expected_size=len(b"different ephemeral handoff\n"),
+                        before_mtime_ns=before_stat.st_mtime_ns,
+                        after_mtime_ns=after_stat.st_mtime_ns,
+                        before_change=before_change,
+                        after_change=after_change,
+                    )
+                )
+                failed_check = (
+                    "native-changetime-edit-detection"
+                    f":same_size={int(same_size)}"
+                    f":mtime_restored_100ns={int(mtime_restored_100ns)}"
+                    f":change_time_changed={int(change_time_changed)}"
+                )
+                if not (same_size and mtime_restored_100ns and change_time_changed):
                     raise RuntimeError
                 _check(checks, "same-size-edit-restored-mtime-changes-native-changetime")
             file_handoff_in_progress = False
@@ -196,6 +224,7 @@ def main() -> int:
             "failed_check": error.failed_check,
             "error_type": error.error_type,
             "winerror": error.winerror,
+            "python_version": ".".join(map(str, sys.version_info[:3])),
             "checks_completed": error.checks_completed,
         }
         print(json.dumps(result, separators=(",", ":")))
@@ -207,6 +236,7 @@ def main() -> int:
             "failed_check": "probe-setup-or-cleanup",
             "error_type": type(error).__name__,
             "winerror": None,
+            "python_version": ".".join(map(str, sys.version_info[:3])),
             "checks_completed": [],
         }
         print(json.dumps(result, separators=(",", ":")))

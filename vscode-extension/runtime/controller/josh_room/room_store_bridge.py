@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -40,6 +40,7 @@ from .private_paths import (
     validate_private_directory,
     verify_private_path,
 )
+from .r2 import R2Backend, R2Config
 from .restic_store import ResticStore, SnapshotEntry
 from .room_store_components import (
     RCC_VERSION,
@@ -91,8 +92,11 @@ class RoomStoreBridgeError(RuntimeError):
 
 
 class _CatalogPublicationError(RuntimeError):
-    def __init__(self, published: bool | None):
+    def __init__(
+        self, published: bool | None, descriptor_object_key: str | None = None
+    ):
         self.published = published
+        self.descriptor_object_key = descriptor_object_key
         super().__init__("Room Store catalog publication failed")
 
 
@@ -112,12 +116,33 @@ class ExistingRoomStoreContext:
     selected_descriptor: LogicalJat | None
     publish_descriptor: Callable[..., None] | None = None
     writable: bool = False
+    physical_binding: str = ""
+    authority_session: Any | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _RoomStorePasswordBinding:
+    secret: str = field(repr=False)
+    generation: int
+    repository_id: str | None
+    repository_format: int = 2
+    repository_prefix: str = ROOM_STORE_PREFIX
+
+
+@dataclass(frozen=True, slots=True)
+class _RoomStoreOperationsKeyset:
+    encryption_domain_id: str
+    room_store: _RoomStorePasswordBinding
+    recovery_recipients: tuple[str, ...]
 
 
 def _scope(dimension: DimensionConfig, material: EncryptionMaterial) -> str:
-    if not isinstance(dimension, DimensionConfig) or dimension.provider != "minio":
+    if not isinstance(dimension, DimensionConfig) or dimension.provider not in {
+        "minio",
+        "r2",
+    }:
         raise RoomStoreBridgeError(
-            "Room Store currently requires a MinIO Dimension",
+            "Room Store requires a MinIO or R2 Dimension",
             code="provider-unsupported",
         )
     if not isinstance(material, EncryptionMaterial):
@@ -141,21 +166,107 @@ def _scope(dimension: DimensionConfig, material: EncryptionMaterial) -> str:
             ca_bundle=dimension.option("ca_bundle"),
         )
         if (
-            physical_bucket_identity("minio", dimension.endpoint, dimension.bucket)
+            physical_bucket_identity(
+                dimension.provider, dimension.endpoint, dimension.bucket
+            )
             != material.keyset.binding
         ):
             raise ValueError("physical binding mismatch")
     except (TypeError, ValueError) as error:
         raise RoomStoreBridgeError(
-            "selected MinIO storage binding is invalid", code="storage-binding-invalid"
+            "selected storage binding is invalid", code="storage-binding-invalid"
         ) from error
     return material.encryption_domain_id
 
 
-def _repository_locator(dimension: DimensionConfig) -> str:
-    if dimension.provider != "minio":
+def _r2_authority_session(
+    dimension: DimensionConfig,
+    selected_material: EncryptionMaterial | None,
+    authority_session: Any | None,
+    *,
+    allow_initialize: bool,
+) -> tuple[Any, EncryptionMaterial]:
+    try:
+        session = authority_session or auth.create_r2_room_store_authority(
+            dimension, allow_initialize=allow_initialize
+        )
+        material = session.encryption_material
+        room_store = session.room_store
+        binding = physical_bucket_identity("r2", dimension.endpoint, dimension.bucket)
+        if (
+            not isinstance(material, EncryptionMaterial)
+            or not isinstance(room_store.secret, str)
+            or material.keyset.binding != binding
+            or room_store.physical_binding != binding
+            or room_store.encryption_domain_id != material.encryption_domain_id
+            or (
+                selected_material is not None
+                and (
+                    selected_material.encryption_domain_id
+                    != material.encryption_domain_id
+                    or selected_material.recipient != material.recipient
+                )
+            )
+        ):
+            raise ValueError(
+                "R2 Room Store authority does not match the selected Dimension"
+            )
+        return session, material
+    except RoomStoreBridgeError:
+        raise
+    except Exception:  # noqa: BLE001 - auth transport and broker diagnostics are private.
         raise RoomStoreBridgeError(
-            "Room Store currently requires a MinIO Dimension",
+            "R2 Room Store authority is unavailable", code="r2-room-store-unavailable"
+        ) from None
+
+
+def _r2_operations_keyset(room_store: Any, material: EncryptionMaterial):
+    keyset = room_store.keyset
+    return _RoomStoreOperationsKeyset(
+        encryption_domain_id=material.encryption_domain_id,
+        room_store=_RoomStorePasswordBinding(
+            secret=room_store.secret,
+            generation=room_store.generation,
+            repository_id=room_store.repository_id,
+            repository_format=keyset.repository_format,
+            repository_prefix=keyset.repository_prefix,
+        ),
+        recovery_recipients=tuple(material.keyset.recovery_recipients),
+    )
+
+
+def _resolve_material(
+    dimension: DimensionConfig,
+    selected_material: EncryptionMaterial | None,
+    authority_session: Any | None,
+    *,
+    allow_initialize: bool,
+) -> tuple[EncryptionMaterial, Any | None]:
+    if dimension.provider == "r2":
+        session, material = _r2_authority_session(
+            dimension,
+            selected_material,
+            authority_session,
+            allow_initialize=allow_initialize,
+        )
+        return material, session
+    if authority_session is not None:
+        raise RoomStoreBridgeError(
+            "R2 authority cannot be used with a MinIO Dimension",
+            code="provider-binding-mismatch",
+        )
+    if not isinstance(selected_material, EncryptionMaterial):
+        raise RoomStoreBridgeError(
+            "selected Dimension encryption material is required",
+            code="material-required",
+        )
+    return selected_material, None
+
+
+def _repository_locator(dimension: DimensionConfig) -> str:
+    if dimension.provider not in {"minio", "r2"}:
+        raise RoomStoreBridgeError(
+            "Room Store requires a MinIO or R2 Dimension",
             code="provider-unsupported",
         )
     try:
@@ -172,7 +283,8 @@ def _repository_locator(dimension: DimensionConfig) -> str:
         return f"s3:{base}/{dimension.bucket}/{ROOM_STORE_PREFIX}"
     except (TypeError, ValueError) as error:
         raise RoomStoreBridgeError(
-            "MinIO repository locator is invalid", code="repository-locator-invalid"
+            "Room Store repository locator is invalid",
+            code="repository-locator-invalid",
         ) from error
 
 
@@ -193,7 +305,9 @@ def _cache_directory(
             )
     else:
         base = Path(cache_root)
-    binding = physical_bucket_identity("minio", dimension.endpoint, dimension.bucket)
+    binding = physical_bucket_identity(
+        dimension.provider, dimension.endpoint, dimension.bucket
+    )
     suffix = hashlib.sha256(binding.encode("utf-8")).hexdigest()
     return base / "room-store" / suffix
 
@@ -231,22 +345,29 @@ def _private_cache(directory: Path) -> None:
         ) from error
 
 
-def _create_backend(dimension: DimensionConfig, _instance: Path) -> MinioBackend:
+def _create_backend(
+    dimension: DimensionConfig, _instance: Path
+) -> MinioBackend | R2Backend:
     _repository_locator(dimension)
     try:
+        if dimension.provider == "r2":
+            return R2Backend(R2Config.from_dimension(dimension))
         return MinioBackend(MinioConfig.from_dimension(dimension))
     except Exception:  # noqa: BLE001 - sanitize SDK, TLS, and credential diagnostics at this boundary.
         raise RoomStoreBridgeError(
-            "MinIO storage connection is unavailable", code="provider-unavailable"
+            "object storage connection is unavailable", code="provider-unavailable"
         ) from None
 
 
 def _provider_environment(dimension: DimensionConfig) -> dict[str, str]:
     try:
-        credentials = keyring.lookup(dimension.credential_profile, allow_runtime=False)
+        credentials = keyring.lookup(
+            dimension.credential_profile, allow_runtime=dimension.provider == "r2"
+        )
     except Exception:  # noqa: BLE001 - native keyring errors may contain backend details.
         raise RoomStoreBridgeError(
-            "MinIO credential profile is unavailable", code="credentials-unavailable"
+            "object storage credential profile is unavailable",
+            code="credentials-unavailable",
         ) from None
     values = {
         "AWS_ACCESS_KEY_ID": credentials.get("access-key-id"),
@@ -257,7 +378,8 @@ def _provider_environment(dimension: DimensionConfig) -> dict[str, str]:
         values["AWS_SESSION_TOKEN"] = credentials["session-token"]
     if not values["AWS_ACCESS_KEY_ID"] or not values["AWS_SECRET_ACCESS_KEY"]:
         raise RoomStoreBridgeError(
-            "MinIO credential profile is incomplete", code="credentials-unavailable"
+            "object storage credential profile is incomplete",
+            code="credentials-unavailable",
         )
     return {key: value for key, value in values.items() if value}
 
@@ -557,13 +679,23 @@ def _latest_descriptor(
 def open_existing_room_store(
     instance: Path,
     dimension: DimensionConfig,
-    selected_material: EncryptionMaterial,
+    selected_material: EncryptionMaterial | None,
     *,
     project_id: str | None = None,
     snapshot_id: str = "latest",
+    authority_session: Any | None = None,
 ):
-    """Open an already-bound MinIO Room Store without keyset or repository writes."""
-    domain_id = _scope(dimension, selected_material)
+    """Open an already-bound MinIO or R2 Room Store without initialization writes."""
+    if dimension.provider == "r2":
+        authority_session, material = _r2_authority_session(
+            dimension, selected_material, authority_session, allow_initialize=False
+        )
+    else:
+        material = selected_material
+    domain_id = _scope(dimension, material)
+    physical_binding = physical_bucket_identity(
+        dimension.provider, dimension.endpoint, dimension.bucket
+    )
     instance = Path(instance)
     backend = _create_backend(dimension, instance)
     repository = _repository_locator(dimension)
@@ -583,26 +715,39 @@ def open_existing_room_store(
         protect_private_directory(staging_dir)
         password_file = credential_dir / "restic-password"
         try:
-            keyset, _keyset_etag = auth._read_keyset_record_from_backend(
-                dimension, backend
-            )
+            if dimension.provider == "r2":
+                room_store = authority_session.room_store
+                room_keyset = room_store.keyset
+                bound_repository_id = room_store.repository_id
+                key_generation = room_store.generation
+                repository_format = room_keyset.repository_format
+                repository_prefix = room_keyset.repository_prefix
+                secret = room_store.secret
+            else:
+                keyset, _keyset_etag = auth._read_keyset_record_from_backend(
+                    dimension, backend
+                )
+                if keyset is None or keyset.room_store is None:
+                    raise RoomStoreBridgeError(
+                        "bound Room Store keyset is unavailable",
+                        code="room-store-unavailable",
+                    )
+                bound_repository_id = keyset.room_store.repository_id
+                key_generation = keyset.room_store.generation
+                repository_format = keyset.room_store.repository_format
+                repository_prefix = keyset.room_store.repository_prefix
+                secret = keyset.room_store.secret
             if (
-                keyset is None
-                or keyset.room_store is None
-                or keyset.room_store.repository_id is None
-                or keyset.encryption_domain_id != domain_id
-                or keyset.room_store.repository_format != 2
-                or keyset.room_store.repository_prefix != ROOM_STORE_PREFIX
+                bound_repository_id is None
+                or repository_format != 2
+                or repository_prefix != ROOM_STORE_PREFIX
             ):
                 raise RoomStoreBridgeError(
                     "bound Room Store keyset is unavailable",
                     code="room-store-unavailable",
                 )
-            secret = keyring.lookup_room_store_secret(
-                keyset.encryption_domain_id,
-                keyset.room_store.generation,
-            )
-            if not hmac.compare_digest(secret, keyset.room_store.secret):
+            cached_secret = keyring.lookup_room_store_secret(domain_id, key_generation)
+            if not hmac.compare_digest(cached_secret, secret):
                 raise RoomStoreBridgeError(
                     "cached Room Store secret does not match its keyset",
                     code="room-store-secret-mismatch",
@@ -631,17 +776,14 @@ def open_existing_room_store(
             with store as opened:
                 repository_info = opened.open_existing()
                 if (
-                    repository_info.repository_id != keyset.room_store.repository_id
-                    or repository_info.repository_format
-                    != keyset.room_store.repository_format
+                    repository_info.repository_id != bound_repository_id
+                    or repository_info.repository_format != repository_format
                 ):
                     raise RoomStoreBridgeError(
                         "Restic repository does not match its bound identity",
                         code="repository-binding-mismatch",
                     )
-                catalog, etag = _read_catalog(
-                    backend, instance, dimension, selected_material
-                )
+                catalog, etag = _read_catalog(backend, instance, dimension, material)
                 selected_record = None
                 selected_descriptor = None
                 if project_id is not None:
@@ -669,7 +811,7 @@ def open_existing_room_store(
                             selected_descriptor = _load_descriptor(
                                 backend,
                                 instance,
-                                selected_material,
+                                material,
                                 project_id,
                                 selected_record,
                                 staging_dir,
@@ -693,12 +835,14 @@ def open_existing_room_store(
                     catalog_etag=etag,
                     store=opened,
                     private_dir=staging_dir,
-                    material=selected_material,
+                    material=material,
                     dimension=dimension,
                     project_id=project_id,
                     repository_info=repository_info,
                     selected_record=selected_record,
                     selected_descriptor=selected_descriptor,
+                    physical_binding=physical_binding,
+                    authority_session=authority_session,
                 )
         finally:
             password_file.unlink(missing_ok=True)
@@ -708,13 +852,21 @@ def open_existing_room_store(
 def open_writable_room_store(
     instance: Path,
     dimension: DimensionConfig,
-    selected_material: EncryptionMaterial,
+    selected_material: EncryptionMaterial | None,
     *,
     project_id: str | None = None,
     cancellation: Any = None,
+    authority_session: Any | None = None,
 ):
     """Open or initialize this Dimension's Room Store for an explicit write action."""
+    if dimension.provider == "r2":
+        authority_session, selected_material = _r2_authority_session(
+            dimension, selected_material, authority_session, allow_initialize=True
+        )
     domain_id = _scope(dimension, selected_material)
+    physical_binding = physical_bucket_identity(
+        dimension.provider, dimension.endpoint, dimension.bucket
+    )
     instance = Path(instance)
     backend = _create_backend(dimension, instance)
     repository = _repository_locator(dimension)
@@ -734,6 +886,15 @@ def open_writable_room_store(
         protect_private_directory(staging_dir)
 
         def ensure_keyset(selected_dimension, selected_backend):
+            if dimension.provider == "r2":
+                room_store = authority_session.authority.ensure_material_details()
+                selected = _r2_operations_keyset(room_store, selected_material)
+                if selected.encryption_domain_id != domain_id:
+                    raise RoomStoreBridgeError(
+                        "Room Store keyset belongs to another encryption domain",
+                        code="domain-mismatch",
+                    )
+                return selected
             keyset = auth.ensure_room_store_keyset(selected_dimension, selected_backend)
             if keyset.encryption_domain_id != domain_id:
                 raise RoomStoreBridgeError(
@@ -745,6 +906,11 @@ def open_writable_room_store(
         def bind_repository(
             selected_dimension, selected_backend, repository_id, *, expected_generation
         ):
+            if dimension.provider == "r2":
+                room_store = authority_session.authority.bind_repository_details(
+                    repository_id, expected_generation=expected_generation
+                )
+                return _r2_operations_keyset(room_store, selected_material)
             keyset = auth.bind_room_store_repository(
                 selected_dimension,
                 selected_backend,
@@ -811,6 +977,7 @@ def open_writable_room_store(
                     or keyset.room_store.repository_id != repository_info.repository_id
                     or keyset.room_store.repository_format
                     != repository_info.repository_format
+                    or keyset.room_store.repository_prefix != ROOM_STORE_PREFIX
                 ):
                     raise RoomStoreBridgeError(
                         "Restic repository does not match its bound identity",
@@ -854,10 +1021,11 @@ def open_writable_room_store(
                     workspace_signature: str,
                     signature_algorithm: str,
                 ) -> None:
+                    if not isinstance(descriptor, LogicalJat):
+                        raise _CatalogPublicationError(False)
                     body = descriptor.to_dict()
                     if (
-                        not isinstance(descriptor, LogicalJat)
-                        or body["dimension_id"] != dimension.dimension_id
+                        body["dimension_id"] != dimension.dimension_id
                         or body["encryption_domain_id"] != domain_id
                         or body["workspace"]["repository_id"]
                         != repository_info.repository_id
@@ -866,6 +1034,7 @@ def open_writable_room_store(
                     ):
                         raise _CatalogPublicationError(False)
                     ciphertext_path = staging_dir / "logical-jat.age"
+                    descriptor_object_key = None
                     try:
                         recipients = [
                             selected_material.recipient,
@@ -879,8 +1048,9 @@ def open_writable_room_store(
                             ciphertext_path,
                         )
                         ciphertext_digest = _digest_file(ciphertext_path)
+                        descriptor_object_key = f"objects/sha256/{ciphertext_digest}"
                         object_ref = backend.put_file(
-                            f"objects/sha256/{ciphertext_digest}", ciphertext_path
+                            descriptor_object_key, ciphertext_path
                         )
                         if (
                             object_ref.sha256 != ciphertext_digest
@@ -901,7 +1071,9 @@ def open_writable_room_store(
                             candidate, recipients, instance
                         )
                     except Exception:  # noqa: BLE001 - suppress age and provider diagnostics.
-                        raise _CatalogPublicationError(False) from None
+                        raise _CatalogPublicationError(
+                            False, descriptor_object_key
+                        ) from None
                     finally:
                         ciphertext_path.unlink(missing_ok=True)
                     try:
@@ -910,10 +1082,21 @@ def open_writable_room_store(
                         )
                     except Exception as error:  # noqa: BLE001 - preserve only publication outcome.
                         raise _CatalogPublicationError(
-                            getattr(error, "published", None)
+                            getattr(error, "published", None), descriptor_object_key
                         ) from None
                     state.update(catalog=candidate, etag=new_etag)
 
+                if dimension.provider == "r2":
+                    bound_material = authority_session.authority.read_material_details()
+                    authority_session = replace(
+                        authority_session,
+                        room_store=bound_material,
+                    )
+                    if bound_material.repository_id != repository_info.repository_id:
+                        raise RoomStoreBridgeError(
+                            "R2 repository binding was not durably verified",
+                            code="repository-binding-mismatch",
+                        )
                 yield ExistingRoomStoreContext(
                     instance=instance,
                     backend=backend,
@@ -929,6 +1112,8 @@ def open_writable_room_store(
                     selected_descriptor=selected_descriptor,
                     publish_descriptor=publish_descriptor,
                     writable=True,
+                    physical_binding=physical_binding,
+                    authority_session=authority_session,
                 )
         finally:
             password_file.unlink(missing_ok=True)
@@ -1037,21 +1222,39 @@ def _read_only_snapshot_entries(
     provider_env,
     executable,
     snapshot_id,
+    authority_session=None,
 ) -> list[SnapshotEntry]:
     try:
-        keyset, _etag = auth._read_keyset_record_from_backend(dimension, backend)
-        if (
-            keyset is None
-            or keyset.room_store is None
-            or keyset.room_store.repository_id is None
-        ):
+        if dimension.provider == "r2":
+            authority_session, _resolved = _r2_authority_session(
+                dimension, material, authority_session, allow_initialize=False
+            )
+            room_store = authority_session.room_store
+            keyset = room_store.keyset
+            repository_id = room_store.repository_id
+            generation = room_store.generation
+            secret = room_store.secret
+            keyset_domain = room_store.encryption_domain_id
+        else:
+            keyset, _etag = auth._read_keyset_record_from_backend(dimension, backend)
+            if keyset is None or keyset.room_store is None:
+                raise ValueError("Room Store repository is not bound")
+            repository_id = keyset.room_store.repository_id
+            generation = keyset.room_store.generation
+            secret = keyring.lookup_room_store_secret(
+                keyset.encryption_domain_id,
+                generation,
+            )
+            keyset_domain = keyset.encryption_domain_id
+        if repository_id is None:
             raise ValueError("Room Store repository is not bound")
-        if keyset.encryption_domain_id != material.encryption_domain_id:
+        if keyset_domain != material.encryption_domain_id:
             raise ValueError("Room Store domain mismatch")
-        secret = keyring.lookup_room_store_secret(
-            keyset.encryption_domain_id,
-            keyset.room_store.generation,
+        cached_secret = keyring.lookup_room_store_secret(
+            material.encryption_domain_id, generation
         )
+        if not hmac.compare_digest(secret, cached_secret):
+            raise ValueError("Room Store keyring value does not match its authority")
         password_file = runtime_dir / "preview-password"
         descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -1074,7 +1277,7 @@ def _read_only_snapshot_entries(
         )
         with store as opened:
             repository_info = opened.open_existing()
-            if repository_info.repository_id != keyset.room_store.repository_id:
+            if repository_info.repository_id != repository_id:
                 raise ValueError("Room Store repository binding mismatch")
             return list(opened.entries(snapshot_id))
     except Exception:  # noqa: BLE001 - keep backend/path diagnostics out of Preview results.
@@ -1101,6 +1304,7 @@ def _build_operations(
     required_components: Sequence[str] = (),
     cancellation=None,
     active_runtime_root: Path | None = None,
+    authority_session: Any | None = None,
 ):
     domain_id = _scope(dimension, material)
     repository = _repository_locator(dimension)
@@ -1180,6 +1384,7 @@ def _build_operations(
             provider_env=provider_env,
             executable=executable,
             snapshot_id=snapshot_id,
+            authority_session=authority_session,
         )
 
     def publish_descriptor(
@@ -1194,12 +1399,12 @@ def _build_operations(
         if state["catalog"] is None or state["etag"] != expected_etag:
             raise _CatalogPublicationError(False)
         ciphertext_path = runtime_dir / "logical-jat.age"
+        descriptor_object_key = None
         try:
             encrypt(descriptor.to_json().encode("utf-8"), recipients, ciphertext_path)
             ciphertext_digest = _digest_file(ciphertext_path)
-            object_ref = backend.put_file(
-                f"objects/sha256/{ciphertext_digest}", ciphertext_path
-            )
+            descriptor_object_key = f"objects/sha256/{ciphertext_digest}"
+            object_ref = backend.put_file(descriptor_object_key, ciphertext_path)
             if (
                 object_ref.sha256 != ciphertext_digest
                 or object_ref.size != ciphertext_path.stat().st_size
@@ -1207,7 +1412,7 @@ def _build_operations(
                 raise ValueError("logical descriptor object metadata mismatch")
         except Exception:  # noqa: BLE001 - provider errors may contain endpoint or request details.
             ciphertext_path.unlink(missing_ok=True)
-            raise _CatalogPublicationError(False) from None
+            raise _CatalogPublicationError(False, descriptor_object_key) from None
         finally:
             ciphertext_path.unlink(missing_ok=True)
         try:
@@ -1220,11 +1425,13 @@ def _build_operations(
             )
             encrypted_catalog = _encrypt_catalog(candidate, recipients, instance)
         except Exception:  # noqa: BLE001 - catalog/age errors can include local paths.
-            raise _CatalogPublicationError(False) from None
+            raise _CatalogPublicationError(False, descriptor_object_key) from None
         try:
             etag = backend.conditional_catalog_put(encrypted_catalog, expected_etag)
         except Exception as error:  # noqa: BLE001 - preserve tri-state outcome and redact diagnostics.
-            raise _CatalogPublicationError(getattr(error, "published", None)) from None
+            raise _CatalogPublicationError(
+                getattr(error, "published", None), descriptor_object_key
+            ) from None
         state.update(catalog=candidate, etag=etag, object_ref=object_ref)
 
     def resolve_components(opened_store, latest_descriptor):
@@ -1281,6 +1488,15 @@ def _build_operations(
         )
 
     def ensure_keyset(selected_dimension, selected_backend):
+        if dimension.provider == "r2":
+            room_store = authority_session.authority.ensure_material_details()
+            selected = _r2_operations_keyset(room_store, material)
+            if selected.encryption_domain_id != domain_id:
+                raise RoomStoreBridgeError(
+                    "Room Store keyset belongs to another encryption domain",
+                    code="domain-mismatch",
+                )
+            return selected
         keyset = auth.ensure_room_store_keyset(selected_dimension, selected_backend)
         if keyset.encryption_domain_id != domain_id:
             raise RoomStoreBridgeError(
@@ -1292,6 +1508,11 @@ def _build_operations(
     def bind_repository(
         selected_dimension, selected_backend, repository_id, *, expected_generation
     ):
+        if dimension.provider == "r2":
+            room_store = authority_session.authority.bind_repository_details(
+                repository_id, expected_generation=expected_generation
+            )
+            return _r2_operations_keyset(room_store, material)
         keyset = auth.bind_room_store_repository(
             selected_dimension,
             selected_backend,
@@ -1424,15 +1645,22 @@ def preview_room_store(
     dimension: DimensionConfig,
     project_id: str,
     source: Path,
-    selected_material: EncryptionMaterial,
+    selected_material: EncryptionMaterial | None,
     *,
     snapshot_id: str = "latest",
     components: Mapping[str, Any] | Sequence[Any],
     rcc_runtime: Path | str | None = None,
     required_components: Sequence[str] = (),
+    authority_session: Any | None = None,
 ) -> dict:
     component_value = _components(components)
     _check_required_components(component_value, required_components)
+    selected_material, authority_session = _resolve_material(
+        dimension,
+        selected_material,
+        authority_session,
+        allow_initialize=False,
+    )
     workspace, _domain_id, backend = _operation_inputs(
         instance, dimension, project_id, source, selected_material
     )
@@ -1463,6 +1691,7 @@ def preview_room_store(
                 active_runtime_root=active_runtime
                 if active_runtime and active_runtime.is_dir()
                 else None,
+                authority_session=authority_session,
             )
             if snapshot_id == "latest":
                 preview = operations.preview()
@@ -1502,7 +1731,7 @@ def save_room_store(
     dimension: DimensionConfig,
     project_id: str,
     source: Path,
-    selected_material: EncryptionMaterial,
+    selected_material: EncryptionMaterial | None,
     *,
     components: Mapping[str, Any] | Sequence[Any],
     display_name: str | None = None,
@@ -1511,9 +1740,16 @@ def save_room_store(
     cancellation=None,
     rcc_runtime: Path | str | None = None,
     required_components: Sequence[str] = (),
+    authority_session: Any | None = None,
 ) -> dict:
     component_value = _components(components)
     _check_required_components(component_value, required_components)
+    selected_material, authority_session = _resolve_material(
+        dimension,
+        selected_material,
+        authority_session,
+        allow_initialize=dimension.provider == "r2",
+    )
     workspace, _domain_id, backend = _operation_inputs(
         instance, dimension, project_id, source, selected_material
     )
@@ -1543,6 +1779,7 @@ def save_room_store(
                 active_runtime_root=active_runtime
                 if active_runtime and active_runtime.is_dir()
                 else None,
+                authority_session=authority_session,
             )
             result: SaveResult = operations.save(
                 deletion_confirmation_token=confirmation_token,
@@ -1604,11 +1841,18 @@ def hydrate_room_store(
     dimension: DimensionConfig,
     project_id: str,
     destination: Path,
-    selected_material: EncryptionMaterial,
+    selected_material: EncryptionMaterial | None,
     *,
     snapshot_id: str = "latest",
     jat_root: Path | None = None,
+    authority_session: Any | None = None,
 ) -> dict:
+    selected_material, authority_session = _resolve_material(
+        dimension,
+        selected_material,
+        authority_session,
+        allow_initialize=False,
+    )
     domain_id = _scope(dimension, selected_material)
     try:
         with open_existing_room_store(
@@ -1617,6 +1861,7 @@ def hydrate_room_store(
             selected_material,
             project_id=project_id,
             snapshot_id=snapshot_id,
+            authority_session=authority_session,
         ) as context:
             descriptor = context.selected_descriptor
             if descriptor is None:

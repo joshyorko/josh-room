@@ -87,12 +87,12 @@ export function parseContextResult(value: unknown): RoomContext | undefined {
 export function parseStatusResult(value: unknown): RoomStatus | undefined {
 	const body = record(value);
 	if (!body || typeof body.ok !== "boolean") return undefined;
-	if (!body.ok && body.state === "unlinked") return { kind: "unknown" };
-	if (
-		body.ok === true && (body.state === "clean" || body.state === "changed") &&
-		body.path_matches === true && id(body.project_id) && id(body.snapshot_id)
-	) {
-		return { kind: "known", state: body.state, projectId: body.project_id, snapshotId: body.snapshot_id };
+	if (!id(body.project_id) || !id(body.snapshot_id) || body.path_matches !== true) return undefined;
+	if (body.ok === true && body.state === "clean" && body.fingerprint_matches === true) {
+		return { kind: "known", state: "clean", projectId: body.project_id, snapshotId: body.snapshot_id };
+	}
+	if (body.ok === false && body.state === "changed" && body.fingerprint_matches === false) {
+		return { kind: "known", state: "changed", projectId: body.project_id, snapshotId: body.snapshot_id };
 	}
 	return undefined;
 }

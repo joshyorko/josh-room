@@ -718,9 +718,11 @@ def _load_runtime_legacy() -> bool:
     return _load_runtime()
 
 
-def load_runtime_session() -> bool:
-    """Load an existing local encryption or Cloudflare session without contacting the authority."""
-    return _load_runtime()
+def load_runtime_session(*, require_r2: bool = False) -> bool:
+    """Load an existing local session without contacting the authority."""
+    if type(require_r2) is not bool:
+        raise TypeError("R2 runtime capability requirement must be boolean")
+    return _load_runtime(require_r2=require_r2)
 
 
 @dataclass(frozen=True, slots=True)
