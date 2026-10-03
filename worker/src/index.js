@@ -22,6 +22,67 @@ const durableStub = (env, id) => {
     return null;
   }
 };
+const jsonError = (error, status) => Response.json({ error }, { status });
+const privateJson = (value, init = {}) => Response.json(value, {
+  ...init,
+  headers: { ...Object.fromEntries(new Headers(init.headers || {}).entries()), "cache-control": "no-store" },
+});
+const roomStoreDomainId = async (accountId, bucket) => {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`josh-room:r2-room-store:v1\0${accountId}\0${bucket}`)));
+  return [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+};
+const roomStoreStub = (env, accountId, bucket) => {
+  try {
+    const name = `josh-room:r2-room-store:v1:${accountId}:${bucket}`;
+    return env.OAUTH_SESSION.get(env.OAUTH_SESSION.idFromName(name));
+  } catch (_error) {
+    return null;
+  }
+};
+const validRoomStoreRepositoryId = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+const roomStoreMaterialFields = ["ciphertext", "domainId", "format", "keysetGeneration", "version"];
+const validateRoomStoreMaterial = async (body, accountId, bucket) => {
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).sort().join(",") !== roomStoreMaterialFields.join(",")) return null;
+  const domainId = await roomStoreDomainId(accountId, bucket);
+  if (body.format !== "josh-room-r2-room-store-material" || body.version !== 1 || body.domainId !== domainId) return null;
+  if (!Number.isSafeInteger(body.keysetGeneration) || body.keysetGeneration < 1 || body.keysetGeneration > 2147483647) return null;
+  if (typeof body.ciphertext !== "string" || body.ciphertext.length < 1 || body.ciphertext.length > 16384 || !/^[A-Za-z0-9_-]+$/.test(body.ciphertext)) return null;
+  return {
+    format: "josh-room-r2-room-store-material",
+    version: 1,
+    domainId,
+    keysetGeneration: body.keysetGeneration,
+    ciphertext: body.ciphertext,
+    repositoryId: null,
+  };
+};
+const sameRoomStoreMaterial = (left, right) => left && right
+  && left.format === right.format
+  && left.version === right.version
+  && left.domainId === right.domainId
+  && left.keysetGeneration === right.keysetGeneration
+  && left.ciphertext === right.ciphertext;
+const sameRoomStoreCiphertext = (left, right) => left && right
+  && left.format === right.format
+  && left.version === right.version
+  && left.domainId === right.domainId
+  && left.ciphertext === right.ciphertext;
+const roomStoreBearer = request => {
+  const authorization = request.headers.get("authorization") || "";
+  const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{43})$/);
+  return match ? match[1] : null;
+};
+const roomStoreSessionRequest = async (request, env, sessionId, operation) => {
+  const stub = durableStub(env, sessionId);
+  if (!stub) return jsonError("room_store_capability_expired", 404);
+  const headers = new Headers(request.headers);
+  const body = request.method === "POST" ? await request.text() : undefined;
+  return stub.fetch(new Request(`https://session/room-store/${operation}`, {
+    method: request.method,
+    headers,
+    ...(body === undefined ? {} : { body }),
+  }));
+};
 const authPurpose = async request => {
   if (!request.headers.get("content-type")?.includes("application/json")) return "r2";
   try {
@@ -51,6 +112,11 @@ const authUrl = (env, state, challenge, purpose) => {
 
 async function durableRouter(request, env) {
   const url = new URL(request.url);
+  const roomStoreRoute = url.pathname.match(/^\/session\/([0-9a-f]{64})\/room-store\/(material|repository)$/);
+  if (roomStoreRoute) {
+    if (!["GET", "POST"].includes(request.method)) return jsonError("room_store_method_not_allowed", 405);
+    return roomStoreSessionRequest(request, env, roomStoreRoute[1], `${roomStoreRoute[2]}${request.method === "POST" ? "-write" : "-read"}`);
+  }
   if (url.pathname === "/session/start" && request.method === "POST") {
     const purpose = await authPurpose(request);
     if (!purpose) return Response.json({ error: "invalid authorization purpose" }, { status: 400 });
@@ -116,9 +182,13 @@ export class OAuthSession {
       await this.state.storage.setAlarm(expiresAt);
       return Response.json({ status: "pending" });
     }
+    if (url.pathname.startsWith("/bucket-room-store/")) {
+      return this.fetchBucketRoomStore(request, url.pathname.slice("/bucket-room-store/".length));
+    }
     const session = await this.state.storage.get("session");
     if (!session || session.expiresAt <= Date.now()) {
       await this.state.storage.deleteAll();
+      if (url.pathname.startsWith("/room-store/")) return jsonError("room_store_capability_expired", 404);
       return Response.json({ status: "expired" }, { status: 404 });
     }
     if (url.pathname === "/cancel" && request.method === "POST") {
@@ -130,10 +200,34 @@ export class OAuthSession {
       return Response.json({ status: "canceled" });
     }
     if (url.pathname === "/status" && request.method === "GET") {
+      if (session.purpose === "r2") {
+        const capability = random();
+        const expiresAt = Date.now() + 600_000;
+        const capabilityHash = b64(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(capability))));
+        const result = await this.state.storage.transaction(async transaction => {
+          const current = await transaction.get("session");
+          if (!current || current.status !== "authorized" || current.purpose !== "r2") return { response: { status: current?.status || "expired" } };
+          await transaction.put("session", {
+            status: "consumed",
+            purpose: "r2",
+            accountId: this.env.CLOUDFLARE_ACCOUNT_ID,
+            bucket: this.env.R2_BUCKET,
+            capabilityHash,
+            expiresAt,
+          });
+          return { response: current, capability };
+        });
+        if (!result.capability) return Response.json(result.response);
+        await this.state.storage.setAlarm(expiresAt);
+        const domainId = await roomStoreDomainId(this.env.CLOUDFLARE_ACCOUNT_ID, this.env.R2_BUCKET);
+        return privateJson({ ...result.response, roomStoreDomainId: domainId, roomStoreCapability: result.capability, roomStoreCapabilityExpiresIn: 600 });
+      }
       if (session.status !== "authorized") return Response.json({ status: session.status || "expired" });
       await this.state.storage.deleteAll();
       return Response.json(session);
     }
+    const roomStoreMatch = url.pathname.match(/^\/room-store\/(material|repository)-(read|write)$/);
+    if (roomStoreMatch) return this.handleRoomStoreSession(request, session, roomStoreMatch[1], roomStoreMatch[2]);
     if (url.pathname === "/callback" && request.method === "GET") {
       const state = url.searchParams.get("state");
       const nonce = String(state || "").split(".").slice(1).join(".");
@@ -184,6 +278,92 @@ export class OAuthSession {
       return new Response("Josh Room authorized. Return to VS Code.");
     }
     return new Response("Not found", { status: 404 });
+  }
+
+  async handleRoomStoreSession(request, session, resource, action) {
+    if (request.method !== (action === "read" ? "GET" : "POST")) return jsonError("room_store_method_not_allowed", 405);
+    if (!session || session.status !== "consumed" || session.purpose !== "r2" || session.expiresAt <= Date.now()) {
+      return jsonError("room_store_capability_expired", 404);
+    }
+    if (session.accountId !== this.env.CLOUDFLARE_ACCOUNT_ID || session.bucket !== this.env.R2_BUCKET) {
+      return jsonError("room_store_scope_mismatch", 403);
+    }
+    const capability = roomStoreBearer(request);
+    if (!capability) return jsonError("room_store_capability_required", 401);
+    const capabilityHash = b64(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(capability))));
+    if (!same(capabilityHash, session.capabilityHash)) return jsonError("room_store_capability_invalid", 403);
+    const stub = roomStoreStub(this.env, session.accountId, session.bucket);
+    if (!stub) return jsonError("room_store_durable_authority_unavailable", 503);
+    const body = action === "write" ? await request.text() : undefined;
+    return stub.fetch(new Request(`https://bucket/bucket-room-store/${resource}-${action}`, {
+      method: request.method,
+      headers: { "content-type": request.headers.get("content-type") || "" },
+      ...(body === undefined ? {} : { body }),
+    }));
+  }
+
+  async fetchBucketRoomStore(request, operation) {
+    const key = "r2-room-store-material-v1";
+    const storage = this.state.storage;
+    if (operation === "material-read" && request.method === "GET") {
+      const material = await storage.get(key);
+      return material ? privateJson({ status: "ready", material }) : jsonError("room_store_material_missing", 404);
+    }
+    if (operation === "material-write" && request.method === "POST") {
+      if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return jsonError("room_store_invalid_material", 400);
+      let submitted;
+      try {
+        submitted = await validateRoomStoreMaterial(await request.json(), this.env.CLOUDFLARE_ACCOUNT_ID, this.env.R2_BUCKET);
+      } catch (_error) {
+        submitted = null;
+      }
+      if (!submitted) return jsonError("room_store_invalid_material", 400);
+      try {
+        return await storage.transaction(async transaction => {
+          const current = await transaction.get(key);
+          if (current) {
+            if (!sameRoomStoreMaterial(current, submitted)) return jsonError("room_store_material_conflict", 409);
+            return privateJson({ status: "existing", material: current });
+          }
+          await transaction.put(key, submitted);
+          const winner = await transaction.get(key);
+          if (!sameRoomStoreMaterial(winner, submitted) || winner.repositoryId !== null) throw new Error("room store material readback mismatch");
+          return privateJson({ status: "created", material: winner }, { status: 201 });
+        });
+      } catch (_error) {
+        return jsonError("room_store_material_write_unverified", 503);
+      }
+    }
+    if (operation === "repository-write" && request.method === "POST") {
+      if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return jsonError("room_store_invalid_repository", 400);
+      let body;
+      try {
+        body = await request.json();
+      } catch (_error) {
+        return jsonError("room_store_invalid_repository", 400);
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).sort().join(",") !== "expectedGeneration,repositoryId" || !validRoomStoreRepositoryId(body.repositoryId) || !Number.isSafeInteger(body.expectedGeneration) || body.expectedGeneration < 1 || body.expectedGeneration > 2147483646) return jsonError("room_store_invalid_repository", 400);
+      try {
+        return await storage.transaction(async transaction => {
+          const current = await transaction.get(key);
+          if (!current) return jsonError("room_store_material_missing", 404);
+          if (current.repositoryId !== null && current.repositoryId !== body.repositoryId) return jsonError("room_store_repository_conflict", 409);
+          if (current.repositoryId === body.repositoryId) {
+            if (current.keysetGeneration !== body.expectedGeneration && current.keysetGeneration !== body.expectedGeneration + 1) return jsonError("room_store_generation_conflict", 409);
+            return privateJson({ status: "bound", repositoryId: current.repositoryId, keysetGeneration: current.keysetGeneration });
+          }
+          if (current.keysetGeneration !== body.expectedGeneration) return jsonError("room_store_generation_conflict", 409);
+          const candidate = { ...current, repositoryId: body.repositoryId, keysetGeneration: body.expectedGeneration + 1 };
+          await transaction.put(key, candidate);
+          const winner = await transaction.get(key);
+          if (!winner || !sameRoomStoreCiphertext(winner, current) || winner.repositoryId !== body.repositoryId || winner.keysetGeneration !== body.expectedGeneration + 1) throw new Error("room store repository readback mismatch");
+          return privateJson({ status: "bound", repositoryId: winner.repositoryId, keysetGeneration: winner.keysetGeneration }, { status: 201 });
+        });
+      } catch (_error) {
+        return jsonError("room_store_repository_write_unverified", 503);
+      }
+    }
+    return jsonError("room_store_not_found", 404);
   }
 
   async alarm() {
@@ -273,6 +453,10 @@ export default {
         ageRecipients: JSON.parse(env.AGE_RECIPIENTS),
       }), { expirationTtl: 600 });
       return new Response("Josh Room authorized. Return to VS Code.");
+    }
+    if (/^\/session\/[^/]+\/room-store\/(material|repository)$/.test(url.pathname)) {
+      if (!["GET", "POST"].includes(request.method)) return jsonError("room_store_method_not_allowed", 405);
+      return jsonError("room_store_durable_authority_unavailable", 503);
     }
     if (url.pathname.startsWith("/session/") && request.method === "GET") {
       const key = `session:${url.pathname.slice(9)}`;

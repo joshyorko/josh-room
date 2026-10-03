@@ -24,24 +24,63 @@ def packaged_jat():
     return module
 
 
-def test_packaged_windows_process_termination_does_not_use_posix_process_groups():
+def test_packaged_windows_process_termination_uses_bounded_taskkill_tree(monkeypatch):
     jat = packaged_jat()
+    commands = []
+    waits = []
+    drains = []
 
     class Process:
-        def __init__(self):
-            self.terminated = False
-            self.communicated = False
+        pid = 4242
+        returncode = 0
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            raise jat.subprocess.TimeoutExpired("owned-process", timeout)
+
+        def communicate(self, timeout=None):
+            drains.append(timeout)
+            return "", ""
+
+    monkeypatch.setattr(jat.subprocess, "run", lambda command, **_kwargs: commands.append(command))
+    monkeypatch.setattr(jat.os, "killpg", lambda *_args: (_ for _ in ()).throw(AssertionError("POSIX killpg used")))
+    process = Process()
+    jat._terminate_process(process, platform="nt")
+    assert commands == [
+        ["taskkill", "/PID", "4242", "/T"],
+        ["taskkill", "/PID", "4242", "/T", "/F"],
+    ]
+    assert waits == [0.4]
+    assert drains == [0.4]
+
+
+def test_packaged_windows_process_termination_falls_back_when_taskkill_is_unavailable(monkeypatch):
+    jat = packaged_jat()
+    waits = []
+    drains = []
+
+    class Process:
+        pid = 5151
 
         def terminate(self):
             self.terminated = True
 
-        def communicate(self):
-            self.communicated = True
+        def wait(self, timeout=None):
+            waits.append(timeout)
 
+        def communicate(self, timeout=None):
+            drains.append(timeout)
+            return "", ""
+
+    def missing_taskkill(*_args, **_kwargs):
+        raise FileNotFoundError("taskkill unavailable in test")
+
+    monkeypatch.setattr(jat.subprocess, "run", missing_taskkill)
     process = Process()
     jat._terminate_process(process, platform="nt")
     assert process.terminated is True
-    assert process.communicated is True
+    assert waits == [0.4]
+    assert drains == [0.4]
 
 
 def test_packaged_windows_run_does_not_request_posix_process_sessions(monkeypatch):

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .cancellation import CLICancelled, defer_sigterm_cancellation
 from .catalog import Catalog, CatalogConflict, CatalogFile
 from .crypto import decrypt, decrypt_file, encrypt, encrypt_file
 from .encryption_domain import (
@@ -39,14 +40,29 @@ class CopyPublicationError(RuntimeError, ValueError):
 
 
 class SavePublicationError(RuntimeError):
-    def __init__(self, cause: BaseException, marker: Path):
+    def __init__(
+        self,
+        cause: BaseException,
+        marker: Path,
+        *,
+        publication_state: str = "uncertain",
+        marker_state: str = "unchanged",
+        project_id: str | None = None,
+        snapshot_id: str | None = None,
+    ):
         self.result = {
             "ok": False,
-            "publication_state": "published_verification_unknown",
-            "marker_state": "committed",
+            "publication_state": publication_state,
+            "marker_state": marker_state,
             "marker": str(marker),
         }
-        super().__init__(f"{cause}; catalog publication may be visible; marker committed: {marker}")
+        if project_id:
+            self.result["project_id"] = project_id
+        if snapshot_id:
+            self.result["snapshot_id"] = snapshot_id
+        if publication_state == "uncertain":
+            self.result["reconciliation_required"] = True
+        super().__init__(str(cause))
 
 
 class CatalogResult(dict):
@@ -58,6 +74,20 @@ class CatalogResult(dict):
 
     def resolve_snapshot(self, project_id, snapshot_id):
         return Catalog(self).resolve_snapshot(project_id, snapshot_id)
+
+
+def _local_catalog_commit_state(catalog_file, expected_revision: int, catalog: Catalog, error: BaseException) -> str:
+    if isinstance(error, CatalogConflict):
+        return "rejected"
+    try:
+        observed = catalog_file.read()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return "uncertain"
+    if observed.body == catalog.body:
+        return "committed"
+    if observed.body["revision"] == expected_revision:
+        return "rejected"
+    return "uncertain"
 
 
 def _bounded_catalog_result(catalog: Catalog, project_id: str, snapshot_id: str) -> CatalogResult:
@@ -78,6 +108,18 @@ def _bounded_catalog_result(catalog: Catalog, project_id: str, snapshot_id: str)
         if field in catalog.body:
             body[field] = catalog.body[field]
     return CatalogResult(body)
+
+
+def snapshot_payload_kind(snapshot: dict) -> str:
+    """Return the restore path selected by a catalog snapshot record."""
+    if not isinstance(snapshot, dict):
+        raise TypeError("catalog snapshot record is invalid")
+    if "payload_kind" not in snapshot:
+        return "portable-jat"
+    payload_kind = snapshot["payload_kind"]
+    if payload_kind == "room-store-v1":
+        return payload_kind
+    raise ValueError("unsupported snapshot payload kind")
 
 
 def create_snapshot(
@@ -114,14 +156,7 @@ def create_snapshot(
         ciphertext_size, ciphertext_digest = _file_metadata(encrypted)
         if workspace_fingerprint(source) != source_fingerprint:
             raise ValueError("source workspace changed during snapshot capture")
-        if backend:
-            report_progress("upload", "Uploading encrypted Room to the selected storage Dimension")
-            ref = backend.put_file(f"objects/sha256/{ciphertext_digest}", encrypted)
-        else:
-            report_progress("store", "Writing encrypted Room to local storage")
-            ref = ImmutableLocalStore(instance).put_file(encrypted)
-        if ref.sha256 != ciphertext_digest or ref.size != ciphertext_size:
-            raise ValueError("published ciphertext metadata mismatch")
+        ref = None
         catalog_path = instance / "catalog.jroom.age"
         dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) if backend else None
         encryption_domain_id = _selected_domain_id(selected_material, selected_domain)
@@ -129,7 +164,18 @@ def create_snapshot(
         marker_path = source / ".josh-room.json"
         previous_marker = None
         marker_written = False
+        commit_state = None
+        commit_error = None
+        commit_visibility_unknown = False
         try:
+            if backend:
+                report_progress("upload", "Uploading encrypted Room to the selected storage Dimension")
+                ref = backend.put_file(f"objects/sha256/{ciphertext_digest}", encrypted)
+            else:
+                report_progress("store", "Writing encrypted Room to local storage")
+                ref = ImmutableLocalStore(instance).put_file(encrypted)
+            if ref.sha256 != ciphertext_digest or ref.size != ciphertext_size:
+                raise ValueError("published ciphertext metadata mismatch")
             if marker_path.is_file():
                 with marker_path.open("rb") as marker_file:
                     previous_marker = marker_file.read()
@@ -151,21 +197,123 @@ def create_snapshot(
             catalog = catalog.add_snapshot(project_id, display_name or _display_name(project_id), snapshot_record)
             if workspace_fingerprint(source) != source_fingerprint:
                 raise ValueError("source workspace changed during snapshot capture")
-            _write_room_marker(source, project_id, display_name or _display_name(project_id), dimension_id=dimension_id, snapshot_id=manifest["snapshot_id"], workspace_fp=source_fingerprint)
-            marker_written = True
             report_progress("catalog", "Publishing the new latest Room snapshot")
-            if backend:
-                backend.conditional_catalog_put(_encrypt_catalog(catalog, recipients, instance), catalog_etag)
-            else:
-                catalog_file.update_if_revision(observed_revision, catalog, recipients)
-        except BaseException as error:
-            published = bool(getattr(error, "published", False))
-            if marker_written and not published:
-                _restore_marker(marker_path, previous_marker)
-            if backend and not published:
+            catalog_body = _encrypt_catalog(catalog, recipients, instance) if backend else None
+            with defer_sigterm_cancellation():
+                try:
+                    if backend:
+                        backend.conditional_catalog_put(catalog_body, catalog_etag)
+                    else:
+                        catalog_file.update_if_revision(observed_revision, catalog, recipients)
+                except BaseException as error:  # noqa: BLE001 - classify signal-safe commit outcomes.
+                    commit_error = error
+                    if not backend:
+                        commit_state = _local_catalog_commit_state(catalog_file, observed_revision, catalog, error)
+                    else:
+                        published = getattr(error, "published", None)
+                        if published is True:
+                            commit_state = "committed"
+                            commit_visibility_unknown = True
+                        elif published is False or isinstance(error, CatalogConflict):
+                            commit_state = "rejected"
+                        else:
+                            commit_state = "uncertain"
+                else:
+                    commit_state = "committed"
+            if commit_state == "rejected":
+                raise commit_error
+            if commit_state == "uncertain":
+                raise SavePublicationError(
+                    commit_error,
+                    marker_path,
+                    publication_state="uncertain",
+                    marker_state="unchanged",
+                    project_id=project_id,
+                    snapshot_id=manifest["snapshot_id"],
+                ) from commit_error
+            try:
+                _write_room_marker(
+                    source,
+                    project_id,
+                    display_name or _display_name(project_id),
+                    dimension_id=dimension_id,
+                    snapshot_id=manifest["snapshot_id"],
+                    workspace_fp=source_fingerprint,
+                )
+            except CLICancelled:
+                raise
+            except BaseException as error:
+                restore_error = _restore_previous_marker(marker_path, previous_marker)
+                publication_failure = SavePublicationError(
+                    error,
+                    marker_path,
+                    publication_state="committed",
+                    marker_state="stale",
+                    project_id=project_id,
+                    snapshot_id=manifest["snapshot_id"],
+                )
+                if restore_error is not None:
+                    publication_failure.result["marker_restore_error_type"] = type(restore_error).__name__
+                raise publication_failure from error
+            marker_written = True
+            if commit_error is not None:
+                raise SavePublicationError(
+                    commit_error,
+                    marker_path,
+                    publication_state="published_verification_unknown" if commit_visibility_unknown else "committed",
+                    marker_state="updated",
+                    project_id=project_id,
+                    snapshot_id=manifest["snapshot_id"],
+                ) from commit_error
+        except CLICancelled as error:
+            marker_state = "unchanged"
+            publication_state = "not_committed"
+            if commit_state == "committed":
+                publication_state = "published_verification_unknown" if commit_visibility_unknown else "committed"
+                if marker_written:
+                    marker_state = "updated"
+                else:
+                    try:
+                        _write_room_marker(
+                            source,
+                            project_id,
+                            display_name or _display_name(project_id),
+                            dimension_id=dimension_id,
+                            snapshot_id=manifest["snapshot_id"],
+                            workspace_fp=source_fingerprint,
+                        )
+                    except (OSError, RuntimeError, TypeError, ValueError) as marker_error:
+                        restore_error = _restore_previous_marker(marker_path, previous_marker)
+                        marker_state = "stale"
+                        error.result["marker_error_type"] = type(marker_error).__name__
+                        if restore_error is not None:
+                            error.result["marker_restore_error_type"] = type(restore_error).__name__
+                    else:
+                        marker_written = True
+                        marker_state = "updated"
+            elif commit_state == "uncertain":
+                publication_state = "uncertain"
+                error.result["reconciliation_required"] = True
+            elif commit_state == "rejected":
+                publication_state = "rejected"
+            if ref is not None and commit_state in {None, "rejected"} and backend:
+                try:
+                    backend.record_orphan(ref)
+                except Exception as orphan_error:  # noqa: BLE001 - preserve the cancellation exit after cleanup failure.
+                    error.result["orphan_record_error_type"] = type(orphan_error).__name__
+            if ref is not None:
+                error.result.update(
+                    {
+                        "publication_state": publication_state,
+                        "marker_state": marker_state,
+                        "project_id": project_id,
+                        "snapshot_id": manifest["snapshot_id"],
+                    }
+                )
+            raise
+        except BaseException:
+            if ref is not None and commit_state in {None, "rejected"} and backend:
                 backend.record_orphan(ref)
-            if published:
-                raise SavePublicationError(error, marker_path) from error
             raise
         report_progress("complete", "Room saved safely")
         return {"project_id": project_id, "snapshot_id": manifest["snapshot_id"], "object_key": ref.key, "ciphertext_sha256": ref.sha256, "ciphertext_size": ref.size, "producer": producer}
@@ -390,6 +538,98 @@ def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: 
         return run_serve(jat_root, haul)
 
 
+def export_snapshot(
+    instance: Path,
+    project_id: str,
+    snapshot_id: str,
+    identity: Path,
+    output: Path,
+    backend=None,
+    *,
+    selected_material: EncryptionMaterial | None = None,
+    selected_domain: EncryptionKeyset | None = None,
+) -> dict:
+    """Publish an existing legacy portable JAT payload without rebuilding it."""
+    identity = _selected_identity(identity, selected_material)
+    target = Path(output)
+    if target.exists() or target.is_symlink():
+        raise FileExistsError("portable JAT output already exists")
+    try:
+        parent = target.parent.resolve(strict=True)
+        if not parent.is_dir():
+            raise ValueError
+        target = parent / target.name
+        if target.exists() or target.is_symlink():
+            raise FileExistsError("portable JAT output already exists")
+    except FileExistsError:
+        raise
+    except OSError as error:
+        raise ValueError("portable JAT output directory is unavailable") from error
+
+    instance = Path(instance)
+    instance.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="export-legacy-", dir=instance) as work:
+        stage = Path(work)
+        report_progress("catalog", "Loading encrypted Room catalog")
+        if backend:
+            domain_id = _selected_domain_id(selected_material, selected_domain)
+            if domain_id:
+                catalog, _etag = _read_remote_catalog(
+                    backend, identity, instance, encryption_domain_id=domain_id
+                )
+            else:
+                catalog, _etag = _read_remote_catalog(backend, identity, instance)
+        else:
+            catalog = CatalogFile(instance / "catalog.jroom.age", identity).read()
+        snapshot = catalog.resolve_snapshot(project_id, snapshot_id)
+        if snapshot_payload_kind(snapshot) != "portable-jat":
+            raise ValueError("logical JAT export requires the native materialization path")
+        encrypted = stage / "snapshot.jroom.age"
+        if backend:
+            backend.download_file(
+                snapshot["object_key"], encrypted,
+                snapshot["ciphertext_sha256"], snapshot["ciphertext_size"],
+            )
+        else:
+            ImmutableLocalStore(instance).download_file(
+                snapshot["object_key"], encrypted,
+                snapshot["ciphertext_sha256"], snapshot["ciphertext_size"],
+            )
+        envelope = stage / "snapshot.jroom"
+        report_progress("decrypt", "Decrypting Room snapshot")
+        decrypt_file(encrypted, [identity], envelope)
+        haul = stage / "payload.haul.tar.zst"
+        report_progress("verify", "Verifying portable JAT envelope")
+        manifest = read_envelope_file(envelope, haul)
+        if not _manifest_matches_snapshot(manifest, project_id, snapshot):
+            raise ValueError("manifest project mismatch")
+        size, digest = _file_metadata(haul)
+        temporary = parent / f".{target.name}.josh-room-{uuid.uuid4().hex}"
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, "wb") as destination, haul.open("rb") as source:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+                destination.flush()
+                os.fsync(destination.fileno())
+            if os.name == "nt":
+                os.rename(temporary, target)
+            else:
+                os.link(temporary, target)
+            temporary.unlink(missing_ok=True)
+        except FileExistsError:
+            raise FileExistsError("portable JAT output already exists") from None
+        finally:
+            temporary.unlink(missing_ok=True)
+        report_progress("complete", "Portable JAT exported")
+    return {
+        "project_id": project_id,
+        "snapshot_id": snapshot["snapshot_id"],
+        "status": "exported",
+        "output_size": size,
+        "output_sha256": digest,
+    }
+
+
 def _write_receipt(path: Path, body: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -418,6 +658,14 @@ def _restore_marker(path: Path, previous: bytes | None) -> None:
         path.unlink(missing_ok=True)
     else:
         path.write_bytes(previous)
+
+
+def _restore_previous_marker(path: Path, previous: bytes | None) -> OSError | None:
+    try:
+        _restore_marker(path, previous)
+    except OSError as error:
+        return error
+    return None
 
 
 def _read_remote_catalog(backend, identity_value, instance: Path, dimension_id: str | None = None, encryption_domain_id: str | None = None):

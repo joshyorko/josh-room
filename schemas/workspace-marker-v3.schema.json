@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/workspace-marker-v3.schema.json",
+  "title": "Josh Room Workspace Marker v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "dimension_id",
+    "encryption_domain_id",
+    "project_id",
+    "snapshot_id",
+    "display_name",
+    "workspace_path_sha256",
+    "workspace_signature",
+    "signature_algorithm",
+    "capture_policy_sha256"
+  ],
+  "properties": {
+    "format_version": { "const": 3 },
+    "dimension_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "encryption_domain_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "project_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "snapshot_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "display_name": { "type": "string", "minLength": 1 },
+    "workspace_path_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "workspace_signature": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "signature_algorithm": { "const": "josh-room-stat-v1" },
+    "capture_policy_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

@@ -5,25 +5,216 @@ const path = require("path");
 const readline = require("readline");
 
 const MAX_PENDING_EVENTS = 128;
+const MAX_IGNORE_BYTES = 64 * 1024;
+const MAX_IGNORE_RULES = 128;
+const MAX_RULE_LENGTH = 1024;
+const MAX_PATTERN_SEGMENTS = 128;
 const SORT_RUN_SIZE = 256;
 const SORT_MERGE_FAN_IN = 16;
+const DEFAULTS_PATH = path.resolve(__dirname, "runtime/controller/josh_room/workspace_capture_defaults.json");
 
-function shouldMarkDirty(relativePath) {
+function readDefaultCapturePolicy() {
+  return fs.readFileSync(DEFAULTS_PATH, "utf8");
+}
+
+function patternParts(pattern, label = "capture pattern") {
+  if (typeof pattern !== "string" || !pattern || pattern.startsWith("/")
+    || /^[A-Za-z]:\//.test(pattern) || pattern.includes("\\") || pattern.length > MAX_RULE_LENGTH) {
+    throw new Error(`${label} is invalid`);
+  }
+  const rawParts = pattern.split("/");
+  if (rawParts.length > MAX_PATTERN_SEGMENTS) throw new Error(`${label} has too many path components`);
+  const parts = rawParts.filter((part, index) => part !== "**" || index === 0 || rawParts[index - 1] !== "**");
+  if (parts.some((part) => !part || part === "." || part === ".." || /[!\[\]]/.test(part))) {
+    throw new Error(`${label} is invalid`);
+  }
+  if (parts.some((part) => part.includes("**") && part !== "**")) {
+    throw new Error(`${label} uses unsupported glob syntax`);
+  }
+  if (parts.length === 1 && parts[0] === "**") throw new Error(`${label} cannot exclude the whole workspace`);
+  return parts;
+}
+
+function segmentMatches(value, pattern) {
+  let expression = "^";
+  for (const character of pattern) {
+    if (character === "*") expression += "[^/]*";
+    else if (character === "?") expression += "[^/]";
+    else expression += character.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+  }
+  return new RegExp(`${expression}$`, "u").test(value);
+}
+
+function globMatches(pattern, value) {
+  const memo = new Map();
+  function match(patternIndex, valueIndex) {
+    const key = `${patternIndex}:${valueIndex}`;
+    if (memo.has(key)) return memo.get(key);
+    let result;
+    if (patternIndex === pattern.length) result = valueIndex === value.length;
+    else if (pattern[patternIndex] === "**") {
+      result = match(patternIndex + 1, valueIndex)
+        || (valueIndex < value.length && match(patternIndex, valueIndex + 1));
+    } else {
+      result = valueIndex < value.length
+        && segmentMatches(value[valueIndex], pattern[patternIndex])
+        && match(patternIndex + 1, valueIndex + 1);
+    }
+    memo.set(key, result);
+    return result;
+  }
+  return match(0, 0);
+}
+
+function ruleMatches(parts, pattern) {
+  if (pattern.length === 1 && pattern[0] !== "**") {
+    return parts.some((part) => globMatches(pattern, [part]));
+  }
+  for (let length = 1; length <= parts.length; length += 1) {
+    if (globMatches(pattern, parts.slice(0, length))) return true;
+  }
+  return false;
+}
+
+function compileCapturePolicy(defaults = readDefaultCapturePolicy(), { ignoreText, activeRuntimeRelative } = {}) {
+  const defaultsRaw = typeof defaults === "string" ? defaults : JSON.stringify(defaults);
+  let body;
+  try {
+    body = JSON.parse(defaultsRaw);
+  } catch (error) {
+    throw new Error("workspace capture defaults are invalid", { cause: error });
+  }
+  if (!body || body.version !== 1 || !Array.isArray(body.exclude) || !body.exclude.length
+    || Object.keys(body).some((key) => !["version", "exclude"].includes(key))) {
+    throw new Error("unsupported workspace capture defaults");
+  }
+  if (body.exclude.length > MAX_IGNORE_RULES) throw new Error("workspace capture defaults have too many rules");
+  const patterns = body.exclude.map((item) => patternParts(item, "workspace capture default"));
+  if (ignoreText !== undefined && ignoreText !== null) {
+    if (typeof ignoreText !== "string") throw new Error("workspace ignore file must be text");
+    if (Buffer.byteLength(ignoreText, "utf8") > MAX_IGNORE_BYTES) throw new Error("workspace ignore file exceeds 64 KiB");
+    let userRuleCount = 0;
+    for (const line of ignoreText.split("\n")) {
+      const rule = line.trim();
+      if (!rule || rule.startsWith("#")) continue;
+      if (rule.startsWith("!")) throw new Error("workspace ignore rules cannot reinclude paths");
+      if (userRuleCount >= MAX_IGNORE_RULES) throw new Error("workspace ignore file has too many rules");
+      userRuleCount += 1;
+      patterns.push(patternParts(rule, "workspace ignore rule"));
+    }
+  }
+  if (activeRuntimeRelative !== undefined && activeRuntimeRelative !== null) {
+    const activeParts = patternParts(activeRuntimeRelative, "active runtime path");
+    if (activeParts.some((part) => /[*?\[\]]/.test(part))) {
+      throw new Error("active runtime path contains unsupported glob characters");
+    }
+    activeRuntimeRelative = activeParts.join("/");
+  } else activeRuntimeRelative = null;
+
+  const digest = crypto.createHash("sha256");
+  digest.update(defaultsRaw, "utf8");
+  digest.update(ignoreText === undefined || ignoreText === null ? "\0ignore-absent\0" : "\0ignore-present\0", "utf8");
+  if (ignoreText !== undefined && ignoreText !== null) digest.update(ignoreText, "utf8");
+  digest.update("\0active-runtime\0", "utf8");
+  digest.update(activeRuntimeRelative || "", "utf8");
+  const sha256 = digest.digest("hex");
+
+  function isExcluded(relativePath) {
+    const normalized = String(relativePath);
+    if (!normalized || normalized.startsWith("/") || normalized.includes("\\")) return false;
+    const parts = normalized.split("/");
+    if (parts.some((part) => !part || part === "." || part === "..")) return false;
+    if (activeRuntimeRelative) {
+      const runtime = activeRuntimeRelative.split("/");
+      if (runtime.every((part, index) => parts[index] === part)) return true;
+    }
+    return patterns.some((pattern) => ruleMatches(parts, pattern));
+  }
+  const resticExcludes = () => {
+    const result = [];
+    for (const pattern of patterns) {
+      const raw = pattern.join("/");
+      const rendered = pattern.length === 1 && pattern[0] !== "**" ? `**/${raw}` : raw;
+      result.push(rendered);
+      if (pattern[pattern.length - 1] === "**") {
+        const base = pattern.slice(0, -1).join("/");
+        if (base) result.push(base);
+      } else result.push(`${rendered}/**`);
+    }
+    if (activeRuntimeRelative) result.push(activeRuntimeRelative, `${activeRuntimeRelative}/**`);
+    return [...new Set(result)];
+  };
+  return Object.freeze({ sha256, patterns: Object.freeze(patterns), activeRuntimeRelative, isExcluded, resticExcludes });
+}
+
+function loadCapturePolicy(workspaceRoot, { activeRuntimeRoot } = {}) {
+  const root = fs.realpathSync(workspaceRoot);
+  if (!fs.statSync(root).isDirectory()) throw new Error("workspace must be a directory");
+  const ignorePath = path.join(root, ".josh-roomignore");
+  let ignoreText;
+  let metadata;
+  try {
+    metadata = fs.lstatSync(ignorePath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (metadata) {
+    if (!metadata.isFile() || metadata.size > MAX_IGNORE_BYTES) {
+      throw new Error("workspace ignore file must be a regular file of at most 64 KiB");
+    }
+    let descriptor;
+    try {
+      const flags = fs.constants.O_RDONLY
+        | (fs.constants.O_NONBLOCK || 0)
+        | (fs.constants.O_NOFOLLOW || 0);
+      descriptor = fs.openSync(ignorePath, flags);
+      const opened = fs.fstatSync(descriptor);
+      if (!opened.isFile() || opened.dev !== metadata.dev || opened.ino !== metadata.ino
+        || opened.size > MAX_IGNORE_BYTES) {
+        throw new Error("workspace ignore file changed while opening");
+      }
+      const bytes = Buffer.allocUnsafe(MAX_IGNORE_BYTES + 1);
+      let offset = 0;
+      while (offset <= MAX_IGNORE_BYTES) {
+        const count = fs.readSync(descriptor, bytes, offset, MAX_IGNORE_BYTES + 1 - offset, null);
+        if (!count) break;
+        offset += count;
+      }
+      if (offset > MAX_IGNORE_BYTES) throw new Error("workspace ignore file exceeds 64 KiB");
+      try {
+        ignoreText = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, offset));
+      } catch (error) {
+        throw new Error("workspace ignore file must be valid UTF-8", { cause: error });
+      }
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ELOOP") {
+        throw new Error("workspace ignore file changed while opening", { cause: error });
+      }
+      throw error;
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+  }
+
+  let activeRuntimeRelative;
+  if (activeRuntimeRoot) {
+    const runtime = fs.realpathSync(activeRuntimeRoot);
+    if (!fs.statSync(runtime).isDirectory()) throw new Error("active runtime root must be a directory");
+    const relative = path.relative(root, runtime);
+    if (!relative) throw new Error("active runtime root cannot be the workspace root");
+    if (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)) {
+      activeRuntimeRelative = relative.split(path.sep).join("/");
+    }
+  }
+  return compileCapturePolicy(readDefaultCapturePolicy(), { ignoreText, activeRuntimeRelative });
+}
+
+const DEFAULT_CAPTURE_POLICY = compileCapturePolicy();
+
+function shouldMarkDirty(relativePath, policy = DEFAULT_CAPTURE_POLICY) {
   const normalized = String(relativePath).replaceAll("\\", "/").replace(/^\.\//, "");
   if (!normalized || normalized === ".." || normalized.startsWith("../")) return false;
-  if (normalized === ".josh-room.json" || normalized === ".DS_Store") return false;
-  if (normalized === ".git" || normalized.startsWith(".git/")) return false;
-  if (normalized === ".pytest_cache" || normalized.startsWith(".pytest_cache/")) return false;
-  if (normalized === ".ruff_cache" || normalized.startsWith(".ruff_cache/")) return false;
-  if (normalized === ".venv" || normalized.startsWith(".venv/")) return false;
-  if (normalized === "venv" || normalized.startsWith("venv/")) return false;
-  if (normalized === "node_modules" || normalized.startsWith("node_modules/")) return false;
-  if (normalized === "__pycache__"
-    || normalized.startsWith("__pycache__/")
-    || normalized.endsWith("/__pycache__")
-    || normalized.includes("/__pycache__/")) return false;
-  if (normalized.includes("node_modules/.cache/")) return false;
-  return true;
+  return !policy.isExcluded(normalized);
 }
 
 async function fingerprintFile(filePath) {
@@ -53,11 +244,11 @@ async function fingerprintFile(filePath) {
   return `file:${digest.digest("hex")}`;
 }
 
-async function traverseWorkspace(root, onEntry) {
+async function traverseWorkspace(root, onEntry, policy = DEFAULT_CAPTURE_POLICY) {
   async function visit(directory, prefix = "") {
     for await (const name of sortedDirectoryNames(directory)) {
       const relative = prefix ? `${prefix}/${name}` : name;
-      if (!shouldMarkDirty(relative)) continue;
+      if (!shouldMarkDirty(relative, policy)) continue;
       const absolute = path.join(directory, name);
       let stat;
       try {
@@ -233,7 +424,7 @@ async function* sortedDirectoryNames(directory) {
   }
 }
 
-async function fingerprintWorkspace(root) {
+async function fingerprintWorkspace(root, policy = DEFAULT_CAPTURE_POLICY) {
   const digest = crypto.createHash("sha256");
   await traverseWorkspace(root, async (relative, absolute) => {
     const fingerprint = await fingerprintFile(absolute);
@@ -241,7 +432,7 @@ async function fingerprintWorkspace(root) {
     digest.update("\0");
     digest.update(fingerprint || "missing");
     digest.update("\n");
-  });
+  }, policy);
   return digest.digest("hex");
 }
 
@@ -264,7 +455,7 @@ function workspaceFingerprint(files) {
 }
 
 class AuthoritativeWorkspaceBaseline {
-  constructor(root, { savedFingerprint, currentFingerprint, fingerprintProvider } = {}) {
+  constructor(root, { savedFingerprint, currentFingerprint, fingerprintProvider, capturePolicy = DEFAULT_CAPTURE_POLICY } = {}) {
     this.root = path.resolve(root);
     this.files = new Map();
     this.dirty = new Set();
@@ -273,6 +464,7 @@ class AuthoritativeWorkspaceBaseline {
     this.savedFingerprint = savedFingerprint;
     this.currentFingerprint = currentFingerprint;
     this.fingerprintProvider = fingerprintProvider;
+    this.capturePolicy = capturePolicy;
   }
 
   async capture({ savedFingerprint, currentFingerprint, fingerprintProvider } = {}) {
@@ -283,7 +475,7 @@ class AuthoritativeWorkspaceBaseline {
     this.sequence.clear();
     this.eventSequence = 0;
     this.files = new Map();
-    const current = this.currentFingerprint || await fingerprintWorkspace(this.root);
+    const current = this.currentFingerprint || await fingerprintWorkspace(this.root, this.capturePolicy);
     this.currentFingerprint = current;
     if (!this.savedFingerprint) this.savedFingerprint = current;
     if (current !== this.savedFingerprint) this.dirty.add(".");
@@ -291,12 +483,12 @@ class AuthoritativeWorkspaceBaseline {
 
   async check(relativePath) {
     const relative = String(relativePath).replaceAll("\\", "/").replace(/^\.\//, "");
-    if (!shouldMarkDirty(relative)) return this.dirty.size > 0;
+    if (!shouldMarkDirty(relative, this.capturePolicy)) return this.dirty.size > 0;
     const sequence = nextSequence(this.sequence, relative, this.eventSequence);
     this.eventSequence = sequence;
     const current = this.fingerprintProvider
       ? await this.fingerprintProvider()
-      : await fingerprintWorkspace(this.root);
+      : await fingerprintWorkspace(this.root, this.capturePolicy);
     if (this.sequence.get(relative) !== sequence) return this.dirty.size > 0;
     this.currentFingerprint = current;
     if (this.savedFingerprint && current === this.savedFingerprint) this.dirty.clear();
@@ -307,7 +499,7 @@ class AuthoritativeWorkspaceBaseline {
   async compare() {
     this.currentFingerprint = this.fingerprintProvider
       ? await this.fingerprintProvider()
-      : await fingerprintWorkspace(this.root);
+      : await fingerprintWorkspace(this.root, this.capturePolicy);
     this.dirty.clear();
     if (this.savedFingerprint && this.currentFingerprint !== this.savedFingerprint) this.dirty.add(".");
     return this.dirty.size > 0;
@@ -327,6 +519,8 @@ module.exports = {
   WorkspaceBaseline: AuthoritativeWorkspaceBaseline,
   fingerprintFile,
   fingerprintWorkspace,
+  loadCapturePolicy,
+  compileCapturePolicy,
   shouldMarkDirty,
 };
 module.exports.WorkspaceBaseline = AuthoritativeWorkspaceBaseline;
@@ -335,16 +529,24 @@ module.exports.workspaceFingerprint = workspaceFingerprint;
 function isRoomMarker(marker) {
   const digest = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   return Boolean(
-    marker && [1, 2].includes(marker.format_version)
+    marker && [1, 2, 3].includes(marker.format_version)
     && typeof marker.project_id === "string"
     && typeof marker.display_name === "string"
     && marker.display_name.length > 0
-    && (marker.format_version === 1 || (
+    && (marker.format_version === 1 || (marker.format_version === 2 && (
       typeof marker.snapshot_id === "string"
       && typeof marker.dimension_id === "string"
       && digest(marker.workspace_fingerprint)
       && digest(marker.workspace_path_sha256)
-    )),
+    )) || (marker.format_version === 3 && (
+      typeof marker.snapshot_id === "string"
+      && typeof marker.dimension_id === "string"
+      && typeof marker.encryption_domain_id === "string"
+      && digest(marker.workspace_signature)
+      && marker.signature_algorithm === "josh-room-stat-v1"
+      && digest(marker.capture_policy_sha256)
+      && digest(marker.workspace_path_sha256)
+    ))),
   );
 }
 

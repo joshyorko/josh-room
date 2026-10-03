@@ -27,6 +27,19 @@ jobs:
       - run: node --test vscode-extension/*.test.js
       - run: git diff --check
 
+  windows-private-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Verify native Windows private paths and change timestamps
+        env:
+          PYTHONPATH: vscode-extension/runtime/controller
+        run: python scripts/verify_private_runtime.py
+
   managed-runtime-consumer:
     strategy:
       fail-fast: false

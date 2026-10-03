@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/dimension-catalog-v3.schema.json",
+  "title": "Josh Room Dimension Catalog v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "dimension_id", "encryption_domain_id", "revision", "projects"],
+  "properties": {
+    "format_version": { "const": 3 },
+    "dimension_id": { "$ref": "#/$defs/identifier" },
+    "encryption_domain_id": { "$ref": "#/$defs/encryptionDomainId" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "projects": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "additionalProperties": { "$ref": "#/$defs/room" }
+    }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "logicalIdentifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "encryptionDomainId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "room": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "latest", "snapshots"],
+      "properties": {
+        "display_name": { "type": "string", "minLength": 1 },
+        "latest": {
+          "anyOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/identifier" }
+          ]
+        },
+        "snapshots": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "additionalProperties": {
+            "oneOf": [
+              { "$ref": "#/$defs/legacySnapshot" },
+              { "$ref": "#/$defs/logicalSnapshot" }
+            ]
+          }
+        }
+      }
+    },
+    "legacySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id", "object_key", "ciphertext_sha256", "ciphertext_size", "created_at", "workspace_fingerprint"],
+      "properties": {
+        "snapshot_id": { "$ref": "#/$defs/identifier" },
+        "origin_project_id": { "$ref": "#/$defs/identifier" },
+        "object_key": { "type": "string", "pattern": "^objects/sha256/[0-9a-f]{64}$" },
+        "ciphertext_sha256": { "$ref": "#/$defs/digest" },
+        "ciphertext_size": { "type": "integer", "minimum": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "workspace_fingerprint": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "componentRef": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["snapshot_id", "tree_id"],
+          "properties": {
+            "snapshot_id": { "$ref": "#/$defs/digest" },
+            "tree_id": { "$ref": "#/$defs/digest" }
+          }
+        }
+      ]
+    },
+    "logicalSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshot_id", "payload_kind", "dimension_id", "encryption_domain_id", "room_id",
+        "object_key", "ciphertext_sha256", "ciphertext_size", "created_at", "repository_id",
+        "repository_format", "workspace_snapshot_id", "tree_id", "capture_policy_sha256",
+        "workspace_signature", "signature_algorithm", "logical_bytes", "data_added",
+        "data_added_packed", "component_refs"
+      ],
+      "properties": {
+        "snapshot_id": { "$ref": "#/$defs/logicalIdentifier", "description": "The logical_jat_id in the encrypted descriptor." },
+        "payload_kind": { "const": "room-store-v1" },
+        "dimension_id": { "$ref": "#/$defs/logicalIdentifier" },
+        "encryption_domain_id": { "$ref": "#/$defs/encryptionDomainId" },
+        "room_id": { "$ref": "#/$defs/logicalIdentifier" },
+        "origin_room_id": { "$ref": "#/$defs/logicalIdentifier" },
+        "object_key": { "type": "string", "pattern": "^objects/sha256/[0-9a-f]{64}$" },
+        "ciphertext_sha256": { "$ref": "#/$defs/digest" },
+        "ciphertext_size": { "type": "integer", "minimum": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "repository_id": { "$ref": "#/$defs/digest" },
+        "repository_format": { "const": 2 },
+        "workspace_snapshot_id": { "$ref": "#/$defs/digest" },
+        "tree_id": { "$ref": "#/$defs/digest" },
+        "capture_policy_sha256": { "$ref": "#/$defs/digest" },
+        "workspace_signature": { "$ref": "#/$defs/digest" },
+        "signature_algorithm": { "const": "josh-room-stat-v1" },
+        "logical_bytes": { "type": "integer", "minimum": 0 },
+        "data_added": { "type": "integer", "minimum": 0 },
+        "data_added_packed": { "type": "integer", "minimum": 0 },
+        "component_refs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rcc_environment", "homebrew_recovery", "hauler_content"],
+          "properties": {
+            "rcc_environment": { "$ref": "#/$defs/componentRef" },
+            "homebrew_recovery": { "$ref": "#/$defs/componentRef" },
+            "hauler_content": { "$ref": "#/$defs/componentRef" }
+          }
+        }
+      }
+    }
+  }
+}

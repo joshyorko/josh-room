@@ -360,9 +360,20 @@ def test_mixed_copy_routes_cloudflare_only_for_the_r2_side(tmp_path, monkeypatch
     events = []
     monkeypatch.setattr(cli, "private_config", lambda: config)
     monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
-    monkeypatch.setattr(cli, "ensure_runtime_session", lambda **_kwargs: events.append("cloudflare"))
+    monkeypatch.setattr(
+        cli,
+        "load_runtime_session",
+        lambda *, require_r2=False: events.append("r2-session" if require_r2 else "runtime-session") or True,
+    )
+    monkeypatch.setattr(cli, "ensure_runtime_session", lambda **_kwargs: pytest.fail("normal mixed Copy must not start OAuth"))
     backend_calls = []
-    monkeypatch.setattr(cli, "_backend", lambda *args: backend_calls.append(args) or object())
+    backends = []
+    def backend_factory(*args):
+        backend_calls.append(args)
+        backend = object()
+        backends.append(backend)
+        return backend
+    monkeypatch.setattr(cli, "_backend", backend_factory)
     monkeypatch.setattr(cli, "_identity", lambda: tmp_path / "identity")
     monkeypatch.setattr(cli, "resolve_encryption_material", lambda *_args, **_kwargs: type(
         "Material", (), {
@@ -373,8 +384,17 @@ def test_mixed_copy_routes_cloudflare_only_for_the_r2_side(tmp_path, monkeypatch
             "keyset": type("Keyset", (), {"recovery_recipients": ("recovery",)})(),
         }
     )())
-    monkeypatch.setattr(cli, "_read_remote_catalog", lambda *_args, **_kwargs: (Catalog.empty("dimension"), "catalog-1"))
-    monkeypatch.setattr(cli, "copy_snapshot_stream", lambda *_args, **_kwargs: {"ok": True})
+    digest = "a" * 64
+    source_catalog = Catalog.empty("archive").add_snapshot(
+        "demo", "Demo", {
+            "snapshot_id": "legacy-01", "object_key": f"objects/sha256/{digest}",
+            "ciphertext_sha256": digest, "ciphertext_size": 10,
+            "created_at": "2026-10-02T12:00:00+00:00", "workspace_fingerprint": "b" * 64,
+        }
+    )
+    monkeypatch.setattr(cli, "_read_remote_catalog", lambda *_args, **_kwargs: (source_catalog, "catalog-1"))
+    copy_calls = []
+    monkeypatch.setattr(cli, "copy_snapshot_stream", lambda *args, **kwargs: copy_calls.append((args, kwargs)) or {"ok": True})
 
     assert cli.main([
         "snapshot", "copy", "demo", "--source-dimension", "archive",
@@ -383,8 +403,13 @@ def test_mixed_copy_routes_cloudflare_only_for_the_r2_side(tmp_path, monkeypatch
     result = json.loads(capsys.readouterr().out)
 
     assert result["ok"] is True
-    assert [call[0] for call in backend_calls] == ["minio", "r2"]
-    assert events == ["cloudflare"]
+    assert [(call[0], call[2]) for call in backend_calls] == [("minio", "archive"), ("r2", "cloud")]
+    assert len({call[1] for call in backend_calls}) == 1
+    assert copy_calls[0][0][3:5] == tuple(backends)
+    assert copy_calls[0][1]["source_identity"] == tmp_path / "identity"
+    assert copy_calls[0][1]["source_material"] is not None
+    assert copy_calls[0][1]["destination_material"] is None
+    assert events == ["runtime-session", "r2-session"]
 
 
 def test_marker_derived_operation_selects_the_marker_dimension(tmp_path, monkeypatch):

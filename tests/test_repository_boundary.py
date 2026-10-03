@@ -93,6 +93,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
         "joshRoom.initializeEncryption", "joshRoom.migrateEncryption", "joshRoom.resumeEncryption",
         "joshRoom.exportRecovery", "joshRoom.importRecovery",
+        "joshRoom.inspectLogicalSnapshot", "joshRoom.exportPortableJat", "joshRoom.extractLogicalSnapshot",
+        "joshRoom.verifyRoomStore", "joshRoom.optimizeRoomStore", "joshRoom.reconcileRoomStore",
     }
     assert package["extensionKind"] == ["workspace"]
     assert package["capabilities"]["untrustedWorkspaces"]["supported"] is False

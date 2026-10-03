@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "exclude": [
+    "**/.josh-room.json",
+    "**/.DS_Store",
+    "**/.git",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    "**/.venv",
+    "**/venv",
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.robocorp",
+    "**/.rcc_home"
+  ]
+}

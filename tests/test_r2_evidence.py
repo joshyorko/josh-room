@@ -170,7 +170,7 @@ def test_single_put_duplicate_and_full_readback_ignore_etag(tmp_path):
 
 def test_multipart_stream_uses_digest_claim_and_unconditional_completion(tmp_path):
     fake = EvidenceS3()
-    store = backend(fake, threshold=2, chunk=4)
+    store = backend(fake, threshold=2, chunk=4, receipt_dir=tmp_path / "receipts")
     payload = b"0123456789"
     source = tmp_path / "ciphertext.age"
     source.write_bytes(payload)
@@ -189,7 +189,7 @@ def test_multipart_stream_uses_digest_claim_and_unconditional_completion(tmp_pat
 def test_multipart_ambiguous_completion_is_verified_without_losing_source(tmp_path):
     fake = EvidenceS3()
     fake.complete_error = "ambiguous"
-    store = backend(fake, threshold=2, chunk=4)
+    store = backend(fake, threshold=2, chunk=4, receipt_dir=tmp_path / "receipts")
     source = tmp_path / "ciphertext.age"
     source.write_bytes(b"0123456789")
     source.chmod(0o600)
