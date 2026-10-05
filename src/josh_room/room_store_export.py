@@ -558,7 +558,9 @@ def export_portable_jat(
         for component in components.values()
         if component is not None
     )
-    estimated = 2 * (workspace["logical_bytes"] + component_bytes)
+    # Composition, inspection and clean-room recovery retain multiple independent
+    # copies; reserve the measured staging peak plus filesystem overhead.
+    estimated = 8 * (workspace["logical_bytes"] + component_bytes) + 512 * 1024 * 1024
     try:
         available = min(
             shutil.disk_usage(stage_parent).free, shutil.disk_usage(target_parent).free

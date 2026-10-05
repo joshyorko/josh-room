@@ -343,6 +343,27 @@ def _native_stubs(
     return build, inspect, restore, extract, state
 
 
+def test_export_reserves_composition_and_clean_restore_space_before_materializing(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from josh_room import room_store_export
+
+    descriptor = _descriptor()
+    parent = _private_dir(tmp_path / "private")
+    restic = _Restic(descriptor)
+    restic.snapshot = lambda *_args: pytest.fail("low-space export must not materialize data")
+    body = descriptor.to_dict()
+    logical = body["workspace"]["logical_bytes"] + sum(
+        component["archive_size"] for component in body["components"].values() if component is not None
+    )
+    monkeypatch.setattr(room_store_export.shutil, "disk_usage", lambda _path: SimpleNamespace(free=3 * logical))
+    with pytest.raises(PortableExportError, match="free disk space"):
+        export_portable_jat(descriptor=descriptor, restic=restic, staging_parent=parent,
+                            output=tmp_path / "portable.haul", jat_root=tmp_path / "jat")
+    assert list(parent.iterdir()) == []
+    assert not (tmp_path / "portable.haul").exists()
+
+
 def test_export_passes_verified_components_to_jat_and_promotes_only_after_clean_restore(
     tmp_path,
 ):
