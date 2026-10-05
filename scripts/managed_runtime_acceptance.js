@@ -324,18 +324,56 @@ async function main() {
     });
     const source = path.join(root, "save-source");
     await fsp.mkdir(source, { recursive: true, mode: 0o700 });
-    await fsp.writeFile(path.join(source, "README.md"), "managed runtime Save/Enter acceptance\n");
+    const sourceReadme = path.join(source, "README.md");
+    await fsp.writeFile(sourceReadme, "managed runtime legacy local JAT acceptance\n");
+    await fsp.chmod(sourceReadme, 0o444);
+    const sourceReadmeMode = (await fsp.stat(sourceReadme)).mode & 0o777;
     executeController(["dimensions", "list", "--json"], "dimensions-list");
-    executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "save");
-    executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "enter");
+    executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "legacy-local-jat-save");
+    executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "legacy-local-jat-enter");
     const restored = path.join(workspaceRoot, "demo", "README.md");
-    if ((await fsp.readFile(restored, "utf8")) !== "managed runtime Save/Enter acceptance\n") {
-      throw new Error("managed runtime Enter did not restore the saved workspace");
+    if ((await fsp.readFile(restored, "utf8")) !== "managed runtime legacy local JAT acceptance\n") {
+      throw new Error("legacy local JAT Enter did not restore the saved workspace");
+    }
+    if (((await fsp.stat(restored)).mode & 0o777) !== sourceReadmeMode) {
+      throw new Error("legacy local JAT Enter changed a restored file mode");
     }
     const haul = path.join(root, "managed-runtime.haul.tar.zst");
     executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
     executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
+    const legacyJatRestore = path.join(root, "legacy-jat-clean-room");
+    const legacyJatRestoreResult = JSON.parse(executeController([
+      "jat", "restore", "--haul", haul, "--destination", legacyJatRestore, "--json",
+    ], "legacy-jat-clean-room-restore"));
+    const cleanReadme = path.join(legacyJatRestore, "README.md");
+    if (legacyJatRestoreResult.success !== true
+      || (await fsp.readFile(cleanReadme, "utf8")) !== "managed runtime legacy local JAT acceptance\n"
+      || ((await fsp.stat(cleanReadme)).mode & 0o777) !== sourceReadmeMode) {
+      throw new Error("existing legacy JAT capsule failed clean-room byte/mode restore");
+    }
     await runManagedJatServe(haul, "jat-serve");
+
+    let windowsRoomStoreAcceptance = { status: "not-applicable", native_windows_only: true };
+    if (platform === "win32-x64") {
+      const roomStoreResultFile = path.join(paths.logsRoot, "managed-controller-windows-room-store-result.json");
+      runManaged([
+        "python", path.join(repository, "scripts", "windows_room_store_acceptance.py"),
+        "--restic", resticInstallation.executable,
+        "--operational-identity", path.join(root, "primary-age-identity.txt"),
+        "--recovery-identity", path.join(root, "recovery-age-identity.txt"),
+        "--jat-root", jat.jatRoot,
+        "--output", path.join(root, "room-store-portable.haul.tar.zst"),
+      ], "managed-controller", "windows-room-store-acceptance", root, {
+        inheritStreams: false,
+        resultFile: roomStoreResultFile,
+      });
+      windowsRoomStoreAcceptance = JSON.parse(await fsp.readFile(roomStoreResultFile, "utf8"));
+      if (windowsRoomStoreAcceptance.status !== "passed"
+        || windowsRoomStoreAcceptance.storage?.real_minio !== false) {
+        throw new Error("Windows Room Store fixture acceptance did not pass with an explicit fixture storage label");
+      }
+      await fsp.copyFile(roomStoreResultFile, path.join(evidenceDir, "windows-room-store-acceptance.json"));
+    }
 
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
@@ -395,6 +433,7 @@ async function main() {
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
       dependencies: { boto3: dependencyProbe },
       private_runtime: privateRuntime,
+      windows_room_store_acceptance: windowsRoomStoreAcceptance,
       restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {
         release_tag: lock.controller.release_tag,
@@ -412,7 +451,7 @@ async function main() {
         source_sha: jat.sourceSha,
         rcc_version: rcc.version,
       },
-      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec", "restic-package", "restic-phase0", "private-runtime"],
+      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "legacy-local-jat-save", "legacy-local-jat-enter", "legacy-jat-build", "legacy-jat-inspect", "legacy-jat-clean-room-restore-bytes-and-mode", "legacy-jat-serve", "jat-env-exec", "restic-package", "restic-phase0", "private-runtime", ...(platform === "win32-x64" ? ["windows-room-store-incremental-noop-rename-delete", "windows-room-store-enter", "windows-portable-jat-export-clean-room-restore", "windows-room-store-path-guards"] : [])],
     };
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
       if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-") || filename.startsWith("jat-artifact-")) && filename.endsWith(".json")) {
