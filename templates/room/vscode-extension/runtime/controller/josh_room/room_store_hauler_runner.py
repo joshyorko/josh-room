@@ -336,8 +336,14 @@ class ManagedHaulerAdapter:
             "manifests": [_absolute_path(path) for path in manifests],
             "staging": _absolute_path(staging) if staging is not None else None,
         })
-        if (not isinstance(value, dict) or set(value) != {"sha256", "manifests", "local_images"}
+        if (not isinstance(value, dict) or set(value) != {"sha256", "manifests", "local_images", "fully_pinned"}
                 or not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"])
+                or type(value["fully_pinned"]) is not bool
+                or not isinstance(value["local_images"], list)
+                or any(not isinstance(row, list) or len(row) != 2
+                       or not isinstance(row[0], str) or not row[0]
+                       or not isinstance(row[1], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", row[1])
+                       for row in value["local_images"])
                 or not isinstance(value["manifests"], list) or len(value["manifests"]) != len(manifests)):
             raise ManagedHaulerError("manifest input evidence is invalid")
         if staging is not None:

@@ -253,6 +253,30 @@ def test_local_image_identity_reuses_saved_component_without_recapture(tmp_path)
     assert len(restic.backups) == before[1] + 1
 
 
+def test_local_manifest_reuses_reference_despite_native_metadata_variation(tmp_path):
+    source = tmp_path / "input.txt"
+    source.write_text("synthetic")
+    manifest = tmp_path / "input.yaml"
+    manifest.write_text(json.dumps({"kind": "Files", "spec": {"files": [{"path": source.as_uri(), "name": "input.txt"}]}}))
+
+    class NativeMetadataHauler(_Hauler):
+        def sync(self, store, temp, *manifests, **kwargs):
+            self._touch_store(store)
+            self.calls.append(("manifests",))
+            self.rows = [{"Reference": "hauler/input.txt:latest", "Type": "file",
+                          "Digest": "sha256:" + hashlib.sha256(str(len(self.calls)).encode()).hexdigest()}]
+
+    hauler, restic = NativeMetadataHauler(), _Restic()
+    first = _capture(tmp_path, hauler=hauler, restic=restic, manifests=[manifest])
+    counts = len(hauler.calls), len(restic.backups)
+    assert _capture(tmp_path, hauler=hauler, restic=restic, manifests=[manifest], prior_component=first) == first
+    assert (len(hauler.calls), len(restic.backups)) == counts
+    source.write_text("changed")
+    changed = _capture(tmp_path, hauler=hauler, restic=restic, manifests=[manifest], prior_component=first)
+    assert changed["source_input_sha256"] != first["source_input_sha256"]
+    assert len(restic.backups) == counts[1] + 1
+
+
 def test_managed_local_images_delegate_to_jat_native_local_capture(tmp_path):
     adapter = object.__new__(runner.ManagedHaulerAdapter)
     calls = []

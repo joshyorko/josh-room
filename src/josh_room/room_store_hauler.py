@@ -139,6 +139,7 @@ def _source_identity(
     hauler_version: str,
     local_images: Sequence[tuple[str, str]] = (),
     manifest_identity: str | None = None,
+    manifest_pinned: bool = False,
 ) -> tuple[str, bool]:
     if not isinstance(hauler_version, str) or not _VERSION.fullmatch(hauler_version):
         raise RoomStoreHaulerError("selected Hauler version is invalid")
@@ -166,7 +167,7 @@ def _source_identity(
     for index, manifest in enumerate(manifests):
         manifest_digest, size = _read_input(Path(manifest), MAX_MANIFEST_BYTES)
         digest.update(b"manifest\0" + index.to_bytes(4, "big") + bytes.fromhex(manifest_digest) + size.to_bytes(8, "big"))
-        pinned = False
+        pinned = pinned and manifest_pinned
     seen_names: set[str] = set()
     for source, name in files:
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name) or name in {".", ".."}:
@@ -326,6 +327,7 @@ def capture_hauler_component(
         return None
     manifest_plan = _hauler_call(lambda: hauler.manifest_inputs(manifest_paths)) if manifest_paths else None
     manifest_identity = manifest_plan["sha256"] if manifest_plan else None
+    manifest_pinned = manifest_plan.get("fully_pinned") is True if manifest_plan else False
     source_digest, pinned_sources = _source_identity(
         images=images,
         manifests=manifest_paths,
@@ -333,6 +335,7 @@ def capture_hauler_component(
         hauler_version=hauler_version,
         local_images=local_images,
         manifest_identity=manifest_identity,
+        manifest_pinned=manifest_pinned,
     )
     prior_snapshot = None
     prior_refs = None
@@ -375,7 +378,7 @@ def capture_hauler_component(
                 frozen_manifests = frozen_plan["manifests"]
             if _source_identity(images=images, manifests=manifest_paths, files=frozen_files,
                                 hauler_version=hauler_version, local_images=local_images,
-                                manifest_identity=manifest_identity)[0] != source_digest:
+                                manifest_identity=manifest_identity, manifest_pinned=manifest_pinned)[0] != source_digest:
                 raise RoomStoreHaulerError("Hauler inputs changed while being staged")
             if images:
                 image_list = private / "selected-images.txt"
@@ -439,6 +442,7 @@ def capture_hauler_component(
                 hauler_version=hauler_version,
                 local_images=local_images,
                 manifest_identity=manifest_identity,
+                manifest_pinned=manifest_pinned,
             )[0] != source_digest:
                 raise RoomStoreHaulerError("Hauler selection changed during capture")
             _check_cancel(cancellation)

@@ -33,6 +33,7 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
     local_images = []
     total_bytes = 0
     count = 0
+    fully_pinned = bool(manifests)
 
     def capture(path, label):
         nonlocal total_bytes, count
@@ -100,6 +101,7 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
         if (hashlib.sha256(raw).hexdigest(), len(raw)) != before:
             raise RoomStoreHaulerError("Hauler manifest changed while being staged")
         documents = list(yaml.safe_load_all(raw.decode("utf-8")))
+        fully_pinned = fully_pinned and bool(documents)
         digest.update(json.dumps([index, *before], separators=(",", ":")).encode())
         for document in documents:
             if not isinstance(document, dict) or not isinstance(document.get("spec"), dict):
@@ -107,6 +109,7 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
             spec = document["spec"]
             kind = document.get("kind")
             if kind == "Charts":
+                fully_pinned = False  # Local chart indexes can still name remote dependencies.
                 charts = [(chart, list(chart.get("valuesFiles", [])), chart.get("repoURL"))
                           for chart in spec.get("charts", [])]
                 for chart, values, repository in charts:
@@ -126,7 +129,9 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
                             captured = capture(local, [index, "repository", repository])
                             chart["repoURL"] = Path(captured).resolve().as_uri() if parsed.scheme == "file" else captured
             elif kind == "Files":
-                for entry in spec.get("files", []):
+                entries = spec.get("files", [])
+                fully_pinned = fully_pinned and bool(entries)
+                for entry in entries:
                     value = entry.get("path")
                     if isinstance(value, str):
                         parsed = urlsplit(value)
@@ -135,8 +140,14 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
                             entry["path"] = Path(captured).resolve().as_uri()
                         elif not parsed.scheme or Path(value).is_absolute():
                             entry["path"] = capture(Path(value), [index, "file", value])
+                        else:
+                            fully_pinned = False
+                    else:
+                        fully_pinned = False
             elif kind == "Images":
-                names = [entry["name"] for entry in spec.get("images", []) if entry.get("local") is True]
+                entries = spec.get("images", [])
+                fully_pinned = fully_pinned and bool(entries) and all(entry.get("local") is True for entry in entries)
+                names = [entry["name"] for entry in entries if entry.get("local") is True]
                 if names:
                     if local_image_lookup is None:
                         raise RoomStoreHaulerError("local manifest images require native identity evidence")
@@ -147,6 +158,8 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
                         for entry in spec["images"] if entry.get("local") is True
                     )
                     digest.update(json.dumps(observed, separators=(",", ":")).encode())
+            else:
+                fully_pinned = False
         if _read_input(manifest, MAX_MANIFEST_BYTES) != before:
             raise RoomStoreHaulerError("Hauler manifest changed while being staged")
         if stage is None:
@@ -156,4 +169,5 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
             target.write_text(yaml.safe_dump_all(documents, sort_keys=False), encoding="utf-8")
             protect_private_file(target)
             frozen.append(str(target))
-    return {"sha256": digest.hexdigest(), "manifests": frozen, "local_images": local_images}
+    return {"sha256": digest.hexdigest(), "manifests": frozen, "local_images": local_images,
+            "fully_pinned": fully_pinned}

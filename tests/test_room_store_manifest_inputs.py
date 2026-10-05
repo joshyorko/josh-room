@@ -91,6 +91,63 @@ def test_native_file_uri_is_frozen_and_bound_to_identity(tmp_path):
     assert prepare_manifest_inputs([manifest])["sha256"] != original["sha256"]
 
 
+@pytest.mark.parametrize("remote", [False, True])
+def test_only_local_file_manifests_are_fully_pinned(tmp_path, remote):
+    source = tmp_path / "input.txt"
+    source.write_text("synthetic")
+    manifest = tmp_path / "input.yaml"
+    paths = [source.as_uri()]
+    if remote:
+        paths.append("https://example.invalid/mutable.txt")
+    manifest.write_text(json.dumps({"kind": "Files", "spec": {"files": [{"path": path} for path in paths]}}))
+    assert prepare_manifest_inputs([manifest])["fully_pinned"] is (not remote)
+
+
+def test_local_chart_repository_does_not_pin_remote_chart_dependencies(tmp_path):
+    repository = tmp_path / "charts"
+    repository.mkdir()
+    (repository / "index.yaml").write_text("synthetic")
+    manifest = tmp_path / "charts.yaml"
+    manifest.write_text(json.dumps({"kind": "Charts", "spec": {"charts": [{"name": "synthetic", "repoURL": str(repository)}]}}))
+    assert prepare_manifest_inputs([manifest])["fully_pinned"] is False
+
+
+@pytest.mark.parametrize("document", [
+    {"kind": "Files", "spec": {"files": []}},
+    {"kind": "Files", "spec": {"files": [{"path": None}]}},
+    {"kind": "Images", "spec": {"images": []}},
+    {"kind": "Images", "spec": {"images": [{"name": "remote:latest"}]}},
+    {"kind": "Unknown", "spec": {}},
+])
+def test_unsupported_or_mutable_manifests_are_not_fully_pinned(tmp_path, document):
+    manifest = tmp_path / "input.yaml"
+    manifest.write_text(json.dumps(document))
+    assert prepare_manifest_inputs([manifest])["fully_pinned"] is False
+
+
+def test_local_manifest_images_pin_config_identity_but_mixed_remote_images_do_not(tmp_path):
+    manifest = tmp_path / "images.yaml"
+    local = {"name": "localhost/synthetic:latest", "local": True}
+    document = {"kind": "Images", "spec": {"images": [local]}}
+    manifest.write_text(json.dumps(document))
+    first = prepare_manifest_inputs([manifest], local_image_lookup=lambda names: [[names[0], "sha256:" + "1" * 64]])
+    second = prepare_manifest_inputs([manifest], local_image_lookup=lambda names: [[names[0], "sha256:" + "2" * 64]])
+    assert first["fully_pinned"] is True
+    assert second["sha256"] != first["sha256"]
+    document["spec"]["images"].append({"name": "remote:latest"})
+    manifest.write_text(json.dumps(document))
+    assert prepare_manifest_inputs([manifest], local_image_lookup=lambda names: [[names[0], "sha256:" + "1" * 64]])["fully_pinned"] is False
+
+
+@pytest.mark.parametrize("signal", [None, "true", 1])
+def test_managed_manifest_worker_rejects_invalid_pinning_evidence(signal):
+    adapter = object.__new__(runner.ManagedHaulerAdapter)
+    adapter._invoke = lambda *args: {"sha256": "a" * 64, "manifests": ["synthetic.yaml"],
+                                    "local_images": [], "fully_pinned": signal}
+    with pytest.raises(runner.ManagedHaulerError, match="evidence"):
+        adapter.manifest_inputs([Path("synthetic.yaml")])
+
+
 def test_local_config_verification_rejects_retag_and_restore(tmp_path):
     blobs = tmp_path / "blobs" / "sha256"
     blobs.mkdir(parents=True)
