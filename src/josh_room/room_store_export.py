@@ -389,24 +389,115 @@ def _verify_inspection(
     inventory = inspection.get("inventory")
     if not isinstance(inventory, list):
         raise PortableExportError("JAT capsule inventory is unavailable")
-    digests = {row.get("digest") for row in inventory if isinstance(row, dict)}
     hauler = components["hauler_content"]
-    if hauler is not None and any(
-        reference["digest"] not in digests for reference in hauler["references"]
-    ):
-        raise PortableExportError("Hauler component identities do not match")
+    if hauler is not None:
+        rows = [row for row in inventory if isinstance(row, dict)]
+        used: set[int] = set()
+        for expected in hauler["references"]:
+            matches = [
+                index
+                for index, row in enumerate(rows)
+                if index not in used
+                and row.get("digest") == expected["digest"]
+                and (
+                    "kind" not in expected
+                    or str(row.get("type", "")).lower() == expected["kind"]
+                )
+            ]
+            if len(matches) != 1:
+                raise PortableExportError("Hauler component identities do not match")
+            used.add(matches[0])
 
 
-def _verify_restore_result(result: dict[str, Any], components: dict[str, Any]) -> None:
+def _inventory_reference(inventory: list[Any], artifact_name: str) -> str:
+    expected = f"hauler/{artifact_name}:latest"
+    matches = [
+        row.get("reference")
+        for row in inventory
+        if isinstance(row, dict)
+        and row.get("reference") == expected
+        and str(row.get("type", "")).lower() == "file"
+    ]
+    if len(matches) != 1:
+        raise PortableExportError("JAT capsule component identities are unavailable")
+    return matches[0]
+
+
+def _verify_extracted_component(
+    *,
+    jat_root: Path,
+    haul: Path,
+    inventory: list[Any],
+    artifact_name: str,
+    source: Path,
+    destination: Path,
+    run_extract_fn: Callable[..., dict[str, Any]],
+) -> None:
+    reference = _inventory_reference(inventory, artifact_name)
+    try:
+        expected_size, expected_digest = _digest(source)
+        result = run_extract_fn(jat_root, haul, reference, destination)
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise ValueError
+        payloads = result.get("payloads")
+        if not isinstance(payloads, list) or len(payloads) != 1:
+            raise ValueError
+        payload = payloads[0]
+        if not isinstance(payload, dict):
+            raise TypeError
+        extracted = Path(payload.get("path", ""))
+        extracted.relative_to(destination)
+        if extracted.name != artifact_name:
+            raise ValueError
+        actual_size, actual_digest = _digest(extracted)
+        if (
+            actual_size != expected_size
+            or actual_digest != expected_digest
+            or payload.get("size") != actual_size
+            or payload.get("sha256") != actual_digest
+        ):
+            raise ValueError
+    except (jat.JATError, OSError, TypeError, ValueError):
+        raise PortableExportError(
+            "JAT capsule component identity does not match"
+        ) from None
+
+
+def _verify_restore_result(
+    result: dict[str, Any],
+    components: dict[str, Any],
+    expected_rcc_metadata: Path | None,
+) -> None:
     if not isinstance(result, dict) or result.get("success") is not True:
         raise PortableExportError("JAT clean-room restore did not succeed")
     rcc = components["rcc_environment"]
     if rcc is not None:
         identity = result.get("environment_artifact")
+        if expected_rcc_metadata is None or not isinstance(identity, dict):
+            raise PortableExportError(
+                "RCC component identity changed after clean-room restore"
+            )
+        try:
+            expected = json.loads(expected_rcc_metadata.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise PortableExportError(
+                "RCC component JAT metadata is unavailable"
+            ) from None
+        fields = (
+            "artifact",
+            "specification_digest",
+            "legacy_blueprint_key",
+            "archive",
+            "archive_sha256",
+            "archive_size",
+            "rcc_version",
+            "platform",
+            "robot",
+        )
         if (
-            not isinstance(identity, dict)
-            or identity.get("artifact") != rcc["artifact_digest"]
+            identity.get("artifact") != rcc["artifact_digest"]
             or identity.get("specification_digest") != rcc["specification_digest"]
+            or any(identity.get(field) != expected.get(field) for field in fields)
         ):
             raise PortableExportError(
                 "RCC component identity changed after clean-room restore"
@@ -433,6 +524,7 @@ def export_portable_jat(
     run_build_fn: Callable[..., dict[str, Any]] = jat.run_build,
     run_inspect_fn: Callable[..., dict[str, Any]] = jat.run_inspect,
     run_restore_fn: Callable[..., dict[str, Any]] = jat.run_restore,
+    run_extract_fn: Callable[..., dict[str, Any]] = jat.run_extract,
 ) -> PortableExportResult:
     """Materialize, compose, clean-room restore, compare, and atomically publish a logical JAT."""
     body = descriptor.to_dict()
@@ -576,6 +668,47 @@ def export_portable_jat(
             _verify_inspection(inspection, components)
             _check_cancelled(cancellation)
 
+            capsule_inventory = inspection["inventory"]
+            component_checks = staging / "component-checks"
+            component_checks.mkdir()
+            if materialized.brew_archive is not None:
+                _verify_extracted_component(
+                    jat_root=Path(jat_root),
+                    haul=temporary_output,
+                    inventory=capsule_inventory,
+                    artifact_name=materialized.brew_archive.name,
+                    source=materialized.brew_archive,
+                    destination=component_checks / "homebrew-recovery",
+                    run_extract_fn=run_extract_fn,
+                )
+            if materialized.rcc_archive is not None:
+                if materialized.jat_rcc_metadata is None:
+                    raise PortableExportError(
+                        "RCC component JAT metadata is unavailable"
+                    )
+                for artifact_name, source, label in (
+                    (
+                        materialized.rcc_archive.name,
+                        materialized.rcc_archive,
+                        "rcc-environment",
+                    ),
+                    (
+                        "rcc-environment-metadata.json",
+                        materialized.jat_rcc_metadata,
+                        "rcc-metadata",
+                    ),
+                ):
+                    _verify_extracted_component(
+                        jat_root=Path(jat_root),
+                        haul=temporary_output,
+                        inventory=capsule_inventory,
+                        artifact_name=artifact_name,
+                        source=source,
+                        destination=component_checks / label,
+                        run_extract_fn=run_extract_fn,
+                    )
+            _check_cancelled(cancellation)
+
             clean_restore = staging / "clean-room-restore"
             try:
                 restore_result = run_restore_fn(
@@ -585,9 +718,14 @@ def export_portable_jat(
                 raise
             except jat.JATError:
                 raise PortableExportError("JAT clean-room restore failed") from None
-            _verify_restore_result(restore_result, components)
-            restored_workspace = clean_restore / "workspace"
+            _verify_restore_result(
+                restore_result, components, materialized.jat_rcc_metadata
+            )
+            workspace_container = clean_restore / "workspace"
+            restored_workspace = workspace_container / workspace_stage.name
             try:
+                if workspace_container.is_symlink() or set(workspace_container.iterdir()) != {restored_workspace}:
+                    raise PortableExportError("JAT clean-room workspace root identity does not match")
                 restored_policy = load_capture_policy(restored_workspace)
                 _scan_workspace(restored_workspace, restored_policy)
                 actual_workspace = _semantic_workspace(

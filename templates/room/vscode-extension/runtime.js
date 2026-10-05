@@ -8,6 +8,7 @@ const { pipeline, finished } = require("stream/promises");
 
 const DIGEST = /^[0-9a-f]{64}$/;
 const VERSION = /^v\d+\.\d+\.\d+$/;
+const ROOM_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?![\s\S])/;
 const JAT_SOURCE_URL_PREFIX = "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/";
 const MANIFEST_PATH = path.join(__dirname, "runtime", "manifest.json");
 const HAULER_VERSION_CHECK = "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)";
@@ -873,6 +874,10 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
 function runtimeEnvironment(context, runtime, workspace) {
   const paths = privatePaths(context);
   const values = runtime || {};
+  const roomVersion = context?.extension?.packageJSON?.version;
+  if (typeof roomVersion !== "string" || !ROOM_VERSION.test(roomVersion)) {
+    throw new Error("installed Josh Room extension has an invalid package version");
+  }
   const managedBin = values.rccExecutable ? path.dirname(values.rccExecutable) : "";
   return {
     RCC_HOLOTREE_MODE: "private",
@@ -886,6 +891,7 @@ function runtimeEnvironment(context, runtime, workspace) {
     JOSH_ROOM_JAT_SHA: values.jatSourceSha || "",
     JOSH_ROOM_INSTANCE: paths.instanceRoot,
     JOSH_ROOM_CONFIG_DIR: paths.configRoot,
+    JOSH_ROOM_EXTENSION_VERSION: roomVersion,
     XDG_RUNTIME_DIR: path.join(paths.runtimeRoot, "xdg-runtime"),
     PYTHONPATH: values.controllerRoot || paths.controllerRoot,
     PATH: [managedBin, process.env.PATH].filter(Boolean).join(path.delimiter),

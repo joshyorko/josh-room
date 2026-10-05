@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
+import sys
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +23,53 @@ from josh_room.encryption_domain import EncryptionKeyset, EncryptionMaterial
 from josh_room.local_store import ObjectRef
 from josh_room.private_paths import protect_private_directory
 from josh_room.restic_store import RepositoryInfo, ResticStore
+
+
+def _load_copied_room_store_bridge():
+    path = (
+        Path(__file__).parents[1]
+        / "vscode-extension/runtime/controller/josh_room/room_store_bridge.py"
+    )
+    name = "josh_room._copied_room_store_bridge_test"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_copied_controller_uses_extension_version_without_dist_metadata(monkeypatch):
+    copied = _load_copied_room_store_bridge()
+    monkeypatch.setattr(
+        copied,
+        "version",
+        lambda _name: (_ for _ in ()).throw(copied.PackageNotFoundError("josh-room")),
+    )
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_VERSION", "0.1.26")
+
+    assert Path(copied.__file__) == (
+        Path(__file__).parents[1]
+        / "vscode-extension/runtime/controller/josh_room/room_store_bridge.py"
+    )
+    assert copied._room_version() == "0.1.26"
+
+
+@pytest.mark.parametrize("value", ["latest", "0.1.26\n"])
+def test_extension_version_handoff_rejects_invalid_version(monkeypatch, value):
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_VERSION", value)
+
+    with pytest.raises(bridge.RoomStoreBridgeError) as error:
+        bridge._room_version()
+
+    assert error.value.code == "runtime-version-invalid"
+
+
+def test_standalone_cli_keeps_installed_distribution_version(monkeypatch):
+    monkeypatch.delenv("JOSH_ROOM_EXTENSION_VERSION", raising=False)
+    monkeypatch.setattr(bridge, "version", lambda name: "0.1.26" if name == "josh-room" else "")
+
+    assert bridge._room_version() == "0.1.26"
 
 
 class FakeS3:

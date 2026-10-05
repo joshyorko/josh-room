@@ -63,6 +63,12 @@ from .workspace_state import write_stat_workspace_marker
 
 _COMPONENTS = {"rcc_environment", "homebrew_recovery", "hauler_content"}
 MAX_CONTEXT_LOGICAL_DESCRIPTORS = 1024
+_ROOM_VERSION = re.compile(
+    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z"
+)
 
 
 class RoomStoreBridgeError(RuntimeError):
@@ -1561,7 +1567,14 @@ def _build_operations(
 
 
 def _room_version() -> str:
-
+    extension_version = os.environ.get("JOSH_ROOM_EXTENSION_VERSION")
+    if extension_version is not None:
+        if not _ROOM_VERSION.fullmatch(extension_version):
+            raise RoomStoreBridgeError(
+                "Josh Room extension version is invalid",
+                code="runtime-version-invalid",
+            )
+        return extension_version
     try:
         return version("josh-room")
     except PackageNotFoundError:

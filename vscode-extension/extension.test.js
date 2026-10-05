@@ -9,6 +9,7 @@ const { EventEmitter } = require("node:events");
 const Module = require("node:module");
 const { buildProviderTree, flattenDimensionRooms } = require("./registry");
 const managedRuntime = require("./runtime");
+const extensionPackageJson = require("./package.json");
 
 function sha256Hex(value) {
   return crypto.createHash("sha256").update(String(value)).digest("hex");
@@ -142,6 +143,7 @@ async function createLocalFallbackFixture(t) {
   const context = {
     globalStorageUri: { fsPath: root },
     extensionPath: __dirname,
+    extension: { packageJSON: extensionPackageJson },
     secrets: { get: async () => undefined },
   };
   const manifest = {
@@ -443,6 +445,7 @@ function stubRuntimeAcquisition(t, extension, acquire) {
 function activateTestExtension(extension, root, vscode, values = new Map()) {
   const context = {
     extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    extension: { packageJSON: extensionPackageJson },
     secrets: { get: async (key) => values.get(key), store: async (key, value) => values.set(key, value) },
   };
   extension.activate(context);
@@ -490,6 +493,7 @@ test("managed extension controller invocation keeps receipt handling and stream 
   extension.__test__.setExtensionContextForTests({
     extensionPath: root,
     globalStorageUri: { fsPath: root },
+    extension: { packageJSON: extensionPackageJson },
     secrets: { get: async () => undefined },
   });
   extension.__test__.setRuntimeReadinessForTests(Promise.resolve({
@@ -524,6 +528,7 @@ test("managed extension controller execution requires a matching RCC receipt", a
     extension.__test__.setExtensionContextForTests({
       extensionPath: root,
       globalStorageUri: { fsPath: root },
+      extension: { packageJSON: extensionPackageJson },
       secrets: { get: async () => undefined },
     });
     extension.__test__.setRuntimeReadinessForTests(Promise.resolve({
@@ -928,7 +933,10 @@ test("real extension process uses an already resolved managed runtime", {
   const extension = loadExtensionWithRealProcesses(vscode);
   const rcc = path.join(storage, "runtime/rcc/v18.19.2/linux-x64/rcc");
   const jatRoot = path.join(storage, "runtime/jat/096c5f3c5d735a67f41c4fabbf63e4af1aacadf1");
-  const environment = managedRuntime.runtimeEnvironment({ globalStorageUri: { fsPath: storage } }, {
+  const environment = managedRuntime.runtimeEnvironment({
+    globalStorageUri: { fsPath: storage },
+    extension: { packageJSON: require("./package.json") },
+  }, {
     rccExecutable: rcc,
     controllerRoot: path.join(__dirname, "runtime/controller"),
     jatRoot,

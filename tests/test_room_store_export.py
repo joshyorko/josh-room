@@ -191,11 +191,18 @@ def _private_dir(path: Path):
 
 
 def _native_stubs(
-    *, mismatch: bool = False, workspace_mismatch: bool = False, on_build=None
+    *,
+    mismatch: bool = False,
+    workspace_mismatch: bool = False,
+    extraction_mismatch: str | None = None,
+    hauler_kind_mismatch: bool = False,
+    restore_metadata_mismatch: str | None = None,
+    on_build=None,
 ):
-    state = {}
+    state = {"events": []}
 
     def build(jat_root, source, output, **kwargs):
+        state["events"].append("build")
         if on_build:
             on_build(source, kwargs)
         state["source"] = source
@@ -210,31 +217,51 @@ def _native_stubs(
             if "rcc_metadata" in kwargs
             else None
         )
+        state["rcc_metadata_bytes"] = (
+            kwargs["rcc_metadata"].read_bytes() if "rcc_metadata" in kwargs else None
+        )
         output.write_bytes(b"complete-capsule")
         return {"success": True, "operation": "build"}
 
     def inspect(_jat_root, _haul):
+        state["events"].append("inspect")
+        hauler_row = {
+            "reference": "example.test/image:latest",
+            "type": "image",
+            "digest": "sha256:" + "4" * 64,
+            "platform": "linux/amd64",
+            "size": 4096,
+        }
+        if hauler_kind_mismatch:
+            hauler_row["type"] = "file"
         return {
             "success": True,
             "operation": "inspect",
             "inventory": [
                 {
                     "reference": "hauler/joshs-all-the-things-workspace.tar.zst:latest",
+                    "type": "file",
                     "digest": None,
                 },
                 {
                     "reference": "hauler/homebrew-recovery.tar.zst:latest",
-                    "digest": None,
+                    "type": "file",
+                    "digest": hashlib.sha256(b"verified-brew").hexdigest(),
+                    "size": len(b"verified-brew"),
                 },
-                {"reference": "hauler/rcc-environment.rcca:latest", "digest": None},
+                {
+                    "reference": "hauler/rcc-environment.rcca:latest",
+                    "type": "file",
+                    "digest": hashlib.sha256(b"verified-rcca").hexdigest(),
+                    "size": len(b"verified-rcca"),
+                },
                 {
                     "reference": "hauler/rcc-environment-metadata.json:latest",
-                    "digest": None,
+                    "type": "file",
+                    "digest": hashlib.sha256(state["rcc_metadata_bytes"]).hexdigest(),
+                    "size": len(state["rcc_metadata_bytes"]),
                 },
-                {
-                    "reference": "example.test/image:latest",
-                    "digest": "sha256:" + "4" * 64,
-                },
+                hauler_row,
             ],
             "anchors": {
                 "workspace": True,
@@ -244,23 +271,65 @@ def _native_stubs(
             },
         }
 
-    def restore(_jat_root, _haul, destination):
+    def extract(_jat_root, _haul, reference, destination):
+        state["events"].append(("extract", reference))
         destination.mkdir()
-        shutil.copytree(state["source"], destination / "workspace", symlinks=True)
+        name = reference.rsplit("/", 1)[-1].removesuffix(":latest")
+        data = {
+            "homebrew-recovery.tar.zst": state["component_bytes"]["brew_archive"],
+            "rcc-environment.rcca": state["component_bytes"]["rcc_archive"],
+            "rcc-environment-metadata.json": state["rcc_metadata_bytes"],
+        }[name]
+        if extraction_mismatch == name:
+            data += b"-changed"
+        path = destination / name
+        path.write_bytes(data)
+        return {
+            "success": True,
+            "operation": "extract",
+            "payloads": [
+                {
+                    "path": str(path),
+                    "size": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            ],
+        }
+
+    def restore(_jat_root, _haul, destination):
+        state["events"].append("restore")
+        destination.mkdir()
+        (destination / "workspace").mkdir()
+        restored_workspace = destination / "workspace" / state["source"].name
+        shutil.copytree(state["source"], restored_workspace, symlinks=True)
         if workspace_mismatch:
-            (destination / "workspace" / "project.txt").write_text(
+            (restored_workspace / "project.txt").write_text(
                 "different", encoding="utf-8"
             )
-        (destination / "workspace" / ".josh-room.json").write_text("generated marker")
+        (restored_workspace / ".josh-room.json").write_text("generated marker")
         (destination / "homebrew-recovery").mkdir()
         (destination / "homebrew-recovery" / "restored.txt").write_text("ok")
-        (destination / "environment_artifact.json").write_text(
-            json.dumps(
-                {
-                    "artifact": "sha256:" + ("9" if mismatch else "1") * 64,
-                    "specification_digest": "sha256:" + "2" * 64,
-                }
+        expected_rcc = state["rcc_metadata"]
+        environment_artifact = {
+            key: expected_rcc[key]
+            for key in (
+                "artifact",
+                "specification_digest",
+                "legacy_blueprint_key",
+                "archive",
+                "archive_sha256",
+                "archive_size",
+                "rcc_version",
+                "platform",
+                "robot",
             )
+        }
+        if mismatch:
+            environment_artifact["artifact"] = "sha256:" + "9" * 64
+        if restore_metadata_mismatch:
+            environment_artifact[restore_metadata_mismatch] = "changed"
+        (destination / "environment_artifact.json").write_text(
+            json.dumps(environment_artifact)
         )
         return {
             "success": True,
@@ -270,7 +339,7 @@ def _native_stubs(
             ),
         }
 
-    return build, inspect, restore, state
+    return build, inspect, restore, extract, state
 
 
 def test_export_passes_verified_components_to_jat_and_promotes_only_after_clean_restore(
@@ -279,7 +348,7 @@ def test_export_passes_verified_components_to_jat_and_promotes_only_after_clean_
     descriptor = _descriptor()
     parent = _private_dir(tmp_path / "private")
     output = tmp_path / "portable.haul.tar.zst"
-    build, inspect, restore, state = _native_stubs()
+    build, inspect, restore, extract, state = _native_stubs()
 
     result = export_portable_jat(
         descriptor=descriptor,
@@ -290,6 +359,7 @@ def test_export_passes_verified_components_to_jat_and_promotes_only_after_clean_
         run_build_fn=build,
         run_inspect_fn=inspect,
         run_restore_fn=restore,
+        run_extract_fn=extract,
     )
 
     assert result.logical_jat_id == "logical-test"
@@ -301,6 +371,13 @@ def test_export_passes_verified_components_to_jat_and_promotes_only_after_clean_
         "hauler_archive": b"verified-hauler",
     }
     assert state["rcc_metadata"]["artifact"] == "sha256:" + "1" * 64
+    assert state["events"][0:2] == ["build", "inspect"]
+    assert [event[0] for event in state["events"] if isinstance(event, tuple)] == [
+        "extract",
+        "extract",
+        "extract",
+    ]
+    assert state["events"][-1] == "restore"
     assert not list(parent.iterdir())
 
 
@@ -308,7 +385,7 @@ def test_export_preserves_and_compares_workspace_symlink_targets(tmp_path):
     descriptor = _descriptor()
     parent = _private_dir(tmp_path / "private")
     output = tmp_path / "portable.haul.tar.zst"
-    build, inspect, restore, _state = _native_stubs()
+    build, inspect, restore, extract, _state = _native_stubs()
 
     result = export_portable_jat(
         descriptor=descriptor,
@@ -319,6 +396,7 @@ def test_export_preserves_and_compares_workspace_symlink_targets(tmp_path):
         run_build_fn=build,
         run_inspect_fn=inspect,
         run_restore_fn=restore,
+        run_extract_fn=extract,
     )
 
     assert result.workspace_entry_count == 2
@@ -329,7 +407,7 @@ def test_export_preserves_and_compares_workspace_symlink_targets(tmp_path):
 def test_export_fails_closed_on_unsafe_component_snapshot_path(tmp_path):
     descriptor = _descriptor()
     parent = _private_dir(tmp_path / "private")
-    build, inspect, restore, _state = _native_stubs()
+    build, inspect, restore, extract, _state = _native_stubs()
 
     with pytest.raises(PortableExportError, match="unsafe"):
         export_portable_jat(
@@ -341,6 +419,7 @@ def test_export_fails_closed_on_unsafe_component_snapshot_path(tmp_path):
             run_build_fn=build,
             run_inspect_fn=inspect,
             run_restore_fn=restore,
+            run_extract_fn=extract,
         )
 
     assert not (tmp_path / "portable.haul.tar.zst").exists()
@@ -380,7 +459,7 @@ def test_export_rejects_capsule_whose_clean_restore_has_different_component_iden
     descriptor = _descriptor()
     parent = _private_dir(tmp_path / "private")
     output = tmp_path / "portable.haul.tar.zst"
-    build, inspect, restore, _state = _native_stubs(mismatch=True)
+    build, inspect, restore, extract, _state = _native_stubs(mismatch=True)
 
     with pytest.raises(PortableExportError, match="identity"):
         export_portable_jat(
@@ -392,6 +471,109 @@ def test_export_rejects_capsule_whose_clean_restore_has_different_component_iden
             run_build_fn=build,
             run_inspect_fn=inspect,
             run_restore_fn=restore,
+            run_extract_fn=extract,
+        )
+
+    assert not output.exists()
+    assert not list(parent.iterdir())
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "legacy_blueprint_key",
+        "archive_sha256",
+        "archive_size",
+        "rcc_version",
+        "platform",
+        "robot",
+    ],
+)
+def test_export_rejects_clean_restore_with_changed_rcc_metadata(tmp_path, field):
+    descriptor = _descriptor()
+    parent = _private_dir(tmp_path / "private")
+    output = tmp_path / "portable.haul.tar.zst"
+    build, inspect, restore, extract, _state = _native_stubs(
+        restore_metadata_mismatch=field
+    )
+
+    with pytest.raises(PortableExportError, match="RCC component identity"):
+        export_portable_jat(
+            descriptor=descriptor,
+            restic=_Restic(descriptor),
+            staging_parent=parent,
+            output=output,
+            jat_root=tmp_path / "jat",
+            run_build_fn=build,
+            run_inspect_fn=inspect,
+            run_restore_fn=restore,
+            run_extract_fn=extract,
+        )
+
+    assert not output.exists()
+    assert not list(parent.iterdir())
+
+
+def test_export_rejects_saved_hauler_digest_with_changed_native_kind(tmp_path):
+    descriptor = _descriptor(
+        components={
+            **_descriptor().to_dict()["components"],
+            "hauler_content": {
+                **_descriptor().to_dict()["components"]["hauler_content"],
+                "references": [{"digest": "sha256:" + "4" * 64, "kind": "image"}],
+            },
+        }
+    )
+    parent = _private_dir(tmp_path / "private")
+    output = tmp_path / "portable.haul.tar.zst"
+    build, inspect, restore, extract, _state = _native_stubs(hauler_kind_mismatch=True)
+
+    with pytest.raises(PortableExportError, match="Hauler component identities"):
+        export_portable_jat(
+            descriptor=descriptor,
+            restic=_Restic(descriptor),
+            staging_parent=parent,
+            output=output,
+            jat_root=tmp_path / "jat",
+            run_build_fn=build,
+            run_inspect_fn=inspect,
+            run_restore_fn=restore,
+            run_extract_fn=extract,
+        )
+
+    assert not output.exists()
+    assert not list(parent.iterdir())
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        "homebrew-recovery.tar.zst",
+        "rcc-environment.rcca",
+        "rcc-environment-metadata.json",
+    ],
+)
+def test_export_rejects_saved_anchor_bytes_changed_in_composed_capsule(
+    tmp_path, artifact
+):
+    descriptor = _descriptor()
+    parent = _private_dir(tmp_path / "private")
+    output = tmp_path / "portable.haul.tar.zst"
+    build, inspect, restore, extract, _state = _native_stubs(
+        extraction_mismatch=artifact
+    )
+
+    with pytest.raises(PortableExportError, match="component identity"):
+        export_portable_jat(
+            descriptor=descriptor,
+            restic=_Restic(descriptor),
+            staging_parent=parent,
+            output=output,
+            jat_root=tmp_path / "jat",
+            run_build_fn=build,
+            run_inspect_fn=inspect,
+            run_restore_fn=restore,
+            run_extract_fn=extract,
         )
 
     assert not output.exists()
@@ -404,7 +586,7 @@ def test_export_rejects_capsule_whose_clean_restore_has_different_workspace_cont
     descriptor = _descriptor()
     parent = _private_dir(tmp_path / "private")
     output = tmp_path / "portable.haul.tar.zst"
-    build, inspect, restore, _state = _native_stubs(workspace_mismatch=True)
+    build, inspect, restore, extract, _state = _native_stubs(workspace_mismatch=True)
 
     with pytest.raises(PortableExportError, match="content identity"):
         export_portable_jat(
@@ -416,6 +598,7 @@ def test_export_rejects_capsule_whose_clean_restore_has_different_workspace_cont
             run_build_fn=build,
             run_inspect_fn=inspect,
             run_restore_fn=restore,
+            run_extract_fn=extract,
         )
 
     assert not output.exists()
@@ -427,7 +610,7 @@ def test_export_is_create_only_and_preserves_existing_output(tmp_path):
     parent = _private_dir(tmp_path / "private")
     output = tmp_path / "portable.haul.tar.zst"
     output.write_bytes(b"user data")
-    build, inspect, restore, _state = _native_stubs()
+    build, inspect, restore, extract, _state = _native_stubs()
 
     with pytest.raises(PortableExportError, match="already exists"):
         export_portable_jat(
@@ -439,6 +622,7 @@ def test_export_is_create_only_and_preserves_existing_output(tmp_path):
             run_build_fn=build,
             run_inspect_fn=inspect,
             run_restore_fn=restore,
+            run_extract_fn=extract,
         )
 
     assert output.read_bytes() == b"user data"
@@ -453,7 +637,7 @@ def test_export_atomic_promotion_does_not_replace_output_created_during_build(tm
     def create_collision(_source, _kwargs):
         output.write_bytes(b"concurrent output")
 
-    build, inspect, restore, _state = _native_stubs(on_build=create_collision)
+    build, inspect, restore, extract, _state = _native_stubs(on_build=create_collision)
 
     with pytest.raises(PortableExportError, match="already exists"):
         export_portable_jat(
@@ -465,6 +649,7 @@ def test_export_atomic_promotion_does_not_replace_output_created_during_build(tm
             run_build_fn=build,
             run_inspect_fn=inspect,
             run_restore_fn=restore,
+            run_extract_fn=extract,
         )
 
     assert output.read_bytes() == b"concurrent output"
@@ -475,7 +660,7 @@ def test_export_cancellation_cleans_all_staging_without_promoting_output(tmp_pat
     descriptor = _descriptor()
     parent = _private_dir(tmp_path / "private")
     output = tmp_path / "portable.haul.tar.zst"
-    build, inspect, restore, _state = _native_stubs()
+    build, inspect, restore, extract, _state = _native_stubs()
 
     class CancelAfterBuild:
         cancelled = False
@@ -498,6 +683,7 @@ def test_export_cancellation_cleans_all_staging_without_promoting_output(tmp_pat
             run_build_fn=cancel_build,
             run_inspect_fn=inspect,
             run_restore_fn=restore,
+            run_extract_fn=extract,
         )
 
     assert not output.exists()
