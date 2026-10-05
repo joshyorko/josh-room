@@ -12,6 +12,7 @@ import stat
 import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -755,15 +756,48 @@ def _verify_local_image_configs(store: Path, images) -> None:
         raise ManagedHaulerError("local image identity could not be verified") from None
 
 
+@contextmanager
+def _brew_decoded_stream(archive: Path):
+    try:
+        import zstandard
+    except ModuleNotFoundError:
+        import shutil
+        import subprocess
+
+        from .cancellation import terminate_owned_process
+
+        executable = shutil.which("zstd")
+        if executable is None:
+            raise ManagedHaulerError("contained Homebrew decompressor is unavailable")
+        process = subprocess.Popen([executable, "-dc", "--memory=128MB", "--", str(archive)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   start_new_session=os.name != "nt")
+
+        class DecodedReader:
+            def read(self, size):
+                block = process.stdout.read(size)
+                if not block and process.wait(timeout=30) != 0:
+                    raise ManagedHaulerError("Homebrew archive decompression failed")
+                return block
+
+        try:
+            yield DecodedReader()
+        finally:
+            if process.poll() is None:
+                terminate_owned_process(process)
+            process.stdout.close()
+        return
+    with archive.open("rb") as raw, zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(raw) as decoded:
+        yield decoded
+
+
 def _preflight_brew_archive(archive: Path) -> None:
     import tarfile
-
-    import zstandard
 
     limit = 8 * 1024 * 1024 * 1024
     expanded = 0
     # Check extension-header sizes before tarfile can allocate their bodies.
-    with archive.open("rb") as raw, zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(raw) as headers:
+    with _brew_decoded_stream(archive) as headers:
         scanned = 0
         header_count = 0
         while header := headers.read(512):
@@ -798,10 +832,7 @@ def _preflight_brew_archive(archive: Path) -> None:
                 raise ManagedHaulerError("expanded Homebrew archive exceeds its validation limit")
             return block
 
-    with (
-        archive.open("rb") as raw,
-        zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(raw) as decoded,
-    ):
+    with _brew_decoded_stream(archive) as decoded:
         reader = BoundedReader(decoded)
         count = 0
         with tarfile.open(fileobj=reader, mode="r|") as stream:

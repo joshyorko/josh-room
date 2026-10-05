@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import hashlib
 import io
 import json
@@ -57,6 +58,29 @@ def test_brew_preflight_accepts_native_zstd_tar_stream(tmp_path):
         archive.addfile(member, io.BytesIO(b"test"))
     source = tmp_path / "brew.tar.zst"
     source.write_bytes(zstandard.ZstdCompressor().compress(raw.getvalue()))
+    runner._preflight_brew_archive(source)
+
+
+def test_brew_preflight_uses_contained_decoder_when_python_backend_is_absent(tmp_path, monkeypatch):
+    import shutil
+
+    if shutil.which("zstd") is None:
+        pytest.skip("native zstd is unavailable")
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as archive:
+        member = tarfile.TarInfo("synthetic/file")
+        member.size = 4
+        archive.addfile(member, io.BytesIO(b"test"))
+    source = tmp_path / "brew.tar.zst"
+    source.write_bytes(zstandard.ZstdCompressor().compress(raw.getvalue()))
+    native_import = builtins.__import__
+
+    def without_python_decoder(name, *args, **kwargs):
+        if name == "zstandard":
+            raise ModuleNotFoundError(name)
+        return native_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_python_decoder)
     runner._preflight_brew_archive(source)
 
 
