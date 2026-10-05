@@ -940,7 +940,7 @@ class ResticStore:
         if cancellation is not None and cancellation.cancelled:
             raise ResticStoreError(ResticStoreErrorCode.CANCELLED)
         force_scan = sys.platform.startswith("win")
-        args = ["backup", "--json", "--skip-if-unchanged"]
+        args = ["backup", "--json", "--skip-if-unchanged", "--no-scan"]
         if force_scan:
             args.append("--force")
         elif parent is not None:
