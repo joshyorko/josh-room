@@ -123,7 +123,7 @@ def _check_component_snapshot(
     except (OSError, ResticStoreError, ValueError, TypeError):
         raise PortableExportError("component snapshot could not be verified") from None
     expected = set(_COMPONENT_FILES[name])
-    if set(entries) != {".", *expected} or any(
+    if set(entries) - {"."} != expected or any(
         row.entry_type != "file" for path, row in entries.items() if path != "."
     ):
         raise PortableExportError(

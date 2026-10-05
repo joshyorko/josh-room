@@ -426,6 +426,19 @@ def test_export_fails_closed_on_unsafe_component_snapshot_path(tmp_path):
     assert not list(parent.iterdir())
 
 
+def test_materialize_components_accepts_native_entries_without_root_row(tmp_path):
+    descriptor = _descriptor()
+    restic = _Restic(descriptor)
+    entries = restic.entries
+    restic.entries = lambda snapshot_id: (
+        row for row in entries(snapshot_id) if row.path != "."
+    )
+    with materialize_components(descriptor, restic, _private_dir(tmp_path / "private")) as components:
+        assert components.rcc_archive.read_bytes() == b"verified-rcca"
+        assert components.brew_archive.read_bytes() == b"verified-brew"
+        assert components.hauler_archive.read_bytes() == b"verified-hauler"
+
+
 def test_materialize_components_returns_owned_verified_paths_and_manifest(tmp_path):
     descriptor = _descriptor()
     parent = _private_dir(tmp_path / "private")
