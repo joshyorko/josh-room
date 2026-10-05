@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .logical_jat import MAX_LOGICAL_JAT_BYTES
 from .private_paths import (
     protect_private_directory,
     protect_private_file,
@@ -137,6 +138,7 @@ def _source_identity(
     files: Sequence[tuple[Path, str]],
     hauler_version: str,
     local_images: Sequence[tuple[str, str]] = (),
+    manifest_identity: str | None = None,
 ) -> tuple[str, bool]:
     if not isinstance(hauler_version, str) or not _VERSION.fullmatch(hauler_version):
         raise RoomStoreHaulerError("selected Hauler version is invalid")
@@ -147,6 +149,10 @@ def _source_identity(
         raise RoomStoreHaulerError("Hauler image selection contains duplicates")
     digest = hashlib.sha256(b"josh-room-hauler-inputs-v1\0")
     digest.update(hauler_version.encode("ascii") + b"\0")
+    if manifest_identity is not None:
+        if not _SHA256.fullmatch(manifest_identity):
+            raise RoomStoreHaulerError("manifest identity is invalid")
+        digest.update(b"manifest-dependencies\0" + bytes.fromhex(manifest_identity))
     for image in sorted(image_refs):
         digest.update(b"image\0" + image.encode("utf-8") + b"\0")
     local_names = set()
@@ -240,7 +246,10 @@ def _native_references(inventory: object) -> list[dict[str, str]]:
         identity = (digest, value.get("kind", ""), value.get("media_type", ""),
                     value.get("reference_sha256", ""), value.get("platform_sha256", ""))
         references[identity] = value
-    return [references[key] for key in sorted(references)]
+    result = [references[key] for key in sorted(references)]
+    if len(json.dumps(result, separators=(",", ":")).encode("utf-8")) > MAX_LOGICAL_JAT_BYTES // 2:
+        raise RoomStoreHaulerError("Hauler references exceed the logical descriptor budget")
+    return result
 
 
 def _prior_references(value: object) -> list[dict[str, str]] | None:
@@ -315,12 +324,15 @@ def capture_hauler_component(
     file_inputs = tuple((Path(path), name) for path, name in files)
     if not images and not manifest_paths and not file_inputs and not local_images:
         return None
+    manifest_plan = _hauler_call(lambda: hauler.manifest_inputs(manifest_paths)) if manifest_paths else None
+    manifest_identity = manifest_plan["sha256"] if manifest_plan else None
     source_digest, pinned_sources = _source_identity(
         images=images,
         manifests=manifest_paths,
         files=file_inputs,
         hauler_version=hauler_version,
         local_images=local_images,
+        manifest_identity=manifest_identity,
     )
     prior_snapshot = None
     prior_refs = None
@@ -356,12 +368,14 @@ def capture_hauler_component(
                 _freeze_input(Path(source_path), owned, MAX_SOURCE_FILE, cancellation)
                 frozen_files.append((owned, name))
             frozen_manifests = []
-            for index, manifest in enumerate(manifest_paths):
-                owned = input_stage / f"manifest-{index}.yaml"
-                _freeze_input(manifest, owned, MAX_MANIFEST_BYTES, cancellation)
-                frozen_manifests.append(owned)
-            if _source_identity(images=images, manifests=frozen_manifests, files=frozen_files,
-                                hauler_version=hauler_version, local_images=local_images)[0] != source_digest:
+            if manifest_paths:
+                frozen_plan = _hauler_call(lambda: hauler.manifest_inputs(manifest_paths, input_stage / "manifests"))
+                if frozen_plan["sha256"] != manifest_identity:
+                    raise RoomStoreHaulerError("manifest inputs changed while being staged")
+                frozen_manifests = frozen_plan["manifests"]
+            if _source_identity(images=images, manifests=manifest_paths, files=frozen_files,
+                                hauler_version=hauler_version, local_images=local_images,
+                                manifest_identity=manifest_identity)[0] != source_digest:
                 raise RoomStoreHaulerError("Hauler inputs changed while being staged")
             if images:
                 image_list = private / "selected-images.txt"
@@ -381,6 +395,9 @@ def capture_hauler_component(
                 _check_cancel(cancellation)
             protect_private_directory(hauler_store)
             protect_private_directory(hauler_temp)
+            expected_local = [*local_images, *(manifest_plan["local_images"] if manifest_plan else [])]
+            if expected_local:
+                _hauler_call(lambda: hauler.verify_local_images(hauler_store, expected_local))
             inventory = _hauler_call(lambda: hauler.inventory(hauler_store, hauler_temp))
             _verify_requested_images(images, inventory)
             _verify_requested_images([name for name, _identity in local_images], inventory)
@@ -413,12 +430,15 @@ def capture_hauler_component(
             metadata_path.write_text(json.dumps(metadata_value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
             protect_private_file(metadata_path)
             verify_private_path(component_stage, directory=True)
+            if manifest_paths and _hauler_call(lambda: hauler.manifest_inputs(manifest_paths))["sha256"] != manifest_identity:
+                raise RoomStoreHaulerError("manifest inputs changed during capture")
             if _source_identity(
                 images=images,
                 manifests=manifest_paths,
                 files=file_inputs,
                 hauler_version=hauler_version,
                 local_images=local_images,
+                manifest_identity=manifest_identity,
             )[0] != source_digest:
                 raise RoomStoreHaulerError("Hauler selection changed during capture")
             _check_cancel(cancellation)

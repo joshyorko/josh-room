@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import stat
 import sys
+import tarfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
+import zstandard
 
 from josh_room import room_store_hauler as component
 from josh_room import room_store_hauler_runner as runner
@@ -20,6 +23,41 @@ TREE_ID = "c" * 64
 IMAGE_DIGEST = "sha256:" + "d" * 64
 FILE_DIGEST = "sha256:" + "e" * 64
 JAT_ARTIFACT = "sha256:" + "a" * 64
+
+
+def test_hauler_reference_budget_fails_before_archive_save(tmp_path):
+    hauler = _Hauler([
+        {"Reference": f"synthetic/file-{i}:latest", "Type": "file",
+         "Digest": "sha256:" + f"{i:064x}"}
+        for i in range(400)
+    ])
+    source = tmp_path / "input.txt"
+    source.write_text("synthetic")
+    restic = _Restic()
+    with pytest.raises(component.RoomStoreHaulerError, match="descriptor budget"):
+        _capture(tmp_path, hauler=hauler, restic=restic, files=[(source, "fixture")])
+    assert not restic.backups
+    assert not any(call[0] == "save" for call in hauler.calls)
+
+
+def test_brew_preflight_rejects_oversize_declared_member_without_extraction(tmp_path):
+    member = tarfile.TarInfo("synthetic/huge")
+    member.size = 9 * 1024 * 1024 * 1024
+    archive = tmp_path / "brew.tar.zst"
+    archive.write_bytes(zstandard.ZstdCompressor().compress(member.tobuf()))
+    with pytest.raises(runner.ManagedHaulerError, match="validation limit"):
+        runner._preflight_brew_archive(archive)
+
+
+def test_brew_preflight_accepts_native_zstd_tar_stream(tmp_path):
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as archive:
+        member = tarfile.TarInfo("synthetic/file")
+        member.size = 4
+        archive.addfile(member, io.BytesIO(b"test"))
+    source = tmp_path / "brew.tar.zst"
+    source.write_bytes(zstandard.ZstdCompressor().compress(raw.getvalue()))
+    runner._preflight_brew_archive(source)
 
 
 class _Restic:
@@ -73,6 +111,14 @@ class _Hauler:
     def inventory(self, store, temp):
         self.calls.append(("inventory",))
         return list(self.rows)
+
+    def manifest_inputs(self, manifests, staging=None):
+        from josh_room.room_store_manifest_inputs import prepare_manifest_inputs
+
+        return prepare_manifest_inputs(manifests, staging)
+
+    def verify_local_images(self, store, images):
+        pass
 
     def save(self, store, temp, output, **kwargs):
         self.calls.append(("save",))
@@ -663,5 +709,5 @@ def test_jat_platform_normalization_rejects_unknown_values():
 
 def _manifest(root: Path) -> Path:
     path = root / "content.yaml"
-    path.write_text("apiVersion: content.hauler.cattle.io/v1\nkind: Images\n", encoding="utf-8")
+    path.write_text("apiVersion: content.hauler.cattle.io/v1\nkind: Images\nspec:\n  images: []\n", encoding="utf-8")
     return path

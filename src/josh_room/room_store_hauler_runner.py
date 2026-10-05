@@ -20,9 +20,10 @@ from . import jat, private_paths
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
 MAX_ITEMS = 4096
-_OPERATIONS = {"sync", "sync_image_txt", "sync_files", "inventory", "save", "acquire_rcc", "local_images", "validate_brew_archive"}
+_OPERATIONS = {"sync", "sync_image_txt", "sync_files", "inventory", "save", "acquire_rcc", "local_images", "validate_brew_archive", "manifest_inputs", "verify_local_images"}
 _VERSION = re.compile(r"(?<![A-Za-z0-9])v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?(?![A-Za-z0-9])")
 JAT_PLATFORM_MAP = {"linux-x64": "linux_amd64", "win32-x64": "windows_amd64"}
+MAX_HAUL_OUTPUT_BYTES = 8 * 1024 * 1024 * 1024
 _HAULER_VERSION_PROBE = (
     "import os,shutil,subprocess,sys; e=shutil.which('hauler'); p=os.environ.get('CONDA_PREFIX'); "
     "r=os.path.realpath(p) if p else ''; x=os.path.realpath(e) if e else ''; q=os.path.realpath(sys.executable); "
@@ -329,6 +330,24 @@ class ManagedHaulerAdapter:
     def validate_brew_archive(self, archive: Path) -> None:
         self._invoke("validate_brew_archive", {"archive": _absolute_path(archive)})
 
+    def manifest_inputs(self, manifests, staging=None):
+        value = self._invoke("manifest_inputs", {
+            "manifests": [_absolute_path(path) for path in manifests],
+            "staging": _absolute_path(staging) if staging is not None else None,
+        })
+        if (not isinstance(value, dict) or set(value) != {"sha256", "manifests", "local_images"}
+                or not isinstance(value["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", value["sha256"])
+                or not isinstance(value["manifests"], list) or len(value["manifests"]) != len(manifests)):
+            raise ManagedHaulerError("manifest input evidence is invalid")
+        if staging is not None:
+            root = Path(staging).resolve(strict=True)
+            for path in value["manifests"]:
+                Path(path).resolve(strict=True).relative_to(root)
+        return value
+
+    def verify_local_images(self, store, images):
+        self._invoke("verify_local_images", {"store": _absolute_path(store), "images": [list(row) for row in images]})
+
     def inventory(self, store: Path, temp: Path, check: bool = False) -> list[dict[str, Any]]:
         value = self._invoke("inventory", {**self._store_temp(store, temp), "check": check})
         if not isinstance(value, list) or len(value) > MAX_ITEMS or any(not isinstance(item, dict) for item in value):
@@ -407,6 +426,23 @@ def _worker_request(path: Path) -> dict[str, Any]:
     operation = request.get("operation")
     if not isinstance(operation, str) or operation not in _OPERATIONS:
         raise ManagedHaulerError("managed Hauler operation is unsupported")
+    if operation == "manifest_inputs":
+        if set(request) != {"format_version", "operation", "manifests", "staging"}:
+            raise ManagedHaulerError("managed manifest request is invalid")
+        _validate_strings(request["manifests"], MAX_ITEMS)
+        if request["staging"] is not None and (not isinstance(request["staging"], str) or not request["staging"]):
+            raise ManagedHaulerError("managed manifest request is invalid")
+        return request
+    if operation == "verify_local_images":
+        if (set(request) != {"format_version", "operation", "store", "images"}
+                or not isinstance(request["store"], str) or not request["store"]
+                or not isinstance(request["images"], list) or len(request["images"]) > MAX_ITEMS
+                or any(not isinstance(row, list) or len(row) != 2
+                       or not isinstance(row[0], str) or not row[0]
+                       or not isinstance(row[1], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", row[1])
+                       for row in request["images"])):
+            raise ManagedHaulerError("managed local image evidence is invalid")
+        return request
     required = {
         "sync": {"format_version", "operation", "store", "temp", "manifests", "retries", "exclude_extras", "concurrency", "ca_file", "insecure_skip_tls_verify"},
         "sync_image_txt": {"format_version", "operation", "store", "temp", "sources", "retries", "exclude_extras", "concurrency", "ca_file", "insecure_skip_tls_verify", "platform"},
@@ -508,6 +544,14 @@ def _validate_common_options(request: Mapping[str, Any]) -> None:
 
 def _worker_value(request: dict[str, Any]) -> Any:
     operation = request["operation"]
+    if operation == "manifest_inputs":
+        from .room_store_manifest_inputs import prepare_manifest_inputs
+
+        return prepare_manifest_inputs(request["manifests"], request["staging"],
+                                       lambda images: _worker_local_images({"images": images, "all_images": False}))
+    if operation == "verify_local_images":
+        _verify_local_image_configs(Path(request["store"]), request["images"])
+        return None
     if operation == "acquire_rcc":
         return _worker_acquire_rcc(request)
     if operation == "local_images":
@@ -546,19 +590,94 @@ def _worker_value(request: dict[str, Any]) -> Any:
         )
         return None
     if operation == "sync_files":
-        adapter.sync_files(
-            store,
-            temp,
-            [(Path(path), name) for path, name in request["files"]],
-            retries=request["retries"],
-            exclude_extras=request["exclude_extras"],
-            **({"images": request["images"]} if request.get("images") else {}),
-        )
+        images = request.get("images", [])
+        if request["files"] or os.name == "nt":
+            adapter.sync_files(
+                store, temp, [(Path(path), name) for path, name in request["files"]],
+                retries=request["retries"], exclude_extras=request["exclude_extras"],
+                **({"images": images} if images and os.name == "nt" else {}),
+            )
+        if images and os.name != "nt":
+            manifest = temp / "local-images.json"
+            manifest.write_text(json.dumps({"apiVersion": "content.hauler.cattle.io/v1", "kind": "Images",
+                                           "metadata": {"name": "room-local-images"},
+                                           "spec": {"images": [{"name": name, "local": True} for name in images]}}))
+            private_paths.protect_private_file(manifest)
+            adapter.sync(store, temp, str(manifest), retries=request["retries"], exclude_extras=request["exclude_extras"])
         return None
     if operation == "inventory":
         return adapter.inventory(store, temp, check=request["check"])
-    adapter.save(store, temp, Path(request["haul"]), chunk_size=request["chunk_size"], containerd=request["containerd"])
+    _bounded_hauler_save(adapter, store, temp, Path(request["haul"]),
+                         chunk_size=request["chunk_size"], containerd=request["containerd"])
     return None
+
+
+def _bounded_hauler_save(adapter, store, temp, haul, **options):
+    import shutil
+    import subprocess
+    import threading
+
+    from .cancellation import terminate_owned_process
+
+    estimate = 0
+    for directory, dirs, files in os.walk(store, followlinks=False):
+        if any((Path(directory) / name).is_symlink() for name in dirs):
+            raise ManagedHaulerError("Hauler output source is unsafe")
+        for name in files:
+            metadata = (Path(directory) / name).lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ManagedHaulerError("Hauler output source is unsafe")
+            estimate += metadata.st_size + 4096
+    estimate += estimate // 100 + 64 * 1024 * 1024
+    if estimate > MAX_HAUL_OUTPUT_BYTES:
+        raise ManagedHaulerError("Hauler output exceeds its archive budget")
+    if shutil.disk_usage(haul.parent).free < estimate + 256 * 1024 * 1024:
+        raise ManagedHaulerError("Hauler output requires more free disk space")
+    finished = threading.Event()
+    exceeded = threading.Event()
+    owned = []
+    native_popen = subprocess.Popen
+
+    def start_owned(*args, **kwargs):
+        process = native_popen(*args, **kwargs)
+        owned.append(process)
+        return process
+
+    def monitor():
+        while not finished.wait(0.05):
+            try:
+                unsafe = haul.exists() and haul.stat().st_size > MAX_HAUL_OUTPUT_BYTES
+                unsafe |= shutil.disk_usage(haul.parent).free < 64 * 1024 * 1024
+            except OSError:
+                unsafe = True
+            if unsafe:
+                exceeded.set()
+                for process in tuple(owned):
+                    if process.poll() is None:
+                        terminate_owned_process(process)
+                return
+
+    resource = None
+    previous = None
+    if os.name == "posix":
+        import resource
+
+        previous = resource.getrlimit(resource.RLIMIT_FSIZE)
+        soft = MAX_HAUL_OUTPUT_BYTES if previous[0] == resource.RLIM_INFINITY else min(previous[0], MAX_HAUL_OUTPUT_BYTES)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (soft, previous[1]))
+    watcher = threading.Thread(target=monitor, name="room-hauler-output-limit")
+    subprocess.Popen = start_owned
+    watcher.start()
+    try:
+        adapter.save(store, temp, haul, **options)
+        if exceeded.is_set() or not haul.is_file() or haul.stat().st_size > MAX_HAUL_OUTPUT_BYTES:
+            raise ManagedHaulerError("Hauler output exceeded its archive budget")
+    finally:
+        finished.set()
+        watcher.join()
+        subprocess.Popen = native_popen
+        if resource is not None and previous is not None:
+            resource.setrlimit(resource.RLIMIT_FSIZE, previous)
 
 
 def _worker_local_images(request: Mapping[str, Any]) -> list[list[str]]:
@@ -596,12 +715,110 @@ def _worker_local_images(request: Mapping[str, Any]) -> list[list[str]]:
     return result
 
 
-def _worker_validate_brew_archive(request: Mapping[str, Any]) -> None:
-    import shutil
-    import stat
-    import subprocess
+def _verify_local_image_configs(store: Path, images) -> None:
+    def canonical(value):
+        name = value.removeprefix("docker.io/")
+        if "/" not in name:
+            name = "index.docker.io/library/" + name
+        elif "." not in name.split("/", 1)[0] and ":" not in name.split("/", 1)[0] and not name.startswith("localhost/"):
+            name = "index.docker.io/" + name
+        if ":" not in name.rsplit("/", 1)[-1] and "@" not in name:
+            name += ":latest"
+        return name
+
+    def read_json(path, expected_digest=None):
+        if any(parent.is_symlink() for parent in (path, path.parent, path.parent.parent)):
+            raise ManagedHaulerError("local image evidence is unsafe")
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_RESULT_BYTES:
+            raise ManagedHaulerError("local image evidence is invalid")
+        raw = path.read_bytes()
+        if expected_digest is not None and hashlib.sha256(raw).hexdigest() != expected_digest:
+            raise ManagedHaulerError("local image manifest digest does not match")
+        return json.loads(raw)
+
+    try:
+        index = read_json(store / "index.json")
+        descriptors = index["manifests"]
+        for name, identity in images:
+            matches = [row for row in descriptors if canonical(row.get("annotations", {}).get("org.opencontainers.image.ref.name", "")) == canonical(name)]
+            if len(matches) != 1:
+                raise ManagedHaulerError("local image evidence is ambiguous or missing")
+            digest = matches[0]["digest"]
+            if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+                raise ManagedHaulerError("local image manifest digest is invalid")
+            manifest = read_json(store / "blobs" / "sha256" / digest[7:], digest[7:])
+            if manifest.get("config", {}).get("digest") != identity:
+                raise ManagedHaulerError("captured local image does not match its selected identity")
+            read_json(store / "blobs" / "sha256" / identity[7:], identity[7:])
+    except (OSError, KeyError, TypeError, ValueError):
+        raise ManagedHaulerError("local image identity could not be verified") from None
+
+
+def _preflight_brew_archive(archive: Path) -> None:
     import tarfile
 
+    import zstandard
+
+    limit = 8 * 1024 * 1024 * 1024
+    expanded = 0
+    # Check extension-header sizes before tarfile can allocate their bodies.
+    with archive.open("rb") as raw, zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(raw) as headers:
+        scanned = 0
+        header_count = 0
+        while header := headers.read(512):
+            scanned += len(header)
+            if header == b"\0" * 512:
+                break
+            member = tarfile.TarInfo.frombuf(header, "utf-8", "surrogateescape")
+            header_count += 1
+            if (header_count > 100_000 or member.size > limit
+                    or member.type in {tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK}
+                    and member.size > 4 * 1024 * 1024):
+                raise ManagedHaulerError("expanded Homebrew archive exceeds its validation limit")
+            remaining = (member.size + 511) // 512 * 512
+            while remaining:
+                block = headers.read(min(remaining, 1024 * 1024))
+                if not block:
+                    raise ManagedHaulerError("Homebrew archive is incomplete")
+                remaining -= len(block)
+                scanned += len(block)
+                if scanned > limit:
+                    raise ManagedHaulerError("expanded Homebrew archive exceeds its validation limit")
+
+    class BoundedReader:
+        def __init__(self, source):
+            self.source = source
+            self.read_bytes = 0
+
+        def read(self, size):
+            block = self.source.read(min(size, 1024 * 1024))
+            self.read_bytes += len(block)
+            if self.read_bytes > limit:
+                raise ManagedHaulerError("expanded Homebrew archive exceeds its validation limit")
+            return block
+
+    with (
+        archive.open("rb") as raw,
+        zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(raw) as decoded,
+    ):
+        reader = BoundedReader(decoded)
+        count = 0
+        with tarfile.open(fileobj=reader, mode="r|") as stream:
+            for member in stream:
+                count += 1
+                expanded += member.size
+                if count > 100_000 or expanded > limit:
+                    raise ManagedHaulerError("expanded Homebrew archive exceeds its validation limit")
+        while reader.read(1024 * 1024):
+            pass
+    import shutil
+
+    if shutil.disk_usage(tempfile.gettempdir()).free < expanded + 64 * 1024 * 1024:
+        raise ManagedHaulerError("Homebrew validation requires more free disk space")
+
+
+def _worker_validate_brew_archive(request: Mapping[str, Any]) -> None:
     from jat.archive import ArchiveAdapter
     from jat.process import ProcessRunner
     from jat.safety import validate_archive_members
@@ -611,27 +828,8 @@ def _worker_validate_brew_archive(request: Mapping[str, Any]) -> None:
     metadata = archive.lstat()
     if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 8 * 1024 * 1024 * 1024:
         raise ManagedHaulerError("Homebrew archive is not a bounded regular file")
+    _preflight_brew_archive(archive)
     adapter = ArchiveAdapter(ProcessRunner())
-    zstd = shutil.which("zstd")
-    if not zstd:
-        raise ManagedHaulerError("contained zstd is required for bounded Homebrew validation")
-    with subprocess.Popen([zstd, "-dc", "--", str(archive)], stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL) as process:
-        try:
-            expanded = 0
-            count = 0
-            with tarfile.open(fileobj=process.stdout, mode="r|") as stream:
-                for member in stream:
-                    count += 1
-                    expanded += member.size
-                    if count > 100_000 or expanded > 8 * 1024 * 1024 * 1024:
-                        raise ManagedHaulerError("expanded Homebrew archive exceeds its validation limit")
-            if process.wait(timeout=30) != 0:
-                raise ManagedHaulerError("Homebrew archive decompression failed")
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
     validate_archive_members(adapter.members(archive))
     with tempfile.TemporaryDirectory(prefix="josh-room-brew-validate-") as temporary:
         destination = Path(temporary) / "brew"
