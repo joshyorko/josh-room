@@ -468,7 +468,7 @@ def run_acceptance(
             _require(edit.status == "saved" and edit.descriptor is not None, "same-size edited Room Store Save failed")
             _require(edit.descriptor.to_dict()["workspace"]["snapshot_id"] != initial_snapshot, "same-size edit did not publish a new Restic snapshot")
             edit_workspace = edit.descriptor.to_dict()["workspace"]
-            _require(edit_workspace["parent_snapshot_id"] is None, "forced Windows edit Save retained a Restic parent")
+            _require(edit_workspace.get("parent_snapshot_id") is None, "forced Windows edit Save retained a Restic parent")
             _require(edit_workspace["data_added_packed"] < 4 * 1024 * 1024, "same-size edit added an unbounded amount of packed data")
 
             renamed = workspace / "renamed-payload.bin"
@@ -476,7 +476,7 @@ def run_acceptance(
             rename = operations.save()
             _require(rename.status == "saved" and rename.descriptor is not None, "Room Store rename Save failed")
             rename_workspace = rename.descriptor.to_dict()["workspace"]
-            _require(rename_workspace["parent_snapshot_id"] is None, "forced Windows rename Save retained a Restic parent")
+            _require(rename_workspace.get("parent_snapshot_id") is None, "forced Windows rename Save retained a Restic parent")
             _require(rename_workspace["data_added_packed"] < 1024 * 1024, "rename failed to reuse stored content")
 
             delete_target.unlink()
@@ -490,7 +490,7 @@ def run_acceptance(
             final_descriptor = delete_result.descriptor
             final_body = final_descriptor.to_dict()
             _require(final_body["workspace"]["snapshot_id"] != rename_workspace["snapshot_id"], "delete did not publish a new recovery point")
-            _require(final_body["workspace"]["parent_snapshot_id"] is None, "forced Windows delete Save retained a Restic parent")
+            _require(final_body["workspace"].get("parent_snapshot_id") is None, "forced Windows delete Save retained a Restic parent")
             _require(store_calls["backup"] == 4, "Room Store Save reached Restic an unexpected number of times")
 
             restored_room = root / "room-store-enter"
