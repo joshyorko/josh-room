@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import json
 import os
 import re
@@ -20,7 +21,7 @@ from .auth import (
     cancel_oauth_session,
     encryption_status,
     ensure_minio_domain,
-    ensure_runtime_session,
+    ensure_runtime_session,  # noqa: F401 - retained as an observable interactive-auth boundary.
     load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
@@ -31,6 +32,7 @@ from .auth import (
     start_oauth_session,
     wait_oauth_session,
 )
+from .cancellation import CLICancelled, sigterm_cancellation
 from .catalog import Catalog
 from .config import (
     DimensionRegistry,
@@ -87,6 +89,7 @@ from .operations import (
     remove_snapshot,
     repair_workspace,
     serve_snapshot,
+    snapshot_payload_kind,
 )
 from .pcc_hooks import (
     codex_hook_main,
@@ -101,7 +104,34 @@ from .pcc_replay import ReplayLimits, ReplayReader
 from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
 from .tls import initialize_system_trust
-from .workspace_state import local_status
+from .workspace_state import context_status, local_status
+
+
+def _deferred_room_store_call(module, name):
+    def invoke(*args, **kwargs):
+        operation = getattr(importlib.import_module(module, __package__), name)
+        globals()[name] = operation
+        return operation(*args, **kwargs)
+
+    return invoke
+
+
+hydrate_room_store = _deferred_room_store_call('.room_store_bridge', 'hydrate_room_store')
+open_existing_room_store = _deferred_room_store_call('.room_store_bridge', 'open_existing_room_store')
+open_writable_room_store = _deferred_room_store_call('.room_store_bridge', 'open_writable_room_store')
+preview_room_store = _deferred_room_store_call('.room_store_bridge', 'preview_room_store')
+save_room_store = _deferred_room_store_call('.room_store_bridge', 'save_room_store')
+complete_logical_catalog_removal = _deferred_room_store_call('.room_store_lifecycle', 'complete_logical_catalog_removal')
+copy_logical_jat_as_new = _deferred_room_store_call('.room_store_lifecycle', 'copy_logical_jat_as_new')
+copy_logical_jat_to_dimension = _deferred_room_store_call('.room_store_lifecycle', 'copy_logical_jat_to_dimension')
+export_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'export_logical_jat')
+extract_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'extract_logical_jat')
+inspect_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'inspect_logical_jat')
+optimize_room_store = _deferred_room_store_call('.room_store_lifecycle', 'optimize_room_store')
+reconcile_room_store = _deferred_room_store_call('.room_store_lifecycle', 'reconcile_room_store')
+remove_logical_catalog_records = _deferred_room_store_call('.room_store_lifecycle', 'remove_logical_catalog_records')
+serve_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'serve_logical_jat')
+verify_room_store = _deferred_room_store_call('.room_store_lifecycle', 'verify_room_store')
 
 R2Backend = _r2.R2Backend
 R2Config = _r2.R2Config
@@ -376,7 +406,11 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(hook_codex)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
+    status.add_argument("--include-context", action="store_true")
     _json_option(status)
+    context = commands.add_parser("context", help="read offline workspace linkage context")
+    context.add_argument("--workspace", type=Path, required=True)
+    _json_option(context)
     for action in ("link", "repair"):
         state_command = commands.add_parser(action)
         state_command.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -421,7 +455,38 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create.add_argument("--all-images", action="store_true")
     snapshot_create.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     snapshot_create.add_argument("--dimension")
+    snapshot_create.add_argument("--editor-dirty", action="store_true", help=argparse.SUPPRESS)
+    snapshot_create.add_argument(
+        "--confirm-deletion",
+        help="confirm the exact mass-deletion plan returned by snapshot preview",
+    )
     _json_option(snapshot_create)
+    snapshot_preview = snapshot_commands.add_parser("preview")
+    snapshot_preview.add_argument("project")
+    snapshot_preview.add_argument("--source", type=Path)
+    snapshot_preview.add_argument("--image", dest="images", action="append", default=[])
+    snapshot_preview.add_argument("--all-images", action="store_true")
+    snapshot_preview.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_preview.add_argument("--dimension")
+    _json_option(snapshot_preview)
+    for command in (snapshot_create, snapshot_preview):
+        command.add_argument("--hauler-manifest", dest="hauler_manifests", type=Path, action="append", default=[])
+        command.add_argument("--hauler-file", dest="hauler_files", nargs=2, action="append", default=[], metavar=("PATH", "NAME"))
+        command.add_argument("--brew-archive", type=Path, help="reuse a saved Homebrew recovery archive in the native Room Store")
+    for action in ("inspect", "export", "serve", "extract"):
+        snapshot_action = snapshot_commands.add_parser(action)
+        snapshot_action.add_argument("project")
+        snapshot_action.add_argument("--snapshot", default="latest")
+        snapshot_action.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+        snapshot_action.add_argument("--dimension")
+        if action == "export":
+            snapshot_action.add_argument("--output", type=Path, required=True)
+        elif action == "serve":
+            snapshot_action.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+        elif action == "extract":
+            snapshot_action.add_argument("reference")
+            snapshot_action.add_argument("--destination", type=Path, required=True)
+        _json_option(snapshot_action)
     snapshot_copy = snapshot_commands.add_parser("copy")
     snapshot_copy.add_argument("project", nargs="?")
     snapshot_copy.add_argument("--source-folder", type=Path)
@@ -451,6 +516,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     serve.add_argument("--dimension")
     _json_option(serve)
+    room_store = commands.add_parser("room-store")
+    room_store_commands = room_store.add_subparsers(dest="room_store_command", required=True)
+    for action in ("verify", "optimize", "reconcile"):
+        room_store_action = room_store_commands.add_parser(action)
+        room_store_action.add_argument("--dimension", required=True)
+        if action == "verify":
+            room_store_action.add_argument("--read-data", action="store_true")
+            room_store_action.add_argument("--read-data-subset")
+        elif action == "optimize":
+            room_store_action.add_argument("--confirm", action="store_true")
+        _json_option(room_store_action)
     jat = commands.add_parser("jat")
     jat_commands = jat.add_subparsers(dest="jat_command", required=True)
     jat_build = jat_commands.add_parser("build")
@@ -524,34 +600,56 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:2] == ["hook", "codex"]:
         return codex_hook_main()
+    if argv[:1] == ["context"]:
+        args = build_parser().parse_args(argv)
+        result = context_status(args.workspace)
+        emit(result, True)
+        return _exit_code(result)
     initialize_system_trust()
     args = build_parser().parse_args(argv)
-    instance = _instance_root()
+    cancelled = False
     try:
-        runtime_loaded = False
-        scoped_minio = _uses_minio_encryption(args)
-        identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
-        with identity_context:
-            if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook"} and not scoped_minio:
-                runtime_loaded = load_runtime_session()
-            with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext():
-                if _requires_oauth(args):
-                    requested_dimension = getattr(args, "dimension", None)
-                    selected = None
-                    if getattr(args, "snapshot_command", None) != "copy":
-                        try:
-                            selected = _effective_dimension(args)
-                        except ValueError:
-                            if requested_dimension != "r2":
-                                raise
-                    ensure_runtime_session(dimension_id=selected.dimension_id if selected else requested_dimension)
-                elif _requires_encryption(args) and args.command != "dimensions" and not runtime_loaded and not _encryption_material_ready():
-                    raise _encryption_authorization_required()
-                result = dispatch(args, instance)
-    except (OSError, RuntimeError, TypeError, ValueError) as error:
-        result = {"ok": False, "error": str(error)}
-        if isinstance(getattr(error, "result", None), dict):
-            result.update(error.result)
+        with sigterm_cancellation():
+            instance = _instance_root()
+            try:
+                preflight = _local_save_preflight(args, instance)
+                if preflight is not None:
+                    preflight = _bounded_json_result(preflight)
+                    _write_runtime_result(preflight)
+                    emit(preflight, getattr(args, "json", False))
+                    return _exit_code(preflight)
+                runtime_loaded = False
+                scoped_minio = _uses_minio_encryption(args)
+                identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
+                with identity_context:
+                    if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook"} and not scoped_minio:
+                        runtime_loaded = load_runtime_session()
+                    with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext() as selected_material:
+                        if selected_material is not None:
+                            args._selected_encryption_material = selected_material
+                        if _requires_oauth(args):
+                            if not load_runtime_session(require_r2=True):
+                                raise _r2_authorization_required()
+                        elif _requires_encryption(args) and args.command != "dimensions" and not runtime_loaded and not _encryption_material_ready():
+                            raise _encryption_authorization_required()
+                        result = dispatch(args, instance)
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                result = {"ok": False, "error": str(error)}
+                if isinstance(getattr(error, "result", None), dict):
+                    result.update(error.result)
+    except CLICancelled as error:
+        cancelled = True
+        result = {"ok": False, "state": "cancelled", "cancelled": True}
+        result.update(error.result)
+        result.update({"ok": False, "state": "cancelled", "cancelled": True})
+    if cancelled:
+        result = _bounded_json_result(result)
+        try:
+            _write_runtime_result(result)
+        except (OSError, RuntimeError) as error:
+            result["runtime_result_error_type"] = type(error).__name__
+        emit(result, True)
+        return 130
     if getattr(args, "jsonl", False) and isinstance(result, dict) and "_jsonl_lines" in result:
         lines = tuple(result.pop("_jsonl_lines"))
         record_count = len(result.pop("records", ()))
@@ -620,6 +718,8 @@ def _write_runtime_result(result):
 
 
 def _requires_oauth(args) -> bool:
+    if args.command == "snapshot" and getattr(args, "snapshot_command", None) == "preview":
+        return False
     if args.command == "provider" and args.provider_command == "bucket":
         if getattr(args, "provider", None) == "r2":
             return True
@@ -639,7 +739,7 @@ def _requires_oauth(args) -> bool:
             return any(dimension.provider == "r2" for dimension in registry.dimensions.values())
         except ValueError:
             return getattr(args, "backend", "r2") == "r2"
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         source_dimension = _copy_source_dimension(args)
@@ -667,9 +767,7 @@ def _requires_oauth(args) -> bool:
 def _requires_encryption(args) -> bool:
     if args.command == "dimensions":
         return getattr(args, "with_hierarchy", False) and _dimensions_have_provider(args, "minio")
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair"}:
-        return False
-    if args.command == "snapshot" and getattr(args, "snapshot_command", None) not in {"create", "copy"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         return False
@@ -764,6 +862,37 @@ def _encryption_material_environment(material):
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+@contextmanager
+def _open_room_store_context(
+    args,
+    instance: Path,
+    *,
+    project_id: str | None = None,
+    snapshot_id: str = "latest",
+    writable: bool = False,
+    dimension_id: str | None = None,
+    material=None,
+):
+    dimension = (
+        DimensionRegistry(private_config() or {}).select(dimension_id)
+        if dimension_id is not None
+        else _effective_dimension(args)
+    )
+    if dimension is None or dimension.provider not in {"minio", "r2"}:
+        raise ValueError("Room Store operations require a configured MinIO or R2 Dimension")
+    if material is None:
+        material = getattr(args, "_selected_encryption_material", None)
+    opener = open_writable_room_store if writable else open_existing_room_store
+    with opener(
+        instance,
+        dimension,
+        material,
+        project_id=project_id,
+        snapshot_id=snapshot_id,
+    ) as context:
+        yield context
 
 
 def _encryption_material_ready() -> bool:
@@ -1782,7 +1911,10 @@ def dispatch(args, instance: Path) -> dict:
         save_private_config(config)
         return {"ok": True, "dimension": args.dimension, "updated": True}
     if args.command == "status":
-        return {"ok": True, **local_status(args.workspace)}
+        result = {"ok": True, **local_status(args.workspace)}
+        if getattr(args, "include_context", False):
+            return {"format_version": 1, **result, "context": context_status(args.workspace)}
+        return result
     if args.command in {"link", "repair"}:
         from .workspace_state import read_workspace_marker
         marker = None
@@ -1841,6 +1973,22 @@ def dispatch(args, instance: Path) -> dict:
         dimension_id = getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
         return {"ok": True, "dimension_id": dimension_id, "projects": [{"id": project_id, "display_name": name} for project_id, name in projects]}
     if args.command == "rooms":
+        dimension = _effective_dimension(args)
+        if dimension is not None and dimension.provider in {"minio", "r2"}:
+            backend = _backend_for_args(args, instance)
+            catalog = load_catalog(instance, backend)
+            project = catalog.body["projects"].get(args.project)
+            if project and any(
+                snapshot_payload_kind(record) == "room-store-v1"
+                for record in project.get("snapshots", {}).values()
+            ):
+                identities = [(args.project, snapshot_id) for snapshot_id in project["snapshots"]]
+                with _open_room_store_context(
+                    args, instance, project_id=args.project, writable=True
+                ) as context:
+                    pending = remove_logical_catalog_records(context, identities)
+                with _open_room_store_context(args, instance) as fresh:
+                    return complete_logical_catalog_removal(fresh, pending)
         recipients = _recipients()
         if len(recipients) < 2:
             raise ValueError("room removal requires two age recipients")
@@ -1853,6 +2001,23 @@ def dispatch(args, instance: Path) -> dict:
         }
     if args.command == "snapshots":
         if args.snapshots_command == "remove":
+            dimension = _effective_dimension(args)
+            if dimension is not None and dimension.provider in {"minio", "r2"}:
+                backend = _backend_for_args(args, instance)
+                catalog = load_catalog(instance, backend)
+                record = catalog.resolve_snapshot(args.project, args.snapshot)
+                if snapshot_payload_kind(record) == "room-store-v1":
+                    identity = (args.project, record["snapshot_id"])
+                    with _open_room_store_context(
+                        args,
+                        instance,
+                        project_id=args.project,
+                        snapshot_id=args.snapshot,
+                        writable=True,
+                    ) as context:
+                        pending = remove_logical_catalog_records(context, [identity])
+                    with _open_room_store_context(args, instance) as fresh:
+                        return complete_logical_catalog_removal(fresh, pending)
             recipients = _recipients()
             identity = os.environ.get("JOSH_ROOM_IDENTITY")
             if len(recipients) < 2 or not identity:
@@ -1876,6 +2041,32 @@ def dispatch(args, instance: Path) -> dict:
         dimension_id = catalog.dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
         return {"ok": True, "dimension_id": dimension_id, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
+        if args.snapshot_command in {"inspect", "export", "serve", "extract"}:
+            jat_root = _jat_root()
+            with _open_room_store_context(
+                args,
+                instance,
+                project_id=args.project,
+                snapshot_id=args.snapshot,
+            ) as context:
+                if context.selected_record is None or context.selected_descriptor is None:
+                    raise ValueError("selected recovery point is not a native logical JAT")
+                if args.snapshot_command == "inspect":
+                    return {"ok": True, **inspect_logical_jat(context.selected_record, context.selected_descriptor)}
+                if args.snapshot_command == "export":
+                    return export_logical_jat(
+                        context,
+                        jat_root=jat_root,
+                        output=args.output,
+                    )
+                if args.snapshot_command == "serve":
+                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode)
+                return extract_logical_jat(
+                    context,
+                    args.reference,
+                    args.destination,
+                    jat_root=jat_root,
+                )
         if args.snapshot_command == "copy":
             config = private_config() or {}
             registry = DimensionRegistry(config)
@@ -1938,6 +2129,42 @@ def dispatch(args, instance: Path) -> dict:
                     destination_dimension_config.dimension_id,
                     getattr(destination_material, "encryption_domain_id", None),
                 )
+                try:
+                    source_record = source_catalog.resolve_snapshot(source_project, source_snapshot)
+                except (KeyError, ValueError):
+                    source_record = None
+                if source_record is not None and snapshot_payload_kind(source_record) == "room-store-v1":
+                    display_name = _room_identity(args.destination_project)[1]
+                    with ExitStack() as contexts:
+                        source_context = contexts.enter_context(_open_room_store_context(
+                            args,
+                            instance,
+                            project_id=source_project,
+                            snapshot_id=source_snapshot,
+                            dimension_id=source_dimension_config.dimension_id,
+                            material=source_material,
+                        ))
+                        destination_context = contexts.enter_context(_open_room_store_context(
+                            args,
+                            instance,
+                            project_id=args.destination_project,
+                            dimension_id=destination_dimension_config.dimension_id,
+                            material=destination_material,
+                            writable=True,
+                        ))
+                        if source_dimension_config.dimension_id == destination_dimension_config.dimension_id:
+                            return copy_logical_jat_as_new(
+                                source_context,
+                                destination_context,
+                                args.destination_project,
+                                display_name,
+                            )
+                        return copy_logical_jat_to_dimension(
+                            source_context,
+                            destination_context,
+                            args.destination_project,
+                            display_name,
+                        )
                 return copy_snapshot_stream(
                     instance, source_catalog, destination_catalog, source_backend, destination_backend,
                     source_project, args.destination_project, source_snapshot,
@@ -1951,17 +2178,54 @@ def dispatch(args, instance: Path) -> dict:
                     destination_material=destination_material,
                     source_material=source_material,
                 )
+        project_id, display_name = _room_identity(args.project)
+        source = args.source or Path.cwd()
+        dimension = _effective_dimension(args)
+        selected_material = getattr(args, "_selected_encryption_material", None)
+        if dimension is not None and dimension.provider in {"minio", "r2"}:
+            if dimension.provider == "minio" and selected_material is None:
+                raise ValueError("selected MinIO encryption material is required for native Save")
+            components = _native_component_inputs(args, source)
+            capture_options = _native_capture_options(args)
+            if args.snapshot_command == "preview":
+                result = preview_room_store(
+                    instance,
+                    dimension,
+                    project_id,
+                    source,
+                    selected_material,
+                    components=components,
+                    **capture_options,
+                )
+                if (Path(source) / "robot.yaml").is_file():
+                    result["rcc_capture_pending"] = True
+                return result
+            return save_room_store(
+                instance,
+                dimension,
+                project_id,
+                source,
+                selected_material,
+                components=components,
+                display_name=display_name,
+                confirmation_token=getattr(args, "confirm_deletion", None),
+                preflight_scan=getattr(args, "_local_workspace_evidence", None),
+                rcc_runtime=None,
+                **capture_options,
+                **({"jat_root": _jat_root()} if capture_options else {}),
+            )
+        if args.snapshot_command == "preview":
+            raise ValueError("snapshot preview is available for native Room Store saves")
         recipients = _recipients()
         jat_root = _jat_root()
         if len(recipients) < 2 or len(set(recipients)) < 2:
             raise ValueError("snapshot create requires encryption authorization with two age recipients")
-        project_id, display_name = _room_identity(args.project)
         return {
             "ok": True,
             **create_snapshot(
                 instance,
                 project_id,
-                args.source or Path.cwd(),
+                source,
                 jat_root,
                 recipients,
                 _backend_for_args(args, instance),
@@ -1976,7 +2240,19 @@ def dispatch(args, instance: Path) -> dict:
         backend = _backend_for_args(args, instance)
         project = args.project or choose_project(instance, backend)
         destination = _workspace_root() / project
-        result = hydrate_command(argparse.Namespace(project=project, snapshot=args.snapshot, destination=destination, ide=args.ide, backend=args.backend), instance, backend)
+        result = hydrate_command(
+            argparse.Namespace(
+                project=project,
+                snapshot=args.snapshot,
+                destination=destination,
+                ide=args.ide,
+                backend=args.backend,
+                dimension=getattr(args, "dimension", None),
+                _selected_encryption_material=getattr(args, "_selected_encryption_material", None),
+            ),
+            instance,
+            backend,
+        )
         if result["ok"] and args.ide != "terminal":
             executable = "code-insiders" if args.ide == "vscode-insiders" else "code"
             if not shutil.which(executable):
@@ -2000,6 +2276,19 @@ def dispatch(args, instance: Path) -> dict:
                 _backend_for_args(args, instance),
             ),
         }
+    if args.command == "room-store":
+        config = private_config() or {}
+        dimension = DimensionRegistry(config).select(args.dimension)
+        with _open_room_store_context(args, instance) as context:
+            if args.room_store_command == "verify":
+                return verify_room_store(
+                    context.store,
+                    read_data=args.read_data,
+                    read_data_subset=args.read_data_subset,
+                )
+            if args.room_store_command == "optimize":
+                return optimize_room_store(context.store, confirmed=args.confirm)
+            return reconcile_room_store(context)
     if args.command == "jat":
         jat_root = _jat_root()
         if args.jat_command == "build":
@@ -2206,11 +2495,33 @@ def _minio_connection_id(endpoint):
 
 def hydrate_command(args, instance: Path, backend=None) -> dict:
     identity = os.environ.get("JOSH_ROOM_IDENTITY")
+    if backend is None:
+        backend = _backend_for_args(args, instance)
+    selected_material = getattr(args, "_selected_encryption_material", None)
+    dimension = _effective_dimension(args)
+    if dimension is not None and dimension.provider in {"minio", "r2"}:
+        if dimension.provider == "minio" and selected_material is None:
+            raise ValueError("selected MinIO encryption material is required to Enter this Dimension")
+        catalog = load_catalog(instance, backend)
+        record = catalog.resolve_snapshot(args.project, args.snapshot)
+        payload_kind = snapshot_payload_kind(record)
+        if payload_kind == "room-store-v1":
+            jat_root = _jat_root()
+            return {
+                "ok": True,
+                **hydrate_room_store(
+                    instance,
+                    dimension,
+                    args.project,
+                    args.destination,
+                    selected_material,
+                    snapshot_id=args.snapshot,
+                    jat_root=jat_root,
+                ),
+            }
     jat_root = _jat_root()
     if not identity:
         raise ValueError("hydrate requires JOSH_ROOM_IDENTITY and JOSH_ROOM_JAT_ROOT")
-    if backend is None:
-        backend = _backend_for_args(args, instance)
     return {
         "ok": True,
         **hydrate(
@@ -2223,6 +2534,58 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
             snapshot_id=args.snapshot,
         ),
     }
+
+
+def _local_save_preflight(args, instance: Path) -> dict | None:
+    if args.command != "snapshot" or args.snapshot_command != "create":
+        return None
+    from .local_save_receipt import invalidate, read_noop
+
+    source = args.source or Path.cwd()
+    if getattr(args, "editor_dirty", False):
+        invalidate(instance, source)
+        return None
+    try:
+        dimension = _effective_dimension(args)
+        if dimension is None or dimension.provider != "minio":
+            return None
+        if _native_capture_options(args) or getattr(args, "confirm_deletion", None):
+            invalidate(instance, source)
+            return None
+        project_id, _display_name = _room_identity(args.project)
+        scan_sink = {}
+        result = read_noop(instance, source, dimension, project_id, scan_sink=scan_sink)
+        args._local_workspace_evidence = scan_sink.get("workspace_evidence")
+        if result is None:
+            invalidate(instance, source)
+        return result
+    except (OSError, RuntimeError, TypeError, ValueError):
+        invalidate(instance, source)
+        return None
+
+
+def _native_component_inputs(args, source: Path) -> list:
+    return []
+
+
+def _native_capture_options(args) -> dict:
+    images = list(getattr(args, "images", ()) or ())
+    all_images = bool(getattr(args, "all_images", False))
+    manifests = list(getattr(args, "hauler_manifests", ()) or ())
+    files = [(Path(path), name) for path, name in (getattr(args, "hauler_files", ()) or ())]
+    if images and all_images:
+        raise ValueError("select explicit local images or all local images, not both")
+    options = {}
+    if images or all_images or manifests or files:
+        options["hauler_selection"] = {"images": images, "all_images": all_images, "manifests": manifests, "files": files}
+    homebrew = getattr(args, "brew_archive", None)
+    if homebrew is None:
+        configured = (private_config() or {}).get("homebrew_recovery")
+        if isinstance(configured, dict) and configured.get("archive"):
+            homebrew = Path(configured["archive"])
+    if homebrew is not None:
+        options["homebrew_archive"] = homebrew
+    return options
 
 
 def _backend_for_args(args, instance: Path):
@@ -2650,6 +3013,18 @@ def _encryption_authorization_required() -> RuntimeError:
     return error
 
 
+def _r2_authorization_required() -> RuntimeError:
+    error = RuntimeError(
+        "R2 authorization required; connect with `josh-room auth start` before this operation"
+    )
+    error.result = {
+        "error_code": "r2-authorization-required",
+        "authorization_required": True,
+        "authorization_purpose": "r2",
+    }
+    return error
+
+
 def list_projects(instance: Path, backend=None) -> list[tuple[str, str]]:
     catalog = load_catalog(instance, backend)
     return [(project_id, project["display_name"]) for project_id, project in catalog.body["projects"].items()]
@@ -2731,6 +3106,7 @@ def _human_failure_message(result: dict) -> str:
 
 _JSON_RESULT_LIMIT = 64 * 1024
 _JSON_VALUE_LIMIT = 4096
+_JSON_PUBLIC_CONFIRMATION_KEYS = frozenset({"confirmation_token", "deletion_confirmation_token"})
 _JSON_SENSITIVE_KEYS = frozenset({
     "access-key-id", "access_key_id", "secret-access-key", "secret_access_key",
     "session-token", "session_token", "password", "token", "identity",
@@ -2741,7 +3117,10 @@ def _json_safe(value, *, key="", depth=0):
     if depth > 8:
         return "<result depth limit>"
     lowered = key.lower()
-    if lowered in _JSON_SENSITIVE_KEYS or any(part in lowered for part in ("secret", "password", "token")):
+    if lowered not in _JSON_PUBLIC_CONFIRMATION_KEYS and (
+        lowered in _JSON_SENSITIVE_KEYS
+        or any(part in lowered for part in ("secret", "password", "token"))
+    ):
         return "<redacted>"
     if isinstance(value, Catalog):
         return {
@@ -2785,6 +3164,17 @@ def _bounded_json_result(result: dict) -> dict:
 def emit(result: dict, json_mode: bool) -> None:
     if json_mode:
         print(json.dumps(_bounded_json_result(result), sort_keys=True))
+    elif result.get("ok") and result.get("status") == "already-saved":
+        print("Already saved — 0 bytes uploaded")
+    elif result.get("ok") and "deleted_paths" in result:
+        print(f"Preview: {result.get('current_entry_count', 0)} entries, {result.get('scanned_bytes', 0)} bytes scanned")
+        if result.get("rcc_capture_pending"):
+            print("RCC environment capture runs during Save.")
+        if result["deleted_paths"]:
+            print(f"Deleted paths: {len(result['deleted_paths'])}")
+        token = result.get("deletion_confirmation_token")
+        if token:
+            print(f"Confirm this plan with --confirm-deletion {token} when saving.")
     elif result["ok"] and {"project_id", "snapshot_id", "ciphertext_size"} <= result.keys():
         size_mib = result["ciphertext_size"] / (1024 * 1024)
         print(f'Saved "{result["project_id"]}".')
@@ -2792,6 +3182,11 @@ def emit(result: dict, json_mode: bool) -> None:
         print("Restore it with Josh: Enter Room.")
     elif result["ok"]:
         print("ok: " + json.dumps(result, sort_keys=True))
+    elif result.get("requires_confirmation") and result.get("confirmation_token"):
+        print(
+            "error: suspicious workspace deletions need confirmation. "
+            f"Review `snapshot preview`, then retry with --confirm-deletion {result['confirmation_token']}."
+        )
     else:
         message = _human_failure_message(result)
         if not message:

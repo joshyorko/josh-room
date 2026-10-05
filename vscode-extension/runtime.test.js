@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const zlib = require("node:zlib");
+const packageVersion = require("./package.json").version;
 
 const {
   ensureControllerRuntime,
@@ -62,7 +63,10 @@ function manifestFor(binary, overrides = {}) {
 }
 
 function context(root) {
-  return { globalStorageUri: { fsPath: root } };
+  return {
+    globalStorageUri: { fsPath: root },
+    extension: { packageJSON: { version: packageVersion } },
+  };
 }
 
 function cancellationSource() {
@@ -735,6 +739,21 @@ test("runtimeEnvironment keeps RCC and Room state under extension global storage
   assert.equal(environment.JOSH_ROOM_WORKSPACE_ROOT, "/workspaces/example");
   assert.equal(environment.JOSH_ROOM_JAT_ARTIFACT, "sha256:" + "a".repeat(64));
   assert.equal(environment.JOSH_ROOM_JAT_SHA, "b".repeat(40));
+  assert.equal(environment.JOSH_ROOM_EXTENSION_VERSION, packageVersion);
+});
+
+test("runtimeEnvironment rejects malformed installed extension versions", () => {
+  for (const version of ["latest", "0.1.26\n"]) {
+    const invalidContext = {
+      ...context("/private/vscode/global-storage/josh-room"),
+      extension: { packageJSON: { version } },
+    };
+
+    assert.throws(
+      () => runtimeEnvironment(invalidContext, {}),
+      /installed Josh Room extension has an invalid package version/,
+    );
+  }
 });
 
 test("runtimeEnvironment gives RCC a space-safe home for VS Code paths with spaces", () => {

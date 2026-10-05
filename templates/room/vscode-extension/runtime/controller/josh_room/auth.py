@@ -1,28 +1,57 @@
 import json
 import os
+import re
 import stat
 import tempfile
 import time
 import urllib.request
 import uuid
 import webbrowser
+from dataclasses import dataclass, field
+from hmac import compare_digest
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
+from botocore.exceptions import BotoCoreError
+
 from .config import config_dir
 from .encryption_domain import (
     KEYSET_CONTROL_KEY,
+    ROOM_STORE_KEYSET_FORMAT_VERSION,
     EncryptionKeyset,
     EncryptionMaterial,
+    physical_bucket_identity,
+    validate_encryption_domain_id,
     validate_minio_transport,
     validate_operational_identity,
+    validate_recipient,
 )
-from .keyring import lookup_encryption_identity, store_encryption_identity
+from .keyring import (
+    lookup_encryption_identity,
+    store_encryption_identity,
+    store_room_store_secret,
+)
+from .private_paths import (
+    protect_private_directory,
+    protect_private_file,
+    verify_private_path,
+)
 from .progress import report_progress
+from .r2_room_store_material import (
+    R2RoomStoreAuthority,
+    R2RoomStoreError,
+    R2RoomStoreMaterial,
+)
 from .tls import system_ssl_context
 
 _RUNTIME_FILES = ("r2.json", "age.identity", "config.json", "session.json")
+_ROOM_STORE_HANDOFF_FIELDS = (
+    "room_store_session_id",
+    "room_store_domain_id",
+    "room_store_capability",
+    "room_store_capability_expires_at",
+)
 DEFAULT_AUTH_URL = "https://josh-room-auth.joshua-yorko.workers.dev"
 _AUTH_PURPOSES = {"encryption", "r2"}
 
@@ -36,29 +65,47 @@ def _runtime_paths() -> tuple[Path, ...]:
     return tuple(root / name for name in _RUNTIME_FILES)
 
 
+def _runtime_root_is_private() -> bool:
+    root = _runtime_root()
+    if root.is_symlink() or not root.is_dir():
+        return False
+    try:
+        verify_private_path(root, directory=True)
+    except (OSError, RuntimeError):
+        return False
+    return True
+
+
 def _r2_logout_marker() -> Path:
     return _runtime_root() / "r2-logout.json"
 
 
-def _write_private_json(path: Path, body: dict) -> None:
+def _write_private_text(path: Path, value: str) -> None:
+    protect_private_directory(path.parent)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "w") as handle:
-            json.dump(body, handle)
+            handle.write(value)
             handle.flush()
             os.fsync(handle.fileno())
-        temporary.chmod(0o600)
+        protect_private_file(temporary)
         os.replace(temporary, path)
+        protect_private_file(path)
     finally:
         temporary.unlink(missing_ok=True)
 
 
+def _write_private_json(path: Path, body: dict) -> None:
+    _write_private_text(path, json.dumps(body))
+
+
 def _clear_runtime_session() -> None:
     credentials, identity, config, metadata = _runtime_paths()
-    for path in (credentials, identity, config, metadata):
-        path.unlink(missing_ok=True)
-    _r2_logout_marker().unlink(missing_ok=True)
+    if _runtime_root_is_private():
+        for path in (credentials, identity, config, metadata):
+            path.unlink(missing_ok=True)
+        _r2_logout_marker().unlink(missing_ok=True)
     if os.environ.get("JOSH_ROOM_RUNTIME_CREDENTIALS") == str(credentials):
         os.environ.pop("JOSH_ROOM_RUNTIME_CREDENTIALS", None)
     if os.environ.get("JOSH_ROOM_RUNTIME_CONFIG") == str(config):
@@ -69,7 +116,39 @@ def _clear_runtime_session() -> None:
         os.environ.pop("JOSH_ROOM_IDENTITY", None)
 
 
+def _valid_room_store_handoff(metadata: dict, *, now: float | None = None) -> bool:
+    """Validate the private, short-lived broker handoff without exposing it."""
+    now = time.time() if now is None else now
+    session_id = metadata.get("room_store_session_id")
+    domain_id = metadata.get("room_store_domain_id")
+    capability = metadata.get("room_store_capability")
+    expires_at = metadata.get("room_store_capability_expires_at")
+    session_expires_at = metadata.get("expires_at")
+    return (
+        isinstance(session_id, str)
+        and re.fullmatch(r"[0-9a-f]{64}", session_id) is not None
+        and isinstance(domain_id, str)
+        and re.fullmatch(r"[0-9a-f]{64}", domain_id) is not None
+        and isinstance(capability, str)
+        and re.fullmatch(r"[A-Za-z0-9_-]{43}", capability) is not None
+        and type(expires_at) in {int, float}
+        and now + 15 < expires_at <= now + 615
+        and type(session_expires_at) in {int, float}
+        and expires_at <= session_expires_at
+    )
+
+
+def _clear_room_store_handoff(metadata: dict, path: Path) -> None:
+    if not any(name in metadata for name in _ROOM_STORE_HANDOFF_FIELDS):
+        return
+    for name in _ROOM_STORE_HANDOFF_FIELDS:
+        metadata.pop(name, None)
+    _write_private_json(path, metadata)
+
+
 def _recover_r2_logout() -> bool:
+    if not _runtime_root_is_private():
+        return False
     marker = _r2_logout_marker()
     if not marker.exists():
         return False
@@ -152,9 +231,9 @@ def poll_oauth_session(
         _write_legacy_source_handoff(session, legacy_source_handoff, legacy_r2_source=legacy_r2_source)
         return {"status": "authorized", "purpose": "r2" if legacy_r2_source else "encryption"}
     if purpose is None:
-        _write_runtime(session, dimension_id=dimension_id)
+        _write_runtime(session, dimension_id=dimension_id, session_id=session_id)
     else:
-        _write_runtime(session, dimension_id=dimension_id, purpose=purpose)
+        _write_runtime(session, dimension_id=dimension_id, purpose=purpose, session_id=session_id)
     return {"status": "authorized"}
 
 
@@ -290,11 +369,18 @@ def _validate_recipients(value: object) -> list[str]:
 
 
 def _read_runtime() -> tuple[str, tuple[str, ...]]:
+    if not _runtime_root_is_private():
+        return "missing", ()
     _recover_r2_logout()
     credentials, identity, config, metadata = _runtime_paths()
     if not metadata.is_file() or metadata.is_symlink():
         if any(path.exists() for path in (credentials, identity, config, metadata)):
             _clear_runtime_session()
+        return "missing", ()
+    try:
+        verify_private_path(metadata, directory=False)
+    except (OSError, RuntimeError):
+        _clear_runtime_session()
         return "missing", ()
     try:
         metadata_body = json.loads(metadata.read_text())
@@ -305,7 +391,15 @@ def _read_runtime() -> tuple[str, tuple[str, ...]]:
     if expires_at <= time.time() + 60:
         _clear_runtime_session()
         return "expired", ()
+    if any(name in metadata_body for name in _ROOM_STORE_HANDOFF_FIELDS) and not _valid_room_store_handoff(metadata_body):
+        _clear_room_store_handoff(metadata_body, metadata)
     if not all(path.is_file() and not path.is_symlink() for path in (identity, config)):
+        _clear_runtime_session()
+        return "missing", ()
+    try:
+        verify_private_path(identity, directory=False)
+        verify_private_path(config, directory=False)
+    except (OSError, RuntimeError):
         _clear_runtime_session()
         return "missing", ()
     try:
@@ -343,6 +437,11 @@ def _read_runtime() -> tuple[str, tuple[str, ...]]:
             credentials_valid = False
         if not credentials_valid or not credentials.is_file() or credentials.is_symlink() \
                 or stat.S_IMODE(credentials.stat().st_mode) & 0o077:
+            _clear_runtime_session()
+            return "missing", ()
+        try:
+            verify_private_path(credentials, directory=False)
+        except (OSError, RuntimeError):
             _clear_runtime_session()
             return "missing", ()
     elif credentials.exists():
@@ -489,7 +588,13 @@ def _write_legacy_source_handoff(session: dict, path: Path, *, legacy_r2_source:
             path.unlink(missing_ok=True)
 
 
-def _write_runtime(session: dict, dimension_id: str | None = None, purpose: str | None = None) -> None:
+def _write_runtime(
+    session: dict,
+    dimension_id: str | None = None,
+    purpose: str | None = None,
+    *,
+    session_id: str | None = None,
+) -> None:
     purpose = _session_purpose(session, purpose)
     try:
         age_identity = _normalize_identity(session.get("ageIdentity"))
@@ -499,10 +604,33 @@ def _write_runtime(session: dict, dimension_id: str | None = None, purpose: str 
     include_r2 = purpose == "r2"
     if include_r2:
         _validate_r2_storage_material(session)
+    room_store_handoff = None
+    handoff_fields = (
+        "roomStoreDomainId",
+        "roomStoreCapability",
+        "roomStoreCapabilityExpiresIn",
+    )
+    if any(name in session for name in handoff_fields):
+        domain_id = session.get("roomStoreDomainId")
+        capability = session.get("roomStoreCapability")
+        capability_expires_in = session.get("roomStoreCapabilityExpiresIn")
+        if (
+            not include_r2
+            or not isinstance(session_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", session_id) is None
+            or not isinstance(domain_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", domain_id) is None
+            or not isinstance(capability, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{43}", capability) is None
+            or type(capability_expires_in) is not int
+            or not 1 <= capability_expires_in <= 600
+        ):
+            raise RuntimeError("Cloudflare authorization Room Store handoff is invalid")
+        room_store_handoff = (session_id, domain_id, capability, capability_expires_in)
 
     root = _runtime_root()
     root.mkdir(parents=True, exist_ok=True)
-    root.chmod(0o700)
+    protect_private_directory(root)
     credentials = root / "r2.json"
     identity = root / "age.identity"
     config = root / "config.json"
@@ -562,19 +690,26 @@ def _write_runtime(session: dict, dimension_id: str | None = None, purpose: str 
         "secret-access-key": session.get("secretAccessKey"),
         "session-token": session.get("sessionToken"),
     }
-    identity.write_text(age_identity.rstrip("\n") + "\n")
-    config.write_text(json.dumps(runtime_config))
+    _write_private_text(identity, age_identity.rstrip("\n") + "\n")
+    _write_private_json(config, runtime_config)
     if include_r2:
-        credentials.write_text(json.dumps(credentials_body))
-    metadata.write_text(json.dumps({
-        "expires_at": time.time() + int(session.get("expiresIn", 600)),
+        _write_private_json(credentials, credentials_body)
+    now = time.time()
+    expires_at = now + int(session.get("expiresIn", 600))
+    metadata_body = {
+        "expires_at": expires_at,
         "capabilities": ["encryption", "r2"] if include_r2 else ["encryption"],
         "purpose": purpose,
-    }))
-    for path in (identity, config, metadata):
-        path.chmod(0o600)
-    if include_r2:
-        credentials.chmod(0o600)
+    }
+    if room_store_handoff is not None:
+        handoff_session_id, domain_id, capability, capability_expires_in = room_store_handoff
+        metadata_body.update({
+            "room_store_session_id": handoff_session_id,
+            "room_store_domain_id": domain_id,
+            "room_store_capability": capability,
+            "room_store_capability_expires_at": min(now + capability_expires_in, expires_at),
+        })
+    _write_private_json(metadata, metadata_body)
     _set_runtime_environment(("encryption", "r2") if include_r2 else ("encryption",))
 
 
@@ -583,9 +718,110 @@ def _load_runtime_legacy() -> bool:
     return _load_runtime()
 
 
-def load_runtime_session() -> bool:
-    """Load an existing local encryption or Cloudflare session without contacting the authority."""
-    return _load_runtime()
+def load_runtime_session(*, require_r2: bool = False) -> bool:
+    """Load an existing local session without contacting the authority."""
+    if type(require_r2) is not bool:
+        raise TypeError("R2 runtime capability requirement must be boolean")
+    return _load_runtime(require_r2=require_r2)
+
+
+@dataclass(frozen=True, slots=True)
+class R2RoomStoreSession:
+    """Authenticated broker plus the matching local age and password material."""
+
+    authority: R2RoomStoreAuthority = field(repr=False)
+    room_store: R2RoomStoreMaterial = field(repr=False)
+    encryption_material: EncryptionMaterial = field(repr=False)
+
+    def __repr__(self) -> str:
+        return "R2RoomStoreSession(authority=<redacted>, material=<redacted>)"
+
+
+def create_r2_room_store_authority(
+    dimension, *, allow_initialize: bool = False, endpoint_transport=None
+) -> R2RoomStoreSession:
+    """Read R2 material privately, creating broker state only when explicitly allowed."""
+    if type(allow_initialize) is not bool:
+        raise TypeError("R2 Room Store initialization setting must be boolean")
+    state, capabilities = _read_runtime()
+    if state != "connected" or "r2" not in capabilities:
+        raise R2RoomStoreError("r2_authorization_session_unavailable")
+    if getattr(dimension, "provider", None) != "r2":
+        raise ValueError("Room Store authority requires an R2 Dimension")
+
+    _credentials, identity_path, config_path, metadata_path = _runtime_paths()
+    try:
+        verify_private_path(identity_path, directory=False)
+        verify_private_path(config_path, directory=False)
+        verify_private_path(metadata_path, directory=False)
+        runtime_config = json.loads(config_path.read_text())
+        metadata = json.loads(metadata_path.read_text())
+    except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+        raise R2RoomStoreError("r2_authorization_session_unavailable") from None
+    r2_config = runtime_config.get("r2") if isinstance(runtime_config, dict) else None
+    if not isinstance(r2_config, dict):
+        raise R2RoomStoreError("r2_authorization_session_unavailable")
+    try:
+        selected_binding = physical_bucket_identity("r2", dimension.endpoint, dimension.bucket)
+        oauth_binding = physical_bucket_identity("r2", r2_config["endpoint"], r2_config["bucket"])
+    except (KeyError, TypeError, ValueError):
+        raise R2RoomStoreError("r2_authorization_scope_invalid") from None
+    if selected_binding != oauth_binding:
+        raise R2RoomStoreError("r2_authorization_scope_mismatch")
+    if not _valid_room_store_handoff(metadata):
+        raise R2RoomStoreError("room_store_capability_unavailable")
+
+    domain_id = metadata["room_store_domain_id"]
+    try:
+        recipients = tuple(
+            validate_recipient(value)
+            for value in _validate_recipients(runtime_config.get("age_recipients"))
+        )
+        verify_private_path(identity_path, directory=False)
+        from .crypto import derive_recipient
+
+        operational_recipient = derive_recipient(identity_path)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise R2RoomStoreError("r2_encryption_material_unavailable") from None
+    if operational_recipient not in recipients:
+        raise R2RoomStoreError("r2_encryption_recipient_mismatch")
+
+    authority = R2RoomStoreAuthority(
+        session_id=metadata["room_store_session_id"],
+        capability=metadata["room_store_capability"],
+        physical_binding=domain_id,
+        endpoint_transport=_worker_url() if endpoint_transport is None else endpoint_transport,
+        identity_path=identity_path,
+        recipients=recipients,
+    )
+    room_store = (
+        authority.ensure_material_details()
+        if allow_initialize
+        else authority.read_material_details()
+    )
+    if room_store.physical_binding != domain_id:
+        raise R2RoomStoreError("room_store_physical_binding_mismatch")
+    try:
+        validate_encryption_domain_id(room_store.encryption_domain_id)
+        if type(room_store.key_generation) is not int or room_store.key_generation < 1:
+            raise ValueError("invalid age key generation")
+        selected_domain = getattr(dimension, "encryption_domain_id", None)
+        if selected_domain is not None and selected_domain != room_store.encryption_domain_id:
+            raise ValueError("selected encryption domain mismatch")
+        keyset = EncryptionKeyset.create(
+            provider="r2",
+            endpoint=dimension.endpoint,
+            bucket=dimension.bucket,
+            operational_identity=_normalize_identity(identity_path.read_text()),
+            operational_recipient=operational_recipient,
+            recovery_recipients=[value for value in recipients if value != operational_recipient],
+            encryption_domain_id=room_store.encryption_domain_id,
+            key_generation=room_store.key_generation,
+        )
+        encryption_material = EncryptionMaterial(keyset, identity_path)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise R2RoomStoreError("r2_encryption_domain_mismatch") from None
+    return R2RoomStoreSession(authority, room_store, encryption_material)
 
 
 class EncryptionStateError(RuntimeError):
@@ -661,12 +897,17 @@ def _normalize_generated_identity(value: str) -> str:
 
 
 def _keyset_from_backend(dimension, backend):
+    keyset, _etag = _read_keyset_record_from_backend(dimension, backend)
+    return keyset
+
+
+def _read_keyset_record_from_backend(dimension, backend):
     _validate_minio_backend_transport(dimension, backend)
-    body, _etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
+    body, etag = backend.read_control(KEYSET_CONTROL_KEY, 64 * 1024)
     if body is None:
-        return None
+        return None, etag
     try:
-        return EncryptionKeyset.from_json(
+        keyset = EncryptionKeyset.from_json(
             body,
             provider=dimension.provider,
             endpoint=dimension.endpoint,
@@ -679,6 +920,7 @@ def _keyset_from_backend(dimension, backend):
             state="failed",
             dimension_id=dimension.dimension_id,
         ) from error
+    return keyset, etag
 
 
 def _validate_minio_backend_transport(dimension, backend):
@@ -701,6 +943,193 @@ def _assert_keyset_matches_dimension(dimension, keyset):
             dimension_id=dimension.dimension_id,
         )
     return keyset
+
+
+def _require_minio_room_store(dimension):
+    if dimension.provider != "minio":
+        raise EncryptionStateError(
+            "Room Store keyset is unsupported for this provider",
+            error_code="room-store-keyset-unsupported",
+            state="unsupported",
+            dimension_id=dimension.dimension_id,
+        )
+
+
+def _room_store_keyset_error(dimension, message, error_code, cause=None):
+    error = EncryptionStateError(
+        message,
+        error_code=error_code,
+        state="failed",
+        dimension_id=dimension.dimension_id,
+    )
+    if cause is not None:
+        raise error from cause
+    raise error
+
+
+def _cache_room_store_secret(keyset):
+    metadata = keyset.room_store
+    store_room_store_secret(keyset.encryption_domain_id, metadata.generation, metadata.secret)
+
+
+def _validate_room_store_winner(dimension, keyset):
+    if keyset is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset is unavailable",
+            "room-store-keyset-unavailable",
+        )
+    _assert_keyset_matches_dimension(dimension, keyset)
+    if keyset.format_version != ROOM_STORE_KEYSET_FORMAT_VERSION or keyset.room_store is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade outcome is unknown",
+            "room-store-keyset-write-unknown",
+        )
+    return keyset
+
+
+def _same_room_store_secret(first, second):
+    return compare_digest(first.room_store.secret, second.room_store.secret)
+
+
+def ensure_room_store_keyset(dimension, backend) -> EncryptionKeyset:
+    """Explicitly upgrade a MinIO keyset and cache only its durable winner."""
+    _require_minio_room_store(dimension)
+    keyset, etag = _read_keyset_record_from_backend(dimension, backend)
+    if keyset is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset is uninitialized; initialize encryption first",
+            "room-store-keyset-uninitialized",
+        )
+    _assert_keyset_matches_dimension(dimension, keyset)
+    if keyset.format_version == ROOM_STORE_KEYSET_FORMAT_VERSION:
+        _cache_room_store_secret(keyset)
+        return keyset
+    if not etag:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade requires a backend version token",
+            "room-store-keyset-version-unavailable",
+        )
+    replace_control = getattr(backend, "replace_control", None)
+    if not callable(replace_control):
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade requires conditional control replacement",
+            "room-store-keyset-conditional-write-unavailable",
+        )
+
+    candidate = keyset.upgrade_for_room_store()
+    try:
+        replace_control(KEYSET_CONTROL_KEY, candidate.to_json(), etag)
+    except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as write_error:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError):
+            raise write_error
+    else:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as read_error:
+            _room_store_keyset_error(
+                dimension,
+                "Room Store keyset write could not be verified",
+                "room-store-keyset-write-unverified",
+                read_error,
+            )
+        if not _same_room_store_secret(candidate, winner):
+            _room_store_keyset_error(
+                dimension,
+                "Room Store keyset changed during upgrade",
+                "room-store-keyset-upgrade-conflict",
+            )
+        if winner.room_store.generation < candidate.room_store.generation:
+            _room_store_keyset_error(
+                dimension,
+                "Room Store keyset generation regressed during upgrade",
+                "room-store-keyset-generation-conflict",
+            )
+    _cache_room_store_secret(winner)
+    return winner
+
+
+def bind_room_store_repository(
+    dimension,
+    backend,
+    repository_id: str,
+    *,
+    expected_generation: int,
+) -> EncryptionKeyset:
+    """Conditionally bind the initialized repository to the winning Room Store keyset."""
+    _require_minio_room_store(dimension)
+    keyset, etag = _read_keyset_record_from_backend(dimension, backend)
+    if keyset is None:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset is uninitialized",
+            "room-store-keyset-uninitialized",
+        )
+    _assert_keyset_matches_dimension(dimension, keyset)
+    if keyset.format_version != ROOM_STORE_KEYSET_FORMAT_VERSION:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store keyset upgrade is required before repository binding",
+            "room-store-keyset-upgrade-required",
+        )
+    candidate = keyset.bind_repository(repository_id, expected_generation=expected_generation)
+    if candidate is keyset:
+        _cache_room_store_secret(keyset)
+        return keyset
+    if not etag:
+        _room_store_keyset_error(
+            dimension,
+            "Room Store repository binding requires a backend version token",
+            "room-store-keyset-version-unavailable",
+        )
+    replace_control = getattr(backend, "replace_control", None)
+    if not callable(replace_control):
+        _room_store_keyset_error(
+            dimension,
+            "Room Store repository binding requires conditional control replacement",
+            "room-store-keyset-conditional-write-unavailable",
+        )
+
+    try:
+        replace_control(KEYSET_CONTROL_KEY, candidate.to_json(), etag)
+    except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as write_error:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError):
+            raise write_error
+    else:
+        try:
+            winner, _winner_etag = _read_keyset_record_from_backend(dimension, backend)
+            winner = _validate_room_store_winner(dimension, winner)
+        except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError) as read_error:
+            _room_store_keyset_error(
+                dimension,
+                "Room Store repository binding could not be verified",
+                "room-store-keyset-write-unverified",
+                read_error,
+            )
+
+    if (
+        not _same_room_store_secret(candidate, winner)
+        or winner.room_store.repository_id != repository_id
+        or winner.room_store.generation != candidate.room_store.generation
+    ):
+        _room_store_keyset_error(
+            dimension,
+            "Room Store repository binding conflicted with another writer",
+            "room-store-repository-binding-conflict",
+        )
+    _cache_room_store_secret(winner)
+    return winner
 
 
 def _resolve_recovery_recipients(recovery_recipients, recovery_handoff):

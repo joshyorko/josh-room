@@ -38,6 +38,12 @@
     "onCommand:joshRoom.enter",
     "onCommand:joshRoom.remove",
     "onCommand:joshRoom.serve",
+    "onCommand:joshRoom.inspectLogicalSnapshot",
+    "onCommand:joshRoom.exportPortableJat",
+    "onCommand:joshRoom.extractLogicalSnapshot",
+    "onCommand:joshRoom.verifyRoomStore",
+    "onCommand:joshRoom.optimizeRoomStore",
+    "onCommand:joshRoom.reconcileRoomStore",
     "onCommand:joshRoom.refresh",
     "onCommand:joshRoom.prepare",
     "onCommand:joshRoom.showLogs",
@@ -162,6 +168,36 @@
         "icon": "$(server-process)"
       },
       {
+        "command": "joshRoom.inspectLogicalSnapshot",
+        "title": "Josh: Inspect Logical JAT",
+        "icon": "$(search)"
+      },
+      {
+        "command": "joshRoom.exportPortableJat",
+        "title": "Josh: Export Portable JAT",
+        "icon": "$(export)"
+      },
+      {
+        "command": "joshRoom.extractLogicalSnapshot",
+        "title": "Josh: Extract from Logical JAT",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "joshRoom.verifyRoomStore",
+        "title": "Josh: Verify Room Store",
+        "icon": "$(verified)"
+      },
+      {
+        "command": "joshRoom.optimizeRoomStore",
+        "title": "Josh: Optimize Room Store…",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "joshRoom.reconcileRoomStore",
+        "title": "Josh: Reconcile Room Store",
+        "icon": "$(sync)"
+      },
+      {
         "command": "joshRoom.refresh",
         "title": "Josh: Refresh Rooms",
         "icon": "$(refresh)"
@@ -273,6 +309,13 @@
         { "command": "joshRoom.repair", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" },
         { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
         { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == jat", "group": "inline@2" },
+        { "command": "joshRoom.inspectLogicalSnapshot", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@1" },
+        { "command": "joshRoom.exportPortableJat", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@2" },
+        { "command": "joshRoom.extractLogicalSnapshot", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@3" },
+        { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@4" },
+        { "command": "joshRoom.verifyRoomStore", "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/", "group": "room-store@1" },
+        { "command": "joshRoom.optimizeRoomStore", "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/", "group": "room-store@2" },
+        { "command": "joshRoom.reconcileRoomStore", "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/", "group": "room-store@3" },
         { "command": "joshRoom.remove", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" }
       ]
     }

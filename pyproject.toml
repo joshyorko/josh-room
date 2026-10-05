@@ -11,7 +11,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["build>=1.2", "jsonschema[format]>=4", "pytest>=8", "ruff>=0.12"]
+dev = ["build>=1.2", "jsonschema[format]>=4", "pytest>=8", "pyyaml>=6", "ruff>=0.12"]
 
 [project.scripts]
 josh-room = "josh_room.cli:main"
@@ -23,3 +23,6 @@ markers = [
   "r2: performs a live private R2 acceptance write",
   "first_run: performs Josh's private fresh-state golden path",
 ]
+
+[tool.ruff]
+extend-exclude = ["src/josh_room/_vendor"]

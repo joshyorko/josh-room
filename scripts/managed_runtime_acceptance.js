@@ -8,6 +8,7 @@ const os = require("os");
 const path = require("path");
 const fsp = fs.promises;
 const repository = path.resolve(__dirname, "..");
+const { compareRestoredFile, jatRestoredWorkspace } = require("./managed_runtime_acceptance_helpers");
 
 function run(command, args, options = {}) {
   return childProcess.execFileSync(command, args, {
@@ -163,6 +164,7 @@ async function main() {
     const controllerRoot = path.join(extension, "runtime", "controller");
     const environment = {
       ...process.env,
+      JOSH_ROOM_EXTENSION_VERSION: manifest.extension_version,
       ROBOCORP_HOME: paths.rccHome,
       RCC_HOLOTREE_MODE: "private",
       JOSH_ROOM_EXTENSION_MODE: "1",
@@ -202,6 +204,19 @@ async function main() {
         }
         return output;
       } catch (error) {
+        if (prefix === "managed-tool" && name === "private-runtime") {
+          for (const line of String(error?.stdout || "").split(/\r?\n/)) {
+            try {
+              const probe = JSON.parse(line);
+              if (probe.status !== "failed") continue;
+              const safe = {};
+              for (const key of ["status", "platform", "failed_check", "error_type", "winerror", "checks_completed"]) {
+                if (Object.hasOwn(probe, key)) safe[key] = probe[key];
+              }
+              process.stderr.write(`[managed-private-runtime-result] ${JSON.stringify(safe)}\n`);
+            } catch { /* Ignore non-probe RCC output. */ }
+          }
+        }
         const result = readManagedResult(resultFile);
         if (result) {
           process.stderr.write(`[${prefix}-${name}-result] ${JSON.stringify(result).slice(0, 8192)}\n`);
@@ -279,6 +294,25 @@ async function main() {
       "python", "-c", "import boto3, josh_room; print(boto3.__version__)",
     ], "dependencies").trim();
     if (!dependencyProbe) throw new Error("managed controller dependency probe returned no boto3 version");
+    const privateRuntime = JSON.parse(runManagedTool([
+      "python", path.join(repository, "scripts", "verify_private_runtime.py"),
+    ], "private-runtime").trim());
+    if (privateRuntime.status !== "passed") {
+      throw new Error("managed private runtime protection did not pass");
+    }
+    const resticInstallation = JSON.parse(runManagedTool([
+      "python", path.join(controllerRoot, "install_restic.py"),
+      "--manifest", path.join(extension, "runtime", "restic-manifest.json"),
+      "--destination", paths.runtimeRoot, "--platform", platform,
+    ], "restic-install").trim());
+    const resticPhase0 = JSON.parse(runManagedTool([
+      "python", path.join(repository, "scripts", "room_store_probe.py"),
+      "--restic", resticInstallation.executable,
+      "--evidence-file", path.join(evidenceDir, "restic-phase0.json"),
+    ], "restic-phase0").trim());
+    if (resticPhase0.status !== "passed" || resticPhase0.engine_version !== "0.19.1") {
+      throw new Error("managed restic feasibility did not pass on the selected platform");
+    }
     const identityPath = path.join(root, "age-identity.txt");
     await fsp.writeFile(identityPath, `${identityBodies.join("\n")}\n`, { mode: 0o600 });
     const instance = path.join(root, "room-instance");
@@ -290,20 +324,109 @@ async function main() {
       JOSH_ROOM_RECIPIENTS: recipients.join(","),
       JOSH_ROOM_WORKSPACE_ROOT: workspaceRoot,
     });
-    const source = path.join(root, "save-source");
+    // JAT extracts Build archives into <payload_path>/workspace and keeps the source basename.
+    const source = path.join(root, "workspace");
     await fsp.mkdir(source, { recursive: true, mode: 0o700 });
-    await fsp.writeFile(path.join(source, "README.md"), "managed runtime Save/Enter acceptance\n");
+    const sourceReadme = path.join(source, "README.md");
+    await fsp.writeFile(sourceReadme, "managed runtime legacy local JAT acceptance\n");
+    await fsp.chmod(sourceReadme, 0o444);
+    const sourceReadmeBytes = await fsp.readFile(sourceReadme);
+    const sourceReadmeMode = (await fsp.stat(sourceReadme)).mode;
     executeController(["dimensions", "list", "--json"], "dimensions-list");
-    executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "save");
-    executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "enter");
+    executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "legacy-local-jat-save");
+    executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "legacy-local-jat-enter");
     const restored = path.join(workspaceRoot, "demo", "README.md");
-    if ((await fsp.readFile(restored, "utf8")) !== "managed runtime Save/Enter acceptance\n") {
-      throw new Error("managed runtime Enter did not restore the saved workspace");
+    const legacyEnterComparison = compareRestoredFile({
+      sourceBytes: sourceReadmeBytes,
+      restoredBytes: await fsp.readFile(restored),
+      sourceMode: sourceReadmeMode,
+      restoredMode: (await fsp.stat(restored)).mode,
+      platform,
+    });
+    if (!legacyEnterComparison.bytes_match || !legacyEnterComparison.mode_match) {
+      throw new Error("legacy local JAT Enter did not restore the saved workspace");
     }
     const haul = path.join(root, "managed-runtime.haul.tar.zst");
     executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
     executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
+    const legacyJatRestore = path.join(root, "legacy-jat-clean-room");
+    executeController([
+      "jat", "restore", "--haul", haul, "--destination", legacyJatRestore, "--json",
+    ], "legacy-jat-clean-room-restore");
+    const legacyJatRestoreResultFile = path.join(paths.logsRoot, "managed-controller-legacy-jat-clean-room-restore-result.json");
+    const legacyJatRestoreResult = readManagedResult(legacyJatRestoreResultFile);
+    const restoredWorkspaceRoot = jatRestoredWorkspace(
+      legacyJatRestoreResult,
+      legacyJatRestore,
+      path.basename(source),
+      platform,
+    );
+    const cleanReadme = restoredWorkspaceRoot && path.join(restoredWorkspaceRoot, "README.md");
+    let cleanReadmeBytes = Buffer.alloc(0);
+    let cleanReadmeMode = 0;
+    let cleanReadmeExists = false;
+    if (cleanReadme) {
+      try {
+        cleanReadmeBytes = await fsp.readFile(cleanReadme);
+        cleanReadmeMode = (await fsp.stat(cleanReadme)).mode;
+        cleanReadmeExists = true;
+      } catch { /* Record the missing or unreadable payload below. */ }
+    }
+    const legacyJatRestoreComparison = compareRestoredFile({
+      sourceBytes: sourceReadmeBytes,
+      restoredBytes: cleanReadmeBytes,
+      sourceMode: sourceReadmeMode,
+      restoredMode: cleanReadmeMode,
+      restoredExists: cleanReadmeExists,
+      platform,
+    });
+    const legacyJatRestoreReceipt = {
+      operation: legacyJatRestoreResult?.operation || null,
+      success: legacyJatRestoreResult?.success === true,
+      exit_status: legacyJatRestoreResult?.exit_status ?? null,
+      payload_path_matches_destination: restoredWorkspaceRoot !== null,
+      workspace_layout: "<payload_path>/workspace/<build-source-name>",
+      file: { name: "README.md", ...legacyJatRestoreComparison },
+      status: legacyJatRestoreResult?.operation === "restore"
+        && legacyJatRestoreResult?.success === true
+        && legacyJatRestoreResult?.exit_status === 0
+        && restoredWorkspaceRoot !== null
+        && legacyJatRestoreComparison.bytes_match
+        && legacyJatRestoreComparison.mode_match
+        ? "passed"
+        : "failed",
+    };
+    await fsp.writeFile(
+      path.join(evidenceDir, "legacy-jat-clean-room-restore.json"),
+      `${JSON.stringify(legacyJatRestoreReceipt, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    if (legacyJatRestoreReceipt.status !== "passed") {
+      throw new Error("existing legacy JAT capsule failed clean-room byte/mode restore");
+    }
     await runManagedJatServe(haul, "jat-serve");
+
+    let windowsRoomStoreAcceptance = { status: "not-applicable", native_windows_only: true };
+    if (platform === "win32-x64") {
+      const roomStoreResultFile = path.join(paths.logsRoot, "managed-controller-windows-room-store-result.json");
+      runManaged([
+        "python", path.join(repository, "scripts", "windows_room_store_acceptance.py"),
+        "--restic", resticInstallation.executable,
+        "--operational-identity", path.join(root, "primary-age-identity.txt"),
+        "--recovery-identity", path.join(root, "recovery-age-identity.txt"),
+        "--jat-root", jat.jatRoot,
+        "--output", path.join(root, "room-store-portable.haul.tar.zst"),
+      ], "managed-controller", "windows-room-store-acceptance", root, {
+        inheritStreams: false,
+        resultFile: roomStoreResultFile,
+      });
+      windowsRoomStoreAcceptance = JSON.parse(await fsp.readFile(roomStoreResultFile, "utf8"));
+      if (windowsRoomStoreAcceptance.status !== "passed"
+        || windowsRoomStoreAcceptance.storage?.real_minio !== false) {
+        throw new Error("Windows Room Store fixture acceptance did not pass with an explicit fixture storage label");
+      }
+      await fsp.copyFile(roomStoreResultFile, path.join(evidenceDir, "windows-room-store-acceptance.json"));
+    }
 
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
@@ -358,10 +481,13 @@ async function main() {
     const evidence = {
       result: "managed-runtime-consumer-pass",
       platform,
-      source_sha: lock.controller.source_sha,
+      source_sha: childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
       vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
       dependencies: { boto3: dependencyProbe },
+      private_runtime: privateRuntime,
+      windows_room_store_acceptance: windowsRoomStoreAcceptance,
+      restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {
         release_tag: lock.controller.release_tag,
         artifact_digest: controllerPin.digest,
@@ -378,10 +504,11 @@ async function main() {
         source_sha: jat.sourceSha,
         rcc_version: rcc.version,
       },
-      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "save", "enter", "jat-build", "jat-inspect", "jat-serve", "jat-env-exec"],
+      checks: ["clean-installed-vsix", "cold-acquire", "warm-no-build", "provider-unavailable-after-acquire", "corrupt-archive-rejection", "wrong-rcc-rejection", "stale-receipt-rejection", "controller-cli", "legacy-local-jat-save", "legacy-local-jat-enter", "legacy-jat-build", "legacy-jat-inspect", "legacy-jat-clean-room-restore-bytes-and-mode", "legacy-jat-serve", "jat-env-exec", "restic-package", "restic-phase0", "private-runtime", ...(platform === "win32-x64" ? ["windows-room-store-incremental-noop-rename-delete", "windows-room-store-enter", "windows-portable-jat-export-clean-room-restore", "windows-room-store-path-guards"] : [])],
     };
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
       if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-") || filename.startsWith("jat-artifact-")) && filename.endsWith(".json")) {
+        if (filename === "managed-controller-legacy-jat-clean-room-restore-result.json") continue;
         await fsp.copyFile(path.join(paths.logsRoot, filename), path.join(evidenceDir, filename));
       }
     }

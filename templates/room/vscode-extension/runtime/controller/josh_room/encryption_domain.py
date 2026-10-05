@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import re
+import secrets
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from hmac import compare_digest
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -14,6 +17,10 @@ KEYSET_CONTROL_KEY = "control/encryption-keyset.v1.json"
 MIGRATION_JOURNAL_KEY = "control/migration-journal.v1.json"
 CONTROL_KEYS = frozenset({KEYSET_CONTROL_KEY, MIGRATION_JOURNAL_KEY})
 KEYSET_FORMAT_VERSION = 1
+ROOM_STORE_KEYSET_FORMAT_VERSION = 2
+ROOM_STORE_METADATA_FORMAT_VERSION = 1
+ROOM_STORE_REPOSITORY_FORMAT_VERSION = 2
+ROOM_STORE_PREFIX = "room-store/v1"
 MAX_KEYSET_SIZE = 64 * 1024
 CONTROL_OBJECT_MAX_BYTES = 64 * 1024
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -31,6 +38,81 @@ _KEYSET_FIELDS = frozenset(
         "recovery_recipients",
     }
 )
+_ROOM_STORE_FIELDS = frozenset(
+    {
+        "format_version",
+        "secret",
+        "repository_prefix",
+        "repository_format",
+        "physical_binding",
+        "generation",
+        "repository_id",
+    }
+)
+
+
+def validate_room_store_secret(value: object) -> str:
+    """Validate canonical base64url encoding of a 32-byte secret."""
+    if not isinstance(value, str) or len(value) != 43:
+        raise ValueError("Room Store secret encoding is invalid")
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=")
+    except (ValueError, TypeError) as error:
+        raise ValueError("Room Store secret encoding is invalid") from error
+    if len(decoded) != 32 or base64.urlsafe_b64encode(decoded).decode().rstrip("=") != value:
+        raise ValueError("Room Store secret encoding is invalid")
+    return value
+
+
+@dataclass(frozen=True)
+class RoomStoreKeyset:
+    secret: str = field(repr=False, compare=False)
+    physical_binding: str
+    generation: int = 1
+    repository_id: str | None = None
+    repository_prefix: str = ROOM_STORE_PREFIX
+    repository_format: int = ROOM_STORE_REPOSITORY_FORMAT_VERSION
+    format_version: int = ROOM_STORE_METADATA_FORMAT_VERSION
+
+    def __post_init__(self):
+        validate_room_store_secret(self.secret)
+        if type(self.format_version) is not int or self.format_version != ROOM_STORE_METADATA_FORMAT_VERSION:
+            raise ValueError("unsupported Room Store metadata format")
+        if self.repository_prefix != ROOM_STORE_PREFIX:
+            raise ValueError("unsupported Room Store repository prefix")
+        if type(self.repository_format) is not int or self.repository_format != ROOM_STORE_REPOSITORY_FORMAT_VERSION:
+            raise ValueError("unsupported Room Store repository format")
+        if not isinstance(self.physical_binding, str) or not self.physical_binding:
+            raise ValueError("Room Store physical binding is invalid")
+        if type(self.generation) is not int or self.generation < 1:
+            raise ValueError("Room Store generation must be positive")
+        if self.repository_id is not None and (
+            not isinstance(self.repository_id, str) or not re.fullmatch(r"[0-9a-f]{64}", self.repository_id)
+        ):
+            raise ValueError("Room Store repository id is invalid")
+
+    @classmethod
+    def from_dict(cls, body: object) -> RoomStoreKeyset:
+        if not isinstance(body, dict):
+            raise TypeError("Room Store metadata must be an object")
+        unknown = set(body) - _ROOM_STORE_FIELDS
+        if unknown:
+            raise ValueError(f"unknown Room Store field: {min(unknown)}")
+        missing = _ROOM_STORE_FIELDS - set(body)
+        if missing:
+            raise ValueError(f"missing Room Store field: {min(missing)}")
+        return cls(**body)
+
+    def to_dict(self) -> dict:
+        return {
+            "format_version": self.format_version,
+            "secret": self.secret,
+            "repository_prefix": self.repository_prefix,
+            "repository_format": self.repository_format,
+            "physical_binding": self.physical_binding,
+            "generation": self.generation,
+            "repository_id": self.repository_id,
+        }
 
 
 def validate_endpoint(endpoint: str) -> str:
@@ -200,10 +282,18 @@ class EncryptionKeyset:
     operational_recipient: str
     recovery_recipients: tuple[str, ...]
     format_version: int = KEYSET_FORMAT_VERSION
+    room_store: RoomStoreKeyset | None = field(default=None, repr=False)
 
     def __post_init__(self):
-        if type(self.format_version) is not int or self.format_version != KEYSET_FORMAT_VERSION:
+        if type(self.format_version) is not int or self.format_version not in {KEYSET_FORMAT_VERSION, ROOM_STORE_KEYSET_FORMAT_VERSION}:
             raise ValueError("unsupported keyset format")
+        if self.format_version == KEYSET_FORMAT_VERSION and self.room_store is not None:
+            raise ValueError("version 1 keyset cannot contain Room Store metadata")
+        if self.format_version == ROOM_STORE_KEYSET_FORMAT_VERSION:
+            if not isinstance(self.room_store, RoomStoreKeyset):
+                raise ValueError("version 2 keyset requires Room Store metadata")
+            if self.room_store.physical_binding != self.binding:
+                raise ValueError("Room Store physical binding mismatch")
         validate_encryption_domain_id(self.encryption_domain_id)
         if self.provider not in {"r2", "minio"}:
             raise ValueError("keyset provider is invalid")
@@ -270,13 +360,19 @@ class EncryptionKeyset:
     ) -> EncryptionKeyset:
         if not isinstance(body, dict):
             raise TypeError("keyset must be an object")
-        unknown = set(body) - _KEYSET_FIELDS
+        version = body.get("format_version")
+        if type(version) is not int or version not in {KEYSET_FORMAT_VERSION, ROOM_STORE_KEYSET_FORMAT_VERSION}:
+            raise ValueError("unsupported keyset format")
+        fields = _KEYSET_FIELDS if version == KEYSET_FORMAT_VERSION else _KEYSET_FIELDS | {"room_store"}
+        unknown = set(body) - fields
         if unknown:
             raise ValueError(f"unknown keyset field: {min(unknown)}")
-        missing = _KEYSET_FIELDS - set(body)
+        missing = fields - set(body)
         if missing:
             raise ValueError(f"missing keyset field: {min(missing)}")
         values = dict(body)
+        if version == ROOM_STORE_KEYSET_FORMAT_VERSION:
+            values["room_store"] = RoomStoreKeyset.from_dict(values["room_store"])
         if provider is not None and values["provider"] != provider:
             raise ValueError("provider binding mismatch")
         if endpoint is not None and physical_bucket_identity(values["provider"], values["endpoint"], values["bucket"]) != physical_bucket_identity(values["provider"], endpoint, values["bucket"]):
@@ -309,7 +405,7 @@ class EncryptionKeyset:
         return cls.from_dict(value, **bindings)
 
     def to_dict(self) -> dict:
-        return {
+        body = {
             "format_version": self.format_version,
             "encryption_domain_id": self.encryption_domain_id,
             "provider": self.provider,
@@ -320,6 +416,36 @@ class EncryptionKeyset:
             "operational_recipient": self.operational_recipient,
             "recovery_recipients": list(self.recovery_recipients),
         }
+        if self.format_version == ROOM_STORE_KEYSET_FORMAT_VERSION:
+            body["room_store"] = self.room_store.to_dict()
+        return body
+
+    def upgrade_for_room_store(self) -> EncryptionKeyset:
+        """Explicitly add a random Room Store secret without rotating age keys."""
+        if self.format_version == ROOM_STORE_KEYSET_FORMAT_VERSION:
+            return self
+        secret = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+        metadata = RoomStoreKeyset(secret=secret, physical_binding=self.binding)
+        return replace(self, format_version=ROOM_STORE_KEYSET_FORMAT_VERSION, room_store=metadata)
+
+    def bind_repository(self, repository_id: str, *, expected_generation: int) -> EncryptionKeyset:
+        """Bind the initialized repository once using Room Store metadata CAS generation."""
+        if self.format_version != ROOM_STORE_KEYSET_FORMAT_VERSION or self.room_store is None:
+            raise ValueError("Room Store keyset upgrade is required")
+        if type(expected_generation) is not int or expected_generation != self.room_store.generation:
+            raise ValueError("Room Store generation mismatch")
+        if not isinstance(repository_id, str) or not re.fullmatch(r"[0-9a-f]{64}", repository_id):
+            raise ValueError("Room Store repository id is invalid")
+        if self.room_store.repository_id is not None:
+            if self.room_store.repository_id == repository_id:
+                return self
+            raise ValueError("Room Store repository id is immutable")
+        metadata = replace(
+            self.room_store,
+            repository_id=repository_id,
+            generation=self.room_store.generation + 1,
+        )
+        return replace(self, room_store=metadata)
 
     def to_json(self) -> bytes:
         body = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()
@@ -369,6 +495,13 @@ def reconcile_keyset(
             raise TypeError("existing keyset is invalid")
         if existing.binding != candidate.binding:
             raise ValueError("keyset physical bucket binding mismatch")
+        if existing.format_version != candidate.format_version:
+            raise ValueError("keyset version mismatch")
+        if existing.format_version == ROOM_STORE_KEYSET_FORMAT_VERSION:
+            if not compare_digest(existing.room_store.secret, candidate.room_store.secret):
+                raise ValueError("Room Store secret mismatch")
+            if existing.room_store.repository_id != candidate.room_store.repository_id:
+                raise ValueError("Room Store repository id mismatch")
         return existing
     for item in occupied:
         if item.operational_identity == candidate.operational_identity and item.binding != candidate.binding:

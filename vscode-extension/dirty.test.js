@@ -11,8 +11,47 @@ const {
   fingerprintFile,
   fingerprintWorkspace,
   isRoomMarker,
+  loadCapturePolicy,
   shouldMarkDirty,
 } = require("./dirty");
+
+test("capture policy rejects an ignore file replaced after lstat", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-ignore-race-test-"));
+  const ignore = path.join(root, ".josh-roomignore");
+  const replacement = path.join(root, "replacement");
+  fs.writeFileSync(ignore, "src/generated\n");
+  fs.writeFileSync(replacement, "secrets/**\n");
+  const originalLstat = fs.lstatSync;
+  fs.lstatSync = function lstatThenReplace(filePath, ...args) {
+    const metadata = originalLstat.call(fs, filePath, ...args);
+    if (filePath === ignore) fs.renameSync(replacement, ignore);
+    return metadata;
+  };
+  try {
+    assert.throws(() => loadCapturePolicy(root), /changed while opening/);
+  } finally {
+    fs.lstatSync = originalLstat;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("capture policy rejects an ignore file grown after lstat", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-ignore-growth-test-"));
+  const ignore = path.join(root, ".josh-roomignore");
+  fs.writeFileSync(ignore, "src/generated\n");
+  const originalLstat = fs.lstatSync;
+  fs.lstatSync = function lstatThenGrow(filePath, ...args) {
+    const metadata = originalLstat.call(fs, filePath, ...args);
+    if (filePath === ignore) fs.appendFileSync(ignore, "x".repeat(64 * 1024 + 1));
+    return metadata;
+  };
+  try {
+    assert.throws(() => loadCapturePolicy(root), /changed while opening/);
+  } finally {
+    fs.lstatSync = originalLstat;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("dirty tracking notices workspace content and ignores bookkeeping noise", () => {
   assert.equal(shouldMarkDirty("src/app.py"), true);
@@ -72,6 +111,30 @@ test("room marker validation accepts v2 bindings while retaining readable v1", (
     project_id: "demo",
     display_name: "Demo",
     snapshot_id: "jat-1",
+  }), false);
+  assert.equal(isRoomMarker({
+    format_version: 3,
+    dimension_id: "archive",
+    encryption_domain_id: "domain-a",
+    project_id: "demo",
+    display_name: "Demo",
+    snapshot_id: "jat-1",
+    workspace_path_sha256: "b".repeat(64),
+    workspace_signature: "c".repeat(64),
+    signature_algorithm: "josh-room-stat-v1",
+    capture_policy_sha256: "d".repeat(64),
+  }), true);
+  assert.equal(isRoomMarker({
+    format_version: 3,
+    dimension_id: "archive",
+    encryption_domain_id: "domain-a",
+    project_id: "demo",
+    display_name: "Demo",
+    snapshot_id: "jat-1",
+    workspace_path_sha256: "b".repeat(64),
+    workspace_signature: "c".repeat(64),
+    signature_algorithm: "future-stat-v2",
+    capture_policy_sha256: "d".repeat(64),
   }), false);
 });
 

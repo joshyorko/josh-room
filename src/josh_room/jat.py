@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import subprocess
 import tempfile
 import uuid
@@ -8,6 +7,7 @@ from pathlib import Path
 
 from robocorp import log
 
+from .cancellation import terminate_owned_process as _terminate_process
 from .progress import report_progress
 
 _STDOUT_LIMIT = 1_048_576
@@ -18,15 +18,6 @@ class JATError(RuntimeError):
     def __init__(self, message, result=None):
         super().__init__(message)
         self.result = result or {}
-
-
-def _terminate_process(process, platform: str | None = None) -> None:
-    platform = platform or os.name
-    if platform == "nt":
-        process.terminate()
-    else:
-        os.killpg(process.pid, signal.SIGTERM)
-    process.communicate()
 
 
 def _version(jat_root: Path) -> str:
@@ -373,10 +364,16 @@ def run_build(
     rcc_environment: str | None = None,
     images_files: list[str] | None = None,
     hauler_manifests: list[str] | None = None,
+    rcc_archive: Path | None = None,
+    rcc_metadata: Path | None = None,
+    brew_archive: Path | None = None,
+    hauler_archive: Path | None = None,
     chunk_size: str | None = None,
     exclude_extras: bool = False,
     retries: int | None = None,
 ) -> dict:
+    if (rcc_archive is None) != (rcc_metadata is None):
+        raise ValueError("saved RCC archive and metadata must be supplied together")
     request = {
         "folder": str(source),
         "output": str(output),
@@ -389,6 +386,13 @@ def run_build(
         request["images_files"] = [str(value) for value in images_files]
     if hauler_manifests:
         request["hauler_manifests"] = [str(value) for value in hauler_manifests]
+    if rcc_archive is not None:
+        request["rcc_archive"] = str(rcc_archive)
+        request["rcc_metadata"] = str(rcc_metadata)
+    if brew_archive is not None:
+        request["brew_archive"] = str(brew_archive)
+    if hauler_archive is not None:
+        request["hauler_archive"] = str(hauler_archive)
     if chunk_size:
         request["chunk_size"] = str(chunk_size)
     if exclude_extras:

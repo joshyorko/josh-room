@@ -1,0 +1,13 @@
+{
+	"name": "@joshyorko/josh-room-omp",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Native Oh My Pi extension for Josh Room context and checkpoints",
+	"scripts": {
+		"test": "node --experimental-strip-types --test tests/*.test.mjs"
+	},
+	"omp": {
+		"extensions": ["./src/index.ts"]
+	}
+}

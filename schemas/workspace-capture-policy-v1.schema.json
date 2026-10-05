@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/workspace-capture-policy-v1.schema.json",
+  "title": "Josh Room workspace capture defaults v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "exclude"],
+  "properties": {
+    "version": {"const": 1},
+    "exclude": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?:\\*\\*/)?(?:[^/!*?\\[\\]\\\\]+|\\*(?:\\*|)|\\?)+(?:/(?:[^/!*?\\[\\]\\\\]+|\\*(?:\\*|)|\\?)+)*$"
+      }
+    }
+  }
+}

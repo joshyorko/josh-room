@@ -1,0 +1,13 @@
+# Workspace capture policy v1
+
+Josh Room uses the versioned defaults in `src/josh_room/workspace_capture_defaults.json` for workspace fingerprints, dirty tracking, and capture exclusions. The VS Code extension reads the packaged copy at `runtime/controller/josh_room/workspace_capture_defaults.json`; the package copy is generated from the canonical source file. Both files must have identical contents.
+
+The defaults exclude these names at every directory depth: `.josh-room.json`, `.DS_Store`, `.git`, `.pytest_cache`, `.ruff_cache`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.robocorp`, and `.rcc_home`. A caller may also pass the resolved active runtime root explicitly. When it is inside the workspace, that directory and its contents are excluded and its relative path contributes to the policy SHA256. A runtime root outside the workspace adds no exclusion. The workspace root itself cannot be selected as the active runtime root.
+
+An optional UTF-8 `.josh-roomignore` file adds exclusions. Each nonblank line is one POSIX-style pattern. A pattern with `/` is rooted at the workspace root; a single-component pattern such as `*.tmp` matches that basename at any depth. Lines starting with `#` are comments. `*` and `?` match within one path component; a component equal to `**` matches zero or more components. Adjacent `**` components are collapsed. A matching directory excludes its descendants. Rules are limited to 128 non-comment lines, 1,024 characters, and 128 path components. Bracket expressions, absolute paths, `.`, `..`, backslashes, and `!` negation are rejected. Git ignore files and Git ignore behavior are not read. The ignore file must be a regular, non-symlink file no larger than 64 KiB; invalid rules fail policy loading rather than silently changing capture.
+
+The ignore file itself is not excluded by default. Its exact UTF-8 contents, including comments and line endings, contribute to `capture_policy_sha256`, so any edit changes the policy identity. The shared defaults bytes and the explicit active runtime path also contribute. A changed policy therefore changes the workspace fingerprint when the caller binds the policy hash into that fingerprint or snapshot metadata.
+
+Python callers use `load_capture_policy(workspace_root, active_runtime_root=...)`; JavaScript callers use `loadCapturePolicy(workspaceRoot, { activeRuntimeRoot })` or pass a compiled result from `compileCapturePolicy` to `shouldMarkDirty`. `CapturePolicy.is_excluded` / `policy.isExcluded` and `restic_excludes()` / `policy.resticExcludes()` expose the same compiled exclusion rules. The restic patterns are relative to the workspace root.
+
+`CACHEDIR.TAG` is not interpreted. A tag must not silently hide its containing directory.
