@@ -861,6 +861,7 @@ def open_writable_room_store(
     selected_material: EncryptionMaterial | None,
     *,
     project_id: str | None = None,
+    snapshot_id: str = "latest",
     cancellation: Any = None,
     authority_session: Any | None = None,
 ):
@@ -996,8 +997,19 @@ def open_writable_room_store(
                 selected_descriptor = None
                 if project_id is not None:
                     project = catalog.body["projects"].get(project_id)
-                    if project is not None and project.get("latest") is not None:
-                        selected_record = catalog.latest(project_id)
+                    selector = (
+                        project.get("latest")
+                        if snapshot_id == "latest" and project is not None
+                        else snapshot_id if snapshot_id != "latest" else None
+                    )
+                    if selector is not None:
+                        try:
+                            selected_record = catalog.resolve_snapshot(project_id, selector)
+                        except ValueError:
+                            raise RoomStoreBridgeError(
+                                "selected recovery point is unavailable",
+                                code="snapshot-unavailable",
+                            ) from None
                         if selected_record.get("payload_kind") == "room-store-v1":
                             selected_descriptor = _load_descriptor(
                                 backend,

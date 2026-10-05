@@ -755,7 +755,7 @@ def test_writable_room_store_context_initializes_and_binds_only_on_explicit_open
     )
 
     with bridge.open_writable_room_store(
-        tmp_path / "instance", dimension, material
+        tmp_path / "instance", dimension, material, snapshot_id="latest"
     ) as context:
         assert context.writable is True
         assert context.repository_info.repository_id == "a" * 64
