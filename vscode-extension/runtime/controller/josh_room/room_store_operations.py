@@ -323,7 +323,12 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
                 )
             folded_paths.add(_portable_path_key(relative))
             try:
-                metadata = child.stat(follow_symlinks=False)
+                # Windows DirEntry caches omit device and file identity.
+                metadata = (
+                    path.stat(follow_symlinks=False)
+                    if _WINDOWS_HOST
+                    else child.stat(follow_symlinks=False)
+                )
             except OSError as error:
                 raise RoomStoreOperationsError(
                     "workspace changed during safety scan"

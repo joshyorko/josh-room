@@ -510,6 +510,83 @@ def test_restore_reuses_open_read_only_store_and_runs_callbacks_before_promotion
     )
 
 
+def test_windows_scan_uses_authoritative_identity_with_cached_direntry_stat(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    nested = workspace / "nested"
+    nested.mkdir(parents=True)
+    file = nested / "file.txt"
+    file.write_bytes(b"synthetic")
+    native_scandir = os.scandir
+    seen = []
+
+    def windows_scandir(directory):
+        with native_scandir(directory) as entries:
+            result = []
+            for entry in entries:
+                metadata = entry.stat(follow_symlinks=False)
+                cached = SimpleNamespace(
+                    st_dev=0,
+                    st_ino=0,
+                    st_nlink=0,
+                    st_mode=metadata.st_mode,
+                    st_size=metadata.st_size,
+                    st_mtime_ns=metadata.st_mtime_ns,
+                    st_ctime_ns=metadata.st_ctime_ns,
+                )
+                result.append(
+                    SimpleNamespace(
+                        path=entry.path,
+                        name=entry.name,
+                        stat=lambda cached=cached, **kwargs: cached,
+                    )
+                )
+            return result
+
+    def native_change_time(path, metadata):
+        authoritative = path.stat(follow_symlinks=False)
+        assert metadata.st_dev == authoritative.st_dev
+        assert metadata.st_ino == authoritative.st_ino
+        seen.append(path)
+        return 123456789
+
+    monkeypatch.setattr(room_store_operations, "_WINDOWS_HOST", True)
+    monkeypatch.setattr(room_store_operations.os, "scandir", windows_scandir)
+    monkeypatch.setattr(
+        room_store_operations, "_windows_change_time_ns", native_change_time
+    )
+    scan = room_store_operations._scan_workspace(workspace, None)
+    assert scan.paths == frozenset({"nested", "nested/file.txt"})
+    assert scan.logical_bytes == len(b"synthetic")
+    assert seen == [file]
+
+
+def test_windows_scan_still_rejects_authoritative_cross_device_metadata(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    file = workspace / "file.txt"
+    file.write_bytes(b"synthetic")
+    native_stat = Path.stat
+
+    def cross_device_stat(path, **kwargs):
+        metadata = native_stat(path, **kwargs)
+        if path != file:
+            return metadata
+        return SimpleNamespace(
+            st_dev=metadata.st_dev + 1,
+            st_mode=metadata.st_mode,
+            st_size=metadata.st_size,
+        )
+
+    monkeypatch.setattr(room_store_operations, "_WINDOWS_HOST", True)
+    monkeypatch.setattr(Path, "stat", cross_device_stat)
+    with pytest.raises(RoomStoreOperationsError, match="filesystem boundary"):
+        room_store_operations._scan_workspace(workspace, None)
+
+
 def test_windows_workspace_signature_uses_native_change_time(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
