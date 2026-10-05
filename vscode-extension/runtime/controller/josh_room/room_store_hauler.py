@@ -380,6 +380,12 @@ def capture_hauler_component(
                                 hauler_version=hauler_version, local_images=local_images,
                                 manifest_identity=manifest_identity, manifest_pinned=manifest_pinned)[0] != source_digest:
                 raise RoomStoreHaulerError("Hauler inputs changed while being staged")
+            selected_local = [*local_images, *(manifest_plan["local_images"] if manifest_plan else [])]
+            # Docker's source ID can name a manifest, not its raw config. Resolve
+            # config bytes only on recapture, after the immutable-source reuse return.
+            expected_local_configs = (
+                _hauler_call(lambda: hauler.local_image_configs(selected_local)) if selected_local else []
+            )
             if images:
                 image_list = private / "selected-images.txt"
                 image_list.write_text("".join(f"{image}\n" for image in images), encoding="utf-8")
@@ -398,9 +404,8 @@ def capture_hauler_component(
                 _check_cancel(cancellation)
             protect_private_directory(hauler_store)
             protect_private_directory(hauler_temp)
-            expected_local = [*local_images, *(manifest_plan["local_images"] if manifest_plan else [])]
-            if expected_local:
-                _hauler_call(lambda: hauler.verify_local_images(hauler_store, expected_local))
+            if expected_local_configs:
+                _hauler_call(lambda: hauler.verify_local_images(hauler_store, expected_local_configs))
             inventory = _hauler_call(lambda: hauler.inventory(hauler_store, hauler_temp))
             _verify_requested_images(images, inventory)
             _verify_requested_images([name for name, _identity in local_images], inventory)

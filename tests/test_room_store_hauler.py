@@ -144,6 +144,10 @@ class _Hauler:
     def verify_local_images(self, store, images):
         pass
 
+    def local_image_configs(self, images):
+        self.calls.append(("local-image-configs",))
+        return list(images)
+
     def save(self, store, temp, output, **kwargs):
         self.calls.append(("save",))
         Path(output).write_bytes(self.archive_bytes)

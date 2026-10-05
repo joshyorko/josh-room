@@ -21,7 +21,7 @@ from . import jat, private_paths
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
 MAX_ITEMS = 4096
-_OPERATIONS = {"sync", "sync_image_txt", "sync_files", "inventory", "save", "acquire_rcc", "local_images", "validate_brew_archive", "manifest_inputs", "verify_local_images"}
+_OPERATIONS = {"sync", "sync_image_txt", "sync_files", "inventory", "save", "acquire_rcc", "local_images", "local_image_configs", "validate_brew_archive", "manifest_inputs", "verify_local_images"}
 _VERSION = re.compile(r"(?<![A-Za-z0-9])v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?(?![A-Za-z0-9])")
 JAT_PLATFORM_MAP = {"linux-x64": "linux_amd64", "win32-x64": "windows_amd64"}
 MAX_HAUL_OUTPUT_BYTES = 8 * 1024 * 1024 * 1024
@@ -355,6 +355,15 @@ class ManagedHaulerAdapter:
     def verify_local_images(self, store, images):
         self._invoke("verify_local_images", {"store": _absolute_path(store), "images": [list(row) for row in images]})
 
+    def local_image_configs(self, images):
+        value = self._invoke("local_image_configs", {"images": [list(row) for row in images]})
+        if (not isinstance(value, list) or len(value) != len(images)
+                or any(not isinstance(row, list) or len(row) != 2 or row[0] != expected[0]
+                       or not isinstance(row[1], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", row[1])
+                       for row, expected in zip(value, images))):
+            raise ManagedHaulerError("local image config evidence is invalid")
+        return value
+
     def inventory(self, store: Path, temp: Path, check: bool = False) -> list[dict[str, Any]]:
         value = self._invoke("inventory", {**self._store_temp(store, temp), "check": check})
         if not isinstance(value, list) or len(value) > MAX_ITEMS or any(not isinstance(item, dict) for item in value):
@@ -440,9 +449,12 @@ def _worker_request(path: Path) -> dict[str, Any]:
         if request["staging"] is not None and (not isinstance(request["staging"], str) or not request["staging"]):
             raise ManagedHaulerError("managed manifest request is invalid")
         return request
-    if operation == "verify_local_images":
-        if (set(request) != {"format_version", "operation", "store", "images"}
-                or not isinstance(request["store"], str) or not request["store"]
+    if operation in {"verify_local_images", "local_image_configs"}:
+        fields = {"format_version", "operation", "images"}
+        if operation == "verify_local_images":
+            fields.add("store")
+        if (set(request) != fields
+                or operation == "verify_local_images" and (not isinstance(request["store"], str) or not request["store"])
                 or not isinstance(request["images"], list) or len(request["images"]) > MAX_ITEMS
                 or any(not isinstance(row, list) or len(row) != 2
                        or not isinstance(row[0], str) or not row[0]
@@ -559,6 +571,10 @@ def _worker_value(request: dict[str, Any]) -> Any:
     if operation == "verify_local_images":
         _verify_local_image_configs(Path(request["store"]), request["images"])
         return None
+    if operation == "local_image_configs":
+        from .room_store_docker_identity import docker_image_config_digests
+
+        return docker_image_config_digests(request["images"], timeout=_hauler_timeout())
     if operation == "acquire_rcc":
         return _worker_acquire_rcc(request)
     if operation == "local_images":
