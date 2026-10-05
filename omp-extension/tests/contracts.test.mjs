@@ -43,10 +43,11 @@ test("context accepts only the v1 bounded Room identity contract", () => {
 	assert.equal(parseContextResult({ format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, project_id: "../private" }), undefined);
 });
 
-test("status accepts the authoritative path-bound changed receipt and filters private fields", () => {
-	assert.deepEqual(parseStatusResult({ ok: true, state: "clean", path_matches: true, fingerprint_matches: true, project_id: "demo-room", snapshot_id: "jat-a1b2c3", workspace: "/tmp/synthetic-workspace", workspace_fingerprint: "a".repeat(64) }), {
+test("status accepts the authoritative v2 path-bound receipt and filters private fields", () => {
+	assert.deepEqual(parseStatusResult({ ok: true, state: "clean", path_matches: true, fingerprint_matches: true, dimension_id: "local", project_id: "demo-room", snapshot_id: "jat-a1b2c3", workspace: "/tmp/synthetic-workspace", workspace_fingerprint: "a".repeat(64) }), {
 		kind: "known",
 		state: "clean",
+		dimensionId: "local",
 		projectId: "demo-room",
 		snapshotId: "jat-a1b2c3",
 	});
@@ -64,6 +65,7 @@ test("status accepts the authoritative path-bound changed receipt and filters pr
 	}), {
 		kind: "known",
 		state: "changed",
+		dimensionId: "synthetic",
 		projectId: "smoke-room",
 		snapshotId: "jat-old",
 	});
@@ -91,6 +93,31 @@ test("status accepts the authoritative path-bound changed receipt and filters pr
 			{ snapshotId: "jat-old", createdAt: "2026-01-01T00:00:00Z", ciphertextSize: 10 },
 		],
 	});
+});
+
+test("status accepts actual v3 signature and capture-policy receipts", () => {
+	const clean = {
+		ok: true, state: "clean", path_matches: true, signature_matches: true, policy_matches: true,
+		signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room",
+		snapshot_id: "snapshot-current", workspace: "/tmp/synthetic-room", workspace_path_sha256: "c".repeat(64), workspace_signature: "a".repeat(64),
+		capture_policy_sha256: "b".repeat(64),
+	};
+	const changed = { ...clean, ok: false, state: "changed", signature_matches: false };
+	assert.deepEqual(parseStatusResult(clean), {
+		kind: "known", state: "clean", dimensionId: "synthetic-dim", projectId: "synthetic-room", snapshotId: "snapshot-current",
+	});
+	assert.deepEqual(parseStatusResult(changed), {
+		kind: "known", state: "changed", dimensionId: "synthetic-dim", projectId: "synthetic-room", snapshotId: "snapshot-current",
+	});
+	assert.deepEqual(parseStatusResult({ ...clean, ok: false, state: "changed", policy_matches: false }), {
+		kind: "known", state: "changed", dimensionId: "synthetic-dim", projectId: "synthetic-room", snapshotId: "snapshot-current",
+	});
+	assert.equal(parseStatusResult({ ...clean, path_matches: false }), undefined);
+	assert.equal(parseStatusResult({ ...clean, signature_algorithm: "future-stat" }), undefined);
+	assert.equal(parseStatusResult({ ...clean, policy_matches: undefined }), undefined);
+	assert.equal(parseStatusResult({ ...clean, ok: false, state: "changed", signature_matches: true }), undefined);
+	assert.equal(parseStatusResult({ ...changed, fingerprint_matches: false }), undefined);
+	assert.equal(parseStatusResult({ ...clean, dimension_id: "../private" }), undefined);
 });
 
 test("save, JAT inspection and session provenance omit paths and secrets", () => {
@@ -155,8 +182,8 @@ test("Save outcome does not create provenance for already-saved and stays dirty 
 });
 
 test("status glyph and theme stay presentation-only", () => {
-	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, { kind: "known", state: "clean", projectId: "demo-room", snapshotId: "jat-x" }), "room:Demo Room ✓");
-	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, { kind: "known", state: "changed", projectId: "demo-room", snapshotId: "jat-x" }), "room:Demo Room ●");
+	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, { kind: "known", state: "clean", dimensionId: "local", projectId: "demo-room", snapshotId: "jat-x" }), "room:Demo Room ✓");
+	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, { kind: "known", state: "changed", dimensionId: "local", projectId: "demo-room", snapshotId: "jat-x" }), "room:Demo Room ●");
 	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, undefined), "room:Demo Room ?");
 	assert.equal(roomStatusText({ kind: "invalid" }, undefined), undefined);
 });

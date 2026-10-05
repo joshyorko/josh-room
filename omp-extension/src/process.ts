@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { parseStatusResult } from "./contracts.ts";
 
 const OUTPUT_LIMIT = 256 * 1024;
 const TERMINATION_GRACE_MS = 2_000;
@@ -145,8 +146,8 @@ export function createRoomProcessRunner(
 			if ((result.code === 0 || interrupted) && typeof parsed === "object" && parsed !== null && "ok" in parsed && parsed.ok === true) return parsed;
 			if (interrupted) throw new RoomCliError("cancelled");
 			if (timedOut) throw new RoomCliError("timeout");
-			const changedStatusExit = args[0] === "status" && result.code === 2 && isRecord(parsed) &&
-				parsed.ok === false && parsed.state === "changed" && parsed.path_matches === true && parsed.fingerprint_matches === false;
+			const statusReceipt = args[0] === "status" ? parseStatusResult(parsed) : undefined;
+			const changedStatusExit = result.code === 2 && statusReceipt?.kind === "known" && statusReceipt.state === "changed";
 			if (!options.allowFailure && !changedStatusExit && isRecord(parsed) && parsed.ok === false) {
 				const diagnostic = "error" in parsed ? safeDiagnostic(parsed.error) : undefined;
 				throw new RoomCliError("failed", diagnostic);

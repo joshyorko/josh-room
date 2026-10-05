@@ -58,6 +58,9 @@ export function createRoomController(run: CliRunner = runRoomCli): RoomControlle
 				await run(["status", "--workspace", cwd, "--json"], { cwd, signal, timeoutMs: 30_000 }),
 				parseStatusResult,
 			);
+			if (status.kind === "known" && (
+				status.dimensionId !== context.dimensionId || status.projectId !== context.projectId || status.snapshotId !== context.snapshotId
+			)) throw new RoomCliError("invalid-result");
 			return { context, status };
 		},
 		async snapshots(cwd, signal) {

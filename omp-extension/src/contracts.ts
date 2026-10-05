@@ -4,7 +4,7 @@ export type RoomContext =
 	| { kind: "invalid" };
 
 export type RoomStatus =
-	| { kind: "known"; state: "clean" | "changed"; projectId: string; snapshotId: string }
+	| { kind: "known"; state: "clean" | "changed"; dimensionId: string; projectId: string; snapshotId: string }
 	| { kind: "unknown" };
 
 export interface SnapshotInfo {
@@ -99,14 +99,36 @@ export function parseContextResult(value: unknown): RoomContext | undefined {
 export function parseStatusResult(value: unknown): RoomStatus | undefined {
 	const body = record(value);
 	if (!body || typeof body.ok !== "boolean") return undefined;
-	if (!id(body.project_id) || !id(body.snapshot_id) || body.path_matches !== true) return undefined;
-	if (body.ok === true && body.state === "clean" && body.fingerprint_matches === true) {
-		return { kind: "known", state: "clean", projectId: body.project_id, snapshotId: body.snapshot_id };
+	if (!id(body.dimension_id) || !id(body.project_id) || !id(body.snapshot_id) || body.path_matches !== true) return undefined;
+	const hasV2Status = "fingerprint_matches" in body;
+	const hasV3Status = "signature_matches" in body || "policy_matches" in body || "signature_algorithm" in body;
+	if (hasV2Status === hasV3Status) return undefined;
+	if (hasV2Status) {
+		if (typeof body.fingerprint_matches !== "boolean") return undefined;
+		if (body.ok === true && body.state === "clean" && body.fingerprint_matches) {
+			return { kind: "known", state: "clean", dimensionId: body.dimension_id, projectId: body.project_id, snapshotId: body.snapshot_id };
+		}
+		if (body.ok === false && body.state === "changed" && !body.fingerprint_matches) {
+			return { kind: "known", state: "changed", dimensionId: body.dimension_id, projectId: body.project_id, snapshotId: body.snapshot_id };
+		}
+		return undefined;
 	}
-	if (body.ok === false && body.state === "changed" && body.fingerprint_matches === false) {
-		return { kind: "known", state: "changed", projectId: body.project_id, snapshotId: body.snapshot_id };
+	if (
+		typeof body.signature_matches !== "boolean" || typeof body.policy_matches !== "boolean" ||
+		body.signature_algorithm !== "josh-room-stat-v1" ||
+		!isSha256(body.workspace_path_sha256) || !isSha256(body.workspace_signature) || !isSha256(body.capture_policy_sha256)
+	) return undefined;
+	if (body.ok === true && body.state === "clean" && body.signature_matches && body.policy_matches) {
+		return { kind: "known", state: "clean", dimensionId: body.dimension_id, projectId: body.project_id, snapshotId: body.snapshot_id };
+	}
+	if (body.ok === false && body.state === "changed" && (!body.signature_matches || !body.policy_matches)) {
+		return { kind: "known", state: "changed", dimensionId: body.dimension_id, projectId: body.project_id, snapshotId: body.snapshot_id };
 	}
 	return undefined;
+}
+
+function isSha256(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
 export function parseSnapshotsResult(value: unknown): SnapshotList | undefined {
@@ -257,6 +279,7 @@ export function presentSaveOutcome(
 	const statusText = roomStatusText(statusContext, {
 		kind: "known",
 		state: statusState,
+		dimensionId: context.dimensionId,
 		projectId: receipt.projectId,
 		snapshotId: savedSnapshotId,
 	}) ?? `room:${context.displayName} ?`;

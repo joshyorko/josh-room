@@ -123,3 +123,30 @@ test("status forwards the core changed receipt that exits with status 2", async 
 	assert.deepEqual(await runner(["status", "--workspace", "/tmp/synthetic-room", "--json"], { cwd: process.cwd() }), changed);
 	await assert.rejects(runner(["projects", "list", "--json"], { cwd: process.cwd() }), RoomCliError);
 });
+
+test("status forwards an actual v3 changed receipt that exits with status 2", async () => {
+	const changed = {
+		ok: false, state: "changed", path_matches: true, signature_matches: false, policy_matches: true,
+		signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room",
+		snapshot_id: "snapshot-current", workspace: "/tmp/synthetic-room", workspace_path_sha256: "c".repeat(64), workspace_signature: "a".repeat(64),
+		capture_policy_sha256: "b".repeat(64),
+	};
+	const runner = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(JSON.stringify(changed))});process.exit(2)`], options));
+	assert.deepEqual(await runner(["status", "--workspace", "/tmp/synthetic-room", "--json"], { cwd: process.cwd() }), changed);
+});
+
+test("status requires the authoritative context identity to match the status receipt", async () => {
+	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "synthetic-dim", project_id: "synthetic-room", display_name: "Synthetic Room", snapshot_id: "snapshot-current" };
+	const clean = { ok: true, state: "clean", path_matches: true, signature_matches: true, policy_matches: true, signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room", snapshot_id: "snapshot-current", workspace_path_sha256: "c".repeat(64), workspace_signature: "a".repeat(64), capture_policy_sha256: "b".repeat(64) };
+	const controller = createRoomController(async (args) => args[0] === "context" ? linked : clean);
+	const result = await controller.status("/workspace");
+	assert.equal(result.status.state, "clean");
+	for (const changedIdentity of [
+		{ dimension_id: "other-dimension" },
+		{ project_id: "other-room" },
+		{ snapshot_id: "other-snapshot" },
+	]) {
+		const inconsistent = createRoomController(async (args) => args[0] === "context" ? linked : { ...clean, ...changedIdentity });
+		await assert.rejects(inconsistent.status("/workspace"), (error) => error instanceof RoomCliError && error.kind === "invalid-result");
+	}
+});
