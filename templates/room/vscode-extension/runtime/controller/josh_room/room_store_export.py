@@ -23,6 +23,7 @@ from .private_paths import (
     verify_private_path,
 )
 from .restic_store import ResticStore, ResticStoreError
+from .room_store_hauler_runner import normalize_jat_platform
 from .room_store_operations import (
     RoomStoreOperationsError,
     _scan_workspace,
@@ -180,7 +181,7 @@ def _rcc_metadata(
         "archive_sha256": component["archive_sha256"],
         "archive_size": component["archive_size"],
         "rcc_version": component["rcc_version"],
-        "platform": component["platform"],
+        "platform": normalize_jat_platform(component["platform"]),
         "robot": component["robot_relative_path"],
         "provider": "local",
         "acquired": False,

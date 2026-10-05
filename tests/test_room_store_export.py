@@ -371,6 +371,7 @@ def test_export_passes_verified_components_to_jat_and_promotes_only_after_clean_
         "hauler_archive": b"verified-hauler",
     }
     assert state["rcc_metadata"]["artifact"] == "sha256:" + "1" * 64
+    assert state["rcc_metadata"]["platform"] == "linux_amd64"
     assert state["events"][0:2] == ["build", "inspect"]
     assert [event[0] for event in state["events"] if isinstance(event, tuple)] == [
         "extract",
