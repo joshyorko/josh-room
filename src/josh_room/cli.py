@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import json
 import os
 import re
@@ -102,28 +103,35 @@ from .pcc_outbox import PccOutbox
 from .pcc_replay import ReplayLimits, ReplayReader
 from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
-from .room_store_bridge import (
-    hydrate_room_store,
-    open_existing_room_store,
-    open_writable_room_store,
-    preview_room_store,
-    save_room_store,
-)
-from .room_store_lifecycle import (
-    complete_logical_catalog_removal,
-    copy_logical_jat_as_new,
-    copy_logical_jat_to_dimension,
-    export_logical_jat,
-    extract_logical_jat,
-    inspect_logical_jat,
-    optimize_room_store,
-    reconcile_room_store,
-    remove_logical_catalog_records,
-    serve_logical_jat,
-    verify_room_store,
-)
 from .tls import initialize_system_trust
 from .workspace_state import context_status, local_status
+
+
+def _deferred_room_store_call(module, name):
+    def invoke(*args, **kwargs):
+        operation = getattr(importlib.import_module(module, __package__), name)
+        globals()[name] = operation
+        return operation(*args, **kwargs)
+
+    return invoke
+
+
+hydrate_room_store = _deferred_room_store_call('.room_store_bridge', 'hydrate_room_store')
+open_existing_room_store = _deferred_room_store_call('.room_store_bridge', 'open_existing_room_store')
+open_writable_room_store = _deferred_room_store_call('.room_store_bridge', 'open_writable_room_store')
+preview_room_store = _deferred_room_store_call('.room_store_bridge', 'preview_room_store')
+save_room_store = _deferred_room_store_call('.room_store_bridge', 'save_room_store')
+complete_logical_catalog_removal = _deferred_room_store_call('.room_store_lifecycle', 'complete_logical_catalog_removal')
+copy_logical_jat_as_new = _deferred_room_store_call('.room_store_lifecycle', 'copy_logical_jat_as_new')
+copy_logical_jat_to_dimension = _deferred_room_store_call('.room_store_lifecycle', 'copy_logical_jat_to_dimension')
+export_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'export_logical_jat')
+extract_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'extract_logical_jat')
+inspect_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'inspect_logical_jat')
+optimize_room_store = _deferred_room_store_call('.room_store_lifecycle', 'optimize_room_store')
+reconcile_room_store = _deferred_room_store_call('.room_store_lifecycle', 'reconcile_room_store')
+remove_logical_catalog_records = _deferred_room_store_call('.room_store_lifecycle', 'remove_logical_catalog_records')
+serve_logical_jat = _deferred_room_store_call('.room_store_lifecycle', 'serve_logical_jat')
+verify_room_store = _deferred_room_store_call('.room_store_lifecycle', 'verify_room_store')
 
 R2Backend = _r2.R2Backend
 R2Config = _r2.R2Config
