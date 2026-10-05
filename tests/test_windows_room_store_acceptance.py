@@ -9,6 +9,7 @@ from scripts.windows_room_store_acceptance import (
     FIXTURE_STORE_KIND,
     AcceptanceFailure,
     FixtureObjectStore,
+    _failure_receipt,
     _portable_mode,
     run_acceptance,
     verify_hostile_inventory_entries,
@@ -55,6 +56,32 @@ def test_fixture_acceptance_cannot_report_a_non_windows_host_as_a_pass(tmp_path)
             jat_root=tmp_path / "jat",
             output=tmp_path / "capsule.haul.tar.zst",
         )
+
+
+def test_failure_receipt_reports_safe_bridge_diagnostics_without_paths():
+    class BridgeFailure(RuntimeError):
+        def __init__(self, message):
+            self.code = "restore-failed"
+            self.result = {
+                "error_type": "FileNotFoundError",
+                "error_site": "run_restore",
+                "error_line": 41,
+                "missing_attribute": "payload_path",
+                "path": "C:\\Users\\runner\\private\\workspace",
+            }
+            super().__init__(message)
+
+    receipt = _failure_receipt(BridgeFailure("C:\\Users\\runner\\private\\workspace"))
+
+    assert receipt == {
+        "status": "failed",
+        "error_type": "BridgeFailure",
+        "error_code": "restore-failed",
+        "cause_type": "FileNotFoundError",
+        "error_site": "run_restore",
+        "error_line": 41,
+        "missing_attribute": "payload_path",
+    }
 
 
 def test_windows_mode_assertion_uses_readonly_semantics_but_posix_is_exact():

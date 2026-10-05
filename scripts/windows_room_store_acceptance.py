@@ -7,13 +7,14 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import stat
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
@@ -31,6 +32,29 @@ FIXTURE_STORE_KIND = "in-memory-fixture"
 
 class AcceptanceFailure(RuntimeError):
     """Path-free failed check name for the hosted acceptance receipt."""
+
+
+def _failure_receipt(error: Exception) -> dict[str, Any]:
+    result: dict[str, Any] = {"status": "failed", "error_type": type(error).__name__}
+    code = getattr(error, "code", None)
+    if isinstance(code, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", code):
+        result["error_code"] = code
+    details = getattr(error, "result", None)
+    if isinstance(details, Mapping):
+        for key, target in (
+            ("error_type", "cause_type"),
+            ("error_site", "error_site"),
+            ("missing_attribute", "missing_attribute"),
+        ):
+            value = details.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", value):
+                result[target] = value
+        line = details.get("error_line")
+        if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+            result["error_line"] = line
+    if isinstance(error, AcceptanceFailure):
+        result["failed_check"] = str(error)
+    return result
 
 
 class FixtureObjectStore:
@@ -634,9 +658,7 @@ def main(argv: list[str] | None = None) -> int:
             output=args.output,
         )
     except Exception as error:  # noqa: BLE001 - keep native runtime paths out of receipts.
-        result = {"status": "failed", "error_type": type(error).__name__}
-        if isinstance(error, AcceptanceFailure):
-            result["failed_check"] = str(error)
+        result = _failure_receipt(error)
         status = 1
     else:
         status = 0
