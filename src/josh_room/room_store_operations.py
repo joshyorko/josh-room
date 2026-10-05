@@ -295,7 +295,7 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
     folded_paths: set[str] = set()
     logical_bytes = 0
 
-    def visit(directory: Path) -> None:
+    def visit(directory: Path, prefix: str = "") -> None:
         nonlocal logical_bytes
         try:
             _require_same_device(
@@ -313,7 +313,7 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
             ) from error
         for child in children:
             path = Path(child.path)
-            relative = path.relative_to(resolved_root).as_posix()
+            relative = f"{prefix}/{child.name}" if prefix else child.name
             if policy is not None and policy.is_excluded(relative):
                 continue
             _relative_parts(relative)
@@ -359,7 +359,7 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
             elif stat.S_ISDIR(metadata.st_mode):
                 paths.add(relative)
                 records.append(f"{relative}\0dir\0{mode}".encode())
-                visit(path)
+                visit(path, relative)
             elif stat.S_ISREG(metadata.st_mode):
                 paths.add(relative)
                 logical_bytes += metadata.st_size
