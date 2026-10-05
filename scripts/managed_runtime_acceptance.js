@@ -323,7 +323,8 @@ async function main() {
       JOSH_ROOM_RECIPIENTS: recipients.join(","),
       JOSH_ROOM_WORKSPACE_ROOT: workspaceRoot,
     });
-    const source = path.join(root, "save-source");
+    // JAT Restore preserves the Build source basename beneath its destination.
+    const source = path.join(root, "workspace");
     await fsp.mkdir(source, { recursive: true, mode: 0o700 });
     const sourceReadme = path.join(source, "README.md");
     await fsp.writeFile(sourceReadme, "managed runtime legacy local JAT acceptance\n");
