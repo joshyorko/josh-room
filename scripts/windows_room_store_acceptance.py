@@ -54,6 +54,21 @@ def _failure_receipt(error: Exception) -> dict[str, Any]:
             result["error_line"] = line
     if isinstance(error, AcceptanceFailure):
         result["failed_check"] = str(error)
+    if type(error) is RoomStoreOperationsError:
+        message = str(error)
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,159}", message):
+            result["failed_check"] = message
+        frame = error.__traceback__
+        room_store_frame = None
+        while frame is not None:
+            if Path(frame.tb_frame.f_code.co_filename).name == "room_store_operations.py":
+                room_store_frame = frame
+            frame = frame.tb_next
+        if room_store_frame is not None:
+            site = room_store_frame.tb_frame.f_code.co_name
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", site):
+                result["error_site"] = site
+            result["error_line"] = room_store_frame.tb_lineno
     return result
 
 

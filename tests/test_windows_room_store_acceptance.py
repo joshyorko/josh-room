@@ -5,6 +5,11 @@ import hashlib
 import pytest
 
 from josh_room.object_store import ObjectStore
+from josh_room.restic_store import SnapshotEntry
+from josh_room.room_store_operations import (
+    RoomStoreOperationsError,
+    _validate_snapshot_entries,
+)
 from scripts.windows_room_store_acceptance import (
     FIXTURE_STORE_KIND,
     AcceptanceFailure,
@@ -82,6 +87,22 @@ def test_failure_receipt_reports_safe_bridge_diagnostics_without_paths():
         "error_line": 41,
         "missing_attribute": "payload_path",
     }
+
+
+def test_failure_receipt_reports_path_free_room_operation_site():
+    with pytest.raises(RoomStoreOperationsError) as failure:
+        _validate_snapshot_entries([SnapshotEntry("../private", "file", 1, 0o600, None)])
+
+    receipt = _failure_receipt(failure.value)
+
+    assert set(receipt) == {
+        "status", "error_type", "failed_check", "error_site", "error_line"
+    }
+    assert receipt["status"] == "failed"
+    assert receipt["error_type"] == "RoomStoreOperationsError"
+    assert receipt["failed_check"] == "snapshot contains an unsafe path"
+    assert receipt["error_site"] == "_relative_parts"
+    assert isinstance(receipt["error_line"], int)
 
 
 def test_windows_mode_assertion_uses_readonly_semantics_but_posix_is_exact():
