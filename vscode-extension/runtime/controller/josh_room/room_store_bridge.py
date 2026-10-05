@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import auth, keyring
+from .cancellation import CLICancelled
 from .catalog import Catalog, corroborate_logical_snapshot
 from .config import DimensionConfig, config_dir
 from .crypto import decrypt_file, encrypt
@@ -1817,8 +1818,27 @@ def save_room_store(
     homebrew_archive: Path | None = None,
     jat_root: Path | None = None,
 ) -> dict:
+    from .local_save_receipt import invalidate, read_noop, write_verified_receipt
+
+    if cancellation is not None and cancellation.cancelled:
+        raise CLICancelled
     component_value = _components(components)
     _check_required_components(component_value, required_components)
+    if (
+        not any(component_value.values())
+        and not required_components
+        and hauler_selection is None
+        and homebrew_archive is None
+        and rcc_runtime is None
+        and confirmation_token is None
+        and (selected_material is None or selected_material.encryption_domain_id == dimension.encryption_domain_id)
+    ):
+        cached = read_noop(instance, source, dimension, project_id)
+        if cached is not None:
+            if cancellation is not None and cancellation.cancelled:
+                raise CLICancelled
+            return cached
+    invalidate(instance, source)
     selected_material, authority_session = _resolve_material(
         dimension,
         selected_material,
@@ -1895,6 +1915,8 @@ def save_room_store(
                 output["object_key"] = object_ref.key
                 output["ciphertext_sha256"] = object_ref.sha256
                 output["ciphertext_size"] = object_ref.size
+            if result.status == "saved" and result.publication_state == "committed":
+                write_verified_receipt(instance, workspace, dimension, descriptor.to_dict(), output)
             return output
     except RoomStoreBridgeError:
         raise
@@ -2027,7 +2049,7 @@ def hydrate_room_store(
                 repository_info=context.repository_info,
             )
             scan = scan_workspace_for_status(Path(destination))
-            return {
+            output = {
                 "ok": True,
                 "dimension_id": dimension.dimension_id,
                 "encryption_domain_id": domain_id,
@@ -2042,6 +2064,13 @@ def hydrate_room_store(
                 "capture_policy_sha256": scan.capture_policy_sha256,
                 "display_name": project_name,
             }
+            from .local_save_receipt import write_verified_receipt
+
+            write_verified_receipt(
+                instance, Path(destination), dimension, descriptor.to_dict(), output,
+                restored=True,
+            )
+            return output
     except RoomStoreBridgeError:
         raise
     except RoomStoreOperationsError as error:

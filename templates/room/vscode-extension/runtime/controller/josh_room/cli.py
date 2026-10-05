@@ -611,6 +611,12 @@ def main(argv=None):
         with sigterm_cancellation():
             instance = _instance_root()
             try:
+                preflight = _local_save_preflight(args, instance)
+                if preflight is not None:
+                    preflight = _bounded_json_result(preflight)
+                    _write_runtime_result(preflight)
+                    emit(preflight, getattr(args, "json", False))
+                    return _exit_code(preflight)
                 runtime_loaded = False
                 scoped_minio = _uses_minio_encryption(args)
                 identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
@@ -2526,6 +2532,29 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
             snapshot_id=args.snapshot,
         ),
     }
+
+
+def _local_save_preflight(args, instance: Path) -> dict | None:
+    if args.command != "snapshot" or args.snapshot_command != "create":
+        return None
+    from .local_save_receipt import invalidate, read_noop
+
+    source = args.source or Path.cwd()
+    try:
+        dimension = _effective_dimension(args)
+        if dimension is None or dimension.provider != "minio":
+            return None
+        if _native_capture_options(args) or getattr(args, "confirm_deletion", None):
+            invalidate(instance, source)
+            return None
+        project_id, _display_name = _room_identity(args.project)
+        result = read_noop(instance, source, dimension, project_id)
+        if result is None:
+            invalidate(instance, source)
+        return result
+    except (OSError, RuntimeError, TypeError, ValueError):
+        invalidate(instance, source)
+        return None
 
 
 def _native_component_inputs(args, source: Path) -> list:
