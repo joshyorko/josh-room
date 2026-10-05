@@ -185,6 +185,35 @@ def test_direct_save_cancellation_precedes_cached_success(saved_workspace):
         )
 
 
+def test_direct_cache_does_not_bypass_material_or_authority_validation(saved_workspace):
+    from types import SimpleNamespace
+
+    from josh_room.room_store_bridge import RoomStoreBridgeError, save_room_store
+
+    instance, source, dimension, *_ = saved_workspace
+    with pytest.raises(RoomStoreBridgeError) as wrong_material:
+        save_room_store(
+            instance,
+            dimension,
+            "room-test",
+            source,
+            SimpleNamespace(encryption_domain_id=dimension.encryption_domain_id),
+            components=[],
+        )
+    assert wrong_material.value.code == "material-required"
+    with pytest.raises(RoomStoreBridgeError) as wrong_authority:
+        save_room_store(
+            instance,
+            dimension,
+            "room-test",
+            source,
+            None,
+            components=[],
+            authority_session=object(),
+        )
+    assert wrong_authority.value.code == "provider-binding-mismatch"
+
+
 def test_receipt_inside_workspace_is_never_created(saved_workspace):
     _, source, dimension, descriptor, result, _ = saved_workspace
     assert not local_save_receipt.write_verified_receipt(

@@ -1831,8 +1831,11 @@ def save_room_store(
         and homebrew_archive is None
         and rcc_runtime is None
         and confirmation_token is None
-        and (selected_material is None or selected_material.encryption_domain_id == dimension.encryption_domain_id)
+        and authority_session is None
+        and dimension.provider == "minio"
+        and isinstance(selected_material, EncryptionMaterial)
     ):
+        _scope(dimension, selected_material)
         cached = read_noop(instance, source, dimension, project_id)
         if cached is not None:
             if cancellation is not None and cancellation.cancelled:
