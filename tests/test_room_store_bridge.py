@@ -260,6 +260,21 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     source.write_text("first small capture\n", encoding="utf-8")
     (workspace / "robot.yaml").write_text("tasks: []\n", encoding="utf-8")
     rcc_captures = []
+    rcc_acquisitions = []
+    synthetic_archive = b"synthetic rcca archive"
+    synthetic_archive_sha256 = hashlib.sha256(synthetic_archive).hexdigest()
+    synthetic_metadata = {
+        "format_version": 1,
+        "source_input_sha256": bridge.source_input_sha256(workspace),
+        "artifact_digest": "sha256:" + "1" * 64,
+        "specification_digest": "sha256:" + "2" * 64,
+        "legacy_blueprint_key": "synthetic-rcca-key",
+        "archive_sha256": synthetic_archive_sha256,
+        "archive_size": len(synthetic_archive),
+        "rcc_version": "v18.19.5",
+        "platform": "linux-x64",
+        "robot_relative_path": "robot.yaml",
+    }
 
     def capture_rcc_component(
         *,
@@ -279,10 +294,12 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
             return copy.deepcopy(prior_component)
         stage = tmp_path / "synthetic-rcca"
         stage.mkdir()
-        (stage / "rcc-environment.rcca").write_bytes(b"synthetic rcca archive")
+        (stage / "rcc-environment.rcca").write_bytes(synthetic_archive)
+        (stage / "metadata.json").write_text(
+            json.dumps(synthetic_metadata, sort_keys=True), encoding="utf-8"
+        )
         summary = restic.backup(stage, parent=None, cancellation=cancellation)
         snapshot = restic.snapshot(summary.snapshot_id)
-        archive = (stage / "rcc-environment.rcca").read_bytes()
         rcc_captures.append("captured")
         return {
             "kind": "rcca",
@@ -292,8 +309,8 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
                 "snapshot_id": snapshot.snapshot_id,
                 "tree_id": snapshot.tree_id,
             },
-            "archive_sha256": hashlib.sha256(archive).hexdigest(),
-            "archive_size": len(archive),
+            "archive_sha256": synthetic_archive_sha256,
+            "archive_size": len(synthetic_archive),
             "member_basename": "rcc-environment.rcca",
             "artifact_digest": "sha256:" + "1" * 64,
             "specification_digest": "sha256:" + "2" * 64,
@@ -304,6 +321,23 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
         }
 
     monkeypatch.setattr(bridge, "capture_rcc_component", capture_rcc_component)
+
+    class SyntheticManagedRccAdapter:
+        def acquire_rcc(self, archive, metadata, restored_workspace, robot_file):
+            # This boundary verifies only Room's handoff; the synthetic archive
+            # is not a real RCCA and this test does not prove RCC acquisition.
+            assert archive.name == "rcc-environment.rcca"
+            assert archive.read_bytes() == synthetic_archive
+            assert json.loads(metadata.read_text(encoding="utf-8")) == synthetic_metadata
+            assert robot_file == restored_workspace / "robot.yaml"
+            assert robot_file.read_bytes() == b"tasks: []\n"
+            rcc_acquisitions.append("synthetic-handoff-verified")
+
+    monkeypatch.setattr(
+        bridge,
+        "create_managed_hauler_adapter",
+        lambda *_args, **_kwargs: SyntheticManagedRccAdapter(),
+    )
 
     try:
         first = bridge.save_room_store(
@@ -398,6 +432,7 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     assert second["status"] == "saved"
     assert second["workspace_parent_snapshot_id"] == first["workspace_snapshot_id"]
     assert rcc_captures == ["captured", "reused", "reused"]
+    assert rcc_acquisitions == ["synthetic-handoff-verified"]
     assert restored["snapshot_id"] == first["snapshot_id"]
     assert (destination / "notes.txt").read_text(
         encoding="utf-8"
