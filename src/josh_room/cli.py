@@ -406,6 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(hook_codex)
     status = commands.add_parser("status")
     status.add_argument("--workspace", type=Path, default=Path.cwd())
+    status.add_argument("--include-context", action="store_true")
     _json_option(status)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
@@ -1903,7 +1904,10 @@ def dispatch(args, instance: Path) -> dict:
         save_private_config(config)
         return {"ok": True, "dimension": args.dimension, "updated": True}
     if args.command == "status":
-        return {"ok": True, **local_status(args.workspace)}
+        result = {"ok": True, **local_status(args.workspace)}
+        if getattr(args, "include_context", False):
+            return {"format_version": 1, **result, "context": context_status(args.workspace)}
+        return result
     if args.command in {"link", "repair"}:
         from .workspace_state import read_workspace_marker
         marker = None

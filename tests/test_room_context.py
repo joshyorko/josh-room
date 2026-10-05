@@ -35,6 +35,23 @@ def test_context_reports_missing_marker_as_unlinked(tmp_path):
     }
 
 
+def test_status_include_context_is_versioned_and_keeps_changed_receipt(tmp_path, monkeypatch):
+    (tmp_path / "file.txt").write_text("before")
+    marker = _marker(tmp_path, workspace_fingerprint=workspace_state.workspace_fingerprint(tmp_path))
+    (tmp_path / ".josh-room.json").write_text(json.dumps(marker))
+    (tmp_path / "file.txt").write_text("changed")
+    monkeypatch.setattr(cli, "_backend_for_args", lambda *_args: (_ for _ in ()).throw(AssertionError("must not create provider")))
+    args = cli.build_parser().parse_args(["status", "--workspace", str(tmp_path), "--include-context", "--json"])
+    result = cli.dispatch(args, tmp_path / "unused")
+    assert result["format_version"] == 1
+    assert result["state"] == "changed"
+    assert result["ok"] is False
+    assert result["context"]["state"] == "linked"
+    assert result["context"]["path_matches"] is True
+    assert result["project_id"] == result["context"]["project_id"]
+    assert result["snapshot_id"] == result["context"]["snapshot_id"]
+
+
 def test_context_reports_valid_v2_marker_without_fingerprinting(tmp_path, monkeypatch):
     (tmp_path / ".josh-room.json").write_text(json.dumps(_marker(tmp_path)))
     monkeypatch.setattr(
