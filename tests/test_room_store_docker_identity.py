@@ -46,6 +46,8 @@ def _docker_save(configs: list[tuple[str, bytes]]) -> bytes:
 def _oci_save(configs: list[bytes]) -> tuple[bytes, list[str]]:
     stream = io.BytesIO()
     config_digests = [_sha256(raw) for raw in configs]
+    layer_raw = b"\x1f\x8b" + b"synthetic-compressed-layer" * 16
+    layer_digest = _sha256(layer_raw)
     manifest_raws = []
     for raw, config_digest in zip(configs, config_digests, strict=True):
         manifest_raws.append(json.dumps({
@@ -53,7 +55,8 @@ def _oci_save(configs: list[bytes]) -> tuple[bytes, list[str]]:
             "mediaType": "application/vnd.oci.image.manifest.v1+json",
             "config": {"mediaType": "application/vnd.oci.image.config.v1+json",
                        "digest": config_digest, "size": len(raw)},
-            "layers": [],
+            "layers": [{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                        "digest": layer_digest, "size": len(layer_raw)}],
         }, separators=(",", ":")).encode())
     manifest_digests = [_sha256(raw) for raw in manifest_raws]
     index_raw = json.dumps({
@@ -69,14 +72,15 @@ def _oci_save(configs: list[bytes]) -> tuple[bytes, list[str]]:
     with tarfile.open(fileobj=stream, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         _member(archive, "oci-layout", b'{"imageLayoutVersion":"1.0.0"}')
         _member(archive, "manifest.json", json.dumps([
-            {"Config": digest[7:] + ".json", "RepoTags": [f"localhost/synthetic-{index}:latest"], "Layers": []}
+            {"Config": "blobs/sha256/" + digest[7:],
+             "RepoTags": [f"localhost/synthetic-{index}:latest"], "Layers": ["layer.tar"]}
             for index, digest in enumerate(config_digests)
         ], separators=(",", ":")).encode())
         _member(archive, "index.json", index_raw)
         for raw, digest in zip(configs, config_digests, strict=True):
-            _member(archive, digest[7:] + ".json", raw)
-        for raw, digest in zip(configs, config_digests, strict=True):
             _member(archive, "blobs/sha256/" + digest[7:], raw)
+        _member(archive, "layer.tar", layer_raw)
+        _member(archive, "blobs/sha256/" + layer_digest[7:], layer_raw)
         for raw, digest in zip(manifest_raws, manifest_digests, strict=True):
             _member(archive, "blobs/sha256/" + digest[7:], raw)
     return stream.getvalue(), manifest_digests
@@ -106,6 +110,22 @@ def test_legacy_config_id_resolves_through_oci_index():
     raw = _config()
     archive, _ = _oci_save([raw])
     assert identity.saved_image_config_digest(io.BytesIO(archive), _sha256(raw)) == _sha256(raw)
+
+
+def test_compressed_blobs_skip_json_complexity_scan(monkeypatch):
+    raw = _config()
+    archive, _ = _oci_save([raw])
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as saved:
+        index_id = _sha256(saved.extractfile("index.json").read())
+    scan = identity._json_complexity
+
+    def complexity_probe(value):
+        if value.startswith(b"\x1f\x8b"):
+            pytest.fail("compressed layer was scanned as JSON")
+        return scan(value)
+
+    monkeypatch.setattr(identity, "_json_complexity", complexity_probe)
+    assert identity.saved_image_config_digest(io.BytesIO(archive), index_id) == _sha256(raw)
 
 
 def test_oci_index_may_omit_optional_media_type():
@@ -310,3 +330,34 @@ def test_docker_export_timeout_stops_and_reaps_child(monkeypatch):
         identity.docker_image_config_digests([("localhost/synthetic:latest", "sha256:" + "a" * 64)], timeout=0.01)
     assert processes[0].killed is True
     assert processes[0].returncode == -9
+
+
+def test_docker_export_archive_budget_is_cumulative(monkeypatch):
+    raw_a, raw_b = _config("first"), _config("second")
+    id_a, id_b = _sha256(raw_a), _sha256(raw_b)
+    archive_a = _docker_save([(id_a[7:] + ".json", raw_a)])
+    archive_b = _docker_save([(id_b[7:] + ".json", raw_b)])
+    assert len(archive_a) < 15_000 and len(archive_b) < 15_000
+    monkeypatch.setattr(identity, "MAX_ARCHIVE_BYTES", 15_000)
+
+    class Process:
+        def __init__(self, command, **_kwargs):
+            self.stdout = io.BytesIO({id_a: archive_a, id_b: archive_b}[command[-1]])
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(identity.shutil, "which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setattr(identity.subprocess, "Popen", Process)
+    with pytest.raises(identity.DockerImageIdentityError, match="size limit"):
+        identity.docker_image_config_digests([
+            ("localhost/a:latest", id_a),
+            ("localhost/b:latest", id_b),
+        ], timeout=1)

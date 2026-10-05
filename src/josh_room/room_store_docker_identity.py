@@ -49,14 +49,15 @@ def _fail(message: str = "Docker image config identity could not be verified") -
 
 
 class _BoundedReader:
-    def __init__(self, stream: BinaryIO):
+    def __init__(self, stream: BinaryIO, limit: int):
         self.stream = stream
+        self.limit = limit
         self.bytes_read = 0
 
     def read(self, size: int) -> bytes:
         if size < 0:
             _fail("Docker image save archive is invalid")
-        remaining = MAX_ARCHIVE_BYTES - self.bytes_read
+        remaining = self.limit - self.bytes_read
         data = self.stream.read(min(size, remaining + 1))
         if data is None or not isinstance(data, (bytes, bytearray)):
             _fail("Docker image save stream is invalid")
@@ -288,6 +289,8 @@ def _read_member(reader: _BoundedReader, path: str, size: int, metadata_budget: 
         _account_metadata(metadata_budget, (2 * len(raw)) + (tokens * 128))
         return record
     if blob_match is not None:
+        if not raw.lstrip().startswith(b"{"):
+            return None
         record = _read_json_record(
             raw,
             size,
@@ -307,8 +310,8 @@ def _account_metadata(budget: list[int], amount: int) -> None:
     budget[0] += amount
 
 
-def _read_saved_members(stream: BinaryIO):
-    reader = _BoundedReader(stream)
+def _read_saved_members(stream: BinaryIO, archive_limit: int):
+    reader = _BoundedReader(stream, archive_limit)
     paths: set[str] = set()
     file_records: dict[str, _JsonRecord] = {}
     blobs: dict[str, _JsonRecord] = {}
@@ -364,7 +367,7 @@ def _read_saved_members(stream: BinaryIO):
             break
         if any(tail):
             _fail("Docker image save archive has trailing data")
-    return file_records, blobs, member_types
+    return file_records, blobs, member_types, reader.bytes_read
 
 
 def _digest(value: object) -> str:
@@ -447,8 +450,19 @@ def _resolve_saved_config(file_records: dict[str, _JsonRecord], blobs: dict[str,
             if not isinstance(config_path, str) or not isinstance(layers, list):
                 _fail("Docker image save manifest is invalid")
             config_path = _safe_reference_path(config_path)
-            config_record = file_records.get(config_path)
-            if config_record is None or config_record.kind != "config" or member_types.get(config_path) != "file":
+            config_blob = re.fullmatch(r"blobs/sha256/([0-9a-f]{64})", config_path)
+            if config_blob is not None:
+                config_record = blobs.get(config_blob.group(1))
+                if (config_record is None or config_record.kind != "config"
+                        or config_record.digest != "sha256:" + config_blob.group(1)
+                        or member_types.get(config_path) != "file"):
+                    _fail("Docker image save config is missing")
+            else:
+                config_record = file_records.get(config_path)
+                if (config_record is None or config_record.kind != "config"
+                        or member_types.get(config_path) != "file"):
+                    _fail("Docker image save config is missing")
+            if config_record is None or config_record.kind != "config":
                 _fail("Docker image save config is missing")
             for layer in layers:
                 if not isinstance(layer, str) or member_types.get(_safe_reference_path(layer)) != "file":
@@ -485,17 +499,23 @@ def _safe_reference_path(path: str) -> str:
     return path
 
 
-def saved_image_config_digest(stream: BinaryIO, image_id: str) -> str:
-    """Return the raw config digest bound to one immutable Docker image ID."""
+def _saved_image_config_digest(stream: BinaryIO, image_id: str, archive_limit: int) -> tuple[str, int]:
     if not isinstance(image_id, str) or _SHA256.fullmatch(image_id) is None:
         _fail("Docker image ID is invalid")
+    if type(archive_limit) is not int or archive_limit < 0 or archive_limit > MAX_ARCHIVE_BYTES:
+        _fail("Docker image save archive limit is invalid")
     try:
-        files, blobs, member_types = _read_saved_members(stream)
-        return _resolve_saved_config(files, blobs, member_types, image_id)
+        files, blobs, member_types, byte_count = _read_saved_members(stream, archive_limit)
+        return _resolve_saved_config(files, blobs, member_types, image_id), byte_count
     except DockerImageIdentityError:
         raise
     except (OSError, ValueError, TypeError, KeyError, OverflowError, RecursionError, AttributeError):
         raise DockerImageIdentityError("Docker image save archive is invalid") from None
+
+
+def saved_image_config_digest(stream: BinaryIO, image_id: str) -> str:
+    """Return the raw config digest bound to one immutable Docker image ID."""
+    return _saved_image_config_digest(stream, image_id, MAX_ARCHIVE_BYTES)[0]
 
 
 def _validate_images(images: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -518,7 +538,7 @@ def _validate_images(images: Iterable[tuple[str, str]]) -> list[tuple[str, str]]
     return result
 
 
-def _export_config_digest(executable: str, image_id: str, timeout: float) -> str:
+def _export_config_digest(executable: str, image_id: str, timeout: float, archive_limit: int) -> tuple[str, int]:
     from .cancellation import terminate_owned_process
 
     deadline = time.monotonic() + timeout
@@ -546,12 +566,12 @@ def _export_config_digest(executable: str, image_id: str, timeout: float) -> str
                 process.wait()
 
     completed = threading.Event()
-    result: list[str] = []
+    result: list[tuple[str, int]] = []
     failure: list[Exception] = []
 
     def read_stream() -> None:
         try:
-            result.append(saved_image_config_digest(process.stdout, image_id))
+            result.append(_saved_image_config_digest(process.stdout, image_id, archive_limit))
         except (
             DockerImageIdentityError,
             OSError,
@@ -613,11 +633,17 @@ def docker_image_config_digests(images: Iterable[tuple[str, str]], timeout: floa
     if not executable:
         _fail("Docker is unavailable")
     digests: dict[str, str] = {}
+    archive_bytes = 0
     for _name, image_id in rows:
         if image_id in digests:
             continue
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _fail("Docker image save timed out")
-        digests[image_id] = _export_config_digest(executable, image_id, remaining)
+        remaining_archive = MAX_ARCHIVE_BYTES - archive_bytes
+        if remaining_archive < 0:
+            _fail("Docker image save archive exceeds its size limit")
+        digest, archive_size = _export_config_digest(executable, image_id, remaining, remaining_archive)
+        archive_bytes += archive_size
+        digests[image_id] = digest
     return [(name, digests[image_id]) for name, image_id in rows]
