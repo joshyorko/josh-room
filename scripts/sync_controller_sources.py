@@ -10,13 +10,17 @@ def synchronize(root: Path, *, names: list[str] | None = None) -> list[str]:
     source = root / "src/josh_room"
     files = [source / name for name in names] if names else sorted(source.glob("*.py"))
     files.extend([source / "workspace_capture_defaults.json"])
+    files.extend(sorted(path for path in (source / "_vendor").rglob("*")
+                        if path.suffix in {".py", ".json"} or path.name == "LICENSE"))
+    files = [path for path in files if path.is_file()]
     changed = []
     for relative in ("vscode-extension/runtime/controller", "templates/room/vscode-extension/runtime/controller"):
         package = root / relative / "josh_room"
         for path in files:
-            if path.parent != source or path.is_symlink() or not path.is_file():
+            if source not in path.parents or path.is_symlink() or not path.is_file():
                 raise ValueError("controller source must be a regular canonical module")
-            target = package / path.name
+            target = package / path.relative_to(source)
+            target.parent.mkdir(parents=True, exist_ok=True)
             content = path.read_bytes()
             if not target.exists() or target.read_bytes() != content:
                 target.write_bytes(content)

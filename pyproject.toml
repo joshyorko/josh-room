@@ -23,3 +23,6 @@ markers = [
   "r2: performs a live private R2 acceptance write",
   "first_run: performs Josh's private fresh-state golden path",
 ]
+
+[tool.ruff]
+extend-exclude = ["src/josh_room/_vendor"]

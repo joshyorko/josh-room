@@ -22,7 +22,7 @@ from .room_store_hauler import (
 
 
 def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
-    import yaml
+    from ._vendor import yaml
 
     digest = hashlib.sha256(b"josh-room-manifest-inputs-v1\0")
     stage = Path(staging) if staging is not None else None
