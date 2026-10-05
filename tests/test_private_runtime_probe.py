@@ -113,6 +113,26 @@ def test_changetime_probe_compares_mtime_at_native_100ns_resolution():
     ) == (True, False, True)
 
 
+def test_native_clock_gate_requires_observed_filetime_advance(monkeypatch):
+    observed = iter((100, 100, 101))
+    elapsed = iter((0, 0, 0))
+    monkeypatch.setattr(verify_private_runtime, "system_time_100ns", lambda: next(observed))
+    monkeypatch.setattr(verify_private_runtime.time, "monotonic_ns", lambda: next(elapsed))
+    monkeypatch.setattr(verify_private_runtime.time, "sleep", lambda _seconds: None)
+
+    assert verify_private_runtime._wait_for_native_clock_advance(100, timeout_ns=10)
+
+
+def test_native_clock_gate_times_out_without_clock_advance(monkeypatch):
+    observed = iter((100, 100))
+    elapsed = iter((0, 10))
+    monkeypatch.setattr(verify_private_runtime, "system_time_100ns", lambda: next(observed))
+    monkeypatch.setattr(verify_private_runtime.time, "monotonic_ns", lambda: next(elapsed))
+    monkeypatch.setattr(verify_private_runtime.time, "sleep", lambda _seconds: None)
+
+    assert not verify_private_runtime._wait_for_native_clock_advance(100, timeout_ns=10)
+
+
 def test_windows_changetime_probe_closes_writer_before_observing_metadata(monkeypatch):
     created = []
     closed = []
@@ -139,6 +159,8 @@ def test_windows_changetime_probe_closes_writer_before_observing_metadata(monkey
     ))
     monkeypatch.setattr(verify_private_runtime, "_verify_windows_acl", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(verify_private_runtime, "change_time_ns", native_change_time)
+    native_clock = iter((10, 11))
+    monkeypatch.setattr(verify_private_runtime, "system_time_100ns", lambda: next(native_clock))
 
     result = verify_private_runtime.run_probe()
 

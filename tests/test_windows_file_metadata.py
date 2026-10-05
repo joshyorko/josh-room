@@ -258,10 +258,19 @@ def test_ctypes_wrapper_uses_handle_basic_info_and_closes(tmp_path, monkeypatch)
         calls.append(("basic", info_class))
         return 1
 
+    system_time = 0x01DC000000123456
+
+    def get_system_time(pointer):
+        value = ctypes.cast(pointer, ctypes.POINTER(metadata._FILETIME)).contents
+        value.dwLowDateTime = system_time & 0xFFFFFFFF
+        value.dwHighDateTime = system_time >> 32
+        calls.append(("system-time",))
+
     kernel = SimpleNamespace(
         CreateFileW=_FunctionMock(create_file),
         GetFileInformationByHandle=_FunctionMock(get_classic_attributes),
         GetFileInformationByHandleEx=_FunctionMock(get_basic),
+        GetSystemTimeAsFileTime=_FunctionMock(get_system_time),
         CloseHandle=_FunctionMock(lambda handle: calls.append(("close", handle)) or 1),
     )
     native_file_id = _FunctionMock(get_file_id)
@@ -279,9 +288,11 @@ def test_ctypes_wrapper_uses_handle_basic_info_and_closes(tmp_path, monkeypatch)
 
     assert api.file_identity(handle) == (volume, file_id, 0)
     assert api.change_time(handle) == (7654321, 0)
+    assert api.system_time_100ns() == system_time
     api.close(handle)
     assert calls[0][0] == "open"
     assert calls[0][-1] == metadata._FILE_FLAG_OPEN_REPARSE_POINT
     assert ("file-id", metadata._FILE_INFO_CLASS_ID) in calls
     assert ("basic", metadata._FILE_INFO_CLASS_BASIC) in calls
+    assert ("system-time",) in calls
     assert calls[-1] == ("close", 91)

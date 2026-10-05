@@ -118,6 +118,8 @@ class _WindowsFileAPI:
             ctypes.c_uint32,
         ]
         self.kernel.GetFileInformationByHandleEx.restype = ctypes.c_int
+        self.kernel.GetSystemTimeAsFileTime.argtypes = [ctypes.POINTER(_FILETIME)]
+        self.kernel.GetSystemTimeAsFileTime.restype = None
         self.kernel.CloseHandle.argtypes = [ctypes.c_void_p]
         self.kernel.CloseHandle.restype = ctypes.c_int
 
@@ -172,6 +174,11 @@ class _WindowsFileAPI:
         ):
             raise self._last_error("change-time-failed")
         return int(information.ChangeTime), int(information.FileAttributes)
+
+    def system_time_100ns(self) -> int:
+        file_time = _FILETIME()
+        self.kernel.GetSystemTimeAsFileTime(ctypes.byref(file_time))
+        return (int(file_time.dwHighDateTime) << 32) | int(file_time.dwLowDateTime)
 
     def close(self, handle: ctypes.c_void_p) -> None:
         if not self.kernel.CloseHandle(handle):
@@ -260,3 +267,15 @@ def change_time_ns(path: Path, expected_stat: os.stat_result) -> int:
             _failure("handle-close-failed", error)
         except Exception:  # noqa: BLE001 - sanitize native close diagnostics.
             _failure("handle-close-failed")
+
+
+def system_time_100ns() -> int:
+    """Return the current native Windows system time in FILETIME ticks."""
+    if not _is_windows():
+        _failure("unsupported-platform")
+    try:
+        return _windows_api().system_time_100ns()
+    except OSError as error:
+        _failure("clock-query-failed", error)
+    except Exception:  # noqa: BLE001 - hide native API diagnostics.
+        _failure("clock-query-failed")

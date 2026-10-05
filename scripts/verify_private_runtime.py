@@ -7,10 +7,17 @@ import os
 import stat
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from josh_room import private_paths
-from josh_room.windows_file_metadata import WindowsFileMetadataError, change_time_ns
+from josh_room.windows_file_metadata import (
+    WindowsFileMetadataError,
+    change_time_ns,
+    system_time_100ns,
+)
+
+_NATIVE_CLOCK_ADVANCE_TIMEOUT_NS = 5_000_000_000
 
 
 class _ProbeFailure(Exception):
@@ -47,6 +54,20 @@ def _changetime_edit_predicates(
         before_mtime_ns // 100 == after_mtime_ns // 100,
         before_change != after_change,
     )
+
+
+def _wait_for_native_clock_advance(
+    after_filetime: int,
+    *,
+    timeout_ns: int = _NATIVE_CLOCK_ADVANCE_TIMEOUT_NS,
+) -> bool:
+    """Wait for an observed FILETIME tick, with a bounded timeout."""
+    deadline = time.monotonic_ns() + timeout_ns
+    while system_time_100ns() <= after_filetime:
+        if time.monotonic_ns() >= deadline:
+            return False
+        time.sleep(0)
+    return True
 
 
 def _verify_windows_acl(path: Path, *, directory: bool) -> None:
@@ -115,6 +136,10 @@ def run_probe() -> dict[str, object]:
                 failed_check = "native-changetime-before-edit"
                 before_stat = handoff.stat()
                 before_change = change_time_ns(handoff, before_stat)
+                failed_check = "native-changetime-clock-advance"
+                if not _wait_for_native_clock_advance(before_change // 100):
+                    raise RuntimeError
+                _check(checks, "native-system-clock-advanced-after-baseline")
                 failed_check = "same-size-edit-and-mtime-restore"
                 handoff.write_bytes(b"different ephemeral handoff\n")
                 os.utime(
