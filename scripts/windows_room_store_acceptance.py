@@ -438,7 +438,17 @@ def run_acceptance(
             _require(noop.status == "already-saved", "unchanged Room Store Save did not take the native Windows no-op path")
             _require(store_calls["backup"] == backups_after_initial, "no-op Save reached Restic backup")
             _require(state["etag"] == initial_catalog_etag, "no-op Save published a new catalog revision")
-            _require(noop.descriptor is None, "no-op Save created a new logical recovery point")
+            _require(noop.descriptor is not None, "no-op Save omitted the existing logical recovery point")
+            noop_body = noop.descriptor.to_dict()
+            initial_body = initial.descriptor.to_dict()
+            _require(
+                noop_body["logical_jat_id"] == initial_body["logical_jat_id"],
+                "no-op Save changed the logical recovery point",
+            )
+            _require(
+                noop_body["workspace"]["snapshot_id"] == initial_snapshot,
+                "no-op Save changed the Restic snapshot",
+            )
 
             before_stat = payload.stat()
             from josh_room.windows_file_metadata import change_time_ns
@@ -469,9 +479,13 @@ def run_acceptance(
             _require(rename_workspace["parent_snapshot_id"] == edit_workspace["snapshot_id"], "rename did not use the latest Restic parent")
             _require(rename_workspace["data_added_packed"] < 1024 * 1024, "rename failed to reuse stored content")
 
+            delete_target.unlink()
             delete_preview = operations.preview()
             _require("delete-me.txt" in delete_preview.deleted_paths, "Room Store deletion preview omitted the deleted path")
-            delete_result = operations.save()
+            delete_options = {}
+            if delete_preview.deletion_confirmation_token is not None:
+                delete_options["deletion_confirmation_token"] = delete_preview.deletion_confirmation_token
+            delete_result = operations.save(**delete_options)
             _require(delete_result.status == "saved" and delete_result.descriptor is not None, "Room Store delete Save failed")
             final_descriptor = delete_result.descriptor
             final_body = final_descriptor.to_dict()
