@@ -107,6 +107,11 @@ def run_probe() -> dict[str, object]:
                     raise RuntimeError
             _check(checks, "private-file-owner-and-access")
             if os.name == "nt":
+                # Windows may defer file timestamps until the writable handle
+                # closes. Observe the completed handoff, as a Save scan does.
+                failed_check = "close-private-file-handoff"
+                os.close(descriptor)
+                descriptor = -1
                 failed_check = "native-changetime-before-edit"
                 before_stat = handoff.stat()
                 before_change = change_time_ns(handoff, before_stat)
@@ -141,9 +146,10 @@ def run_probe() -> dict[str, object]:
                 _check(checks, "same-size-edit-restored-mtime-changes-native-changetime")
             file_handoff_in_progress = False
         finally:
-            if not file_handoff_in_progress:
-                failed_check = "close-private-file-handoff"
-            os.close(descriptor)
+            if descriptor >= 0:
+                if not file_handoff_in_progress:
+                    failed_check = "close-private-file-handoff"
+                os.close(descriptor)
 
         failed_check = "create-symlink-probe"
         link = root / "link-probe"

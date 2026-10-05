@@ -6,6 +6,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -110,6 +111,40 @@ def test_changetime_probe_compares_mtime_at_native_100ns_resolution():
         before_change=1000,
         after_change=1100,
     ) == (True, False, True)
+
+
+def test_windows_changetime_probe_closes_writer_before_observing_metadata(monkeypatch):
+    created = []
+    closed = []
+    native_mkstemp = verify_private_runtime.tempfile.mkstemp
+
+    def mkstemp(**kwargs):
+        descriptor, filename = native_mkstemp(**kwargs)
+        created.append(descriptor)
+        return descriptor, filename
+
+    def close(descriptor):
+        closed.append(descriptor)
+        os.close(descriptor)
+
+    def native_change_time(_path, _metadata):
+        assert created[0] in closed, "Windows defers timestamps while the writer remains open"
+        native_change_time.calls += 1
+        return native_change_time.calls * 1000
+
+    native_change_time.calls = 0
+    monkeypatch.setattr(verify_private_runtime.tempfile, "mkstemp", mkstemp)
+    monkeypatch.setattr(verify_private_runtime, "os", SimpleNamespace(
+        name="nt", write=os.write, close=close, utime=os.utime,
+    ))
+    monkeypatch.setattr(verify_private_runtime, "_verify_windows_acl", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(verify_private_runtime, "change_time_ns", native_change_time)
+
+    result = verify_private_runtime.run_probe()
+
+    assert result["status"] == "passed"
+    assert "same-size-edit-restored-mtime-changes-native-changetime" in result["checks"]
+    assert closed.count(created[0]) == 1
 
 
 def test_changetime_probe_keeps_size_and_native_change_predicates_separate():
