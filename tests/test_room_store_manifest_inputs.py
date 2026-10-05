@@ -148,7 +148,13 @@ def test_managed_manifest_worker_rejects_invalid_pinning_evidence(signal):
         adapter.manifest_inputs([Path("synthetic.yaml")])
 
 
-def test_local_config_verification_rejects_retag_and_restore(tmp_path):
+@pytest.mark.parametrize("annotations", [
+    {"org.opencontainers.image.ref.name": "localhost/synthetic:latest"},
+    {"org.opencontainers.image.ref.name": "synthetic:latest",
+     "io.containerd.image.name": "localhost/synthetic:latest",
+     "hauler.dev/original-ref": "localhost/synthetic:latest"},
+])
+def test_local_config_verification_rejects_retag_and_restore(tmp_path, annotations):
     blobs = tmp_path / "blobs" / "sha256"
     blobs.mkdir(parents=True)
     observed = "sha256:" + "a" * 64
@@ -160,11 +166,17 @@ def test_local_config_verification_rejects_retag_and_restore(tmp_path):
     (blobs / digest).write_bytes(raw)
     (tmp_path / "index.json").write_text(json.dumps({"manifests": [{
         "digest": "sha256:" + digest,
-        "annotations": {"org.opencontainers.image.ref.name": "localhost/synthetic:latest"},
+        "annotations": annotations,
     }]}))
     runner._verify_local_image_configs(tmp_path, [["localhost/synthetic:latest", captured]])
     with pytest.raises(runner.ManagedHaulerError, match="selected identity"):
         runner._verify_local_image_configs(tmp_path, [["localhost/synthetic:latest", observed]])
+    if "io.containerd.image.name" in annotations:
+        annotations["hauler.dev/original-ref"] = "localhost/another-image:latest"
+        (tmp_path / "index.json").write_text(json.dumps({"manifests": [{"digest": "sha256:" + digest,
+                                                                     "annotations": annotations}]}))
+        with pytest.raises(runner.ManagedHaulerError, match="annotations disagree"):
+            runner._verify_local_image_configs(tmp_path, [["localhost/synthetic:latest", captured]])
 
 
 def test_output_budget_rejects_before_native_save(tmp_path, monkeypatch):

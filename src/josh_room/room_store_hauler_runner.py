@@ -744,11 +744,20 @@ def _verify_local_image_configs(store: Path, images) -> None:
             raise ManagedHaulerError("local image manifest digest does not match")
         return json.loads(raw)
 
+    def image_reference(descriptor):
+        annotations = descriptor.get("annotations", {})
+        full = annotations.get("io.containerd.image.name")
+        original = annotations.get("hauler.dev/original-ref")
+        if full and original and canonical(full) != canonical(original):
+            raise ManagedHaulerError("local image reference annotations disagree")
+        # Hauler's OCI short reference drops the registry, while these retain it.
+        return full or original or annotations.get("org.opencontainers.image.ref.name", "")
+
     try:
         index = read_json(store / "index.json")
         descriptors = index["manifests"]
         for name, identity in images:
-            matches = [row for row in descriptors if canonical(row.get("annotations", {}).get("org.opencontainers.image.ref.name", "")) == canonical(name)]
+            matches = [row for row in descriptors if canonical(image_reference(row)) == canonical(name)]
             if len(matches) != 1:
                 raise ManagedHaulerError("local image evidence is ambiguous or missing")
             digest = matches[0]["digest"]
