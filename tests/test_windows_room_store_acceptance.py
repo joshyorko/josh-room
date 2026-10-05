@@ -15,6 +15,8 @@ from scripts.windows_room_store_acceptance import (
     AcceptanceFailure,
     FixtureObjectStore,
     _failure_receipt,
+    _portable_inventory_mismatch_counts,
+    _portable_jat_workspace,
     _portable_mode,
     run_acceptance,
     verify_hostile_inventory_entries,
@@ -111,3 +113,36 @@ def test_windows_mode_assertion_uses_readonly_semantics_but_posix_is_exact():
     assert _portable_mode(0o666, "nt") == "writable"
     assert _portable_mode(0o444, "posix") == "0444"
     assert _portable_mode(0o555, "posix") == "0555"
+
+
+def test_portable_restore_inventory_diagnostic_contains_counts_only():
+    expected = {
+        "same.txt": (b"same", "read-only"),
+        "changed.txt": (b"before", "read-only"),
+        "missing.txt": (b"gone", "writable"),
+    }
+    restored = {
+        "same.txt": (b"same", "read-only"),
+        "changed.txt": (b"after", "writable"),
+        "extra.txt": (b"new", "writable"),
+    }
+
+    assert _portable_inventory_mismatch_counts(expected, restored) == {
+        "added": 1,
+        "removed": 1,
+        "content_mismatches": 1,
+        "mode_mismatches": 1,
+    }
+
+
+def test_portable_jat_workspace_resolver_uses_exact_source_basename(tmp_path):
+    payload = tmp_path / "payload"
+    workspace_container = payload / "workspace"
+    restored_workspace = workspace_container / "workspace"
+    restored_workspace.mkdir(parents=True)
+    (restored_workspace / "synthetic.txt").write_text("synthetic\n", encoding="utf-8")
+
+    assert _portable_jat_workspace(payload) == restored_workspace
+
+    (workspace_container / "unexpected").mkdir()
+    assert _portable_jat_workspace(payload) is None

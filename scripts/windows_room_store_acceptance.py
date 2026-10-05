@@ -236,6 +236,45 @@ def _source_inventory(root: Path) -> dict[str, tuple[bytes, str]]:
     return inventory
 
 
+def _portable_inventory_mismatch_counts(
+    expected: Mapping[str, tuple[bytes, str]],
+    restored: Mapping[str, tuple[bytes, str]],
+) -> dict[str, int]:
+    expected_paths = set(expected)
+    restored_paths = set(restored)
+    shared_paths = expected_paths & restored_paths
+    return {
+        "added": len(restored_paths - expected_paths),
+        "removed": len(expected_paths - restored_paths),
+        "content_mismatches": sum(
+            expected[path][0] != restored[path][0] for path in shared_paths
+        ),
+        "mode_mismatches": sum(
+            expected[path][1] != restored[path][1] for path in shared_paths
+        ),
+    }
+
+
+def _portable_jat_workspace(payload_path: Path) -> Path | None:
+    """Resolve the exact Room Store Export Build source root inside a JAT Restore."""
+    container = Path(payload_path) / "workspace"
+    # Room Store Export builds from workspace_stage named "workspace"; JAT
+    # preserves that source basename beneath the payload workspace container.
+    workspace = container / "workspace"
+    try:
+        if (
+            container.is_symlink()
+            or not container.is_dir()
+            or set(container.iterdir()) != {workspace}
+            or workspace.is_symlink()
+            or not workspace.is_dir()
+        ):
+            return None
+    except OSError:
+        return None
+    return workspace
+
+
 def _portable_mode(mode: int, platform: str | None = None) -> str:
     value = stat.S_IMODE(mode)
     if (platform or os.name) == "nt":
@@ -590,13 +629,31 @@ def run_acceptance(
                 and restore_result.get("exit_status") == 0,
                 "portable JAT clean-room Restore failed",
             )
-            restored_payload = Path(restore_result.get("payload_path") or "")
+            payload_path = restore_result.get("payload_path")
+            _require(
+                isinstance(payload_path, str) and bool(payload_path),
+                "portable JAT Restore omitted its payload destination",
+            )
+            restored_payload = Path(payload_path)
             payload_path_matches = restored_payload.resolve() == clean_room.resolve()
             _require(payload_path_matches, "portable JAT Restore returned a different payload destination")
-            clean_workspace = restored_payload / "workspace"
+            clean_workspace = _portable_jat_workspace(restored_payload)
+            _require(
+                clean_workspace is not None,
+                "portable JAT Restore returned an unexpected workspace root",
+            )
             expected_inventory = _source_inventory(restored_room)
             restored_inventory = _source_inventory(clean_workspace)
-            _require(restored_inventory == expected_inventory, "portable JAT clean-room Restore changed file bytes or modes")
+            if restored_inventory != expected_inventory:
+                counts = _portable_inventory_mismatch_counts(
+                    expected_inventory, restored_inventory
+                )
+                raise AcceptanceFailure(
+                    "portable JAT clean-room Restore changed file bytes or modes: "
+                    f"added={counts['added']}, removed={counts['removed']}, "
+                    f"content_mismatches={counts['content_mismatches']}, "
+                    f"mode_mismatches={counts['mode_mismatches']}"
+                )
 
             outside_target = root / "outside-workspace-target.txt"
             outside_target.write_bytes(b"synthetic external symlink target\n")
