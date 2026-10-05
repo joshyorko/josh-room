@@ -32,7 +32,13 @@ from .auth import bind_room_store_repository, ensure_room_store_keyset
 from .cancellation import CLICancelled, defer_sigterm_cancellation
 from .catalog import CatalogConflict
 from .logical_jat import LogicalJat
-from .restic_store import BackupProgress, ResticStore, SnapshotEntry
+from .restic_store import (
+    BackupProgress,
+    ResticStore,
+    ResticStoreError,
+    ResticStoreErrorCode,
+    SnapshotEntry,
+)
 from .windows_file_metadata import WindowsFileMetadataError
 from .windows_file_metadata import change_time_ns as _native_windows_change_time_ns
 from .workspace_policy import CapturePolicy, load_capture_policy
@@ -874,7 +880,7 @@ class RoomStoreOperations:
                     if self.read_catalog_signature is not None
                     else None
                 )
-                if _WINDOWS_HOST and self._is_unchanged(
+                if self._is_unchanged(
                     latest,
                     selected_parent,
                     policy,
@@ -883,6 +889,8 @@ class RoomStoreOperations:
                     catalog_signature,
                     False,
                 ):
+                    if cancellation is not None and cancellation.cancelled:
+                        raise ResticStoreError(ResticStoreErrorCode.CANCELLED)
                     return SaveResult(
                         "already-saved",
                         latest,

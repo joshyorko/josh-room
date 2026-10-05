@@ -7,6 +7,7 @@ import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -349,6 +350,7 @@ def test_forced_scan_noop_fails_closed(tmp_path):
     latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
     store = _Store(summary=BackupSummary(None, 0, 0, 1, 0, 0, 5, 0, force_scan=True))
     catalog = _Catalog(latest)
+    catalog.workspace_signature = "0" * 64
     operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
 
     with pytest.raises(RoomStoreOperationsError, match="forced content scan"):
@@ -364,6 +366,7 @@ def test_forced_scan_records_the_restic_parent_that_was_actually_used(tmp_path):
         summary=BackupSummary(NEW_SNAPSHOT_ID, 1, 0, 0, 5, 5, 5, 0, force_scan=True)
     )
     catalog = _Catalog(latest)
+    catalog.workspace_signature = "0" * 64
     operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
 
     result = operations.save()
@@ -374,8 +377,9 @@ def test_forced_scan_records_the_restic_parent_that_was_actually_used(tmp_path):
     assert "parent_snapshot_id" not in body["workspace"]
 
 
-def test_windows_verified_native_signature_skips_restic_backup_before_any_scan(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("windows", [False, True])
+def test_verified_native_signature_skips_restic_backup_before_any_scan(
+    tmp_path, monkeypatch, windows
 ):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -383,11 +387,11 @@ def test_windows_verified_native_signature_skips_restic_backup_before_any_scan(
     latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
     store = _Store()
     store.backup = lambda *_args, **_kwargs: pytest.fail(
-        "verified Windows signature must avoid the Restic scan"
+        "verified native signature must avoid the Restic scan"
     )
     catalog = _Catalog(latest)
     operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
-    monkeypatch.setattr(room_store_operations, "_WINDOWS_HOST", True)
+    monkeypatch.setattr(room_store_operations, "_WINDOWS_HOST", windows)
     monkeypatch.setattr(
         room_store_operations,
         "_windows_change_time_ns",
@@ -398,6 +402,39 @@ def test_windows_verified_native_signature_skips_restic_backup_before_any_scan(
 
     assert result.status == "already-saved"
     assert catalog.published == []
+
+
+def test_verified_noop_honors_cancellation_without_backup_or_publication(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello")
+    latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
+    store, catalog = _Store(), _Catalog(latest)
+    store.backup = lambda *_args, **_kwargs: pytest.fail("cancelled no-op must not back up")
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+    with pytest.raises(ResticStoreError) as error:
+        operations.save(cancellation=SimpleNamespace(cancelled=True))
+    assert error.value.code is ResticStoreErrorCode.CANCELLED
+    assert catalog.published == []
+    assert catalog.marker_rows == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX change-time metadata")
+def test_noop_preflight_detects_same_size_edit_with_restored_mtime(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "file.txt"
+    source.write_text("hello")
+    latest = _descriptor(policy_sha=load_capture_policy(workspace).sha256)
+    store, catalog = _Store(), _Catalog(latest)
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+    before = source.stat()
+    source.write_text("other")
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert source.stat().st_mtime_ns == before.st_mtime_ns
+    assert operations.save().status == "saved"
+    assert store.parents == [SNAPSHOT_ID]
+    assert len(catalog.published) == 1
 
 
 def test_save_rejects_external_symlink_before_restic_or_publication(tmp_path):
