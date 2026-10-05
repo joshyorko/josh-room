@@ -71,6 +71,7 @@ def _rule_matches(path_parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool
         and pattern[0] == "**"
         and "*" not in pattern[1]
         and "?" not in pattern[1]
+        and "[" not in pattern[1]
     ):
         return pattern[1] in path_parts
     if len(pattern) == 1 and pattern[0] != "**":

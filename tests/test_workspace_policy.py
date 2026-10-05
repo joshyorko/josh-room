@@ -51,6 +51,12 @@ def test_literal_directory_rules_preserve_unicode_and_glob_fallback(tmp_path: Pa
     assert not policy.is_excluded("app/generated-build/source/file")
 
 
+def test_direct_policy_construction_preserves_character_class_matching() -> None:
+    policy = workspace_policy.CapturePolicy("synthetic", (("**", "[ab]"),), None)
+    assert policy.is_excluded("src/a/file")
+    assert not policy.is_excluded("src/[ab]/file")
+
+
 def test_shared_defaults_are_versioned_against_the_schema() -> None:
     repository = Path(__file__).resolve().parents[1]
     defaults = json.loads(
