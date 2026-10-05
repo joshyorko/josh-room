@@ -7,6 +7,11 @@ export type RoomStatus =
 	| { kind: "known"; state: "clean" | "changed"; dimensionId: string; projectId: string; snapshotId: string }
 	| { kind: "unknown" };
 
+export interface RoomStatusEnvelope {
+	context: Extract<RoomContext, { kind: "linked" }>;
+	status: Extract<RoomStatus, { kind: "known" }>;
+}
+
 export interface SnapshotInfo {
 	snapshotId: string;
 	createdAt: string;
@@ -129,6 +134,17 @@ export function parseStatusResult(value: unknown): RoomStatus | undefined {
 
 function isSha256(value: unknown): value is string {
 	return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+export function parseStatusEnvelope(value: unknown): RoomStatusEnvelope | undefined {
+	const body = record(value);
+	if (!body || body.format_version !== 1) return undefined;
+	const context = parseContextResult(body.context);
+	if (!context || context.kind !== "linked") return undefined;
+	const status = parseStatusResult(body);
+	if (!status || status.kind !== "known") return undefined;
+	if (status.dimensionId !== context.dimensionId || status.projectId !== context.projectId || status.snapshotId !== context.snapshotId) return undefined;
+	return { context, status };
 }
 
 export function parseSnapshotsResult(value: unknown): SnapshotList | undefined {

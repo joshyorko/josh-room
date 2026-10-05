@@ -2,6 +2,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { parseStatusResult } from "./contracts.ts";
 
 const OUTPUT_LIMIT = 256 * 1024;
+const UNSUPPORTED_OPTION_STDERR_LIMIT = 4 * 1024;
 const TERMINATION_GRACE_MS = 2_000;
 const SAFE_ENVIRONMENT = [
 	"PATH",
@@ -17,7 +18,7 @@ const SAFE_ENVIRONMENT = [
 ] as const;
 
 export class RoomCliError extends Error {
-	readonly kind: "missing-runtime" | "cancelled" | "timeout" | "output-limit" | "invalid-result" | "failed";
+	readonly kind: "missing-runtime" | "cancelled" | "timeout" | "output-limit" | "invalid-result" | "unsupported-option" | "failed";
 
 	constructor(kind: RoomCliError["kind"], diagnostic?: string) {
 		const messages = {
@@ -26,6 +27,7 @@ export class RoomCliError extends Error {
 		timeout: "Josh Room operation timed out.",
 		"output-limit": "Josh Room returned more data than the extension accepts.",
 		"invalid-result": "Josh Room returned an unsupported or invalid JSON result.",
+		"unsupported-option": "This Josh Room runtime does not support the requested status option.",
 		failed: "Josh Room operation failed. Run `josh-room doctor` for local diagnostics.",
 		};
 		super(kind === "failed" && diagnostic ? diagnostic : messages[kind]);
@@ -88,11 +90,14 @@ export function createRoomProcessRunner(
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const stdout: Uint8Array[] = [];
+		const stderr: Uint8Array[] = [];
 		let stdoutBytes = 0;
+		let stderrBytes = 0;
 		let overflow = false;
 		let spawnFailed = false;
 		let timedOut = false;
 		let aborted = false;
+		const statusContextProbe = args[0] === "status" && args.includes("--include-context");
 		let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 		const killTree = () => {
 			processGroupSignal(child.pid, "SIGTERM");
@@ -126,12 +131,21 @@ export function createRoomProcessRunner(
 			return current + chunk.byteLength;
 		};
 		child.stdout?.on("data", (chunk: Uint8Array) => { stdoutBytes = collect(stdout, chunk, stdoutBytes, limit); });
-		child.stderr?.on("data", () => { /* Diagnostics may contain private paths; drain and discard them. */ });
+		child.stderr?.on("data", (chunk: Uint8Array) => {
+			// Keep only a small in-memory window to recognize argparse's exact
+			// unsupported-option response. Never expose or persist raw diagnostics.
+			if (!statusContextProbe || stderrBytes + chunk.byteLength > UNSUPPORTED_OPTION_STDERR_LIMIT) return;
+			stderr.push(chunk);
+			stderrBytes += chunk.byteLength;
+		});
 		try {
 			const result = await finished;
 			if (spawnFailed) throw new RoomCliError("missing-runtime");
 			if (overflow) throw new RoomCliError("output-limit");
 			const text = new TextDecoder("utf-8", { fatal: true }).decode(concat(stdout, stdoutBytes));
+			if (statusContextProbe && result.code === 2 && !text && unsupportedIncludeContextOption(stderr, stderrBytes)) {
+				throw new RoomCliError("unsupported-option");
+			}
 			const interrupted = aborted || options.signal?.aborted === true;
 			if (!text && interrupted) throw new RoomCliError("cancelled");
 			if (!text && timedOut) throw new RoomCliError("timeout");
@@ -184,6 +198,12 @@ function concat(chunks: readonly Uint8Array[], length: number): Uint8Array {
 		offset += chunk.byteLength;
 	}
 	return result;
+}
+
+function unsupportedIncludeContextOption(chunks: readonly Uint8Array[], length: number): boolean {
+	if (length === 0 || length > UNSUPPORTED_OPTION_STDERR_LIMIT) return false;
+	const text = new TextDecoder().decode(concat(chunks, length));
+	return /(?:^|\n)(?:[^:\r\n]+: )?error: unrecognized arguments: --include-context(?:\r?\n|$)/.test(text);
 }
 
 export const runRoomCli = createRoomProcessRunner();

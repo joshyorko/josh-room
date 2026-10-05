@@ -135,18 +135,104 @@ test("status forwards an actual v3 changed receipt that exits with status 2", as
 	assert.deepEqual(await runner(["status", "--workspace", "/tmp/synthetic-room", "--json"], { cwd: process.cwd() }), changed);
 });
 
-test("status requires the authoritative context identity to match the status receipt", async () => {
+test("status forwards a v3 changed envelope with status exit 2", async () => {
 	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "synthetic-dim", project_id: "synthetic-room", display_name: "Synthetic Room", snapshot_id: "snapshot-current" };
-	const clean = { ok: true, state: "clean", path_matches: true, signature_matches: true, policy_matches: true, signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room", snapshot_id: "snapshot-current", workspace_path_sha256: "c".repeat(64), workspace_signature: "a".repeat(64), capture_policy_sha256: "b".repeat(64) };
-	const controller = createRoomController(async (args) => args[0] === "context" ? linked : clean);
+	const changed = {
+		format_version: 1, ok: false, state: "changed", path_matches: true, signature_matches: false, policy_matches: true,
+		signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room",
+		snapshot_id: "snapshot-current", workspace: "/tmp/synthetic-room", workspace_path_sha256: "c".repeat(64),
+		workspace_signature: "a".repeat(64), capture_policy_sha256: "b".repeat(64), context: linked,
+	};
+	const runner = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(JSON.stringify(changed))});process.exit(2)`], options));
+	assert.deepEqual(await runner(["status", "--workspace", "/tmp/synthetic-room", "--include-context", "--json"], { cwd: process.cwd() }), changed);
+});
+
+test("status identifies only argparse rejection of the explicit include-context flag", async () => {
+	const unsupported = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", "process.stderr.write('usage: josh-room status [--json]\\njosh-room: error: unrecognized arguments: --include-context\\n');process.exit(2)"], options));
+	await assert.rejects(
+		unsupported(["status", "--workspace", "/tmp/synthetic-room", "--include-context", "--json"], { cwd: process.cwd() }),
+		(error) => error instanceof RoomCliError && error.kind === "unsupported-option",
+	);
+	const otherError = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", "process.stderr.write('josh-room: error: unrecognized arguments: --workspace\\n');process.exit(2)"], options));
+	await assert.rejects(
+		otherError(["status", "--workspace", "/tmp/synthetic-room", "--include-context", "--json"], { cwd: process.cwd() }),
+		(error) => error instanceof RoomCliError && error.kind !== "unsupported-option",
+	);
+});
+
+test("status envelope requires authoritative dimension, project and snapshot identity", async () => {
+	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "synthetic-dim", project_id: "synthetic-room", display_name: "Synthetic Room", snapshot_id: "snapshot-current" };
+	const clean = { format_version: 1, ok: true, state: "clean", path_matches: true, signature_matches: true, policy_matches: true, signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room", snapshot_id: "snapshot-current", workspace_path_sha256: "c".repeat(64), workspace_signature: "a".repeat(64), capture_policy_sha256: "b".repeat(64), context: linked };
+	const calls = [];
+	const controller = createRoomController(async (args) => { calls.push(args); return clean; });
 	const result = await controller.status("/workspace");
 	assert.equal(result.status.state, "clean");
+	assert.deepEqual(calls, [["status", "--workspace", "/workspace", "--include-context", "--json"]]);
 	for (const changedIdentity of [
 		{ dimension_id: "other-dimension" },
 		{ project_id: "other-room" },
 		{ snapshot_id: "other-snapshot" },
 	]) {
-		const inconsistent = createRoomController(async (args) => args[0] === "context" ? linked : { ...clean, ...changedIdentity });
+		const inconsistent = createRoomController(async () => ({ ...clean, context: { ...linked, ...changedIdentity } }));
 		await assert.rejects(inconsistent.status("/workspace"), (error) => error instanceof RoomCliError && error.kind === "invalid-result");
 	}
+});
+
+test("status uses the versioned context envelope in one CLI call", async () => {
+	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "synthetic-dim", project_id: "synthetic-room", display_name: "Synthetic Room", snapshot_id: "snapshot-current" };
+	const envelope = {
+		format_version: 1, ok: true, state: "clean", path_matches: true, signature_matches: true, policy_matches: true,
+		signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room", snapshot_id: "snapshot-current",
+		workspace_path_sha256: "c".repeat(64), workspace_signature: "a".repeat(64), capture_policy_sha256: "b".repeat(64), context: linked,
+	};
+	const calls = [];
+	const controller = createRoomController(async (args) => { calls.push(args); return envelope; });
+	const result = await controller.status("/workspace");
+	assert.deepEqual(calls, [["status", "--workspace", "/workspace", "--include-context", "--json"]]);
+	assert.deepEqual(result.context, { kind: "linked", dimensionId: "synthetic-dim", projectId: "synthetic-room", displayName: "Synthetic Room", snapshotId: "snapshot-current" });
+	assert.equal(result.status.state, "clean");
+});
+
+test("status does not fallback after an invalid or context-mismatched envelope", async () => {
+	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "synthetic-dim", project_id: "synthetic-room", display_name: "Synthetic Room", snapshot_id: "snapshot-current" };
+	const clean = {
+		format_version: 1, ok: true, state: "clean", path_matches: true, signature_matches: true, policy_matches: true,
+		signature_algorithm: "josh-room-stat-v1", dimension_id: "synthetic-dim", project_id: "synthetic-room", snapshot_id: "snapshot-current",
+		workspace_path_sha256: "c".repeat(64), workspace_signature: "a".repeat(64), capture_policy_sha256: "b".repeat(64), context: linked,
+	};
+	for (const response of [
+		{ ...clean, context: { ...linked, project_id: "other-room" } },
+		{ ...clean, path_matches: false },
+	]) {
+		const calls = [];
+		const controller = createRoomController(async (args) => { calls.push(args); return response; });
+		await assert.rejects(controller.status("/workspace"), (error) => error instanceof RoomCliError && error.kind === "invalid-result");
+		assert.deepEqual(calls, [["status", "--workspace", "/workspace", "--include-context", "--json"]]);
+	}
+});
+
+test("status falls back only for an explicitly unsupported include-context flag", async () => {
+	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "synthetic-dim", project_id: "synthetic-room", display_name: "Synthetic Room", snapshot_id: "snapshot-current" };
+	const clean = { ok: true, state: "clean", path_matches: true, fingerprint_matches: true, dimension_id: "synthetic-dim", project_id: "synthetic-room", snapshot_id: "snapshot-current" };
+	const calls = [];
+	const controller = createRoomController(async (args) => {
+		calls.push(args);
+		if (args.includes("--include-context")) throw new RoomCliError("unsupported-option");
+		return args[0] === "context" ? linked : clean;
+	});
+	const result = await controller.status("/workspace");
+	assert.deepEqual(calls, [
+		["status", "--workspace", "/workspace", "--include-context", "--json"],
+		["context", "--workspace", "/workspace", "--json"],
+		["status", "--workspace", "/workspace", "--json"],
+	]);
+	assert.equal(result.status.state, "clean");
+	const malformedCalls = [];
+	const malformed = createRoomController(async (args) => {
+		malformedCalls.push(args);
+		if (args.includes("--include-context")) return { ...clean, path_matches: false, format_version: 1, context: linked };
+		return linked;
+	});
+	await assert.rejects(malformed.status("/workspace"), (error) => error instanceof RoomCliError && error.kind === "invalid-result");
+	assert.equal(malformedCalls.length, 1);
 });

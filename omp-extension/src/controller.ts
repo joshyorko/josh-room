@@ -5,6 +5,7 @@ import {
 	parseRoomsResult,
 	parseSaveResult,
 	parseSnapshotsResult,
+	parseStatusEnvelope,
 	parseStatusResult,
 	type RoomContext,
 	type RoomStatus,
@@ -39,6 +40,26 @@ function requireResult<T>(value: unknown, parser: (input: unknown) => T | undefi
 	return result;
 }
 
+function requireMatchingStatus(value: unknown, context: Extract<RoomContext, { kind: "linked" }>): RoomStatus {
+	const status = requireResult(value, parseStatusResult);
+	if (status.kind === "known" && (
+		status.dimensionId !== context.dimensionId || status.projectId !== context.projectId || status.snapshotId !== context.snapshotId
+	)) throw new RoomCliError("invalid-result");
+	return status;
+}
+
+async function legacyStatus(run: CliRunner, cwd: string, signal?: AbortSignal) {
+	const context = requireLinked(requireResult(
+		await run(["context", "--workspace", cwd, "--json"], { cwd, signal, timeoutMs: 2_000 }),
+		parseContextResult,
+	));
+	const status = requireMatchingStatus(
+		await run(["status", "--workspace", cwd, "--json"], { cwd, signal, timeoutMs: 30_000 }),
+		context,
+	);
+	return { context, status };
+}
+
 export function createRoomController(run: CliRunner = runRoomCli): RoomController {
 	return {
 		async context(cwd, signal, options) {
@@ -53,15 +74,15 @@ export function createRoomController(run: CliRunner = runRoomCli): RoomControlle
 			}
 		},
 		async status(cwd, signal) {
-			const context = requireLinked(await this.context(cwd, signal));
-			const status = requireResult(
-				await run(["status", "--workspace", cwd, "--json"], { cwd, signal, timeoutMs: 30_000 }),
-				parseStatusResult,
-			);
-			if (status.kind === "known" && (
-				status.dimensionId !== context.dimensionId || status.projectId !== context.projectId || status.snapshotId !== context.snapshotId
-			)) throw new RoomCliError("invalid-result");
-			return { context, status };
+			try {
+				return requireResult(
+					await run(["status", "--workspace", cwd, "--include-context", "--json"], { cwd, signal, timeoutMs: 30_000 }),
+					parseStatusEnvelope,
+				);
+			} catch (error) {
+				if (error instanceof RoomCliError && error.kind === "unsupported-option") return legacyStatus(run, cwd, signal);
+				throw error;
+			}
 		},
 		async snapshots(cwd, signal) {
 			const context = requireLinked(await this.context(cwd, signal));
