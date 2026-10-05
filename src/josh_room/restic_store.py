@@ -1024,18 +1024,32 @@ class ResticStore:
         _code, output = self._capture(["snapshots", "--json"])
         return parse_snapshot_inventory(output)
 
-    def entries(self, snapshot_id: str) -> Iterator[SnapshotEntry]:
+    def entries(self, snapshot_id: str, *, expected_tree_id: str | None = None) -> Iterator[SnapshotEntry]:
         self._require_initialized()
         snapshot_id = _validate_snapshot_id(snapshot_id)
+        from .parent_inventory import read_inventory, write_inventory
+
+        if expected_tree_id is not None:
+            if _REPOSITORY_ID.fullmatch(expected_tree_id) is None:
+                raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+            cached = read_inventory(self._cache_dir, self._repository, self._repository_info.repository_id, snapshot_id, expected_tree_id)
+            if cached is not None:
+                yield from cached
+                return
         snapshot = self.snapshot(snapshot_id)
+        if expected_tree_id is not None and snapshot.tree_id != expected_tree_id:
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+        rows = []
         with self._process(["ls", "--json", snapshot_id]) as process:
             try:
-                yield from parse_snapshot_entries(
+                for row in parse_snapshot_entries(
                     self._read_lines(process),
                     snapshot,
                     max_event_bytes=self._max_json_event_bytes,
                     max_entries=self._max_entries,
-                )
+                ):
+                    rows.append(row)
+                    yield row
             except ResticStoreError:
                 code = process.poll()
                 if code is not None and code != 0:
@@ -1043,6 +1057,7 @@ class ResticStore:
                 self._terminate(process)
                 raise
             self._raise_exit(self._wait(process))
+        write_inventory(self._cache_dir, self._repository, self._repository_info.repository_id, snapshot_id, snapshot.tree_id, rows)
 
     def restore(self, snapshot_id: str, destination: Path) -> None:
         self._require_initialized()

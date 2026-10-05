@@ -1013,6 +1013,20 @@ def test_snapshot_entries_restore_and_check_use_only_non_destructive_commands(tm
     assert all("prune" not in command and "forget" not in command for command in commands)
 
 
+def test_authenticated_parent_inventory_hit_skips_snapshot_and_ls_subprocesses(tmp_path):
+    module = api()
+    from josh_room.parent_inventory import write_inventory
+
+    snapshot_id, tree_id = "1" * 64, "2" * 64
+    rows = [module.SnapshotEntry("file.txt", "file", 7, 0o600, None)]
+    store, factory = initialized_store(tmp_path, [])
+    write_inventory(store._cache_dir, store._repository, "a" * 64, snapshot_id, tree_id, rows)
+    with store:
+        before = len(factory.calls)
+        assert list(store.entries(snapshot_id, expected_tree_id=tree_id)) == rows
+        assert len(factory.calls) == before
+
+
 def test_snapshot_metadata_cache_is_cleared_at_context_boundary(tmp_path):
     snapshot_id = "1" * 64
     snapshot_json = json.dumps(

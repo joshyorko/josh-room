@@ -865,7 +865,8 @@ class RoomStoreOperations:
                     selected_parent,
                     before,
                     opened.entries(
-                        selected_parent.to_dict()["workspace"]["snapshot_id"]
+                        selected_parent.to_dict()["workspace"]["snapshot_id"],
+                        expected_tree_id=selected_parent.to_dict()["workspace"]["tree_id"],
                     )
                     if selected_parent is not None
                     else None,

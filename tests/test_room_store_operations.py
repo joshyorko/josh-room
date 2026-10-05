@@ -164,7 +164,7 @@ class _Store:
             snapshot_id, tree_id, parent_id, "2026-10-02T12:00:00Z", ("/workspace",)
         )
 
-    def entries(self, snapshot_id):
+    def entries(self, snapshot_id, *, expected_tree_id=None):
         yield from self.entry_rows
 
     def restore(self, snapshot_id, destination):
