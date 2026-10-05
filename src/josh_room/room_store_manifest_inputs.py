@@ -39,33 +39,49 @@ def prepare_manifest_inputs(manifests, staging=None, local_image_lookup=None):
         path = Path(path)
         if path.is_symlink():
             raise RoomStoreHaulerError("manifest dependency is unsafe")
-        paths = []
-        if path.is_dir():
-            for directory, dirs, files in os.walk(path, followlinks=False):
-                if any((Path(directory) / name).is_symlink() for name in dirs):
-                    raise RoomStoreHaulerError("manifest dependency is unsafe")
-                paths.extend(Path(directory) / name for name in sorted(files))
-        else:
-            paths = [path]
+        directory_input = path.is_dir()
+
+        def paths():
+            nonlocal count
+            pending = [path]
+            while pending:
+                parent = pending.pop()
+                if not directory_input:
+                    count += 1
+                    if count > 100_000:
+                        raise RoomStoreHaulerError("manifest dependencies exceed their member limit")
+                    yield parent
+                    continue
+                children = []
+                with os.scandir(parent) as entries:
+                    for entry in entries:
+                        count += 1
+                        if count > 100_000:
+                            raise RoomStoreHaulerError("manifest dependencies exceed their member limit")
+                        if entry.is_symlink():
+                            raise RoomStoreHaulerError("manifest dependency is unsafe")
+                        children.append(entry)
+                for entry in sorted(children, key=lambda item: item.name):
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+                    else:
+                        yield Path(entry.path)
         owned = stage / f"dependency-{count}" / path.name if stage is not None else None
-        for source in sorted(paths):
-            count += 1
-            if count > 100_000:
-                raise RoomStoreHaulerError("manifest dependencies exceed their member limit")
+        for source in paths():
             size = source.lstat().st_size
             total_bytes += size
             if total_bytes > MAX_ARCHIVE_BYTES or not stat.S_ISREG(source.lstat().st_mode):
                 raise RoomStoreHaulerError("manifest dependencies exceed their input limit")
             sha, read_size = _read_input(source, MAX_SOURCE_FILE)
-            relative = str(source.relative_to(path)) if path.is_dir() else source.name
+            relative = str(source.relative_to(path)) if directory_input else source.name
             digest.update(json.dumps([label, relative, sha, read_size], separators=(",", ":")).encode())
             if owned is not None:
-                target = owned / relative if path.is_dir() else owned
+                target = owned / relative if directory_input else owned
                 target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 _freeze_input(source, target, MAX_SOURCE_FILE, None)
                 if _read_input(target, MAX_SOURCE_FILE) != (sha, read_size):
                     raise RoomStoreHaulerError("manifest dependency changed while being staged")
-        if owned is not None and path.is_dir():
+        if owned is not None and directory_input:
             owned.mkdir(mode=0o700, parents=True, exist_ok=True)
         return str(owned if owned is not None else path)
 
