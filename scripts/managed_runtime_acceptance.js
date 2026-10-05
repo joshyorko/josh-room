@@ -164,6 +164,7 @@ async function main() {
     const controllerRoot = path.join(extension, "runtime", "controller");
     const environment = {
       ...process.env,
+      JOSH_ROOM_EXTENSION_VERSION: manifest.extension_version,
       ROBOCORP_HOME: paths.rccHome,
       RCC_HOLOTREE_MODE: "private",
       JOSH_ROOM_EXTENSION_MODE: "1",
