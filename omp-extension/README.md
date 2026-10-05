@@ -2,7 +2,7 @@
 
 This package adds a terminal-native OMP surface for the existing Josh Room CLI. The VS Code extension continues to own graphical Room setup, storage, Save/Enter, and JAT tools. This extension owns validated local context, read-only browsing, explicit checkpoints, and local haul inspection.
 
-It was implemented against installed OMP `18.4.12` and the release-tagged public `@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-tui` APIs. Package discovery uses the current `package.json#omp.extensions` contract.
+The initial implementation used OMP `18.4.12`; acceptance was revalidated against installed OMP `18.6.1` on 2026-10-05 and its release-tagged public `@oh-my-pi/pi-coding-agent` and `@oh-my-pi/pi-tui` APIs. Package discovery uses the current `package.json#omp.extensions` contract.
 
 ## Development
 
