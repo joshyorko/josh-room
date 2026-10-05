@@ -310,6 +310,45 @@ def test_save_publishes_complete_descriptor_before_marker_and_uses_explicit_pare
     assert catalog.order == ["publish", "marker"]
 
 
+def test_changed_save_reuses_preflight_scan_but_keeps_post_capture_checks(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello")
+    store, catalog = _Store(), _Catalog(_descriptor())
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+    policy = load_capture_policy(workspace)
+    before = room_store_operations._scan_workspace(workspace, policy)
+    binding = __import__("hashlib").sha256(str(workspace.resolve()).encode()).hexdigest()
+    native_scan = room_store_operations._scan_workspace
+    scans = []
+    def traced_scan(root, policy):
+        scans.append(root)
+        return native_scan(root, policy)
+    monkeypatch.setattr(room_store_operations, "_scan_workspace", traced_scan)
+    result = operations.save(preflight_scan=(binding, before))
+    assert result.status == "saved"
+    assert len(scans) == 2  # Post-backup and post-publication checks remain.
+    assert len(catalog.published) == 1
+
+
+def test_reused_scan_cannot_report_stale_noop(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "file.txt"
+    source.write_text("hello")
+    policy = load_capture_policy(workspace)
+    parent = _descriptor(policy_sha=policy.sha256)
+    store, catalog = _Store(), _Catalog(parent)
+    operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
+    before = room_store_operations._scan_workspace(workspace, policy)
+    binding = __import__("hashlib").sha256(str(workspace.resolve()).encode()).hexdigest()
+    source.write_text("world")
+    with pytest.raises(RoomStoreOperationsError, match="changed after Save preflight"):
+        operations.save(preflight_scan=(binding, before))
+    assert catalog.published == []
+    assert catalog.marker_rows == []
+
+
 def test_unchanged_save_publishes_no_descriptor_or_marker(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

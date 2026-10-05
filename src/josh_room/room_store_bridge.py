@@ -1817,6 +1817,7 @@ def save_room_store(
     hauler_selection: Mapping[str, Any] | None = None,
     homebrew_archive: Path | None = None,
     jat_root: Path | None = None,
+    preflight_scan: Any = None,
 ) -> dict:
     from .local_save_receipt import invalidate, read_noop, write_verified_receipt
 
@@ -1886,6 +1887,7 @@ def save_room_store(
                 deletion_confirmation_token=confirmation_token,
                 on_progress=on_progress,
                 cancellation=cancellation,
+                preflight_scan=preflight_scan,
             )
             descriptor = result.descriptor
             logical_id = descriptor.to_dict()["logical_jat_id"] if descriptor else None

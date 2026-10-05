@@ -819,11 +819,20 @@ class RoomStoreOperations:
         deletion_confirmation_token: str | None = None,
         on_progress: Callable[[BackupProgress], None] | None = None,
         cancellation: Any = None,
+        preflight_scan: tuple[str, WorkspaceScan] | None = None,
     ) -> SaveResult:
         latest, etag = self.read_latest()
         selected_parent = parent if parent is not None else latest
         policy = self._policy()
-        before = _scan_workspace(self.workspace, policy)
+        reused_scan = bool(
+            isinstance(preflight_scan, tuple)
+            and len(preflight_scan) == 2
+            and preflight_scan[0] == hashlib.sha256(str(self.workspace.resolve(strict=True)).encode()).hexdigest()
+            and isinstance(preflight_scan[1], WorkspaceScan)
+            and preflight_scan[1].signature_algorithm == "josh-room-stat-v1"
+            and preflight_scan[1].capture_policy_sha256 == policy.sha256
+        )
+        before = preflight_scan[1] if reused_scan else _scan_workspace(self.workspace, policy)
         keyset, password_file, store = self._open_store()
         try:
             with store as opened:
@@ -894,6 +903,11 @@ class RoomStoreOperations:
                     catalog_signature,
                     False,
                 ):
+                    if reused_scan:
+                        current_policy = self._policy()
+                        current_scan = _scan_workspace(self.workspace, current_policy)
+                        if current_scan.signature != before.signature or current_policy.sha256 != policy.sha256:
+                            raise RoomStoreOperationsError("workspace changed after Save preflight")
                     if cancellation is not None and cancellation.cancelled:
                         raise ResticStoreError(ResticStoreErrorCode.CANCELLED)
                     return SaveResult(

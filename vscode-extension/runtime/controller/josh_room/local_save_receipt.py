@@ -270,7 +270,12 @@ def write_verified_receipt(
 
 
 def read_noop(
-    instance: Path, source: Path, dimension: Any, project_id: str
+    instance: Path,
+    source: Path,
+    dimension: Any,
+    project_id: str,
+    *,
+    scan_sink: dict | None = None,
 ) -> dict | None:
     """Verify current local metadata before any auth/provider/runtime work."""
     try:
@@ -308,12 +313,15 @@ def read_noop(
         # A fresh process has no event continuity. Recompute metadata, never
         # trust a persisted signature or a directory mtime as current evidence.
         scan = scan_workspace_for_status(source)
-        if (scan.signature, scan.signature_algorithm, scan.capture_policy_sha256) != (
+        unchanged = (
+            scan.signature,
+            scan.signature_algorithm,
+            scan.capture_policy_sha256,
+        ) == (
             marker["workspace_signature"],
             marker["signature_algorithm"],
             marker["capture_policy_sha256"],
-        ):
-            return None
+        )
         if _marker(source) != marker:
             return None
         from .workspace_policy import load_capture_policy
@@ -331,6 +339,13 @@ def read_noop(
             policy.sha256 != scan.capture_policy_sha256
             or _rcc_input(source, receipt["components"]) != receipt["rcc_input"]
         ):
+            return None
+        if not unchanged:
+            if scan_sink is not None:
+                scan_sink["workspace_evidence"] = (
+                    marker["workspace_path_sha256"],
+                    scan,
+                )
             return None
         return {
             "ok": True,

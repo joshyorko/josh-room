@@ -1989,6 +1989,13 @@ async function saveRoom(options = {}) {
     targetDimensionId || selectedDimensionId,
   );
   if (imageChoice.allImages) buildArgs.push("--all-images");
+  // This hint only skips the local no-op probe. Save still validates the full
+  // workspace and Restic remains the content authority.
+  if (workspaceBindingTrusted && workspaceBaseline
+    && ["dirty", "saved-but-still-dirty"].includes(roomStatus.kind)
+    && fs.realpathSync(source) === fs.realpathSync(cwd)) {
+    buildArgs.push("--editor-dirty");
+  }
   let preview;
   let deletionConfirmationToken;
   if (targetProvider === "minio") {

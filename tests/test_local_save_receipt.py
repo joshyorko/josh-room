@@ -112,6 +112,23 @@ def test_fresh_cli_noop_precedes_all_auth_provider_and_runtime_work(
     assert '"status": "already-saved"' in capsys.readouterr().out
 
 
+def test_editor_dirty_hint_only_skips_preflight_and_keeps_authoritative_dispatch(
+    saved_workspace, monkeypatch
+):
+    from types import SimpleNamespace
+
+    instance, source, *_ = saved_workspace
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("known editor changes repeated the local no-op scan")
+
+    monkeypatch.setattr(local_save_receipt, "read_noop", forbidden)
+    args = SimpleNamespace(
+        command="snapshot", snapshot_command="create", source=source, editor_dirty=True
+    )
+    assert cli._local_save_preflight(args, instance) is None
+
+
 def test_same_size_mtime_restored_edit_misses(saved_workspace):
     instance, source, dimension, *_ = saved_workspace
     file = source / "source.txt"

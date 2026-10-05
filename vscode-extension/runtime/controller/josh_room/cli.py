@@ -455,6 +455,7 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create.add_argument("--all-images", action="store_true")
     snapshot_create.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     snapshot_create.add_argument("--dimension")
+    snapshot_create.add_argument("--editor-dirty", action="store_true", help=argparse.SUPPRESS)
     snapshot_create.add_argument(
         "--confirm-deletion",
         help="confirm the exact mass-deletion plan returned by snapshot preview",
@@ -2208,6 +2209,7 @@ def dispatch(args, instance: Path) -> dict:
                 components=components,
                 display_name=display_name,
                 confirmation_token=getattr(args, "confirm_deletion", None),
+                preflight_scan=getattr(args, "_local_workspace_evidence", None),
                 rcc_runtime=None,
                 **capture_options,
                 **({"jat_root": _jat_root()} if capture_options else {}),
@@ -2540,6 +2542,9 @@ def _local_save_preflight(args, instance: Path) -> dict | None:
     from .local_save_receipt import invalidate, read_noop
 
     source = args.source or Path.cwd()
+    if getattr(args, "editor_dirty", False):
+        invalidate(instance, source)
+        return None
     try:
         dimension = _effective_dimension(args)
         if dimension is None or dimension.provider != "minio":
@@ -2548,7 +2553,9 @@ def _local_save_preflight(args, instance: Path) -> dict | None:
             invalidate(instance, source)
             return None
         project_id, _display_name = _room_identity(args.project)
-        result = read_noop(instance, source, dimension, project_id)
+        scan_sink = {}
+        result = read_noop(instance, source, dimension, project_id, scan_sink=scan_sink)
+        args._local_workspace_evidence = scan_sink.get("workspace_evidence")
         if result is None:
             invalidate(instance, source)
         return result
