@@ -187,14 +187,21 @@ class _CountingRestic:
         return self._store.backup(*args, **kwargs)
 
 
-def _source_inventory(root: Path) -> dict[str, tuple[bytes, int]]:
+def _source_inventory(root: Path) -> dict[str, tuple[bytes, str]]:
     inventory = {}
     for path in sorted(root.rglob("*")):
         if path.is_file() and path.name != ".josh-room.json":
             inventory[path.relative_to(root).as_posix()] = (
-                path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+                path.read_bytes(), _portable_mode(path.stat().st_mode)
             )
     return inventory
+
+
+def _portable_mode(mode: int, platform: str | None = None) -> str:
+    value = stat.S_IMODE(mode)
+    if (platform or os.name) == "nt":
+        return "writable" if value & 0o222 else "read-only"
+    return f"{value:04o}"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -305,7 +312,8 @@ def run_acceptance(
         readonly = workspace / "readonly.txt"
         readonly.write_bytes(b"mode-preservation fixture\n")
         readonly.chmod(0o444)
-        readonly_mode = stat.S_IMODE(readonly.stat().st_mode)
+        readonly_mode = _portable_mode(readonly.stat().st_mode)
+        _require(readonly_mode == "read-only", "Windows read-only mode could not be represented")
         store_calls = {"backup": 0}
 
         def ensure_keyset(selected_dimension, selected_backend):
@@ -457,7 +465,7 @@ def run_acceptance(
             _require(room_restore.destination == restored_room, "Room Store Enter promoted the wrong destination")
             _require((restored_room / "renamed-payload.bin").read_bytes() == bytes(edited_payload), "Room Store Enter restored edited payload bytes incorrectly")
             _require(not (restored_room / "delete-me.txt").exists(), "Room Store Enter restored a deleted file")
-            _require(stat.S_IMODE((restored_room / "readonly.txt").stat().st_mode) == readonly_mode, "Room Store Enter changed the read-only mode")
+            _require(_portable_mode((restored_room / "readonly.txt").stat().st_mode) == readonly_mode, "Room Store Enter changed the read-only mode")
             _require(_source_inventory(restored_room) == _source_inventory(workspace), "Room Store Enter changed user file bytes or modes")
 
             hostile = verify_hostile_inventory_entries()
@@ -523,9 +531,18 @@ def run_acceptance(
             from josh_room.jat import run_restore
 
             restore_result = run_restore(jat_root, output, clean_room)
-            _require(restore_result.get("success") is True, "portable JAT clean-room Restore failed")
+            _require(
+                restore_result.get("operation") == "restore"
+                and restore_result.get("success") is True
+                and restore_result.get("exit_status") == 0,
+                "portable JAT clean-room Restore failed",
+            )
+            restored_payload = Path(restore_result.get("payload_path") or "")
+            payload_path_matches = restored_payload.resolve() == clean_room.resolve()
+            _require(payload_path_matches, "portable JAT Restore returned a different payload destination")
+            clean_workspace = restored_payload / "workspace"
             expected_inventory = _source_inventory(restored_room)
-            restored_inventory = _source_inventory(clean_room)
+            restored_inventory = _source_inventory(clean_workspace)
             _require(restored_inventory == expected_inventory, "portable JAT clean-room Restore changed file bytes or modes")
 
             outside_target = root / "outside-workspace-target.txt"
@@ -581,6 +598,7 @@ def run_acceptance(
                     "native_workspace_symlink": "rejected",
                     "portable_export": portable["status"],
                     "portable_clean_room_restore": "passed",
+                    "portable_restore_payload_path_matches": payload_path_matches,
                     "restore_bytes_and_modes": "passed",
                 },
                 "metrics": {

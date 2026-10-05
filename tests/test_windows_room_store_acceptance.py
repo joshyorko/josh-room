@@ -9,6 +9,7 @@ from scripts.windows_room_store_acceptance import (
     FIXTURE_STORE_KIND,
     AcceptanceFailure,
     FixtureObjectStore,
+    _portable_mode,
     run_acceptance,
     verify_hostile_inventory_entries,
 )
@@ -54,3 +55,11 @@ def test_fixture_acceptance_cannot_report_a_non_windows_host_as_a_pass(tmp_path)
             jat_root=tmp_path / "jat",
             output=tmp_path / "capsule.haul.tar.zst",
         )
+
+
+def test_windows_mode_assertion_uses_readonly_semantics_but_posix_is_exact():
+    assert _portable_mode(0o444, "nt") == "read-only"
+    assert _portable_mode(0o555, "nt") == "read-only"
+    assert _portable_mode(0o666, "nt") == "writable"
+    assert _portable_mode(0o444, "posix") == "0444"
+    assert _portable_mode(0o555, "posix") == "0555"

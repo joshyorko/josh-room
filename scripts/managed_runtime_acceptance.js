@@ -8,6 +8,7 @@ const os = require("os");
 const path = require("path");
 const fsp = fs.promises;
 const repository = path.resolve(__dirname, "..");
+const { compareRestoredFile, jatRestoredWorkspace } = require("./managed_runtime_acceptance_helpers");
 
 function run(command, args, options = {}) {
   return childProcess.execFileSync(command, args, {
@@ -327,28 +328,73 @@ async function main() {
     const sourceReadme = path.join(source, "README.md");
     await fsp.writeFile(sourceReadme, "managed runtime legacy local JAT acceptance\n");
     await fsp.chmod(sourceReadme, 0o444);
-    const sourceReadmeMode = (await fsp.stat(sourceReadme)).mode & 0o777;
+    const sourceReadmeBytes = await fsp.readFile(sourceReadme);
+    const sourceReadmeMode = (await fsp.stat(sourceReadme)).mode;
     executeController(["dimensions", "list", "--json"], "dimensions-list");
     executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "legacy-local-jat-save");
     executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "legacy-local-jat-enter");
     const restored = path.join(workspaceRoot, "demo", "README.md");
-    if ((await fsp.readFile(restored, "utf8")) !== "managed runtime legacy local JAT acceptance\n") {
+    const legacyEnterComparison = compareRestoredFile({
+      sourceBytes: sourceReadmeBytes,
+      restoredBytes: await fsp.readFile(restored),
+      sourceMode: sourceReadmeMode,
+      restoredMode: (await fsp.stat(restored)).mode,
+      platform,
+    });
+    if (!legacyEnterComparison.bytes_match || !legacyEnterComparison.mode_match) {
       throw new Error("legacy local JAT Enter did not restore the saved workspace");
-    }
-    if (((await fsp.stat(restored)).mode & 0o777) !== sourceReadmeMode) {
-      throw new Error("legacy local JAT Enter changed a restored file mode");
     }
     const haul = path.join(root, "managed-runtime.haul.tar.zst");
     executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
     executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
     const legacyJatRestore = path.join(root, "legacy-jat-clean-room");
-    const legacyJatRestoreResult = JSON.parse(executeController([
+    executeController([
       "jat", "restore", "--haul", haul, "--destination", legacyJatRestore, "--json",
-    ], "legacy-jat-clean-room-restore"));
-    const cleanReadme = path.join(legacyJatRestore, "README.md");
-    if (legacyJatRestoreResult.success !== true
-      || (await fsp.readFile(cleanReadme, "utf8")) !== "managed runtime legacy local JAT acceptance\n"
-      || ((await fsp.stat(cleanReadme)).mode & 0o777) !== sourceReadmeMode) {
+    ], "legacy-jat-clean-room-restore");
+    const legacyJatRestoreResultFile = path.join(paths.logsRoot, "managed-controller-legacy-jat-clean-room-restore-result.json");
+    const legacyJatRestoreResult = readManagedResult(legacyJatRestoreResultFile);
+    const restoredWorkspaceRoot = jatRestoredWorkspace(legacyJatRestoreResult, legacyJatRestore, platform);
+    const cleanReadme = restoredWorkspaceRoot && path.join(restoredWorkspaceRoot, "README.md");
+    let cleanReadmeBytes = Buffer.alloc(0);
+    let cleanReadmeMode = 0;
+    let cleanReadmeExists = false;
+    if (cleanReadme) {
+      try {
+        cleanReadmeBytes = await fsp.readFile(cleanReadme);
+        cleanReadmeMode = (await fsp.stat(cleanReadme)).mode;
+        cleanReadmeExists = true;
+      } catch { /* Record the missing or unreadable payload below. */ }
+    }
+    const legacyJatRestoreComparison = compareRestoredFile({
+      sourceBytes: sourceReadmeBytes,
+      restoredBytes: cleanReadmeBytes,
+      sourceMode: sourceReadmeMode,
+      restoredMode: cleanReadmeMode,
+      restoredExists: cleanReadmeExists,
+      platform,
+    });
+    const legacyJatRestoreReceipt = {
+      operation: legacyJatRestoreResult?.operation || null,
+      success: legacyJatRestoreResult?.success === true,
+      exit_status: legacyJatRestoreResult?.exit_status ?? null,
+      payload_path_matches_destination: restoredWorkspaceRoot !== null,
+      workspace_layout: "<payload_path>/workspace",
+      file: { name: "README.md", ...legacyJatRestoreComparison },
+      status: legacyJatRestoreResult?.operation === "restore"
+        && legacyJatRestoreResult?.success === true
+        && legacyJatRestoreResult?.exit_status === 0
+        && restoredWorkspaceRoot !== null
+        && legacyJatRestoreComparison.bytes_match
+        && legacyJatRestoreComparison.mode_match
+        ? "passed"
+        : "failed",
+    };
+    await fsp.writeFile(
+      path.join(evidenceDir, "legacy-jat-clean-room-restore.json"),
+      `${JSON.stringify(legacyJatRestoreReceipt, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    if (legacyJatRestoreReceipt.status !== "passed") {
       throw new Error("existing legacy JAT capsule failed clean-room byte/mode restore");
     }
     await runManagedJatServe(haul, "jat-serve");
@@ -455,6 +501,7 @@ async function main() {
     };
     for (const filename of fs.existsSync(paths.logsRoot) ? fs.readdirSync(paths.logsRoot) : []) {
       if ((filename.startsWith("managed-controller-") || filename.startsWith("managed-tool-") || filename.startsWith("managed-jat-") || filename.startsWith("jat-artifact-")) && filename.endsWith(".json")) {
+        if (filename === "managed-controller-legacy-jat-clean-room-restore-result.json") continue;
         await fsp.copyFile(path.join(paths.logsRoot, filename), path.join(evidenceDir, filename));
       }
     }
