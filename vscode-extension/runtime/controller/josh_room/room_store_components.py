@@ -200,7 +200,7 @@ def _publish_metadata(raw: bytes) -> dict[str, str]:
     specification = specification if specification.startswith("sha256:") else f"sha256:{specification}"
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact) or not re.fullmatch(r"sha256:[0-9a-f]{64}", specification):
         raise RoomStoreComponentError("RCC returned invalid environment metadata")
-    platform_value = _rcc_value(value, "platform", "platformId", "platform_id")
+    platform_value = value.get("platform", value.get("platformId", value.get("platform_id")))
     legacy_key = _rcc_value(value, "legacyBlueprintKey", "legacy_blueprint_key")
     return {
         "artifact_digest": artifact,
@@ -253,12 +253,25 @@ def capture_rcc_component(
         version_output = _run([executable, "--version"], cwd=root, cancellation=cancellation, timeout=20)
         if re.search(r"(?<![A-Za-z0-9.+-])v18\.19\.5(?![A-Za-z0-9.+-])", version_output.decode("utf-8", "replace")) is None:
             raise RoomStoreComponentError("selected RCC version is unsupported")
-        published = _run([executable, "env", "publish", "--robot", str(robot), "--json"], cwd=root, cancellation=cancellation)
+        published = _run([executable, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, cancellation=cancellation)
         native = _publish_metadata(published)
+        if native["platform"] is None:
+            acquired = _run([executable, "env", "acquire", "--artifact", native["artifact_digest"],
+                             "--permissive-local", "--json"], cwd=root, cancellation=cancellation)
+            try:
+                value = json.loads(acquired)
+                verification = value["verification"]
+                if (verification["valid"] is not True
+                        or verification["artifactDigest"] != native["artifact_digest"]
+                        or value["artifactDigest"] != native["artifact_digest"]):
+                    raise ValueError
+                native["platform"] = {"linux_amd64": "linux-x64", "windows_amd64": "win32-x64"}[verification["platform"]]
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                raise RoomStoreComponentError("RCC returned invalid artifact verification") from None
         if native["platform"] != _host_platform():
             raise RoomStoreComponentError("RCC returned a mismatched environment platform")
         archive = stage / "rcc-environment.rcca"
-        _run([executable, "env", "export", "--artifact", native["artifact_digest"], "--output", str(archive)], cwd=root, cancellation=cancellation)
+        _run([executable, "env", "export", "--artifact", native["artifact_digest"], "--provider", "local", "--output", str(archive)], cwd=root, cancellation=cancellation)
         try:
             archive_stat = archive.lstat()
             if not stat.S_ISREG(archive_stat.st_mode) or stat.S_ISLNK(archive_stat.st_mode) or archive_stat.st_size <= 0:

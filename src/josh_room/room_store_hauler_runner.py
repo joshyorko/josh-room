@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import stat
 import tempfile
 import uuid
 from collections.abc import Mapping, Sequence
@@ -19,7 +20,7 @@ from . import jat, private_paths
 MAX_REQUEST_BYTES = 1024 * 1024
 MAX_RESULT_BYTES = 4 * 1024 * 1024
 MAX_ITEMS = 4096
-_OPERATIONS = {"sync", "sync_image_txt", "sync_files", "inventory", "save", "acquire_rcc"}
+_OPERATIONS = {"sync", "sync_image_txt", "sync_files", "inventory", "save", "acquire_rcc", "local_images", "validate_brew_archive"}
 _VERSION = re.compile(r"(?<![A-Za-z0-9])v?\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?(?![A-Za-z0-9])")
 JAT_PLATFORM_MAP = {"linux-x64": "linux_amd64", "win32-x64": "windows_amd64"}
 _HAULER_VERSION_PROBE = (
@@ -56,8 +57,20 @@ def _require_managed_runtime(jat_root: Path):
     if not isinstance(private_home, str) or not private_home:
         raise ManagedHaulerError("managed JAT private home is unavailable")
     try:
-        private_paths.verify_private_path(Path(private_home), directory=True)
-    except private_paths.PrivatePathError:
+        home = Path(private_home)
+        metadata = home.lstat()
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ManagedHaulerError("managed JAT private home is unsafe")
+        if os.name == "nt":
+            api = private_paths._windows_api()
+            owner, _protected, _aces = api.read_security(home)
+            if owner != api.current_user_sid():
+                raise ManagedHaulerError("managed JAT private home is unsafe")
+        elif metadata.st_uid != os.getuid():
+            raise ManagedHaulerError("managed JAT private home is unsafe")
+        private_paths.protect_private_directory(home)
+        private_paths.verify_private_path(home, directory=True)
+    except (OSError, private_paths.PrivatePathError):
         raise ManagedHaulerError("managed JAT private home is unsafe") from None
     source_root = str(Path(__file__).resolve().parent.parent)
     existing = environment.get("PYTHONPATH")
@@ -291,17 +304,30 @@ class ManagedHaulerAdapter:
         retries: int | None = None,
         exclude_extras: bool = False,
     ):
-        if images:
-            raise ManagedHaulerError("local Docker image publication is unavailable in Room Store capture")
         request = self._store_temp(store, temp)
         request.update(
             {
                 "files": [[_absolute_path(path), name] for path, name in files],
                 "retries": retries,
                 "exclude_extras": exclude_extras,
+                **({"images": list(images)} if images else {}),
             }
         )
         return self._invoke("sync_files", request)
+
+    def local_images(self, images: Sequence[str] = (), *, all_images: bool = False) -> list[tuple[str, str]]:
+        value = self._invoke("local_images", {"images": list(images), "all_images": all_images})
+        if not isinstance(value, list) or len(value) > MAX_ITEMS or any(
+            not isinstance(row, list) or len(row) != 2
+            or not isinstance(row[0], str) or not isinstance(row[1], str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", row[1]) is None
+            for row in value
+        ):
+            raise ManagedHaulerError("local image inventory is invalid")
+        return [(name, identity) for name, identity in value]
+
+    def validate_brew_archive(self, archive: Path) -> None:
+        self._invoke("validate_brew_archive", {"archive": _absolute_path(archive)})
 
     def inventory(self, store: Path, temp: Path, check: bool = False) -> list[dict[str, Any]]:
         value = self._invoke("inventory", {**self._store_temp(store, temp), "check": check})
@@ -388,18 +414,27 @@ def _worker_request(path: Path) -> dict[str, Any]:
         "inventory": {"format_version", "operation", "store", "temp", "check"},
         "save": {"format_version", "operation", "store", "temp", "haul", "chunk_size", "containerd"},
         "acquire_rcc": {"format_version", "operation", "archive", "metadata", "workspace", "robot_file"},
+        "local_images": {"format_version", "operation", "images", "all_images"},
+        "validate_brew_archive": {"format_version", "operation", "archive"},
     }[operation]
+    if operation == "sync_files" and "images" in request:
+        required = required | {"images"}
     if set(request) != required:
         raise ManagedHaulerError("managed Hauler request is invalid")
+    if operation == "local_images":
+        _validate_strings(request["images"], MAX_ITEMS)
+        if type(request["all_images"]) is not bool or request["images"] and request["all_images"]:
+            raise ManagedHaulerError("local image selection is invalid")
+        return request
     path_fields = (
         ("archive", "metadata", "workspace", "robot_file")
         if operation == "acquire_rcc"
-        else ("store", "temp")
+        else ("archive",) if operation == "validate_brew_archive" else ("store", "temp")
     )
     for field in path_fields:
         if not isinstance(request[field], str) or not request[field] or len(request[field]) > 4096:
             raise ManagedHaulerError("managed Hauler request is invalid")
-    if operation == "acquire_rcc":
+    if operation in {"acquire_rcc", "validate_brew_archive"}:
         return request
     if operation == "sync":
         _validate_strings(request["manifests"], MAX_ITEMS)
@@ -410,6 +445,7 @@ def _worker_request(path: Path) -> dict[str, Any]:
         if request["platform"] is not None and not isinstance(request["platform"], str):
             raise ManagedHaulerError("managed Hauler request is invalid")
     elif operation == "sync_files":
+        _validate_strings(request.get("images", []), MAX_ITEMS)
         files = request["files"]
         if (
             not isinstance(files, list)
@@ -474,6 +510,10 @@ def _worker_value(request: dict[str, Any]) -> Any:
     operation = request["operation"]
     if operation == "acquire_rcc":
         return _worker_acquire_rcc(request)
+    if operation == "local_images":
+        return _worker_local_images(request)
+    if operation == "validate_brew_archive":
+        return _worker_validate_brew_archive(request)
     from jat.hauler import HaulerAdapter
     from jat.process import ProcessRunner
 
@@ -512,12 +552,92 @@ def _worker_value(request: dict[str, Any]) -> Any:
             [(Path(path), name) for path, name in request["files"]],
             retries=request["retries"],
             exclude_extras=request["exclude_extras"],
+            **({"images": request["images"]} if request.get("images") else {}),
         )
         return None
     if operation == "inventory":
         return adapter.inventory(store, temp, check=request["check"])
     adapter.save(store, temp, Path(request["haul"]), chunk_size=request["chunk_size"], containerd=request["containerd"])
     return None
+
+
+def _worker_local_images(request: Mapping[str, Any]) -> list[list[str]]:
+    import shutil
+
+    from jat.process import ProcessRunner
+
+    from .room_store_hauler import _validate_image_reference
+
+    docker = shutil.which("docker")
+    if not docker:
+        raise ManagedHaulerError("local Docker image capture requires Docker")
+    runner = ProcessRunner()
+    ready = runner.run([docker, "info", "--format", "{{.ServerVersion}}"], timeout=30)
+    if not ready.success:
+        raise ManagedHaulerError("local Docker image capture requires a reachable Docker daemon")
+    images = request["images"]
+    if request["all_images"]:
+        listed = runner.run([docker, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"], timeout=30)
+        if not listed.success:
+            raise ManagedHaulerError("local Docker image inventory is unavailable")
+        images = [name for name in listed.stdout.splitlines() if "<none>" not in name]
+    if len(images) > MAX_ITEMS:
+        raise ManagedHaulerError("local Docker image inventory exceeds its limit")
+    result = []
+    for name in sorted(set(images)):
+        name = _validate_image_reference(name)
+        if name.startswith("-"):
+            raise ManagedHaulerError("local image selection is invalid")
+        observed = runner.run([docker, "image", "inspect", "--format", "{{.Id}}", name], timeout=30)
+        identity = observed.stdout.strip()
+        if not observed.success or re.fullmatch(r"sha256:[0-9a-f]{64}", identity) is None:
+            raise ManagedHaulerError("a selected local image is unavailable")
+        result.append([name, identity])
+    return result
+
+
+def _worker_validate_brew_archive(request: Mapping[str, Any]) -> None:
+    import shutil
+    import stat
+    import subprocess
+    import tarfile
+
+    from jat.archive import ArchiveAdapter
+    from jat.process import ProcessRunner
+    from jat.safety import validate_archive_members
+    from jat.services import _validate_brew_recovery
+
+    archive = Path(request["archive"])
+    metadata = archive.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= 8 * 1024 * 1024 * 1024:
+        raise ManagedHaulerError("Homebrew archive is not a bounded regular file")
+    adapter = ArchiveAdapter(ProcessRunner())
+    zstd = shutil.which("zstd")
+    if not zstd:
+        raise ManagedHaulerError("contained zstd is required for bounded Homebrew validation")
+    with subprocess.Popen([zstd, "-dc", "--", str(archive)], stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL) as process:
+        try:
+            expanded = 0
+            count = 0
+            with tarfile.open(fileobj=process.stdout, mode="r|") as stream:
+                for member in stream:
+                    count += 1
+                    expanded += member.size
+                    if count > 100_000 or expanded > 8 * 1024 * 1024 * 1024:
+                        raise ManagedHaulerError("expanded Homebrew archive exceeds its validation limit")
+            if process.wait(timeout=30) != 0:
+                raise ManagedHaulerError("Homebrew archive decompression failed")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    validate_archive_members(adapter.members(archive))
+    with tempfile.TemporaryDirectory(prefix="josh-room-brew-validate-") as temporary:
+        destination = Path(temporary) / "brew"
+        destination.mkdir(mode=0o700)
+        adapter.extract(archive, destination, strip_components=1)
+        _validate_brew_recovery(destination)
 
 
 def _worker_acquire_rcc(request: Mapping[str, Any]) -> dict[str, str]:

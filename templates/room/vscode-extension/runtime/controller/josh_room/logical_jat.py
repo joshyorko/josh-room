@@ -162,7 +162,7 @@ def _validate_component(value: object, name: str, workspace: dict[str, Any]) -> 
                 reference_value,
                 "Hauler reference",
                 {"digest"},
-                {"kind", "media_type"},
+                {"kind", "media_type", "reference_sha256", "platform_sha256"},
             )
             _content_digest(reference["digest"], "Hauler reference digest")
             if "media_type" in reference:
@@ -178,7 +178,11 @@ def _validate_component(value: object, name: str, workspace: dict[str, Any]) -> 
                 raise ValueError("logical JAT Hauler reference kind is invalid")
             if "kind" not in reference and "media_type" not in reference:
                 raise ValueError("logical JAT Hauler reference needs kind or media type")
-            key = (reference["digest"], reference.get("kind"), media_type)
+            for field in ("reference_sha256", "platform_sha256"):
+                if field in reference:
+                    _sha256(reference[field], f"logical JAT Hauler {field}")
+            key = (reference["digest"], reference.get("kind"), media_type,
+                   reference.get("reference_sha256"), reference.get("platform_sha256"))
             if key in seen:
                 raise ValueError("logical JAT Hauler references must be unique")
             seen.add(key)

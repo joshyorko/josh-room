@@ -454,9 +454,15 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_preview = snapshot_commands.add_parser("preview")
     snapshot_preview.add_argument("project")
     snapshot_preview.add_argument("--source", type=Path)
+    snapshot_preview.add_argument("--image", dest="images", action="append", default=[])
+    snapshot_preview.add_argument("--all-images", action="store_true")
     snapshot_preview.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     snapshot_preview.add_argument("--dimension")
     _json_option(snapshot_preview)
+    for command in (snapshot_create, snapshot_preview):
+        command.add_argument("--hauler-manifest", dest="hauler_manifests", type=Path, action="append", default=[])
+        command.add_argument("--hauler-file", dest="hauler_files", nargs=2, action="append", default=[], metavar=("PATH", "NAME"))
+        command.add_argument("--brew-archive", type=Path, help="reuse a saved Homebrew recovery archive in the native Room Store")
     for action in ("inspect", "export", "serve", "extract"):
         snapshot_action = snapshot_commands.add_parser(action)
         snapshot_action.add_argument("project")
@@ -2161,6 +2167,7 @@ def dispatch(args, instance: Path) -> dict:
             if dimension.provider == "minio" and selected_material is None:
                 raise ValueError("selected MinIO encryption material is required for native Save")
             components = _native_component_inputs(args, source)
+            capture_options = _native_capture_options(args)
             if args.snapshot_command == "preview":
                 result = preview_room_store(
                     instance,
@@ -2169,6 +2176,7 @@ def dispatch(args, instance: Path) -> dict:
                     source,
                     selected_material,
                     components=components,
+                    **capture_options,
                 )
                 if (Path(source) / "robot.yaml").is_file():
                     result["rcc_capture_pending"] = True
@@ -2183,6 +2191,8 @@ def dispatch(args, instance: Path) -> dict:
                 display_name=display_name,
                 confirmation_token=getattr(args, "confirm_deletion", None),
                 rcc_runtime=None,
+                **capture_options,
+                **({"jat_root": _jat_root()} if capture_options else {}),
             )
         if args.snapshot_command == "preview":
             raise ValueError("snapshot preview is available for native Room Store saves")
@@ -2507,9 +2517,27 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
 
 
 def _native_component_inputs(args, source: Path) -> list:
-    if getattr(args, "images", None) or getattr(args, "all_images", False):
-        raise ValueError("native image capture is unavailable; remove image inputs before saving")
     return []
+
+
+def _native_capture_options(args) -> dict:
+    images = list(getattr(args, "images", ()) or ())
+    all_images = bool(getattr(args, "all_images", False))
+    manifests = list(getattr(args, "hauler_manifests", ()) or ())
+    files = [(Path(path), name) for path, name in (getattr(args, "hauler_files", ()) or ())]
+    if images and all_images:
+        raise ValueError("select explicit local images or all local images, not both")
+    options = {}
+    if images or all_images or manifests or files:
+        options["hauler_selection"] = {"images": images, "all_images": all_images, "manifests": manifests, "files": files}
+    homebrew = getattr(args, "brew_archive", None)
+    if homebrew is None:
+        configured = (private_config() or {}).get("homebrew_recovery")
+        if isinstance(configured, dict) and configured.get("archive"):
+            homebrew = Path(configured["archive"])
+    if homebrew is not None:
+        options["homebrew_archive"] = homebrew
+    return options
 
 
 def _backend_for_args(args, instance: Path):

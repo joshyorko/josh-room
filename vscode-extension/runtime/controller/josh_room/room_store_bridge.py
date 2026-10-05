@@ -50,7 +50,9 @@ from .room_store_components import (
     source_input_sha256,
 )
 from .room_store_export import PortableExportError, materialize_components
-from .room_store_hauler_runner import create_managed_hauler_adapter
+from .room_store_hauler import RoomStoreHaulerError, capture_hauler_component
+from .room_store_hauler_runner import ManagedHaulerError, create_managed_hauler_adapter
+from .room_store_homebrew import RoomStoreHomebrewError, capture_homebrew_component
 from .room_store_operations import (
     RoomStoreOperations,
     RoomStoreOperationsError,
@@ -1323,6 +1325,9 @@ def _build_operations(
     cancellation=None,
     active_runtime_root: Path | None = None,
     authority_session: Any | None = None,
+    hauler_selection: Mapping[str, Any] | None = None,
+    homebrew_archive: Path | None = None,
+    jat_root: Path | None = None,
 ):
     domain_id = _scope(dimension, material)
     repository = _repository_locator(dimension)
@@ -1475,6 +1480,43 @@ def _build_operations(
         else:
             rcc_component = component_value["rcc_environment"]
         resolved = {**component_value, "rcc_environment": rcc_component}
+        managed_adapter = None
+
+        def adapter():
+            nonlocal managed_adapter
+            if jat_root is None:
+                raise RoomStoreOperationsError("selected native components require the managed JAT runtime")
+            if managed_adapter is None:
+                managed_adapter = create_managed_hauler_adapter(Path(jat_root), cancellation=cancellation)
+            return managed_adapter
+
+        try:
+            if homebrew_archive is not None:
+                resolved["homebrew_recovery"] = capture_homebrew_component(
+                    archive=homebrew_archive, prior_component=prior_components["homebrew_recovery"],
+                    repository_id=opened_store.repository_info.repository_id,
+                    repository_format=opened_store.repository_info.repository_format,
+                    restic=opened_store, validator=adapter, cancellation=cancellation,
+                )
+            if hauler_selection is not None:
+                selected_adapter = adapter()
+                local_images = selected_adapter.local_images(
+                    hauler_selection["images"], all_images=hauler_selection["all_images"],
+                ) if hauler_selection["images"] or hauler_selection["all_images"] else []
+                resolved["hauler_content"] = capture_hauler_component(
+                    workspace=workspace, prior_component=prior_components["hauler_content"],
+                    repository_id=opened_store.repository_info.repository_id,
+                    repository_format=opened_store.repository_info.repository_format,
+                    restic=opened_store, hauler=selected_adapter, hauler_version=selected_adapter.hauler_version,
+                    local_images=local_images, manifests=hauler_selection["manifests"],
+                    files=hauler_selection["files"], cancellation=cancellation,
+                )
+                if local_images != (selected_adapter.local_images(
+                    hauler_selection["images"], all_images=hauler_selection["all_images"],
+                ) if hauler_selection["images"] or hauler_selection["all_images"] else []):
+                    raise RoomStoreOperationsError("local image selection changed during capture")
+        except (ManagedHaulerError, RoomStoreHaulerError, RoomStoreHomebrewError) as error:
+            raise RoomStoreOperationsError(str(error)) from None
         missing = [name for name in required_components if resolved[name] is None]
         if missing:
             raise RoomStoreOperationsError(
@@ -1677,6 +1719,8 @@ def preview_room_store(
     rcc_runtime: Path | str | None = None,
     required_components: Sequence[str] = (),
     authority_session: Any | None = None,
+    hauler_selection: Mapping[str, Any] | None = None,
+    homebrew_archive: Path | None = None,
 ) -> dict:
     component_value = _components(components)
     _check_required_components(component_value, required_components)
@@ -1721,9 +1765,12 @@ def preview_room_store(
             if snapshot_id == "latest":
                 preview = operations.preview()
                 latest = state["latest_descriptor"]
-                return _preview_output(
+                output = _preview_output(
                     preview, rcc_capture_pending=_rcc_capture_pending(workspace, latest)
                 )
+                output.update(hauler_capture_pending=hauler_selection is not None,
+                              homebrew_capture_pending=homebrew_archive is not None)
+                return output
             else:
                 catalog, _catalog_etag = _read_catalog(
                     backend, Path(instance), dimension, selected_material
@@ -1766,6 +1813,9 @@ def save_room_store(
     rcc_runtime: Path | str | None = None,
     required_components: Sequence[str] = (),
     authority_session: Any | None = None,
+    hauler_selection: Mapping[str, Any] | None = None,
+    homebrew_archive: Path | None = None,
+    jat_root: Path | None = None,
 ) -> dict:
     component_value = _components(components)
     _check_required_components(component_value, required_components)
@@ -1805,6 +1855,9 @@ def save_room_store(
                 if active_runtime and active_runtime.is_dir()
                 else None,
                 authority_session=authority_session,
+                hauler_selection=hauler_selection,
+                homebrew_archive=homebrew_archive,
+                jat_root=jat_root,
             )
             result: SaveResult = operations.save(
                 deletion_confirmation_token=confirmation_token,
@@ -1832,6 +1885,10 @@ def save_room_store(
                 "signature_algorithm": result.signature_algorithm,
                 "capture_policy_sha256": result.capture_policy_sha256,
                 "display_name": resolved_display_name,
+                "has_external_components": bool(descriptor and any(
+                    descriptor.to_dict()["components"][name] is not None
+                    for name in ("homebrew_recovery", "hauler_content")
+                )),
             }
             object_ref = state.get("object_ref")
             if object_ref is not None:

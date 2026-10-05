@@ -95,7 +95,8 @@ def test_unchanged_inputs_reuse_exact_prior_component_without_rcc_or_backup(tmp_
     assert restic.backups == []
 
 
-def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, monkeypatch):
+@pytest.mark.parametrize("publish_platform", ["linux-x64", None])
+def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, monkeypatch, publish_platform):
     root = _workspace(tmp_path)
     digest = components.source_input_sha256(root)
     restic = _Restic()
@@ -109,9 +110,12 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
             return json.dumps({
                 "artifactDigest": "sha256:" + "1" * 64,
                 "specificationDigest": "sha256:" + "2" * 64,
-                "platform": "linux-x64",
+                **({"platform": publish_platform} if publish_platform else {}),
                 "legacyBlueprintKey": "synthetic-blueprint",
             }).encode()
+        if argv[1:3] == ["env", "acquire"]:
+            return json.dumps({"artifactDigest": "sha256:" + "1" * 64,
+                "verification": {"valid": True, "artifactDigest": "sha256:" + "1" * 64, "platform": "linux_amd64"}}).encode()
         if argv[1:3] == ["env", "export"]:
             Path(argv[-1]).write_bytes(b"rcca payload")
             return b""
@@ -126,11 +130,13 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
         restic=restic,
         rcc_runtime="/synthetic/rcc",
     )
-    assert [call[1:3] for call in calls] == [["--version"], ["env", "publish"], ["env", "export"]]
+    assert [call[1:3] for call in calls] == [["--version"], ["env", "publish"],
+        *([["env", "acquire"]] if publish_platform is None else []), ["env", "export"]]
     assert calls[1] == [
-        "/synthetic/rcc", "env", "publish", "--robot", str(root / "robot.yaml"), "--json"
+        "/synthetic/rcc", "env", "publish", "--robot", str(root / "robot.yaml"), "--provider", "local", "--json"
     ]
-    assert calls[2][1:5] == ["env", "export", "--artifact", "sha256:" + "1" * 64]
+    assert calls[-1][1:5] == ["env", "export", "--artifact", "sha256:" + "1" * 64]
+    assert calls[-1][calls[-1].index("--provider") + 1] == "local"
     assert result["artifact_digest"] == "sha256:" + "1" * 64
     assert result["specification_digest"] == "sha256:" + "2" * 64
     assert result["snapshot"]["repository_id"] == REPOSITORY_ID

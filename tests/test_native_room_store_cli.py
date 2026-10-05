@@ -45,14 +45,16 @@ def test_room_store_lifecycle_actions_have_explicit_cli_contracts(tmp_path):
     assert [args.room_store_command for args in parsed[4:]] == ["verify", "optimize", "reconcile"]
 
 
-def test_native_save_fails_closed_when_image_capture_is_requested(tmp_path, monkeypatch):
+def test_native_save_passes_local_image_selection_to_the_opened_store(tmp_path, monkeypatch):
     from josh_room import cli
 
     monkeypatch.setattr(cli, "_room_identity", lambda _value: ("demo", "Demo"))
     monkeypatch.setattr(cli, "_effective_dimension", lambda _args: type("Dimension", (), {"provider": "minio"})())
     monkeypatch.setattr(cli, "_backend_for_args", lambda *_args: object())
     monkeypatch.setattr(cli, "_recipients", lambda: ["age1synthetic", "age1recovery"])
-    monkeypatch.setattr(cli, "save_room_store", lambda *_args, **_kwargs: pytest.fail("capture-dependent Save must not reach the bridge"))
+    calls = []
+    monkeypatch.setattr(cli, "_jat_root", lambda: tmp_path / "managed-jat")
+    monkeypatch.setattr(cli, "save_room_store", lambda *args, **kwargs: calls.append(kwargs) or {"ok": True})
 
     args = build_parser().parse_args([
         "snapshot", "create", "demo", "--source", str(tmp_path),
@@ -60,8 +62,35 @@ def test_native_save_fails_closed_when_image_capture_is_requested(tmp_path, monk
     ])
     args._selected_encryption_material = object()
 
-    with pytest.raises(ValueError, match="image capture is unavailable"):
-        cli.dispatch(args, tmp_path / "instance")
+    assert cli.dispatch(args, tmp_path / "instance")["ok"] is True
+    assert calls[0]["hauler_selection"]["images"] == ["example/image:latest"]
+    assert calls[0]["hauler_selection"]["all_images"] is False
+    assert calls[0]["jat_root"] == tmp_path / "managed-jat"
+
+
+def test_native_preview_accepts_capture_selection_without_capturing(tmp_path, monkeypatch):
+    from josh_room import cli
+
+    calls = []
+    monkeypatch.setattr(cli, "_room_identity", lambda _value: ("demo", "Demo"))
+    monkeypatch.setattr(cli, "_effective_dimension", lambda _args: type("Dimension", (), {"provider": "minio"})())
+    monkeypatch.setattr(cli, "preview_room_store", lambda *args, **kwargs: calls.append(kwargs) or {"ok": True})
+    args = build_parser().parse_args([
+        "snapshot", "preview", "demo", "--source", str(tmp_path),
+        "--backend", "minio", "--all-images",
+        "--hauler-file", str(tmp_path / "extra.txt"), "extra.txt",
+        "--hauler-manifest", str(tmp_path / "manifest.yaml"),
+        "--brew-archive", str(tmp_path / "brew.tar.zst"),
+    ])
+    args._selected_encryption_material = object()
+
+    assert cli.dispatch(args, tmp_path / "instance")["ok"] is True
+    assert calls[0]["hauler_selection"] == {
+        "images": [], "all_images": True,
+        "manifests": [tmp_path / "manifest.yaml"],
+        "files": [(tmp_path / "extra.txt", "extra.txt")],
+    }
+    assert calls[0]["homebrew_archive"] == tmp_path / "brew.tar.zst"
 
 
 def test_native_save_sends_rcc_workspace_to_component_resolver(tmp_path, monkeypatch):

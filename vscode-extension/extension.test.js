@@ -1497,7 +1497,7 @@ test("native Save confirms suspicious deletions with the exact preview token", a
   assert.match(fixture.warningCalls[0][0], /25 deleted entries/);
 });
 
-test("a trusted same-session no-event Save skips Preview and reports the exact no-op receipt", async () => {
+for (const externalComponents of [false, true]) test(`trusted no-event Save ${externalComponents ? "rechecks external components" : "skips all controller and secret work"}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-fast-noop-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
   const fixture = createNativeSaveFixture(root, {
@@ -1514,6 +1514,7 @@ test("a trusted same-session no-event Save skips Preview and reports the exact n
       workspace_signature: "c".repeat(64),
       signature_algorithm: "josh-room-stat-v1",
       capture_policy_sha256: policySha,
+      has_external_components: externalComponents,
     },
     onSave: (_args, { root: saveRoot, project }) => {
       project.latest = "jat-2";
@@ -1535,13 +1536,32 @@ test("a trusted same-session no-event Save skips Preview and reports the exact n
     { label: "Demo Room", project: fixture.project, allImages: false },
     { label: "Workspace only", allImages: false },
   );
-  fixture.vscode.infoResponses.push("Already saved", "Save", undefined);
+  fixture.vscode.infoResponses.push(...(externalComponents ? ["Save", undefined] : ["Already saved", "Save", undefined]));
 
-  assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
-
-  assert.equal(fixture.spawnHarness.calls.length, callsAfterSave);
-  assert.equal(fixture.secretReads, secretReadsAfterSave);
-  assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
+  const samples = [];
+  for (let index = 0; index < (externalComponents ? 1 : 30); index += 1) {
+    if (index) {
+      fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
+      fixture.vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+      fixture.vscode.infoResponses.push(undefined);
+    }
+    const started = process.hrtime.bigint();
+    assert.equal(await fixture.extension.__test__.saveRoom(), externalComponents ? "saved" : "already-saved");
+    samples.push(Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  if (externalComponents) {
+    assert.ok(fixture.spawnHarness.calls.length > callsAfterSave);
+    assert.ok(fixture.secretReads > secretReadsAfterSave);
+  } else {
+    assert.equal(fixture.spawnHarness.calls.length, callsAfterSave);
+    assert.equal(fixture.secretReads, secretReadsAfterSave);
+    assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
+    if (process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH) fs.writeFileSync(
+      process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH,
+      `${JSON.stringify({ fixture: "real Save command with synthetic native UI and prior verified receipt", samples_ms: samples,
+        controller_calls: 0, secret_reads: 0, provider_rcc_jat_restic_calls: 0 })}\n`,
+    );
+  }
   assert.equal(fixture.statusItem.text.includes("Saved"), true);
 });
 

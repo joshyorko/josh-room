@@ -642,6 +642,22 @@ def test_windows_private_paths_reject_unprotected_or_wrong_owner_dacl(tmp_path, 
     assert failure.value.code == module.ResticStoreErrorCode.INVALID_CONFIGURATION
 
 
+def test_capture_byte_totals_include_component_and_workspace_backups(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store, _factory = initialized_store(tmp_path, [
+        FakeProcess(summary("b" * 64, data_added=101)),
+        FakeProcess(summary("c" * 64, data_added=202)),
+        FakeProcess(summary(None)),
+    ])
+    with store:
+        store.backup(workspace)
+        store.backup(workspace)
+        store.backup(workspace)
+
+    assert store.data_added_bytes == 303
+
+
 def test_backup_uses_parent_relative_dot_and_returns_noop_without_snapshot(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

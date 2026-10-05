@@ -817,6 +817,7 @@ class RoomStoreOperations:
         try:
             with store as opened:
                 repository_info = opened.initialize()
+                initial_data_added = getattr(opened, "data_added_bytes", None)
                 self._bind_repository(keyset, repository_info.repository_id)
                 if selected_parent is not None:
                     parent_body = selected_parent.to_dict()
@@ -840,16 +841,6 @@ class RoomStoreOperations:
                     raise RoomStoreOperationsError(
                         "Room Store catalog points to another repository"
                     )
-                components = copy.deepcopy(self.descriptor_metadata["components"])
-                if self.resolve_components is not None:
-                    resolved_components = self.resolve_components(opened, latest)
-                    if not isinstance(resolved_components, Mapping) or set(
-                        resolved_components
-                    ) != set(components):
-                        raise RoomStoreOperationsError(
-                            "native component resolver returned an invalid component set"
-                        )
-                    components = copy.deepcopy(dict(resolved_components))
                 preview = self._deletion_preview(
                     selected_parent,
                     before,
@@ -868,6 +859,16 @@ class RoomStoreOperations:
                         "suspicious deletions require the current preview confirmation token",
                         deletion_confirmation_token=preview.deletion_confirmation_token,
                     )
+                components = copy.deepcopy(self.descriptor_metadata["components"])
+                if self.resolve_components is not None:
+                    resolved_components = self.resolve_components(opened, latest)
+                    if not isinstance(resolved_components, Mapping) or set(
+                        resolved_components
+                    ) != set(components):
+                        raise RoomStoreOperationsError(
+                            "native component resolver returned an invalid component set"
+                        )
+                    components = copy.deepcopy(dict(resolved_components))
                 catalog_signature = (
                     self.read_catalog_signature()
                     if self.read_catalog_signature is not None
@@ -1114,7 +1115,8 @@ class RoomStoreOperations:
                     "saved-but-dirty" if dirty else "saved",
                     descriptor,
                     before.logical_bytes,
-                    summary.data_added,
+                    (opened.data_added_bytes - initial_data_added
+                     if initial_data_added is not None else summary.data_added),
                     snapshot.snapshot_id,
                     "committed",
                     before.signature,

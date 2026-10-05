@@ -598,6 +598,7 @@ class ResticStore:
         self._entered = False
         self._active_process: Any | None = None
         self._repository_info: RepositoryInfo | None = None
+        self.data_added_bytes = 0
         self._snapshot_info: dict[str, SnapshotInfo] = {}
         if command_timeout <= 0 or max_json_event_bytes <= 0 or max_capture_bytes <= 0 or max_entries <= 0:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
@@ -971,6 +972,7 @@ class ResticStore:
                     orphan_snapshot_id=summary.snapshot_id,
                 )
             self._raise_exit(code, orphan_snapshot_id=summary.snapshot_id)
+            self.data_added_bytes += summary.data_added
             return replace(
                 summary,
                 force_scan=force_scan,

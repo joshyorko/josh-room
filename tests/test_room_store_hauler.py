@@ -68,6 +68,7 @@ class _Hauler:
         self._touch_store(store)
         self.calls.append(("files", tuple(name for _path, name in files), kwargs))
         self.rows.extend({"Reference": name, "Type": "file", "Digest": FILE_DIGEST} for _path, name in files)
+        self.rows.extend({"Reference": name, "Type": "image", "Digest": IMAGE_DIGEST} for name in kwargs.get("images", ()))
 
     def inventory(self, store, temp):
         self.calls.append(("inventory",))
@@ -113,6 +114,86 @@ def _capture(tmp_path, *, hauler=None, restic=None, **kwargs):
     )
 
 
+def test_capture_retains_alias_and_platform_identity():
+    rows = [
+        {"Reference": "registry.example.test/first:latest", "Platform": "linux/amd64", "Digest": IMAGE_DIGEST, "Type": "image"},
+        {"Reference": "registry.example.test/second:latest", "Platform": "linux/amd64", "Digest": IMAGE_DIGEST, "Type": "image"},
+    ]
+
+    result = component._native_references(rows)
+
+    assert len(result) == 2
+    assert {row["reference_sha256"] for row in result} == {hashlib.sha256(row["Reference"].encode()).hexdigest() for row in rows}
+    assert all(row["platform_sha256"] == hashlib.sha256(b"linux/amd64").hexdigest() for row in result)
+
+
+def test_capture_rejects_reserved_jat_anchor_before_backup(tmp_path):
+    source = tmp_path / "extra"
+    source.write_bytes(b"synthetic")
+    restic = _Restic()
+    hauler = _Hauler([{ "Reference": "hauler/rcc-environment.rcca:latest", "Type": "file", "Digest": FILE_DIGEST }])
+    with pytest.raises(component.RoomStoreHaulerError, match="reserved"):
+        _capture(tmp_path, hauler=hauler, restic=restic, files=[(source, "extra")])
+    assert restic.backups == []
+
+
+def test_captured_hauler_archive_respects_portable_input_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(component, "MAX_ARCHIVE_BYTES", 4, raising=False)
+    source = tmp_path / "extra"
+    source.write_bytes(b"synthetic")
+    restic = _Restic()
+    with pytest.raises(component.RoomStoreHaulerError, match="export limit"):
+        _capture(tmp_path, restic=restic, files=[(source, "extra")])
+    assert restic.backups == []
+
+
+def test_hauler_reads_private_frozen_file_bytes(tmp_path):
+    original = tmp_path / "input.txt"
+    original.write_bytes(b"expected frozen bytes")
+    initial = original.stat()
+    class ConcurrentEditHauler(_Hauler):
+        def sync_files(self, store, temp, files, **kwargs):
+            original.write_bytes(b"concurrent other bytes")
+            try:
+                assert Path(files[0][0]).read_bytes() == b"expected frozen bytes"
+                assert Path(files[0][0]) != original
+                super().sync_files(store, temp, files, **kwargs)
+            finally:
+                original.write_bytes(b"expected frozen bytes")
+                os.utime(original, ns=(initial.st_atime_ns, initial.st_mtime_ns))
+    result = _capture(tmp_path, hauler=ConcurrentEditHauler(), files=[(original, "input.txt")])
+    assert result["kind"] == "hauler-content"
+
+
+def test_local_image_identity_reuses_saved_component_without_recapture(tmp_path):
+    hauler = _Hauler()
+    restic = _Restic()
+    local = [("synthetic:latest", "sha256:" + "1" * 64)]
+    first = _capture(tmp_path, hauler=hauler, restic=restic, local_images=local)
+    assert any(call[0] == "files" and call[2]["images"] == ["synthetic:latest"] for call in hauler.calls)
+    before = (len(hauler.calls), len(restic.backups))
+
+    unchanged = _capture(tmp_path, hauler=hauler, restic=restic, local_images=local, prior_component=first)
+
+    assert unchanged == first
+    assert (len(hauler.calls), len(restic.backups)) == before
+    changed = _capture(tmp_path, hauler=hauler, restic=restic,
+                       local_images=[("synthetic:latest", "sha256:" + "2" * 64)], prior_component=first)
+    assert changed["source_input_sha256"] != first["source_input_sha256"]
+    assert len(restic.backups) == before[1] + 1
+
+
+def test_managed_local_images_delegate_to_jat_native_local_capture(tmp_path):
+    adapter = object.__new__(runner.ManagedHaulerAdapter)
+    calls = []
+    adapter._invoke = lambda operation, request: calls.append((operation, request))
+
+    adapter.sync_files(tmp_path / "store", tmp_path / "temp", [], images=["synthetic:latest"])
+
+    assert calls[0][0] == "sync_files"
+    assert calls[0][1]["images"] == ["synthetic:latest"]
+
+
 def test_pinned_image_reuses_prior_without_hauler_or_restic(tmp_path):
     image = "registry.example/team/app@" + IMAGE_DIGEST
     hauler = _Hauler()
@@ -139,7 +220,7 @@ def test_mutable_image_resolves_natively_then_reuses_matching_digest(tmp_path):
     digest = component._source_identity(
         images=[image], manifests=[], files=[], hauler_version="2.1.1"
     )[0]
-    prior = _prior(source_hash=digest)
+    prior = _prior(source_hash=digest, refs=[{"digest": IMAGE_DIGEST, "kind": "image", "reference_sha256": hashlib.sha256(image.encode()).hexdigest()}])
     result = _capture(tmp_path, hauler=hauler, restic=restic, prior_component=prior, requested_images=[image])
     assert result == prior
     assert [call[0] for call in hauler.calls] == ["images", "inventory"]
@@ -160,8 +241,8 @@ def test_capture_saves_only_requested_content_archive_and_native_references(tmp_
         files=[(file_path, "fixture.bin")],
     )
     assert result["references"] == [
-        {"digest": IMAGE_DIGEST, "kind": "image"},
-        {"digest": FILE_DIGEST, "kind": "file"},
+        {"digest": IMAGE_DIGEST, "kind": "image", "reference_sha256": hashlib.sha256(image.encode()).hexdigest()},
+        {"digest": FILE_DIGEST, "kind": "file", "reference_sha256": hashlib.sha256(b"fixture.bin").hexdigest()},
     ]
     assert result["hauler_version"] == "2.1.1"
     assert result["source_input_sha256"]
@@ -185,6 +266,7 @@ def test_native_media_type_is_preserved_without_inference(tmp_path):
         "digest": IMAGE_DIGEST,
         "kind": "chart",
         "media_type": "application/vnd.example.chart.v1",
+        "reference_sha256": hashlib.sha256(b"chart:latest").hexdigest(),
     }]
 
 
@@ -244,6 +326,21 @@ def test_empty_selection_is_no_component(tmp_path):
     hauler = _Hauler()
     assert _capture(tmp_path, hauler=hauler) is None
     assert hauler.calls == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX owner/mode protection")
+def test_selected_owned_rcc_home_is_secured_before_component_execution(tmp_path, monkeypatch):
+    root = tmp_path / "jat"
+    root.mkdir()
+    home = tmp_path / "rcc-home"
+    home.mkdir(mode=0o750)
+    monkeypatch.setattr(runner.jat, "_managed_runtime", lambda _root: (
+        "/synthetic/rcc", JAT_ARTIFACT, {"ROBOCORP_HOME": str(home)},
+    ))
+
+    runner._require_managed_runtime(root)
+
+    assert stat.S_IMODE(home.stat().st_mode) == 0o700
 
 
 def test_managed_adapter_factory_observes_hauler_inside_selected_artifact(tmp_path, monkeypatch):

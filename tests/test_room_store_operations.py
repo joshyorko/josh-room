@@ -597,6 +597,9 @@ def test_preview_requires_confirmation_for_mass_deletion_and_reports_scanned_byt
     assert preview.deletion_confirmation_token
     assert store.initialized is False
     operations.ensure_keyset = ensure_keyset
+    operations.resolve_components = lambda *_args: pytest.fail(
+        "unconfirmed mass deletion must not capture any component"
+    )
 
     with pytest.raises(RoomStoreOperationsError, match="confirmation token") as failure:
         operations.save()

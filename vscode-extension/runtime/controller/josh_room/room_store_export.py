@@ -399,12 +399,14 @@ def _verify_inspection(
                 for index, row in enumerate(rows)
                 if index not in used
                 and row.get("digest") == expected["digest"]
+                and ("reference_sha256" not in expected or hashlib.sha256(str(row.get("reference", "")).encode("utf-8")).hexdigest() == expected["reference_sha256"])
+                and ("platform_sha256" not in expected or hashlib.sha256(str(row.get("platform", "")).encode("utf-8")).hexdigest() == expected["platform_sha256"])
                 and (
                     "kind" not in expected
                     or str(row.get("type", "")).lower() == expected["kind"]
                 )
             ]
-            if len(matches) != 1:
+            if not matches or ("reference_sha256" in expected and len(matches) != 1):
                 raise PortableExportError("Hauler component identities do not match")
             used.add(matches[0])
 

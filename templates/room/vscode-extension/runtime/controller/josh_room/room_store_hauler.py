@@ -19,6 +19,7 @@ from .private_paths import (
 )
 
 MAX_SOURCE_FILE = 8 * 1024 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_SOURCES = 4096
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -135,10 +136,11 @@ def _source_identity(
     manifests: Sequence[Path],
     files: Sequence[tuple[Path, str]],
     hauler_version: str,
+    local_images: Sequence[tuple[str, str]] = (),
 ) -> tuple[str, bool]:
     if not isinstance(hauler_version, str) or not _VERSION.fullmatch(hauler_version):
         raise RoomStoreHaulerError("selected Hauler version is invalid")
-    if len(images) + len(manifests) + len(files) > MAX_SOURCES:
+    if len(images) + len(manifests) + len(files) + len(local_images) > MAX_SOURCES:
         raise RoomStoreHaulerError("Hauler selection contains too many sources")
     image_refs = [_validate_image_reference(item) for item in images]
     if len(set(image_refs)) != len(image_refs):
@@ -147,6 +149,13 @@ def _source_identity(
     digest.update(hauler_version.encode("ascii") + b"\0")
     for image in sorted(image_refs):
         digest.update(b"image\0" + image.encode("utf-8") + b"\0")
+    local_names = set()
+    for image, identity in sorted(local_images):
+        image = _validate_image_reference(image)
+        if image in local_names or not isinstance(identity, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", identity) is None:
+            raise RoomStoreHaulerError("local image identity is invalid")
+        local_names.add(image)
+        digest.update(b"local-image\0" + image.encode("utf-8") + b"\0" + identity.encode("ascii") + b"\0")
     pinned = all("@sha256:" in image for image in image_refs)
     for index, manifest in enumerate(manifests):
         manifest_digest, size = _read_input(Path(manifest), MAX_MANIFEST_BYTES)
@@ -164,10 +173,34 @@ def _source_identity(
     return digest.hexdigest(), pinned
 
 
+def _freeze_input(source_path: Path, owned: Path, limit: int, cancellation) -> None:
+    before = source_path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise RoomStoreHaulerError("Hauler input is unsafe")
+    descriptor = os.open(source_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as source, owned.open("xb") as output:
+        opened = os.fstat(source.fileno())
+        if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino) or opened.st_size > limit:
+            raise RoomStoreHaulerError("Hauler input changed while being staged")
+        protect_private_file(owned)
+        copied = 0
+        while block := source.read(1024 * 1024):
+            _check_cancel(cancellation)
+            copied += len(block)
+            if copied > limit:
+                raise RoomStoreHaulerError("Hauler input exceeds its size limit")
+            output.write(block)
+        after = os.fstat(source.fileno())
+        if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+        ) or copied != opened.st_size:
+            raise RoomStoreHaulerError("Hauler input changed while being staged")
+
+
 def _native_references(inventory: object) -> list[dict[str, str]]:
     if not isinstance(inventory, list) or not inventory or len(inventory) > MAX_SOURCES:
         raise RoomStoreHaulerError("Hauler returned invalid component inventory")
-    references: dict[tuple[str, str, str], dict[str, str]] = {}
+    references: dict[tuple[str, ...], dict[str, str]] = {}
     for item in inventory:
         if not isinstance(item, Mapping):
             raise RoomStoreHaulerError("Hauler returned invalid component inventory")
@@ -177,6 +210,24 @@ def _native_references(inventory: object) -> list[dict[str, str]]:
         if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             raise RoomStoreHaulerError("Hauler inventory is missing immutable digest evidence")
         value = {"digest": digest}
+        native_reference = item.get("Reference", item.get("reference"))
+        native_platform = item.get("Platform", item.get("platform"))
+        if native_reference is not None:
+            if (not isinstance(native_reference, str) or not native_reference
+                    or len(native_reference) > 4096 or any(character.isspace() for character in native_reference)):
+                raise RoomStoreHaulerError("Hauler reference is invalid")
+            if native_reference in {
+                "hauler/joshs-all-the-things-workspace.tar.zst:latest",
+                "hauler/homebrew-recovery.tar.zst:latest",
+                "hauler/rcc-environment.rcca:latest",
+                "hauler/rcc-environment-metadata.json:latest",
+            } or native_reference.endswith(".rcca:latest"):
+                raise RoomStoreHaulerError("Hauler content contains a reserved JAT anchor")
+            value["reference_sha256"] = hashlib.sha256(native_reference.encode("utf-8")).hexdigest()
+        if native_platform is not None:
+            if not isinstance(native_platform, str) or not native_platform or len(native_platform) > 128:
+                raise RoomStoreHaulerError("Hauler platform is invalid")
+            value["platform_sha256"] = hashlib.sha256(native_platform.encode("utf-8")).hexdigest()
         kind = str(kind_value).lower() if isinstance(kind_value, str) else ""
         if kind in _KINDS:
             value["kind"] = kind
@@ -186,7 +237,8 @@ def _native_references(inventory: object) -> list[dict[str, str]]:
             value["media_type"] = media_type
         if "kind" not in value and "media_type" not in value:
             raise RoomStoreHaulerError("Hauler inventory lacks native type evidence")
-        identity = (digest, value.get("kind", ""), value.get("media_type", ""))
+        identity = (digest, value.get("kind", ""), value.get("media_type", ""),
+                    value.get("reference_sha256", ""), value.get("platform_sha256", ""))
         references[identity] = value
     return [references[key] for key in sorted(references)]
 
@@ -204,6 +256,11 @@ def _prior_references(value: object) -> list[dict[str, str]] | None:
         if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             return None
         reference = {"digest": digest}
+        for field in ("reference_sha256", "platform_sha256"):
+            if field in item:
+                if not isinstance(item[field], str) or not item[field]:
+                    return None
+                reference[field] = item[field]
         if kind is not None:
             if kind not in _KINDS:
                 return None
@@ -215,7 +272,7 @@ def _prior_references(value: object) -> list[dict[str, str]] | None:
         if len(reference) == 1:
             return None
         references.append(reference)
-    return sorted(references, key=lambda item: (item["digest"], item.get("kind", ""), item.get("media_type", "")))
+    return sorted(references, key=lambda item: (item["digest"], item.get("kind", ""), item.get("media_type", ""), item.get("reference_sha256", ""), item.get("platform_sha256", "")))
 
 
 def _validate_prior(
@@ -244,6 +301,7 @@ def capture_hauler_component(
     hauler: Any,
     hauler_version: str,
     requested_images: Sequence[str] = (),
+    local_images: Sequence[tuple[str, str]] = (),
     manifests: Sequence[Path] = (),
     files: Sequence[tuple[Path, str]] = (),
     cancellation: Any = None,
@@ -255,13 +313,14 @@ def capture_hauler_component(
     images = tuple(requested_images)
     manifest_paths = tuple(Path(path) for path in manifests)
     file_inputs = tuple((Path(path), name) for path, name in files)
-    if not images and not manifest_paths and not file_inputs:
+    if not images and not manifest_paths and not file_inputs and not local_images:
         return None
     source_digest, pinned_sources = _source_identity(
         images=images,
         manifests=manifest_paths,
         files=file_inputs,
         hauler_version=hauler_version,
+        local_images=local_images,
     )
     prior_snapshot = None
     prior_refs = None
@@ -288,6 +347,22 @@ def capture_hauler_component(
         component_stage.mkdir(mode=0o700)
         protect_private_directory(component_stage)
         try:
+            input_stage = private / "inputs"
+            input_stage.mkdir(mode=0o700)
+            protect_private_directory(input_stage)
+            frozen_files = []
+            for index, (source_path, name) in enumerate(file_inputs):
+                owned = input_stage / f"file-{index}"
+                _freeze_input(Path(source_path), owned, MAX_SOURCE_FILE, cancellation)
+                frozen_files.append((owned, name))
+            frozen_manifests = []
+            for index, manifest in enumerate(manifest_paths):
+                owned = input_stage / f"manifest-{index}.yaml"
+                _freeze_input(manifest, owned, MAX_MANIFEST_BYTES, cancellation)
+                frozen_manifests.append(owned)
+            if _source_identity(images=images, manifests=frozen_manifests, files=frozen_files,
+                                hauler_version=hauler_version, local_images=local_images)[0] != source_digest:
+                raise RoomStoreHaulerError("Hauler inputs changed while being staged")
             if images:
                 image_list = private / "selected-images.txt"
                 image_list.write_text("".join(f"{image}\n" for image in images), encoding="utf-8")
@@ -297,16 +372,18 @@ def capture_hauler_component(
                 _check_cancel(cancellation)
             if manifest_paths:
                 _check_cancel(cancellation)
-                _hauler_call(lambda: hauler.sync(hauler_store, hauler_temp, *manifest_paths))
+                _hauler_call(lambda: hauler.sync(hauler_store, hauler_temp, *frozen_manifests))
                 _check_cancel(cancellation)
-            if file_inputs:
+            if file_inputs or local_images:
                 _check_cancel(cancellation)
-                _hauler_call(lambda: hauler.sync_files(hauler_store, hauler_temp, list(file_inputs)))
+                _hauler_call(lambda: hauler.sync_files(hauler_store, hauler_temp, frozen_files,
+                                                      **({"images": [name for name, _identity in local_images]} if local_images else {})))
                 _check_cancel(cancellation)
             protect_private_directory(hauler_store)
             protect_private_directory(hauler_temp)
             inventory = _hauler_call(lambda: hauler.inventory(hauler_store, hauler_temp))
             _verify_requested_images(images, inventory)
+            _verify_requested_images([name for name, _identity in local_images], inventory)
             references = _native_references(inventory)
             if prior_refs is not None and prior_refs == references and prior_component.get("source_input_sha256") == source_digest and prior_component.get("hauler_version") == hauler_version:
                 return dict(prior_component)
@@ -317,6 +394,8 @@ def capture_hauler_component(
             metadata = archive.lstat()
             if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode) or metadata.st_size <= 0:
                 raise RoomStoreHaulerError("Hauler produced an invalid component archive")
+            if metadata.st_size > MAX_ARCHIVE_BYTES:
+                raise RoomStoreHaulerError("Hauler archive exceeds the portable export limit")
             protect_private_file(archive)
             archive_digest = hashlib.sha256()
             with archive.open("rb") as source:
@@ -339,6 +418,7 @@ def capture_hauler_component(
                 manifests=manifest_paths,
                 files=file_inputs,
                 hauler_version=hauler_version,
+                local_images=local_images,
             )[0] != source_digest:
                 raise RoomStoreHaulerError("Hauler selection changed during capture")
             _check_cancel(cancellation)

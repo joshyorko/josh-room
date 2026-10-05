@@ -1690,6 +1690,8 @@ function roomStorePreviewText(preview) {
   ];
   if (preview.deleted_paths?.length) lines.push(`${preview.deleted_paths.length} deleted entries`);
   if (preview.rcc_capture_pending) lines.push("RCC environment capture runs during Save.");
+  if (preview.hauler_capture_pending) lines.push("Selected OCI and Hauler content will be checked during Save.");
+  if (preview.homebrew_capture_pending) lines.push("Homebrew recovery will be checked during Save.");
   return lines.join("\n");
 }
 
@@ -1831,6 +1833,10 @@ function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   workspaceBindingTrusted = true;
   dirtyBuffers.clear();
   setRoomState("clean", { bindingTrusted: true });
+  if (allImages || result.has_external_components) {
+    trustedSaveReceipt = undefined;
+    return;
+  }
   trustedSaveReceipt = Object.freeze({
     canonical_source_path: canonicalSource,
     project_id: marker.project_id,
