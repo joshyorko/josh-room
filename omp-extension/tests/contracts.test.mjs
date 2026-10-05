@@ -11,6 +11,7 @@ import {
 	roomStatusText,
 	snapshotOptions,
 	checkpointEntry,
+	presentSaveOutcome,
 	ROOM_TOOL_APPROVALS,
 } from "../src/contracts.ts";
 
@@ -94,7 +95,7 @@ test("status accepts the authoritative path-bound changed receipt and filters pr
 
 test("save, JAT inspection and session provenance omit paths and secrets", () => {
 	assert.deepEqual(parseSaveResult({ ok: true, project_id: "demo-room", snapshot_id: "jat-new", previous_snapshot_id: "jat-old", ciphertext_size: 4, source: "/private/workspace" }), {
-		kind: "saved", projectId: "demo-room", snapshotId: "jat-new", previousSnapshotId: "jat-old", ciphertextSize: 4,
+		kind: "saved", status: "saved", projectId: "demo-room", snapshotId: "jat-new", previousSnapshotId: "jat-old", ciphertextSize: 4, dataAddedBytes: 4,
 	});
 	assert.deepEqual(parseInspectResult({ ok: true, success: true, operation: "inspect", exit_status: 0, images: [{ name: "private.registry/team/image" }], haul: "/private/file.tar" }), {
 		kind: "jat-inspection", imageCount: 1,
@@ -104,9 +105,53 @@ test("save, JAT inspection and session provenance omit paths and secrets", () =>
 	assert.deepEqual(parseRoomsResult({ ok: true, projects: [{ id: "demo-room", display_name: "Demo Room", private_endpoint: "https://secret.invalid" }] }), { kind: "rooms", rooms: [{ projectId: "demo-room", displayName: "Demo Room" }] });
 	assert.deepEqual(parseDoctorResult({ format_version: 1, product: "josh-room", ok: false, selected_backend: "local", selected_ide: "terminal", checks: [{ name: "age", ok: false, remediation: "/private/path" }] }), { kind: "doctor", ok: false, checks: [{ name: "age", ok: false }] });
 	assert.equal(parseDoctorResult({ format_version: 2, product: "josh-room", ok: true, selected_backend: "local", selected_ide: "terminal", checks: [] }), undefined);
-	assert.deepEqual(checkpointEntry({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-old" }, { kind: "saved", projectId: "demo-room", snapshotId: "jat-new", previousSnapshotId: "jat-old", ciphertextSize: 4 }), {
+	assert.deepEqual(checkpointEntry({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-old" }, { kind: "saved", status: "saved", projectId: "demo-room", snapshotId: "jat-new", previousSnapshotId: "jat-old", ciphertextSize: 4, dataAddedBytes: 4 }), {
 		format_version: 1, dimension_id: "local", project_id: "demo-room", previous_snapshot_id: "jat-old", snapshot_id: "jat-new",
 	});
+});
+
+test("native logical Save receipts prefer aggregate data bytes, preserve dirty status and accept no-op without ciphertext", () => {
+	const saved = parseSaveResult({
+		ok: true, status: "saved", project_id: "demo-room", snapshot_id: "logical-new",
+		workspace_snapshot_id: "restic-new", workspace_parent_snapshot_id: "restic-old",
+		data_added_bytes: 1234, scanned_bytes: 4096, has_external_components: true,
+		ciphertext_size: 2048,
+	});
+	assert.deepEqual(saved, {
+		kind: "saved", status: "saved", projectId: "demo-room", snapshotId: "logical-new",
+		ciphertextSize: 2048, dataAddedBytes: 1234,
+	});
+	assert.deepEqual(parseSaveResult({
+		ok: true, status: "saved-but-dirty", project_id: "demo-room", snapshot_id: "logical-dirty",
+		data_added_bytes: 512, has_external_components: false,
+	}), {
+		kind: "saved", status: "saved-but-dirty", projectId: "demo-room", snapshotId: "logical-dirty",
+		dataAddedBytes: 512,
+	});
+	assert.deepEqual(parseSaveResult({ ok: true, status: "already-saved", project_id: "demo-room", snapshot_id: "logical-current", data_added_bytes: 0 }), {
+		kind: "already-saved", status: "already-saved", projectId: "demo-room", snapshotId: "logical-current", dataAddedBytes: 0,
+	});
+	assert.equal(parseSaveResult({ ok: true, status: "future-save-state", project_id: "demo-room", snapshot_id: "logical-new", data_added_bytes: 1, ciphertext_size: 1 }), undefined);
+	assert.equal(parseSaveResult({ ok: true, status: "already-saved", project_id: "demo-room", snapshot_id: "logical-current", data_added_bytes: 1 }), undefined);
+	assert.equal(parseSaveResult({ ok: true, status: "saved", project_id: "demo-room", snapshot_id: "logical-new", data_added_bytes: 1.5 }), undefined);
+});
+
+test("Save outcome does not create provenance for already-saved and stays dirty after saved-but-dirty", () => {
+	const context = { kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "logical-old" };
+	const already = presentSaveOutcome(context, { kind: "already-saved", status: "already-saved", projectId: "demo-room", snapshotId: "logical-old", dataAddedBytes: 0 });
+	assert.match(already.message, /^Already saved/);
+	assert.match(already.message, /0 bytes added/);
+	assert.equal(already.statusText, "room:Demo Room ✓");
+	assert.equal(already.checkpointEntry, undefined);
+	assert.equal(already.details.status, "already-saved");
+	assert.equal(already.details.data_added_bytes, 0);
+
+	const dirty = presentSaveOutcome(context, { kind: "saved", status: "saved-but-dirty", projectId: "demo-room", snapshotId: "logical-new", previousSnapshotId: "logical-old", dataAddedBytes: 12 });
+	assert.match(dirty.message, /workspace changed during Save/);
+	assert.equal(dirty.statusText, "room:Demo Room ●");
+	assert.equal(dirty.details.status, "saved-but-dirty");
+	assert.equal(dirty.details.data_added_bytes, 12);
+	assert.equal(dirty.checkpointEntry.snapshot_id, "logical-new");
 });
 
 test("status glyph and theme stay presentation-only", () => {

@@ -1,6 +1,6 @@
 import {
-	checkpointEntry,
 	ROOM_TOOL_APPROVALS,
+	presentSaveOutcome,
 	roomStatusText,
 	snapshotOptions,
 	type RoomContext,
@@ -86,15 +86,10 @@ export function registerRoomTools(api: ExtensionAPI, controller: RoomController)
 	api.registerTool(tool("room_save", "Save Room Checkpoint", "Save the current Josh Room workspace as an explicit checkpoint.", ROOM_TOOL_APPROVALS.room_save, noArguments, async (_id, _params, signal, onUpdate, ctx) => {
 		try {
 			const { context, receipt } = await controller.save(ctx.cwd, signal, (message) => onUpdate?.({ content: [{ type: "text", text: message }] }));
-			api.appendEntry(PROVENANCE_TYPE, checkpointEntry(context, receipt));
-			ctx.ui.setStatus("josh-room", roomStatusText({ ...context, snapshotId: receipt.snapshotId }, { kind: "known", state: "clean", projectId: receipt.projectId, snapshotId: receipt.snapshotId }));
-			return output(`Saved Room ${context.displayName} → ${receipt.snapshotId}`, {
-				ok: true,
-				project_id: receipt.projectId,
-				previous_snapshot_id: receipt.previousSnapshotId,
-				snapshot_id: receipt.snapshotId,
-				ciphertext_size: receipt.ciphertextSize,
-			});
+			const outcome = presentSaveOutcome(context, receipt);
+			if (outcome.checkpointEntry) api.appendEntry(PROVENANCE_TYPE, outcome.checkpointEntry);
+			ctx.ui.setStatus("josh-room", outcome.statusText);
+			return output(outcome.message, outcome.details);
 		} catch (error) { return errorResult(error); }
 	}));
 	api.registerTool(tool("jat_inspect", "Inspect JAT", "Inspect a local JAT haul through Josh Room.", ROOM_TOOL_APPROVALS.jat_inspect, haulArguments, async (_id, params, signal, _update, ctx) => {

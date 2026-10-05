@@ -89,7 +89,12 @@ export function createRoomController(run: CliRunner = runRoomCli): RoomControlle
 				{ cwd, signal, timeoutMs: 30 * 60_000 },
 			);
 			const parsed = requireResult(raw, parseSaveResult);
-			if (parsed.projectId !== context.projectId || parsed.snapshotId === context.snapshotId) throw new RoomCliError("invalid-result");
+			if (parsed.projectId !== context.projectId) throw new RoomCliError("invalid-result");
+			if (parsed.kind === "already-saved") {
+				if (parsed.snapshotId !== context.snapshotId) throw new RoomCliError("invalid-result");
+				return { context, receipt: parsed };
+			}
+			if (parsed.snapshotId === context.snapshotId) throw new RoomCliError("invalid-result");
 			return {
 				context,
 				receipt: { ...parsed, previousSnapshotId: parsed.previousSnapshotId ?? context.snapshotId },

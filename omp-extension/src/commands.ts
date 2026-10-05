@@ -1,4 +1,4 @@
-import { checkpointEntry, roomStatusText, snapshotOptions } from "./contracts.ts";
+import { presentSaveOutcome, roomStatusText, snapshotOptions } from "./contracts.ts";
 import type { RoomController } from "./controller.ts";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { RoomCliError } from "./process.ts";
@@ -110,9 +110,10 @@ export function registerRoomCommand(api: ExtensionAPI, controller: RoomControlle
 					ctx.ui.setWorkingMessage("Saving Josh Room checkpoint…");
 					try {
 						const { context, receipt } = await controller.save(ctx.cwd);
-						api.appendEntry("com.joshyorko.josh-room.checkpoint.v1", checkpointEntry(context, receipt));
-						ctx.ui.setStatus("josh-room", `room:${context.displayName} ✓`);
-						ctx.ui.notify(`Saved Room ${context.displayName} → ${receipt.snapshotId}`, "info");
+						const outcome = presentSaveOutcome(context, receipt);
+						if (outcome.checkpointEntry) api.appendEntry("com.joshyorko.josh-room.checkpoint.v1", outcome.checkpointEntry);
+						ctx.ui.setStatus("josh-room", outcome.statusText);
+						ctx.ui.notify(outcome.message, "info");
 					} finally {
 						ctx.ui.setWorkingMessage();
 					}

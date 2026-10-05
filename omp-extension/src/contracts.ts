@@ -20,13 +20,25 @@ export interface SnapshotList {
 	snapshots: SnapshotInfo[];
 }
 
-export interface SaveReceipt {
+export interface SavedReceipt {
 	kind: "saved";
+	status: "saved" | "saved-but-dirty";
 	projectId: string;
 	snapshotId: string;
 	previousSnapshotId?: string;
-	ciphertextSize: number;
+	ciphertextSize?: number;
+	dataAddedBytes: number;
 }
+
+export interface AlreadySavedReceipt {
+	kind: "already-saved";
+	status: "already-saved";
+	projectId: string;
+	snapshotId: string;
+	dataAddedBytes: 0;
+}
+
+export type SaveReceipt = SavedReceipt | AlreadySavedReceipt;
 
 export interface JatInspection {
 	kind: "jat-inspection";
@@ -116,17 +128,27 @@ export function parseSnapshotsResult(value: unknown): SnapshotList | undefined {
 
 export function parseSaveResult(value: unknown): SaveReceipt | undefined {
 	const body = record(value);
-	if (
-		!body || body.ok !== true || !id(body.project_id) || !id(body.snapshot_id) ||
-		typeof body.ciphertext_size !== "number" || !Number.isSafeInteger(body.ciphertext_size) || body.ciphertext_size < 0 ||
-		(body.previous_snapshot_id !== undefined && !id(body.previous_snapshot_id))
-	) return undefined;
+	if (!body || body.ok !== true || !id(body.project_id) || !id(body.snapshot_id)) return undefined;
+	if (body.previous_snapshot_id !== undefined && !id(body.previous_snapshot_id)) return undefined;
+	const ciphertextSize = body.ciphertext_size;
+	if (ciphertextSize !== undefined && (typeof ciphertextSize !== "number" || !Number.isSafeInteger(ciphertextSize) || ciphertextSize < 0)) return undefined;
+	const rawAddedBytes = body.data_added_bytes;
+	if (rawAddedBytes !== undefined && (typeof rawAddedBytes !== "number" || !Number.isSafeInteger(rawAddedBytes) || rawAddedBytes < 0)) return undefined;
+	if (body.status === "already-saved") {
+		if (rawAddedBytes !== 0) return undefined;
+		return { kind: "already-saved", status: "already-saved", projectId: body.project_id, snapshotId: body.snapshot_id, dataAddedBytes: 0 };
+	}
+	if (body.status !== undefined && body.status !== "saved" && body.status !== "saved-but-dirty") return undefined;
+	const dataAddedBytes = rawAddedBytes ?? ciphertextSize;
+	if (dataAddedBytes === undefined) return undefined;
 	return {
 		kind: "saved",
+		status: body.status === "saved-but-dirty" ? "saved-but-dirty" : "saved",
 		projectId: body.project_id,
 		snapshotId: body.snapshot_id,
 		...(typeof body.previous_snapshot_id === "string" ? { previousSnapshotId: body.previous_snapshot_id } : {}),
-		ciphertextSize: body.ciphertext_size,
+		...(ciphertextSize !== undefined ? { ciphertextSize } : {}),
+		dataAddedBytes,
 	};
 }
 
@@ -191,13 +213,58 @@ export function snapshotOptions(result: SnapshotList): Array<{ label: string; de
 	}));
 }
 
-export function checkpointEntry(context: Extract<RoomContext, { kind: "linked" }>, receipt: SaveReceipt): Record<string, unknown> {
+export function checkpointEntry(context: Extract<RoomContext, { kind: "linked" }>, receipt: SavedReceipt): Record<string, unknown> {
 	return {
 		format_version: 1,
 		dimension_id: context.dimensionId,
 		project_id: receipt.projectId,
 		...(receipt.previousSnapshotId ? { previous_snapshot_id: receipt.previousSnapshotId } : {}),
 		snapshot_id: receipt.snapshotId,
+	};
+}
+
+export interface SaveOutcomePresentation {
+	message: string;
+	statusText: string;
+	details: Record<string, unknown>;
+	checkpointEntry?: Record<string, unknown>;
+}
+
+export function presentSaveOutcome(
+	context: Extract<RoomContext, { kind: "linked" }>,
+	receipt: SaveReceipt,
+): SaveOutcomePresentation {
+	const alreadySaved = receipt.kind === "already-saved";
+	const savedSnapshotId = receipt.snapshotId;
+	const statusState = receipt.kind === "saved" && receipt.status === "saved-but-dirty" ? "changed" : "clean";
+	const statusContext = alreadySaved ? context : { ...context, snapshotId: savedSnapshotId };
+	const message = alreadySaved
+		? `Already saved Room ${context.displayName}; 0 bytes added.`
+		: receipt.status === "saved-but-dirty"
+			? `Saved Room ${context.displayName} → ${savedSnapshotId}; workspace changed during Save; ${receipt.dataAddedBytes} bytes added.`
+			: `Saved Room ${context.displayName} → ${savedSnapshotId}; ${receipt.dataAddedBytes} bytes added.`;
+	const details: Record<string, unknown> = {
+		ok: true,
+		status: receipt.status,
+		project_id: receipt.projectId,
+		snapshot_id: savedSnapshotId,
+		data_added_bytes: receipt.dataAddedBytes,
+	};
+	if (receipt.kind === "saved") {
+		if (receipt.previousSnapshotId) details.previous_snapshot_id = receipt.previousSnapshotId;
+		if (receipt.ciphertextSize !== undefined) details.ciphertext_size = receipt.ciphertextSize;
+	}
+	const statusText = roomStatusText(statusContext, {
+		kind: "known",
+		state: statusState,
+		projectId: receipt.projectId,
+		snapshotId: savedSnapshotId,
+	}) ?? `room:${context.displayName} ?`;
+	return {
+		message,
+		statusText,
+		details,
+		...(receipt.kind === "saved" ? { checkpointEntry: checkpointEntry(context, receipt) } : {}),
 	};
 }
 

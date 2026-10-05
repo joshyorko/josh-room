@@ -44,6 +44,30 @@ test("save uses only the core Save contract and retains prior snapshot provenanc
 	assert.equal(JSON.stringify(result).includes("/private/path"), false);
 });
 
+test("controller recognizes native already-saved receipts only for the current authoritative snapshot", async () => {
+	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "local", project_id: "demo-room", display_name: "Demo Room", snapshot_id: "logical-current" };
+	const noop = { ok: true, status: "already-saved", project_id: "demo-room", snapshot_id: "logical-current", data_added_bytes: 0, has_external_components: false };
+	const calls = [];
+	const controller = createRoomController(async (args) => { calls.push(args); return args[0] === "context" ? linked : noop; });
+	const result = await controller.save("/workspace");
+	assert.deepEqual(result.receipt, { kind: "already-saved", status: "already-saved", projectId: "demo-room", snapshotId: "logical-current", dataAddedBytes: 0 });
+	assert.equal(calls[1][0], "snapshot");
+
+	const inconsistent = createRoomController(async (args) => args[0] === "context" ? linked : { ...noop, snapshot_id: "logical-foreign" });
+	await assert.rejects(inconsistent.save("/workspace"), (error) => error instanceof RoomCliError && error.kind === "invalid-result");
+});
+
+test("controller preserves saved-but-dirty status and prefers aggregate added bytes", async () => {
+	const linked = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "local", project_id: "demo-room", display_name: "Demo Room", snapshot_id: "logical-old" };
+	const dirty = { ok: true, status: "saved-but-dirty", project_id: "demo-room", snapshot_id: "logical-new", previous_snapshot_id: "logical-old", data_added_bytes: 37, ciphertext_size: 999, has_external_components: true };
+	const controller = createRoomController(async (args) => args[0] === "context" ? linked : dirty);
+	const result = await controller.save("/workspace");
+	assert.equal(result.receipt.status, "saved-but-dirty");
+	assert.equal(result.receipt.dataAddedBytes, 37);
+	assert.equal(result.receipt.ciphertextSize, 999);
+	assert.equal(result.receipt.previousSnapshotId, "logical-old");
+});
+
 test("abort terminates the CLI process group, including inherited descendants", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "josh-room-omp-test-"));
 	const marker = join(directory, "child-stopped");
