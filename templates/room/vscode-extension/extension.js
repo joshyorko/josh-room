@@ -1877,13 +1877,15 @@ async function saveRoom(options = {}) {
       ignoreFocusOut: true,
     });
     if (!imageChoice) return "cancelled";
-    if (Boolean(imageChoice.allImages) === cachedReceipt.all_images) {
+    if (trustedLocalSaveReceipt(source, cwd) === cachedReceipt
+      && Boolean(imageChoice.allImages) === cachedReceipt.all_images) {
       const action = await vscode.window.showInformationMessage(
         "Already saved — 0 bytes uploaded",
         "Done",
         "Choose another Room",
       );
-      if (action !== "Choose another Room") {
+      if (action !== "Choose another Room"
+        && trustedLocalSaveReceipt(source, cwd) === cachedReceipt) {
         refreshRoomStatus();
         return "already-saved";
       }

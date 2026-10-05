@@ -1565,6 +1565,59 @@ for (const externalComponents of [false, true]) test(`trusted no-event Save ${ex
   assert.equal(fixture.statusItem.text.includes("Saved"), true);
 });
 
+for (const boundary of ["image choice", "completion choice"]) test(`a change during trusted Save ${boundary} reaches the Room Store`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-ui-race-"));
+  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  const source = path.join(root, "source.txt");
+  fs.writeFileSync(source, "initial");
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
+    saveResult: {
+      ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2",
+      dimension_id: "backup", encryption_domain_id: "domain-a",
+      workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha,
+    },
+    onSave: (_args, { root: saveRoot, project }) => {
+      project.latest = "jat-2";
+      project.snapshots = [{ snapshot_id: "jat-2" }];
+      writeStatMarker(saveRoot, { snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha });
+    },
+  });
+  await fixture.extension.__test__.startDirtyTracking({ subscriptions: [] });
+  fixture.vscode.infoResponses.push("Save", undefined);
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  const createsBefore = fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length;
+  let changed = false;
+  const invalidate = async () => {
+    if (changed) return;
+    changed = true;
+    fs.writeFileSync(source, "changed");
+    await fixture.watcherCallbacks[0].didChange({ fsPath: source });
+  };
+  if (boundary === "image choice") {
+    const original = fixture.vscode.window.showQuickPick;
+    fixture.vscode.window.showQuickPick = async (items, options) => {
+      const result = await original(items, options);
+      if (options.title === "Include local OCI images?") await invalidate();
+      return result;
+    };
+  } else {
+    const original = fixture.vscode.window.showInformationMessage;
+    fixture.vscode.window.showInformationMessage = async (...args) => {
+      const result = await original(...args);
+      if (args[0] === "Already saved — 0 bytes uploaded") await invalidate();
+      return result;
+    };
+  }
+  fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
+  fixture.vscode.quickPickResponses.push({ allImages: false }, { label: "Demo Room", project: fixture.project });
+  fixture.vscode.infoResponses.push(...(boundary === "completion choice" ? ["Done", "Save", undefined] : ["Save", undefined]));
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  assert.equal(changed, true);
+  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length, createsBefore + 1);
+});
+
 test("a mode change invalidates the trusted Save receipt and reaches the Room Store", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-mode-change-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
