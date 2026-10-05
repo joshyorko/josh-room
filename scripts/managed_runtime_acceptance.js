@@ -323,7 +323,7 @@ async function main() {
       JOSH_ROOM_RECIPIENTS: recipients.join(","),
       JOSH_ROOM_WORKSPACE_ROOT: workspaceRoot,
     });
-    // JAT Restore preserves the Build source basename beneath its destination.
+    // JAT extracts Build archives into <payload_path>/workspace and keeps the source basename.
     const source = path.join(root, "workspace");
     await fsp.mkdir(source, { recursive: true, mode: 0o700 });
     const sourceReadme = path.join(source, "README.md");
@@ -354,7 +354,12 @@ async function main() {
     ], "legacy-jat-clean-room-restore");
     const legacyJatRestoreResultFile = path.join(paths.logsRoot, "managed-controller-legacy-jat-clean-room-restore-result.json");
     const legacyJatRestoreResult = readManagedResult(legacyJatRestoreResultFile);
-    const restoredWorkspaceRoot = jatRestoredWorkspace(legacyJatRestoreResult, legacyJatRestore, platform);
+    const restoredWorkspaceRoot = jatRestoredWorkspace(
+      legacyJatRestoreResult,
+      legacyJatRestore,
+      path.basename(source),
+      platform,
+    );
     const cleanReadme = restoredWorkspaceRoot && path.join(restoredWorkspaceRoot, "README.md");
     let cleanReadmeBytes = Buffer.alloc(0);
     let cleanReadmeMode = 0;
@@ -379,7 +384,7 @@ async function main() {
       success: legacyJatRestoreResult?.success === true,
       exit_status: legacyJatRestoreResult?.exit_status ?? null,
       payload_path_matches_destination: restoredWorkspaceRoot !== null,
-      workspace_layout: "<payload_path>/workspace",
+      workspace_layout: "<payload_path>/workspace/<build-source-name>",
       file: { name: "README.md", ...legacyJatRestoreComparison },
       status: legacyJatRestoreResult?.operation === "restore"
         && legacyJatRestoreResult?.success === true

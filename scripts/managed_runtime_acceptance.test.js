@@ -9,7 +9,7 @@ const {
   jatRestoredWorkspace,
 } = require("./managed_runtime_acceptance_helpers");
 
-test("JAT Restore workspace is rooted beneath its reported payload path", () => {
+test("JAT Restore workspace includes the Build source basename beneath payload/workspace", () => {
   const destination = path.resolve("synthetic-clean-room");
   const result = {
     operation: "restore",
@@ -18,13 +18,17 @@ test("JAT Restore workspace is rooted beneath its reported payload path", () => 
     payload_path: destination,
   };
 
-  assert.equal(jatRestoredWorkspace(result, destination), path.join(destination, "workspace"));
-  assert.equal(jatRestoredWorkspace({ ...result, payload_path: `${destination}-other` }, destination), null);
-  assert.equal(jatRestoredWorkspace({ ...result, success: false }, destination), null);
+  assert.equal(
+    jatRestoredWorkspace(result, destination, "workspace"),
+    path.join(destination, "workspace", "workspace"),
+  );
+  assert.equal(jatRestoredWorkspace(result, destination, "../outside"), null);
+  assert.equal(jatRestoredWorkspace({ ...result, payload_path: `${destination}-other` }, destination, "workspace"), null);
+  assert.equal(jatRestoredWorkspace({ ...result, success: false }, destination, "workspace"), null);
   const windowsPayload = "C:\\Temp\\Clean-Restore";
   assert.equal(
-    jatRestoredWorkspace({ ...result, payload_path: windowsPayload }, "c:\\temp\\clean-restore", "win32"),
-    path.win32.join(windowsPayload, "workspace"),
+    jatRestoredWorkspace({ ...result, payload_path: windowsPayload }, "c:\\temp\\clean-restore", "workspace", "win32"),
+    path.win32.join(windowsPayload, "workspace", "workspace"),
   );
 });
 

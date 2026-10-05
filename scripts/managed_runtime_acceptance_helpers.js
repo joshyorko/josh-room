@@ -3,17 +3,21 @@
 const crypto = require("crypto");
 const path = require("path");
 
-function jatRestoredWorkspace(result, requestedDestination, platform = process.platform) {
+function jatRestoredWorkspace(result, requestedDestination, sourceName, platform = process.platform) {
   if (!result || result.operation !== "restore" || result.success !== true || result.exit_status !== 0
-    || typeof result.payload_path !== "string") return null;
+    || typeof result.payload_path !== "string" || typeof sourceName !== "string") return null;
   const windows = platform === "win32" || platform === "win32-x64";
   const pathApi = windows ? path.win32 : path.posix;
+  if (!sourceName || sourceName === "." || sourceName === ".." || pathApi.basename(sourceName) !== sourceName) return null;
   const payloadPath = pathApi.resolve(result.payload_path);
   const expectedPath = pathApi.resolve(requestedDestination);
   const samePath = windows
     ? payloadPath.toLowerCase() === expectedPath.toLowerCase()
     : payloadPath === expectedPath;
-  return samePath ? pathApi.join(payloadPath, "workspace") : null;
+  const workspace = pathApi.join(payloadPath, "workspace", sourceName);
+  const relative = pathApi.relative(payloadPath, workspace);
+  const contained = relative !== ".." && !relative.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(relative);
+  return samePath && contained ? workspace : null;
 }
 
 function compareRestoredFile({ sourceBytes, restoredBytes, sourceMode, restoredMode, restoredExists = true, platform = process.platform }) {
