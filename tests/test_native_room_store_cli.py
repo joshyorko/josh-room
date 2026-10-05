@@ -209,7 +209,8 @@ def test_snapshot_export_serve_and_extract_use_selected_descriptor_and_jat_root(
         assert call[-1]["jat_root"] == tmp_path / "jat-root"
 
 
-def test_native_room_removal_publishes_catalog_cas_before_fresh_reachability_check(tmp_path, monkeypatch):
+@pytest.mark.parametrize("remove_snapshot", [False, True])
+def test_native_room_removal_publishes_catalog_cas_before_fresh_reachability_check(tmp_path, monkeypatch, remove_snapshot):
     from josh_room import cli
 
     dimension = type("Dimension", (), {"provider": "minio", "dimension_id": "archive"})()
@@ -218,28 +219,41 @@ def test_native_room_removal_publishes_catalog_cas_before_fresh_reachability_che
             "one": {"payload_kind": "room-store-v1"},
             "two": {"payload_kind": "room-store-v1"},
         }}}},
+        "resolve_snapshot": lambda self, project, snapshot: {
+            "snapshot_id": snapshot, **self.body["projects"][project]["snapshots"][snapshot],
+        },
     })()
+    if remove_snapshot:
+        del catalog.body["projects"]["demo"]["snapshots"]["two"]
     events = []
 
     @contextmanager
     def room_context(_args, _instance, *, project_id=None, snapshot_id="latest", writable=False):
+        if project_id is not None and project_id not in catalog.body["projects"]:
+            raise ValueError("removed Room is unavailable")
         events.append(("context", project_id, snapshot_id, writable))
         yield object()
+
+    def remove_records(_context, identities):
+        events.append(("cas", identities))
+        del catalog.body["projects"]["demo"]
+        return "pending"
 
     monkeypatch.setattr(cli, "_effective_dimension", lambda _args: dimension)
     monkeypatch.setattr(cli, "_backend_for_args", lambda *_args: object())
     monkeypatch.setattr(cli, "load_catalog", lambda *_args: catalog)
     monkeypatch.setattr(cli, "_open_room_store_context", room_context)
-    monkeypatch.setattr(cli, "remove_logical_catalog_records", lambda _context, identities: events.append(("cas", identities)) or "pending")
+    monkeypatch.setattr(cli, "remove_logical_catalog_records", remove_records)
     monkeypatch.setattr(cli, "complete_logical_catalog_removal", lambda _context, pending: events.append(("recheck", pending)) or {"ok": True})
 
-    args = build_parser().parse_args(["rooms", "remove", "demo", "--backend", "minio"])
+    vector = ["snapshots", "remove", "demo", "one"] if remove_snapshot else ["rooms", "remove", "demo"]
+    args = build_parser().parse_args([*vector, "--backend", "minio"])
 
     assert cli.dispatch(args, tmp_path / "instance") == {"ok": True}
     assert events == [
-        ("context", "demo", "latest", True),
-        ("cas", [("demo", "one"), ("demo", "two")]),
-        ("context", "demo", "latest", False),
+        ("context", "demo", "one" if remove_snapshot else "latest", True),
+        ("cas", [("demo", "one")] if remove_snapshot else [("demo", "one"), ("demo", "two")]),
+        ("context", None, "latest", False),
         ("recheck", "pending"),
     ]
 

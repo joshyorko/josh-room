@@ -1962,7 +1962,7 @@ def dispatch(args, instance: Path) -> dict:
                     args, instance, project_id=args.project, writable=True
                 ) as context:
                     pending = remove_logical_catalog_records(context, identities)
-                with _open_room_store_context(args, instance, project_id=args.project) as fresh:
+                with _open_room_store_context(args, instance) as fresh:
                     return complete_logical_catalog_removal(fresh, pending)
         recipients = _recipients()
         if len(recipients) < 2:
@@ -1991,9 +1991,7 @@ def dispatch(args, instance: Path) -> dict:
                         writable=True,
                     ) as context:
                         pending = remove_logical_catalog_records(context, [identity])
-                    with _open_room_store_context(
-                        args, instance, project_id=args.project
-                    ) as fresh:
+                    with _open_room_store_context(args, instance) as fresh:
                         return complete_logical_catalog_removal(fresh, pending)
             recipients = _recipients()
             identity = os.environ.get("JOSH_ROOM_IDENTITY")
