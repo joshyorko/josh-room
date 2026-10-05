@@ -218,7 +218,8 @@ def _native_stubs(
             else None
         )
         state["rcc_metadata_bytes"] = (
-            kwargs["rcc_metadata"].read_bytes() if "rcc_metadata" in kwargs else None
+            (json.dumps(state["rcc_metadata"], indent=2, sort_keys=True) + "\n").encode()
+            if "rcc_metadata" in kwargs else None
         )
         output.write_bytes(b"complete-capsule")
         return {"success": True, "operation": "build"}

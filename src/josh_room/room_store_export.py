@@ -187,7 +187,7 @@ def _rcc_metadata(
         "acquired": False,
     }
     destination.write_text(
-        json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8"
+        json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     destination.chmod(0o600)
     return destination
