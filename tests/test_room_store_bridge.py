@@ -373,6 +373,10 @@ def test_managed_robot_capture_reaches_local_room_store_and_failure_never_publis
         Path(jat_root) / "environment_linux_amd64_freeze.yaml",
         workspace / "environment_linux_amd64_freeze.yaml",
     )
+    for relative in ("scripts/install_hauler.sh", "scripts/install_hauler.py", "runtime/hauler.json"):
+        target = workspace / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Path(jat_root) / relative, target)
     robot = workspace / "robot.yaml"
     robot.write_text(
         "tasks:\n  Example:\n    shell: python -c \"print('synthetic')\"\n"

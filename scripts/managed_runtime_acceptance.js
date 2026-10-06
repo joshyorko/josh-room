@@ -365,8 +365,11 @@ async function main() {
       + "'rcc_component_captured': isinstance(result.get('environment_artifact'), dict)}))",
       jat.jatRoot, folder, output,
     ], name);
-    if (platform === "linux-x64") captureRobot(source, haul, "jat-build-with-rcc");
-    executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
+    const componentHaul = platform === "linux-x64" ? path.join(root, "managed-runtime-with-rcc.haul.tar.zst") : haul;
+    if (platform === "linux-x64") {
+      captureRobot(source, componentHaul, "jat-build-with-rcc");
+    }
+    executeController(["jat", "inspect", "--haul", componentHaul, "--json"], "jat-inspect");
     const componentInventory = readManagedResult(path.join(paths.logsRoot, "managed-controller-jat-inspect-result.json"));
     if (platform === "linux-x64" && componentInventory?.anchors?.rcc_environment !== true) {
       throw new Error("managed robot workspace capture omitted its RCC component");
