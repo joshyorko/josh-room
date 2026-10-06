@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import bz2
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -37,6 +40,114 @@ def _load_copied_room_store_bridge():
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture
+def cold_restic_runtime(tmp_path, monkeypatch):
+    """Exercise the real installer with a checksum-pinned synthetic release."""
+    if bridge._runtime_platform() != "linux-x64":
+        pytest.skip("synthetic executable fixture requires Linux")
+    binary = b"#!/bin/sh\nprintf 'restic 0.19.1\\n'\n"
+    archive = bz2.compress(binary)
+    asset = "restic_0.19.1_linux_amd64.bz2"
+    url = f"https://github.com/restic/restic/releases/download/v0.19.1/{asset}"
+    manifest = tmp_path / "synthetic-restic-manifest.json"
+    manifest.write_text(json.dumps({
+        "schema_version": 1,
+        "version": "0.19.1",
+        "repository_format": 2,
+        "platforms": {"linux-x64": {
+            "asset": asset,
+            "url": url,
+            "sha256": hashlib.sha256(archive).hexdigest(),
+            "size": len(archive),
+            "binary": "restic",
+        }},
+    }), encoding="utf-8")
+    installer = Path(__file__).parents[1] / "scripts/install_restic.py"
+    monkeypatch.setattr(bridge, "_managed_runtime_assets", lambda: (manifest, installer))
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.delenv("JOSH_ROOM_RESTIC_EXE", raising=False)
+    monkeypatch.delenv("JOSH_ROOM_RESTIC_RUNTIME", raising=False)
+    downloads = []
+
+    class ReleaseResponse(io.BytesIO):
+        def geturl(self):
+            return url
+
+    def download(request, **_kwargs):
+        assert request.full_url == url
+        downloads.append(url)
+        return ReleaseResponse(archive)
+
+    monkeypatch.setattr(urllib.request, "urlopen", download)
+    executable = tmp_path / "josh-room-runtime/restic/0.19.1/linux-x64/restic"
+    assert not (tmp_path / "josh-room-runtime").exists()
+    return SimpleNamespace(executable=executable, binary=binary, downloads=downloads)
+
+
+def test_cold_preview_prepares_pinned_restic_and_warm_retry_stays_read_only(
+    tmp_path, monkeypatch, cold_restic_runtime
+):
+    domain_id = str(uuid.uuid4())
+    dimension = bridge.DimensionConfig(
+        dimension_id="minio-main",
+        display_name="Synthetic MinIO",
+        provider="minio",
+        endpoint="https://minio.example.test:9443",
+        bucket="synthetic-room-store",
+        credential_profile="synthetic-profile",
+        encryption_domain_id=domain_id,
+    )
+    recipient = "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq"
+    keyset = EncryptionKeyset.create(
+        "minio", dimension.endpoint, dimension.bucket,
+        synthetic_identity("operational"), recipient,
+        ["age1qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpquuzgag"],
+        encryption_domain_id=domain_id,
+    )
+    monkeypatch.setattr(crypto, "derive_recipient", lambda _identity: recipient)
+    material = EncryptionMaterial(keyset, tmp_path / "synthetic.age")
+    backend = FakeS3(keyset, dimension)
+    initial_control = copy.deepcopy(backend.control)
+    monkeypatch.setattr(bridge, "_create_backend", lambda *_args: backend)
+    monkeypatch.setattr(bridge, "_provider_environment", lambda _dimension: {})
+    monkeypatch.setattr(bridge, "_cache_directory", lambda _dimension: tmp_path / "cache")
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_VERSION", "0.1.27")
+    monkeypatch.delenv("ROBOCORP_HOME", raising=False)
+    monkeypatch.setattr(
+        auth, "ensure_room_store_keyset",
+        lambda *_args: pytest.fail("preview must not create keysets"),
+    )
+    monkeypatch.setattr(
+        auth, "bind_room_store_repository",
+        lambda *_args, **_kwargs: pytest.fail("preview must not bind repositories"),
+    )
+    monkeypatch.setattr(
+        bridge, "_restic_store_factory",
+        lambda **_kwargs: pytest.fail("first preview must not initialize a repository"),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("first capture\n", encoding="utf-8")
+
+    for _attempt in range(2):
+        preview = bridge.preview_room_store(
+            tmp_path / "instance", dimension, "room-synthetic", workspace, material,
+            components=[],
+        )
+        assert preview["ok"] is True
+        assert preview["scanned_bytes"] == len(b"first capture\n")
+        assert preview["current_entry_count"] == 1
+        assert preview["previous_entry_count"] == 0
+        assert preview["deleted_paths"] == []
+        assert cold_restic_runtime.executable.read_bytes() == cold_restic_runtime.binary
+        marker = cold_restic_runtime.executable.with_name("restic.sha256")
+        assert marker.read_text().strip() == hashlib.sha256(cold_restic_runtime.binary).hexdigest()
+        assert len(cold_restic_runtime.downloads) == 1
+        assert backend.control == initial_control
+        assert backend.catalog is None and backend.objects == {}
+        assert all(call[0] == "read_catalog" for call in backend.calls)
 
 
 def test_copied_controller_uses_extension_version_without_dist_metadata(monkeypatch):
@@ -560,8 +671,8 @@ def test_requested_uncaptured_component_fails_before_provider_or_runtime_work(
     assert failure.value.code == "components-unsupported"
 
 
-def test_existing_room_store_context_is_read_only_and_keeps_password_out_of_staging(
-    tmp_path, monkeypatch
+def test_cold_existing_room_store_bootstraps_and_warm_retry_is_read_only(
+    tmp_path, monkeypatch, cold_restic_runtime
 ):
     domain_id = str(uuid.uuid4())
     endpoint = "https://minio.example.test:9443"
@@ -637,11 +748,6 @@ def test_existing_room_store_context_is_read_only_and_keeps_password_out_of_stag
     monkeypatch.setattr(bridge, "_provider_environment", lambda _dimension: {})
     monkeypatch.setattr(
         bridge,
-        "_verified_restic_executable",
-        lambda **_kwargs: tmp_path / "verified-restic",
-    )
-    monkeypatch.setattr(
-        bridge,
         "_read_catalog",
         lambda *_args: (
             Catalog.empty(dimension.dimension_id, domain_id),
@@ -652,7 +758,9 @@ def test_existing_room_store_context_is_read_only_and_keeps_password_out_of_stag
         keyring, "lookup_room_store_secret", lambda *_args: keyset.room_store.secret
     )
 
-    def create_store(*, password_file, **_kwargs):
+    def create_store(*, password_file, executable, **_kwargs):
+        assert executable == cold_restic_runtime.executable
+        assert executable.read_bytes() == cold_restic_runtime.binary
         password_paths.append(password_file)
         return store
 
@@ -668,24 +776,26 @@ def test_existing_room_store_context_is_read_only_and_keeps_password_out_of_stag
         lambda *_args, **_kwargs: pytest.fail("context must not bind repositories"),
     )
 
-    with bridge.open_existing_room_store(
-        tmp_path / "instance",
-        dimension,
-        SimpleNamespace(encryption_domain_id=domain_id),
-    ) as context:
-        assert context.repository_info.repository_id == "a" * 64
-        assert context.catalog.body["format_version"] == 2
-        assert context.catalog_etag == '"catalog-read"'
-        assert context.selected_descriptor is None
-        assert context.private_dir.is_dir()
-        assert not any(
-            path.name == "restic-password" for path in context.private_dir.rglob("*")
-        )
-        assert password_paths[0].exists()
+    for _attempt in range(2):
+        with bridge.open_existing_room_store(
+            tmp_path / "instance",
+            dimension,
+            SimpleNamespace(encryption_domain_id=domain_id),
+        ) as context:
+            assert context.repository_info.repository_id == "a" * 64
+            assert context.catalog.body["format_version"] == 2
+            assert context.catalog_etag == '\"catalog-read\"'
+            assert context.selected_descriptor is None
+            assert context.private_dir.is_dir()
+            assert not any(
+                path.name == "restic-password" for path in context.private_dir.rglob("*")
+            )
+            assert password_paths[-1].exists()
+        assert store.closed
+        assert not password_paths[-1].exists()
+        assert len(cold_restic_runtime.downloads) == 1
 
-    assert backend.calls == [("read_control", auth.KEYSET_CONTROL_KEY)]
-    assert store.closed
-    assert not password_paths[0].exists()
+    assert backend.calls == [("read_control", auth.KEYSET_CONTROL_KEY)] * 2
 
 
 def test_writable_room_store_context_initializes_and_binds_only_on_explicit_open(
@@ -1116,7 +1226,7 @@ def test_r2_existing_authority_requests_read_only_material(monkeypatch):
     assert observed == [False]
 
 
-def test_restic_runtime_handoff_rejects_arbitrary_path_and_preview_never_installs(
+def test_restic_runtime_handoff_rejects_arbitrary_path_and_noninstall_lookup_stays_cold(
     tmp_path, monkeypatch
 ):
     private_runtime = tmp_path / "private-runtime"

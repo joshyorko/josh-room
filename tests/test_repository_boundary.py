@@ -174,6 +174,8 @@ def test_real_vsix_contains_the_owned_runtime_contract(tmp_path):
         names = set(archive.namelist())
         assert "extension/runtime.js" in names
         assert "extension/runtime/manifest.json" in names
+        assert "extension/runtime/restic-manifest.json" in names
+        assert "extension/runtime/controller/install_restic.py" in names
         assert "extension/runtime/controller/robot.yaml" in names
         assert "extension/runtime/controller/conda.yaml" in names
         assert any(name.startswith("extension/runtime/controller/josh_room/") and name.endswith(".py") for name in names)
