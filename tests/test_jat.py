@@ -236,6 +236,29 @@ def test_nested_diagnostic_redacts_credentials_not_present_in_environment():
     assert "synthetic" not in diagnostic and "\x1b" not in diagnostic
 
 
+@pytest.mark.parametrize("text", [
+    '{"password": "synthetic-secret"}',
+    '{"credentials": {"SecretAccessKey": "synthetic-secret"}}',
+    '{"AWS_SESSION_TOKEN": "synthetic-secret"}',
+    '{"authorization": "******", "password": "synthetic-secret"}',
+    'token="synthetic \\"secret\\" value"',
+    'File "/srv/work/Synthetic Private Folder/task.py", line 1\nBuild preflight failed',
+    "File 'C:\\Users\\Synthetic Private Folder\\task.py', line 1\nBuild preflight failed",
+    "Collecting tasks from: /srv/work/Synthetic Private Folder/task.py\nBuild preflight failed",
+])
+def test_diagnostic_redacts_json_credentials_and_complete_paths_with_spaces(text):
+    from josh_room.cli import _bounded_json_result
+    from josh_room.jat import _diagnostic
+
+    diagnostic = _diagnostic(text)
+    serialized = json.dumps(_bounded_json_result({"ok": False, "diagnostic": diagnostic}))
+    assert "synthetic-secret" not in serialized
+    assert "Synthetic Private Folder" not in serialized
+    assert "synthetic" not in serialized.lower()
+    if "Build preflight failed" in text:
+        assert "Build preflight failed" in diagnostic
+
+
 def test_jat_rejects_receipt_operation_mismatch(tmp_path, monkeypatch):
     result_path = tmp_path / "output" / "result.json"
     result_path.parent.mkdir()

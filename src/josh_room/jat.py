@@ -31,19 +31,24 @@ def _version(jat_root: Path) -> str:
 
 def _diagnostic(stderr: str) -> str:
     cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(stderr or ""))
-    cleaned = " ".join(cleaned.split())
-    for value in sorted(os.environ.values(), key=len, reverse=True):
-        if value and len(value) > 3:
-            cleaned = cleaned.replace(value, "[redacted]")
     cleaned = re.sub(r"\bAGE-SECRET-KEY-[A-Za-z0-9_-]+|\bage1[0-9a-z]{20,}", "[redacted]", cleaned)
-    cleaned = re.sub(r"(?i)\bbearer\s+\S+", "******", cleaned)
     cleaned = re.sub(
-        r"""(?i)\b((?:access[-_ ]?key(?:[-_ ]?id)?|secret[-_ ]?(?:access[-_ ]?)?key|session[-_ ]?token|password|token|authorization)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,]+)""",
+        r"""(?i)\b((?:[a-z0-9]+_)*(?:access[-_ ]?key(?:[-_ ]?id)?|secret[-_ ]?(?:access[-_ ]?)?key|session[-_ ]?token|password|token|authorization|credentials?|identity|private[-_ ]?key|api[-_ ]?key|oauth[-_ ]?code)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,{}\[\]]+)""",
         r"\1[redacted]",
         cleaned,
     )
+    cleaned = re.sub(r"(?i)\bbearer\s+\S+", "******", cleaned)
     cleaned = re.sub(r"https?://\S+", "[redacted-url]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"""(?<![\w:])(?:[A-Za-z]:[\\/]|/)[^\s"'<>]+""", "[redacted-path]", cleaned)
+    cleaned = re.sub(
+        r"""(?:"(?:[A-Za-z]:[\\/]|/)(?:\\.|[^"\\])*"|'(?:[A-Za-z]:[\\/]|/)(?:\\.|[^'\\])*')""",
+        "[redacted-path]",
+        cleaned,
+    )
+    cleaned = re.sub(r"""(?<![\w:])(?:[A-Za-z]:[\\/]|/)[^\r\n"'<>;,){}\[\]]+""", "[redacted-path]", cleaned)
+    for value in sorted(os.environ.values(), key=len, reverse=True):
+        if value and len(value) > 3:
+            cleaned = cleaned.replace(value, "[redacted]")
+    cleaned = " ".join(cleaned.split())
     return cleaned[-4096:]
 
 
