@@ -44,10 +44,14 @@ def _diagnostic(stderr: str) -> str:
         "[redacted-path]",
         cleaned,
     )
-    cleaned = re.sub(r"""(?<![\w:])(?:[A-Za-z]:[\\/]|/)[^\r\n"'<>;,){}\[\]]+""", "[redacted-path]", cleaned)
-    for value in sorted(os.environ.values(), key=len, reverse=True):
+    cleaned = re.sub(r"""(?<!\w)[A-Za-z]:[\\/][^\r\n"'<>:;,){}\[\]]+""", "[redacted-path]", cleaned)
+    cleaned = re.sub(r"""(?<![\w:])/[^\r\n"'<>:;,){}\[\]]+""", "[redacted-path]", cleaned)
+    for key, value in sorted(os.environ.items(), key=lambda item: len(item[1]), reverse=True):
         if value and len(value) > 3:
-            cleaned = cleaned.replace(value, "[redacted]")
+            if key in {"USER", "USERNAME", "LOGNAME", "SUDO_USER"}:
+                cleaned = re.sub(r"(?<!\w)" + re.escape(value) + r"(?!\w)", "[redacted]", cleaned)
+            else:
+                cleaned = cleaned.replace(value, "[redacted]")
     cleaned = " ".join(cleaned.split())
     return cleaned[-4096:]
 

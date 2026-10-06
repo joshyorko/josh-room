@@ -245,6 +245,7 @@ def test_nested_diagnostic_redacts_credentials_not_present_in_environment():
     'File "/srv/work/Synthetic Private Folder/task.py", line 1\nBuild preflight failed',
     "File 'C:\\Users\\Synthetic Private Folder\\task.py', line 1\nBuild preflight failed",
     "Collecting tasks from: /srv/work/Synthetic Private Folder/task.py\nBuild preflight failed",
+    "/srv/work/Synthetic Private Folder/python: No module named jat.task_runner",
 ])
 def test_diagnostic_redacts_json_credentials_and_complete_paths_with_spaces(text):
     from josh_room.cli import _bounded_json_result
@@ -257,6 +258,17 @@ def test_diagnostic_redacts_json_credentials_and_complete_paths_with_spaces(text
     assert "synthetic" not in serialized.lower()
     if "Build preflight failed" in text:
         assert "Build preflight failed" in diagnostic
+    if "No module named" in text:
+        assert "No module named jat.task_runner" in diagnostic
+
+
+def test_username_redaction_preserves_public_task_runner_module_identity(monkeypatch):
+    from josh_room.jat import _diagnostic
+
+    monkeypatch.setenv("USER", "runner")
+    diagnostic = _diagnostic("user runner; No module named jat.task_runner")
+    assert "user [redacted]" in diagnostic
+    assert "No module named jat.task_runner" in diagnostic
 
 
 def test_jat_rejects_receipt_operation_mismatch(tmp_path, monkeypatch):
