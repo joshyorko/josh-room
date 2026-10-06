@@ -66,6 +66,14 @@ def _glob_matches(pattern: tuple[str, ...], path: tuple[str, ...]) -> bool:
 
 
 def _rule_matches(path_parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    if (
+        len(pattern) == 2
+        and pattern[0] == "**"
+        and "*" not in pattern[1]
+        and "?" not in pattern[1]
+        and "[" not in pattern[1]
+    ):
+        return pattern[1] in path_parts
     if len(pattern) == 1 and pattern[0] != "**":
         return any(_glob_matches(pattern, (part,)) for part in path_parts)
     return any(

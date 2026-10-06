@@ -30,6 +30,33 @@ def test_policy_excludes_generated_directories_at_any_depth(tmp_path: Path) -> N
     assert not policy.is_excluded("services/api/src/main.py")
 
 
+@pytest.mark.parametrize("pattern", ["cache", "**/cache", "**/cache/**"])
+def test_literal_directory_rules_preserve_component_and_case_boundaries(
+    tmp_path: Path, pattern: str,
+) -> None:
+    (tmp_path / ".josh-roomignore").write_text(pattern + "\n", encoding="utf-8")
+    policy = load_capture_policy(tmp_path)
+    for relative in ("cache", "src/cache", "cache/file", "src/cache/deep/file"):
+        assert policy.is_excluded(relative)
+    for relative in ("CACHE/file", "src/cache-sibling/file", "src/cache.txt", "acache/file"):
+        assert not policy.is_excluded(relative)
+
+
+def test_literal_directory_rules_preserve_unicode_and_glob_fallback(tmp_path: Path) -> None:
+    (tmp_path / ".josh-roomignore").write_text("**/café\n**/generated-*/cache\n", encoding="utf-8")
+    policy = load_capture_policy(tmp_path)
+    assert policy.is_excluded("src/café/file")
+    assert not policy.is_excluded("src/cafe\u0301/file")
+    assert policy.is_excluded("app/generated-build/cache/file")
+    assert not policy.is_excluded("app/generated-build/source/file")
+
+
+def test_direct_policy_construction_preserves_character_class_matching() -> None:
+    policy = workspace_policy.CapturePolicy("synthetic", (("**", "[ab]"),), None)
+    assert policy.is_excluded("src/a/file")
+    assert not policy.is_excluded("src/[ab]/file")
+
+
 def test_shared_defaults_are_versioned_against_the_schema() -> None:
     repository = Path(__file__).resolve().parents[1]
     defaults = json.loads(
