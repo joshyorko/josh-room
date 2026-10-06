@@ -14,7 +14,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-BASE_HEAD = "f0271bb80f4cb5bcc07c2f5f5d88cccbfd158aac"
+FEATURE_MERGE_SHA = "c64ca50604feec9c1cd0c9bd6eb02223194df162"
 
 
 def _dimension(provider, endpoint, bucket, profile):
@@ -42,13 +42,13 @@ def _snapshot(*, origin=None):
     return body
 
 
-def test_clean_bootstrap_uses_exact_repaired_candidate_and_cli_contract():
+def test_clean_bootstrap_uses_exact_feature_merge_and_cli_contract():
     lock = json.loads(Path("release-lock.json").read_text())
-    assert lock["josh_room"]["git_sha"] == BASE_HEAD
+    assert lock["josh_room"]["git_sha"] == FEATURE_MERGE_SHA
     assert "josh-room = \"josh_room.cli:main\"" in Path("pyproject.toml").read_text()
     for path in (Path(".devcontainer/bootstrap.sh"), Path("templates/room/.devcontainer/bootstrap.sh")):
         body = path.read_text()
-        assert "joshyorko.josh-room-0.1.26" in body
+        assert "joshyorko.josh-room-0.1.27" in body
         assert "uv tool install" not in body
         assert "brew" not in body.lower()
 
