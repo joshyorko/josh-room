@@ -130,13 +130,17 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
         restic=restic,
         rcc_runtime="/synthetic/rcc",
     )
-    assert [call[1:3] for call in calls] == [["--version"], ["env", "publish"],
-        *([["env", "acquire"]] if publish_platform is None else []), ["env", "export"]]
+    assert [call[1:3] for call in calls] == [["--version"], ["env", "publish"], ["env", "export"],
+        *([["env", "acquire"]] if publish_platform is None else [])]
     assert calls[1] == [
         "/synthetic/rcc", "env", "publish", "--robot", str(root / "robot.yaml"), "--provider", "local", "--json"
     ]
-    assert calls[-1][1:5] == ["env", "export", "--artifact", "sha256:" + "1" * 64]
-    assert calls[-1][calls[-1].index("--provider") + 1] == "local"
+    assert calls[2][1:5] == ["env", "export", "--artifact", "sha256:" + "1" * 64]
+    assert calls[2][calls[2].index("--provider") + 1] == "local"
+    if publish_platform is None:
+        assert calls[3][calls[3].index("--archive") + 1] == calls[2][-1]
+        assert calls[3][calls[3].index("--artifact") + 1] == calls[2][4]
+        assert "--no-build" in calls[3] and "--permissive-local" in calls[3]
     assert result["artifact_digest"] == "sha256:" + "1" * 64
     assert result["specification_digest"] == "sha256:" + "2" * 64
     assert result["snapshot"]["repository_id"] == REPOSITORY_ID
@@ -177,6 +181,38 @@ def test_native_metadata_mismatch_fails_closed(tmp_path, monkeypatch):
             restic=_Restic(),
             rcc_runtime="/synthetic/rcc",
         )
+
+
+def test_managed_capture_never_falls_back_to_ambient_rcc(tmp_path, monkeypatch):
+    root = _workspace(tmp_path)
+    restic = _Restic()
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.delenv("JOSH_ROOM_RCC_EXE", raising=False)
+    monkeypatch.setattr(components.shutil, "which", lambda *_args: pytest.fail("ambient RCC lookup"))
+    with pytest.raises(components.RoomStoreComponentError, match="handoff is incomplete"):
+        components.capture_rcc_component(
+            workspace=root, prior_component=None, repository_id=REPOSITORY_ID,
+            repository_format=2, restic=restic,
+        )
+    assert restic.backups == []
+
+
+def test_failed_rcc_command_preserves_bounded_sanitized_cause(tmp_path):
+    import sys
+
+    cause = "synthetic RCC publish preflight rejected"
+    with pytest.raises(components.RoomStoreComponentError) as error:
+        components._run(
+            [sys.executable, "-c",
+             (f"import sys; print({cause!r}); "
+             "print('****** /home/synthetic-user/private', file=sys.stderr); "
+             "sys.exit(2)")],
+            cwd=tmp_path, cancellation=None,
+        )
+    assert cause in str(error.value)
+    assert error.value.result["exit_status"] == 2
+    assert "synthetic-secret" not in json.dumps(error.value.result)
+    assert "/home/synthetic-user" not in json.dumps(error.value.result)
 
 
 def test_wrong_native_platform_fails_before_export_or_backup(tmp_path, monkeypatch):

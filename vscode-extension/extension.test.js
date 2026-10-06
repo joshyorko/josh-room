@@ -830,6 +830,41 @@ test("failed controller result also accepts top-level JAT status and diagnostics
   );
 });
 
+test("Save exposes inner capture evidence instead of the RCC final wrapper", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-capture-evidence-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const artifact = "sha256:" + "b".repeat(64);
+  const cause = "artifact is not local and no provider was supplied";
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    fs.writeFileSync(args[args.indexOf("--receipt-file") + 1], JSON.stringify({
+      artifactDigest: artifact, exitCode: 2,
+    }));
+    fs.writeFileSync(options.env.JOSH_ROOM_RESULT_FILE, JSON.stringify({
+      ok: false, error: "rcc-capture-failed", stage: "rcc-component-capture",
+      command: "rcc env acquire", exit_status: 1, diagnostic: cause,
+      stdout: cause, stderr: `[rcc] exit status will be: 1! /home/synthetic-user/private`,
+    }));
+    return { code: 2, stdout: "", stderr: "[rcc] exit status will be: 2!" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests({
+    command: "/test/rcc",
+    args: (args, receipt) => [...args, "--artifact", artifact, "--receipt-file", receipt],
+    env: {}, controllerArtifact: artifact, jatRoot: root,
+  });
+  await assert.rejects(extension.__test__.runJoshRoom(["snapshot", "create", "synthetic"], root), (error) => {
+    assert.ok(error.message.includes(cause), error.message);
+    assert.equal(error.controller_exit_status, 2);
+    assert.equal(error.result.exit_status, 1);
+    assert.equal(error.result.stage, "rcc-component-capture");
+    assert.equal(error.result.command, "rcc env acquire");
+    assert.doesNotMatch(JSON.stringify(error), /\/home\/synthetic-user/);
+    assert.ok(error.message.length <= 4096);
+    return true;
+  });
+});
+
 test("Cloudflare authorization remains R2-only", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-encryption-auth-error-test-"));
   const { vscode, statusItem } = createVscodeMock(root);

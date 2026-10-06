@@ -2210,7 +2210,12 @@ def dispatch(args, instance: Path) -> dict:
                 display_name=display_name,
                 confirmation_token=getattr(args, "confirm_deletion", None),
                 preflight_scan=getattr(args, "_local_workspace_evidence", None),
-                rcc_runtime=None,
+                rcc_runtime=(
+                    os.environ.get("JOSH_ROOM_RCC_EXE")
+                    if os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1"
+                    and (source / "robot.yaml").is_file()
+                    else None
+                ),
                 **capture_options,
                 **({"jat_root": _jat_root()} if capture_options else {}),
             )

@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .cancellation import terminate_owned_process
+from .jat import _diagnostic
 
 RCC_VERSION = "v18.19.5"
 MAX_SOURCE_FILE = 2 * 1024 * 1024
@@ -28,6 +29,10 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 class RoomStoreComponentError(RuntimeError):
     """Path-free component capture failure."""
+
+    def __init__(self, message: str, *, result: dict | None = None):
+        super().__init__(message)
+        self.result = result or {}
 
 
 def _safe_relative(value: str) -> str:
@@ -143,14 +148,21 @@ def _host_platform() -> str:
 def _run(argv: list[str], *, cwd: Path, cancellation: Any, timeout: float = 1800) -> bytes:
     if cancellation is not None and cancellation.cancelled:
         raise RoomStoreComponentError("RCC environment capture was cancelled")
-    with tempfile.TemporaryFile(mode="w+b") as output:
+    environment = os.environ.copy()
+    if environment.get("JOSH_ROOM_EXTENSION_MODE") == "1":
+        home = environment.get("JOSH_ROOM_RCC_HOME")
+        if not home or not Path(home).is_absolute():
+            raise RoomStoreComponentError("managed RCC home handoff is incomplete")
+        environment.update(ROBOCORP_HOME=home, RCC_HOLOTREE_MODE="private")
+    with tempfile.TemporaryFile(mode="w+b") as output, tempfile.TemporaryFile(mode="w+b") as errors:
         try:
             process = subprocess.Popen(
                 argv,
                 cwd=cwd,
+                env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=output,
-                stderr=subprocess.DEVNULL,
+                stderr=errors,
                 start_new_session=os.name != "nt",
             )
         except OSError:
@@ -171,7 +183,23 @@ def _run(argv: list[str], *, cwd: Path, cancellation: Any, timeout: float = 1800
             output.seek(0)
             raw = output.read(MAX_JSON + 1)
             if process.returncode != 0 or len(raw) > MAX_JSON:
-                raise RoomStoreComponentError("RCC environment capture failed")
+                errors.seek(0, os.SEEK_END)
+                errors.seek(max(0, errors.tell() - 16384))
+                stderr = _diagnostic(errors.read().decode("utf-8", "replace"))
+                stdout = _diagnostic(raw.decode("utf-8", "replace"))
+                command = "rcc " + " ".join(argv[1:3] if argv[1] == "env" else argv[1:2])
+                diagnostic = _diagnostic(f"{stdout} {stderr}")
+                raise RoomStoreComponentError(
+                    f"RCC environment capture failed ({command}, exit {process.returncode}): {diagnostic}",
+                    result={
+                        "stage": "rcc-component-capture",
+                        "command": command,
+                        "exit_status": process.returncode,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "diagnostic": diagnostic,
+                    },
+                )
             return raw
         except BaseException:
             if process.poll() is None:
@@ -227,7 +255,14 @@ def capture_rcc_component(
         return None
     if repository_format != 2 or not _SHA256.fullmatch(repository_id):
         raise RoomStoreComponentError("Room Store repository identity is invalid")
-    executable = str(rcc_runtime) if rcc_runtime is not None else shutil.which("rcc")
+    if os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1":
+        executable = os.environ.get("JOSH_ROOM_RCC_EXE")
+        if not executable or not Path(executable).is_absolute():
+            raise RoomStoreComponentError("managed RCC runtime handoff is incomplete")
+        if rcc_runtime is not None and str(rcc_runtime) != executable:
+            raise RoomStoreComponentError("managed RCC runtime handoff does not match")
+    else:
+        executable = str(rcc_runtime) if rcc_runtime is not None else shutil.which("rcc")
     if not executable:
         raise RoomStoreComponentError("selected RCC runtime is unavailable")
     current_input = source_input_sha256(root)
@@ -255,9 +290,13 @@ def capture_rcc_component(
             raise RoomStoreComponentError("selected RCC version is unsupported")
         published = _run([executable, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, cancellation=cancellation)
         native = _publish_metadata(published)
+        if native["platform"] is not None and native["platform"] != _host_platform():
+            raise RoomStoreComponentError("RCC returned a mismatched environment platform")
+        archive = stage / "rcc-environment.rcca"
+        _run([executable, "env", "export", "--artifact", native["artifact_digest"], "--provider", "local", "--output", str(archive)], cwd=root, cancellation=cancellation)
         if native["platform"] is None:
-            acquired = _run([executable, "env", "acquire", "--artifact", native["artifact_digest"],
-                             "--permissive-local", "--json"], cwd=root, cancellation=cancellation)
+            acquired = _run([executable, "env", "acquire", "--artifact", native["artifact_digest"], "--archive", str(archive),
+                             "--no-build", "--permissive-local", "--json"], cwd=root, cancellation=cancellation)
             try:
                 value = json.loads(acquired)
                 verification = value["verification"]
@@ -270,8 +309,6 @@ def capture_rcc_component(
                 raise RoomStoreComponentError("RCC returned invalid artifact verification") from None
         if native["platform"] != _host_platform():
             raise RoomStoreComponentError("RCC returned a mismatched environment platform")
-        archive = stage / "rcc-environment.rcca"
-        _run([executable, "env", "export", "--artifact", native["artifact_digest"], "--provider", "local", "--output", str(archive)], cwd=root, cancellation=cancellation)
         try:
             archive_stat = archive.lstat()
             if not stat.S_ISREG(archive_stat.st_mode) or stat.S_ISLNK(archive_stat.st_mode) or archive_stat.st_size <= 0:

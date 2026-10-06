@@ -16,9 +16,9 @@ def _request_from_fake_run(monkeypatch, tmp_path):
         result = tmp_path / "output" / "result.json"
         result.parent.mkdir(exist_ok=True)
         result.write_text('{"operation":"build","success":true,"exit_status":0}')
-        return 0, ""
+        return 0, "", ""
 
-    monkeypatch.setattr("josh_room.jat._run", fake_run)
+    monkeypatch.setattr("josh_room.jat._run_cli", fake_run)
     return captured
 
 

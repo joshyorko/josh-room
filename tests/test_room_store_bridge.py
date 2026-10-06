@@ -356,6 +356,76 @@ def _fixture(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("entry_count", [1, 2048])
+def test_managed_robot_capture_reaches_local_room_store_and_failure_never_publishes(
+    tmp_path, monkeypatch, entry_count
+):
+    from josh_room import room_store_components
+
+    rcc = os.environ.get("JOSH_ROOM_TEST_RCC")
+    jat_root = os.environ.get("JOSH_ROOM_TEST_JAT_ROOT")
+    if not rcc or not jat_root or bridge._runtime_platform() != "linux-x64":
+        pytest.skip("exact managed RCC/JAT fixture runtime is unavailable")
+    dimension, material, backend, _identity, _recovery = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "synthetic-workspace"
+    workspace.mkdir()
+    shutil.copyfile(
+        Path(jat_root) / "environment_linux_amd64_freeze.yaml",
+        workspace / "environment_linux_amd64_freeze.yaml",
+    )
+    robot = workspace / "robot.yaml"
+    robot.write_text(
+        "tasks:\n  Example:\n    shell: python -c \"print('synthetic')\"\n"
+        "environmentConfigs:\n  - environment_linux_amd64_freeze.yaml\n"
+    )
+    for index in range(entry_count):
+        (workspace / f"entry-{index}.txt").write_text(f"synthetic entry {index}\n")
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", rcc)
+    captured = []
+    original = bridge.capture_rcc_component
+
+    def capture(**kwargs):
+        result = original(**kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(bridge, "capture_rcc_component", capture)
+    preview = bridge.preview_room_store(
+        tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[],
+    )
+    assert preview["ok"] and captured == []
+    assert backend.catalog is None and backend.objects == {}
+    saved = bridge.save_room_store(
+        tmp_path / "instance", dimension, "synthetic-room", workspace, material,
+        components=[], rcc_runtime=rcc,
+    )
+    assert saved["status"] == "saved"
+    assert captured[0]["kind"] == "rcca" and captured[0]["archive_size"] > 0
+    assert captured[0]["rcc_version"] == "v18.19.5"
+    assert backend.catalog is not None and backend.objects
+    before = copy.deepcopy((backend.catalog, backend.objects, backend.control))
+    robot.write_text(robot.read_text() + "\n# changed synthetic capture input\n")
+
+    def fail_capture(*_args, **_kwargs):
+        raise room_store_components.RoomStoreComponentError(
+            "RCC synthetic preflight failure",
+            result={"stage": "rcc-component-capture", "exit_status": 2,
+                    "diagnostic": "RCC synthetic preflight failure"},
+        )
+
+    monkeypatch.setattr(room_store_components, "_run", fail_capture)
+    with pytest.raises(bridge.RoomStoreBridgeError) as error:
+        bridge.save_room_store(
+            tmp_path / "instance", dimension, "synthetic-room", workspace, material,
+            components=[], rcc_runtime=rcc,
+        )
+    assert error.value.code == "rcc-capture-failed"
+    assert error.value.result["exit_status"] == 2
+    assert (backend.catalog, backend.objects, backend.control) == before
+
+
+@pytest.mark.integration
 def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     tmp_path, monkeypatch
 ):

@@ -332,6 +332,15 @@ async function main() {
     await fsp.chmod(sourceReadme, 0o444);
     const sourceReadmeBytes = await fsp.readFile(sourceReadme);
     const sourceReadmeMode = (await fsp.stat(sourceReadme)).mode;
+    if (platform === "linux-x64") {
+      await fsp.copyFile(
+        path.join(jat.jatRoot, "environment_linux_amd64_freeze.yaml"),
+        path.join(source, "environment_linux_amd64_freeze.yaml"),
+      );
+      await fsp.writeFile(path.join(source, "robot.yaml"),
+        "tasks:\n  Example:\n    shell: python -c \"print('synthetic')\"\n"
+        + "environmentConfigs:\n  - environment_linux_amd64_freeze.yaml\n");
+    }
     executeController(["dimensions", "list", "--json"], "dimensions-list");
     executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "legacy-local-jat-save");
     executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "legacy-local-jat-enter");
@@ -348,7 +357,36 @@ async function main() {
     }
     const haul = path.join(root, "managed-runtime.haul.tar.zst");
     executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
+    const captureRobot = (folder, output, name) => runManagedTool([
+      "python", "-c",
+      "import json, sys; from pathlib import Path; from josh_room.jat import run_build; "
+      + "result = run_build(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), rcc_environment='required'); "
+      + "print(json.dumps({'success': result['success'], 'exit_status': result['exit_status'], "
+      + "'rcc_component_captured': isinstance(result.get('environment_artifact'), dict)}))",
+      jat.jatRoot, folder, output,
+    ], name);
+    if (platform === "linux-x64") captureRobot(source, haul, "jat-build-with-rcc");
     executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
+    const componentInventory = readManagedResult(path.join(paths.logsRoot, "managed-controller-jat-inspect-result.json"));
+    if (platform === "linux-x64" && componentInventory?.anchors?.rcc_environment !== true) {
+      throw new Error("managed robot workspace capture omitted its RCC component");
+    }
+    if (platform === "linux-x64") {
+      const largerSource = path.join(root, "larger-workspace");
+      await fsp.mkdir(largerSource, { mode: 0o700 });
+      for (const name of ["robot.yaml", "environment_linux_amd64_freeze.yaml"]) {
+        await fsp.copyFile(path.join(source, name), path.join(largerSource, name));
+      }
+      for (let index = 0; index < 2048; index += 1) {
+        await fsp.writeFile(path.join(largerSource, `entry-${index}.txt`), `synthetic entry ${index}\n`);
+      }
+      const largerHaul = path.join(root, "larger-workspace.haul.tar.zst");
+      captureRobot(largerSource, largerHaul, "jat-build-larger");
+      executeController(["jat", "inspect", "--haul", largerHaul, "--json"], "jat-inspect-larger");
+      if (readManagedResult(path.join(paths.logsRoot, "managed-controller-jat-inspect-larger-result.json"))?.anchors?.rcc_environment !== true) {
+        throw new Error("larger managed robot workspace capture omitted its RCC component");
+      }
+    }
     const legacyJatRestore = path.join(root, "legacy-jat-clean-room");
     executeController([
       "jat", "restore", "--haul", haul, "--destination", legacyJatRestore, "--json",

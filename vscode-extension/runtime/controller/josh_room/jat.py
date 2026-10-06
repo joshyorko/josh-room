@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
@@ -29,10 +30,20 @@ def _version(jat_root: Path) -> str:
 
 
 def _diagnostic(stderr: str) -> str:
-    cleaned = " ".join(stderr.replace("\x1b", "").split())
-    for value in os.environ.values():
+    cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(stderr or ""))
+    cleaned = " ".join(cleaned.split())
+    for value in sorted(os.environ.values(), key=len, reverse=True):
         if value and len(value) > 3:
             cleaned = cleaned.replace(value, "[redacted]")
+    cleaned = re.sub(r"\bAGE-SECRET-KEY-[A-Za-z0-9_-]+|\bage1[0-9a-z]{20,}", "[redacted]", cleaned)
+    cleaned = re.sub(r"(?i)\bbearer\s+\S+", "******", cleaned)
+    cleaned = re.sub(
+        r"""(?i)\b((?:access[-_ ]?key(?:[-_ ]?id)?|secret[-_ ]?(?:access[-_ ]?)?key|session[-_ ]?token|password|token|authorization)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,]+)""",
+        r"\1[redacted]",
+        cleaned,
+    )
+    cleaned = re.sub(r"https?://\S+", "[redacted-url]", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"""(?<![\w:])(?:[A-Za-z]:[\\/]|/)[^\s"'<>]+""", "[redacted-path]", cleaned)
     return cleaned[-4096:]
 
 
@@ -49,21 +60,61 @@ def _run_cli(
     }
     if os.name != "nt":
         options["start_new_session"] = True
-    process = subprocess.Popen(argv, **options)
+    try:
+        process = subprocess.Popen(argv, **options)
+    except OSError as error:
+        raise JATError(
+            "JAT runtime execution is unavailable",
+            {"command": "RCC execution", "exit_status": None, "error_type": type(error).__name__},
+        ) from None
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
         _terminate_process(process)
-        raise JATError("JAT operation timed out", {"argv": argv, "exit_status": None, "timed_out": True}) from error
+        raise JATError(
+            "JAT operation timed out",
+            {"command": "RCC execution", "exit_status": None, "timed_out": True},
+        ) from error
     except BaseException:
         _terminate_process(process)
         raise
-    return process.returncode, (stdout or "")[-_STDOUT_LIMIT:], _diagnostic(stderr or stdout)
+    return process.returncode, (stdout or "")[-_STDOUT_LIMIT:], _diagnostic(stderr)
 
 
 def _run(argv: list[str], timeout: float | None, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> tuple[int, str]:
-    exit_status, _stdout, diagnostic = _run_cli(argv, timeout, cwd=cwd, env=env)
-    return exit_status, diagnostic
+    exit_status, stdout, diagnostic = _run_cli(argv, timeout, cwd=cwd, env=env)
+    return exit_status, _diagnostic(f"{stdout} {diagnostic}")
+
+
+def _receipt_evidence(path: Path | None) -> dict:
+    if path is None or not path.is_file():
+        return {"state": "missing"}
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(_RESULT_LIMIT + 1)
+        if len(raw) > _RESULT_LIMIT:
+            return {"state": "oversized"}
+        value = json.loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"state": "invalid"}
+    if not isinstance(value, dict):
+        return {"state": "invalid"}
+    evidence = {"state": "present"}
+    for key in ("exitCode", "exit_code", "exit", "exit_status"):
+        if type(value.get(key)) is int:
+            evidence[key] = value[key]
+    if isinstance(value.get("success"), bool):
+        evidence["success"] = value["success"]
+    for key in ("artifactDigest", "artifact_digest"):
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", str(value.get(key, ""))):
+            evidence[key] = value[key]
+    if isinstance(value.get("operation"), str) and value["operation"] in {
+        "build", "restore", "doctor", "serve", "inspect", "extract", "export", "copy"
+    }:
+        evidence["operation"] = value["operation"]
+    if isinstance(value.get("diagnostics"), str):
+        evidence["diagnostic"] = _diagnostic(value["diagnostics"])
+    return evidence
 
 
 def _jat_contract(jat_root: Path) -> dict[str, bool]:
@@ -99,7 +150,11 @@ def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
     if not path.is_file():
         raise JATError("managed RCC did not produce its execution receipt")
     try:
-        receipt = json.loads(path.read_text())
+        with path.open("rb") as handle:
+            raw = handle.read(_RESULT_LIMIT + 1)
+        if len(raw) > _RESULT_LIMIT:
+            raise JATError("managed RCC produced an oversized execution receipt")
+        receipt = json.loads(raw)
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise JATError("managed RCC produced an invalid execution receipt") from error
     if not isinstance(receipt, dict):
@@ -126,6 +181,8 @@ def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
     rcc_home = os.environ.get("JOSH_ROOM_RCC_HOME")
     if not executable or not artifact or not rcc_home:
         raise JATError("managed Josh Room runtime is incomplete")
+    if not Path(executable).is_absolute():
+        raise JATError("managed RCC executable must be an absolute path")
     environment = os.environ.copy()
     environment.update(
         {
@@ -140,6 +197,9 @@ def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
     if environment.get("PYTHONPATH"):
         python_path.append(environment["PYTHONPATH"])
     environment["PYTHONPATH"] = os.pathsep.join(python_path)
+    environment["PATH"] = os.pathsep.join(
+        filter(None, [str(Path(executable).parent), environment.get("PATH")])
+    )
     return executable, artifact, environment
 
 
@@ -189,10 +249,21 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
         if request_path is not None:
             argv.extend(("--", "--json-input", str(request_path)))
         run_kwargs = {"cwd": jat_root, "env": environment}
+    evidence = None
     try:
         report_progress("jat", f"Running JAT {task} through RCC")
         timeout = None if foreground else float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600"))
-        exit_status, diagnostic = _run(argv, timeout, **run_kwargs)
+        exit_status, stdout, stderr = _run_cli(argv, timeout, **run_kwargs)
+        diagnostic = _diagnostic(f"{stdout} {stderr}")
+        evidence = {
+            "stage": f"jat-{task.lower()}",
+            "command": f"python -m jat.task_runner run tasks.py -t {task}",
+            "exit_status": exit_status,
+            "stdout": _diagnostic(stdout),
+            "stderr": stderr,
+            "rcc_receipt": _receipt_evidence(rcc_receipt),
+            "jat_result": _receipt_evidence(result_path),
+        }
         if managed is not None:
             _validate_rcc_receipt(rcc_receipt, artifact, exit_status)
         if not result_path.is_file():
@@ -201,7 +272,11 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
                 message += f": {diagnostic}"
             raise JATError(message, {"argv": argv, "exit_status": exit_status, "diagnostic": diagnostic})
         try:
-            result = json.loads(result_path.read_text())
+            with result_path.open("rb") as handle:
+                raw = handle.read(_RESULT_LIMIT + 1)
+            if len(raw) > _RESULT_LIMIT:
+                raise JATError("JAT task produced an oversized output/result.json")
+            result = json.loads(raw)
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise JATError("JAT task produced an invalid output/result.json") from error
         if not isinstance(result, dict):
@@ -223,6 +298,15 @@ def _run_task(jat_root: Path, task: str, request: dict | None, *, foreground: bo
             raise JATError(f"JAT {task.lower()} failed with exit {exit_status}", result)
         report_progress("jat", f"JAT {task} completed")
         return result
+    except JATError as error:
+        if evidence is not None:
+            error.result = {
+                **evidence,
+                "diagnostic": diagnostic,
+            }
+            if diagnostic and diagnostic not in str(error):
+                error.args = (f"{error}: {diagnostic}",)
+        raise
     finally:
         if request_path is not None:
             request_path.unlink(missing_ok=True)
@@ -326,7 +410,8 @@ def _run_jat_cli(jat_root: Path, cli_args: list[str], *, foreground: bool = Fals
     try:
         report_progress("jat", f"Running jat {operation} through RCC")
         timeout = None if foreground else float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600"))
-        exit_status, stdout, diagnostic = _run_cli(argv, timeout, **run_kwargs)
+        exit_status, stdout, stderr = _run_cli(argv, timeout, **run_kwargs)
+        diagnostic = _diagnostic(f"{stdout} {stderr}")
         if managed is not None:
             _validate_rcc_receipt(rcc_receipt, artifact, exit_status)
         result = _extract_operation_result(stdout)

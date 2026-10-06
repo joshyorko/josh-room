@@ -1477,7 +1477,9 @@ def _build_operations(
                     rcc_runtime=rcc_runtime,
                 )
             except RoomStoreComponentError as error:
-                raise RoomStoreOperationsError(str(error)) from None
+                raise RoomStoreBridgeError(
+                    str(error), code="rcc-capture-failed", result=error.result
+                ) from None
         else:
             rcc_component = component_value["rcc_environment"]
         resolved = {**component_value, "rcc_environment": rcc_component}
