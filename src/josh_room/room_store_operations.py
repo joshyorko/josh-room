@@ -22,7 +22,7 @@ import tempfile
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -68,10 +68,38 @@ class RoomStoreOperationsError(RuntimeError):
     """Stable, path-free failure at the Room Store operation boundary."""
 
     def __init__(
-        self, message: str, *, deletion_confirmation_token: str | None = None
+        self,
+        message: str,
+        *,
+        deletion_confirmation_token: str | None = None,
+        result: Mapping[str, Any] | None = None,
     ) -> None:
         self.deletion_confirmation_token = deletion_confirmation_token
+        self.result = dict(result or {})
         super().__init__(message)
+
+
+def _restic_store_open_error(error: ResticStoreError) -> RoomStoreOperationsError:
+    return RoomStoreOperationsError(
+        "Restic store could not be opened",
+        result={
+            "stage": "restic-store-open",
+            "command": "restic-store.open",
+            "restic_error_code": error.code.value,
+            "cause": str(error),
+        },
+    )
+
+
+@contextmanager
+def _opened_restic_store(store: Any):
+    """Report errors from store construction/entry without mislabeling its body."""
+    with ExitStack() as stack:
+        try:
+            opened = stack.enter_context(store)
+        except ResticStoreError as error:
+            raise _restic_store_open_error(error) from None
+        yield opened
 
 
 class RoomStorePublicationError(RoomStoreOperationsError):
@@ -625,6 +653,9 @@ class RoomStoreOperations:
                 cache_dir=self.cache_dir,
                 password_file=password_file,
             )
+        except ResticStoreError as error:
+            password_file.unlink(missing_ok=True)
+            raise _restic_store_open_error(error) from None
         except BaseException:
             password_file.unlink(missing_ok=True)
             raise
@@ -835,7 +866,7 @@ class RoomStoreOperations:
         before = preflight_scan[1] if reused_scan else _scan_workspace(self.workspace, policy)
         keyset, password_file, store = self._open_store()
         try:
-            with store as opened:
+            with _opened_restic_store(store) as opened:
                 repository_info = opened.initialize()
                 initial_data_added = getattr(opened, "data_added_bytes", None)
                 self._bind_repository(keyset, repository_info.repository_id)

@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
@@ -24,6 +25,7 @@ RCC_VERSION = "v18.19.5"
 MAX_SOURCE_FILE = 2 * 1024 * 1024
 MAX_SOURCE_FILES = 64
 MAX_JSON = 1024 * 1024
+MAX_STDERR_BYTES = 16 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -145,6 +147,40 @@ def _host_platform() -> str:
     raise RoomStoreComponentError("selected RCC platform is unsupported")
 
 
+def _drain_stderr_tail(stream: Any, tail: bytearray) -> None:
+    """Drain RCC stderr without retaining more than its actionable tail."""
+    try:
+        while True:
+            chunk = stream.read(4096)
+            if not chunk:
+                return
+            if len(chunk) >= MAX_STDERR_BYTES:
+                tail[:] = chunk[-MAX_STDERR_BYTES:]
+                continue
+            overflow = len(tail) + len(chunk) - MAX_STDERR_BYTES
+            if overflow > 0:
+                del tail[:overflow]
+            tail.extend(chunk)
+    except (OSError, ValueError):
+        return
+
+
+def _finish_stderr_reader(process: Any, reader: threading.Thread | None) -> None:
+    if reader is not None and reader.ident is not None:
+        reader.join(timeout=1.0)
+        if reader.is_alive() and process.stderr is not None:
+            try:
+                process.stderr.close()
+            except (OSError, ValueError):
+                pass
+            reader.join(timeout=0.5)
+    if process.stderr is not None:
+        try:
+            process.stderr.close()
+        except (OSError, ValueError):
+            pass
+
+
 def _run(argv: list[str], *, cwd: Path, cancellation: Any, timeout: float = 1800) -> bytes:
     if cancellation is not None and cancellation.cancelled:
         raise RoomStoreComponentError("RCC environment capture was cancelled")
@@ -154,7 +190,7 @@ def _run(argv: list[str], *, cwd: Path, cancellation: Any, timeout: float = 1800
         if not home or not Path(home).is_absolute():
             raise RoomStoreComponentError("managed RCC home handoff is incomplete")
         environment.update(ROBOCORP_HOME=home, RCC_HOLOTREE_MODE="private")
-    with tempfile.TemporaryFile(mode="w+b") as output, tempfile.TemporaryFile(mode="w+b") as errors:
+    with tempfile.TemporaryFile(mode="w+b") as output:
         try:
             process = subprocess.Popen(
                 argv,
@@ -162,13 +198,21 @@ def _run(argv: list[str], *, cwd: Path, cancellation: Any, timeout: float = 1800
                 env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=output,
-                stderr=errors,
+                stderr=subprocess.PIPE,
                 start_new_session=os.name != "nt",
             )
         except OSError:
             raise RoomStoreComponentError("RCC environment capture is unavailable") from None
+        stderr_tail = bytearray()
+        stderr_reader = threading.Thread(
+            target=_drain_stderr_tail,
+            args=(process.stderr, stderr_tail),
+            name="josh-room-rcc-stderr",
+            daemon=True,
+        )
         deadline = time.monotonic() + timeout
         try:
+            stderr_reader.start()
             while process.poll() is None:
                 if cancellation is not None and cancellation.cancelled:
                     terminate_owned_process(process)
@@ -182,10 +226,9 @@ def _run(argv: list[str], *, cwd: Path, cancellation: Any, timeout: float = 1800
                 time.sleep(0.02)
             output.seek(0)
             raw = output.read(MAX_JSON + 1)
+            _finish_stderr_reader(process, stderr_reader)
             if process.returncode != 0 or len(raw) > MAX_JSON:
-                errors.seek(0, os.SEEK_END)
-                errors.seek(max(0, errors.tell() - 16384))
-                stderr = _diagnostic(errors.read().decode("utf-8", "replace"))
+                stderr = _diagnostic(bytes(stderr_tail).decode("utf-8", "replace"))
                 stdout = _diagnostic(raw.decode("utf-8", "replace"))
                 command = "rcc " + " ".join(argv[1:3] if argv[1] == "env" else argv[1:2])
                 diagnostic = _diagnostic(f"{stdout} {stderr}")
@@ -201,10 +244,10 @@ def _run(argv: list[str], *, cwd: Path, cancellation: Any, timeout: float = 1800
                     },
                 )
             return raw
-        except BaseException:
+        finally:
             if process.poll() is None:
                 terminate_owned_process(process)
-            raise
+            _finish_stderr_reader(process, stderr_reader)
 
 
 def _rcc_value(value: Mapping[str, Any], *names: str) -> str:

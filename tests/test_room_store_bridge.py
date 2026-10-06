@@ -434,6 +434,99 @@ def test_managed_robot_capture_reaches_local_room_store_and_failure_never_publis
     assert (backend.catalog, backend.objects, backend.control) == before
 
 
+def test_save_surfaces_safe_restic_store_open_diagnostic(tmp_path, monkeypatch):
+    from josh_room import local_save_receipt
+    from josh_room.room_store_operations import RoomStoreOperationsError
+
+    dimension = bridge.DimensionConfig(
+        dimension_id="minio-main",
+        display_name="Synthetic MinIO",
+        provider="minio",
+        endpoint="https://minio.example.test:9443",
+        bucket="synthetic-room-store",
+        credential_profile="synthetic-profile",
+        encryption_domain_id=str(uuid.uuid4()),
+        options=(("verify_tls", True),),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n", encoding="utf-8")
+    selected_material = object()
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    diagnostic = {
+        "stage": "restic-store-open",
+        "command": "restic-store.open",
+        "restic_error_code": "invalid-configuration",
+        "cause": "restic store configuration is invalid",
+    }
+
+    class FailingSave:
+        def save(self, **_kwargs):
+            raise RoomStoreOperationsError(
+                "Restic store could not be opened", result=diagnostic
+            )
+
+    monkeypatch.setattr(local_save_receipt, "invalidate", lambda *_args: None)
+    monkeypatch.setattr(
+        bridge,
+        "_resolve_material",
+        lambda *_args, **_kwargs: (selected_material, None),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_operation_inputs",
+        lambda *_args: (workspace, dimension.encryption_domain_id, object()),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_verified_restic_executable",
+        lambda **_kwargs: Path("/synthetic/restic"),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_build_operations",
+        lambda **_kwargs: (FailingSave(), {}, "Synthetic Room"),
+    )
+
+    with pytest.raises(bridge.RoomStoreBridgeError) as failure:
+        bridge.save_room_store(
+            tmp_path / "instance",
+            dimension,
+            "synthetic-room",
+            workspace,
+            selected_material,
+            components=[],
+        )
+
+    assert failure.value.code == "save-failed"
+    assert failure.value.result == {"ok": False, "error": "save-failed", **diagnostic}
+
+
+def test_loopback_http_minio_locator_is_accepted_by_restic_store(tmp_path):
+    dimension = bridge.DimensionConfig(
+        dimension_id="minio-loopback",
+        display_name="Synthetic Local MinIO",
+        provider="minio",
+        endpoint="http://127.0.0.1:9000",
+        bucket="synthetic-room-store",
+        credential_profile="synthetic-profile",
+        encryption_domain_id=str(uuid.uuid4()),
+    )
+    repository = bridge._repository_locator(dimension)
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n", encoding="utf-8")
+    password.chmod(0o600)
+
+    store = ResticStore(
+        repository=repository,
+        cache_dir=tmp_path / "cache",
+        password_file=password,
+    )
+
+    assert repository == "s3:http://127.0.0.1:9000/synthetic-room-store/room-store/v1"
+    assert store._repository == repository
+
+
 @pytest.mark.integration
 def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     tmp_path, monkeypatch

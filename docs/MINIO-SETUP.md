@@ -24,7 +24,10 @@ remain in the host OS Secret Service. They never enter argv, logs, catalogs,
 markers, or persisted Dimension JSON. If Secret Service is unavailable,
 connection setup fails rather than writing plaintext credentials. Advanced
 provider options include `region`, `verify_tls`, `ca_bundle`, and `path_style`
-(`true` by default); normal HTTP endpoints do not require a TLS questionnaire.
+(`true` by default). Plain HTTP is limited to canonical loopback hosts
+(`localhost`, IPv4 loopback, and `::1`) for local MinIO; remote MinIO endpoints
+must use HTTPS with certificate verification enabled. Loopback HTTP does not
+require a TLS questionnaire.
 
 Legacy top-level `minio`/Dimension records remain readable for compatibility;
 new connections and Dimensions use the reusable connection model. Use an

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -567,8 +568,22 @@ class ResticStore:
                 port = remote.port
             except ValueError:
                 raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION) from None
+            try:
+                address = ipaddress.ip_address(host) if host else None
+                loopback = bool(
+                    address
+                    and address.is_loopback
+                    and not (
+                        isinstance(address, ipaddress.IPv6Address)
+                        and address.ipv4_mapped is not None
+                    )
+                    and "%" not in host
+                )
+            except ValueError:
+                loopback = host.lower() == "localhost" if host else False
             if (
-                remote.scheme != "https"
+                remote.scheme not in {"https", "http"}
+                or (remote.scheme == "http" and not loopback)
                 or not host
                 or (port is not None and not 1 <= port <= 65535)
                 or remote.username

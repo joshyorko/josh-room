@@ -225,6 +225,31 @@ def test_failed_rcc_command_preserves_bounded_sanitized_cause(tmp_path):
     assert "/home/synthetic-user" not in json.dumps(error.value.result)
 
 
+def test_failed_rcc_stderr_is_bounded_while_child_is_writing(tmp_path, monkeypatch):
+    import sys
+
+    temporary_files = []
+    original_temporary_file = components.tempfile.TemporaryFile
+
+    def track_temporary_file(*args, **kwargs):
+        temporary_files.append(kwargs)
+        return original_temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(components.tempfile, "TemporaryFile", track_temporary_file)
+    script = (
+        "import os, sys; os.write(2, b'X' * (2 * 1024 * 1024)); "
+        "os.write(2, b'synthetic-tail-marker'); sys.exit(2)"
+    )
+
+    with pytest.raises(components.RoomStoreComponentError) as error:
+        components._run([sys.executable, "-c", script], cwd=tmp_path, cancellation=None)
+
+    assert len(temporary_files) == 1  # stdout is bounded; stderr is drained into a bounded tail.
+    stderr = error.value.result["stderr"]
+    assert stderr.endswith("synthetic-tail-marker")
+    assert len(stderr.encode("utf-8")) <= 16 * 1024
+
+
 def test_wrong_native_platform_fails_before_export_or_backup(tmp_path, monkeypatch):
     root = _workspace(tmp_path)
     restic = _Restic()

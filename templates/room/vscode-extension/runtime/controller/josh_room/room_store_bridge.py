@@ -1941,7 +1941,9 @@ def save_room_store(
                 code="deletion-confirmation-required",
                 confirmation_token=error.deletion_confirmation_token,
             ) from None
-        raise RoomStoreBridgeError(str(error), code="save-failed") from None
+        raise RoomStoreBridgeError(
+            str(error), code="save-failed", result=error.result
+        ) from None
     except Exception:  # noqa: BLE001 - public Save errors must not expose SDK, identity, or path diagnostics.
         raise RoomStoreBridgeError(
             "logical Room Store Save failed", code="save-failed"
