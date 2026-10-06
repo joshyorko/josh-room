@@ -543,6 +543,10 @@ def parse_snapshot_entries(
 class ResticStore:
     """Context-scoped access to one explicitly versioned restic repository."""
 
+    engine = "restic"
+    engine_version = RESTIC_VERSION
+    _stderr = subprocess.DEVNULL
+
     def __init__(
         self,
         *,
@@ -697,7 +701,7 @@ class ResticStore:
             "env": self._environment(),
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
-            "stderr": subprocess.DEVNULL,
+            "stderr": self._stderr,
         }
         if os.name == "posix":
             kwargs["start_new_session"] = True

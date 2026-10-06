@@ -4,6 +4,7 @@ import base64
 import os
 import shutil
 import stat
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -342,6 +343,7 @@ def test_reused_scan_cannot_report_stale_noop(tmp_path, monkeypatch):
     operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
     before = room_store_operations._scan_workspace(workspace, policy)
     binding = __import__("hashlib").sha256(str(workspace.resolve()).encode()).hexdigest()
+    time.sleep(0.01)  # Ensure a distinct timestamp tick on coarse-clock filesystems.
     source.write_text("world")
     with pytest.raises(RoomStoreOperationsError, match="changed after Save preflight"):
         operations.save(preflight_scan=(binding, before))
@@ -468,6 +470,7 @@ def test_noop_preflight_detects_same_size_edit_with_restored_mtime(tmp_path):
     store, catalog = _Store(), _Catalog(latest)
     operations = _operations(tmp_path, workspace, store, catalog, binding=REPOSITORY_ID)
     before = source.stat()
+    time.sleep(0.01)  # This fixture requires changed ctime while restoring mtime.
     source.write_text("other")
     os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert source.stat().st_mtime_ns == before.st_mtime_ns
