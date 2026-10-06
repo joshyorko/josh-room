@@ -380,8 +380,13 @@ def test_managed_robot_capture_reaches_local_room_store_and_failure_never_publis
     )
     for index in range(entry_count):
         (workspace / f"entry-{index}.txt").write_text(f"synthetic entry {index}\n")
+    rcc_home = tmp_path / "private-rcc-home"
+    rcc_home.mkdir(mode=0o700)
+    monkeypatch.delenv("ROBOCORP_HOME", raising=False)
+    monkeypatch.delenv("RCC_HOLOTREE_MODE", raising=False)
     monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
     monkeypatch.setenv("JOSH_ROOM_RCC_EXE", rcc)
+    monkeypatch.setenv("JOSH_ROOM_RCC_HOME", str(rcc_home))
     captured = []
     original = bridge.capture_rcc_component
 

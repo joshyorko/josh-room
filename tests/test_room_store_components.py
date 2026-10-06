@@ -197,6 +197,16 @@ def test_managed_capture_never_falls_back_to_ambient_rcc(tmp_path, monkeypatch):
     assert restic.backups == []
 
 
+@pytest.mark.parametrize("home", [None, "relative-home"])
+def test_managed_capture_rejects_missing_or_relative_private_home(tmp_path, monkeypatch, home):
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.delenv("JOSH_ROOM_RCC_HOME", raising=False)
+    if home is not None:
+        monkeypatch.setenv("JOSH_ROOM_RCC_HOME", home)
+    with pytest.raises(components.RoomStoreComponentError, match="home handoff is incomplete"):
+        components._run(["/synthetic/rcc", "--version"], cwd=tmp_path, cancellation=None)
+
+
 def test_failed_rcc_command_preserves_bounded_sanitized_cause(tmp_path):
     import sys
 
