@@ -685,6 +685,7 @@ def test_backup_uses_parent_relative_dot_and_returns_noop_without_snapshot(tmp_p
         "backup",
         "--json",
         "--skip-if-unchanged",
+        "--no-scan",
         "--parent",
         "b" * 64,
         "--exclude-file",
@@ -701,6 +702,25 @@ def test_backup_uses_parent_relative_dot_and_returns_noop_without_snapshot(tmp_p
     assert result.effective_parent_id == "b" * 64
 
 
+def test_no_scan_progress_can_omit_estimated_totals_without_losing_summary_accounting(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    status = json.dumps(
+        {"message_type": "status", "files_done": 1, "bytes_done": 12}
+    ).encode() + b"\n"
+    store, _factory = initialized_store(
+        tmp_path, [FakeProcess(status + summary("d" * 64, total_bytes_processed=12))],
+    )
+    progress = []
+    with store:
+        result = store.backup(workspace, on_progress=progress.append)
+    assert progress[0].files_done == 1
+    assert progress[0].bytes_done == 12
+    assert progress[0].total_files is None
+    assert progress[0].total_bytes is None
+    assert result.total_bytes_processed == 12
+
+
 def test_windows_backup_forces_content_reads_when_metadata_quickcheck_is_unsafe(
     tmp_path, monkeypatch
 ):
@@ -714,6 +734,8 @@ def test_windows_backup_forces_content_reads_when_metadata_quickcheck_is_unsafe(
         result = store.backup(workspace, parent="b" * 64)
 
     command = factory.calls[-1].args[1:]
+    assert "--no-scan" in command
+    assert "--skip-if-unchanged" in command
     assert "--force" in command
     assert "--parent" not in command
     assert result.force_scan is True
