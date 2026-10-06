@@ -12,3 +12,4 @@ env.json
 uv.lock
 dist/
 __pycache__/
+.local-evidence/
