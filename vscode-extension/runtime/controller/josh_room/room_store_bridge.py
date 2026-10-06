@@ -694,7 +694,7 @@ def open_existing_room_store(
     snapshot_id: str = "latest",
     authority_session: Any | None = None,
 ):
-    """Open an already-bound MinIO or R2 Room Store without initialization writes."""
+    """Open an already-bound store, preparing local tools without remote writes."""
     if dimension.provider == "r2":
         authority_session, material = _r2_authority_session(
             dimension, selected_material, authority_session, allow_initialize=False
@@ -713,7 +713,7 @@ def open_existing_room_store(
     provider_env = _provider_environment(dimension)
     executable = _verified_restic_executable(
         runtime_root=instance.parent / "josh-room-runtime",
-        install=False,
+        install=True,
     )
     with _private_operation_directory() as operation_dir:
         credential_dir = operation_dir / "credentials"
@@ -1723,6 +1723,7 @@ def preview_room_store(
     hauler_selection: Mapping[str, Any] | None = None,
     homebrew_archive: Path | None = None,
 ) -> dict:
+    """Preview an explicit Save, preparing local tools without remote writes."""
     component_value = _components(components)
     _check_required_components(component_value, required_components)
     selected_material, authority_session = _resolve_material(
@@ -1742,7 +1743,7 @@ def preview_room_store(
         )
         runtime_root = Path(instance).parent / "josh-room-runtime"
         executable = _verified_restic_executable(
-            runtime_root=runtime_root, install=False
+            runtime_root=runtime_root, install=True
         )
         with _private_operation_directory() as runtime_dir:
             operations, state, _display = _build_operations(
