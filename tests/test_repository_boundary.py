@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 FEATURE_MERGE_SHA = "b1aa05fc5322a9a736fb0d6dab7bc20af6db0be2"
-PROMOTED_VSIX_SHA256 = "7ff6c03d09d1deaa0dbaaf7fa2de7d514e8552ca98561557a9de307837ac59b3"
+PROMOTED_VSIX_SHA256 = "8e28624b4f273a78f2b97beb61b440aa9125a6352d0890d85dc4fc0f438e7918"
 
 
 def test_repository_contains_no_copied_ror_implementation():
