@@ -1,0 +1,169 @@
+{
+  "environment": {
+    "execution": "selected OpenAI-managed Codex Cloud",
+    "cwd": "/workspace",
+    "implementation_and_testing_elsewhere": false,
+    "source_acquisition": "remote GitHub repositories"
+  },
+  "starting_remote_head": "fd3302abf2134a1410e3a72e52176523cedde7e2",
+  "starting_head_drift": false,
+  "feature_merge": "b1aa05fc5322a9a736fb0d6dab7bc20af6db0be2",
+  "candidate_source": "d86e7b7f761730213cd538fc03b21302834e827f",
+  "release_source": "032f9129c1d66b1cb402b84c0ad19968bf1aa9b2",
+  "tag": "v0.1.29-standalone-vsix",
+  "version": "0.1.29",
+  "asset": {
+    "name": "josh-room-0.1.29.vsix",
+    "sha256": "8e28624b4f273a78f2b97beb61b440aa9125a6352d0890d85dc4fc0f438e7918",
+    "size": 489641,
+    "packaged_source_files": 98,
+    "canonical_template_packaged_controller_files": 81,
+    "promotion": "retained exact tested bytes; no VSIX rebuild or overwrite"
+  },
+  "fresh_cloud_checks": {
+    "python_full": {
+      "passed": 1728,
+      "skipped": 10,
+      "failed": 8,
+      "same_failures_on_pre_hotfix_main": true,
+      "baseline_sha": "af40cb67aad3646f1bc5f94eed6dbe453b5eea63",
+      "failures": [
+        "test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes",
+        "test_remove_without_owned_hooks_is_idempotent",
+        "test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact",
+        "test_install_preserves_unrelated_hooks_and_remove_rolls_back",
+        "test_status_detects_stale_runtime_manifest",
+        "test_stale_repair_and_command_windows_contract",
+        "test_unowned_same_command_conflicts_with_install",
+        "test_remove_refuses_unowned_duplicate_canonical_command"
+      ],
+      "causes": [
+        "host interpreter owned by nobody rejected by existing trust rule",
+        "detached child becomes a zombie in this environment"
+      ]
+    },
+    "python_focused": {
+      "passed": 138,
+      "skipped": 2
+    },
+    "python_release": {
+      "passed": 72,
+      "skipped": 0
+    },
+    "node": {
+      "passed": 276,
+      "skipped": 2,
+      "failed": 0
+    },
+    "exact_versioned_packaged_linux_managed_runtime": "PASS",
+    "ruff": "PASS",
+    "shell_syntax": "PASS",
+    "whitespace": "PASS",
+    "candidate_checksum_archive_source_inventory": "PASS",
+    "hotfix_release_commit_secret_scan": "no leaks found",
+    "packaged_secret_scan": "one unchanged vendored PyYAML tokens.py checksum false positive, verified against the file SHA256; no credential finding",
+    "downstream_update_tests": {
+      "joshyorko/work-jatt": 7,
+      "jyorko/work-jatt": 7
+    }
+  },
+  "skipped_or_unavailable": [
+    "native secure authority helper missing",
+    "private device-ready first run",
+    "secret-gated MinIO pytest",
+    "secret-gated R2 pytest",
+    "RCC-first JAT/Hauler/age/tar/zstd pytest vertical without its test tooling",
+    "two dedicated managed RCC/JAT pytest fixtures without their required environment variables",
+    "registry-gated secure Room",
+    "opt-in large streaming pytest",
+    "native Windows ChangeTime pytest",
+    "two optional managed extension-runner Node tests",
+    "full provider UI Save because trusted Secret Service helper is missing",
+    "live Work Jatt Save",
+    "local native Windows UI dogfood"
+  ],
+  "ui_evidence": {
+    "official_code_version": "1.141.0",
+    "official_code_archive_sha256": "d77d588f0454cbaaa71e723497de4160d15b95fba4988abe177b1432e6bd570a",
+    "exact_versioned_vsix_installed_by_real_code_cli": true,
+    "screenshot_scope": "actual installed VSIX details and earlier Josh Room view activation, not Save acceptance",
+    "full_provider_ui_save": "UNAVAILABLE",
+    "gate": {
+      "backend": "linux-secret-service",
+      "available": false,
+      "reason": "helper-missing",
+      "diagnostics": [
+        "headless",
+        "secret-tool-missing"
+      ]
+    },
+    "fabricated_screenshots": false
+  },
+  "published_provider_acceptance": {
+    "repository": "joshyorko/josh-room",
+    "pr": 113,
+    "head": "fd3302abf2134a1410e3a72e52176523cedde7e2",
+    "result": "real disposable-MinIO PASS recorded in remote PR",
+    "repeated_here": false,
+    "production_writes": false
+  },
+  "workflows": {
+    "feature": "https://github.com/joshyorko/josh-room/actions/runs/37634430494",
+    "release_pr": "https://github.com/joshyorko/josh-room/actions/runs/37660451013",
+    "tag_publication": "https://github.com/joshyorko/josh-room/actions/runs/37661759465",
+    "release_pr_result": "SUCCESS, all five checks",
+    "tag_publication_result": "FAILURE at Verify staged tested VSIX, draft asset missing"
+  },
+  "access_limits": [
+    {
+      "action": "read branch protection",
+      "target": "GET repos/joshyorko/josh-room/branches/main/protection",
+      "error": "HTTP 403 Resource not accessible by integration",
+      "response": "standard GitHub PR merge path used, no admin bypass or access expansion"
+    },
+    {
+      "repository": "jyorko/work-jatt",
+      "permissions": "pull=true, push=false",
+      "response": "no source push attempted; exact pin patch and permitted issue handoff"
+    },
+    {
+      "action": "read in-progress Windows job log",
+      "target": "GET repos/joshyorko/josh-room/actions/jobs/112926325170/logs",
+      "error": "GitHub redirect to Actions Azure blob log endpoint returned Forbidden",
+      "response": "No alternate route or access expansion attempted; existing authorized job-status reads remain available"
+    }
+  ],
+  "production_credentials_created": false,
+  "production_provider_writes": false,
+  "runtime_pins_changed": false,
+  "tests_weakened_or_deleted": false,
+  "publication": {
+    "status": "BLOCKED",
+    "draft_release_id": 406013238,
+    "draft": true,
+    "asset_count": 0,
+    "latest_public_release": "v0.1.28-standalone-vsix",
+    "denied_action": "upload exact VSIX release asset",
+    "target": "POST https://uploads.github.com/repos/joshyorko/josh-room/releases/406013238/assets?name=josh-room-0.1.29.vsix",
+    "error": "HTTP 401: Bad credentials",
+    "retry_attempted": false,
+    "credentials_or_access_changed": false,
+    "sequencing_error": "Tag was pushed after draft creation before catching the partial asset-upload failure; publication verification failed closed."
+  },
+  "downstream": {
+    "joshyorko/work-jatt": {
+      "base_sha": "a1c6696d9877e3848a9e5cde728c68df3b7a841d",
+      "source_pin_updated": false,
+      "reason": "No verified public 0.1.29 asset exists; pin update remains correctly gated",
+      "issue": 3
+    },
+    "jyorko/work-jatt": {
+      "base_sha": "6d7dcd4afb9d76892945772b382eda9addf683b9",
+      "permissions": "read-only",
+      "source_pin_updated": false,
+      "patch": "jyorko-work-jatt-pin.patch",
+      "issue": 7,
+      "patch_apply_check": "PASS"
+    }
+  }
+}

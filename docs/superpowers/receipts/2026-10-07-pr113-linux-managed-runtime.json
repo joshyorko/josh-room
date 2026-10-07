@@ -1,0 +1,94 @@
+{
+  "result": "managed-runtime-consumer-pass",
+  "platform": "linux-x64",
+  "source_sha": "d86e7b7f761730213cd538fc03b21302834e827f",
+  "vsix": {
+    "asset": "candidate.vsix",
+    "sha256": "8e28624b4f273a78f2b97beb61b440aa9125a6352d0890d85dc4fc0f438e7918",
+    "size": 489641,
+    "extension_version": "0.1.29"
+  },
+  "rcc": {
+    "version": "v18.19.5",
+    "source_sha": "d1aec7d0bb897a81274423c7a6bb747233f9c263",
+    "asset": "rcc-linux64",
+    "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
+    "size": 22360226
+  },
+  "dependencies": {
+    "boto3": "1.43.82"
+  },
+  "private_runtime": {
+    "status": "passed",
+    "platform": "linux",
+    "checks": [
+      "private-directory-owner-and-access",
+      "private-file-owner-and-access",
+      "symlink-rejection"
+    ]
+  },
+  "windows_room_store_acceptance": {
+    "status": "not-applicable",
+    "native_windows_only": true
+  },
+  "restic": {
+    "version": "0.19.1",
+    "platform": "linux-x64",
+    "sha256": "20d4142678d0d95ec11a4759def1b73fd9190abc9ca19e4b62d067c0b387e639",
+    "size": 30941346,
+    "metrics": {
+      "cancel_progress_message_type": "verbose_status",
+      "cancelled_exit_code": 130,
+      "concurrent_snapshot_count": 2,
+      "edit_data_added_packed": 1451169,
+      "edit_data_processed": 8388654,
+      "edit_fraction_limit": 0.5,
+      "initial_data_added_packed": 8390986,
+      "rename_data_added_packed": 1017
+    }
+  },
+  "controller": {
+    "release_tag": "v0.1.11-controller-artifacts",
+    "artifact_digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
+    "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
+    "archive": {
+      "asset": "josh-room-controller-linux-amd64.rcca",
+      "sha256": "3dd7d542b2fdd35633152a400e30d7c6bb861c5bb128f6e22ef6bdbc3b048f88",
+      "size": 130993088
+    },
+    "source_sha": "b4da2846fee429a2e2878f817faac6a48e4384fd",
+    "rcc_version": "v18.19.5"
+  },
+  "jat": {
+    "release_tag": "v0.1.11-jat-runtime",
+    "artifact_digest": "sha256:ae6b5802103c780de49b42768885a8c66073747272caf759784e9eb23f44e4f1",
+    "specification_digest": "sha256:899025175bc2bfceb1f41778e6feaa4341ca84e4dbe97a5ddd97384ee9fa586d",
+    "archive": {
+      "asset": "jat-runtime-linux-amd64.rcca",
+      "sha256": "eb5a2f5634b6bc78a66bc070493f7d7df81a775cfe421160b8b1ac34c2589d5f",
+      "size": 170822706
+    },
+    "source_sha": "415dac30fe4aec2ae511c40181de6463368fd8e3",
+    "rcc_version": "v18.19.5"
+  },
+  "checks": [
+    "clean-installed-vsix",
+    "cold-acquire",
+    "warm-no-build",
+    "provider-unavailable-after-acquire",
+    "corrupt-archive-rejection",
+    "wrong-rcc-rejection",
+    "stale-receipt-rejection",
+    "controller-cli",
+    "legacy-local-jat-save",
+    "legacy-local-jat-enter",
+    "legacy-jat-build",
+    "legacy-jat-inspect",
+    "legacy-jat-clean-room-restore-bytes-and-mode",
+    "legacy-jat-serve",
+    "jat-env-exec",
+    "restic-package",
+    "restic-phase0",
+    "private-runtime"
+  ]
+}
