@@ -45,9 +45,11 @@ from .r2 import R2Backend, R2Config
 from .restic_store import ResticStore, SnapshotEntry
 from .room_store_components import (
     RCC_VERSION,
+    PreparedRccComponent,
     RoomStoreComponentError,
     _host_platform,
     capture_rcc_component,
+    prepare_rcc_component,
     source_input_sha256,
 )
 from .room_store_export import PortableExportError, materialize_components
@@ -1458,6 +1460,27 @@ def _build_operations(
             ) from None
         state.update(catalog=candidate, etag=etag, object_ref=object_ref)
 
+    prepared_rcc: PreparedRccComponent | None = None
+
+    def prepare_components(latest_descriptor):
+        nonlocal prepared_rcc
+        prior_rcc = (
+            latest_descriptor.to_dict()["components"]["rcc_environment"]
+            if latest_descriptor is not None else None
+        )
+        try:
+            prepared_rcc = prepare_rcc_component(
+                workspace=workspace,
+                prior_component=prior_rcc,
+                directory=runtime_dir / "rcc-component",
+                cancellation=cancellation,
+                rcc_runtime=rcc_runtime,
+            )
+        except RoomStoreComponentError as error:
+            raise RoomStoreBridgeError(
+                str(error), code="rcc-capture-failed", result=error.result
+            ) from None
+
     def resolve_components(opened_store, latest_descriptor):
         prior_components = (
             latest_descriptor.to_dict()["components"]
@@ -1475,6 +1498,7 @@ def _build_operations(
                     restic=opened_store,
                     cancellation=cancellation,
                     rcc_runtime=rcc_runtime,
+                    prepared=prepared_rcc,
                 )
             except RoomStoreComponentError as error:
                 raise RoomStoreBridgeError(
@@ -1616,6 +1640,7 @@ def _build_operations(
         write_marker=write_marker,
         descriptor_metadata=metadata,
         resolve_components=resolve_components,
+        prepare_components=prepare_components,
         active_runtime_root=active_runtime_root,
         secure_private_file=secure_private_file,
         validate_private_directory=validate_private_directory,

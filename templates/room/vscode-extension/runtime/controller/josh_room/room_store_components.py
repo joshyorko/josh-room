@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -35,6 +36,12 @@ class RoomStoreComponentError(RuntimeError):
     def __init__(self, message: str, *, result: dict | None = None):
         super().__init__(message)
         self.result = result or {}
+
+
+@dataclass(frozen=True)
+class PreparedRccComponent:
+    stage: Path
+    metadata: dict[str, Any]
 
 
 def _safe_relative(value: str) -> str:
@@ -281,23 +288,19 @@ def _publish_metadata(raw: bytes) -> dict[str, str]:
     }
 
 
-def capture_rcc_component(
+def prepare_rcc_component(
     *,
     workspace: Path,
     prior_component: Mapping[str, Any] | None,
-    repository_id: str,
-    repository_format: int,
-    restic: Any,
+    directory: Path,
     cancellation: Any = None,
     rcc_runtime: Path | str | None = None,
-) -> dict[str, Any] | None:
-    """Reuse or capture the root robot's RCCA into the opened Room Store."""
+) -> PreparedRccComponent | None:
+    """Verify the local RCC archive before any Room Store mutation."""
     root = Path(workspace).resolve(strict=True)
     robot = root / "robot.yaml"
     if not robot.exists():
         return None
-    if repository_format != 2 or not _SHA256.fullmatch(repository_id):
-        raise RoomStoreComponentError("Room Store repository identity is invalid")
     if os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1":
         executable = os.environ.get("JOSH_ROOM_RCC_EXE")
         if not executable or not Path(executable).is_absolute():
@@ -309,10 +312,84 @@ def capture_rcc_component(
     if not executable:
         raise RoomStoreComponentError("selected RCC runtime is unavailable")
     current_input = source_input_sha256(root)
+    if (
+        prior_component is not None
+        and prior_component.get("source_input_sha256") == current_input
+        and prior_component.get("rcc_version") == RCC_VERSION
+        and prior_component.get("platform") == _host_platform()
+    ):
+        return None
+    stage = Path(directory)
+    stage.mkdir(mode=0o700)
+    version_output = _run([executable, "--version"], cwd=root, cancellation=cancellation, timeout=20)
+    if re.search(r"(?<![A-Za-z0-9.+-])v18\.19\.5(?![A-Za-z0-9.+-])", version_output.decode("utf-8", "replace")) is None:
+        raise RoomStoreComponentError("selected RCC version is unsupported")
+    published = _run([executable, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, cancellation=cancellation)
+    native = _publish_metadata(published)
+    if native["platform"] is not None and native["platform"] != _host_platform():
+        raise RoomStoreComponentError("RCC returned a mismatched environment platform")
+    archive = stage / "rcc-environment.rcca"
+    _run([executable, "env", "export", "--artifact", native["artifact_digest"], "--provider", "local", "--output", str(archive)], cwd=root, cancellation=cancellation)
+    if native["platform"] is None:
+        acquired = _run([executable, "env", "acquire", "--artifact", native["artifact_digest"], "--archive", str(archive),
+                         "--no-build", "--permissive-local", "--json"], cwd=root, cancellation=cancellation)
+        try:
+            value = json.loads(acquired)
+            verification = value["verification"]
+            if (verification["valid"] is not True
+                    or verification["artifactDigest"] != native["artifact_digest"]
+                    or value["artifactDigest"] != native["artifact_digest"]):
+                raise ValueError
+            native["platform"] = {"linux_amd64": "linux-x64", "windows_amd64": "win32-x64"}[verification["platform"]]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            raise RoomStoreComponentError("RCC returned invalid artifact verification") from None
+    if native["platform"] != _host_platform():
+        raise RoomStoreComponentError("RCC returned a mismatched environment platform")
+    try:
+        archive_stat = archive.lstat()
+        if not stat.S_ISREG(archive_stat.st_mode) or stat.S_ISLNK(archive_stat.st_mode) or archive_stat.st_size <= 0:
+            raise RoomStoreComponentError("RCC environment export is invalid")
+        archive_digest = hashlib.sha256()
+        with archive.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                archive_digest.update(chunk)
+        if source_input_sha256(root) != current_input:
+            raise RoomStoreComponentError("RCC environment source changed during capture")
+        metadata_value = {
+            "format_version": 1,
+            "source_input_sha256": current_input,
+            **native,
+            "rcc_version": RCC_VERSION,
+            "robot_relative_path": "robot.yaml",
+            "archive_sha256": archive_digest.hexdigest(),
+            "archive_size": archive_stat.st_size,
+        }
+        metadata_file = stage / "metadata.json"
+        metadata_file.write_text(json.dumps(metadata_value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+        metadata_file.chmod(0o600)
+        return PreparedRccComponent(stage, metadata_value)
+    except OSError:
+        raise RoomStoreComponentError("RCC environment capture failed") from None
+
+
+def capture_rcc_component(
+    *,
+    workspace: Path,
+    prior_component: Mapping[str, Any] | None,
+    repository_id: str,
+    repository_format: int,
+    restic: Any,
+    cancellation: Any = None,
+    rcc_runtime: Path | str | None = None,
+    prepared: PreparedRccComponent | None = None,
+) -> dict[str, Any] | None:
+    """Reuse or capture the root robot's RCCA into the opened Room Store."""
+    root = Path(workspace).resolve(strict=True)
+    if not (root / "robot.yaml").exists():
+        return None
+    if repository_format != 2 or not _SHA256.fullmatch(repository_id):
+        raise RoomStoreComponentError("Room Store repository identity is invalid")
     with tempfile.TemporaryDirectory(prefix="josh-room-rcc-") as temporary:
-        private = Path(temporary)
-        stage = private / "component"
-        stage.mkdir(mode=0o700)
         if prior_component is not None:
             snapshot = prior_component.get("snapshot")
             if (
@@ -322,84 +399,44 @@ def capture_rcc_component(
                 or not _SHA256.fullmatch(str(snapshot.get("snapshot_id", "")))
             ):
                 raise RoomStoreComponentError("prior RCC component belongs to another Room Store")
-            if (
-                prior_component.get("source_input_sha256") == current_input
-                and prior_component.get("rcc_version") == RCC_VERSION
-                and prior_component.get("platform") == _host_platform()
-            ):
-                return dict(prior_component)
-        version_output = _run([executable, "--version"], cwd=root, cancellation=cancellation, timeout=20)
-        if re.search(r"(?<![A-Za-z0-9.+-])v18\.19\.5(?![A-Za-z0-9.+-])", version_output.decode("utf-8", "replace")) is None:
-            raise RoomStoreComponentError("selected RCC version is unsupported")
-        published = _run([executable, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, cancellation=cancellation)
-        native = _publish_metadata(published)
-        if native["platform"] is not None and native["platform"] != _host_platform():
-            raise RoomStoreComponentError("RCC returned a mismatched environment platform")
-        archive = stage / "rcc-environment.rcca"
-        _run([executable, "env", "export", "--artifact", native["artifact_digest"], "--provider", "local", "--output", str(archive)], cwd=root, cancellation=cancellation)
-        if native["platform"] is None:
-            acquired = _run([executable, "env", "acquire", "--artifact", native["artifact_digest"], "--archive", str(archive),
-                             "--no-build", "--permissive-local", "--json"], cwd=root, cancellation=cancellation)
-            try:
-                value = json.loads(acquired)
-                verification = value["verification"]
-                if (verification["valid"] is not True
-                        or verification["artifactDigest"] != native["artifact_digest"]
-                        or value["artifactDigest"] != native["artifact_digest"]):
-                    raise ValueError
-                native["platform"] = {"linux_amd64": "linux-x64", "windows_amd64": "win32-x64"}[verification["platform"]]
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                raise RoomStoreComponentError("RCC returned invalid artifact verification") from None
-        if native["platform"] != _host_platform():
-            raise RoomStoreComponentError("RCC returned a mismatched environment platform")
+        if prepared is None:
+            prepared = prepare_rcc_component(
+                workspace=root, prior_component=prior_component,
+                directory=Path(temporary) / "component",
+                cancellation=cancellation, rcc_runtime=rcc_runtime,
+            )
+        if prepared is None:
+            return dict(prior_component) if prior_component is not None else None
+        stage, metadata = prepared.stage, prepared.metadata
+        if source_input_sha256(root) != metadata["source_input_sha256"]:
+            raise RoomStoreComponentError("RCC environment source changed during capture")
+        if prior_component is None:
+            parent = None
+        else:
+            parent = prior_component["snapshot"]["snapshot_id"]
         try:
-            archive_stat = archive.lstat()
-            if not stat.S_ISREG(archive_stat.st_mode) or stat.S_ISLNK(archive_stat.st_mode) or archive_stat.st_size <= 0:
-                raise RoomStoreComponentError("RCC environment export is invalid")
-            archive_digest = hashlib.sha256()
-            with archive.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    archive_digest.update(chunk)
-            if source_input_sha256(root) != current_input:
-                raise RoomStoreComponentError("RCC environment source changed during capture")
-            metadata_value = {
-                "format_version": 1,
-                "source_input_sha256": current_input,
-                **native,
-                "rcc_version": RCC_VERSION,
-                "robot_relative_path": "robot.yaml",
-                "archive_sha256": archive_digest.hexdigest(),
-                "archive_size": archive_stat.st_size,
-            }
-            metadata_file = stage / "metadata.json"
-            metadata_file.write_text(json.dumps(metadata_value, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
-            metadata_file.chmod(0o600)
-            if prior_component is None:
-                parent = None
-            else:
-                parent = prior_component["snapshot"]["snapshot_id"]
             summary = restic.backup(stage, parent=parent, cancellation=cancellation)
             snapshot_id = getattr(summary, "snapshot_id", None)
             if not snapshot_id:
                 raise RoomStoreComponentError("Restic did not capture the RCC component")
             saved = restic.snapshot(snapshot_id)
-            return {
-                "kind": "rcca",
-                "snapshot": {
-                    "repository_id": repository_id,
-                    "repository_format": repository_format,
-                    "snapshot_id": snapshot_id,
-                    "tree_id": saved.tree_id,
-                },
-                "archive_sha256": archive_digest.hexdigest(),
-                "archive_size": archive_stat.st_size,
-                "member_basename": "rcc-environment.rcca",
-                "artifact_digest": native["artifact_digest"],
-                "specification_digest": native["specification_digest"],
-                "platform": native["platform"],
-                "rcc_version": RCC_VERSION,
-                "robot_relative_path": "robot.yaml",
-                "source_input_sha256": current_input,
-            }
         except OSError:
             raise RoomStoreComponentError("RCC environment capture failed") from None
+        return {
+            "kind": "rcca",
+            "snapshot": {
+                "repository_id": repository_id,
+                "repository_format": repository_format,
+                "snapshot_id": snapshot_id,
+                "tree_id": saved.tree_id,
+            },
+            "archive_sha256": metadata["archive_sha256"],
+            "archive_size": metadata["archive_size"],
+            "member_basename": "rcc-environment.rcca",
+            "artifact_digest": metadata["artifact_digest"],
+            "specification_digest": metadata["specification_digest"],
+            "platform": metadata["platform"],
+            "rcc_version": RCC_VERSION,
+            "robot_relative_path": "robot.yaml",
+            "source_input_sha256": metadata["source_input_sha256"],
+        }

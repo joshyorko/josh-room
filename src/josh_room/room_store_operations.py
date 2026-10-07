@@ -490,6 +490,7 @@ class RoomStoreOperations:
         descriptor_metadata: Mapping[str, Any],
         resolve_components: Callable[[Any, LogicalJat | None], Mapping[str, Any]]
         | None = None,
+        prepare_components: Callable[[LogicalJat | None], None] | None = None,
         active_runtime_root: Path | None = None,
         secure_private_file: Callable[[int, Path, int], None] | None = None,
         validate_private_directory: Callable[[Path], None] | None = None,
@@ -510,6 +511,7 @@ class RoomStoreOperations:
         self.write_marker = write_marker
         self.descriptor_metadata = copy.deepcopy(dict(descriptor_metadata))
         self.resolve_components = resolve_components
+        self.prepare_components = prepare_components
         self.active_runtime_root = active_runtime_root
         self.secure_private_file = secure_private_file
         self.validate_private_directory = validate_private_directory
@@ -864,6 +866,8 @@ class RoomStoreOperations:
             and preflight_scan[1].capture_policy_sha256 == policy.sha256
         )
         before = preflight_scan[1] if reused_scan else _scan_workspace(self.workspace, policy)
+        if self.prepare_components is not None:
+            self.prepare_components(latest)
         keyset, password_file, store = self._open_store()
         try:
             with _opened_restic_store(store) as opened:

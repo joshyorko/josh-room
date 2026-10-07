@@ -24,7 +24,10 @@ while computing the digest; no source paths or content enter the descriptor,
 logs, or component metadata. A source change during capture fails closed.
 The RCC version is pinned to `v18.19.5`; absence, version mismatch, incomplete
 native metadata, or an invalid export stops Save before publishing the logical
-JAT. Component restore remains separate from workspace restore.
+JAT. RCC publish, export, and archive verification complete before upgrading
+the Room Store keyset or opening Restic. Failed RCC preparation therefore
+performs no provider writes, including transient Restic lock writes, on fresh
+or existing stores. Component restore remains separate from workspace restore.
 
 Homebrew recovery and Hauler content remain separate component owners and are
 not inferred from an RCC capture.
