@@ -87,6 +87,13 @@ used a throwaway local checksum record for archive comparison; the tracked
   boundaries, custom exception names, zero provider writes on preparation
   failure, and absence of a success receipt.
 - Focused Python: 132 passed, 2 integration cases skipped in that invocation.
+- Those two real-RCC integration parameters (1 and 2,048 entries) were then
+  attempted under the pinned controller with an empty private capture home.
+  Both failed at `rcc env publish`, exit 1, with micromamba's sandbox read-only
+  filesystem error during a cold environment build. The imported-artifact
+  controller/API probes above passed. Cold rebuild acceptance is blocked on
+  this host; these failures are reported, not counted as passes or asserted
+  to explain the live regression.
 - Node extension/scripts/OMP suites: 278 passed, 2 skipped.
 - Full Python: 1,735 passed, 10 skipped, 8 failed. All eight failures reproduced
   on exact main in a disposable checkout under the same interpreter:
