@@ -45,7 +45,7 @@ from .r2 import R2Backend, R2Config
 from .restic_store import ResticStore, SnapshotEntry
 from .room_store_components import (
     RCC_VERSION,
-    PreparedRccComponent,
+    RccComponentPreparation,
     RoomStoreComponentError,
     _host_platform,
     capture_rcc_component,
@@ -1460,7 +1460,7 @@ def _build_operations(
             ) from None
         state.update(catalog=candidate, etag=etag, object_ref=object_ref)
 
-    prepared_rcc: PreparedRccComponent | None = None
+    prepared_rcc: RccComponentPreparation | None = None
 
     def prepare_components(latest_descriptor):
         nonlocal prepared_rcc

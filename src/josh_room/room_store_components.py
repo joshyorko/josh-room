@@ -44,6 +44,19 @@ class PreparedRccComponent:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ReusedRccComponent:
+    component: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AbsentRccComponent:
+    pass
+
+
+RccComponentPreparation = PreparedRccComponent | ReusedRccComponent | AbsentRccComponent
+
+
 def _safe_relative(value: str) -> str:
     path = PurePosixPath(value)
     if (
@@ -295,12 +308,12 @@ def prepare_rcc_component(
     directory: Path,
     cancellation: Any = None,
     rcc_runtime: Path | str | None = None,
-) -> PreparedRccComponent | None:
+) -> RccComponentPreparation:
     """Verify the local RCC archive before any Room Store mutation."""
     root = Path(workspace).resolve(strict=True)
     robot = root / "robot.yaml"
     if not robot.exists():
-        return None
+        return AbsentRccComponent()
     if os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1":
         executable = os.environ.get("JOSH_ROOM_RCC_EXE")
         if not executable or not Path(executable).is_absolute():
@@ -318,7 +331,7 @@ def prepare_rcc_component(
         and prior_component.get("rcc_version") == RCC_VERSION
         and prior_component.get("platform") == _host_platform()
     ):
-        return None
+        return ReusedRccComponent(dict(prior_component))
     stage = Path(directory)
     stage.mkdir(mode=0o700)
     version_output = _run([executable, "--version"], cwd=root, cancellation=cancellation, timeout=20)
@@ -381,17 +394,24 @@ def capture_rcc_component(
     restic: Any,
     cancellation: Any = None,
     rcc_runtime: Path | str | None = None,
-    prepared: PreparedRccComponent | None = None,
+    prepared: RccComponentPreparation | None = None,
 ) -> dict[str, Any] | None:
     """Reuse or capture the root robot's RCCA into the opened Room Store."""
     root = Path(workspace).resolve(strict=True)
+    if isinstance(prepared, AbsentRccComponent):
+        if (root / "robot.yaml").exists():
+            raise RoomStoreComponentError("RCC environment source changed during capture")
+        return None
     if not (root / "robot.yaml").exists():
+        if prepared is not None:
+            raise RoomStoreComponentError("RCC environment source changed during capture")
         return None
     if repository_format != 2 or not _SHA256.fullmatch(repository_id):
         raise RoomStoreComponentError("Room Store repository identity is invalid")
     with tempfile.TemporaryDirectory(prefix="josh-room-rcc-") as temporary:
-        if prior_component is not None:
-            snapshot = prior_component.get("snapshot")
+        prior = prepared.component if isinstance(prepared, ReusedRccComponent) else prior_component
+        if prior is not None:
+            snapshot = prior.get("snapshot")
             if (
                 not isinstance(snapshot, dict)
                 or snapshot.get("repository_id") != repository_id
@@ -405,8 +425,12 @@ def capture_rcc_component(
                 directory=Path(temporary) / "component",
                 cancellation=cancellation, rcc_runtime=rcc_runtime,
             )
-        if prepared is None:
-            return dict(prior_component) if prior_component is not None else None
+        if isinstance(prepared, AbsentRccComponent):
+            return None
+        if isinstance(prepared, ReusedRccComponent):
+            if source_input_sha256(root) != prepared.component["source_input_sha256"]:
+                raise RoomStoreComponentError("RCC environment source changed during capture")
+            return dict(prepared.component)
         stage, metadata = prepared.stage, prepared.metadata
         if source_input_sha256(root) != metadata["source_input_sha256"]:
             raise RoomStoreComponentError("RCC environment source changed during capture")

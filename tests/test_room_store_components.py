@@ -95,6 +95,37 @@ def test_unchanged_inputs_reuse_exact_prior_component_without_rcc_or_backup(tmp_
     assert restic.backups == []
 
 
+@pytest.mark.parametrize("initial_robot", [False, True])
+def test_completed_preparation_never_runs_rcc_after_source_changes(
+    tmp_path, monkeypatch, initial_robot
+):
+    root = _workspace(tmp_path)
+    prior = _prior(components.source_input_sha256(root)) if initial_robot else None
+    if not initial_robot:
+        (root / "robot.yaml").unlink()
+    calls = []
+
+    def unexpected_rcc(argv, **_kwargs):
+        calls.append(argv)
+        raise components.RoomStoreComponentError("RCC ran after preparation")
+
+    monkeypatch.setattr(components, "_run", unexpected_rcc)
+    prepared = components.prepare_rcc_component(
+        workspace=root, prior_component=prior, directory=tmp_path / "prepared",
+        rcc_runtime="/synthetic/rcc",
+    )
+    (root / "robot.yaml").write_text("condaConfigFile: conda.yaml\n# changed\n")
+    restic = _Restic()
+    with pytest.raises(components.RoomStoreComponentError, match="source changed"):
+        components.capture_rcc_component(
+            workspace=root, prior_component=prior,
+            repository_id=REPOSITORY_ID, repository_format=2,
+            restic=restic, rcc_runtime="/synthetic/rcc", prepared=prepared,
+        )
+    assert calls == []
+    assert restic.backups == []
+
+
 @pytest.mark.parametrize("publish_platform", ["linux-x64", None])
 def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, monkeypatch, publish_platform):
     root = _workspace(tmp_path)

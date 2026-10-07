@@ -27,7 +27,9 @@ native metadata, or an invalid export stops Save before publishing the logical
 JAT. RCC publish, export, and archive verification complete before upgrading
 the Room Store keyset or opening Restic. Failed RCC preparation therefore
 performs no provider writes, including transient Restic lock writes, on fresh
-or existing stores. Component restore remains separate from workspace restore.
+or existing MinIO stores. Completed preparation records archive, reuse, or
+absence explicitly; source changes do not restart RCC after Restic opens.
+Component restore remains separate from workspace restore.
 
 Homebrew recovery and Hauler content remain separate component owners and are
 not inferred from an RCC capture.
