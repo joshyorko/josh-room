@@ -47,7 +47,8 @@ def test_jat_timeout_returns_bounded_metadata_and_terminates_process_group():
         _run([sys.executable, "-c", "import time; time.sleep(60)"], 0.01)
     assert error.value.result["timed_out"] is True
     assert error.value.result["exit_status"] is None
-    assert len(error.value.result["argv"]) == 3
+    assert error.value.result["command"] == "RCC execution"
+    assert "argv" not in error.value.result
 
 
 @pytest.mark.skipif(os.name == "nt", reason="detached POSIX sessions are platform-specific")
@@ -140,9 +141,9 @@ def test_jat_build_uses_typed_rcc_request_and_preserves_receipt(tmp_path, monkey
             "images": [],
         }
         output.write_text('{"format_version": 1, "operation": "build", "success": true, "exit_status": 0, "producer_version": "jat-test", "payload_size": 12, "sha256": "' + "a" * 64 + '"}')
-        return 0, "decorative output"
+        return 0, "", "decorative output"
 
-    monkeypatch.setattr("josh_room.jat._run", fake_run)
+    monkeypatch.setattr("josh_room.jat._run_cli", fake_run)
     result = __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
     assert seen["argv"][:7] == ["rcc", "run", "-r", str(tmp_path / "robot.yaml"), "-t", "Build", "--"]
     assert seen["argv"][7] == "--json-input"
@@ -155,18 +156,119 @@ def test_jat_rejects_stale_receipt(tmp_path, monkeypatch):
     result_path = tmp_path / "output" / "result.json"
     result_path.parent.mkdir()
     result_path.write_text('{"operation":"build","success":true,"exit_status":0}')
-    monkeypatch.setattr("josh_room.jat._run", lambda *_args, **_kwargs: (0, ""))
+    monkeypatch.setattr("josh_room.jat._run_cli", lambda *_args, **_kwargs: (0, "", ""))
     with pytest.raises(JATError, match="fresh"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
 
 
 def test_jat_missing_receipt_reports_bounded_rcc_diagnostic(tmp_path, monkeypatch):
     (tmp_path / "output").mkdir()
-    monkeypatch.setattr("josh_room.jat._run", lambda *_args, **_kwargs: (1, "typed request validation failed"))
+    monkeypatch.setattr("josh_room.jat._run_cli", lambda *_args, **_kwargs: (1, "", "typed request validation failed"))
     with pytest.raises(JATError, match="typed request validation failed"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(
             tmp_path, tmp_path / "source", tmp_path / "haul"
         )
+
+
+@pytest.mark.parametrize("receipt", [None, "{bad", "mismatch", "valid"])
+def test_nested_build_failure_preserves_bounded_sanitized_evidence_before_cleanup(
+    tmp_path, monkeypatch, receipt
+):
+    from josh_room.jat import run_build
+
+    _managed_env(monkeypatch)
+    seen = {}
+    secret = "synthetic-credential-value"
+    monkeypatch.setenv("SYNTHETIC_CREDENTIAL", secret)
+    cause = "Build preflight rejected the synthetic request"
+
+    def failed_run(argv, _timeout, **_kwargs):
+        receipt_path = Path(argv[argv.index("--receipt-file") + 1])
+        seen["receipt_path"] = receipt_path
+        seen["request_path"] = Path(argv[-1])
+        if receipt is not None:
+            receipt_path.write_text(
+                json.dumps({
+                    "artifactDigest": os.environ["JOSH_ROOM_JAT_ARTIFACT"],
+                    "exitCode": 9 if receipt == "mismatch" else 2,
+                    "path": "/private/synthetic/runtime",
+                    "secret": secret,
+                }) if receipt != "{bad" else receipt
+            )
+        (tmp_path / "output/result.json").write_text(json.dumps({
+            "operation": "build", "success": False, "exit_status": 2,
+            "diagnostics": cause + " /private/synthetic/workspace " + secret,
+            "payload_path": "/private/synthetic/payload",
+        }))
+        return 2, "x" * 10000 + cause + " " + secret, "[rcc] exit status will be: 2!"
+
+    monkeypatch.setattr("josh_room.jat._run_cli", failed_run)
+    with pytest.raises(JATError) as error:
+        run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
+
+    evidence = error.value.result
+    assert evidence["stage"] == "jat-build"
+    assert evidence["command"] == "python -m jat.task_runner run tasks.py -t Build"
+    assert evidence["exit_status"] == 2
+    assert cause in evidence["stdout"] and cause in str(error.value)
+    assert evidence["stderr"] == "[rcc] exit status will be: 2!"
+    assert evidence["jat_result"]["success"] is False
+    assert evidence["rcc_receipt"]["state"] == (
+        "missing" if receipt is None else "invalid" if receipt == "{bad" else "present"
+    )
+    assert all(len(evidence[key]) <= 4096 for key in ("stdout", "stderr", "diagnostic"))
+    serialized = json.dumps(evidence)
+    assert secret not in serialized and "/private/synthetic" not in serialized
+    assert "argv" not in evidence and "payload_path" not in evidence["jat_result"]
+    assert not seen["receipt_path"].exists() and not seen["request_path"].exists()
+
+
+def test_nested_diagnostic_redacts_credentials_not_present_in_environment():
+    from josh_room.jat import _diagnostic
+
+    diagnostic = _diagnostic(
+        "\x1b[31mBuild rejected\x1b[0m "
+        "secret_access_key='synthetic secret with spaces' token=synthetic-token "
+        "****** https://synthetic.example.test/private "
+        "/home/synthetic-user/private-workspace C:\\Users\\synthetic-user\\private-workspace"
+    )
+    assert "Build rejected" in diagnostic
+    assert "synthetic" not in diagnostic and "\x1b" not in diagnostic
+
+
+@pytest.mark.parametrize("text", [
+    '{"password": "synthetic-secret"}',
+    '{"credentials": {"SecretAccessKey": "synthetic-secret"}}',
+    '{"AWS_SESSION_TOKEN": "synthetic-secret"}',
+    '{"authorization": "******", "password": "synthetic-secret"}',
+    'token="synthetic \\"secret\\" value"',
+    'File "/srv/work/Synthetic Private Folder/task.py", line 1\nBuild preflight failed',
+    "File 'C:\\Users\\Synthetic Private Folder\\task.py', line 1\nBuild preflight failed",
+    "Collecting tasks from: /srv/work/Synthetic Private Folder/task.py\nBuild preflight failed",
+    "/srv/work/Synthetic Private Folder/python: No module named jat.task_runner",
+])
+def test_diagnostic_redacts_json_credentials_and_complete_paths_with_spaces(text):
+    from josh_room.cli import _bounded_json_result
+    from josh_room.jat import _diagnostic
+
+    diagnostic = _diagnostic(text)
+    serialized = json.dumps(_bounded_json_result({"ok": False, "diagnostic": diagnostic}))
+    assert "synthetic-secret" not in serialized
+    assert "Synthetic Private Folder" not in serialized
+    assert "synthetic" not in serialized.lower()
+    if "Build preflight failed" in text:
+        assert "Build preflight failed" in diagnostic
+    if "No module named" in text:
+        assert "No module named jat.task_runner" in diagnostic
+
+
+def test_username_redaction_preserves_public_task_runner_module_identity(monkeypatch):
+    from josh_room.jat import _diagnostic
+
+    monkeypatch.setenv("USER", "runner")
+    diagnostic = _diagnostic("user runner; No module named jat.task_runner")
+    assert "user [redacted]" in diagnostic
+    assert "No module named jat.task_runner" in diagnostic
 
 
 def test_jat_rejects_receipt_operation_mismatch(tmp_path, monkeypatch):
@@ -174,8 +276,8 @@ def test_jat_rejects_receipt_operation_mismatch(tmp_path, monkeypatch):
     result_path.parent.mkdir()
     def write_mismatch(*_args, **_kwargs):
         result_path.write_text('{"operation":"restore","success":true,"exit_status":0}')
-        return 0, ""
-    monkeypatch.setattr("josh_room.jat._run", write_mismatch)
+        return 0, "", ""
+    monkeypatch.setattr("josh_room.jat._run_cli", write_mismatch)
     with pytest.raises(JATError, match="operation mismatch"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
 
@@ -185,8 +287,8 @@ def test_jat_rejects_inconsistent_receipt_exit_status(tmp_path, monkeypatch):
     result_path.parent.mkdir()
     def write_inconsistent(*_args, **_kwargs):
         result_path.write_text('{"operation":"build","success":true,"exit_status":1}')
-        return 0, ""
-    monkeypatch.setattr("josh_room.jat._run", write_inconsistent)
+        return 0, "", ""
+    monkeypatch.setattr("josh_room.jat._run_cli", write_inconsistent)
     with pytest.raises(JATError, match="exit status"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(tmp_path, tmp_path / "source", tmp_path / "haul")
 
@@ -197,9 +299,9 @@ def test_jat_rejects_malformed_task_receipts(tmp_path, monkeypatch, receipt):
 
     def write_malformed(*_args, **_kwargs):
         result_path.write_text(receipt)
-        return 0, ""
+        return 0, "", ""
 
-    monkeypatch.setattr("josh_room.jat._run", write_malformed)
+    monkeypatch.setattr("josh_room.jat._run_cli", write_malformed)
     with pytest.raises(JATError, match="invalid|incomplete"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(
             tmp_path, tmp_path / "source", tmp_path / "haul"
@@ -213,9 +315,9 @@ def test_jat_rejects_non_integer_task_exit_status(tmp_path, monkeypatch, exit_st
 
     def write_non_integer(*_args, **_kwargs):
         result_path.write_text(json.dumps({"operation": "build", "success": True, "exit_status": exit_status}))
-        return 0, ""
+        return 0, "", ""
 
-    monkeypatch.setattr("josh_room.jat._run", write_non_integer)
+    monkeypatch.setattr("josh_room.jat._run_cli", write_non_integer)
     with pytest.raises(JATError, match="exit status"):
         __import__("josh_room.jat", fromlist=["run_build"]).run_build(
             tmp_path, tmp_path / "source", tmp_path / "haul"
@@ -231,9 +333,9 @@ def test_local_fallback_jat_pins_cwd_and_result_directory(tmp_path, monkeypatch)
     def fake_run(argv, timeout, **kwargs):
         seen.update(argv=argv, timeout=timeout, kwargs=kwargs)
         result_path.write_text('{"operation":"restore","success":true,"exit_status":0}')
-        return 0, "local RCC output"
+        return 0, "", "local RCC output"
 
-    monkeypatch.setattr("josh_room.jat._run", fake_run)
+    monkeypatch.setattr("josh_room.jat._run_cli", fake_run)
     __import__("josh_room.jat", fromlist=["run_restore"]).run_restore(
         tmp_path, tmp_path / "haul", tmp_path / "destination"
     )
@@ -260,9 +362,9 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
         result_path.write_text('{"operation":"build","success":true,"exit_status":0}')
         receipt = Path(argv[argv.index("--receipt-file") + 1])
         receipt.write_text(json.dumps({"artifactDigest": os.environ["JOSH_ROOM_JAT_ARTIFACT"], "exitCode": 0}))
-        return 0, "managed RCC output"
+        return 0, "", "managed RCC output"
 
-    monkeypatch.setattr("josh_room.jat._run", fake_run)
+    monkeypatch.setattr("josh_room.jat._run_cli", fake_run)
     result = __import__("josh_room.jat", fromlist=["run_build"]).run_build(
         tmp_path, tmp_path / "source", tmp_path / "haul"
     )
@@ -286,6 +388,8 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
     assert command[7:9] == ["--", "--json-input"]
     assert seen["kwargs"]["env"]["ROBOCORP_HOME"] == "/private/runtime/robocorp"
     assert seen["kwargs"]["env"]["RCC_HOLOTREE_MODE"] == "private"
+    assert seen["kwargs"]["env"]["PATH"].split(os.pathsep)[0] == "/private/runtime"
+    assert seen["kwargs"]["env"]["PATH"].split(os.pathsep)[1:] == os.environ["PATH"].split(os.pathsep)
     assert seen["kwargs"]["env"]["JAT_RUN_DIR"] == str(tmp_path / "output")
     assert seen["kwargs"]["cwd"] == tmp_path
     assert result["version"] == "b" * 40
@@ -548,9 +652,9 @@ def test_jat_build_advanced_capture_keys_flow_into_the_request(tmp_path, monkeyp
     def fake_run(argv, _timeout, **_kwargs):
         captured["request"] = json.loads(Path(argv[-1]).read_text())
         result_path.write_text('{"operation":"build","success":true,"exit_status":0}')
-        return 0, ""
+        return 0, "", ""
 
-    monkeypatch.setattr("josh_room.jat._run", fake_run)
+    monkeypatch.setattr("josh_room.jat._run_cli", fake_run)
     jat = __import__("josh_room.jat", fromlist=["run_build"])
     jat.run_build(
         tmp_path,

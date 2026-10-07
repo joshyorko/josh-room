@@ -95,6 +95,37 @@ def test_unchanged_inputs_reuse_exact_prior_component_without_rcc_or_backup(tmp_
     assert restic.backups == []
 
 
+@pytest.mark.parametrize("initial_robot", [False, True])
+def test_completed_preparation_never_runs_rcc_after_source_changes(
+    tmp_path, monkeypatch, initial_robot
+):
+    root = _workspace(tmp_path)
+    prior = _prior(components.source_input_sha256(root)) if initial_robot else None
+    if not initial_robot:
+        (root / "robot.yaml").unlink()
+    calls = []
+
+    def unexpected_rcc(argv, **_kwargs):
+        calls.append(argv)
+        raise components.RoomStoreComponentError("RCC ran after preparation")
+
+    monkeypatch.setattr(components, "_run", unexpected_rcc)
+    prepared = components.prepare_rcc_component(
+        workspace=root, prior_component=prior, directory=tmp_path / "prepared",
+        rcc_runtime="/synthetic/rcc",
+    )
+    (root / "robot.yaml").write_text("condaConfigFile: conda.yaml\n# changed\n")
+    restic = _Restic()
+    with pytest.raises(components.RoomStoreComponentError, match="source changed"):
+        components.capture_rcc_component(
+            workspace=root, prior_component=prior,
+            repository_id=REPOSITORY_ID, repository_format=2,
+            restic=restic, rcc_runtime="/synthetic/rcc", prepared=prepared,
+        )
+    assert calls == []
+    assert restic.backups == []
+
+
 @pytest.mark.parametrize("publish_platform", ["linux-x64", None])
 def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, monkeypatch, publish_platform):
     root = _workspace(tmp_path)
@@ -130,13 +161,17 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
         restic=restic,
         rcc_runtime="/synthetic/rcc",
     )
-    assert [call[1:3] for call in calls] == [["--version"], ["env", "publish"],
-        *([["env", "acquire"]] if publish_platform is None else []), ["env", "export"]]
+    assert [call[1:3] for call in calls] == [["--version"], ["env", "publish"], ["env", "export"],
+        *([["env", "acquire"]] if publish_platform is None else [])]
     assert calls[1] == [
         "/synthetic/rcc", "env", "publish", "--robot", str(root / "robot.yaml"), "--provider", "local", "--json"
     ]
-    assert calls[-1][1:5] == ["env", "export", "--artifact", "sha256:" + "1" * 64]
-    assert calls[-1][calls[-1].index("--provider") + 1] == "local"
+    assert calls[2][1:5] == ["env", "export", "--artifact", "sha256:" + "1" * 64]
+    assert calls[2][calls[2].index("--provider") + 1] == "local"
+    if publish_platform is None:
+        assert calls[3][calls[3].index("--archive") + 1] == calls[2][-1]
+        assert calls[3][calls[3].index("--artifact") + 1] == calls[2][4]
+        assert "--no-build" in calls[3] and "--permissive-local" in calls[3]
     assert result["artifact_digest"] == "sha256:" + "1" * 64
     assert result["specification_digest"] == "sha256:" + "2" * 64
     assert result["snapshot"]["repository_id"] == REPOSITORY_ID
@@ -177,6 +212,73 @@ def test_native_metadata_mismatch_fails_closed(tmp_path, monkeypatch):
             restic=_Restic(),
             rcc_runtime="/synthetic/rcc",
         )
+
+
+def test_managed_capture_never_falls_back_to_ambient_rcc(tmp_path, monkeypatch):
+    root = _workspace(tmp_path)
+    restic = _Restic()
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.delenv("JOSH_ROOM_RCC_EXE", raising=False)
+    monkeypatch.setattr(components.shutil, "which", lambda *_args: pytest.fail("ambient RCC lookup"))
+    with pytest.raises(components.RoomStoreComponentError, match="handoff is incomplete"):
+        components.capture_rcc_component(
+            workspace=root, prior_component=None, repository_id=REPOSITORY_ID,
+            repository_format=2, restic=restic,
+        )
+    assert restic.backups == []
+
+
+@pytest.mark.parametrize("home", [None, "relative-home"])
+def test_managed_capture_rejects_missing_or_relative_private_home(tmp_path, monkeypatch, home):
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.delenv("JOSH_ROOM_RCC_HOME", raising=False)
+    if home is not None:
+        monkeypatch.setenv("JOSH_ROOM_RCC_HOME", home)
+    with pytest.raises(components.RoomStoreComponentError, match="home handoff is incomplete"):
+        components._run(["/synthetic/rcc", "--version"], cwd=tmp_path, cancellation=None)
+
+
+def test_failed_rcc_command_preserves_bounded_sanitized_cause(tmp_path):
+    import sys
+
+    cause = "synthetic RCC publish preflight rejected"
+    with pytest.raises(components.RoomStoreComponentError) as error:
+        components._run(
+            [sys.executable, "-c",
+             (f"import sys; print({cause!r}); "
+             "print('****** /home/synthetic-user/private', file=sys.stderr); "
+             "sys.exit(2)")],
+            cwd=tmp_path, cancellation=None,
+        )
+    assert cause in str(error.value)
+    assert error.value.result["exit_status"] == 2
+    assert "synthetic-secret" not in json.dumps(error.value.result)
+    assert "/home/synthetic-user" not in json.dumps(error.value.result)
+
+
+def test_failed_rcc_stderr_is_bounded_while_child_is_writing(tmp_path, monkeypatch):
+    import sys
+
+    temporary_files = []
+    original_temporary_file = components.tempfile.TemporaryFile
+
+    def track_temporary_file(*args, **kwargs):
+        temporary_files.append(kwargs)
+        return original_temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(components.tempfile, "TemporaryFile", track_temporary_file)
+    script = (
+        "import os, sys; os.write(2, b'X' * (2 * 1024 * 1024)); "
+        "os.write(2, b'synthetic-tail-marker'); sys.exit(2)"
+    )
+
+    with pytest.raises(components.RoomStoreComponentError) as error:
+        components._run([sys.executable, "-c", script], cwd=tmp_path, cancellation=None)
+
+    assert len(temporary_files) == 1  # stdout is bounded; stderr is drained into a bounded tail.
+    stderr = error.value.result["stderr"]
+    assert stderr.endswith("synthetic-tail-marker")
+    assert len(stderr.encode("utf-8")) <= 16 * 1024
 
 
 def test_wrong_native_platform_fails_before_export_or_backup(tmp_path, monkeypatch):

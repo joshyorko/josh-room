@@ -356,6 +356,240 @@ def _fixture(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("entry_count", [1, 2048])
+def test_managed_robot_capture_reaches_local_room_store_and_failure_never_publishes(
+    tmp_path, monkeypatch, entry_count
+):
+    from josh_room import room_store_components
+
+    rcc = os.environ.get("JOSH_ROOM_TEST_RCC")
+    jat_root = os.environ.get("JOSH_ROOM_TEST_JAT_ROOT")
+    if not rcc or not jat_root or bridge._runtime_platform() != "linux-x64":
+        pytest.skip("exact managed RCC/JAT fixture runtime is unavailable")
+    dimension, material, backend, _identity, _recovery = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "synthetic-workspace"
+    workspace.mkdir()
+    shutil.copyfile(
+        Path(jat_root) / "environment_linux_amd64_freeze.yaml",
+        workspace / "environment_linux_amd64_freeze.yaml",
+    )
+    for relative in ("scripts/install_hauler.sh", "scripts/install_hauler.py", "runtime/hauler.json"):
+        target = workspace / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Path(jat_root) / relative, target)
+    robot = workspace / "robot.yaml"
+    robot.write_text(
+        "tasks:\n  Example:\n    shell: python -c \"print('synthetic')\"\n"
+        "environmentConfigs:\n  - environment_linux_amd64_freeze.yaml\n"
+    )
+    for index in range(entry_count):
+        (workspace / f"entry-{index}.txt").write_text(f"synthetic entry {index}\n")
+    rcc_home = tmp_path / "private-rcc-home"
+    rcc_home.mkdir(mode=0o700)
+    monkeypatch.delenv("ROBOCORP_HOME", raising=False)
+    monkeypatch.delenv("RCC_HOLOTREE_MODE", raising=False)
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", rcc)
+    monkeypatch.setenv("JOSH_ROOM_RCC_HOME", str(rcc_home))
+    captured = []
+    original = bridge.capture_rcc_component
+
+    def capture(**kwargs):
+        result = original(**kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(bridge, "capture_rcc_component", capture)
+    preview = bridge.preview_room_store(
+        tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[],
+    )
+    assert preview["ok"] and captured == []
+    assert backend.catalog is None and backend.objects == {}
+    saved = bridge.save_room_store(
+        tmp_path / "instance", dimension, "synthetic-room", workspace, material,
+        components=[], rcc_runtime=rcc,
+    )
+    assert saved["status"] == "saved"
+    assert captured[0]["kind"] == "rcca" and captured[0]["archive_size"] > 0
+    assert captured[0]["rcc_version"] == "v18.19.5"
+    assert backend.catalog is not None and backend.objects
+    before = copy.deepcopy((backend.catalog, backend.objects, backend.control))
+    robot.write_text(robot.read_text() + "\n# changed synthetic capture input\n")
+
+    def fail_capture(*_args, **_kwargs):
+        raise room_store_components.RoomStoreComponentError(
+            "RCC synthetic preflight failure",
+            result={"stage": "rcc-component-capture", "exit_status": 2,
+                    "diagnostic": "RCC synthetic preflight failure"},
+        )
+
+    monkeypatch.setattr(room_store_components, "_run", fail_capture)
+    with pytest.raises(bridge.RoomStoreBridgeError) as error:
+        bridge.save_room_store(
+            tmp_path / "instance", dimension, "synthetic-room", workspace, material,
+            components=[], rcc_runtime=rcc,
+        )
+    assert error.value.code == "rcc-capture-failed"
+    assert error.value.result["exit_status"] == 2
+    assert (backend.catalog, backend.objects, backend.control) == before
+
+
+def test_save_surfaces_safe_restic_store_open_diagnostic(tmp_path, monkeypatch):
+    from josh_room import local_save_receipt
+    from josh_room.room_store_operations import RoomStoreOperationsError
+
+    dimension = bridge.DimensionConfig(
+        dimension_id="minio-main",
+        display_name="Synthetic MinIO",
+        provider="minio",
+        endpoint="https://minio.example.test:9443",
+        bucket="synthetic-room-store",
+        credential_profile="synthetic-profile",
+        encryption_domain_id=str(uuid.uuid4()),
+        options=(("verify_tls", True),),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n", encoding="utf-8")
+    selected_material = object()
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    diagnostic = {
+        "stage": "restic-store-open",
+        "command": "restic-store.open",
+        "restic_error_code": "invalid-configuration",
+        "cause": "restic store configuration is invalid",
+    }
+
+    class FailingSave:
+        def save(self, **_kwargs):
+            raise RoomStoreOperationsError(
+                "Restic store could not be opened", result=diagnostic
+            )
+
+    monkeypatch.setattr(local_save_receipt, "invalidate", lambda *_args: None)
+    monkeypatch.setattr(
+        bridge,
+        "_resolve_material",
+        lambda *_args, **_kwargs: (selected_material, None),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_operation_inputs",
+        lambda *_args: (workspace, dimension.encryption_domain_id, object()),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_verified_restic_executable",
+        lambda **_kwargs: Path("/synthetic/restic"),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_build_operations",
+        lambda **_kwargs: (FailingSave(), {}, "Synthetic Room"),
+    )
+
+    with pytest.raises(bridge.RoomStoreBridgeError) as failure:
+        bridge.save_room_store(
+            tmp_path / "instance",
+            dimension,
+            "synthetic-room",
+            workspace,
+            selected_material,
+            components=[],
+        )
+
+    assert failure.value.code == "save-failed"
+    assert failure.value.result == {"ok": False, "error": "save-failed", **diagnostic}
+
+
+@pytest.mark.parametrize("existing_store", [False, True])
+@pytest.mark.parametrize("failed_command", ["publish", "export", "acquire"])
+def test_rcc_preparation_failure_never_opens_restic_or_mutates_provider(
+    tmp_path, monkeypatch, existing_store, failed_command
+):
+    from josh_room import room_store_components
+
+    dimension, material, backend, _identity, _recovery = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n")
+    if existing_store:
+        bridge.save_room_store(
+            tmp_path / "instance", dimension, "synthetic-room", workspace,
+            material, components=[],
+        )
+    (workspace / "robot.yaml").write_text("condaConfigFile: conda.yaml\n")
+    (workspace / "conda.yaml").write_text("dependencies: [python=3.13]\n")
+    before = copy.deepcopy((backend.catalog, backend.objects, backend.control))
+    backend.calls.clear()
+    restic_commands = []
+    original_spawn = ResticStore._spawn
+
+    def observe_spawn(self, args, **kwargs):
+        restic_commands.append(args)
+        return original_spawn(self, args, **kwargs)
+
+    monkeypatch.setattr(ResticStore, "_spawn", observe_spawn)
+
+    def rcc(argv, **_kwargs):
+        if argv[1:] == ["--version"]:
+            return b"RCC version: v18.19.5\n"
+        if argv[2] == failed_command:
+            raise room_store_components.RoomStoreComponentError(
+                "synthetic RCC preparation failed",
+                result={"stage": "rcc-component-capture", "command": f"rcc env {failed_command}", "exit_status": 1},
+            )
+        if argv[2] == "publish":
+            return json.dumps({
+                "artifactDigest": "sha256:" + "1" * 64,
+                "specificationDigest": "sha256:" + "2" * 64,
+                "legacyBlueprintKey": "synthetic-blueprint",
+            }).encode()
+        if argv[2] == "export":
+            Path(argv[-1]).write_bytes(b"synthetic rcca archive")
+            return b""
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(room_store_components, "_run", rcc)
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.save_room_store(
+            tmp_path / "instance", dimension, "synthetic-room", workspace,
+            material, components=[], rcc_runtime="/synthetic/rcc",
+        )
+
+    assert caught.value.code == "rcc-capture-failed"
+    assert caught.value.result["command"] == f"rcc env {failed_command}"
+    assert restic_commands == []
+    assert (backend.catalog, backend.objects, backend.control) == before
+    assert not any(call[0] in {"create_control", "replace_control", "put_file", "conditional_catalog_put"} for call in backend.calls)
+
+
+def test_loopback_http_minio_locator_is_accepted_by_restic_store(tmp_path):
+    dimension = bridge.DimensionConfig(
+        dimension_id="minio-loopback",
+        display_name="Synthetic Local MinIO",
+        provider="minio",
+        endpoint="http://127.0.0.1:9000",
+        bucket="synthetic-room-store",
+        credential_profile="synthetic-profile",
+        encryption_domain_id=str(uuid.uuid4()),
+    )
+    repository = bridge._repository_locator(dimension)
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n", encoding="utf-8")
+    password.chmod(0o600)
+
+    store = ResticStore(
+        repository=repository,
+        cache_dir=tmp_path / "cache",
+        password_file=password,
+    )
+
+    assert repository == "s3:http://127.0.0.1:9000/synthetic-room-store/room-store/v1"
+    assert store._repository == repository
+
+
+@pytest.mark.integration
 def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     tmp_path, monkeypatch
 ):
@@ -396,6 +630,7 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
         restic,
         cancellation,
         rcc_runtime,
+        prepared=None,
     ):
         if not (workspace / "robot.yaml").exists():
             rcc_captures.append("cleared")
@@ -432,6 +667,8 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
         }
 
     monkeypatch.setattr(bridge, "capture_rcc_component", capture_rcc_component)
+    # This local Restic vertical uses a synthetic RCC archive, not an RCC runtime.
+    monkeypatch.setattr(bridge, "prepare_rcc_component", lambda **_kwargs: None)
 
     class SyntheticManagedRccAdapter:
         def acquire_rcc(self, archive, metadata, restored_workspace, robot_file):

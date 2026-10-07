@@ -24,7 +24,29 @@ while computing the digest; no source paths or content enter the descriptor,
 logs, or component metadata. A source change during capture fails closed.
 The RCC version is pinned to `v18.19.5`; absence, version mismatch, incomplete
 native metadata, or an invalid export stops Save before publishing the logical
-JAT. Component restore remains separate from workspace restore.
+JAT. RCC publish, export, and archive verification complete before upgrading
+the Room Store keyset or opening Restic. Failed RCC preparation therefore
+performs no provider writes, including transient Restic lock writes, on fresh
+or existing MinIO stores. Completed preparation records archive, reuse, or
+absence explicitly; source changes do not restart RCC after Restic opens.
+Component restore remains separate from workspace restore.
 
 Homebrew recovery and Hauler content remain separate component owners and are
 not inferred from an RCC capture.
+
+In extension mode, component capture uses the exact managed RCC executable
+handed off by the extension; a missing handoff fails closed instead of searching
+the host PATH. Nested JAT execution puts that RCC directory first in its
+inherited PATH; RCC supplies the selected artifact's own runtime tools while
+retaining access to its host compatibility probes (such as `uname`).
+Publish and export select RCC's local provider. If publication metadata omits
+the platform, acquisition verifies the exact exported archive and published
+digest under `--no-build --permissive-local` before component backup.
+The private `ROBOCORP_HOME`, artifact pins, `--no-build` execution, and receipt
+verification remain unchanged.
+
+Capture failures report the command identity, stage, inner exit status, and
+bounded sanitized stdout/stderr. Nested Build failures also retain allowlisted
+RCC receipt and JAT result summaries before temporary receipt cleanup. Private
+paths, credentials, and raw request arguments are not included in this evidence.
+Preview does not run component capture or publish remote state.

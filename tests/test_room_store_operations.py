@@ -284,6 +284,42 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
     )
 
 
+@pytest.mark.parametrize("fail_at", ["factory", "context-entry"])
+def test_save_restic_open_failure_preserves_safe_stage_diagnostic(tmp_path, fail_at):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n", encoding="utf-8")
+    catalog = _Catalog()
+    operations = _operations(tmp_path, workspace, _Store(), catalog)
+    failure = ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+
+    if fail_at == "factory":
+        def fail_open(**_kwargs):
+            raise failure
+
+        operations.store_factory = fail_open
+    else:
+        class FailingContext:
+            def __enter__(self):
+                raise failure
+
+            def __exit__(self, *_args):
+                return False
+
+        operations.store_factory = lambda **_kwargs: FailingContext()
+    with pytest.raises(RoomStoreOperationsError) as caught:
+        operations.save()
+
+    assert caught.value.result == {
+        "stage": "restic-store-open",
+        "command": "restic-store.open",
+        "restic_error_code": "invalid-configuration",
+        "cause": "restic store configuration is invalid",
+    }
+    assert catalog.published == []
+    assert catalog.marker_rows == []
+
+
 def test_save_publishes_complete_descriptor_before_marker_and_uses_explicit_parent(
     tmp_path,
 ):
