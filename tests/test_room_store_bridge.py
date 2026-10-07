@@ -564,6 +564,98 @@ def test_rcc_preparation_failure_never_opens_restic_or_mutates_provider(
     assert not any(call[0] in {"create_control", "replace_control", "put_file", "conditional_catalog_put"} for call in backend.calls)
 
 
+@pytest.mark.parametrize("existing_store", [False, True])
+@pytest.mark.parametrize("failure_type", [FileExistsError, TypeError])
+def test_unexpected_rcc_preparation_failure_has_safe_receipt_and_zero_writes(
+    tmp_path, monkeypatch, existing_store, failure_type
+):
+    from josh_room import local_save_receipt
+
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n")
+    instance = tmp_path / "instance"
+    if existing_store:
+        bridge.save_room_store(instance, dimension, "synthetic-room", workspace, material, components=[])
+    (workspace / "robot.yaml").write_text("condaConfigFile: conda.yaml\n")
+    (workspace / "conda.yaml").write_text("dependencies: [python=3.13]\n")
+    before = copy.deepcopy((backend.catalog, backend.objects, backend.control))
+    backend.calls.clear()
+
+    def fail_preparation(**_kwargs):
+        raise failure_type("synthetic-secret /private/customer/workspace access-key=fixture-credential")
+
+    monkeypatch.setattr(bridge, "prepare_rcc_component", fail_preparation)
+    monkeypatch.setattr(bridge, "_restic_store_factory", lambda **_kwargs: pytest.fail("capture failure must precede store opening"))
+    monkeypatch.setattr(local_save_receipt, "write_verified_receipt", lambda *_args: pytest.fail("failed Save must not write a success receipt"))
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.save_room_store(instance, dimension, "synthetic-room", workspace, material, components=[])
+
+    assert caught.value.result == {
+        "ok": False,
+        "error": "save-failed",
+        "stage": "rcc-component-prepare",
+        "cause_type": failure_type.__name__,
+        "diagnostic": f"Save failed at rcc-component-prepare ({failure_type.__name__})",
+    }
+    assert "synthetic-secret" not in str(caught.value)
+    assert (backend.catalog, backend.objects, backend.control) == before
+    assert not any(call[0] in {"create_control", "replace_control", "put_file", "conditional_catalog_put"} for call in backend.calls)
+
+
+def test_unexpected_save_setup_failure_never_formats_arbitrary_exception(tmp_path, monkeypatch):
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n")
+
+    class PrivateException(RuntimeError):
+        def __str__(self) -> str:
+            pytest.fail("unexpected exceptions must never be formatted")
+            return "unreachable"
+
+    PrivateException.__name__ = "secret-class-name-" + "x" * 8192
+
+    def fail_runtime(**_kwargs):
+        raise PrivateException()
+
+    monkeypatch.setattr(bridge, "_verified_restic_executable", fail_runtime)
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[])
+    assert caught.value.result == {
+        "ok": False,
+        "error": "save-failed",
+        "stage": "restic-runtime",
+        "cause_type": "UnexpectedError",
+        "diagnostic": "Save failed at restic-runtime (UnexpectedError)",
+    }
+    assert backend.catalog is None and backend.objects == {}
+
+
+@pytest.mark.parametrize("boundary,stage", [
+    ("_build_operations", "operations-build"),
+    ("_restic_store_factory", "restic-store-open"),
+])
+def test_unexpected_save_failure_identifies_the_inner_boundary(tmp_path, monkeypatch, boundary, stage):
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n")
+
+    def fail(**_kwargs):
+        raise KeyError("fixture-credential /private/customer/workspace")
+
+    monkeypatch.setattr(bridge, boundary, fail)
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[])
+    assert caught.value.result["stage"] == stage
+    assert caught.value.result["cause_type"] == "KeyError"
+    assert caught.value.result["diagnostic"] == f"Save failed at {stage} (KeyError)"
+    assert "fixture-credential" not in repr(caught.value.result)
+    assert backend.catalog is None and backend.objects == {}
+
+
 def test_loopback_http_minio_locator_is_accepted_by_restic_store(tmp_path):
     dimension = bridge.DimensionConfig(
         dimension_id="minio-loopback",

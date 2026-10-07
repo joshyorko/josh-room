@@ -57,6 +57,7 @@ from .room_store_hauler import RoomStoreHaulerError, capture_hauler_component
 from .room_store_hauler_runner import ManagedHaulerError, create_managed_hauler_adapter
 from .room_store_homebrew import RoomStoreHomebrewError, capture_homebrew_component
 from .room_store_operations import (
+    SAVE_STAGES,
     RoomStoreOperations,
     RoomStoreOperationsError,
     RoomStorePublicationError,
@@ -74,6 +75,25 @@ _ROOM_VERSION = re.compile(
     r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z"
 )
+
+_SAVE_CAUSE_TYPES = {
+    error_type: error_type.__name__ for error_type in (
+        OSError, FileExistsError, FileNotFoundError, PermissionError, TimeoutError,
+        TypeError, ValueError, RuntimeError, KeyError, AttributeError,
+        ImportError, ModuleNotFoundError,
+    )
+}
+
+
+def _save_failure_receipt(error: Exception, stage: str) -> dict[str, str]:
+    """Never format exception text, arguments, custom type names, or paths."""
+    stage = stage if isinstance(stage, str) and stage in SAVE_STAGES else "operation-save"
+    cause_type = _SAVE_CAUSE_TYPES.get(type(error), "UnexpectedError")
+    return {
+        "stage": stage,
+        "cause_type": cause_type,
+        "diagnostic": f"Save failed at {stage} ({cause_type})",
+    }
 
 
 class RoomStoreBridgeError(RuntimeError):
@@ -1883,12 +1903,16 @@ def save_room_store(
     active_runtime = (
         Path(os.environ["ROBOCORP_HOME"]) if os.environ.get("ROBOCORP_HOME") else None
     )
+    stage = "restic-runtime"
+    operations = None
     try:
         runtime_root = Path(instance).parent / "josh-room-runtime"
         executable = _verified_restic_executable(
             runtime_root=runtime_root, install=True
         )
+        stage = "private-runtime"
         with _private_operation_directory() as runtime_dir:
+            stage = "operations-build"
             operations, state, resolved_display_name = _build_operations(
                 instance=Path(instance),
                 dimension=dimension,
@@ -1911,12 +1935,14 @@ def save_room_store(
                 homebrew_archive=homebrew_archive,
                 jat_root=jat_root,
             )
+            stage = "operation-save"
             result: SaveResult = operations.save(
                 deletion_confirmation_token=confirmation_token,
                 on_progress=on_progress,
                 cancellation=cancellation,
                 preflight_scan=preflight_scan,
             )
+            stage = "save-result"
             descriptor = result.descriptor
             logical_id = descriptor.to_dict()["logical_jat_id"] if descriptor else None
             output = {
@@ -1949,7 +1975,9 @@ def save_room_store(
                 output["ciphertext_sha256"] = object_ref.sha256
                 output["ciphertext_size"] = object_ref.size
             if result.status == "saved" and result.publication_state == "committed":
+                stage = "save-receipt"
                 write_verified_receipt(instance, workspace, dimension, descriptor.to_dict(), output)
+            stage = "private-runtime-cleanup"
             return output
     except RoomStoreBridgeError:
         raise
@@ -1969,9 +1997,12 @@ def save_room_store(
         raise RoomStoreBridgeError(
             str(error), code="save-failed", result=error.result
         ) from None
-    except Exception:  # noqa: BLE001 - public Save errors must not expose SDK, identity, or path diagnostics.
+    except Exception as error:  # noqa: BLE001 - emit only program-owned stage and allowlisted type.
+        if stage == "operation-save":
+            stage = getattr(operations, "save_stage", stage)
+        receipt = _save_failure_receipt(error, stage)
         raise RoomStoreBridgeError(
-            "logical Room Store Save failed", code="save-failed"
+            receipt["diagnostic"], code="save-failed", result=receipt
         ) from None
 
 
