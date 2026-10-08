@@ -4,8 +4,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
-FEATURE_MERGE_SHA = "e1969ec56de0a0fab2fd3754f60cb816c9000ce7"
-PROMOTED_VSIX_SHA256 = "f34f151fb5da95d7f7dafd0334ef28e47c13d22b8c97f0659af5a7dae5a731d3"
+FEATURE_MERGE_SHA = "ebee0880dbc1a1249b9e03cabf88ce96f8916792"
+PROMOTED_VSIX_SHA256 = "46a2fee968b22becbc49d008b2817eef23e5ac3d329cf0ed05dcd2e75e391c14"
 
 
 def test_repository_contains_no_copied_ror_implementation():
