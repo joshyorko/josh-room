@@ -123,7 +123,9 @@ def exercise(root: Path, jat_root: Path | None = None) -> dict:
     for relative in repos:
         repository(workspace / relative)
     parent = workspace / repos[0]
-    git(parent, "-c", "protocol.file.allow=always", "submodule", "add", str(workspace / "library"), "modules/library")
+    git(parent, "-c", "core.longpaths=true", "-c", "protocol.file.allow=always", "submodule", "add", str(workspace / "library"), "modules/library")
+    if os.name == "nt":
+        git(parent / "modules/library", "-c", "core.longpaths=true", "config", "core.longpaths", "true")
     git(parent, "config", "-f", ".gitmodules", "submodule.modules/library.url", "https://example.invalid/synthetic/library.git")
     git(parent / "modules/library", "remote", "set-url", "origin", "https://example.invalid/synthetic/library.git")
     repos.append(repos[0] / "modules/library")
