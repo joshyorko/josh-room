@@ -57,6 +57,7 @@ from .room_store_hauler import RoomStoreHaulerError, capture_hauler_component
 from .room_store_hauler_runner import ManagedHaulerError, create_managed_hauler_adapter
 from .room_store_homebrew import RoomStoreHomebrewError, capture_homebrew_component
 from .room_store_operations import (
+    SAVE_STAGES,
     RoomStoreOperations,
     RoomStoreOperationsError,
     RoomStorePublicationError,
@@ -74,6 +75,25 @@ _ROOM_VERSION = re.compile(
     r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\Z"
 )
+
+_SAVE_CAUSE_TYPES = {
+    error_type: error_type.__name__ for error_type in (
+        OSError, FileExistsError, FileNotFoundError, PermissionError, TimeoutError,
+        TypeError, ValueError, RuntimeError, KeyError, AttributeError,
+        ImportError, ModuleNotFoundError,
+    )
+}
+
+
+def _save_failure_receipt(error: Exception, stage: str) -> dict[str, str]:
+    """Never format exception text, arguments, custom type names, or paths."""
+    stage = stage if isinstance(stage, str) and stage in SAVE_STAGES else "operation-save"
+    cause_type = _SAVE_CAUSE_TYPES.get(type(error), "UnexpectedError")
+    return {
+        "stage": stage,
+        "cause_type": cause_type,
+        "diagnostic": f"Save failed at {stage} ({cause_type})",
+    }
 
 
 class RoomStoreBridgeError(RuntimeError):
@@ -743,6 +763,11 @@ def open_existing_room_store(
                         "bound Room Store keyset is unavailable",
                         code="room-store-unavailable",
                     )
+                if keyset.encryption_domain_id != domain_id:
+                    raise RoomStoreBridgeError(
+                        "Room Store domain does not match selected material",
+                        code="encryption-domain-mismatch",
+                    )
                 bound_repository_id = keyset.room_store.repository_id
                 key_generation = keyset.room_store.generation
                 repository_format = keyset.room_store.repository_format
@@ -757,12 +782,7 @@ def open_existing_room_store(
                     "bound Room Store keyset is unavailable",
                     code="room-store-unavailable",
                 )
-            cached_secret = keyring.lookup_room_store_secret(domain_id, key_generation)
-            if not hmac.compare_digest(cached_secret, secret):
-                raise RoomStoreBridgeError(
-                    "cached Room Store secret does not match its keyset",
-                    code="room-store-secret-mismatch",
-                )
+            _verify_native_room_store_cache(dimension, domain_id, key_generation, secret)
             password_fd = os.open(
                 password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
             )
@@ -1264,20 +1284,15 @@ def _read_only_snapshot_entries(
                 raise ValueError("Room Store repository is not bound")
             repository_id = keyset.room_store.repository_id
             generation = keyset.room_store.generation
-            secret = keyring.lookup_room_store_secret(
-                keyset.encryption_domain_id,
-                generation,
-            )
+            secret = keyset.room_store.secret
             keyset_domain = keyset.encryption_domain_id
         if repository_id is None:
             raise ValueError("Room Store repository is not bound")
         if keyset_domain != material.encryption_domain_id:
             raise ValueError("Room Store domain mismatch")
-        cached_secret = keyring.lookup_room_store_secret(
-            material.encryption_domain_id, generation
+        _verify_native_room_store_cache(
+            dimension, material.encryption_domain_id, generation, secret
         )
-        if not hmac.compare_digest(secret, cached_secret):
-            raise ValueError("Room Store keyring value does not match its authority")
         password_file = runtime_dir / "preview-password"
         descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -1309,6 +1324,22 @@ def _read_only_snapshot_entries(
         ) from None
     finally:
         (runtime_dir / "preview-password").unlink(missing_ok=True)
+
+
+def _verify_native_room_store_cache(dimension, domain_id, generation, secret):
+    """Check an available native cache without making it MinIO's authority."""
+    try:
+        cached_secret = keyring.lookup_room_store_secret(domain_id, generation)
+    except keyring.NativeSecretBackendUnavailable:
+        if dimension.provider != "minio":
+            raise
+        # MinIO's validated remote keyset supplies durable custody on headless hosts.
+        return
+    if not hmac.compare_digest(cached_secret, secret):
+        raise RoomStoreBridgeError(
+            "cached Room Store secret does not match its keyset",
+            code="room-store-secret-mismatch",
+        )
 
 
 def _build_operations(
@@ -1883,12 +1914,16 @@ def save_room_store(
     active_runtime = (
         Path(os.environ["ROBOCORP_HOME"]) if os.environ.get("ROBOCORP_HOME") else None
     )
+    stage = "restic-runtime"
+    operations = None
     try:
         runtime_root = Path(instance).parent / "josh-room-runtime"
         executable = _verified_restic_executable(
             runtime_root=runtime_root, install=True
         )
+        stage = "private-runtime"
         with _private_operation_directory() as runtime_dir:
+            stage = "operations-build"
             operations, state, resolved_display_name = _build_operations(
                 instance=Path(instance),
                 dimension=dimension,
@@ -1911,12 +1946,14 @@ def save_room_store(
                 homebrew_archive=homebrew_archive,
                 jat_root=jat_root,
             )
+            stage = "operation-save"
             result: SaveResult = operations.save(
                 deletion_confirmation_token=confirmation_token,
                 on_progress=on_progress,
                 cancellation=cancellation,
                 preflight_scan=preflight_scan,
             )
+            stage = "save-result"
             descriptor = result.descriptor
             logical_id = descriptor.to_dict()["logical_jat_id"] if descriptor else None
             output = {
@@ -1949,7 +1986,9 @@ def save_room_store(
                 output["ciphertext_sha256"] = object_ref.sha256
                 output["ciphertext_size"] = object_ref.size
             if result.status == "saved" and result.publication_state == "committed":
+                stage = "save-receipt"
                 write_verified_receipt(instance, workspace, dimension, descriptor.to_dict(), output)
+            stage = "private-runtime-cleanup"
             return output
     except RoomStoreBridgeError:
         raise
@@ -1969,9 +2008,12 @@ def save_room_store(
         raise RoomStoreBridgeError(
             str(error), code="save-failed", result=error.result
         ) from None
-    except Exception:  # noqa: BLE001 - public Save errors must not expose SDK, identity, or path diagnostics.
+    except Exception as error:  # noqa: BLE001 - emit only program-owned stage and allowlisted type.
+        if stage == "operation-save":
+            stage = getattr(operations, "save_stage", stage)
+        receipt = _save_failure_receipt(error, stage)
         raise RoomStoreBridgeError(
-            "logical Room Store Save failed", code="save-failed"
+            receipt["diagnostic"], code="save-failed", result=receipt
         ) from None
 
 

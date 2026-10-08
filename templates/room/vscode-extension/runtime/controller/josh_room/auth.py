@@ -28,6 +28,7 @@ from .encryption_domain import (
     validate_recipient,
 )
 from .keyring import (
+    NativeSecretBackendUnavailable,
     lookup_encryption_identity,
     store_encryption_identity,
     store_room_store_secret,
@@ -969,7 +970,13 @@ def _room_store_keyset_error(dimension, message, error_code, cause=None):
 
 def _cache_room_store_secret(keyset):
     metadata = keyset.room_store
-    store_room_store_secret(keyset.encryption_domain_id, metadata.generation, metadata.secret)
+    try:
+        store_room_store_secret(keyset.encryption_domain_id, metadata.generation, metadata.secret)
+    except NativeSecretBackendUnavailable:
+        # The validated remote MinIO keyset is durable custody. Native storage is
+        # only a cache; headless hosts use the returned secret through the existing
+        # short-lived private password handoff. Never persist a plaintext fallback.
+        pass
 
 
 def _validate_room_store_winner(dimension, keyset):

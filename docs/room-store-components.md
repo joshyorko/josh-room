@@ -50,3 +50,15 @@ bounded sanitized stdout/stderr. Nested Build failures also retain allowlisted
 RCC receipt and JAT result summaries before temporary receipt cleanup. Private
 paths, credentials, and raw request arguments are not included in this evidence.
 Preview does not run component capture or publish remote state.
+
+Unexpected Python failures in native Save retain `error: save-failed` and add
+`stage`, `cause_type`, and `diagnostic` to the public failure receipt. The stage
+is the last entered Save boundary (for example, `rcc-component-prepare` or
+`restic-store-open`). Only program-owned stages and a fixed list of built-in
+exception types are exposed; other types become `UnexpectedError`. Exception
+messages, arguments, custom class names, paths, and stack traces are omitted.
+The diagnostic is a fixed sentence constructed from those allowlisted values.
+Known capture, cancellation, deletion-confirmation, and publication errors keep
+their existing receipts. A stage is not evidence of completed capture or
+publication; validate the controller RCC receipt and any inner capture receipt
+separately.

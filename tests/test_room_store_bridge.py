@@ -564,6 +564,98 @@ def test_rcc_preparation_failure_never_opens_restic_or_mutates_provider(
     assert not any(call[0] in {"create_control", "replace_control", "put_file", "conditional_catalog_put"} for call in backend.calls)
 
 
+@pytest.mark.parametrize("existing_store", [False, True])
+@pytest.mark.parametrize("failure_type", [FileExistsError, TypeError])
+def test_unexpected_rcc_preparation_failure_has_safe_receipt_and_zero_writes(
+    tmp_path, monkeypatch, existing_store, failure_type
+):
+    from josh_room import local_save_receipt
+
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n")
+    instance = tmp_path / "instance"
+    if existing_store:
+        bridge.save_room_store(instance, dimension, "synthetic-room", workspace, material, components=[])
+    (workspace / "robot.yaml").write_text("condaConfigFile: conda.yaml\n")
+    (workspace / "conda.yaml").write_text("dependencies: [python=3.13]\n")
+    before = copy.deepcopy((backend.catalog, backend.objects, backend.control))
+    backend.calls.clear()
+
+    def fail_preparation(**_kwargs):
+        raise failure_type("synthetic-secret /private/customer/workspace access-key=fixture-credential")
+
+    monkeypatch.setattr(bridge, "prepare_rcc_component", fail_preparation)
+    monkeypatch.setattr(bridge, "_restic_store_factory", lambda **_kwargs: pytest.fail("capture failure must precede store opening"))
+    monkeypatch.setattr(local_save_receipt, "write_verified_receipt", lambda *_args: pytest.fail("failed Save must not write a success receipt"))
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.save_room_store(instance, dimension, "synthetic-room", workspace, material, components=[])
+
+    assert caught.value.result == {
+        "ok": False,
+        "error": "save-failed",
+        "stage": "rcc-component-prepare",
+        "cause_type": failure_type.__name__,
+        "diagnostic": f"Save failed at rcc-component-prepare ({failure_type.__name__})",
+    }
+    assert "synthetic-secret" not in str(caught.value)
+    assert (backend.catalog, backend.objects, backend.control) == before
+    assert not any(call[0] in {"create_control", "replace_control", "put_file", "conditional_catalog_put"} for call in backend.calls)
+
+
+def test_unexpected_save_setup_failure_never_formats_arbitrary_exception(tmp_path, monkeypatch):
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n")
+
+    class PrivateException(RuntimeError):
+        def __str__(self) -> str:
+            pytest.fail("unexpected exceptions must never be formatted")
+            return "unreachable"
+
+    PrivateException.__name__ = "secret-class-name-" + "x" * 8192
+
+    def fail_runtime(**_kwargs):
+        raise PrivateException()
+
+    monkeypatch.setattr(bridge, "_verified_restic_executable", fail_runtime)
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[])
+    assert caught.value.result == {
+        "ok": False,
+        "error": "save-failed",
+        "stage": "restic-runtime",
+        "cause_type": "UnexpectedError",
+        "diagnostic": "Save failed at restic-runtime (UnexpectedError)",
+    }
+    assert backend.catalog is None and backend.objects == {}
+
+
+@pytest.mark.parametrize("boundary,stage", [
+    ("_build_operations", "operations-build"),
+    ("_restic_store_factory", "restic-store-open"),
+])
+def test_unexpected_save_failure_identifies_the_inner_boundary(tmp_path, monkeypatch, boundary, stage):
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n")
+
+    def fail(**_kwargs):
+        raise KeyError("fixture-credential /private/customer/workspace")
+
+    monkeypatch.setattr(bridge, boundary, fail)
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[])
+    assert caught.value.result["stage"] == stage
+    assert caught.value.result["cause_type"] == "KeyError"
+    assert caught.value.result["diagnostic"] == f"Save failed at {stage} (KeyError)"
+    assert "fixture-credential" not in repr(caught.value.result)
+    assert backend.catalog is None and backend.objects == {}
+
+
 def test_loopback_http_minio_locator_is_accepted_by_restic_store(tmp_path):
     dimension = bridge.DimensionConfig(
         dimension_id="minio-loopback",
@@ -590,15 +682,22 @@ def test_loopback_http_minio_locator_is_accepted_by_restic_store(tmp_path):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("native_cache", [True, False])
 def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, native_cache
 ):
     try:
         crypto._managed_executable("age")
         crypto._managed_executable("age-keygen")
     except crypto.CryptoError:
         pytest.skip("managed age runtime is unavailable")
+    native_lookup = keyring.lookup_room_store_secret
     dimension, material, backend, _identity, _recovery = _fixture(tmp_path, monkeypatch)
+    if not native_cache:
+        monkeypatch.setattr(auth, "store_room_store_secret", keyring.store_room_store_secret)
+        monkeypatch.setattr(keyring, "lookup_room_store_secret", native_lookup)
+        monkeypatch.setattr(keyring, "available", lambda: False)
+
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     source = workspace / "notes.txt"
@@ -908,8 +1007,9 @@ def test_requested_uncaptured_component_fails_before_provider_or_runtime_work(
     assert failure.value.code == "components-unsupported"
 
 
+@pytest.mark.parametrize("cache_mode", ["available", "unavailable", "wrong-domain"])
 def test_cold_existing_room_store_bootstraps_and_warm_retry_is_read_only(
-    tmp_path, monkeypatch, cold_restic_runtime
+    tmp_path, monkeypatch, cold_restic_runtime, cache_mode
 ):
     domain_id = str(uuid.uuid4())
     endpoint = "https://minio.example.test:9443"
@@ -1012,6 +1112,28 @@ def test_cold_existing_room_store_bootstraps_and_warm_retry_is_read_only(
         "bind_room_store_repository",
         lambda *_args, **_kwargs: pytest.fail("context must not bind repositories"),
     )
+
+    if cache_mode != "available":
+        monkeypatch.setattr(keyring, "available", lambda: False)
+
+        def unavailable(*_args):
+            raise keyring.NativeSecretBackendUnavailable("unavailable")
+
+        monkeypatch.setattr(keyring, "lookup_room_store_secret", unavailable)
+    if cache_mode == "wrong-domain":
+        body = json.loads(backend.control)
+        body["encryption_domain_id"] = str(uuid.uuid4())
+        backend.control = json.dumps(body)
+        with (
+            pytest.raises(bridge.RoomStoreBridgeError),
+            bridge.open_existing_room_store(
+                tmp_path / "instance", dimension,
+                SimpleNamespace(encryption_domain_id=domain_id),
+            ),
+        ):
+            pytest.fail("foreign domain must not open")
+        assert password_paths == []
+        return
 
     for _attempt in range(2):
         with bridge.open_existing_room_store(
@@ -1663,3 +1785,28 @@ def test_hydrate_allows_cache_sibling_to_destination_and_marks_before_promotion(
     assert destination.joinpath("notes.txt").read_text(encoding="utf-8") == "hello"
     assert calls == ["components", "marker-before-promotion"]
     assert restored["destination"] == str(destination)
+
+
+@pytest.mark.parametrize("provider", ["minio", "r2"])
+def test_native_room_store_cache_mismatch_remains_fatal(monkeypatch, provider):
+    monkeypatch.setattr(keyring, "lookup_room_store_secret", lambda *_args: "wrong-secret")
+    with pytest.raises(bridge.RoomStoreBridgeError, match="does not match"):
+        bridge._verify_native_room_store_cache(SimpleNamespace(provider=provider), "domain", 1, "secret")
+
+
+def test_r2_native_room_store_cache_unavailability_remains_fatal(monkeypatch):
+    monkeypatch.setattr(keyring, "available", lambda: False)
+    with pytest.raises(keyring.NativeSecretBackendUnavailable):
+        bridge._verify_native_room_store_cache(
+            SimpleNamespace(provider="r2"), "00000000-0000-4000-8000-000000000001", 1, "secret"
+        )
+
+
+@pytest.mark.parametrize("provider", ["minio", "r2"])
+def test_native_room_store_cache_read_error_remains_fatal(monkeypatch, provider):
+    def fail_read(*_args):
+        raise RuntimeError("synthetic native read failure")
+
+    monkeypatch.setattr(keyring, "lookup_room_store_secret", fail_read)
+    with pytest.raises(RuntimeError, match="native read failure"):
+        bridge._verify_native_room_store_cache(SimpleNamespace(provider=provider), "domain", 1, "secret")

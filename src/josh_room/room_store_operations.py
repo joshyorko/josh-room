@@ -54,6 +54,18 @@ _WINDOWS_RESERVED = {
 _ENTRY_TYPES = {"dir", "file", "symlink"}
 _WINDOWS_HOST = os.name == "nt"
 
+# Only these program-owned values may cross the public Save error boundary.
+SAVE_STAGES = frozenset({
+    "restic-runtime", "private-runtime", "operations-build", "operation-save",
+    "catalog-read", "workspace-scan", "rcc-component-prepare",
+    "private-roots", "room-store-keyset", "room-store-password",
+    "restic-store-open", "repository-initialize", "repository-bind",
+    "parent-validation", "component-capture", "workspace-backup",
+    "snapshot-verification", "workspace-verification", "descriptor-build",
+    "descriptor-publication", "marker-write", "save-result",
+    "save-receipt", "private-runtime-cleanup",
+})
+
 
 def _windows_change_time_ns(path: Path, expected_stat: os.stat_result) -> int:
     try:
@@ -641,15 +653,19 @@ class RoomStoreOperations:
                 )
 
     def _open_store(self):
+        self.save_stage = "private-roots"
         self._validate_private_roots()
+        self.save_stage = "room-store-keyset"
         keyset = self.ensure_keyset(self.dimension, self.backend)
         metadata = getattr(keyset, "room_store", None)
         secret = getattr(metadata, "secret", None)
         generation = getattr(metadata, "generation", None)
         if metadata is None or type(generation) is not int:
             raise RoomStoreOperationsError("Room Store keyset is unavailable")
+        self.save_stage = "room-store-password"
         password_file = self._password_file(secret)
         try:
+            self.save_stage = "restic-store-open"
             store = self.store_factory(
                 repository=self.repository,
                 cache_dir=self.cache_dir,
@@ -854,8 +870,10 @@ class RoomStoreOperations:
         cancellation: Any = None,
         preflight_scan: tuple[str, WorkspaceScan] | None = None,
     ) -> SaveResult:
+        self.save_stage = "catalog-read"
         latest, etag = self.read_latest()
         selected_parent = parent if parent is not None else latest
+        self.save_stage = "workspace-scan"
         policy = self._policy()
         reused_scan = bool(
             isinstance(preflight_scan, tuple)
@@ -867,13 +885,17 @@ class RoomStoreOperations:
         )
         before = preflight_scan[1] if reused_scan else _scan_workspace(self.workspace, policy)
         if self.prepare_components is not None:
+            self.save_stage = "rcc-component-prepare"
             self.prepare_components(latest)
         keyset, password_file, store = self._open_store()
         try:
             with _opened_restic_store(store) as opened:
+                self.save_stage = "repository-initialize"
                 repository_info = opened.initialize()
                 initial_data_added = getattr(opened, "data_added_bytes", None)
+                self.save_stage = "repository-bind"
                 self._bind_repository(keyset, repository_info.repository_id)
+                self.save_stage = "parent-validation"
                 if selected_parent is not None:
                     parent_body = selected_parent.to_dict()
                     if (
@@ -917,6 +939,7 @@ class RoomStoreOperations:
                     )
                 components = copy.deepcopy(self.descriptor_metadata["components"])
                 if self.resolve_components is not None:
+                    self.save_stage = "component-capture"
                     resolved_components = self.resolve_components(opened, latest)
                     if not isinstance(resolved_components, Mapping) or set(
                         resolved_components
@@ -925,6 +948,7 @@ class RoomStoreOperations:
                             "native component resolver returned an invalid component set"
                         )
                     components = copy.deepcopy(dict(resolved_components))
+                self.save_stage = "workspace-verification"
                 catalog_signature = (
                     self.read_catalog_signature()
                     if self.read_catalog_signature is not None
@@ -957,6 +981,7 @@ class RoomStoreOperations:
                         before.signature_algorithm,
                         policy.sha256,
                     )
+                self.save_stage = "workspace-backup"
                 exclude_file = self._exclude_file(policy)
                 try:
                     summary = opened.backup(
@@ -970,6 +995,7 @@ class RoomStoreOperations:
                     )
                 finally:
                     exclude_file.unlink(missing_ok=True)
+                self.save_stage = "snapshot-verification"
                 if summary.snapshot_id is None and summary.force_scan:
                     raise RoomStoreOperationsError(
                         "Restic reported a no-op after a forced content scan"
@@ -1049,6 +1075,7 @@ class RoomStoreOperations:
                     raise RoomStoreOperationsError(
                         "Restic snapshot inventory does not match the validated workspace"
                     )
+                self.save_stage = "workspace-verification"
                 after_policy = self._policy()
                 after = _scan_workspace(self.workspace, after_policy)
                 if (
@@ -1058,6 +1085,7 @@ class RoomStoreOperations:
                     raise RoomStoreOperationsError(
                         "workspace or capture policy changed during save"
                     )
+                self.save_stage = "descriptor-build"
                 descriptor = self._descriptor(
                     selected_parent
                     if snapshot.parent_snapshot_id is not None
@@ -1073,6 +1101,7 @@ class RoomStoreOperations:
                 commit_error: BaseException | None = None
                 deferred_cancel: CLICancelled | None = None
                 try:
+                    self.save_stage = "descriptor-publication"
                     with defer_sigterm_cancellation():
                         try:
                             self.publish_descriptor(
@@ -1112,6 +1141,7 @@ class RoomStoreOperations:
                 except (OSError, RuntimeError, ValueError):
                     dirty = True
                 try:
+                    self.save_stage = "marker-write"
                     self.write_marker(
                         descriptor,
                         clean=not dirty,
