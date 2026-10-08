@@ -36,7 +36,7 @@ def git(root: Path, *args: str) -> str:
     result = subprocess.run(["git", "-C", str(root), *args], env=environment,
                             capture_output=True, text=True, check=False)
     if result.returncode:
-        raise RuntimeError("synthetic Git fixture command failed: " + args[0])
+        raise RuntimeError("synthetic Git fixture command failed: " + args[0] + ": " + jat._diagnostic(result.stderr))
     return result.stdout
 
 
