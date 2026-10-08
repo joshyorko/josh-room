@@ -395,6 +395,13 @@ def _provider_environment(dimension: DimensionConfig) -> dict[str, str]:
     return {key: value for key, value in values.items() if value}
 
 
+def _store_engine() -> str:
+    engine = os.environ.get("JOSH_ROOM_STORE_ENGINE", "restic")
+    if engine not in {"restic", "rustic"}:
+        raise RoomStoreBridgeError("Room Store engine is unsupported", code="store-engine-invalid")
+    return engine
+
+
 def _restic_store_factory(
     *,
     repository: str,
@@ -404,7 +411,10 @@ def _restic_store_factory(
     ca_bundle: str | None,
     executable: Path,
 ) -> ResticStore:
-    return ResticStore(
+    from .rustic_store import RusticStore
+
+    adapter = RusticStore if _store_engine() == "rustic" else ResticStore
+    return adapter(
         repository=repository,
         cache_dir=cache_dir,
         password_file=password_file,
@@ -415,15 +425,16 @@ def _restic_store_factory(
 
 
 def _managed_runtime_assets() -> tuple[Path, Path]:
+    engine = _store_engine()
     module = Path(__file__).resolve()
     candidates = (
         (
-            module.parents[2] / "restic-manifest.json",
-            module.parents[1] / "install_restic.py",
+            module.parents[2] / f"{engine}-manifest.json",
+            module.parents[1] / f"install_{engine}.py",
         ),
         (
-            module.parents[2] / "vscode-extension" / "runtime" / "restic-manifest.json",
-            module.parents[2] / "scripts" / "install_restic.py",
+            module.parents[2] / "vscode-extension" / "runtime" / f"{engine}-manifest.json",
+            module.parents[2] / "scripts" / f"install_{engine}.py",
         ),
     )
     for manifest, installer in candidates:
@@ -451,37 +462,39 @@ def _runtime_platform() -> str:
 
 def _verified_restic_executable(*, runtime_root: Path, install: bool) -> Path:
     """Return only a version/checksum-verified binary beneath its private runtime root."""
+    engine = _store_engine()
+    version = "0.11.4" if engine == "rustic" else "0.19.1"
     manifest, installer_path = _managed_runtime_assets()
     platform = _runtime_platform()
-    hinted = os.environ.get("JOSH_ROOM_RESTIC_EXE")
+    hinted = os.environ.get(f"JOSH_ROOM_{engine.upper()}_EXE")
     runtime_root = Path(runtime_root).expanduser()
-    runtime_value = os.environ.get("JOSH_ROOM_RESTIC_RUNTIME")
+    runtime_value = os.environ.get(f"JOSH_ROOM_{engine.upper()}_RUNTIME")
     if (
         runtime_value
         and Path(runtime_value).expanduser().resolve() != runtime_root.resolve()
     ):
         raise RoomStoreBridgeError(
-            "Restic runtime handoff is outside the selected instance",
-            code="restic-runtime-invalid",
+            f"{engine.capitalize()} runtime handoff is outside the selected instance",
+            code=f"{engine}-runtime-invalid",
         )
-    binary_name = "restic.exe" if platform == "win32-x64" else "restic"
-    expected_path = runtime_root / "restic" / "0.19.1" / platform / binary_name
+    binary_name = f"{engine}.exe" if platform == "win32-x64" else engine
+    expected_path = runtime_root / engine / version / platform / binary_name
     if hinted and Path(hinted).expanduser().resolve() != expected_path.resolve():
         raise RoomStoreBridgeError(
-            "Restic runtime handoff does not match its private runtime",
-            code="restic-runtime-invalid",
+            f"{engine.capitalize()} runtime handoff does not match its private runtime",
+            code=f"{engine}-runtime-invalid",
         )
     if runtime_root.exists() or runtime_root.is_symlink():
         try:
             verify_private_path(runtime_root, directory=True)
         except PrivatePathError as error:
             raise RoomStoreBridgeError(
-                "Restic runtime root is unsafe", code="restic-runtime-invalid"
+                f"{engine.capitalize()} runtime root is unsafe", code=f"{engine}-runtime-invalid"
             ) from error
     elif not install:
         raise RoomStoreBridgeError(
-            "verified Restic runtime has not been prepared",
-            code="restic-runtime-unavailable",
+            f"verified {engine.capitalize()} runtime has not been prepared",
+            code=f"{engine}-runtime-unavailable",
         )
     else:
         runtime_root.mkdir(parents=True, mode=0o700)
@@ -491,13 +504,13 @@ def _verified_restic_executable(*, runtime_root: Path, install: bool) -> Path:
         or not expected_path.with_name(binary_name + ".sha256").is_file()
     ):
         raise RoomStoreBridgeError(
-            "verified Restic runtime has not been prepared",
-            code="restic-runtime-unavailable",
+            f"verified {engine.capitalize()} runtime has not been prepared",
+            code=f"{engine}-runtime-unavailable",
         )
     runtime_dirs = (
-        runtime_root / "restic",
-        runtime_root / "restic" / "0.19.1",
-        runtime_root / "restic" / "0.19.1" / platform,
+        runtime_root / engine,
+        runtime_root / engine / version,
+        runtime_root / engine / version / platform,
     )
     try:
         for directory in runtime_dirs:
@@ -508,31 +521,31 @@ def _verified_restic_executable(*, runtime_root: Path, install: bool) -> Path:
                 verify_private_path(directory, directory=True)
     except (OSError, PrivatePathError) as error:
         raise RoomStoreBridgeError(
-            "Restic runtime path is unsafe", code="restic-runtime-invalid"
+            f"{engine.capitalize()} runtime path is unsafe", code=f"{engine}-runtime-invalid"
         ) from error
     spec = importlib.util.spec_from_file_location(
-        "_josh_room_install_restic", installer_path
+        f"_josh_room_install_{engine}", installer_path
     )
     if spec is None or spec.loader is None:
         raise RoomStoreBridgeError(
-            "Restic runtime installer is unavailable", code="restic-runtime-unavailable"
+            f"{engine.capitalize()} runtime installer is unavailable", code=f"{engine}-runtime-unavailable"
         )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     try:
-        result = module.install_restic(manifest, runtime_root, platform)
+        result = getattr(module, f"install_{engine}")(manifest, runtime_root, platform)
         executable = Path(result["executable"]).resolve(strict=True)
     except Exception:  # noqa: BLE001 - installer diagnostics may include private runtime paths.
         raise RoomStoreBridgeError(
-            "verified Restic runtime could not be prepared",
-            code="restic-runtime-invalid",
+            f"verified {engine.capitalize()} runtime could not be prepared",
+            code=f"{engine}-runtime-invalid",
         ) from None
     expected = (
         runtime_root
-        / "restic"
-        / "0.19.1"
+        / engine
+        / version
         / platform
-        / ("restic.exe" if platform == "win32-x64" else "restic")
+        / (f"{engine}.exe" if platform == "win32-x64" else engine)
     ).resolve(strict=True)
     digest_marker = expected.with_name(expected.name + ".sha256")
     try:
@@ -553,14 +566,14 @@ def _verified_restic_executable(*, runtime_root: Path, install: bool) -> Path:
             raise ValueError("managed binary permissions are unsafe")
     except (OSError, PrivatePathError, ValueError) as error:
         raise RoomStoreBridgeError(
-            "verified Restic binary path is unsafe", code="restic-runtime-invalid"
+            f"verified {engine.capitalize()} binary path is unsafe", code=f"{engine}-runtime-invalid"
         ) from error
     if executable != expected or (
         hinted and Path(hinted).expanduser().resolve(strict=True) != expected
     ):
         raise RoomStoreBridgeError(
-            "Restic runtime handoff does not match its verified pin",
-            code="restic-runtime-invalid",
+            f"{engine.capitalize()} runtime handoff does not match its verified pin",
+            code=f"{engine}-runtime-invalid",
         )
     return executable
 
@@ -1352,7 +1365,7 @@ def _build_operations(
         "source": {},
         "producer": {
             "josh_room_version": _room_version(),
-            "restic_version": "0.19.1",
+            "restic_version": "rustic-0.11.4" if _store_engine() == "rustic" else "0.19.1",
             "source_platform": _source_platform(),
             "restore_platforms": [_source_platform()],
         },
