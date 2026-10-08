@@ -212,7 +212,15 @@ def main() -> None:
     parser.add_argument("--jat-root", type=Path, required=True)
     parser.add_argument("--result-file", type=Path, required=True)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="josh-room-git-acceptance-") as name:
+    # Git's internal GIT_DIR bound is distinct from core.longpaths. RCC's
+    # deeply nested Windows temp root is not a representative restore target.
+    # Keep all nested repositories and the submodule, but own a short temp root.
+    temporary_parent = None
+    if os.name == "nt":
+        temporary_parent = os.environ.get("RUNNER_TEMP")
+        if not temporary_parent:
+            temporary_parent = str(Path(os.environ["LOCALAPPDATA"]) / "Temp")
+    with tempfile.TemporaryDirectory(prefix="jr-git-", dir=temporary_parent) as name:
         result = exercise(Path(name), args.jat_root)
     args.result_file.write_text(json.dumps(result, sort_keys=True) + "\n")
     print(json.dumps(result, sort_keys=True))
