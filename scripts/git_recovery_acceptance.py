@@ -43,6 +43,10 @@ def git(root: Path, *args: str) -> str:
 def repository(root: Path) -> None:
     root.mkdir(parents=True)
     git(root, "init", "-b", "main")
+    if os.name == "nt":
+        # RCC's private Windows temp root is long; configure only this owned
+        # fixture and verify the setting survives with the rest of its config.
+        git(root, "config", "core.longpaths", "true")
     for name in ("staged.txt", "unstaged.txt", "history.txt"):
         (root / name).write_text("original\n")
     git(root, "add", ".")
