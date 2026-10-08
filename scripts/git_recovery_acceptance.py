@@ -164,7 +164,8 @@ def exercise(root: Path, jat_root: Path | None = None) -> dict:
     assert second.status == "saved"
     expected_parent = None if os.name == "nt" else first.snapshot_id
     assert second.descriptor.to_dict()["workspace"].get("parent_snapshot_id") == expected_parent
-    assert second.descriptor.to_dict()["parent_logical_jat_id"] == first.descriptor.to_dict()["logical_jat_id"]
+    expected_logical_parent = None if os.name == "nt" else first.descriptor.to_dict()["logical_jat_id"]
+    assert second.descriptor.to_dict().get("parent_logical_jat_id") == expected_logical_parent
     assert second.data_added_bytes < first.data_added_bytes
     assert op.save().status == "already-saved"
     portable = "not-run"
