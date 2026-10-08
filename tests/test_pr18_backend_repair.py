@@ -14,7 +14,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-FEATURE_MERGE_SHA = "1c23c848f61b8c8e243bb14f2ecd7dce54ef63ef"
+FEATURE_MERGE_SHA = "e1969ec56de0a0fab2fd3754f60cb816c9000ce7"
 
 
 def _dimension(provider, endpoint, bucket, profile):
