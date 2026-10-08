@@ -29,11 +29,14 @@ def test_staged_git_hardlinks_are_copied_without_changing_source(tmp_path):
     os.link(source, first)
     os.link(first, second)
     inode = source.stat().st_ino
+    stage.chmod(0o555)
     _separate_staged_hardlinks(stage, frozenset({"first.pack", "second.pack"}))
     assert source.stat().st_ino == inode
     assert source.read_bytes() == first.read_bytes() == second.read_bytes()
     assert first.stat().st_nlink == second.stat().st_nlink == 1
     assert first.stat().st_mode == source.stat().st_mode == second.stat().st_mode
+    assert stage.stat().st_mode & 0o777 == 0o555
+    stage.chmod(0o700)
 
 REPOSITORY_ID = "a" * 64
 WORKSPACE_SNAPSHOT = "b" * 64

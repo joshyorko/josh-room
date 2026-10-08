@@ -382,14 +382,19 @@ def _separate_staged_hardlinks(root: Path, paths: frozenset[str]) -> None:
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink <= 1:
             continue
-        descriptor, name = tempfile.mkstemp(prefix=".josh-room-copy-", dir=path.parent)
-        os.close(descriptor)
-        temporary = Path(name)
+        directory_mode = stat.S_IMODE(path.parent.stat().st_mode)
+        temporary = None
         try:
+            path.parent.chmod(directory_mode | stat.S_IWUSR)
+            descriptor, name = tempfile.mkstemp(prefix=".josh-room-copy-", dir=path.parent)
+            os.close(descriptor)
+            temporary = Path(name)
             shutil.copy2(path, temporary, follow_symlinks=False)
             os.replace(temporary, path)
         finally:
-            temporary.unlink(missing_ok=True)
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            path.parent.chmod(directory_mode)
 
 
 def _verify_inspection(
