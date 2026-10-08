@@ -14,7 +14,6 @@ def test_policy_excludes_generated_directories_at_any_depth(tmp_path: Path) -> N
     policy = load_capture_policy(tmp_path)
 
     for name in (
-        ".git",
         ".pytest_cache",
         ".ruff_cache",
         ".venv",
@@ -28,6 +27,8 @@ def test_policy_excludes_generated_directories_at_any_depth(tmp_path: Path) -> N
     assert policy.is_excluded("services/api/.josh-room.json")
     assert policy.is_excluded("services/api/.DS_Store")
     assert not policy.is_excluded("services/api/src/main.py")
+    assert not policy.is_excluded("services/api/.git")
+    assert not policy.is_excluded("services/api/.git/refs/heads/venv")
 
 
 @pytest.mark.parametrize("pattern", ["cache", "**/cache", "**/cache/**"])

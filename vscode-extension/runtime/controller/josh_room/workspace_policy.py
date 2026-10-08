@@ -184,11 +184,36 @@ class CapturePolicy:
         parts = _normalized_relative(relative_path)
         if parts is None:
             return False
+        # Git storage is indivisible. A branch named venv, for example, is
+        # history, not a generated environment. Ancestor exclusions still apply.
+        if ".git" in parts:
+            index = parts.index(".git")
+            return bool(index and self.is_excluded("/".join(parts[:index])))
         if self.active_runtime_relative:
             runtime = tuple(self.active_runtime_relative.split("/"))
             if parts[: len(runtime)] == runtime:
                 return True
         return any(_rule_matches(parts, pattern) for pattern in self.patterns)
+
+    def resolved_restic_excludes(self, root: Path) -> tuple[str, ...]:
+        """Resolve pruned paths so broad globs cannot discard Git internals."""
+        values = []
+        for directory, directories, files in os.walk(root, followlinks=False):
+            parent = Path(directory)
+            for name in (*directories, *files):
+                relative = (parent / name).relative_to(root).as_posix()
+                if self.is_excluded(relative):
+                    if "\n" in relative or "\r" in relative:
+                        raise ValueError("workspace exclusion contains an unsafe path")
+                    # Restic uses Go path.Match; quote glob metacharacters.
+                    absolute = (root.resolve() / relative).as_posix()
+                    if "\n" in absolute or "\r" in absolute:
+                        raise ValueError("workspace exclusion contains an unsafe path")
+                    literal = "".join("\\" + char if char in "*?[]\\" else char for char in absolute)
+                    values.append(literal)
+            directories[:] = [name for name in directories
+                              if not self.is_excluded((parent / name).relative_to(root).as_posix())]
+        return tuple(sorted(values))
 
     def restic_excludes(self) -> tuple[str, ...]:
         """Return deterministic restic glob exclusions equivalent to this policy."""

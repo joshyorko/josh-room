@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -11,9 +12,28 @@ from josh_room.logical_jat import LogicalJat
 from josh_room.restic_store import SnapshotEntry, SnapshotInfo
 from josh_room.room_store_export import (
     PortableExportError,
+    _separate_staged_hardlinks,
     export_portable_jat,
     materialize_components,
 )
+
+
+def test_staged_git_hardlinks_are_copied_without_changing_source(tmp_path):
+    source = tmp_path / "source-object"
+    source.write_bytes(b"synthetic packed Git objects")
+    source.chmod(0o640)
+    stage = tmp_path / "private-stage"
+    stage.mkdir(mode=0o700)
+    first = stage / "first.pack"
+    second = stage / "second.pack"
+    os.link(source, first)
+    os.link(first, second)
+    inode = source.stat().st_ino
+    _separate_staged_hardlinks(stage, frozenset({"first.pack", "second.pack"}))
+    assert source.stat().st_ino == inode
+    assert source.read_bytes() == first.read_bytes() == second.read_bytes()
+    assert first.stat().st_nlink == second.stat().st_nlink == 1
+    assert first.stat().st_mode == source.stat().st_mode == second.stat().st_mode
 
 REPOSITORY_ID = "a" * 64
 WORKSPACE_SNAPSHOT = "b" * 64
