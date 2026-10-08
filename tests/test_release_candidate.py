@@ -94,7 +94,8 @@ def workflow_step(name):
 
 
 @pytest.mark.parametrize("failure", [None, "checksum", "source", "not-draft", "wrong-source-sha", "wrong-tag-sha", "tag-moved-before-publish", "missing-download", "changed-before-publish", "changed-after-publish"])
-def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch", "workflow_dispatch_existing"])
+def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure, event):
     root, candidate, _pin = fixture(tmp_path)
     (root / "scripts").mkdir()
     (root / "scripts/verify_release_candidate.py").symlink_to(SCRIPT)
@@ -113,10 +114,12 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
         count = int(count_file.read_text()) + 1 if count_file.exists() else 1
         count_file.write_text(str(count))
         failure = os.environ["SCENARIO"]
-        if failure == "wrong-tag-sha" or (failure == "tag-moved-before-publish" and count > 1):
+        if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch" and os.environ.get("INITIAL_TAG") != "1" and not (root / "tag-created").exists() and failure != "wrong-tag-sha":
+            sys.exit(0)
+        if failure == "wrong-tag-sha" or (failure == "tag-moved-before-publish" and (root / "dist/package.whl").exists()) or (failure == "tag-moved-after-create" and (root / "tag-created").exists()):
             tag_sha = "b" * 40
         else:
-            tag_sha = os.environ["GITHUB_SHA"]
+            tag_sha = os.environ["RELEASE_SHA"]
         print(f"{tag_sha}\t{args[2]}")
     '''))
     git.chmod(0o700)
@@ -130,7 +133,7 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
             stream.write(json.dumps(args) + "\\n")
         failure = os.environ["SCENARIO"]
         if args[:2] == ["release", "view"]:
-            print(json.dumps({"isDraft": failure != "not-draft" and not (root / "published").exists(), "targetCommitish": "wrong" if failure == "wrong-source-sha" else os.environ["GITHUB_SHA"], "tagName": os.environ["GITHUB_REF_NAME"]}))
+            print(json.dumps({"isDraft": failure != "not-draft" and not (root / "published").exists(), "targetCommitish": "wrong" if failure == "wrong-source-sha" else os.environ["RELEASE_SHA"], "tagName": os.environ["RELEASE_TAG"]}))
         elif args[:2] == ["release", "download"]:
             if failure == "missing-download": sys.exit(1)
             target = pathlib.Path(args[args.index("--dir") + 1]) / args[args.index("--pattern") + 1]
@@ -146,6 +149,13 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
         elif args[:2] == ["release", "edit"]:
             assert "--draft=false" in args
             (root / "published").touch()
+        elif args[:3] == ["api", "--method", "POST"]:
+            assert args[3] == "repos/joshyorko/josh-room/git/refs"
+            assert "ref=refs/tags/" + os.environ["RELEASE_TAG"] in args
+            assert "sha=" + os.environ["RELEASE_SHA"] in args
+            if failure == "tag-create-race":
+                sys.exit(1)
+            (root / "tag-created").touch()
         else:
             raise AssertionError(args)
     '''))
@@ -156,9 +166,11 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
         (root / "vscode-extension/extension.js").write_text("changed")
     before = candidate.read_bytes()
     env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
-           "GITHUB_REPOSITORY": "joshyorko/josh-room", "GITHUB_REF_NAME": "v0.1.26-standalone-vsix",
-           "GITHUB_SHA": "a" * 40, "CANDIDATE": str(candidate), "SCENARIO": failure or ""}
+           "GITHUB_REPOSITORY": "joshyorko/josh-room", "GITHUB_REF_NAME": "main" if event == "workflow_dispatch" else "v0.1.26-standalone-vsix",
+           "GITHUB_SHA": ("b" if event == "workflow_dispatch" else "a") * 40, "RELEASE_SHA": "a" * 40, "RELEASE_TAG": "v0.1.26-standalone-vsix", "GITHUB_EVENT_NAME": "workflow_dispatch" if event.startswith("workflow_dispatch") else event, "INITIAL_TAG": "1" if event.endswith("_existing") else "0", "CANDIDATE": str(candidate), "SCENARIO": failure or ""}
     result = subprocess.run(["bash", "-c", workflow_step("Verify staged tested VSIX")], cwd=root, env=env, capture_output=True, text=True, check=False)
+    if result.returncode == 0 and event.startswith("workflow_dispatch"):
+        result = subprocess.run(["bash", "-c", workflow_step("Create verified release tag")], cwd=root, env=env, capture_output=True, text=True, check=False)
     if result.returncode == 0:
         for name in ["package.whl", "package.tar.gz", "SHA256SUMS"]:
             (root / "dist" / name).write_text("synthetic ancillary artifact")
@@ -167,4 +179,68 @@ def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
     assert (root / "published").exists() == (failure in [None, "changed-after-publish"])
     assert candidate.read_bytes() == before
     calls = [json.loads(line) for line in (root / "gh-calls.jsonl").read_text().splitlines()] if (root / "gh-calls.jsonl").exists() else []
-    assert all(call[:2] in [["release", action] for action in ["view", "download", "upload", "edit"]] for call in calls)
+    assert all(call[:2] in [["release", action] for action in ["view", "download", "upload", "edit"]] or call[:3] == ["api", "--method", "POST"] for call in calls)
+    if event == "workflow_dispatch_existing":
+        assert not any(call[:1] == ["api"] for call in calls)
+    if failure in ["checksum", "source", "not-draft", "wrong-source-sha", "wrong-tag-sha", "missing-download"]:
+        assert not (root / "tag-created").exists()
+
+
+def test_release_dispatch_keeps_existing_permissions_and_checks_out_explicit_source():
+    import yaml
+
+    workflow = yaml.safe_load((SCRIPT.parents[1] / ".github/workflows/release.yml").read_text())
+    events = workflow.get("on", workflow.get(True))
+    assert events["workflow_dispatch"]["inputs"]["source_sha"]["required"] is True
+    assert events["workflow_dispatch"]["inputs"]["release_tag"]["required"] is True
+    assert workflow["permissions"] == {"contents": "write"}
+    assert "inputs.release_tag" in workflow["concurrency"]["group"]
+    job = workflow["jobs"]["build"]
+    assert "inputs.source_sha" in job["steps"][0]["with"]["ref"]
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index("Verify staged tested VSIX") < names.index("Create verified release tag")
+    assert names.index("Create verified release tag") < names.index("Publish GitHub release")
+
+
+@pytest.mark.parametrize("failure", [None, "malformed-sha", "injected-sha", "wrong-head", "untrusted-source", "wrong-workflow-ref", "wrong-tag", "injected-tag"])
+def test_dispatch_version_gate_rejects_untrusted_or_ambiguous_source(tmp_path, failure):
+    root, _candidate, _pin = fixture(tmp_path)
+    template = root / "templates/room/vscode-extension"
+    template.mkdir(parents=True)
+    (template / "package.json").write_text('{"version":"0.1.26"}')
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    git = binary / "git"
+    git.write_text(f"#!{sys.executable}\n" + textwrap.dedent('''\
+        import os, sys
+        if sys.argv[1:] == ["rev-parse", "HEAD"]:
+            print(("b" if os.environ["SCENARIO"] == "wrong-head" else "a") * 40)
+        elif sys.argv[1:3] == ["merge-base", "--is-ancestor"]:
+            assert sys.argv[3:] == ["a" * 40, "origin/main"]
+            sys.exit(1 if os.environ["SCENARIO"] == "untrusted-source" else 0)
+        else:
+            raise AssertionError(sys.argv)
+    '''))
+    git.chmod(0o700)
+    sha = "a" * 40
+    if failure == "malformed-sha":
+        sha = "main"
+    if failure == "injected-sha":
+        sha = "$(touch injected)"
+    tag = "v0.1.26-standalone-vsix"
+    if failure == "wrong-tag":
+        tag = "v0.1.27-standalone-vsix"
+    if failure == "injected-tag":
+        tag = "$(touch injected)"
+    env = {**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+           "GITHUB_REPOSITORY": "joshyorko/josh-room", "GITHUB_EVENT_NAME": "workflow_dispatch",
+           "GITHUB_REF": "refs/heads/untrusted" if failure == "wrong-workflow-ref" else "refs/heads/main",
+           "RELEASE_SHA": sha, "RELEASE_TAG": tag, "SCENARIO": failure or "", "GITHUB_OUTPUT": str(tmp_path / "outputs")}
+    result = subprocess.run(["bash", "-c", workflow_step("Verify tag and package version")], cwd=root, env=env, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == (failure is None), result.stderr
+    assert not (root / "injected").exists()
+
+
+@pytest.mark.parametrize("failure", ["tag-create-race", "tag-moved-after-create"])
+def test_dispatch_tag_creation_races_fail_closed(tmp_path, failure):
+    test_workflow_promotes_only_verified_draft_asset(tmp_path, failure, "workflow_dispatch")
