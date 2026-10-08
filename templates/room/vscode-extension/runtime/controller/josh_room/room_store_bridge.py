@@ -763,6 +763,11 @@ def open_existing_room_store(
                         "bound Room Store keyset is unavailable",
                         code="room-store-unavailable",
                     )
+                if keyset.encryption_domain_id != domain_id:
+                    raise RoomStoreBridgeError(
+                        "Room Store domain does not match selected material",
+                        code="encryption-domain-mismatch",
+                    )
                 bound_repository_id = keyset.room_store.repository_id
                 key_generation = keyset.room_store.generation
                 repository_format = keyset.room_store.repository_format
@@ -777,12 +782,7 @@ def open_existing_room_store(
                     "bound Room Store keyset is unavailable",
                     code="room-store-unavailable",
                 )
-            cached_secret = keyring.lookup_room_store_secret(domain_id, key_generation)
-            if not hmac.compare_digest(cached_secret, secret):
-                raise RoomStoreBridgeError(
-                    "cached Room Store secret does not match its keyset",
-                    code="room-store-secret-mismatch",
-                )
+            _verify_native_room_store_cache(dimension, domain_id, key_generation, secret)
             password_fd = os.open(
                 password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
             )
@@ -1284,20 +1284,15 @@ def _read_only_snapshot_entries(
                 raise ValueError("Room Store repository is not bound")
             repository_id = keyset.room_store.repository_id
             generation = keyset.room_store.generation
-            secret = keyring.lookup_room_store_secret(
-                keyset.encryption_domain_id,
-                generation,
-            )
+            secret = keyset.room_store.secret
             keyset_domain = keyset.encryption_domain_id
         if repository_id is None:
             raise ValueError("Room Store repository is not bound")
         if keyset_domain != material.encryption_domain_id:
             raise ValueError("Room Store domain mismatch")
-        cached_secret = keyring.lookup_room_store_secret(
-            material.encryption_domain_id, generation
+        _verify_native_room_store_cache(
+            dimension, material.encryption_domain_id, generation, secret
         )
-        if not hmac.compare_digest(secret, cached_secret):
-            raise ValueError("Room Store keyring value does not match its authority")
         password_file = runtime_dir / "preview-password"
         descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
@@ -1329,6 +1324,22 @@ def _read_only_snapshot_entries(
         ) from None
     finally:
         (runtime_dir / "preview-password").unlink(missing_ok=True)
+
+
+def _verify_native_room_store_cache(dimension, domain_id, generation, secret):
+    """Check an available native cache without making it MinIO's authority."""
+    try:
+        cached_secret = keyring.lookup_room_store_secret(domain_id, generation)
+    except keyring.NativeSecretBackendUnavailable:
+        if dimension.provider != "minio":
+            raise
+        # MinIO's validated remote keyset supplies durable custody on headless hosts.
+        return
+    if not hmac.compare_digest(cached_secret, secret):
+        raise RoomStoreBridgeError(
+            "cached Room Store secret does not match its keyset",
+            code="room-store-secret-mismatch",
+        )
 
 
 def _build_operations(
