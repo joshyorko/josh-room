@@ -742,8 +742,12 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
   };
 }
 
-async function writeRuntimeCredentials(environment, { extensionMode = true } = {}) {
+async function writeRuntimeCredentials(environment, { extensionMode = true, authFree = false } = {}) {
   environment.JOSH_ROOM_EXTENSION_MODE = extensionMode ? "1" : "0";
+  if (authFree) {
+    delete environment.JOSH_ROOM_PROVIDER_CREDENTIALS;
+    return () => {};
+  }
   if (!extensionContext?.secrets?.get) return () => {};
   const serialized = await extensionContext.secrets.get(CREDENTIALS_SECRET);
   if (!serialized) return () => {};
@@ -1093,6 +1097,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
+      authFree: args[0] === "status",
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
@@ -1792,6 +1797,16 @@ function trustedLocalSaveReceipt(source, cwd) {
   return trustedSaveReceipt;
 }
 
+async function nativeSaveReceiptStillMatches(source, receipt) {
+  let status;
+  try { status = await runJoshRoom(["status"], source); } catch (_error) { return false; }
+  return status?.ok === true && status.state === "clean"
+    && status.path_matches === true && status.signature_matches === true && status.policy_matches === true
+    && status.workspace_signature === receipt.workspace_signature
+    && status.signature_algorithm === receipt.signature_algorithm
+    && status.capture_policy_sha256 === receipt.capture_policy_sha256;
+}
+
 function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   let canonicalSource;
   let canonicalWorkspace;
@@ -1877,14 +1892,18 @@ async function saveRoom(options = {}) {
       ignoreFocusOut: true,
     });
     if (!imageChoice) return "cancelled";
+    // VS Code intentionally suppresses some .git events. Event silence is
+    // never evidence that a recovery point contains the current Git objects.
     if (trustedLocalSaveReceipt(source, cwd) === cachedReceipt
-      && Boolean(imageChoice.allImages) === cachedReceipt.all_images) {
+      && Boolean(imageChoice.allImages) === cachedReceipt.all_images
+      && await nativeSaveReceiptStillMatches(source, cachedReceipt)) {
       const action = await vscode.window.showInformationMessage(
         "Already saved — 0 bytes uploaded",
         "Done",
         "Choose another Room",
       );
       if (action !== "Choose another Room"
+        && await nativeSaveReceiptStillMatches(source, cachedReceipt)
         && trustedLocalSaveReceipt(source, cwd) === cachedReceipt) {
         refreshRoomStatus();
         return "already-saved";

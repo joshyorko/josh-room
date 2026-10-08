@@ -1373,7 +1373,7 @@ test("dirty tracking marks watcher changes immediately without rescanning each e
   assert.equal(statusCalls(), startupStatusCalls);
 });
 
-function createNativeSaveFixture(root, { preview, saveResult, onSave } = {}) {
+function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult } = {}) {
   const dimension = {
     id: "backup",
     display_name: "Backup",
@@ -1405,7 +1405,7 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave } = {}) {
       return { stdout: JSON.stringify(saveResult) };
     }
     if (args[0] === "status") {
-      return { stdout: JSON.stringify({ ok: false, state: "unknown" }) };
+      return { stdout: JSON.stringify(typeof statusResult === "function" ? statusResult() : statusResult || { ok: false, state: "unknown" }) };
     }
     if (args[0] === "encryption" && args[1] === "status") {
       return { stdout: JSON.stringify({ ok: true, state: "ready" }) };
@@ -1532,11 +1532,14 @@ test("native Save confirms suspicious deletions with the exact preview token", a
   assert.match(fixture.warningCalls[0][0], /25 deleted entries/);
 });
 
-for (const externalComponents of [false, true]) test(`trusted no-event Save ${externalComponents ? "rechecks external components" : "skips all controller and secret work"}`, async () => {
+for (const externalComponents of [false, true]) test(`trusted no-event Save ${externalComponents ? "rechecks external components" : "checks native metadata without secret work"}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-fast-noop-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
   const fixture = createNativeSaveFixture(root, {
     preview: nativePreview({ previous_entry_count: 3, restic_data_added_bytes: 1024, rcc_capture_pending: false }),
+    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
+      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha },
     saveResult: {
       ok: true,
       status: "saved",
@@ -1588,13 +1591,14 @@ for (const externalComponents of [false, true]) test(`trusted no-event Save ${ex
     assert.ok(fixture.spawnHarness.calls.length > callsAfterSave);
     assert.ok(fixture.secretReads > secretReadsAfterSave);
   } else {
-    assert.equal(fixture.spawnHarness.calls.length, callsAfterSave);
+    assert.equal(fixture.spawnHarness.calls.length, callsAfterSave + 2 * samples.length);
+    assert.equal(fixture.spawnHarness.calls.slice(callsAfterSave).every((call) => call.args[0] === "status"), true);
     assert.equal(fixture.secretReads, secretReadsAfterSave);
     assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
     if (process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH) fs.writeFileSync(
       process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH,
       `${JSON.stringify({ fixture: "real Save command with synthetic native UI and prior verified receipt", samples_ms: samples,
-        controller_calls: 0, secret_reads: 0, provider_rcc_jat_restic_calls: 0 })}\n`,
+        controller_calls: 2 * samples.length, secret_reads: 0, provider_jat_restic_calls: 0 })}\n`,
     );
   }
   assert.equal(fixture.statusItem.text.includes("Saved"), true);
@@ -1606,6 +1610,9 @@ for (const boundary of ["image choice", "completion choice"]) test(`a change dur
   const source = path.join(root, "source.txt");
   fs.writeFileSync(source, "initial");
   const fixture = createNativeSaveFixture(root, {
+    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
+      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha },
     preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
     saveResult: {
       ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2",
@@ -1651,6 +1658,49 @@ for (const boundary of ["image choice", "completion choice"]) test(`a change dur
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
   assert.equal(changed, true);
   assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length, createsBefore + 1);
+});
+
+for (const changeAt of ["before prompt", "during prompt"]) test(`a Git object change ${changeAt} without a watcher event cannot use cached no-op Save`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-git-no-event-"));
+  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  let changed = false;
+  const fixture = createNativeSaveFixture(root, {
+    statusResult: () => ({ ok: !changed, state: changed ? "changed" : "clean", path_matches: true,
+      signature_matches: !changed, policy_matches: true, workspace_signature: (changed ? "d" : "c").repeat(64),
+      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha }),
+    preview: nativePreview({ rcc_capture_pending: false }),
+    saveResult: { ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2",
+      dimension_id: "backup", encryption_domain_id: "domain-a", workspace_signature: "c".repeat(64),
+      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha },
+    onSave: (_args, { root: saveRoot, project }) => {
+      project.latest = "jat-2";
+      project.snapshots = [{ snapshot_id: "jat-2" }];
+      writeStatMarker(saveRoot, { snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha });
+    },
+  });
+  fixture.vscode.infoResponses.push("Save", undefined);
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  const changeGit = () => {
+    fs.mkdirSync(path.join(root, ".git", "objects", "ab"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git", "objects", "ab", "local-object"), "synthetic object");
+    changed = true; // Deliberately do not dispatch a VS Code watcher event.
+  };
+  if (changeAt === "before prompt") changeGit();
+  else {
+    const original = fixture.vscode.window.showInformationMessage;
+    fixture.vscode.window.showInformationMessage = async (...args) => {
+      const answer = await original(...args);
+      if (args[0] === "Already saved — 0 bytes uploaded") changeGit();
+      return answer;
+    };
+  }
+  fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
+  fixture.vscode.quickPickResponses.push({ allImages: false }, { project: fixture.project });
+  fixture.vscode.infoResponses.push(...(changeAt === "before prompt" ? ["Save", undefined] : ["Done", "Save", undefined]));
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[0] === "status").length, changeAt === "before prompt" ? 1 : 2);
+  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length, 2);
+  assert.equal(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"), changeAt === "during prompt");
 });
 
 test("a mode change invalidates the trusted Save receipt and reaches the Room Store", async () => {
@@ -1701,6 +1751,9 @@ test("choosing another Room invalidates the trusted Save receipt and preserves d
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-destination-change-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
   const fixture = createNativeSaveFixture(root, {
+    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
+      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha },
     preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
     saveResult: {
       ok: true,

@@ -313,6 +313,17 @@ async function main() {
     if (resticPhase0.status !== "passed" || resticPhase0.engine_version !== "0.19.1") {
       throw new Error("managed restic feasibility did not pass on the selected platform");
     }
+    environment.PATH = `${path.dirname(resticInstallation.executable)}${path.delimiter}${environment.PATH || process.env.PATH || ""}`;
+    const gitRecoveryResultFile = path.join(evidenceDir, "git-recovery.json");
+    runManagedTool([
+      "python", path.join(repository, "scripts", "git_recovery_acceptance.py"),
+      "--jat-root", jat.jatRoot, "--result-file", gitRecoveryResultFile,
+    ], "git-recovery");
+    const gitRecovery = JSON.parse(await fsp.readFile(gitRecoveryResultFile, "utf8"));
+    if (gitRecovery.save_enter !== "passed" || gitRecovery.portable_jat !== "passed"
+      || gitRecovery.git_repositories !== 4 || gitRecovery.noop_added_bytes !== 0) {
+      throw new Error("managed Git recovery fidelity acceptance failed");
+    }
     const identityPath = path.join(root, "age-identity.txt");
     await fsp.writeFile(identityPath, `${identityBodies.join("\n")}\n`, { mode: 0o600 });
     const instance = path.join(root, "room-instance");
@@ -527,6 +538,7 @@ async function main() {
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
       dependencies: { boto3: dependencyProbe },
       private_runtime: privateRuntime,
+      git_recovery: gitRecovery,
       windows_room_store_acceptance: windowsRoomStoreAcceptance,
       restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {

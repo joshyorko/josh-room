@@ -14,7 +14,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-FEATURE_MERGE_SHA = "1c23c848f61b8c8e243bb14f2ecd7dce54ef63ef"
+FEATURE_MERGE_SHA = "ebee0880dbc1a1249b9e03cabf88ce96f8916792"
 
 
 def _dimension(provider, endpoint, bucket, profile):
@@ -48,7 +48,7 @@ def test_clean_bootstrap_uses_exact_feature_merge_and_cli_contract():
     assert "josh-room = \"josh_room.cli:main\"" in Path("pyproject.toml").read_text()
     for path in (Path(".devcontainer/bootstrap.sh"), Path("templates/room/.devcontainer/bootstrap.sh")):
         body = path.read_text()
-        assert "joshyorko.josh-room-0.1.30" in body
+        assert "joshyorko.josh-room-0.1.31" in body
         assert "uv tool install" not in body
         assert "brew" not in body.lower()
 
@@ -351,7 +351,7 @@ def test_save_post_publication_verification_failure_keeps_committed_marker_hones
 
 
 def test_python_fingerprint_matches_native_noise_exclusions(tmp_path):
-    excluded = (".josh-room.json", ".DS_Store", ".git", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules", "__pycache__")
+    excluded = (".josh-room.json", ".DS_Store", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules", "__pycache__")
     import subprocess
 
     native = subprocess.run(

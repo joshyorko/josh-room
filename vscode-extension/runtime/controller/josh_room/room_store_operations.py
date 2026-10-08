@@ -31,6 +31,7 @@ from typing import Any
 from .auth import bind_room_store_repository, ensure_room_store_keyset
 from .cancellation import CLICancelled, defer_sigterm_cancellation
 from .catalog import CatalogConflict
+from .git_workspace import GitWorkspaceError, validate_git_storage
 from .logical_jat import LogicalJat
 from .restic_store import (
     BackupProgress,
@@ -181,7 +182,7 @@ def _validate_name(name: str) -> None:
     if (
         not name
         or name in {".", ".."}
-        or any(character in name for character in '<>:"|?*\\\x00')
+        or any(character in name for character in '<>:"|?*\\\x00\r\n')
         or name.endswith((" ", "."))
         or name.split(".", 1)[0].upper() in _WINDOWS_RESERVED
     ):
@@ -324,6 +325,8 @@ def _validate_snapshot_entries(
 def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
     try:
         resolved_root = root.resolve(strict=True)
+        if any(char in str(resolved_root) for char in "\r\n"):
+            raise RoomStoreOperationsError("workspace path cannot be restored safely")
         if not resolved_root.is_dir():
             raise RoomStoreOperationsError("workspace is not a directory")
         root_device = resolved_root.stat().st_dev
@@ -351,6 +354,12 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
             raise RoomStoreOperationsError(
                 "workspace cannot be scanned safely"
             ) from error
+        names = {child.name for child in children}
+        if (policy is not None and {"HEAD", "config", "objects"} <= names
+                and (directory / "HEAD").is_file() and (directory / "objects").is_dir()
+                and any(policy.is_excluded(f"{prefix}/{name}" if prefix else name)
+                        for name in ("HEAD", "config", "objects"))):
+            raise RoomStoreOperationsError("Bare Git metadata is excluded; include the complete repository before saving")
         for child in children:
             path = Path(child.path)
             relative = f"{prefix}/{child.name}" if prefix else child.name
@@ -415,6 +424,10 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
                 raise RoomStoreOperationsError("workspace contains a special file")
 
     visit(resolved_root)
+    try:
+        validate_git_storage(resolved_root, paths)
+    except GitWorkspaceError as error:
+        raise RoomStoreOperationsError(str(error)) from None
     digest = hashlib.sha256(b"\n".join(records)).hexdigest()
     return WorkspaceScan(
         digest,
@@ -547,7 +560,7 @@ class RoomStoreOperations:
         try:
             self._protect_private_file(descriptor, Path(name))
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-                stream.write("\n".join(policy.restic_excludes()))
+                stream.write("\n".join(policy.resolved_restic_excludes(self.workspace)))
                 stream.write("\n")
         except BaseException:
             try:

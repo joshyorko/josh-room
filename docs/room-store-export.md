@@ -50,3 +50,24 @@ remains the managed JAT/RCC runner's responsibility.
 Tests inject the native JAT Build, Inspect, and Restore boundaries. The full
 managed JAT/Hauler clean-room vertical remains an acceptance check for the
 calling application and is not established by those tests.
+
+Git metadata is included in materialization and in the clean-room byte/mode
+comparison. Export refuses nonportable Git storage and credential-bearing
+Git remote URLs, HTTP or credential configuration; it never strips metadata
+to make export succeed. Normal Room Store snapshots remain encrypted and may
+contain that configuration. Portable JAT files are plaintext capsules, created
+with private permissions, and include local history, hooks and repository
+contents. Credential checks are not a general secret scanner: secrets committed
+in history or arbitrary files remain sensitive. Keep the capsule private and
+encrypt it before sharing or moving it to untrusted storage. Export does not
+execute saved hooks or fetch objects from remotes.
+
+Local Git clones can share object files through hardlinks. Restic preserves
+those links. Because JAT rejects tar hardlink entries, portable composition
+copies linked regular files only inside its owned private staging tree. Every
+path's content and mode is preserved; the source and snapshot remain unchanged.
+
+Historical Room Store snapshots that excluded `.git` cannot regain that data
+through portable export; the capsule faithfully represents their incomplete
+recorded contents. Create a new recovery point from an intact workspace before
+relying on Git recovery.
