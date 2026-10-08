@@ -160,7 +160,10 @@ def exercise(root: Path, jat_root: Path | None = None) -> dict:
     git(parent, "branch", "after-save")
     second = op.save()
     assert second.status == "saved"
-    assert second.descriptor.to_dict()["workspace"]["parent_snapshot_id"] == first.snapshot_id
+    expected_parent = None if os.name == "nt" else first.snapshot_id
+    assert second.descriptor.to_dict()["workspace"].get("parent_snapshot_id") == expected_parent
+    assert second.descriptor.to_dict()["parent_logical_jat_id"] == first.descriptor.to_dict()["logical_jat_id"]
+    assert second.data_added_bytes < first.data_added_bytes
     assert op.save().status == "already-saved"
     portable = "not-run"
     if jat_root is not None:
@@ -196,6 +199,8 @@ def exercise(root: Path, jat_root: Path | None = None) -> dict:
             password_file.unlink(missing_ok=True)
     return {"git_repositories": len(repos), "save_enter": "passed", "git_metadata_incremental": "passed",
             "noop": "already-saved", "noop_added_bytes": 0, "noop_seconds": noop_seconds,
+            "git_metadata_added_bytes": second.data_added_bytes, "initial_added_bytes": first.data_added_bytes,
+            "parent_reuse": "passed" if os.name != "nt" else "existing-windows-forced-content-scan",
             "source_unchanged": "passed", "portable_jat": portable}
 
 
