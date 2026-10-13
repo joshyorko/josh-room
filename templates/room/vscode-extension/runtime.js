@@ -644,6 +644,14 @@ async function ensureManagedRcc(context, manifestSource = MANIFEST_PATH, options
   return { executable, storageRoot: paths.storageRoot, platform, version: manifest.rcc.version };
 }
 
+async function ensureManagedJatRcc(context, manifestSource = MANIFEST_PATH, options = {}) {
+  const manifest = readManifest(manifestSource);
+  if (!manifest.jat?.rcc || typeof manifest.jat.rcc !== "object") {
+    throw new Error("Josh Room runtime manifest is missing the pinned JAT RCC runtime");
+  }
+  return ensureManagedRcc(context, { ...manifest, rcc: manifest.jat.rcc }, options);
+}
+
 async function verifyJatArtifact(context, manifestSource, rccRuntime, artifactDigest, options = {}) {
   throwIfCancelled(options);
   const manifest = readManifest(manifestSource);
@@ -884,6 +892,7 @@ function runtimeEnvironment(context, runtime, workspace) {
     ROBOCORP_HOME: paths.rccHome,
     JOSH_ROOM_RCC_HOME: paths.rccHome,
     JOSH_ROOM_RCC_EXE: values.rccExecutable || "",
+    JOSH_ROOM_JAT_RCC_EXE: values.jatRccExecutable || values.rccExecutable || "",
     JOSH_ROOM_CONTROLLER_ROOT: values.controllerRoot || paths.controllerRoot,
     JOSH_ROOM_CONTROLLER_ARTIFACT: values.controllerArtifact || "",
     JOSH_ROOM_JAT_ROOT: values.jatRoot || paths.jatRoot,
@@ -1217,6 +1226,7 @@ async function extractGzipTar(archivePath, destination, options = {}) {
 
 module.exports = {
   ensureManagedRcc,
+  ensureManagedJatRcc,
   ensureControllerRuntime,
   ensureJatRuntime,
   verifyJatArtifact,

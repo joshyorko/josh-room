@@ -332,6 +332,7 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
 
 def test_v0_1_31_release_tuple_is_consistent_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
+    runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     assert lock["format_version"] == 1
     assert lock["candidate_version"] == "0.1.31"
     assert lock["josh_room"]["version"] == "0.1.31"
@@ -348,6 +349,8 @@ def test_v0_1_31_release_tuple_is_consistent_and_consumed_by_both_entries():
     assert artifact["archive_size"] > 0
     assert artifact["rcc_artifact_digest"].startswith("sha256:")
     assert artifact["rcc_version"] == "v18.19.5"
+    assert runtime["jat"]["rcc"]["version"] == "v18.19.5"
+    assert runtime["jat"]["rcc"] == lock["jat"]["rcc"]
     assert lock["rcc"]["version"] == "v18.19.6"
     assert lock["rcc"]["source_sha"] == "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0"
     assert lock["rcc"]["managed_asset"] == "rcc-linux64"

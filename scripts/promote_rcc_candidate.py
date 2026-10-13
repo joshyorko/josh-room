@@ -160,8 +160,15 @@ def _build_update(root: Path, candidate: dict, receipts: dict[str, dict], source
     changed: list[tuple[Path, bytes]] = []
     platform_pins = candidate["platforms"]
     runtime_values = []
+    jat_rcc = None
     for relative in RUNTIME_MANIFESTS:
         value = _read_json(root / relative)
+        # The JAT environment artifact is immutable and can require an older
+        # RCC than the controller candidate being promoted. Preserve its
+        # independently pinned runtime before advancing the controller RCC.
+        if jat_rcc is None:
+            jat_rcc = json.loads(json.dumps(value.get("jat", {}).get("rcc") or value["rcc"]))
+        value.setdefault("jat", {})["rcc"] = json.loads(json.dumps(jat_rcc))
         value.setdefault("rcc", {})["version"] = candidate["version"]
         value["rcc"]["platforms"] = platform_pins
         controller = value.setdefault("controller", {})
@@ -206,6 +213,8 @@ def _build_update(root: Path, candidate: dict, receipts: dict[str, dict], source
             "managed_asset_sha256": linux_pin["sha256"],
             "platforms": platform_pins,
         }
+        if jat_rcc is not None:
+            value.setdefault("jat", {})["rcc"] = json.loads(json.dumps(jat_rcc))
         controller = value.setdefault("controller", {})
         controller.update({
             "repository": "https://github.com/joshyorko/josh-room",

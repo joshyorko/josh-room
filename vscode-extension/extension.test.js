@@ -429,7 +429,7 @@ function loadExtensionWithRealProcesses(vscodeMock) {
 function stubRuntimeAcquisition(t, extension, acquire) {
   extension.__test__.setRuntimeForTests(undefined);
   const runtime = require("./runtime");
-  const originals = { ensureManagedRcc: runtime.ensureManagedRcc, ensureControllerRuntime: runtime.ensureControllerRuntime };
+  const originals = { ensureManagedRcc: runtime.ensureManagedRcc, ensureManagedJatRcc: runtime.ensureManagedJatRcc, ensureControllerRuntime: runtime.ensureControllerRuntime };
   t.after(() => Object.assign(runtime, originals));
   let starts = 0;
   runtime.ensureManagedRcc = async (_context, _manifest, options) => {
@@ -437,6 +437,7 @@ function stubRuntimeAcquisition(t, extension, acquire) {
     options.onProgress?.({ message: "Downloading RCC" });
     return { executable: "/synthetic/managed-rcc", version: "v18.19.5" };
   };
+  runtime.ensureManagedJatRcc = async () => ({ executable: "/synthetic/jat-rcc", version: "v18.19.5" });
   runtime.ensureControllerRuntime = async (_context, _manifest, _rcc, options) => {
     options.onProgress?.({ message: "Importing controller Environment Artifact" });
     options.onOutput?.("stdout", '{"private":"synthetic-private-result"}\n');

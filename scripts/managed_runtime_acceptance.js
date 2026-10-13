@@ -155,8 +155,9 @@ async function main() {
     const options = { platform, onProgress: (event) => events.push(event) };
 
     const rcc = await runtime.ensureManagedRcc(context, manifest, options);
+    const jatRcc = await runtime.ensureManagedJatRcc(context, manifest, options);
     const controller = await runtime.ensureControllerRuntime(context, manifest, rcc, options);
-    const jat = await runtime.ensureJatRuntime(context, manifest, rcc, options);
+    const jat = await runtime.ensureJatRuntime(context, manifest, jatRcc, options);
 
     const controllerPin = runtime.selectControllerArtifact(manifest.controller, platform);
     const jatPin = runtime.selectJatArtifact(manifest.jat, platform);
@@ -170,6 +171,7 @@ async function main() {
       JOSH_ROOM_EXTENSION_MODE: "1",
       JOSH_ROOM_RCC_HOME: paths.rccHome,
       JOSH_ROOM_RCC_EXE: rcc.executable,
+      JOSH_ROOM_JAT_RCC_EXE: jatRcc.executable,
       JOSH_ROOM_CONTROLLER_ROOT: controllerRoot,
       JOSH_ROOM_CONTROLLER_ARTIFACT: controller.artifact,
       JOSH_ROOM_JAT_ROOT: jat.jatRoot,
@@ -244,7 +246,7 @@ async function main() {
         JAT_RUN_DIR: path.join(root, `jat-run-${name}`),
         PYTHONPATH: [path.join(jat.jatRoot, "src"), jat.jatRoot, controllerRoot].join(path.delimiter),
       };
-      const child = childProcess.spawn(rcc.executable, [
+      const child = childProcess.spawn(jatRcc.executable, [
         "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local", "--json", "--",
         "python", "-m", "jat.cli", "serve", "--haul", haul, "--mode", "files",
         "--fileserver-port", String(port), "--json",
@@ -512,7 +514,7 @@ async function main() {
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
     await runtime.ensureControllerRuntime(context, manifest, rcc, { ...options, download: unavailableProvider });
-    await runtime.ensureJatRuntime(context, manifest, rcc, { ...options, download: unavailableProvider });
+    await runtime.ensureJatRuntime(context, manifest, jatRcc, { ...options, download: unavailableProvider });
     if (events.slice(beforeWarm).some((event) => /Downloading|Importing/.test(event.message || ""))) {
       throw new Error("warm managed-runtime reuse attempted a provider download");
     }
@@ -565,6 +567,7 @@ async function main() {
       source_sha: childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
       vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
+      jat_rcc: { version: jatRcc.version, asset: runtime.readManifest(manifest).jat.rcc.platforms[platform].asset, ...(await fileIdentity(runtime, jatRcc.executable)) },
       dependencies: { boto3: dependencyProbe },
       private_runtime: privateRuntime,
       git_recovery: gitRecovery,
