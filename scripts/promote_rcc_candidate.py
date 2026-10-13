@@ -249,7 +249,7 @@ def promote_candidate(
             raise ValueError("RCC release candidate was superseded before promotion")
     receipts = _load_receipts(artifacts_root, candidate, source_sha)
     input_identity = "-".join(receipts[platform]["receipt"]["input_digest"].split(":", 1)[1] for platform in PLATFORM_ASSETS)
-    release_tag = f"rcc-{candidate['version']}-controller-{input_identity}"
+    release_tag = f"rcc-{candidate['version']}-controller-{source_sha}-{input_identity}"
     changes = _build_update(root, candidate, receipts, source_sha, release_tag)
     if not changes:
         return {"status": "PASS", "no_change": True, "changed_files": [], "candidate": candidate["version"]}

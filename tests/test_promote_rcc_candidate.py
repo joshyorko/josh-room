@@ -89,7 +89,7 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
 
     assert report["status"] == "PASS"
     assert report["no_change"] is False
-    assert report["artifact_release_tag"].startswith("rcc-v18.19.6-controller-")
+    assert report["artifact_release_tag"].startswith(f"rcc-v18.19.6-controller-{'a' * 40}-")
     for relative in RUNTIME_MANIFESTS:
         manifest = json.loads((root / relative).read_text())
         assert manifest["rcc"]["version"] == "v18.19.6"
@@ -208,3 +208,20 @@ def test_artifact_release_tag_binds_complete_input_digests(tmp_path: Path):
     second = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
 
     assert first["artifact_release_tag"] != second["artifact_release_tag"]
+
+
+def test_artifact_release_tag_binds_source_sha_even_if_inputs_are_unchanged(tmp_path: Path):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    original = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
+    for platform in PLATFORM_ASSETS:
+        receipt_path = artifacts / f"rcc-controller-candidate-{platform}" / f"{Path(PLATFORM_ASSETS[platform]).stem}.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["source"] = "9" * 40
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    updated = promote_candidate(root, candidate, artifacts, "9" * 40, prepare=False)
+
+    assert original["artifact_release_tag"] != updated["artifact_release_tag"]
+    assert original["artifact_release_tag"].endswith("-" + "2" * 64 + "-" + "3" * 64)
+    assert updated["artifact_release_tag"].endswith("-" + "2" * 64 + "-" + "3" * 64)

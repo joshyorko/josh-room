@@ -203,11 +203,13 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           branch='maintenance/rcc-controller'
+          branch_tip=''
           git fetch origin main
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
             git fetch origin "$branch"
             git switch --track -c "$branch" "origin/$branch"
+            branch_tip=$(git rev-parse "origin/$branch")
             git rebase origin/main
           else
             git switch -c "$branch"
@@ -223,7 +225,11 @@ jobs:
           git add "${files[@]}"
           if git diff --cached --quiet; then exit 0; fi
           git commit -m 'chore: promote verified RCC controller artifacts'
-          git push --set-upstream origin "$branch"
+          if [[ -n "$branch_tip" ]]; then
+            git push --force-with-lease="refs/heads/$branch:$branch_tip" --set-upstream origin "$branch"
+          else
+            git push --set-upstream origin "$branch"
+          fi
           open_pr=$(gh pr list --state open --base main --head "$GITHUB_REPOSITORY_OWNER:$branch" --json number --jq '.[0].number // empty')
           cat > "$RUNNER_TEMP/controller-promotion-pr.md" <<EOF
           Promotes a native RCC controller qualification into the consumer manifests, templates, freezes, and release lock.
