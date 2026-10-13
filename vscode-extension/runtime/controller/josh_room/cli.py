@@ -625,6 +625,7 @@ def main(argv=None):
                     emit(preflight, getattr(args, "json", False))
                     return _exit_code(preflight)
                 runtime_loaded = False
+                scoped_minio = _uses_minio_encryption(args)
                 identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook", "workspace"} or scoped_minio else _identity_environment()
                 with identity_context:
                     if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook", "workspace"} and not scoped_minio:

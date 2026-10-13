@@ -67,6 +67,7 @@ from .room_store_operations import (
 )
 from .workspace_state import write_stat_workspace_marker
 
+from .git_worktree_repair import inspect_workspace
 _COMPONENTS = {"rcc_environment", "homebrew_recovery", "hauler_content"}
 MAX_CONTEXT_LOGICAL_DESCRIPTORS = 1024
 _ROOM_VERSION = re.compile(
@@ -1855,6 +1856,20 @@ def preview_room_store(
                 rcc_capture_pending=_rcc_capture_pending(workspace, parent),
             )
     except RoomStoreOperationsError as error:
+        if "Git storage is not self-contained" in str(error) or "linked worktrees" in str(error):
+            try:
+                records = inspect_workspace(workspace)
+            except (OSError, RuntimeError, ValueError):
+                records = ()
+            if records:
+                raise RoomStoreBridgeError(
+                    "stale Git worktree records can be cleaned before retrying Save",
+                    code="stale-worktree-repair-available",
+                    result={
+                        "repair_records": [record.to_dict() for record in records],
+                        "repair_repository": records[0].repository,
+                    },
+                ) from None
         raise RoomStoreBridgeError(str(error), code="preview-invalid") from None
 
 
