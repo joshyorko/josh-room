@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -72,3 +75,18 @@ def test_cancelled_or_changed_approval_does_not_mutate(tmp_path: Path, monkeypat
     with pytest.raises(WorktreeRepairError, match="proposal changed"):
         repair_workspace(tmp_path, "0" * 64)
     assert pruned == []
+
+def test_cli_json_proposal_and_approval_smoke(tmp_path: Path) -> None:
+    _repo_path, worktree = _repo(tmp_path)
+    shutil.rmtree(worktree)
+    environment = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+    command = [sys.executable, "-m", "josh_room", "workspace", "worktree-repair", "--workspace", str(tmp_path), "--json"]
+    proposal_process = subprocess.run(command, capture_output=True, text=True, check=False, timeout=30, env=environment)
+    assert proposal_process.returncode == 0, proposal_process.stderr
+    proposal = json.loads(proposal_process.stdout)
+    assert proposal["state"] == "approval-required"
+    assert len(proposal["records"]) == 1
+    approved = subprocess.run(command + ["--approve", "--proposal-digest", proposal["proposal_digest"]], capture_output=True, text=True, check=False, timeout=30, env=environment)
+    assert approved.returncode == 0, approved.stderr
+    assert json.loads(approved.stdout)["state"] == "repaired"
+    assert repair_module.inspect_workspace(tmp_path) == ()

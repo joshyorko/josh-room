@@ -161,6 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     worktree.add_argument("--workspace", type=Path, required=True)
     worktree.add_argument("--approve", action="store_true", help="apply the exact dry-run proposal")
     worktree.add_argument("--proposal-digest")
+    _json_option(worktree)
 
     doctor = commands.add_parser("doctor")
     doctor.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
