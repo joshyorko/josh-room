@@ -408,6 +408,9 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--workspace", type=Path, default=Path.cwd())
     status.add_argument("--include-context", action="store_true")
     _json_option(status)
+    check = commands.add_parser("workspace-check", help="validate workspace metadata without changing it")
+    check.add_argument("--workspace", type=Path, default=Path.cwd())
+    _json_option(check)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
     _json_option(context)
@@ -1915,6 +1918,13 @@ def dispatch(args, instance: Path) -> dict:
         if getattr(args, "include_context", False):
             return {"format_version": 1, **result, "context": context_status(args.workspace)}
         return result
+    if args.command == "workspace-check":
+        from .room_store_operations import scan_workspace_for_status
+        try:
+            scan = scan_workspace_for_status(args.workspace)
+        except (OSError, RuntimeError, ValueError) as error:
+            return {"ok": False, "error": str(error), "code": "workspace-invalid", "remediation": "Fix the reported workspace validation issue and run the check again."}
+        return {"ok": True, "scope": "local-workspace-validation", "workspace_signature": scan.signature, "signature_algorithm": scan.signature_algorithm, "capture_policy_sha256": scan.capture_policy_sha256, "entry_count": len(scan.paths), "logical_bytes": scan.logical_bytes}
     if args.command in {"link", "repair"}:
         from .workspace_state import read_workspace_marker
         marker = None

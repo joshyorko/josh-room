@@ -1867,6 +1867,15 @@ function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   });
 }
 
+async function checkWorkspace() {
+  const workspace = activeWorkspace();
+  const result = await runOperation("Checking workspace…", ["workspace-check", "--workspace", workspace], workspace, { action: "check the workspace" });
+  const detail = result.ok ? `Workspace valid · ${result.entry_count} entries` : `${result.code || "workspace-invalid"}: ${result.error || "workspace validation failed"}`;
+  outputChannel?.appendLine(`Workspace check (${workspace}): ${detail}`);
+  if (result.ok) await vscode.window.showInformationMessage(detail);
+  else await vscode.window.showErrorMessage(detail);
+  return result;
+}
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
@@ -3062,6 +3071,7 @@ function activate(context) {
     markWorkspaceChange(document.uri);
   }));
   register(context, "joshRoom.save", saveRoom);
+  register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
