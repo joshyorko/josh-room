@@ -80,18 +80,27 @@ def _plan(repository: Path) -> tuple[StaleWorktreeRecord, ...]:
         admin_path = Path(administrative)
         if not admin_path.is_absolute():
             admin_path = (repository / ".git" / admin_path).resolve()
+        target: Path | None = None
         try:
             target_text = (admin_path / "gitdir").read_text(encoding="utf-8").strip()
+            if not target_text:
+                continue
             target = Path(target_text).resolve()
             target.parent.stat()
-        except PermissionError:
-            continue
-        except (UnicodeError, RuntimeError):
+            # An existing worktree path may contain user data even if its .git
+            # file was removed. Leave it for manual recovery.
+            if os.path.lexists(target.parent):
+                continue
+        except (PermissionError, UnicodeError, RuntimeError):
             continue
         except FileNotFoundError:
+            if target is None:
+                # Without Git's back-pointer there is no safe target to show or
+                # pass to `git worktree remove`.
+                continue
             try:
                 target.parent.parent.stat()
-            except OSError:
+            except (OSError, RuntimeError):
                 continue
         records.append(StaleWorktreeRecord(repository.as_posix(), admin_path.as_posix(), target.parent.as_posix()))
     return tuple(records)
@@ -115,6 +124,22 @@ def repair_workspace(workspace: Path, approved_digest: str) -> tuple[StaleWorktr
         raise WorktreeRepairError("stale worktree proposal changed; refresh before retrying Save")
     if not current:
         return ()
-    for repository in sorted({record.repository for record in current}):
-        _git(Path(repository), "worktree", "prune")
+    for record in current:
+        # Confirm each record again immediately before touching it. Git's
+        # repository-wide `worktree prune` would also remove stale records that
+        # were inaccessible or outside the user's approved workspace proposal.
+        if record not in inspect_workspace(Path(workspace)):
+            raise WorktreeRepairError("stale worktree proposal changed; refresh before retrying Save")
+        target = Path(record.worktree_path)
+        if os.path.lexists(target):
+            raise WorktreeRepairError("stale worktree target reappeared; refresh before retrying Save")
+        try:
+            target.parent.stat()
+        except FileNotFoundError:
+            # The parent is also gone; Git can still remove the exact admin
+            # record by its recorded worktree path.
+            pass
+        except OSError as error:
+            raise WorktreeRepairError("stale worktree target is inaccessible; refresh before retrying Save") from error
+        _git(Path(record.repository), "worktree", "remove", record.worktree_path)
     return current

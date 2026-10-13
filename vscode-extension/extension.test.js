@@ -1104,6 +1104,62 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   assert.match(spawnHarness.calls.at(-1).args.join(" "), /--dimension backup/);
 });
 
+for (const repairDecision of ["Clean stale worktree records and retry", "Cancel"]) test(`Save repair approval is bounded and ${repairDecision === "Cancel" ? "cancellable" : "retries with the exact digest"}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-worktree-repair-"));
+  const source = path.join(root, "source");
+  fs.mkdirSync(source);
+  const dimension = { id: "backup", display_name: "Backup", provider: "minio", rooms: [] };
+  const digest = "d".repeat(64);
+  const repairRecord = {
+    repository: path.join(source, "repo"),
+    administrative_path: path.join(source, "repo", ".git", "worktrees", "stale"),
+    worktree_path: path.join(source, "deleted-worktree"),
+  };
+  const { vscode, statusItem, warningCalls } = createVscodeMock(root);
+  const previewError = {
+    ok: false,
+    error: "stale-worktree-repair-available",
+    message: "stale Git worktree records can be cleaned before retrying Save",
+    repair_records: [repairRecord],
+    repair_repository: repairRecord.repository,
+    proposal_digest: digest,
+  };
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
+    if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "ready" }) };
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      return spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "preview").length === 1
+        ? { code: 1, stdout: JSON.stringify(previewError) }
+        : { stdout: JSON.stringify(nativePreview()) };
+    }
+    if (args[0] === "workspace" && args[1] === "worktree-repair") return { stdout: JSON.stringify({ ok: true, state: "repaired" }) };
+    if (args[0] === "snapshot" && args[1] === "create") return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "synthetic-room", snapshot_id: "jat-1", data_added_bytes: 0, scanned_bytes: 0 }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: source }]);
+  vscode.inputBoxResponses.push("Synthetic Room");
+  vscode.quickPickResponses.push({ create: true }, dimension, { label: "Workspace only", allImages: false });
+  vscode.warningResponses.push(repairDecision);
+  vscode.infoResponses.push("Save");
+
+  if (repairDecision === "Cancel") {
+    await assert.rejects(extension.__test__.saveRoom({ forceCreate: true }));
+    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair"), false);
+    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"), false);
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
+  assert.equal(await extension.__test__.saveRoom({ forceCreate: true }), "saved");
+  const repair = spawnHarness.calls.find((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair");
+  assert.ok(repair);
+  assert.equal(repair.args[repair.args.indexOf("--proposal-digest") + 1], digest);
+  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "preview").length, 2);
+  assert.ok(warningCalls.some(([message]) => message.includes(repairRecord.worktree_path)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 for (const forceCreate of [false, true]) for (const refreshFailure of [false, true]) test(`${forceCreate ? "New" : "Save"} Room uses a migrated MinIO keyset without an extension cache; refresh failure=${refreshFailure}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-migrated-save-"));
   const source = path.join(root, "source");

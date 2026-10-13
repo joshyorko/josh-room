@@ -67,14 +67,81 @@ def test_inaccessible_target_parent_is_not_proposed(tmp_path: Path, monkeypatch:
     assert repair_module._plan(repository) == ()
 
 
+def test_missing_administrative_gitdir_is_skipped_safely(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repository = tmp_path / "repo"
+    admin = repository / ".git" / "worktrees" / "missing"
+    admin.mkdir(parents=True)
+    monkeypatch.setattr(repair_module, "_git", lambda *_args: "Removing worktrees/missing: stale")
+    assert repair_module._plan(repository) == ()
+
+
 def test_cancelled_or_changed_approval_does_not_mutate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     record = StaleWorktreeRecord("/repo", "/repo/.git/worktrees/missing", "/external")
     monkeypatch.setattr(repair_module, "inspect_workspace", lambda _workspace: (record,))
-    pruned = []
-    monkeypatch.setattr(repair_module, "_git", lambda *args: pruned.append(args))
+    mutations = []
+    monkeypatch.setattr(repair_module, "_git", lambda *args: mutations.append(args))
     with pytest.raises(WorktreeRepairError, match="proposal changed"):
         repair_workspace(tmp_path, "0" * 64)
-    assert pruned == []
+    assert mutations == []
+
+
+def test_records_changed_after_digest_check_are_not_mutated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    record = StaleWorktreeRecord("/repo", "/repo/.git/worktrees/missing", "/external")
+    calls = 0
+
+    def changing_proposal(_workspace):
+        nonlocal calls
+        calls += 1
+        return (record,) if calls == 1 else ()
+
+    mutations = []
+    monkeypatch.setattr(repair_module, "inspect_workspace", changing_proposal)
+    monkeypatch.setattr(repair_module, "_git", lambda *args: mutations.append(args))
+    with pytest.raises(WorktreeRepairError, match="changed"):
+        repair_workspace(tmp_path, proposal_digest((record,)))
+    assert mutations == []
+
+
+def test_repair_removes_only_approved_records_in_mixed_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, eligible = _repo(tmp_path)
+    locked = tmp_path / "locked-worktree"
+    inaccessible_parent = tmp_path.parent / f"inaccessible-parent-{tmp_path.name}"
+    inaccessible = inaccessible_parent / "inaccessible-worktree"
+    for path, branch in ((locked, "locked-test"), (inaccessible, "inaccessible-test")):
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", branch, str(path)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repo), "worktree", "lock", str(locked), "--reason", "fixture"], check=True, capture_output=True, timeout=30)
+
+    outside_repo = tmp_path.parent / f"outside-{tmp_path.name}"
+    subprocess.run(["git", "init", str(outside_repo)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(outside_repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "fixture"], check=True, capture_output=True, timeout=30)
+    outside_worktree = tmp_path.parent / f"outside-worktree-{tmp_path.name}"
+    subprocess.run(["git", "-C", str(outside_repo), "worktree", "add", "-b", "outside-test", str(outside_worktree)], check=True, capture_output=True, timeout=30)
+
+    for path in (eligible, locked, inaccessible, outside_worktree):
+        shutil.rmtree(path)
+
+    original_stat = Path.stat
+
+    def selective_stat(path: Path, *args, **kwargs):
+        if path == inaccessible_parent:
+            raise PermissionError("synthetic inaccessible mount")
+        return original_stat(path, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(Path, "stat", selective_stat)
+        proposal = inspect_workspace(tmp_path)
+        assert len(proposal) == 1
+        assert proposal[0].worktree_path == str(eligible)
+        assert repair_workspace(tmp_path, proposal_digest(proposal)) == proposal
+
+    remaining = inspect_workspace(tmp_path)
+    assert len(remaining) == 1
+    assert remaining[0].worktree_path == str(inaccessible)
+    assert (repo / ".git" / "worktrees" / "locked-worktree" / "locked").is_file()
+    assert (repo / ".git" / "worktrees" / "inaccessible-worktree" / "gitdir").is_file()
+    assert (outside_repo / ".git" / "worktrees" / outside_worktree.name / "gitdir").is_file()
+    shutil.rmtree(outside_repo)
+    shutil.rmtree(inaccessible_parent)
 
 def test_cli_json_proposal_and_approval_smoke(tmp_path: Path) -> None:
     _repo_path, worktree = _repo(tmp_path)

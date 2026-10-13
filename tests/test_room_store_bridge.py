@@ -23,6 +23,7 @@ from josh_room import auth, crypto, keyring
 from josh_room import room_store_bridge as bridge
 from josh_room.catalog import Catalog
 from josh_room.encryption_domain import EncryptionKeyset, EncryptionMaterial
+from josh_room.git_worktree_repair import StaleWorktreeRecord, proposal_digest
 from josh_room.local_store import ObjectRef
 from josh_room.private_paths import protect_private_directory
 from josh_room.restic_store import RepositoryInfo, ResticStore
@@ -1810,3 +1811,34 @@ def test_native_room_store_cache_read_error_remains_fatal(monkeypatch, provider)
     monkeypatch.setattr(keyring, "lookup_room_store_secret", fail_read)
     with pytest.raises(RuntimeError, match="native read failure"):
         bridge._verify_native_room_store_cache(SimpleNamespace(provider=provider), "domain", 1, "secret")
+
+
+def test_save_preview_repair_error_carries_digest_for_extension_approval(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    records = (StaleWorktreeRecord(
+        str(workspace / "repo"),
+        str(workspace / "repo" / ".git" / "worktrees" / "stale"),
+        str(workspace / "stale-worktree"),
+    ),)
+
+    class SyntheticRoomStoreOperations:
+        def preview(self):
+            raise bridge.RoomStoreOperationsError("Git storage is not self-contained: linked worktrees")
+
+    monkeypatch.setattr(bridge, "_resolve_material", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(bridge, "_operation_inputs", lambda *_args: (workspace, "domain", object()))
+    monkeypatch.setattr(bridge, "_verified_restic_executable", lambda **_kwargs: tmp_path / "restic")
+    monkeypatch.setattr(bridge, "_private_operation_directory", lambda: __import__("contextlib").nullcontext(tmp_path))
+    monkeypatch.setattr(bridge, "_build_operations", lambda **_kwargs: (SyntheticRoomStoreOperations(), {}, None))
+    monkeypatch.setattr(bridge, "inspect_workspace", lambda _workspace: records)
+
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.preview_room_store(
+            tmp_path / "instance", object(), "synthetic-room", workspace, None, components=[],
+        )
+
+    result = caught.value.result
+    assert caught.value.code == "stale-worktree-repair-available"
+    assert result["repair_records"] == [records[0].to_dict()]
+    assert result["proposal_digest"] == proposal_digest(records)
