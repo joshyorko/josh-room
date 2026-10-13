@@ -10,6 +10,7 @@ from scripts.build_controller_artifact import (
     _controller_input_digest,
     _execution_exit_code,
     _json_result,
+    _reports_expected_rcc_version,
     _run,
     build_commands,
     load_manifest,
@@ -48,6 +49,13 @@ def test_rcc_pin_requires_real_v18_19_5_checksum_before_build():
     pin = resolve_rcc_pin(manifest(), "linux-x64", "a" * 64)
     assert pin["version"] == "v18.19.5"
     assert pin["sha256"] == "a" * 64
+
+
+def test_rcc_version_output_must_identify_only_the_pinned_release():
+    assert _reports_expected_rcc_version("RCC version: v18.19.6 (windows/amd64)", "v18.19.6")
+    assert _reports_expected_rcc_version("18.19.6", "v18.19.6")
+    assert not _reports_expected_rcc_version("RCC version: v18.19.60", "v18.19.6")
+    assert not _reports_expected_rcc_version("v18.19.6 then v18.19.7", "v18.19.6")
 
 
 def test_source_provenance_allows_only_windows_line_ending_conversion(tmp_path):

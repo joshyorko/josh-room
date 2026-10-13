@@ -79,6 +79,14 @@ def resolve_rcc_pin(manifest: dict, platform: str, checksum: str | None = None) 
     return {**pin, "version": expected_rcc, "sha256": value}
 
 
+def _reports_expected_rcc_version(output: str, expected: str) -> bool:
+    found = {
+        f"v{match.group(1)}"
+        for match in re.finditer(r"(?<![A-Za-z0-9.])v?(18\.19\.\d+)(?![A-Za-z0-9.])", output)
+    }
+    return found == {expected}
+
+
 def build_commands(*, rcc: str, robot: str, archive: str, artifact: str, receipt: str) -> list[list[str]]:
     del rcc
     return [
@@ -287,7 +295,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
     expected_rcc = manifest["rcc"]["version"]
     pin = resolve_rcc_pin(manifest, platform, rcc_checksum)
     version = subprocess.run([str(rcc), "version"], capture_output=True, text=True, check=False)
-    if version.returncode != 0 or version.stdout.strip() != expected_rcc:
+    if version.returncode != 0 or not _reports_expected_rcc_version(f"{version.stdout}\n{version.stderr}", expected_rcc):
         raise RuntimeError(f"managed RCC version verification failed: expected {expected_rcc}")
     if _sha256(rcc) != pin["sha256"]:
         raise ValueError(f"managed RCC checksum does not match the canonical {expected_rcc} pin")
