@@ -86,6 +86,7 @@ from .operations import (
     plan_encryption_migration,
     reconcile_encryption_migration,
     remove_room,
+    remove_snapshot,
     repair_workspace,
     serve_snapshot,
     snapshot_payload_kind,
@@ -1485,8 +1486,8 @@ def dispatch(args, instance: Path) -> dict:
         from .git_worktree_repair import (
             inspect_workspace,
             proposal_digest,
-            repair_workspace as repair_worktree_records,
         )
+        from .git_worktree_repair import repair_workspace as repair_worktree_records
         proposal = inspect_workspace(args.workspace)
         digest = proposal_digest(proposal)
         if not args.approve:
