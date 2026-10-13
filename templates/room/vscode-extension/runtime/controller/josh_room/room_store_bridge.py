@@ -30,6 +30,7 @@ from .encryption_domain import (
     physical_bucket_identity,
     validate_minio_transport,
 )
+from .git_worktree_repair import inspect_workspace
 from .logical_jat import MAX_LOGICAL_JAT_BYTES, LogicalJat
 from .minio import MinioBackend, MinioConfig, validate_bucket_name
 from .operations import _display_name, _encrypt_catalog, _read_remote_catalog
@@ -67,7 +68,7 @@ from .room_store_operations import (
 )
 from .workspace_state import write_stat_workspace_marker
 
-from .git_worktree_repair import inspect_workspace
+
 _COMPONENTS = {"rcc_environment", "homebrew_recovery", "hauler_content"}
 MAX_CONTEXT_LOGICAL_DESCRIPTORS = 1024
 _ROOM_VERSION = re.compile(
