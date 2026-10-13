@@ -125,6 +125,19 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
     assert second["changed_files"] == []
 
 
+def test_first_promotion_bootstraps_missing_template_lock_from_root_lock(tmp_path: Path):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    template_lock = root / LOCKS[1]
+    template_lock.unlink()
+
+    report = promote_candidate(root, candidate, artifacts, "a" * 40)
+
+    assert report["status"] == "PASS"
+    assert str(LOCKS[1]) in report["changed_files"]
+    assert json.loads(template_lock.read_text()) == json.loads((root / LOCKS[0]).read_text())
+
+
 def test_missing_or_stale_platform_receipt_leaves_every_consumer_file_unchanged(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
