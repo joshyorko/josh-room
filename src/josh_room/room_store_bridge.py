@@ -68,7 +68,6 @@ from .room_store_operations import (
 )
 from .workspace_state import write_stat_workspace_marker
 
-
 _COMPONENTS = {"rcc_environment", "homebrew_recovery", "hauler_content"}
 MAX_CONTEXT_LOGICAL_DESCRIPTORS = 1024
 _ROOM_VERSION = re.compile(
