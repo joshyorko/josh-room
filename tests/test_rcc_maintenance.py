@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from urllib.request import Request
 
 import pytest
 
@@ -49,6 +50,33 @@ def test_release_candidate_selection_is_stable_and_allowlisted():
     ]
     candidates = maintenance._release_candidates(releases)
     assert candidates == [(6, releases[0])]
+
+
+def test_github_api_request_uses_workflow_token_without_printing_it(monkeypatch):
+    observed = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def open_request(request, timeout):
+        observed["request"] = request
+        observed["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setenv("GH_TOKEN", "fixture-token-do-not-print")
+    monkeypatch.setattr(maintenance.urllib.request, "urlopen", open_request)
+
+    assert maintenance._request_json("https://api.github.com/repos/joshyorko/rcc/releases") == {"ok": True}
+    assert isinstance(observed["request"], Request)
+    assert observed["request"].get_header("Authorization") == "Bearer fixture-token-do-not-print"
+    assert observed["timeout"] == 30
 
 
 def test_release_verification_binds_tag_index_assets_and_exact_checksums(monkeypatch):

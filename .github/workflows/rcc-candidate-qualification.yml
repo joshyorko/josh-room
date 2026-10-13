@@ -46,6 +46,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Verify official RCC release and create isolated candidate manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: >-
           python scripts/rcc_maintenance.py

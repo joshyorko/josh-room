@@ -203,12 +203,12 @@ def _controller_input_digest(robot: Path) -> str:
     digest = hashlib.sha256()
     text = robot.read_text(encoding="utf-8")
     referenced = {line.strip()[2:] for line in text.splitlines() if line.startswith("  - ")}
+    generated_freezes = {"environment_linux_amd64_freeze.yaml", "environment_windows_amd64_freeze.yaml"}
     for path in sorted(robot.parent.rglob("*")):
         relative_path = path.relative_to(robot.parent)
         included = (
-            path.name == "robot.yaml"
+            path.name not in generated_freezes
             or path.name in referenced
-            or ("josh_room" in relative_path.parts and path.suffix == ".py")
         )
         if path.is_file() and included and "output" not in relative_path.parts and "__pycache__" not in relative_path.parts:
             relative = relative_path.as_posix().encode("utf-8")

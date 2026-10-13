@@ -178,3 +178,31 @@ def test_plan_only_reports_exact_changes_without_writing_consumer_files(tmp_path
     assert report["no_change"] is False
     assert report["changed_files"]
     assert {path: path.read_bytes() for path in before} == before
+
+
+def test_no_change_detection_repairs_template_drift(tmp_path: Path):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    first = promote_candidate(root, candidate, artifacts, "a" * 40)
+    assert first["status"] == "PASS"
+    template_lock = root / LOCKS[1]
+    template_lock.write_text('{"format_version": 1, "rcc": {}, "controller": {}}\n', encoding="utf-8")
+
+    repair = promote_candidate(root, candidate, artifacts, "a" * 40)
+
+    assert repair["no_change"] is False
+    assert str(LOCKS[1]) in repair["changed_files"]
+    assert json.loads(template_lock.read_text())["controller"]["source_sha"] == "a" * 40
+
+
+def test_artifact_release_tag_binds_complete_input_digests(tmp_path: Path):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    first = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
+    receipt_path = artifacts / "rcc-controller-candidate-linux-x64" / "josh-room-controller-linux-amd64.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["input_digest"] = receipt["input_digest"][:-1] + "4"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    second = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
+
+    assert first["artifact_release_tag"] != second["artifact_release_tag"]

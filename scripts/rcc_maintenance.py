@@ -28,13 +28,17 @@ LOCKS = (
 
 
 def _request_json(url: str) -> Any:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "josh-room-rcc-maintenance",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "josh-room-rcc-maintenance",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        headers=headers,
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)

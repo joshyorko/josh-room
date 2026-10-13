@@ -7,6 +7,7 @@ import pytest
 
 import scripts.build_controller_artifact as builder_module
 from scripts.build_controller_artifact import (
+    _controller_input_digest,
     _execution_exit_code,
     _json_result,
     _run,
@@ -67,11 +68,35 @@ def test_source_provenance_allows_only_windows_line_ending_conversion(tmp_path):
     tracked.write_bytes(b"changed\r\nsecond\r\n")
     with pytest.raises(RuntimeError, match="unmodified source checkout"):
         require_clean_source(repository)
-
     tracked.write_bytes(b"first\r\nsecond\r\n")
     (repository / "untracked.txt").write_text("extra\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="unmodified source checkout"):
         require_clean_source(repository)
+
+
+def test_controller_input_digest_tracks_packaged_runtime_resources(tmp_path):
+    controller = tmp_path / "controller"
+    package = controller / "josh_room"
+    package.mkdir(parents=True)
+    robot = controller / "robot.yaml"
+    robot.write_text(
+        "environmentConfigs:\n  - environment_linux_amd64_freeze.yaml\n  - conda.yaml\n",
+        encoding="utf-8",
+    )
+    (controller / "conda.yaml").write_text("dependencies: [python]\n", encoding="utf-8")
+    (controller / "environment_linux_amd64_freeze.yaml").write_text("linux-lock\n", encoding="utf-8")
+    windows_freeze = controller / "environment_windows_amd64_freeze.yaml"
+    windows_freeze.write_text("windows-lock\n", encoding="utf-8")
+    resource = package / "workspace_capture_defaults.json"
+    resource.write_text('{"capture": true}\n', encoding="utf-8")
+
+    initial = _controller_input_digest(robot)
+    resource.write_text('{"capture": false}\n', encoding="utf-8")
+    assert _controller_input_digest(robot) != initial
+    resource.write_text('{"capture": true}\n', encoding="utf-8")
+    initial = _controller_input_digest(robot)
+    windows_freeze.write_text("other platform changed\n", encoding="utf-8")
+    assert _controller_input_digest(robot) == initial
 
 
 def test_checked_in_controller_manifest_and_consumers_are_exact_and_in_parity():

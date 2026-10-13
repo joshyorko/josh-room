@@ -104,22 +104,6 @@ def _load_receipts(artifacts_root: Path, candidate: dict, source_sha: str) -> di
     return receipts
 
 
-def _is_no_change(root: Path, candidate: dict, receipts: dict[str, dict]) -> bool:
-    lock = _read_json(root / "release-lock.json")
-    rcc = lock.get("rcc", {})
-    controller = lock.get("controller", {})
-    if rcc.get("version") != candidate["version"] or rcc.get("source_sha") != candidate["source_sha"]:
-        return False
-    for platform, items in receipts.items():
-        current = controller.get("platforms", {}).get(platform, {})
-        receipt = items["receipt"]
-        if current.get("input_digest") != receipt["input_digest"]:
-            return False
-        if current.get("artifact_digest") != receipt["artifact_digest"]:
-            return False
-    return True
-
-
 def _expected_assets(receipts: dict[str, dict]) -> dict[str, Path]:
     expected = {}
     for platform, items in receipts.items():
@@ -255,11 +239,11 @@ def promote_candidate(
         if latest["version"] != candidate.get("version") or latest["source_sha"] != candidate.get("source_sha") or latest["platforms"] != candidate.get("platforms"):
             raise ValueError("RCC release candidate was superseded before promotion")
     receipts = _load_receipts(artifacts_root, candidate, source_sha)
-    if _is_no_change(root, candidate, receipts):
-        return {"status": "PASS", "no_change": True, "changed_files": [], "candidate": candidate["version"]}
-    input_identity = "-".join(receipts[platform]["receipt"]["input_digest"].split(":", 1)[1][:10] for platform in PLATFORM_ASSETS)
+    input_identity = "-".join(receipts[platform]["receipt"]["input_digest"].split(":", 1)[1] for platform in PLATFORM_ASSETS)
     release_tag = f"rcc-{candidate['version']}-controller-{input_identity}"
     changes = _build_update(root, candidate, receipts, source_sha, release_tag)
+    if not changes:
+        return {"status": "PASS", "no_change": True, "changed_files": [], "candidate": candidate["version"]}
     if prepare:
         for path, data in changes:
             if path.suffix == ".json":
