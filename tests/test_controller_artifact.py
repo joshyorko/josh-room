@@ -90,16 +90,18 @@ def test_source_provenance_ignores_changes_outside_controller_inputs(tmp_path):
     controller.mkdir(parents=True)
     (repository / "docs").mkdir()
     source = controller / "robot.yaml"
-    unrelated = repository / "docs" / "policy.md"
+    unrelated = repository / "docs" / "CAPTURE-POLICY.md"
+    canonical_policy = Path(__file__).resolve().parents[1] / "docs" / "CAPTURE-POLICY.md"
+    (repository / ".gitattributes").write_text("* text=auto\n", encoding="utf-8")
     source.write_text("robot: true\n", encoding="utf-8")
-    unrelated.write_text("policy\n", encoding="utf-8")
+    unrelated.write_bytes(canonical_policy.read_bytes())
     subprocess.run(["git", "init", "-q", str(repository)], check=True)
     subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True)
     subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True)
     subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
     subprocess.run(["git", "-C", str(repository), "commit", "-qm", "fixture"], check=True)
 
-    unrelated.write_text("localized checkout variation\n", encoding="utf-8")
+    unrelated.write_bytes(unrelated.read_bytes().replace(b"\n", b"\r\n"))
     require_clean_source(repository, input_paths={controller})
     source.write_text("robot: changed\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="source differs from commit"):
