@@ -1278,9 +1278,8 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
     const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options);
     const { stdout, runtime } = execution;
     const result = parseControllerOutput(stdout);
-    // `status` deliberately returns ok=false for a changed or unlinked
-    // workspace. That is authoritative state, not an operation failure.
-    if (!result.ok && args[0] !== "status") {
+    // `status` and `workspace-check` return authoritative validation results, including failures.
+    if (!result.ok && !["status", "workspace-check"].includes(args[0])) {
       throw controllerFailure(result, {
         controllerExitStatus: execution.controllerExitStatus,
         controllerStderr: execution.stderr,
