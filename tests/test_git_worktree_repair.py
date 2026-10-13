@@ -3,10 +3,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import josh_room.git_worktree_repair as repair_module
 import pytest
+
+import josh_room.git_worktree_repair as repair_module
 from josh_room.git_worktree_repair import (
-    StaleWorktreeRecord,
     WorktreeRepairError,
     inspect_workspace,
     proposal_digest,
