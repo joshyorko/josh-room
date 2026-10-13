@@ -136,7 +136,7 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
     def run(argv, *, cwd, cancellation, timeout=1800):
         calls.append(argv)
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.5\n"
+            return b"RCC version: v18.19.6\n"
         if argv[1:4] == ["env", "publish", "--robot"]:
             return json.dumps({
                 "artifactDigest": "sha256:" + "1" * 64,
@@ -201,7 +201,7 @@ def test_native_metadata_mismatch_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(
         components,
         "_run",
-        lambda argv, **kwargs: b"RCC version: v18.19.5" if argv[1:] == ["--version"] else b'{"artifactDigest":"bad"}',
+        lambda argv, **kwargs: b"RCC version: v18.19.6" if argv[1:] == ["--version"] else b'{"artifactDigest":"bad"}',
     )
     with pytest.raises(components.RoomStoreComponentError, match="environment metadata"):
         components.capture_rcc_component(
@@ -289,7 +289,7 @@ def test_wrong_native_platform_fails_before_export_or_backup(tmp_path, monkeypat
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.5"
+            return b"RCC version: v18.19.6"
         return json.dumps({
             "artifactDigest": "sha256:" + "1" * 64,
             "specificationDigest": "sha256:" + "2" * 64,
@@ -323,7 +323,7 @@ def test_reuse_rejects_changed_platform_or_runtime(tmp_path, monkeypatch, field,
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.5"
+            return b"RCC version: v18.19.6"
         if argv[1:3] == ["env", "publish"]:
             return json.dumps({
                 "artifactDigest": "sha256:" + "1" * 64,
@@ -351,7 +351,7 @@ def test_reuse_rejects_changed_platform_or_runtime(tmp_path, monkeypatch, field,
 def test_wrong_rcc_executable_version_fails_before_publish(tmp_path, monkeypatch):
     root = _workspace(tmp_path)
     calls = []
-    monkeypatch.setattr(components, "_run", lambda argv, **kwargs: calls.append(argv) or b"RCC version: v18.19.50")
+    monkeypatch.setattr(components, "_run", lambda argv, **kwargs: calls.append(argv) or b"RCC version: v18.19.60")
     with pytest.raises(components.RoomStoreComponentError, match="version is unsupported"):
         components.capture_rcc_component(
             workspace=root,
@@ -386,7 +386,7 @@ def test_source_change_during_export_prevents_component_backup(tmp_path, monkeyp
 
     def run(argv, **kwargs):
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.5"
+            return b"RCC version: v18.19.6"
         if argv[1:3] == ["env", "publish"]:
             return json.dumps({
                 "artifactDigest": "sha256:" + "1" * 64,
