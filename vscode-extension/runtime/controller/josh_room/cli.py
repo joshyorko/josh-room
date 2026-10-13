@@ -160,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
     worktree = workspace_commands.add_parser("worktree-repair", help="propose or apply stale Git worktree record cleanup")
     worktree.add_argument("--workspace", type=Path, required=True)
     worktree.add_argument("--approve", action="store_true", help="apply the exact dry-run proposal")
-    _json_option(worktree)
+    worktree.add_argument("--proposal-digest")
 
     doctor = commands.add_parser("doctor")
     doctor.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
@@ -1483,12 +1483,15 @@ def dispatch(args, instance: Path) -> dict:
     if args.command == "workspace":
         if args.workspace_command != "worktree-repair":
             raise ValueError("unsupported workspace operation")
-        from .git_worktree_repair import inspect_workspace, repair_workspace
+        from .git_worktree_repair import inspect_workspace, proposal_digest, repair_workspace
         proposal = inspect_workspace(args.workspace)
+        digest = proposal_digest(proposal)
         if not args.approve:
-            return {"ok": True, "state": "approval-required", "records": [record.to_dict() for record in proposal]}
-        repaired = repair_workspace(args.workspace, proposal)
-        return {"ok": True, "state": "repaired", "records": [record.to_dict() for record in repaired]}
+            return {"ok": True, "state": "approval-required", "proposal_digest": digest, "records": [record.to_dict() for record in proposal]}
+        if not args.proposal_digest:
+            raise ValueError("proposal digest is required for approved worktree repair")
+        repaired = repair_workspace(args.workspace, args.proposal_digest)
+        return {"ok": True, "state": "repaired", "proposal_digest": digest, "records": [record.to_dict() for record in repaired]}
     if args.command == "hook":
         if args.hook_command != "codex":
             raise ValueError("unsupported hook")

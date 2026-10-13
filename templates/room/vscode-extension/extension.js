@@ -1747,7 +1747,7 @@ async function approveStaleWorktreeRepair(result, source, dimension, encryptionM
   );
   if (action !== "Clean stale worktree records and retry") return false;
   await runSelectedEncryption(
-    ["workspace", "worktree-repair", "--workspace", source, "--approve"],
+    ["workspace", "worktree-repair", "--workspace", source, "--approve", "--proposal-digest", result.proposal_digest],
     source,
     dimension,
     { title: "Cleaning stale Git worktree records…", action: "repair stale Git worktree records", encryptionMaterial },

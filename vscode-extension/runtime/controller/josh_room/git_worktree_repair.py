@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import hashlib
+import json
 
 class WorktreeRepairError(ValueError):
     """A repair could not be established safely."""
@@ -79,10 +81,11 @@ def _plan(repository: Path) -> tuple[StaleWorktreeRecord, ...]:
         if not admin_path.is_absolute():
             admin_path = (repository / ".git" / admin_path).resolve()
         try:
-            target = Path((admin_path / "gitdir").read_text(encoding="utf-8").strip()).resolve()
+            target_text = (admin_path / "gitdir").read_text(encoding="utf-8").strip()
+            target = Path(target_text).resolve()
+            target.parent.stat()
         except (OSError, UnicodeError, RuntimeError):
-            target = Path("")
-        records.append(StaleWorktreeRecord(repository.as_posix(), admin_path.as_posix(), target.as_posix()))
+            continue
     return tuple(records)
 
 
@@ -94,11 +97,13 @@ def inspect_workspace(workspace: Path) -> tuple[StaleWorktreeRecord, ...]:
         records.extend(_plan(repository))
     return tuple(records)
 
-
-def repair_workspace(workspace: Path, approved: tuple[StaleWorktreeRecord, ...]) -> tuple[StaleWorktreeRecord, ...]:
-    """Prune exactly an approved proposal after an immediate revalidation."""
+def proposal_digest(records: tuple[StaleWorktreeRecord, ...]) -> str:
+    body = json.dumps([record.to_dict() for record in records], sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(body).hexdigest()
+def repair_workspace(workspace: Path, approved_digest: str) -> tuple[StaleWorktreeRecord, ...]:
+    """Prune an approved proposal after immediate exact digest revalidation."""
     current = inspect_workspace(workspace)
-    if current != tuple(approved):
+    if proposal_digest(current) != approved_digest:
         raise WorktreeRepairError("stale worktree proposal changed; refresh before retrying Save")
     if not current:
         return ()
