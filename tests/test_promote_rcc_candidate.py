@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,17 @@ from scripts.promote_rcc_candidate import (
     verify_downloaded_assets,
     verify_existing_release,
 )
+
+
+def test_promotion_cli_imports_when_run_by_workflow():
+    result = subprocess.run(
+        [sys.executable, str(Path(promoter.__file__).with_name("promote_rcc_candidate.py")), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Prepare a complete, receipt-bound RCC controller consumer update" in result.stdout
 
 
 def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
