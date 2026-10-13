@@ -18,12 +18,12 @@ from josh_room.git_worktree_repair import (
 
 def _repo(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
-    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, timeout=30)
     (repo / "fixture").write_text("fixture\n")
-    subprocess.run(["git", "-C", str(repo), "add", "fixture"], check=True)
-    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "add", "fixture"], check=True, timeout=30)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"], check=True, capture_output=True, timeout=30)
     worktree = tmp_path / "external-worktree"
-    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "repair-test", str(worktree)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "repair-test", str(worktree)], check=True, capture_output=True, timeout=30)
     return repo, worktree
 
 def test_repair_is_exact_and_repeatable(tmp_path: Path) -> None:
@@ -38,7 +38,7 @@ def test_repair_is_exact_and_repeatable(tmp_path: Path) -> None:
 
 def test_locked_worktree_is_not_proposed(tmp_path: Path) -> None:
     repo, worktree = _repo(tmp_path)
-    subprocess.run(["git", "-C", str(repo), "worktree", "lock", str(worktree), "--reason", "fixture"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "lock", str(worktree), "--reason", "fixture"], check=True, capture_output=True, timeout=30)
     shutil.rmtree(worktree)
     assert inspect_workspace(tmp_path) == ()
 
