@@ -56,7 +56,7 @@ consumers:
 
 ```bash
 devcontainer templates apply \
-  --template ghcr.io/joshyorko/josh-room/templates/room:0.1.0
+  --template ghcr.io/joshyorko/josh-room/templates/room:0.1.1
 ```
 
 The OCI template is an additional standards-based distribution path. DevPod
