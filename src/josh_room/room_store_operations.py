@@ -92,6 +92,10 @@ class RoomStoreOperationsError(RuntimeError):
         super().__init__(message)
 
 
+class WorkspaceValidationError(RoomStoreOperationsError):
+    """Path-free diagnostic from the metadata-only workspace scanner."""
+
+
 def _restic_store_open_error(error: ResticStoreError) -> RoomStoreOperationsError:
     return RoomStoreOperationsError(
         "Restic store could not be opened",
@@ -443,10 +447,13 @@ def scan_workspace_for_status(root: Path) -> WorkspaceScan:
     root = Path(root)
     runtime_value = os.environ.get("ROBOCORP_HOME")
     runtime = Path(runtime_value) if runtime_value else None
-    policy = load_capture_policy(
-        root, active_runtime_root=runtime if runtime and runtime.is_dir() else None
-    )
-    return _scan_workspace(root, policy)
+    try:
+        policy = load_capture_policy(
+            root, active_runtime_root=runtime if runtime and runtime.is_dir() else None
+        )
+        return _scan_workspace(root, policy)
+    except RoomStoreOperationsError as error:
+        raise WorkspaceValidationError(str(error)) from None
 
 
 def _deletion_token(
@@ -756,7 +763,10 @@ class RoomStoreOperations:
 
     def preview(self, parent: LogicalJat | None = None) -> SavePreview:
         policy = self._policy()
-        scan = _scan_workspace(self.workspace, policy)
+        try:
+            scan = _scan_workspace(self.workspace, policy)
+        except RoomStoreOperationsError as error:
+            raise WorkspaceValidationError(str(error)) from None
         selected_parent = parent
         latest, _etag = self.read_latest()
         if selected_parent is None:

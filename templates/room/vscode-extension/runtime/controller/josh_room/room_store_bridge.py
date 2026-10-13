@@ -63,6 +63,7 @@ from .room_store_operations import (
     RoomStorePublicationError,
     SavePreview,
     SaveResult,
+    WorkspaceValidationError,
     scan_workspace_for_status,
 )
 from .workspace_state import write_stat_workspace_marker
@@ -1854,6 +1855,12 @@ def preview_room_store(
                 operations.preview(parent),
                 rcc_capture_pending=_rcc_capture_pending(workspace, parent),
             )
+    except WorkspaceValidationError as error:
+        raise RoomStoreBridgeError(
+            str(error),
+            code="preview-invalid",
+            result={"diagnostic": str(error)},
+        ) from None
     except RoomStoreOperationsError as error:
         raise RoomStoreBridgeError(str(error), code="preview-invalid") from None
 
