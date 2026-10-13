@@ -83,9 +83,10 @@ def _plan(repository: Path) -> tuple[StaleWorktreeRecord, ...]:
         try:
             target_text = (admin_path / "gitdir").read_text(encoding="utf-8").strip()
             target = Path(target_text).resolve()
-            target.parent.stat()
+            target.parent.parent.stat()
         except (OSError, UnicodeError, RuntimeError):
             continue
+        records.append(StaleWorktreeRecord(repository.as_posix(), admin_path.as_posix(), target.parent.as_posix()))
     return tuple(records)
 
 
