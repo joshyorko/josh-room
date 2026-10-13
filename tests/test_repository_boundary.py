@@ -77,6 +77,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
     assert commands == {
+        "joshRoom.checkWorkspace",
         "joshRoom.addStorage",
         "joshRoom.connectCloudflare",
         "joshRoom.reconnectCloudflare",

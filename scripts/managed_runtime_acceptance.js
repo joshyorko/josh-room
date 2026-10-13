@@ -338,6 +338,35 @@ async function main() {
     // JAT extracts Build archives into <payload_path>/workspace and keeps the source basename.
     const source = path.join(root, "workspace");
     await fsp.mkdir(source, { recursive: true, mode: 0o700 });
+    const checkWorkspace = path.join(root, "workspace-check-unmarked");
+    await fsp.mkdir(checkWorkspace, { recursive: true, mode: 0o700 });
+    await fsp.writeFile(path.join(checkWorkspace, "notes.txt"), "read-only workspace check\n");
+    executeController(["workspace-check", "--workspace", checkWorkspace, "--json"], "workspace-check-unmarked");
+    const checkReceiptPath = path.join(paths.logsRoot, "managed-controller-workspace-check-unmarked-result.json");
+    const checkReceipt = readManagedResult(checkReceiptPath);
+    if (checkReceipt?.ok !== true || checkReceipt.scope !== "local-workspace-validation" || checkReceipt.entry_count !== 1) {
+      throw new Error("managed unmarked workspace check did not return a valid local receipt");
+    }
+    const invalidCheckWorkspace = path.join(root, "workspace-check-linked-gitfile");
+    await fsp.mkdir(invalidCheckWorkspace, { recursive: true, mode: 0o700 });
+    await fsp.writeFile(path.join(invalidCheckWorkspace, ".git"), "gitdir: /outside/host/repository/.git\n");
+    let invalidCheckExit;
+    try {
+      executeController(["workspace-check", "--workspace", invalidCheckWorkspace, "--json"], "workspace-check-invalid");
+    } catch (error) {
+      invalidCheckExit = error.status;
+    }
+    const invalidCheckReceipt = readManagedResult(path.join(paths.logsRoot, "managed-controller-workspace-check-invalid-result.json"));
+    if (!Number.isInteger(invalidCheckExit) || invalidCheckExit === 0
+      || invalidCheckReceipt?.ok !== false || invalidCheckReceipt.code !== "workspace-invalid"
+      || !String(invalidCheckReceipt.error).includes("absolute Git pointers")) {
+      throw new Error("managed invalid workspace check did not return its sanitized nonzero validation result");
+    }
+    await fsp.writeFile(path.join(evidenceDir, "workspace-check.json"), JSON.stringify({
+      platform,
+      unmarked: checkReceipt,
+      invalid: { exit_status: invalidCheckExit, result: invalidCheckReceipt },
+    }, null, 2) + "\n");
     const sourceReadme = path.join(source, "README.md");
     await fsp.writeFile(sourceReadme, "managed runtime legacy local JAT acceptance\n");
     await fsp.chmod(sourceReadme, 0o444);

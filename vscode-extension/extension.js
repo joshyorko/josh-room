@@ -1222,7 +1222,9 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       }
       if (receiptPresent && receiptExit !== 0) {
         cleanup();
-        if (result && result.ok === false) {
+        if (result && result.ok === false && args[0] === "workspace-check") {
+          resolve({ stdout: JSON.stringify(redactResultDiagnostics(result)), stderr, runtime, controllerExitStatus: code });
+        } else if (result && result.ok === false) {
           reject(controllerFailure(result, { controllerExitStatus: code, controllerStderr: stderr }));
         } else {
           const failure = new Error(controllerErrorText(receiptObject?.error) || `RCC controller exited with status ${code}`);
@@ -1278,9 +1280,8 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
     const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options);
     const { stdout, runtime } = execution;
     const result = parseControllerOutput(stdout);
-    // `status` deliberately returns ok=false for a changed or unlinked
-    // workspace. That is authoritative state, not an operation failure.
-    if (!result.ok && args[0] !== "status") {
+    // `status` and `workspace-check` return authoritative validation results, including failures.
+    if (!result.ok && !["status", "workspace-check"].includes(args[0])) {
       throw controllerFailure(result, {
         controllerExitStatus: execution.controllerExitStatus,
         controllerStderr: execution.stderr,
@@ -1294,6 +1295,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
       throw cancellationError();
     }
     if (error.result) {
+      if (args[0] === "workspace-check") return redactResultDiagnostics(error.result);
       if (args[0] === "status") {
         outputChannel?.info(`DONE · status (${error.result.state || "unknown"})`);
         return error.result;
@@ -1317,6 +1319,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
         outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
         return result;
       }
+      if (args[0] === "workspace-check") return redactResultDiagnostics(result);
       throw controllerFailure(result, {
         controllerExitStatus: error.controller_exit_status,
         controllerStderr: error.stderr,
@@ -1887,6 +1890,18 @@ function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   });
 }
 
+async function checkWorkspace() {
+  assertWorkspaceTrusted("check the workspace");
+  const workspace = activeWorkspace();
+  const result = await runOperation("Checking workspace…", ["workspace-check", "--workspace", workspace], workspace, { action: "check the workspace" });
+  const detail = result.ok ? `Workspace valid · ${result.entry_count} entries` : `${result.code || "workspace-invalid"}: ${result.error || "workspace validation failed"}`;
+  const remediation = result.ok ? "" : sanitizeControllerText(result.remediation || "");
+  const message = [sanitizeControllerText(detail), remediation].filter(Boolean).join(". ");
+  outputChannel?.appendLine(`Workspace check: ${message}`);
+  if (result.ok) await vscode.window.showInformationMessage(message);
+  else await vscode.window.showErrorMessage(message);
+  return result;
+}
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
@@ -3095,6 +3110,7 @@ function activate(context) {
     markWorkspaceChange(document.uri);
   }));
   register(context, "joshRoom.save", saveRoom);
+  register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
@@ -3121,6 +3137,7 @@ function activate(context) {
 module.exports = { activate };
 module.exports.__test__ = {
   enterRoom,
+  checkWorkspace,
   resetNativeBaseline,
   saveRoom,
   getRoomStatusForTests: () => roomStatus,
