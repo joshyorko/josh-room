@@ -155,6 +155,13 @@ def _json_option(parser):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="josh-room")
     commands = parser.add_subparsers(dest="command", required=True)
+    workspace = commands.add_parser("workspace", help="inspect or repair workspace metadata")
+    workspace_commands = workspace.add_subparsers(dest="workspace_command", required=True)
+    worktree = workspace_commands.add_parser("worktree-repair", help="propose or apply stale Git worktree record cleanup")
+    worktree.add_argument("--workspace", type=Path, required=True)
+    worktree.add_argument("--approve", action="store_true", help="apply the exact dry-run proposal")
+    worktree.add_argument("--proposal-digest")
+    _json_option(worktree)
 
     doctor = commands.add_parser("doctor")
     doctor.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
@@ -623,9 +630,10 @@ def main(argv=None):
                     return _exit_code(preflight)
                 runtime_loaded = False
                 scoped_minio = _uses_minio_encryption(args)
-                identity_context = nullcontext() if args.command in {"auth", "setup", "status", "workspace-check", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
+                identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook"}
+                identity_context = nullcontext() if args.command in identity_free_commands or scoped_minio else _identity_environment()
                 with identity_context:
-                    if args.command not in {"auth", "setup", "workspace-check", "encryption", "device", "harvest", "hook"} and not scoped_minio:
+                    if args.command not in identity_free_commands and not scoped_minio:
                         runtime_loaded = load_runtime_session()
                     with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext() as selected_material:
                         if selected_material is not None:
@@ -1477,6 +1485,22 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 
 def dispatch(args, instance: Path) -> dict:
+    if args.command == "workspace":
+        if args.workspace_command != "worktree-repair":
+            raise ValueError("unsupported workspace operation")
+        from .git_worktree_repair import (
+            inspect_workspace,
+            proposal_digest,
+        )
+        from .git_worktree_repair import repair_workspace as repair_worktree_records
+        proposal = inspect_workspace(args.workspace)
+        digest = proposal_digest(proposal)
+        if not args.approve:
+            return {"ok": True, "state": "approval-required", "proposal_digest": digest, "records": [record.to_dict() for record in proposal]}
+        if not args.proposal_digest:
+            raise ValueError("proposal digest is required for approved worktree repair")
+        repaired = repair_worktree_records(args.workspace, args.proposal_digest)
+        return {"ok": True, "state": "repaired", "proposal_digest": digest, "records": [record.to_dict() for record in repaired]}
     if args.command == "hook":
         if args.hook_command != "codex":
             raise ValueError("unsupported hook")

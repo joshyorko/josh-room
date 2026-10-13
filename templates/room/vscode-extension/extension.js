@@ -1738,6 +1738,26 @@ async function approveRoomStorePreview(preview) {
   return action === "Save" ? "" : undefined;
 }
 
+async function approveStaleWorktreeRepair(result, source, dimension, encryptionMaterial) {
+  const records = Array.isArray(result?.repair_records) ? result.repair_records : [];
+  if (!records.length) return false;
+  const details = records.map((record) => `${record.repository}\n  ${record.administrative_path} → ${record.worktree_path}`).join("\n");
+  const action = await vscode.window.showWarningMessage(
+    `Save found stale Git worktree records in ${result.repair_repository || "the selected workspace"}.\n\n${details}\n\nClean stale worktree records and retry Save?`,
+    { modal: true },
+    "Clean stale worktree records and retry",
+    "Cancel",
+  );
+  if (action !== "Clean stale worktree records and retry") return false;
+  await runSelectedEncryption(
+    ["workspace", "worktree-repair", "--workspace", source, "--approve", "--proposal-digest", result.proposal_digest],
+    source,
+    dimension,
+    { title: "Cleaning stale Git worktree records…", action: "repair stale Git worktree records", encryptionMaterial },
+  );
+  return true;
+}
+
 function nativeSaveBindingMatches(result, marker, source, policy) {
   if (!result || !marker || marker.format_version !== 3 || !policy) return false;
   let canonicalPath;
@@ -2037,12 +2057,25 @@ async function saveRoom(options = {}) {
       ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
       targetDimensionId || selectedDimensionId,
     );
-    preview = await runSelectedEncryption(
-      previewArgs,
-      source,
-      targetDimension || { id: targetDimensionId, provider: targetProvider },
-      { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
-    );
+    try {
+      preview = await runSelectedEncryption(
+        previewArgs,
+        source,
+        targetDimension || { id: targetDimensionId, provider: targetProvider },
+        { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
+      );
+    } catch (error) {
+      if (error?.result?.error !== "stale-worktree-repair-available"
+        || !(await approveStaleWorktreeRepair(error.result, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, encryptionMaterial))) {
+        throw error;
+      }
+      preview = await runSelectedEncryption(
+        previewArgs,
+        source,
+        targetDimension || { id: targetDimensionId, provider: targetProvider },
+        { title: "Re-checking workspace…", action: "retry a Room Store Save preview", encryptionMaterial },
+      );
+    }
     assertValidRoomStorePreview(preview);
     deletionConfirmationToken = await approveRoomStorePreview(preview);
     if (deletionConfirmationToken === undefined) return "cancelled";
