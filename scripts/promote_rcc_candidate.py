@@ -8,8 +8,14 @@ import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+# ``python scripts/promote_rcc_candidate.py`` sets sys.path[0] to this
+# directory.  Add the repository root so the same imports work in Actions,
+# local CLI use, and module-based tests.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.build_controller_artifact import validate_receipt
 from scripts.pin_controller_artifact import controller_artifact_pin
