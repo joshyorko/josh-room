@@ -3,11 +3,13 @@
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -164,20 +166,38 @@ def _sha256(path: Path) -> str:
 
 def require_clean_source(repository: Path) -> None:
     """Reject source edits while allowing Windows checkout CRLF conversion."""
-    diff = subprocess.run(
-        ["git", "-C", str(repository), "diff", "--quiet", "--ignore-cr-at-eol", "HEAD", "--"],
-        check=False,
-    )
-    if diff.returncode not in (0, 1):
-        raise subprocess.CalledProcessError(diff.returncode, diff.args)
+    changed = subprocess.run(
+        ["git", "-C", str(repository), "diff", "--name-only", "--no-renames", "-z", "HEAD", "--"],
+        capture_output=True,
+        check=True,
+    ).stdout.split(b"\0")
     untracked = subprocess.run(
         ["git", "-C", str(repository), "ls-files", "--others", "--exclude-standard"],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    if diff.returncode or untracked:
+    changed_paths = [Path(value.decode("utf-8", errors="surrogateescape")) for value in changed if value]
+    if untracked:
         raise RuntimeError("controller candidate build requires an unmodified source checkout for receipt provenance")
+    if not changed_paths:
+        return
+    archived = subprocess.run(
+        ["git", "-C", str(repository), "archive", "--format=tar", "HEAD"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    with tarfile.open(fileobj=io.BytesIO(archived), mode="r:") as source:
+        for relative in changed_paths:
+            member = source.getmember(relative.as_posix())
+            expected_stream = source.extractfile(member)
+            actual_path = repository / relative
+            if expected_stream is None or not actual_path.is_file():
+                raise RuntimeError("controller candidate build requires an unmodified source checkout for receipt provenance")
+            expected = expected_stream.read()
+            actual = actual_path.read_bytes()
+            if actual != expected and (b"\0" in expected or actual.replace(b"\r\n", b"\n") != expected):
+                raise RuntimeError("controller candidate build requires an unmodified source checkout for receipt provenance")
 
 
 def prepare_fresh_robot(robot: Path, root: Path, platform: str) -> Path:
