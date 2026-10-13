@@ -162,6 +162,24 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def require_clean_source(repository: Path) -> None:
+    """Reject source edits while allowing Windows checkout CRLF conversion."""
+    diff = subprocess.run(
+        ["git", "-C", str(repository), "diff", "--quiet", "--ignore-cr-at-eol", "HEAD", "--"],
+        check=False,
+    )
+    if diff.returncode not in (0, 1):
+        raise subprocess.CalledProcessError(diff.returncode, diff.args)
+    untracked = subprocess.run(
+        ["git", "-C", str(repository), "ls-files", "--others", "--exclude-standard"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    if diff.returncode or untracked:
+        raise RuntimeError("controller candidate build requires an unmodified source checkout for receipt provenance")
+
+
 def prepare_fresh_robot(robot: Path, root: Path, platform: str) -> Path:
     """Copy controller inputs, discard prior freezes, solve and regenerate the native freeze."""
     del platform  # Freeze selection is applied after RCC emits the current platform's output.
@@ -267,9 +285,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
     if not crypto_smoke.is_file():
         raise FileNotFoundError("controller crypto smoke script is missing")
     source = subprocess.run(["git", "-C", str(repository), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    dirty = subprocess.run(["git", "-C", str(repository), "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True, check=True).stdout
-    if dirty:
-        raise RuntimeError("controller candidate build requires a clean source checkout for receipt provenance")
+    require_clean_source(repository)
     stage = destination_stage(archive)
     try:
         with tempfile.TemporaryDirectory(prefix="josh-room-controller-build-") as temporary:

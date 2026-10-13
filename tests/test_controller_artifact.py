@@ -13,6 +13,7 @@ from scripts.build_controller_artifact import (
     build_commands,
     load_manifest,
     prepare_fresh_robot,
+    require_clean_source,
     resolve_rcc_pin,
     validate_receipt,
 )
@@ -46,6 +47,31 @@ def test_rcc_pin_requires_real_v18_19_5_checksum_before_build():
     pin = resolve_rcc_pin(manifest(), "linux-x64", "a" * 64)
     assert pin["version"] == "v18.19.5"
     assert pin["sha256"] == "a" * 64
+
+
+def test_source_provenance_allows_only_windows_line_ending_conversion(tmp_path):
+    import subprocess
+
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True)
+    tracked = repository / "controller.txt"
+    tracked.write_bytes(b"first\nsecond\n")
+    subprocess.run(["git", "-C", str(repository), "add", "controller.txt"], check=True)
+    subprocess.run(["git", "-C", str(repository), "commit", "-qm", "fixture"], check=True)
+
+    tracked.write_bytes(b"first\r\nsecond\r\n")
+    require_clean_source(repository)
+    tracked.write_bytes(b"changed\r\nsecond\r\n")
+    with pytest.raises(RuntimeError, match="unmodified source checkout"):
+        require_clean_source(repository)
+
+    tracked.write_bytes(b"first\r\nsecond\r\n")
+    (repository / "untracked.txt").write_text("extra\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="unmodified source checkout"):
+        require_clean_source(repository)
 
 
 def test_checked_in_controller_manifest_and_consumers_are_exact_and_in_parity():
