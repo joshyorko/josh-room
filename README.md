@@ -27,7 +27,7 @@ On a plain supported Linux amd64 VS Code or VS Code Insiders host, install the
 released VSIX directly:
 
 ```bash
-code-insiders --install-extension /path/to/josh-room-0.1.31.vsix
+code-insiders --install-extension /path/to/josh-room-0.1.32.vsix
 ```
 
 The extension acquires its pinned RCC binary and JAT Environment Artifact under
@@ -56,7 +56,7 @@ consumers:
 
 ```bash
 devcontainer templates apply \
-  --template ghcr.io/joshyorko/josh-room/templates/room:0.1.1
+  --template ghcr.io/joshyorko/josh-room/templates/room:0.1.2
 ```
 
 The OCI template is an additional standards-based distribution path. DevPod

@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.31",
+  "candidate_version": "0.1.32",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -10,8 +10,8 @@
   },
   "josh_room": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "version": "0.1.31",
-    "git_sha": "ebee0880dbc1a1249b9e03cabf88ce96f8916792"
+    "version": "0.1.32",
+    "git_sha": "4e4f5d68133d1b562bdc80eb66bc07fca5db76a9"
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
@@ -112,6 +112,6 @@
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",
-    "version": "0.1.1"
+    "version": "0.1.2"
   }
 }
