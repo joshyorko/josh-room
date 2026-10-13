@@ -6,13 +6,12 @@ before pruning so a changed repository cannot be broadened accidentally.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-import os
-from pathlib import Path
-import subprocess
-
 import hashlib
 import json
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 
 class WorktreeRepairError(ValueError):
     """A repair could not be established safely."""
