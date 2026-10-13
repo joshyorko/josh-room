@@ -623,9 +623,9 @@ def main(argv=None):
                     return _exit_code(preflight)
                 runtime_loaded = False
                 scoped_minio = _uses_minio_encryption(args)
-                identity_context = nullcontext() if args.command in {"auth", "setup", "status", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
+                identity_context = nullcontext() if args.command in {"auth", "setup", "status", "workspace-check", "encryption", "device", "harvest", "hook"} or scoped_minio else _identity_environment()
                 with identity_context:
-                    if args.command not in {"auth", "setup", "encryption", "device", "harvest", "hook"} and not scoped_minio:
+                    if args.command not in {"auth", "setup", "workspace-check", "encryption", "device", "harvest", "hook"} and not scoped_minio:
                         runtime_loaded = load_runtime_session()
                     with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext() as selected_material:
                         if selected_material is not None:
@@ -1919,11 +1919,27 @@ def dispatch(args, instance: Path) -> dict:
             return {"format_version": 1, **result, "context": context_status(args.workspace)}
         return result
     if args.command == "workspace-check":
-        from .room_store_operations import scan_workspace_for_status
+        from .room_store_operations import (
+            WorkspaceValidationError,
+            scan_workspace_for_status,
+        )
         try:
             scan = scan_workspace_for_status(args.workspace)
-        except (OSError, RuntimeError, ValueError) as error:
-            return {"ok": False, "error": str(error), "code": "workspace-invalid", "remediation": "Fix the reported workspace validation issue and run the check again."}
+        except WorkspaceValidationError as error:
+            diagnostic = str(error)
+            remediation = (
+                "Inspect linked worktrees with `git worktree prune --dry-run --verbose`; repair Git storage manually before saving."
+                if "linked worktrees" in diagnostic
+                else "Fix the reported workspace validation issue and run the check again."
+            )
+            return {"ok": False, "error": diagnostic, "code": "workspace-invalid", "remediation": remediation}
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return {
+                "ok": False,
+                "error": "Workspace could not be checked safely.",
+                "code": "workspace-invalid",
+                "remediation": "Check that the workspace is accessible and run the check again.",
+            }
         return {"ok": True, "scope": "local-workspace-validation", "workspace_signature": scan.signature, "signature_algorithm": scan.signature_algorithm, "capture_policy_sha256": scan.capture_policy_sha256, "entry_count": len(scan.paths), "logical_bytes": scan.logical_bytes}
     if args.command in {"link", "repair"}:
         from .workspace_state import read_workspace_marker

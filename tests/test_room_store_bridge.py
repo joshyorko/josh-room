@@ -12,7 +12,7 @@ import subprocess
 import sys
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +26,7 @@ from josh_room.encryption_domain import EncryptionKeyset, EncryptionMaterial
 from josh_room.local_store import ObjectRef
 from josh_room.private_paths import protect_private_directory
 from josh_room.restic_store import RepositoryInfo, ResticStore
+from josh_room.room_store_operations import WorkspaceValidationError
 
 
 def _load_copied_room_store_bridge():
@@ -1810,3 +1811,30 @@ def test_native_room_store_cache_read_error_remains_fatal(monkeypatch, provider)
     monkeypatch.setattr(keyring, "lookup_room_store_secret", fail_read)
     with pytest.raises(RuntimeError, match="native read failure"):
         bridge._verify_native_room_store_cache(SimpleNamespace(provider=provider), "domain", 1, "secret")
+
+
+def test_save_preview_preserves_workspace_validation_diagnostic(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    class SyntheticRoomStoreOperations:
+        def preview(self):
+            raise WorkspaceValidationError(
+                "Git storage is not self-contained; linked worktrees are unsupported"
+            )
+
+    monkeypatch.setattr(bridge, "_resolve_material", lambda *args, **kwargs: (None, None))
+    monkeypatch.setattr(bridge, "_operation_inputs", lambda *_args: (workspace, "domain", object()))
+    monkeypatch.setattr(bridge, "_verified_restic_executable", lambda **_kwargs: tmp_path / "restic")
+    monkeypatch.setattr(bridge, "_private_operation_directory", lambda: nullcontext(tmp_path))
+    monkeypatch.setattr(bridge, "_build_operations", lambda **_kwargs: (SyntheticRoomStoreOperations(), {}, None))
+
+    with pytest.raises(bridge.RoomStoreBridgeError) as caught:
+        bridge.preview_room_store(
+            tmp_path / "instance", object(), "synthetic-room", workspace, None, components=[],
+        )
+
+    assert caught.value.code == "preview-invalid"
+    assert caught.value.result["diagnostic"] == (
+        "Git storage is not self-contained; linked worktrees are unsupported"
+    )

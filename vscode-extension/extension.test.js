@@ -178,6 +178,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   const openDialogCalls = [];
   const inputBoxCalls = [];
   const infoCalls = [];
+  const errorCalls = [];
   const warningCalls = [];
   const openExternalCalls = [];
   const executeCalls = [];
@@ -303,6 +304,10 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
           infoCalls.push(args);
           return infoResponses.shift();
         },
+        showErrorMessage: async (...args) => {
+          errorCalls.push(args);
+          return undefined;
+        },
         showWarningMessage: async (...args) => {
           warningCalls.push(args);
           return warningResponses.shift();
@@ -356,6 +361,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     openDialogCalls,
     inputBoxCalls,
     infoCalls,
+    errorCalls,
     warningCalls,
     openExternalCalls,
     executeCalls,
@@ -1102,6 +1108,64 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   assert.equal(quickPickCalls.length >= 3, true);
   assert.deepEqual(quickPickCalls[1].items.map((item) => item.display_name || item.label), ["Archive", "Backup"]);
   assert.match(spawnHarness.calls.at(-1).args.join(" "), /--dimension backup/);
+});
+
+test("Check Workspace accepts the CLI's nonzero validation receipt and shows sanitized guidance", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-check-workspace-test-"));
+  fs.writeFileSync(path.join(root, "notes.txt"), "keep me\n");
+  const payload = {
+    ok: false,
+    code: "workspace-invalid",
+    error: "Git storage is not self-contained and portable; linked worktrees are unsupported",
+    remediation: "Inspect linked worktrees with `git worktree prune --dry-run --verbose`; repair Git storage manually before saving.",
+    diagnostic: "Rejected private path /home/synthetic/host/worktree and AGE-SECRET-KEY-PRIVATE",
+  };
+  const { vscode, statusItem, errorCalls, outputChannel, logLines } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.deepEqual(args.slice(0, 1), ["workspace-check"]);
+    return { code: 2, stdout: JSON.stringify(payload) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests(outputChannel);
+  const before = fs.readFileSync(path.join(root, "notes.txt"));
+
+  const result = await extension.__test__.checkWorkspace();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "workspace-invalid");
+  assert.ok(errorCalls[0][0].includes("git worktree prune --dry-run --verbose"));
+  assert.equal(errorCalls[0][0].includes("/home/synthetic/host"), false);
+  assert.equal(errorCalls[0][0].includes("AGE-SECRET-KEY-PRIVATE"), false);
+  assert.ok(logLines.some((line) => line.includes("workspace-invalid")));
+  assert.equal(spawnHarness.calls.length, 1);
+  assert.equal(spawnHarness.calls[0].args.includes("--workspace"), true);
+  assert.deepEqual(fs.readFileSync(path.join(root, "notes.txt")), before);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Check Workspace runs without a Room marker or storage/provider query", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-check-workspace-clean-"));
+  const { vscode, statusItem, infoCalls, outputChannel } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.equal(args[0], "workspace-check");
+    return { stdout: JSON.stringify({
+      ok: true, scope: "local-workspace-validation", entry_count: 0,
+      workspace_signature: "a".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: "b".repeat(64), logical_bytes: 0,
+    }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests(outputChannel);
+
+  const result = await extension.__test__.checkWorkspace();
+
+  assert.equal(result.ok, true);
+  assert.equal(infoCalls[0][0], "Workspace valid · 0 entries");
+  assert.deepEqual(spawnHarness.calls.map((call) => call.args[0]), ["workspace-check"]);
+  assert.equal(fs.existsSync(path.join(root, ".josh-room.json")), false);
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 for (const forceCreate of [false, true]) for (const refreshFailure of [false, true]) test(`${forceCreate ? "New" : "Save"} Room uses a migrated MinIO keyset without an extension cache; refresh failure=${refreshFailure}`, async () => {
@@ -5365,6 +5429,7 @@ test("Workspace Trust blocks executable, recovery, and workspace-reading actions
     () => extension.__test__.serveRoom({ id: "room", dimension: { id: "backup", provider: "minio" } }),
     () => extension.__test__.linkRoom(),
     () => extension.__test__.repairRoom(),
+    () => extension.__test__.checkWorkspace(),
     () => extension.__test__.exportRecovery({ id: "backup", provider: "minio" }),
   ];
   for (const action of actions) await assert.rejects(action, /Workspace Trust/);
