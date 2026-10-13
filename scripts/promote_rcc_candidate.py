@@ -186,7 +186,16 @@ def _build_update(root: Path, candidate: dict, receipts: dict[str, dict], source
         changed.append((root / relative, (json.dumps(value, indent=2) + "\n").encode()))
 
     for relative in LOCKS:
-        value = _read_json(root / relative)
+        lock_path = root / relative
+        if lock_path.is_file():
+            value = _read_json(lock_path)
+        elif relative == LOCKS[1] and (root / LOCKS[0]).is_file():
+            # The repository historically had only the root lock. Bootstrap
+            # the template copy from it on first promotion so the two
+            # consumer manifests become coherent in one atomic promotion.
+            value = _read_json(root / LOCKS[0])
+        else:
+            raise FileNotFoundError(f"required consumer release lock is missing: {lock_path}")
         linux_pin = platform_pins["linux-x64"]
         value["rcc"] = {
             **value.get("rcc", {}),
