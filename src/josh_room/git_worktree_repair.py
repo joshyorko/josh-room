@@ -13,6 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+
 class WorktreeRepairError(ValueError):
     """A repair could not be established safely."""
 

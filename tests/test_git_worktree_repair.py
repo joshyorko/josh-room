@@ -15,6 +15,7 @@ from josh_room.git_worktree_repair import (
     repair_workspace,
 )
 
+
 def _repo(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
