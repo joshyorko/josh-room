@@ -2,9 +2,17 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+
 import pytest
+
 import josh_room.git_worktree_repair as repair_module
-from josh_room.git_worktree_repair import WorktreeRepairError, StaleWorktreeRecord, inspect_workspace, proposal_digest, repair_workspace
+from josh_room.git_worktree_repair import (
+    StaleWorktreeRecord,
+    WorktreeRepairError,
+    inspect_workspace,
+    proposal_digest,
+    repair_workspace,
+)
 
 def _repo(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
