@@ -5,7 +5,6 @@ from pathlib import Path
 
 import josh_room.git_worktree_repair as repair_module
 import pytest
-
 from josh_room.git_worktree_repair import (
     StaleWorktreeRecord,
     WorktreeRepairError,
