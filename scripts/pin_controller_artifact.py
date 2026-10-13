@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 
 SHA256_DIGEST_LENGTH = len("sha256:") + 64
-EXPECTED_CONTROLLER_SOURCE = "b4da2846fee429a2e2878f817faac6a48e4384fd"
 
 def _is_sha256_digest(value: object) -> bool:
     return (
@@ -18,7 +17,7 @@ def _is_sha256_digest(value: object) -> bool:
         and all(char in "0123456789abcdef" for char in value[7:])
     )
 
-def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, release_tag: str, platform: str = "linux-x64") -> None:
+def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, release_tag: str, source_sha: str, platform: str = "linux-x64") -> None:
     receipt_value = json.loads(receipt.read_text())
     archive = receipt_value.get("archive", {})
     observed = hashlib.sha256(artifact.read_bytes()).hexdigest()
@@ -27,16 +26,19 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
     artifact_digest = receipt_value.get("artifact_digest")
     if not _is_sha256_digest(artifact_digest):
         raise ValueError("controller artifact receipt artifact digest is invalid")
-    if receipt_value.get("rcc_version") != "v18.19.5":
-        raise ValueError("controller artifact receipt must use RCC v18.19.5")
+    rcc_version = receipt_value.get("rcc_version")
+    if not isinstance(rcc_version, str) or not rcc_version.startswith("v18.19."):
+        raise ValueError("controller artifact receipt must use an allowlisted RCC v18.19.x release")
     if receipt_value.get("platform") != platform:
         raise ValueError("controller artifact receipt platform does not match the requested pin")
     asset = artifact.name
     specification_digest = receipt_value.get("specification_digest")
     if not _is_sha256_digest(specification_digest):
         raise ValueError("controller artifact receipt specification digest is invalid")
-    if receipt_value.get("source") != EXPECTED_CONTROLLER_SOURCE:
-        raise ValueError("controller artifact receipt source commit does not match the pinned controller provenance")
+    if not isinstance(source_sha, str) or len(source_sha) != 40 or any(char not in "0123456789abcdef" for char in source_sha):
+        raise ValueError("expected controller source commit must be a full lowercase Git SHA")
+    if receipt_value.get("source") != source_sha:
+        raise ValueError("controller artifact receipt source commit does not match the requested source commit")
     update = {
         "digest": artifact_digest,
         "specification_digest": specification_digest,
@@ -67,9 +69,10 @@ def main(argv=None) -> int:
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--source-sha", required=True)
     parser.add_argument("--platform", choices=("linux-x64", "win32-x64"), default="linux-x64")
     args = parser.parse_args(argv)
-    pin_manifest(args.root, args.template, args.artifact, args.receipt, args.release_tag, args.platform)
+    pin_manifest(args.root, args.template, args.artifact, args.receipt, args.release_tag, args.source_sha, args.platform)
     return 0
 
 

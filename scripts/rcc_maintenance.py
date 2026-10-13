@@ -1,41 +1,243 @@
 #!/usr/bin/env python3
-"""Discover and qualify allowlisted RCC releases for controller maintenance."""
+"""Discover a verified allowlisted RCC release and prepare consumer pins."""
+
 from __future__ import annotations
-import argparse, hashlib, json, re, urllib.request
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import urllib.request
 from pathlib import Path
-OWNER, REPO = "joshyorko", "rcc"
-ALLOWLIST = re.compile(r"^v(18)\.(19)\.(\d+)$")
-PLATFORMS = {"linux-x64": "rcc-linux64", "win32-x64": "rcc-windows64"}
-MANIFESTS = (Path("vscode-extension/runtime/controller-artifact-manifest.json"), Path("vscode-extension/runtime/manifest.json"))
-def fetch_release():
-    req = urllib.request.Request("https://api.github.com/repos/joshyorko/rcc/releases", headers={"Accept": "application/vnd.github+json", "User-Agent": "josh-room-rcc-maintenance"})
-    with urllib.request.urlopen(req, timeout=30) as response: releases = json.load(response)
-    candidates = [(int(m.group(3)), r) for r in releases if (m := ALLOWLIST.fullmatch(r.get("tag_name", ""))) and not r.get("draft") and not r.get("prerelease")]
-    if not candidates: raise RuntimeError("no eligible stable joshyorko/rcc release found")
+from typing import Any
+
+OWNER = "joshyorko"
+REPO = "rcc"
+API_ROOT = f"https://api.github.com/repos/{OWNER}/{REPO}"
+RELEASE_LINE = re.compile(r"^v18\.19\.(\d+)$")
+SHA256 = re.compile(r"^sha256:([0-9a-f]{64})$")
+PLATFORMS = {
+    "linux-x64": {"asset": "rcc-linux64", "index_field": "linux"},
+    "win32-x64": {"asset": "rcc-windows64.exe", "index_field": "windows"},
+}
+MANIFESTS = (
+    Path("vscode-extension/runtime/controller-artifact-manifest.json"),
+    Path("vscode-extension/runtime/manifest.json"),
+    Path("templates/room/vscode-extension/runtime/controller-artifact-manifest.json"),
+    Path("templates/room/vscode-extension/runtime/manifest.json"),
+)
+LOCKS = (
+    Path("release-lock.json"),
+    Path("templates/room/vscode-extension/runtime/release-lock.json"),
+)
+
+
+def _request_json(url: str) -> Any:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "josh-room-rcc-maintenance",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
+def _release_candidates(releases: list[dict]) -> list[tuple[int, dict]]:
+    candidates = []
+    for release in releases:
+        match = RELEASE_LINE.fullmatch(str(release.get("tag_name", "")))
+        if match and not release.get("draft") and not release.get("prerelease"):
+            candidates.append((int(match.group(1)), release))
+    return candidates
+
+
+def fetch_release() -> dict:
+    releases = _request_json(f"{API_ROOT}/releases?per_page=100")
+    candidates = _release_candidates(releases)
+    if not candidates:
+        raise RuntimeError("no eligible stable joshyorko/rcc v18.19.x release found")
     return max(candidates, key=lambda item: item[0])[1]
-def digest(asset):
-    url = asset.get("browser_download_url", "")
-    if not url.startswith("https://github.com/joshyorko/rcc/releases/download/"): raise ValueError(f"asset URL is outside RCC lineage: {url}")
-    with urllib.request.urlopen(url, timeout=120) as source:
-        h = hashlib.sha256()
-        while chunk := source.read(1024 * 1024): h.update(chunk)
-    return h.hexdigest()
-def main():
-    parser = argparse.ArgumentParser(); parser.add_argument("--report", type=Path, default=Path("artifacts/rcc-maintenance-report.json")); parser.add_argument("--apply", action="store_true"); args = parser.parse_args()
-    report = {"repository": f"{OWNER}/{REPO}", "platforms": {}, "status": "FAIL"}
+
+
+def resolve_tag_commit(tag: str) -> str:
+    ref = _request_json(f"{API_ROOT}/git/ref/tags/{tag}")
+    target = ref.get("object", {})
+    if target.get("type") == "tag":
+        target = _request_json(f"{API_ROOT}/git/tags/{target.get('sha')}").get("object", {})
+    commit = target.get("sha")
+    if target.get("type") != "commit" or not re.fullmatch(r"[0-9a-f]{40}", str(commit)):
+        raise ValueError("RCC release tag does not resolve to a commit")
+    return commit
+
+
+def _download(url: str, *, keep_bytes: bool = False) -> tuple[str, int, bytes | None]:
+    request = urllib.request.Request(url, headers={"User-Agent": "josh-room-rcc-maintenance"})
+    digest = hashlib.sha256()
+    size = 0
+    body = bytearray() if keep_bytes else None
+    with urllib.request.urlopen(request, timeout=120) as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+            if body is not None:
+                body.extend(chunk)
+    return digest.hexdigest(), size, bytes(body) if body is not None else None
+
+
+def _expected_asset_digest(asset: dict, *, label: str) -> str:
+    match = SHA256.fullmatch(str(asset.get("digest", "")))
+    if not match:
+        raise ValueError(f"{label} has no trusted GitHub SHA256 asset digest")
+    if type(asset.get("size")) is not int or asset["size"] < 1:
+        raise ValueError(f"{label} has no valid GitHub asset size")
+    return match.group(1)
+
+
+def _verify_asset(asset: dict, *, tag: str, name: str, keep_bytes: bool = False) -> tuple[dict, bytes | None]:
+    expected_url = f"https://github.com/{OWNER}/{REPO}/releases/download/{tag}/{name}"
+    url = asset.get("browser_download_url")
+    if url != expected_url:
+        raise ValueError(f"RCC release asset URL does not match the tagged asset {name}")
+    expected_sha = _expected_asset_digest(asset, label=name)
+    observed_sha, observed_size, body = _download(url, keep_bytes=keep_bytes)
+    if observed_sha != expected_sha:
+        raise ValueError(f"RCC release asset checksum differs from GitHub release metadata: {name}")
+    if observed_size != asset["size"]:
+        raise ValueError(f"RCC release asset size differs from GitHub release metadata: {name}")
+    return {
+        "asset": name,
+        "url": url,
+        "sha256": observed_sha,
+        "size": observed_size,
+        "release_metadata_sha256": expected_sha,
+        "status": "PASS",
+    }, body
+
+
+def verify_release(release: dict) -> dict:
+    tag = str(release.get("tag_name", ""))
+    if not RELEASE_LINE.fullmatch(tag) or release.get("draft") or release.get("prerelease"):
+        raise ValueError("RCC release is outside the stable v18.19.x allowlist")
+    commit = resolve_tag_commit(tag)
+    assets = {asset.get("name"): asset for asset in release.get("assets", [])}
+    index_asset = assets.get("index.json")
+    if not index_asset:
+        raise RuntimeError("required RCC release provenance asset index.json is missing")
+    index_receipt, index_bytes = _verify_asset(index_asset, tag=tag, name="index.json", keep_bytes=True)
+    assert index_bytes is not None
+    index = json.loads(index_bytes)
+    indexed_versions = [item for item in index.get("tested", []) if item.get("version") == tag]
+    if len(indexed_versions) != 1:
+        raise ValueError("RCC release index does not identify the selected stable tag exactly once")
+    indexed = indexed_versions[0]
+
+    platform_pins: dict[str, dict] = {}
+    platform_evidence: dict[str, dict] = {}
+    for platform, details in PLATFORMS.items():
+        name = details["asset"]
+        asset = assets.get(name)
+        if not asset:
+            raise RuntimeError(f"required {platform} RCC asset {name} is missing")
+        evidence, _unused = _verify_asset(asset, tag=tag, name=name)
+        expected_index_url = f"https://github.com/{OWNER}/{REPO}/releases/download/{tag}/{name}"
+        if indexed.get(details["index_field"]) != expected_index_url:
+            raise ValueError(f"RCC release index does not bind {platform} to the selected release asset")
+        platform_pins[platform] = {
+            "asset": name,
+            "url": expected_index_url,
+            "sha256": evidence["sha256"],
+            "size": evidence["size"],
+        }
+        platform_evidence[platform] = {**evidence, "version": tag}
+
+    return {
+        "version": tag,
+        "source_sha": commit,
+        "published_at": release.get("published_at"),
+        "target_commitish": release.get("target_commitish"),
+        "index": index_receipt,
+        "platforms": platform_pins,
+        "evidence": platform_evidence,
+    }
+
+
+def _atomic_write_json(path: Path, value: dict) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        release = fetch_release(); version = release["tag_name"]; assets = {a["name"]: a for a in release.get("assets", [])}; pins = {}
-        for platform, name in PLATFORMS.items():
-            asset = assets.get(name)
-            if not asset: raise RuntimeError(f"required {platform} asset {name} is missing")
-            sha = digest(asset); pins[platform] = {"asset": name, "url": asset["browser_download_url"], "sha256": sha, "size": asset["size"]}; report["platforms"][platform] = {"version": version, "asset": name, "sha256": sha, "size": asset["size"], "status": "PASS"}
-        report.update(version=version, status="PASS")
+        temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def apply_candidate(root: Path, candidate: dict) -> list[str]:
+    changed: list[str] = []
+    manifest_values = []
+    for relative in MANIFESTS:
+        path = root / relative
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value.setdefault("rcc", {})["version"] = candidate["version"]
+        value["rcc"]["platforms"] = candidate["platforms"]
+        manifest_values.append((path, value))
+
+    lock_values = []
+    linux = candidate["platforms"]["linux-x64"]
+    for relative in LOCKS:
+        path = root / relative
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["rcc"] = {
+            **value.get("rcc", {}),
+            "repository": f"https://github.com/{OWNER}/{REPO}",
+            "version": candidate["version"],
+            "source_sha": candidate["source_sha"],
+            "managed_asset": linux["asset"],
+            "managed_asset_sha256": linux["sha256"],
+            "platforms": candidate["platforms"],
+        }
+        lock_values.append((path, value))
+
+    for path, value in [*manifest_values, *lock_values]:
+        encoded = json.dumps(value, indent=2) + "\n"
+        if path.read_text(encoding="utf-8") == encoded:
+            continue
+        _atomic_write_json(path, value)
+        changed.append(str(path.relative_to(root)))
+    return changed
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--report", type=Path, default=Path("artifacts/rcc-maintenance-report.json"))
+    parser.add_argument("--apply", action="store_true")
+    args = parser.parse_args(argv)
+    root = args.root.resolve()
+    report_path = args.report if args.report.is_absolute() else root / args.report
+    report: dict[str, Any] = {
+        "repository": f"{OWNER}/{REPO}",
+        "status": "FAIL",
+        "platforms": {platform: {"status": "BLOCKED"} for platform in PLATFORMS},
+    }
+    try:
+        release = fetch_release()
+        candidate = verify_release(release)
+        report.update(candidate)
+        report["status"] = "PASS"
+        report["changed_files"] = apply_candidate(root, candidate) if args.apply else []
+        report["no_change"] = not report["changed_files"]
         if args.apply:
-            for path in MANIFESTS:
-                document = json.loads(path.read_text()); document.setdefault("rcc", {})["version"] = version; document["rcc"]["platforms"] = pins; path.write_text(json.dumps(document, indent=2) + "\n")
-            report["applied"] = [str(path) for path in MANIFESTS]
-    except Exception as error:
-        report["error"] = str(error)
-        for platform in PLATFORMS: report["platforms"].setdefault(platform, {"status": "BLOCKED"})
-    args.report.parent.mkdir(parents=True, exist_ok=True); args.report.write_text(json.dumps(report, indent=2) + "\n"); print(json.dumps(report, indent=2)); return 0 if report["status"] == "PASS" else 1
-if __name__ == "__main__": raise SystemExit(main())
+            report["applied"] = report["changed_files"]
+    except Exception as error:  # noqa: BLE001 - preserve the report on every failure.
+        report["error"] = f"{type(error).__name__}: {error}"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0 if report["status"] == "PASS" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

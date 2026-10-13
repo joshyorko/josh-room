@@ -5,12 +5,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-EXPECTED_RCC = "v18.19.5"
 SHA256_LENGTH = 64
+RCC_RELEASE = re.compile(r"^v18\.19\.\d+$")
 
 
 def _execution_exit_code(value: dict | list, label: str) -> int:
@@ -46,8 +48,9 @@ def load_manifest(path: Path) -> dict:
     value = json.loads(Path(path).read_text())
     if value.get("schema_version") != 1:
         raise ValueError("controller artifact manifest schema must be 1")
-    if value.get("rcc", {}).get("version") != EXPECTED_RCC:
-        raise ValueError(f"controller artifact lane requires RCC {EXPECTED_RCC}")
+    expected_rcc = value.get("rcc", {}).get("version")
+    if not isinstance(expected_rcc, str) or not RCC_RELEASE.fullmatch(expected_rcc):
+        raise ValueError("controller artifact manifest requires an allowlisted RCC v18.19.x release")
     controller = value.get("controller", {})
     if not controller.get("artifact_asset") and not controller.get("artifact_assets"):
         raise ValueError("controller artifact manifest is missing artifact asset naming")
@@ -55,17 +58,18 @@ def load_manifest(path: Path) -> dict:
 
 
 def resolve_rcc_pin(manifest: dict, platform: str, checksum: str | None = None) -> dict:
-    if manifest.get("rcc", {}).get("version") != EXPECTED_RCC:
-        raise ValueError(f"controller artifact lane requires RCC {EXPECTED_RCC}")
+    expected_rcc = manifest.get("rcc", {}).get("version")
+    if not isinstance(expected_rcc, str) or not RCC_RELEASE.fullmatch(expected_rcc):
+        raise ValueError("controller artifact manifest requires an allowlisted RCC v18.19.x release")
     pin = manifest.get("rcc", {}).get("platforms", {}).get(platform)
     if not isinstance(pin, dict):
         raise TypeError(f"no RCC pin for {platform}")
     value = checksum or pin.get("sha256")
     if not isinstance(value, str) or len(value) != SHA256_LENGTH or any(char not in "0123456789abcdef" for char in value.lower()):
-        raise ValueError(f"RCC {platform} checksum is pending; supply the real v18.19.5 release SHA256")
-    if not str(pin.get("url", "")).startswith("https://github.com/joshyorko/rcc/releases/download/v18.19.5/"):
-        raise ValueError(f"RCC {platform} URL is outside the official v18.19.5 release")
-    return {**pin, "version": EXPECTED_RCC, "sha256": value}
+        raise ValueError(f"RCC {platform} checksum is pending; supply the verified {expected_rcc} release SHA256")
+    if not str(pin.get("url", "")).startswith(f"https://github.com/joshyorko/rcc/releases/download/{expected_rcc}/"):
+        raise ValueError(f"RCC {platform} URL is outside the official {expected_rcc} release")
+    return {**pin, "version": expected_rcc, "sha256": value}
 
 
 def build_commands(*, rcc: str, robot: str, archive: str, artifact: str, receipt: str) -> list[list[str]]:
@@ -125,6 +129,8 @@ def _run(
 ) -> dict | list:
     environment = {
         **os.environ,
+        "HOME": str(home.parent),
+        "MAMBA_ROOT_PREFIX": str(home / "mamba"),
         "ROBOCORP_HOME": str(home),
         "RCC_HOLOTREE_MODE": "private",
         **(environment_overrides or {}),
@@ -151,6 +157,38 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def prepare_fresh_robot(robot: Path, root: Path, platform: str) -> Path:
+    """Copy controller inputs, discard prior freezes, solve and regenerate the native freeze."""
+    del platform  # Freeze selection is applied after RCC emits the current platform's output.
+    root.mkdir(parents=True, exist_ok=True)
+    candidate = root / "candidate-controller"
+    shutil.copytree(robot.parent, candidate)
+    robot_path = candidate / robot.name
+    text = robot_path.read_text(encoding="utf-8")
+    text = re.sub(
+        r"(?m)^environmentConfigs:\n(?:  - .*freeze\.yaml\n)*  - conda\.yaml\n",
+        "environmentConfigs:\n  - conda.yaml\n",
+        text,
+        count=1,
+    )
+    text = text.replace("shell: python -m josh_room\n", "shell: python -m josh_room --help\n", 1)
+    robot_path.write_text(text, encoding="utf-8")
+    return robot_path
+
+
+def _controller_input_digest(robot: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(robot.parent.rglob("*")):
+        if path.is_file() and (path.name == "robot.yaml" or path.name == "conda.yaml" or path.name.endswith("_freeze.yaml")):
+            relative = path.relative_to(robot.parent).as_posix().encode("utf-8")
+            digest.update(len(relative).to_bytes(4, "big"))
+            digest.update(relative)
+            with path.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
 def destination_stage(destination: Path) -> Path:
     """Reserve a temporary artifact path on the destination filesystem."""
     fd, name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".stage", dir=destination.parent)
@@ -161,7 +199,7 @@ def destination_stage(destination: Path) -> Path:
 
 
 def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str) -> None:
-    required = {"artifact_digest", "specification_digest", "legacy_blueprint_key", "archive", "rcc_version", "source", "platform", "verified_acquire", "verified_no_build", "verified_exec", "verified_crypto"}
+    required = {"artifact_digest", "specification_digest", "legacy_blueprint_key", "archive", "rcc_version", "rcc_sha256", "input_digest", "source", "platform", "verified_acquire", "verified_no_build", "verified_exec", "verified_crypto"}
     if not required <= receipt.keys():
         raise ValueError("controller artifact receipt is missing provenance fields")
     if receipt["rcc_version"] != expected_rcc:
@@ -174,6 +212,10 @@ def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str
         raise ValueError("controller artifact receipt specification digest is invalid")
     if not _is_git_sha(receipt["source"]):
         raise ValueError("controller artifact receipt source commit is invalid")
+    if not isinstance(receipt["rcc_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", receipt["rcc_sha256"]):
+        raise ValueError("controller artifact receipt RCC checksum is invalid")
+    if not _is_sha256_digest(receipt["input_digest"]):
+        raise ValueError("controller artifact receipt input digest is invalid")
     if not isinstance(receipt["archive"].get("sha256"), str) or len(receipt["archive"]["sha256"]) != SHA256_LENGTH:
         raise ValueError("controller artifact receipt archive SHA256 is invalid")
     if not isinstance(receipt["archive"].get("size"), int) or receipt["archive"]["size"] < 1:
@@ -184,12 +226,13 @@ def validate_receipt(receipt: dict, *, expected_platform: str, expected_rcc: str
 
 def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | None, output_dir: Path, repository: Path) -> dict:
     manifest = load_manifest(manifest_path)
+    expected_rcc = manifest["rcc"]["version"]
     pin = resolve_rcc_pin(manifest, platform, rcc_checksum)
     version = subprocess.run([str(rcc), "version"], capture_output=True, text=True, check=False)
-    if version.returncode != 0 or EXPECTED_RCC not in f"{version.stdout}\n{version.stderr}":
-        raise RuntimeError(f"managed RCC version verification failed: expected {EXPECTED_RCC}")
+    if version.returncode != 0 or expected_rcc not in f"{version.stdout}\n{version.stderr}":
+        raise RuntimeError(f"managed RCC version verification failed: expected {expected_rcc}")
     if _sha256(rcc) != pin["sha256"]:
-        raise ValueError("managed RCC checksum does not match the canonical v18.19.5 pin")
+        raise ValueError(f"managed RCC checksum does not match the canonical {expected_rcc} pin")
     output_dir.mkdir(parents=True, exist_ok=True)
     asset_names = manifest["controller"].get("artifact_assets", {})
     asset = asset_names.get(platform, manifest["controller"].get("artifact_asset"))
@@ -199,7 +242,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
     receipt_path = output_dir / f"{archive.stem}.json"
     if archive.exists() or receipt_path.exists():
         raise FileExistsError("refusing to overwrite an existing controller artifact or receipt")
-    robot = (repository / manifest["controller"]["robot"]).resolve()
+    source_robot = (repository / manifest["controller"]["robot"]).resolve()
     crypto_smoke = (repository / "scripts" / "controller_crypto_smoke.py").resolve()
     if not crypto_smoke.is_file():
         raise FileNotFoundError("controller crypto smoke script is missing")
@@ -209,6 +252,23 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
         with tempfile.TemporaryDirectory(prefix="josh-room-controller-build-") as temporary:
             builder_home = Path(temporary) / "builder"
             consumer_home = Path(temporary) / "consumer"
+            builder_home.mkdir(parents=True)
+            consumer_home.mkdir(parents=True)
+            robot = prepare_fresh_robot(source_robot, Path(temporary), platform)
+            _run(rcc, ["run", "--robot", str(robot)], home=builder_home, cwd=robot.parent)
+            freeze_name = "environment_linux_amd64_freeze.yaml" if platform == "linux-x64" else "environment_windows_amd64_freeze.yaml"
+            fresh_freeze = robot.parent / "output" / freeze_name
+            if not fresh_freeze.is_file():
+                raise RuntimeError(f"fresh RCC solve did not generate {freeze_name}")
+            freeze_bytes = fresh_freeze.read_bytes()
+            (robot.parent / freeze_name).write_bytes(freeze_bytes)
+            robot_text = robot.read_text(encoding="utf-8")
+            robot.write_text(robot_text.replace("environmentConfigs:\n  - conda.yaml\n", f"environmentConfigs:\n  - {freeze_name}\n  - conda.yaml\n", 1), encoding="utf-8")
+            freeze_copy = output_dir / freeze_name
+            if freeze_copy.exists():
+                raise FileExistsError(f"refusing to overwrite generated freeze {freeze_copy}")
+            freeze_copy.write_bytes(freeze_bytes)
+            input_digest = _controller_input_digest(robot)
             publish = _run(rcc, ["env", "publish", "--robot", str(robot), "--provider", "local", "--json"], home=builder_home, cwd=robot.parent)
             artifact = publish.get("artifactDigest") or publish.get("artifact_digest")
             if not isinstance(artifact, str) or not artifact.startswith("sha256:"):
@@ -262,7 +322,9 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
                 "specification_digest": specification,
                 "legacy_blueprint_key": blueprint,
                 "archive": {"sha256": _sha256(stage), "size": stage.stat().st_size},
-                "rcc_version": EXPECTED_RCC,
+                "rcc_version": expected_rcc,
+                "rcc_sha256": pin["sha256"],
+                "input_digest": input_digest,
                 "source": source,
                 "platform": platform,
                 "verified_acquire": True,
@@ -270,7 +332,7 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
                 "verified_exec": True,
                 "verified_crypto": True,
             }
-            validate_receipt(receipt, expected_platform=platform, expected_rcc=EXPECTED_RCC)
+            validate_receipt(receipt, expected_platform=platform, expected_rcc=expected_rcc)
             stage.replace(archive)
     finally:
         stage.unlink(missing_ok=True)

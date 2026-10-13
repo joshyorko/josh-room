@@ -12,6 +12,7 @@ from scripts.build_controller_artifact import (
     _run,
     build_commands,
     load_manifest,
+    prepare_fresh_robot,
     resolve_rcc_pin,
     validate_receipt,
 )
@@ -116,6 +117,25 @@ def test_controller_build_commands_use_canonical_artifact_flow():
     ]
 
 
+def test_fresh_robot_discards_old_freeze_and_generates_a_native_candidate(tmp_path):
+    source = tmp_path / "source" / "controller"
+    source.mkdir(parents=True)
+    (source / "robot.yaml").write_text(
+        'tasks:\n  "Josh Room":\n    shell: python -m josh_room\n\n'
+        'environmentConfigs:\n  - environment_linux_amd64_freeze.yaml\n  - conda.yaml\n',
+        encoding="utf-8",
+    )
+    (source / "conda.yaml").write_text("channels: [conda-forge]\ndependencies: [python=3.13]\n", encoding="utf-8")
+    (source / "environment_linux_amd64_freeze.yaml").write_text("old freeze\n", encoding="utf-8")
+    robot = prepare_fresh_robot(source / "robot.yaml", tmp_path / "build", "linux-x64")
+
+    assert robot.read_text(encoding="utf-8") == (
+        'tasks:\n  "Josh Room":\n    shell: python -m josh_room --help\n\n'
+        "environmentConfigs:\n  - conda.yaml\n"
+    )
+    assert (robot.parent / "environment_linux_amd64_freeze.yaml").read_text() == "old freeze\n"
+
+
 def test_rcc_json_result_accepts_ht_vars_array():
     assert _json_result('[{"key": "value"}]\n') == [{"key": "value"}]
 
@@ -183,6 +203,8 @@ def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
         "legacy_blueprint_key": "blueprint-1",
         "archive": {"sha256": "d" * 64, "size": 123},
         "rcc_version": "v18.19.5",
+        "rcc_sha256": "f" * 64,
+        "input_digest": "sha256:" + "1" * 64,
         "source": "e" * 40,
         "platform": "linux-x64",
         "verified_acquire": True,
@@ -217,7 +239,7 @@ def test_manifest_pin_integration_updates_root_and_template_atomically(tmp_path)
         "source": "b" * 40,
     }))
     with pytest.raises(ValueError, match="archive SHA256"):
-        pin_manifest(root, template, artifact, receipt, "v0.1.7-controller-artifact")
+        pin_manifest(root, template, artifact, receipt, "v0.1.7-controller-artifact", "b" * 40)
 
 
 
@@ -240,7 +262,7 @@ def test_manifest_pin_integration_keeps_platform_artifacts_separate(tmp_path):
         "source": "b4da2846fee429a2e2878f817faac6a48e4384fd",
     }))
 
-    pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts", platform="win32-x64")
+    pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts", "b4da2846fee429a2e2878f817faac6a48e4384fd", platform="win32-x64")
     for target in (root, template):
         value = json.loads(target.read_text())
         assert value["controller"]["environment_artifact"]["digest"] == "linux"
@@ -261,9 +283,10 @@ def test_manifest_pin_rejects_malformed_specification_digest(tmp_path):
         "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
         "rcc_version": "v18.19.5",
         "platform": "linux-x64",
+        "source": "b4da2846fee429a2e2878f817faac6a48e4384fd",
     }))
     with pytest.raises(ValueError, match="specification digest"):
-        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts")
+        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts", "b4da2846fee429a2e2878f817faac6a48e4384fd")
 
 def test_manifest_pin_rejects_malformed_artifact_digest(tmp_path):
     root = tmp_path / "runtime-manifest.json"
@@ -279,9 +302,10 @@ def test_manifest_pin_rejects_malformed_artifact_digest(tmp_path):
         "archive": {"sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(), "size": artifact.stat().st_size},
         "rcc_version": "v18.19.5",
         "platform": "linux-x64",
+        "source": "b4da2846fee429a2e2878f817faac6a48e4384fd",
     }))
     with pytest.raises(ValueError, match="artifact digest"):
-        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts")
+        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts", "b4da2846fee429a2e2878f817faac6a48e4384fd")
 
 
 def test_manifest_pin_rejects_unexpected_controller_source(tmp_path):
@@ -301,7 +325,7 @@ def test_manifest_pin_rejects_unexpected_controller_source(tmp_path):
         "source": "c" * 40,
     }))
     with pytest.raises(ValueError, match="source commit"):
-        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts")
+        pin_manifest(root, template, artifact, receipt, "v0.1.11-controller-artifacts", "d" * 40)
 def test_packaged_controller_python_file_sets_are_byte_identical_and_importable(tmp_path):
     root = Path(__file__).parents[1]
     canonical = {path.name: path.read_bytes() for path in (root / "src/josh_room").glob("*.py")}
