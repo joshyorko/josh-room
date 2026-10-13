@@ -86,7 +86,7 @@ from .operations import (
     plan_encryption_migration,
     reconcile_encryption_migration,
     remove_room,
-    remove_snapshot,
+    repair_workspace,
     serve_snapshot,
     snapshot_payload_kind,
 )
@@ -1485,7 +1485,7 @@ def dispatch(args, instance: Path) -> dict:
         from .git_worktree_repair import (
             inspect_workspace,
             proposal_digest,
-            repair_workspace,
+            repair_workspace as repair_worktree_records,
         )
         proposal = inspect_workspace(args.workspace)
         digest = proposal_digest(proposal)
@@ -1493,7 +1493,7 @@ def dispatch(args, instance: Path) -> dict:
             return {"ok": True, "state": "approval-required", "proposal_digest": digest, "records": [record.to_dict() for record in proposal]}
         if not args.proposal_digest:
             raise ValueError("proposal digest is required for approved worktree repair")
-        repaired = repair_workspace(args.workspace, args.proposal_digest)
+        repaired = repair_worktree_records(args.workspace, args.proposal_digest)
         return {"ok": True, "state": "repaired", "proposal_digest": digest, "records": [record.to_dict() for record in repaired]}
     if args.command == "hook":
         if args.hook_command != "codex":
