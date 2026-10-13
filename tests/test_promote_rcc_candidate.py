@@ -139,12 +139,14 @@ def test_existing_artifact_release_is_reused_only_when_every_asset_matches(tmp_p
     release = {"tag_name": promotion["artifact_release_tag"], "target_commitish": "a" * 40, "draft": False, "prerelease": True, "assets": assets}
 
     receipts = _load_receipts(artifacts, candidate, "a" * 40)
-    assert verify_existing_release(release, tag=promotion["artifact_release_tag"], source_sha="a" * 40, receipts=receipts) == []
+    assert verify_existing_release(release, tag=promotion["artifact_release_tag"], source_sha="a" * 40, tag_target_sha="a" * 40, receipts=receipts) == []
     partial = {**release, "assets": assets[:-1]}
-    assert verify_existing_release(partial, tag=promotion["artifact_release_tag"], source_sha="a" * 40, receipts=receipts)
+    assert verify_existing_release(partial, tag=promotion["artifact_release_tag"], source_sha="a" * 40, tag_target_sha="a" * 40, receipts=receipts)
     conflict = {**release, "assets": [{**assets[0], "digest": "sha256:" + "0" * 64}, *assets[1:]]}
     with pytest.raises(ValueError, match="conflicts with candidate"):
-        verify_existing_release(conflict, tag=promotion["artifact_release_tag"], source_sha="a" * 40, receipts=receipts)
+        verify_existing_release(conflict, tag=promotion["artifact_release_tag"], source_sha="a" * 40, tag_target_sha="a" * 40, receipts=receipts)
+    with pytest.raises(ValueError, match="Git tag does not resolve"):
+        verify_existing_release(release, tag=promotion["artifact_release_tag"], source_sha="a" * 40, tag_target_sha="b" * 40, receipts=receipts)
 
     downloaded = tmp_path / "downloaded"
     downloaded.mkdir()

@@ -187,7 +187,8 @@ def require_clean_source(repository: Path) -> None:
     ).stdout
     changed_paths = [Path(value.decode("utf-8", errors="surrogateescape")) for value in changed if value]
     if untracked:
-        raise RuntimeError("controller candidate build requires an unmodified source checkout for receipt provenance")
+        paths = ", ".join(untracked.splitlines()[:20])
+        raise RuntimeError(f"controller candidate checkout has untracked files: {paths}")
     if not changed_paths:
         return
     archived = subprocess.run(
@@ -195,17 +196,27 @@ def require_clean_source(repository: Path) -> None:
         capture_output=True,
         check=True,
     ).stdout
+    mismatches = []
     with tarfile.open(fileobj=io.BytesIO(archived), mode="r:") as source:
         for relative in changed_paths:
-            member = source.getmember(relative.as_posix())
+            try:
+                member = source.getmember(relative.as_posix())
+            except KeyError:
+                mismatches.append(relative.as_posix())
+                continue
             expected_stream = source.extractfile(member)
             actual_path = repository / relative
             if expected_stream is None or not actual_path.is_file():
-                raise RuntimeError("controller candidate build requires an unmodified source checkout for receipt provenance")
+                mismatches.append(relative.as_posix())
+                continue
             expected = expected_stream.read()
             actual = actual_path.read_bytes()
             if actual != expected and (b"\0" in expected or actual.replace(b"\r\n", b"\n") != expected):
-                raise RuntimeError("controller candidate build requires an unmodified source checkout for receipt provenance")
+                mismatches.append(relative.as_posix())
+    if mismatches:
+        paths = ", ".join(mismatches[:20])
+        suffix = " …" if len(mismatches) > 20 else ""
+        raise RuntimeError(f"controller candidate source differs from commit after line-ending normalization: {paths}{suffix}")
 
 
 def prepare_fresh_robot(robot: Path, root: Path, platform: str) -> Path:

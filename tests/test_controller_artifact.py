@@ -74,11 +74,11 @@ def test_source_provenance_allows_only_windows_line_ending_conversion(tmp_path):
     tracked.write_bytes(b"first\r\nsecond\r\n")
     require_clean_source(repository)
     tracked.write_bytes(b"changed\r\nsecond\r\n")
-    with pytest.raises(RuntimeError, match="unmodified source checkout"):
+    with pytest.raises(RuntimeError, match="source differs from commit"):
         require_clean_source(repository)
     tracked.write_bytes(b"first\r\nsecond\r\n")
     (repository / "untracked.txt").write_text("extra\n", encoding="utf-8")
-    with pytest.raises(RuntimeError, match="unmodified source checkout"):
+    with pytest.raises(RuntimeError, match="untracked files"):
         require_clean_source(repository)
 
 

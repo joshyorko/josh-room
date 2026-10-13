@@ -113,9 +113,18 @@ def _expected_assets(receipts: dict[str, dict]) -> dict[str, Path]:
     return expected
 
 
-def verify_existing_release(release: dict, *, tag: str, source_sha: str, receipts: dict[str, dict]) -> list[str]:
+def verify_existing_release(
+    release: dict,
+    *,
+    tag: str,
+    source_sha: str,
+    tag_target_sha: str,
+    receipts: dict[str, dict],
+) -> list[str]:
     if release.get("tag_name") != tag or release.get("target_commitish") != source_sha:
         raise ValueError("existing controller artifact release tag/source does not match this candidate")
+    if tag_target_sha != source_sha:
+        raise ValueError("existing controller artifact Git tag does not resolve to the qualified source commit")
     if release.get("draft") is not False or release.get("prerelease") is not True:
         raise ValueError("existing controller artifact release is not the expected public prerelease")
     expected = _expected_assets(receipts)
@@ -273,6 +282,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--report", type=Path)
     parser.add_argument("--existing-release-json", type=Path)
+    parser.add_argument("--tag-target-sha", help="peeled Git tag target resolved from origin")
     parser.add_argument("--downloads", type=Path)
     parser.add_argument("--release-tag")
     parser.add_argument("--plan-only", action="store_true", help="validate and report intended changes without writing consumer files")
@@ -286,8 +296,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.existing_release_json:
             if not args.release_tag:
                 raise ValueError("--release-tag is required to verify a published release")
+            if not args.tag_target_sha:
+                raise ValueError("--tag-target-sha is required to verify a published release")
             release = _read_json(args.existing_release_json)
-            missing = verify_existing_release(release, tag=args.release_tag, source_sha=args.source_sha, receipts=receipts)
+            missing = verify_existing_release(
+                release,
+                tag=args.release_tag,
+                source_sha=args.source_sha,
+                tag_target_sha=args.tag_target_sha,
+                receipts=receipts,
+            )
             report.update(status="PASS", missing_assets=missing)
         elif args.downloads:
             verify_downloaded_assets(args.downloads.resolve(), receipts)
