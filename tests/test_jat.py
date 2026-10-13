@@ -352,7 +352,8 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
     seen = {}
 
     monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
-    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", "/private/runtime/rcc")
+    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", "/private/runtime/controller-rcc")
+    monkeypatch.setenv("JOSH_ROOM_JAT_RCC_EXE", "/private/runtime/jat-rcc")
     monkeypatch.setenv("JOSH_ROOM_RCC_HOME", "/private/runtime/robocorp")
     monkeypatch.setenv("JOSH_ROOM_JAT_ARTIFACT", "sha256:" + "a" * 64)
     monkeypatch.setenv("JOSH_ROOM_JAT_SHA", "b" * 40)
@@ -370,7 +371,7 @@ def test_extension_jat_uses_the_pinned_artifact_with_managed_rcc(tmp_path, monke
     )
 
     assert seen["argv"][:6] == [
-        "/private/runtime/rcc",
+        "/private/runtime/jat-rcc",
         "--no-build",
         "env",
         "exec",

@@ -152,7 +152,7 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     assert "runtime/controller/**/__pycache__/**" in vscodeignore
     assert "runtime/controller/**/*.pyc" in vscodeignore
     assert runtime["extension_version"] == package["version"]
-    assert runtime["rcc"]["version"] == "v18.19.5"
+    assert runtime["rcc"]["version"] == "v18.19.6"
     assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
     assert runtime["jat"]["environment_artifact"]["digest"].startswith("sha256:")
     assert "ensureManagedRcc" in extension and "ensureJatRuntime" in extension
@@ -332,6 +332,7 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
 
 def test_v0_1_31_release_tuple_is_consistent_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
+    runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     assert lock["format_version"] == 1
     assert lock["candidate_version"] == "0.1.31"
     assert lock["josh_room"]["version"] == "0.1.31"
@@ -348,8 +349,10 @@ def test_v0_1_31_release_tuple_is_consistent_and_consumed_by_both_entries():
     assert artifact["archive_size"] > 0
     assert artifact["rcc_artifact_digest"].startswith("sha256:")
     assert artifact["rcc_version"] == "v18.19.5"
-    assert lock["rcc"]["version"] == "v18.19.5"
-    assert lock["rcc"]["source_sha"] == "d1aec7d0bb897a81274423c7a6bb747233f9c263"
+    assert runtime["jat"]["rcc"]["version"] == "v18.19.5"
+    assert runtime["jat"]["rcc"] == lock["jat"]["rcc"]
+    assert lock["rcc"]["version"] == "v18.19.6"
+    assert lock["rcc"]["source_sha"] == "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0"
     assert lock["rcc"]["managed_asset"] == "rcc-linux64"
     assert len(lock["rcc"]["managed_asset_sha256"]) == 64
     for config_path in (

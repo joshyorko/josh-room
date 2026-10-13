@@ -106,6 +106,7 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
     for relative in RUNTIME_MANIFESTS:
         manifest = json.loads((root / relative).read_text())
         assert manifest["rcc"]["version"] == "v18.19.6"
+        assert manifest["jat"]["rcc"]["version"] == "v18.19.5"
         assert set(manifest["controller"]["environment_artifacts"]) == {"linux-x64", "win32-x64"}
         assert manifest["controller"]["environment_artifacts"]["linux-x64"]["source_sha"] == "a" * 40
         assert manifest["controller"]["environment_artifacts"]["win32-x64"]["archive"]["url"].endswith("josh-room-controller-windows-amd64.rcca")

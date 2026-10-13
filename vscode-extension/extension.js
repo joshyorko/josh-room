@@ -590,6 +590,7 @@ async function initializeManagedRuntime(context, progressReporter, cancellationT
   return {
     manifest,
     rcc,
+    jatRcc: undefined,
     jat: undefined,
     controller,
     controllerRoot,
@@ -604,6 +605,15 @@ function operationNeedsJat(args) {
 
 async function ensureJatForState(context, state, progressReporter, cancellationToken) {
   if (cancellationToken?.isCancellationRequested) throw cancellationError();
+  if (!state.jatRcc) {
+    state.jatRcc = state.manifest.jat?.rcc
+      ? await managedRuntime.ensureManagedJatRcc(
+        context,
+        state.manifest,
+        runtimeProgressOptions(progressReporter, cancellationToken),
+      )
+      : state.rcc;
+  }
   if (state.mode === "local-build-fallback") {
     const jatRoot = await managedRuntime.ensureJatSource(
       context,
@@ -614,7 +624,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
     let identity;
     const localJat = await managedRuntime.buildLocalJatArtifact(
       context,
-      state.rcc,
+      state.jatRcc,
       path.join(jatRoot, "robot.yaml"),
       {
         ...runtimeProgressOptions(progressReporter, cancellationToken),
@@ -644,7 +654,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       await managedRuntime.verifyJatArtifact(
         context,
         state.manifest,
-        state.rcc,
+        state.jatRcc,
         state.jat.artifact,
         runtimeProgressOptions(progressReporter, cancellationToken),
       );
@@ -653,7 +663,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       const jat = await managedRuntime.ensureJatRuntime(
         context,
         state.manifest,
-        state.rcc,
+        state.jatRcc,
         { ...runtimeProgressOptions(progressReporter, cancellationToken), forceArchive: true },
       );
       state.jat = jat;
@@ -673,7 +683,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
     } };
     managedJatPromise = Promise.resolve().then(() => {
       reporter.event({ stage: "runtime", message: "Preparing JAT runtime for this operation" });
-      return managedRuntime.ensureJatRuntime(context, state.manifest, state.rcc,
+      return managedRuntime.ensureJatRuntime(context, state.manifest, state.jatRcc,
         runtimeProgressOptions(reporter, preparation.controller.token));
     }).then((jat) => {
       if (preparation.controller.token.isCancellationRequested) throw cancellationError();
@@ -730,6 +740,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
       rccExecutable: state.rcc.executable,
       controllerRoot: state.controllerRoot,
       jatRoot: state.jat?.jatRoot,
+      jatRccExecutable: state.jatRcc?.executable,
       jatArtifact: state.jat?.artifact,
       jatSourceSha: state.jat?.sourceSha,
       controllerArtifact: state.controller?.artifact,

@@ -10,6 +10,7 @@ const packageVersion = require("./package.json").version;
 const {
   ensureControllerRuntime,
   ensureJatRuntime,
+  ensureManagedJatRcc,
   ensureManagedRcc,
   localFallbackReason,
   readManifest,
@@ -670,6 +671,31 @@ test("ensureManagedRcc verifies the downloaded binary before atomic promotion", 
   assert.equal(fs.readdirSync(path.dirname(result.executable)).some((name) => name.includes("tmp")), false);
 });
 
+test("ensureManagedJatRcc resolves the legacy JAT pin independently", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-rcc-test-"));
+  const binary = Buffer.from("legacy-jat-rcc");
+  const manifest = manifestFor(Buffer.from("controller-rcc"), {
+    jat: { rcc: {
+      version: "v18.19.5",
+      platforms: { "linux-x64": {
+        asset: "rcc-linux64",
+        url: "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-linux64",
+        sha256: digest(binary),
+      } },
+    } },
+  });
+  const result = await ensureManagedJatRcc(context(root), manifest, {
+    platform: "linux-x64",
+    download: async (url, destination) => {
+      assert.match(url, /v18\.19\.5/);
+      fs.writeFileSync(destination, binary);
+    },
+    verifyVersion: async (_executable, version) => assert.equal(version, "v18.19.5"),
+  });
+  assert.equal(result.version, "v18.19.5");
+  assert.match(result.executable, /rcc\/v18\.19\.5\/linux-x64\/rcc$/);
+});
+
 test("ensureManagedRcc reports ordered acquisition, verification, and cached reuse phases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-runtime-phases-test-"));
   const binary = Buffer.from("managed-rcc-binary");
@@ -736,6 +762,7 @@ test("runtimeEnvironment keeps RCC and Room state under extension global storage
   assert.equal(environment.RCC_HOLOTREE_MODE, "private");
   assert.equal(environment.ROBOCORP_HOME, `${root}/robocorp`);
   assert.equal(environment.JOSH_ROOM_RCC_EXE, `${root}/runtime/rcc/v18.19.2/linux-x64/rcc`);
+  assert.equal(environment.JOSH_ROOM_JAT_RCC_EXE, `${root}/runtime/rcc/v18.19.2/linux-x64/rcc`);
   assert.equal(environment.JOSH_ROOM_WORKSPACE_ROOT, "/workspaces/example");
   assert.equal(environment.JOSH_ROOM_JAT_ARTIFACT, "sha256:" + "a".repeat(64));
   assert.equal(environment.JOSH_ROOM_JAT_SHA, "b".repeat(40));

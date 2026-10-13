@@ -177,7 +177,7 @@ def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
 def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
     extension_mode = os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1"
     handoff_values = (
-        os.environ.get("JOSH_ROOM_RCC_EXE"),
+        os.environ.get("JOSH_ROOM_JAT_RCC_EXE") or os.environ.get("JOSH_ROOM_RCC_EXE"),
         os.environ.get("JOSH_ROOM_JAT_ARTIFACT"),
         os.environ.get("JOSH_ROOM_RCC_HOME"),
     )
@@ -185,7 +185,7 @@ def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
         raise JATError("managed Josh Room runtime is incomplete")
     if not extension_mode:
         return None
-    executable = os.environ.get("JOSH_ROOM_RCC_EXE")
+    executable = os.environ.get("JOSH_ROOM_JAT_RCC_EXE") or os.environ.get("JOSH_ROOM_RCC_EXE")
     artifact = os.environ.get("JOSH_ROOM_JAT_ARTIFACT")
     rcc_home = os.environ.get("JOSH_ROOM_RCC_HOME")
     if not executable or not artifact or not rcc_home:
