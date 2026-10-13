@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 SHA256_DIGEST_LENGTH = len("sha256:") + 64
@@ -17,8 +18,7 @@ def _is_sha256_digest(value: object) -> bool:
         and all(char in "0123456789abcdef" for char in value[7:])
     )
 
-def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, release_tag: str, source_sha: str, platform: str = "linux-x64") -> None:
-    receipt_value = json.loads(receipt.read_text())
+def controller_artifact_pin(receipt_value: dict, artifact: Path, release_tag: str, source_sha: str, platform: str) -> dict:
     archive = receipt_value.get("archive", {})
     observed = hashlib.sha256(artifact.read_bytes()).hexdigest()
     if observed != archive.get("sha256") or artifact.stat().st_size != archive.get("size"):
@@ -27,7 +27,7 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
     if not _is_sha256_digest(artifact_digest):
         raise ValueError("controller artifact receipt artifact digest is invalid")
     rcc_version = receipt_value.get("rcc_version")
-    if not isinstance(rcc_version, str) or not rcc_version.startswith("v18.19."):
+    if not isinstance(rcc_version, str) or not re.fullmatch(r"v18\.19\.\d+", rcc_version):
         raise ValueError("controller artifact receipt must use an allowlisted RCC v18.19.x release")
     if receipt_value.get("platform") != platform:
         raise ValueError("controller artifact receipt platform does not match the requested pin")
@@ -39,6 +39,14 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
         raise ValueError("expected controller source commit must be a full lowercase Git SHA")
     if receipt_value.get("source") != source_sha:
         raise ValueError("controller artifact receipt source commit does not match the requested source commit")
+    if not isinstance(release_tag, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", release_tag):
+        raise ValueError("controller artifact release tag is invalid")
+    expected_assets = {
+        "linux-x64": "josh-room-controller-linux-amd64.rcca",
+        "win32-x64": "josh-room-controller-windows-amd64.rcca",
+    }
+    if platform not in expected_assets or artifact.name != expected_assets[platform]:
+        raise ValueError("controller artifact filename does not match the requested platform")
     update = {
         "digest": artifact_digest,
         "specification_digest": specification_digest,
@@ -50,6 +58,12 @@ def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, rele
             "size": archive["size"],
         },
     }
+    return update
+
+
+def pin_manifest(root: Path, template: Path, artifact: Path, receipt: Path, release_tag: str, source_sha: str, platform: str = "linux-x64") -> None:
+    receipt_value = json.loads(receipt.read_text())
+    update = controller_artifact_pin(receipt_value, artifact, release_tag, source_sha, platform)
     values = [json.loads(path.read_text()) for path in (root, template)]
     for value in values:
         controller = value.setdefault("controller", {})

@@ -1,16 +1,20 @@
-name: Qualify RCC controller candidate
+name: RCC controller maintenance
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
       - ".github/workflows/rcc-candidate-qualification.yml"
+      - "scripts/promote_rcc_candidate.py"
       - "scripts/build_controller_artifact.py"
       - "scripts/rcc_maintenance.py"
       - "scripts/controller_crypto_smoke.py"
       - "vscode-extension/runtime/controller/**"
       - "tests/test_controller_artifact.py"
       - "tests/test_rcc_maintenance.py"
+      - "tests/test_promote_rcc_candidate.py"
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -80,13 +84,161 @@ jobs:
           --rcc-sha256 "$RCC_SHA256"
           --output-dir dist/controller-artifact
           --repository "$GITHUB_WORKSPACE"
+      - name: Preserve verified candidate context with receipt
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist/controller-artifact
+          if [[ -f "$RUNNER_TEMP/rcc-candidate-report.json" ]]; then cp "$RUNNER_TEMP/rcc-candidate-report.json" dist/controller-artifact/rcc-candidate-report.json; fi
+          if [[ -f "$RUNNER_TEMP/controller-artifact-manifest.json" ]]; then cp "$RUNNER_TEMP/controller-artifact-manifest.json" dist/controller-artifact/controller-artifact-manifest.json; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: rcc-controller-candidate-${{ matrix.platform }}
-          path: |
-            ${{ runner.temp }}/rcc-candidate-report.json
-            ${{ runner.temp }}/controller-artifact-manifest.json
-            dist/controller-artifact/
+          path: dist/controller-artifact/
           if-no-files-found: warn
           retention-days: 14
+
+  promote:
+    if: github.event_name != 'pull_request' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main'
+    needs: qualify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rcc-controller-candidate-*
+          path: ${{ runner.temp }}/rcc-candidates
+          merge-multiple: false
+      - name: Validate receipts and prepare coherent source/template/lock update
+        id: prepare
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          python scripts/promote_rcc_candidate.py \
+            --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+            --artifacts "$RUNNER_TEMP/rcc-candidates" \
+            --source-sha "$SOURCE_SHA" \
+            --report "$RUNNER_TEMP/controller-promotion-report.json" \
+            --plan-only
+          jq -r '"no_change=" + (.no_change|tostring), "release_tag=" + (.artifact_release_tag // "")' \
+            "$RUNNER_TEMP/controller-promotion-report.json" >> "$GITHUB_OUTPUT"
+      - name: Create or verify immutable controller artifact release
+        if: steps.prepare.outputs.no_change != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ steps.prepare.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          linux="$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64"
+          windows="$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-win32-x64"
+          existing="$RUNNER_TEMP/controller-artifact-release.json"
+          gaps="$RUNNER_TEMP/controller-artifact-release-gaps.json"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$existing"; then
+            python scripts/promote_rcc_candidate.py \
+              --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+              --artifacts "$RUNNER_TEMP/rcc-candidates" --source-sha "$SOURCE_SHA" \
+              --existing-release-json "$existing" --release-tag "$RELEASE_TAG" > "$gaps"
+            mapfile -t missing < <(jq -r '.missing_assets[]' "$gaps")
+            for name in "${missing[@]}"; do
+              case "$name" in
+                josh-room-controller-linux-amd64.rcca|josh-room-controller-linux-amd64.json) path="$linux/$name" ;;
+                josh-room-controller-windows-amd64.rcca|josh-room-controller-windows-amd64.json) path="$windows/$name" ;;
+                *) echo "unexpected controller release asset: $name" >&2; exit 1 ;;
+              esac
+              gh release upload "$RELEASE_TAG" "$path" --repo "$GITHUB_REPOSITORY"
+            done
+          else
+            gh release create "$RELEASE_TAG" \
+              "$linux/josh-room-controller-linux-amd64.rcca" "$linux/josh-room-controller-linux-amd64.json" \
+              "$windows/josh-room-controller-windows-amd64.rcca" "$windows/josh-room-controller-windows-amd64.json" \
+              --repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --prerelease \
+              --title "Josh Room controller artifacts for RCC $(jq -r '.version' "$linux/rcc-candidate-report.json")" \
+              --notes "Native Linux and Windows RCC qualification. Source commit: $SOURCE_SHA."
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$existing"
+          python scripts/promote_rcc_candidate.py \
+            --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+            --artifacts "$RUNNER_TEMP/rcc-candidates" --source-sha "$SOURCE_SHA" \
+            --existing-release-json "$existing" --release-tag "$RELEASE_TAG"
+          mkdir -p "$RUNNER_TEMP/published-controller-assets"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.rcca' --pattern '*.json' --dir "$RUNNER_TEMP/published-controller-assets"
+          python scripts/promote_rcc_candidate.py \
+            --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+            --artifacts "$RUNNER_TEMP/rcc-candidates" --source-sha "$SOURCE_SHA" \
+            --downloads "$RUNNER_TEMP/published-controller-assets"
+      - name: Open or update coherent consumer promotion PR
+        if: steps.prepare.outputs.no_change != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          branch='maintenance/rcc-controller'
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "${{ github.sha }}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git fetch origin "$branch"
+            git switch --track -c "$branch" "origin/$branch"
+            git rebase origin/main
+          else
+            git switch -c "$branch"
+          fi
+          python scripts/promote_rcc_candidate.py \
+            --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+            --artifacts "$RUNNER_TEMP/rcc-candidates" \
+            --source-sha "${{ github.sha }}" \
+            --report "$RUNNER_TEMP/controller-promotion-report.json"
+          report="$RUNNER_TEMP/controller-promotion-report.json"
+          mapfile -t files < <(jq -r '.changed_files[]' "$report")
+          if [[ ${#files[@]} -eq 0 ]]; then exit 0; fi
+          git add "${files[@]}"
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'chore: promote verified RCC controller artifacts'
+          git push --set-upstream origin "$branch"
+          open_pr=$(gh pr list --state open --base main --head "$GITHUB_REPOSITORY_OWNER:$branch" --json number --jq '.[0].number // empty')
+          cat > "$RUNNER_TEMP/controller-promotion-pr.md" <<EOF
+          Promotes a native RCC controller qualification into the consumer manifests, templates, freezes, and release lock.
+
+          RCC version: $(jq -r '.candidate' "$report")
+          Artifact release: $(jq -r '.artifact_release_tag' "$report")
+          Source commit: $(jq -r '.source_sha' "$report")
+
+          Linux input/artifact: $(jq -r '.platforms["linux-x64"].input_digest + " / " + .platforms["linux-x64"].artifact_digest' "$report")
+          Windows input/artifact: $(jq -r '.platforms["win32-x64"].input_digest + " / " + .platforms["win32-x64"].artifact_digest' "$report")
+
+          Qualification run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          if [[ -z "$open_pr" ]]; then
+            gh pr create --base main --head "$branch" --title 'chore: promote verified RCC controller artifacts' --body-file "$RUNNER_TEMP/controller-promotion-pr.md"
+          else
+            gh pr edit "$open_pr" --title 'chore: promote verified RCC controller artifacts' --body-file "$RUNNER_TEMP/controller-promotion-pr.md"
+          fi
+      - name: Upload promotion report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcc-controller-promotion-report
+          path: ${{ runner.temp }}/controller-promotion-report.json
+          if-no-files-found: warn
+          retention-days: 90

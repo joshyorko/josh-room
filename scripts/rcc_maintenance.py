@@ -21,12 +21,6 @@ PLATFORMS = {
     "linux-x64": {"asset": "rcc-linux64", "index_field": "linux"},
     "win32-x64": {"asset": "rcc-windows64.exe", "index_field": "windows"},
 }
-MANIFESTS = (
-    Path("vscode-extension/runtime/controller-artifact-manifest.json"),
-    Path("vscode-extension/runtime/manifest.json"),
-    Path("templates/room/vscode-extension/runtime/controller-artifact-manifest.json"),
-    Path("templates/room/vscode-extension/runtime/manifest.json"),
-)
 LOCKS = (
     Path("release-lock.json"),
     Path("templates/room/vscode-extension/runtime/release-lock.json"),
@@ -174,41 +168,6 @@ def _atomic_write_json(path: Path, value: dict) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def apply_candidate(root: Path, candidate: dict) -> list[str]:
-    changed: list[str] = []
-    manifest_values = []
-    for relative in MANIFESTS:
-        path = root / relative
-        value = json.loads(path.read_text(encoding="utf-8"))
-        value.setdefault("rcc", {})["version"] = candidate["version"]
-        value["rcc"]["platforms"] = candidate["platforms"]
-        manifest_values.append((path, value))
-
-    lock_values = []
-    linux = candidate["platforms"]["linux-x64"]
-    for relative in LOCKS:
-        path = root / relative
-        value = json.loads(path.read_text(encoding="utf-8"))
-        value["rcc"] = {
-            **value.get("rcc", {}),
-            "repository": f"https://github.com/{OWNER}/{REPO}",
-            "version": candidate["version"],
-            "source_sha": candidate["source_sha"],
-            "managed_asset": linux["asset"],
-            "managed_asset_sha256": linux["sha256"],
-            "platforms": candidate["platforms"],
-        }
-        lock_values.append((path, value))
-
-    for path, value in [*manifest_values, *lock_values]:
-        encoded = json.dumps(value, indent=2) + "\n"
-        if path.read_text(encoding="utf-8") == encoded:
-            continue
-        _atomic_write_json(path, value)
-        changed.append(str(path.relative_to(root)))
-    return changed
-
-
 def write_candidate_manifest(root: Path, candidate: dict, destination: Path) -> None:
     source = root / "vscode-extension/runtime/controller-artifact-manifest.json"
     value = json.loads(source.read_text(encoding="utf-8"))
@@ -223,36 +182,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--report", type=Path, default=Path("artifacts/rcc-maintenance-report.json"))
     parser.add_argument("--candidate-manifest", type=Path, help="write verified RCC pins into an isolated controller manifest")
-    parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     root = args.root.resolve()
     report_path = args.report if args.report.is_absolute() else root / args.report
     report: dict[str, Any] = {
         "repository": f"{OWNER}/{REPO}",
-        "status": "FAIL",
+        "status": "BLOCKED",
         "platforms": {platform: {"status": "BLOCKED"} for platform in PLATFORMS},
     }
     try:
         release = fetch_release()
         candidate = verify_release(release)
         report.update(candidate)
-        report["status"] = "PASS"
+        report["status"] = "RELEASE_VERIFIED"
         if args.candidate_manifest:
             candidate_manifest = args.candidate_manifest
             if not candidate_manifest.is_absolute():
                 candidate_manifest = root / candidate_manifest
             write_candidate_manifest(root, candidate, candidate_manifest)
             report["candidate_manifest"] = str(candidate_manifest)
-        report["changed_files"] = apply_candidate(root, candidate) if args.apply else []
-        report["no_change"] = not report["changed_files"]
-        if args.apply:
-            report["applied"] = report["changed_files"]
     except Exception as error:  # noqa: BLE001 - preserve the report on every failure.
         report["error"] = f"{type(error).__name__}: {error}"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if report["status"] == "PASS" else 1
+    return 0 if report["status"] == "RELEASE_VERIFIED" else 1
 
 
 if __name__ == "__main__":

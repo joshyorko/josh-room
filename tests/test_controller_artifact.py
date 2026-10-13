@@ -48,52 +48,46 @@ def test_rcc_pin_requires_real_v18_19_5_checksum_before_build():
     assert pin["sha256"] == "a" * 64
 
 
-def test_checked_in_controller_manifest_is_v18_19_5_only_and_has_no_fake_checksums():
+def test_checked_in_controller_manifest_and_consumers_are_exact_and_in_parity():
     root = Path(__file__).parents[1]
     value = load_manifest(root / "vscode-extension/runtime/controller-artifact-manifest.json")
     template = root / "templates/room/vscode-extension/runtime/controller-artifact-manifest.json"
     assert (root / "vscode-extension/runtime/controller-artifact-manifest.json").read_bytes() == template.read_bytes()
-    assert value["rcc"]["version"] == "v18.19.5"
-    assert value["rcc"]["platforms"]["linux-x64"] == {
-        "asset": "rcc-linux64",
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-linux64",
-        "sha256": "1a617ad7c736fa67c605e20e5ebe3c7d54b02cd548f733e05c809cf49a48db1e",
-        "size": 22360226
-    }
-    assert value["rcc"]["platforms"]["linux-x64"]["size"] == 22360226
-    assert value["rcc"]["platforms"]["win32-x64"] == {
-        "asset": "rcc-windows64.exe",
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.5/rcc-windows64.exe",
-        "sha256": "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731",
-        "size": 20084224,
-    }
+    version = value["rcc"]["version"]
+    assert version.startswith("v18.19.") and version.removeprefix("v18.19.").isdigit()
+    assert set(value["rcc"]["platforms"]) == {"linux-x64", "win32-x64"}
+    expected_rcc_assets = {"linux-x64": "rcc-linux64", "win32-x64": "rcc-windows64.exe"}
+    for platform, asset in expected_rcc_assets.items():
+        pin = value["rcc"]["platforms"][platform]
+        assert pin["asset"] == asset
+        assert pin["url"] == f"https://github.com/joshyorko/rcc/releases/download/{version}/{asset}"
+        assert len(pin["sha256"]) == 64 and all(char in "0123456789abcdef" for char in pin["sha256"])
+        assert type(pin["size"]) is int and pin["size"] > 0
     runtime_value = json.loads((root / "vscode-extension/runtime/manifest.json").read_text())
     runtime_template = root / "templates/room/vscode-extension/runtime/manifest.json"
     assert runtime_value == json.loads(runtime_template.read_text())
+    assert runtime_value["rcc"]["version"] == version
+    assert runtime_value["rcc"]["platforms"] == value["rcc"]["platforms"]
     controller = runtime_value["controller"]["environment_artifacts"]
-    assert controller["linux-x64"] == {
-        "digest": "sha256:136ac1121dc14b63333276c571e3712f3bc6c5eb16f497764200ea5bcfa8511a",
-        "specification_digest": "sha256:8f632d0b238da15b20536c78b3440aa2771a504785b8b478383064bbd47a0f23",
-        "platform": "linux-x64",
-        "archive": {
-            "asset": "josh-room-controller-linux-amd64.rcca",
-            "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.11-controller-artifacts/josh-room-controller-linux-amd64.rcca",
-            "sha256": "3dd7d542b2fdd35633152a400e30d7c6bb861c5bb128f6e22ef6bdbc3b048f88",
-            "size": 130993088,
-        },
-    }
-    assert controller["win32-x64"] == {
-        "digest": "sha256:3d6389a89a8cbc068208bbcf198eae3b63d5c46a5d18f1ac1e6b250ebcff228a",
-        "specification_digest": "sha256:1a864c001fc21b59ba5129e884d5a5060bf2aebb047760fda45d5a0c5285a3e0",
-        "platform": "win32-x64",
-        "archive": {
-            "asset": "josh-room-controller-windows-amd64.rcca",
-            "url": "https://github.com/joshyorko/josh-room/releases/download/v0.1.11-controller-artifacts/josh-room-controller-windows-amd64.rcca",
-            "sha256": "1d16ffca8958bd19b32e2747653983d7e2a9755d8534b97192eac5a915ca16d0",
-            "size": 77963976,
-        },
-    }
-    assert value["rcc"]["platforms"]["win32-x64"]["sha256"] == "7b62dc1f421f7cf33560c1b0567fc5bf8a65fc1d919af28d0ab633f85814a731"
+    assert set(controller) == {"linux-x64", "win32-x64"}
+    release_lock = json.loads((root / "release-lock.json").read_text())
+    assert release_lock["rcc"]["version"] == version
+    for platform, asset in (("linux-x64", "josh-room-controller-linux-amd64.rcca"), ("win32-x64", "josh-room-controller-windows-amd64.rcca")):
+        artifact = controller[platform]
+        assert artifact["platform"] == platform
+        assert artifact["digest"].startswith("sha256:") and len(artifact["digest"]) == 71
+        assert artifact["specification_digest"].startswith("sha256:") and len(artifact["specification_digest"]) == 71
+        assert artifact["archive"]["asset"] == asset
+        assert artifact["archive"]["url"].startswith("https://github.com/joshyorko/josh-room/releases/download/")
+        assert artifact["archive"]["url"].endswith("/" + asset)
+        assert len(artifact["archive"]["sha256"]) == 64
+        assert artifact["archive"]["size"] > 0
+        locked = release_lock["controller"]["platforms"][platform]
+        assert locked["artifact_digest"] == artifact["digest"]
+        assert locked["specification_digest"] == artifact["specification_digest"]
+        assert locked["archive_sha256"] == artifact["archive"]["sha256"]
+        if "input_digest" in artifact:
+            assert artifact["input_digest"] == locked["input_digest"]
     workflow = (root / ".github/workflows/controller-artifact.yml").read_text()
     assert "workflow_dispatch" in workflow
     assert "v18.19.2" not in workflow
@@ -205,6 +199,7 @@ def test_receipt_is_immutable_and_carries_controller_provenance(tmp_path):
         "rcc_version": "v18.19.5",
         "rcc_sha256": "f" * 64,
         "input_digest": "sha256:" + "1" * 64,
+        "freeze": {"asset": "environment_linux_amd64_freeze.yaml", "sha256": "2" * 64, "size": 50},
         "source": "e" * 40,
         "platform": "linux-x64",
         "verified_acquire": True,

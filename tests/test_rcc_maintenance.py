@@ -87,34 +87,6 @@ def test_release_verification_rejects_metadata_checksum_mismatch(monkeypatch):
         maintenance.verify_release(release)
 
 
-def test_consumer_pin_application_updates_all_copies_and_is_idempotent(tmp_path: Path):
-    for relative in (*maintenance.MANIFESTS, *maintenance.LOCKS):
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        original = {"rcc": {"version": "v18.19.5", "platforms": {}}}
-        if relative in maintenance.LOCKS:
-            original = {"rcc": {"version": "v18.19.5", "source_sha": "b" * 40}}
-        path.write_text(json.dumps(original, indent=2) + "\n", encoding="utf-8")
-
-    candidate = {
-        "version": "v18.19.6",
-        "source_sha": "a" * 40,
-        "platforms": {
-            "linux-x64": {"asset": "rcc-linux64", "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.6/rcc-linux64", "sha256": "1" * 64, "size": 12},
-            "win32-x64": {"asset": "rcc-windows64.exe", "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.6/rcc-windows64.exe", "sha256": "2" * 64, "size": 13},
-        },
-    }
-    changed = maintenance.apply_candidate(tmp_path, candidate)
-    assert set(changed) == {str(path) for path in (*maintenance.MANIFESTS, *maintenance.LOCKS)}
-    assert maintenance.apply_candidate(tmp_path, candidate) == []
-    for relative in maintenance.MANIFESTS:
-        assert json.loads((tmp_path / relative).read_text())["rcc"]["version"] == "v18.19.6"
-    for relative in maintenance.LOCKS:
-        lock = json.loads((tmp_path / relative).read_text())["rcc"]
-        assert lock["source_sha"] == "a" * 40
-        assert lock["platforms"]["win32-x64"]["sha256"] == "2" * 64
-
-
 def test_candidate_manifest_is_written_separately_from_consumer_pins(tmp_path: Path):
     source = tmp_path / "vscode-extension/runtime/controller-artifact-manifest.json"
     source.parent.mkdir(parents=True)
