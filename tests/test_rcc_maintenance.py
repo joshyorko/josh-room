@@ -113,3 +113,24 @@ def test_consumer_pin_application_updates_all_copies_and_is_idempotent(tmp_path:
         lock = json.loads((tmp_path / relative).read_text())["rcc"]
         assert lock["source_sha"] == "a" * 40
         assert lock["platforms"]["win32-x64"]["sha256"] == "2" * 64
+
+
+def test_candidate_manifest_is_written_separately_from_consumer_pins(tmp_path: Path):
+    source = tmp_path / "vscode-extension/runtime/controller-artifact-manifest.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps({"schema_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {"robot": "controller/robot.yaml"}}))
+    candidate = {
+        "version": "v18.19.6",
+        "platforms": {
+            "linux-x64": {"asset": "rcc-linux64", "url": "https://example.test/linux", "sha256": "1" * 64, "size": 11},
+            "win32-x64": {"asset": "rcc-windows64.exe", "url": "https://example.test/windows", "sha256": "2" * 64, "size": 12},
+        },
+    }
+    destination = tmp_path / "candidate" / "manifest.json"
+
+    maintenance.write_candidate_manifest(tmp_path, candidate, destination)
+
+    written = json.loads(destination.read_text())
+    assert written["rcc"]["version"] == "v18.19.6"
+    assert written["rcc"]["platforms"]["linux-x64"]["sha256"] == "1" * 64
+    assert json.loads(source.read_text())["rcc"]["version"] == "v18.19.5"

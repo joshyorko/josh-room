@@ -1,0 +1,92 @@
+name: Qualify RCC controller candidate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/rcc-candidate-qualification.yml"
+      - "scripts/build_controller_artifact.py"
+      - "scripts/rcc_maintenance.py"
+      - "scripts/controller_crypto_smoke.py"
+      - "vscode-extension/runtime/controller/**"
+      - "tests/test_controller_artifact.py"
+      - "tests/test_rcc_maintenance.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rcc-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-latest
+            executable: rcc-linux64
+          - platform: win32-x64
+            runner: windows-latest
+            executable: rcc-windows64.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify official RCC release and create isolated candidate manifest
+        shell: bash
+        run: >-
+          python scripts/rcc_maintenance.py
+          --report "$RUNNER_TEMP/rcc-candidate-report.json"
+          --candidate-manifest "$RUNNER_TEMP/controller-artifact-manifest.json"
+      - name: Download and verify native RCC executable
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url=$(jq -er '.rcc.platforms["${{ matrix.platform }}"].url' "$RUNNER_TEMP/controller-artifact-manifest.json")
+          sha=$(jq -er '.rcc.platforms["${{ matrix.platform }}"].sha256' "$RUNNER_TEMP/controller-artifact-manifest.json")
+          curl --fail --location --proto '=https' --tlsv1.2 "$url" -o "$RUNNER_TEMP/rcc"
+          printf '%s  %s\n' "$sha" "$RUNNER_TEMP/rcc" | sha256sum --check --status
+          chmod 0700 "$RUNNER_TEMP/rcc"
+          echo "RCC_EXE=$RUNNER_TEMP/rcc" >> "$GITHUB_ENV"
+          echo "RCC_SHA256=$sha" >> "$GITHUB_ENV"
+      - name: Download and verify native RCC executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $manifest = Get-Content "$env:RUNNER_TEMP/controller-artifact-manifest.json" | ConvertFrom-Json
+          $pin = $manifest.rcc.platforms.'${{ matrix.platform }}'
+          $rcc = Join-Path $env:RUNNER_TEMP 'rcc-windows64.exe'
+          Invoke-WebRequest -Uri $pin.url -OutFile $rcc
+          if ((Get-FileHash $rcc -Algorithm SHA256).Hash.ToLower() -ne $pin.sha256.ToLower()) { throw 'RCC SHA256 mismatch.' }
+          "RCC_EXE=$rcc" >> $env:GITHUB_ENV
+          "RCC_SHA256=$($pin.sha256)" >> $env:GITHUB_ENV
+      - name: Fresh solve, freeze, publish and qualify controller artifact
+        shell: bash
+        run: >-
+          python scripts/build_controller_artifact.py
+          --manifest "$RUNNER_TEMP/controller-artifact-manifest.json"
+          --rcc "$RCC_EXE"
+          --platform "${{ matrix.platform }}"
+          --rcc-sha256 "$RCC_SHA256"
+          --output-dir dist/controller-artifact
+          --repository "$GITHUB_WORKSPACE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rcc-controller-candidate-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/rcc-candidate-report.json
+            ${{ runner.temp }}/controller-artifact-manifest.json
+            dist/controller-artifact/
+          if-no-files-found: warn
+          retention-days: 14

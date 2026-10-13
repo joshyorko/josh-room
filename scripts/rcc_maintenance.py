@@ -209,10 +209,20 @@ def apply_candidate(root: Path, candidate: dict) -> list[str]:
     return changed
 
 
+def write_candidate_manifest(root: Path, candidate: dict, destination: Path) -> None:
+    source = root / "vscode-extension/runtime/controller-artifact-manifest.json"
+    value = json.loads(source.read_text(encoding="utf-8"))
+    value.setdefault("rcc", {})["version"] = candidate["version"]
+    value["rcc"]["platforms"] = candidate["platforms"]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(destination, value)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--report", type=Path, default=Path("artifacts/rcc-maintenance-report.json"))
+    parser.add_argument("--candidate-manifest", type=Path, help="write verified RCC pins into an isolated controller manifest")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
     root = args.root.resolve()
@@ -227,6 +237,12 @@ def main(argv: list[str] | None = None) -> int:
         candidate = verify_release(release)
         report.update(candidate)
         report["status"] = "PASS"
+        if args.candidate_manifest:
+            candidate_manifest = args.candidate_manifest
+            if not candidate_manifest.is_absolute():
+                candidate_manifest = root / candidate_manifest
+            write_candidate_manifest(root, candidate, candidate_manifest)
+            report["candidate_manifest"] = str(candidate_manifest)
         report["changed_files"] = apply_candidate(root, candidate) if args.apply else []
         report["no_change"] = not report["changed_files"]
         if args.apply:
