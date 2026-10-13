@@ -82,6 +82,33 @@ def test_source_provenance_allows_only_windows_line_ending_conversion(tmp_path):
         require_clean_source(repository)
 
 
+def test_source_provenance_ignores_changes_outside_controller_inputs(tmp_path):
+    import subprocess
+
+    repository = tmp_path / "repo"
+    controller = repository / "runtime" / "controller"
+    controller.mkdir(parents=True)
+    (repository / "docs").mkdir()
+    source = controller / "robot.yaml"
+    unrelated = repository / "docs" / "policy.md"
+    source.write_text("robot: true\n", encoding="utf-8")
+    unrelated.write_text("policy\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True)
+    subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repository), "commit", "-qm", "fixture"], check=True)
+
+    unrelated.write_text("localized checkout variation\n", encoding="utf-8")
+    require_clean_source(repository, input_paths={controller})
+    source.write_text("robot: changed\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="source differs from commit"):
+        require_clean_source(repository, input_paths={controller})
+    (controller / "untracked.py").write_text("unexpected\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="untracked files"):
+        require_clean_source(repository, input_paths={controller})
+
+
 def test_controller_input_digest_tracks_packaged_runtime_resources(tmp_path):
     controller = tmp_path / "controller"
     package = controller / "josh_room"

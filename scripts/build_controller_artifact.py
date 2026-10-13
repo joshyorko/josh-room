@@ -172,8 +172,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def require_clean_source(repository: Path) -> None:
-    """Reject source edits while allowing Windows checkout CRLF conversion."""
+def require_clean_source(repository: Path, *, input_paths: set[Path] | None = None) -> None:
+    """Reject candidate input edits while allowing Windows checkout CRLF conversion.
+
+    When ``input_paths`` is provided, validate only files that can affect the
+    controller artifact. Windows may mark unrelated text files modified after
+    checkout, and those files do not change the bytes packaged in this build.
+    """
     changed = subprocess.run(
         ["git", "-C", str(repository), "diff", "--name-only", "--no-renames", "-z", "HEAD", "--"],
         capture_output=True,
@@ -186,6 +191,17 @@ def require_clean_source(repository: Path) -> None:
         check=True,
     ).stdout
     changed_paths = [Path(value.decode("utf-8", errors="surrogateescape")) for value in changed if value]
+    if input_paths is not None:
+        resolved_inputs = {
+            (path if path.is_absolute() else repository / path).resolve()
+            for path in input_paths
+        }
+        def is_input(path: Path) -> bool:
+            absolute = (path if path.is_absolute() else repository / path).resolve()
+            return any(absolute == root or absolute.is_relative_to(root) for root in resolved_inputs)
+
+        changed_paths = [path for path in changed_paths if is_input(path)]
+        untracked = "\n".join(path for path in untracked.splitlines() if is_input(Path(path)))
     if untracked:
         paths = ", ".join(untracked.splitlines()[:20])
         raise RuntimeError(f"controller candidate checkout has untracked files: {paths}")
@@ -324,7 +340,15 @@ def build(*, manifest_path: Path, rcc: Path, platform: str, rcc_checksum: str | 
     if not crypto_smoke.is_file():
         raise FileNotFoundError("controller crypto smoke script is missing")
     source = subprocess.run(["git", "-C", str(repository), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    require_clean_source(repository)
+    require_clean_source(
+        repository,
+        input_paths={
+            source_robot.parent,
+            manifest_path,
+            Path(__file__),
+            Path(__file__).with_name("controller_crypto_smoke.py"),
+        },
+    )
     stage = destination_stage(archive)
     try:
         with tempfile.TemporaryDirectory(prefix="josh-room-controller-build-") as temporary:
