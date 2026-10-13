@@ -30,6 +30,7 @@ from .encryption_domain import (
     physical_bucket_identity,
     validate_minio_transport,
 )
+from .git_worktree_repair import inspect_workspace, proposal_digest
 from .logical_jat import MAX_LOGICAL_JAT_BYTES, LogicalJat
 from .minio import MinioBackend, MinioConfig, validate_bucket_name
 from .operations import _display_name, _encrypt_catalog, _read_remote_catalog
@@ -63,6 +64,7 @@ from .room_store_operations import (
     RoomStorePublicationError,
     SavePreview,
     SaveResult,
+    WorkspaceValidationError,
     scan_workspace_for_status,
 )
 from .workspace_state import write_stat_workspace_marker
@@ -1854,7 +1856,28 @@ def preview_room_store(
                 operations.preview(parent),
                 rcc_capture_pending=_rcc_capture_pending(workspace, parent),
             )
+    except WorkspaceValidationError as error:
+        raise RoomStoreBridgeError(
+            str(error),
+            code="preview-invalid",
+            result={"diagnostic": str(error)},
+        ) from None
     except RoomStoreOperationsError as error:
+        if "Git storage is not self-contained" in str(error) or "linked worktrees" in str(error):
+            try:
+                records = inspect_workspace(workspace)
+            except (OSError, RuntimeError, ValueError):
+                records = ()
+            if records:
+                raise RoomStoreBridgeError(
+                    "stale Git worktree records can be cleaned before retrying Save",
+                    code="stale-worktree-repair-available",
+                    result={
+                        "repair_records": [record.to_dict() for record in records],
+                        "repair_repository": records[0].repository,
+                        "proposal_digest": proposal_digest(records),
+                    },
+                ) from None
         raise RoomStoreBridgeError(str(error), code="preview-invalid") from None
 
 

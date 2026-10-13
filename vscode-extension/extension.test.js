@@ -178,6 +178,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   const openDialogCalls = [];
   const inputBoxCalls = [];
   const infoCalls = [];
+  const errorCalls = [];
   const warningCalls = [];
   const openExternalCalls = [];
   const executeCalls = [];
@@ -303,6 +304,10 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
           infoCalls.push(args);
           return infoResponses.shift();
         },
+        showErrorMessage: async (...args) => {
+          errorCalls.push(args);
+          return undefined;
+        },
         showWarningMessage: async (...args) => {
           warningCalls.push(args);
           return warningResponses.shift();
@@ -356,6 +361,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     openDialogCalls,
     inputBoxCalls,
     infoCalls,
+    errorCalls,
     warningCalls,
     openExternalCalls,
     executeCalls,
@@ -1102,6 +1108,120 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   assert.equal(quickPickCalls.length >= 3, true);
   assert.deepEqual(quickPickCalls[1].items.map((item) => item.display_name || item.label), ["Archive", "Backup"]);
   assert.match(spawnHarness.calls.at(-1).args.join(" "), /--dimension backup/);
+});
+
+for (const repairDecision of ["Clean stale worktree records and retry", "Cancel"]) test(`Save repair approval is bounded and ${repairDecision === "Cancel" ? "cancellable" : "retries with the exact digest"}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-worktree-repair-"));
+  const source = path.join(root, "source");
+  fs.mkdirSync(source);
+  const dimension = { id: "backup", display_name: "Backup", provider: "minio", rooms: [] };
+  const digest = "d".repeat(64);
+  const repairRecord = {
+    repository: path.join(source, "repo"),
+    administrative_path: path.join(source, "repo", ".git", "worktrees", "stale"),
+    worktree_path: path.join(source, "deleted-worktree"),
+  };
+  const { vscode, statusItem, warningCalls } = createVscodeMock(root);
+  const previewError = {
+    ok: false,
+    error: "stale-worktree-repair-available",
+    message: "stale Git worktree records can be cleaned before retrying Save",
+    repair_records: [repairRecord],
+    repair_repository: repairRecord.repository,
+    proposal_digest: digest,
+  };
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
+    if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "ready" }) };
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      return spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "preview").length === 1
+        ? { code: 1, stdout: JSON.stringify(previewError) }
+        : { stdout: JSON.stringify(nativePreview()) };
+    }
+    if (args[0] === "workspace" && args[1] === "worktree-repair") return { stdout: JSON.stringify({ ok: true, state: "repaired" }) };
+    if (args[0] === "snapshot" && args[1] === "create") return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "synthetic-room", snapshot_id: "jat-1", data_added_bytes: 0, scanned_bytes: 0 }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: source }]);
+  vscode.inputBoxResponses.push("Synthetic Room");
+  vscode.quickPickResponses.push({ create: true }, dimension, { label: "Workspace only", allImages: false });
+  vscode.warningResponses.push(repairDecision);
+  vscode.infoResponses.push("Save");
+
+  if (repairDecision === "Cancel") {
+    await assert.rejects(extension.__test__.saveRoom({ forceCreate: true }));
+    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair"), false);
+    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"), false);
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
+  assert.equal(await extension.__test__.saveRoom({ forceCreate: true }), "saved");
+  const repair = spawnHarness.calls.find((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair");
+  assert.ok(repair);
+  assert.equal(repair.args[repair.args.indexOf("--proposal-digest") + 1], digest);
+  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "preview").length, 2);
+  assert.ok(warningCalls.some(([message]) => message.includes(repairRecord.worktree_path)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Check Workspace accepts the CLI's nonzero validation receipt and shows sanitized guidance", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-check-workspace-test-"));
+  fs.writeFileSync(path.join(root, "notes.txt"), "keep me\n");
+  const payload = {
+    ok: false,
+    code: "workspace-invalid",
+    error: "Git storage is not self-contained and portable; linked worktrees are unsupported",
+    remediation: "Inspect linked worktrees with `git worktree prune --dry-run --verbose`; repair Git storage manually before saving.",
+    diagnostic: "Rejected private path /home/synthetic/host/worktree and AGE-SECRET-KEY-PRIVATE",
+  };
+  const { vscode, statusItem, errorCalls, outputChannel, logLines } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.deepEqual(args.slice(0, 1), ["workspace-check"]);
+    return { code: 2, stdout: JSON.stringify(payload) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests(outputChannel);
+  const before = fs.readFileSync(path.join(root, "notes.txt"));
+
+  const result = await extension.__test__.checkWorkspace();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "workspace-invalid");
+  assert.ok(errorCalls[0][0].includes("git worktree prune --dry-run --verbose"));
+  assert.equal(errorCalls[0][0].includes("/home/synthetic/host"), false);
+  assert.equal(errorCalls[0][0].includes("AGE-SECRET-KEY-PRIVATE"), false);
+  assert.ok(logLines.some((line) => line.includes("workspace-invalid")));
+  assert.equal(spawnHarness.calls.length, 1);
+  assert.equal(spawnHarness.calls[0].args.includes("--workspace"), true);
+  assert.deepEqual(fs.readFileSync(path.join(root, "notes.txt")), before);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Check Workspace runs without a Room marker or storage/provider query", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-check-workspace-clean-"));
+  const { vscode, statusItem, infoCalls, outputChannel } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.equal(args[0], "workspace-check");
+    return { stdout: JSON.stringify({
+      ok: true, scope: "local-workspace-validation", entry_count: 0,
+      workspace_signature: "a".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: "b".repeat(64), logical_bytes: 0,
+    }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests(outputChannel);
+
+  const result = await extension.__test__.checkWorkspace();
+
+  assert.equal(result.ok, true);
+  assert.equal(infoCalls[0][0], "Workspace valid · 0 entries");
+  assert.deepEqual(spawnHarness.calls.map((call) => call.args[0]), ["workspace-check"]);
+  assert.equal(fs.existsSync(path.join(root, ".josh-room.json")), false);
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 for (const forceCreate of [false, true]) for (const refreshFailure of [false, true]) test(`${forceCreate ? "New" : "Save"} Room uses a migrated MinIO keyset without an extension cache; refresh failure=${refreshFailure}`, async () => {
@@ -5365,6 +5485,7 @@ test("Workspace Trust blocks executable, recovery, and workspace-reading actions
     () => extension.__test__.serveRoom({ id: "room", dimension: { id: "backup", provider: "minio" } }),
     () => extension.__test__.linkRoom(),
     () => extension.__test__.repairRoom(),
+    () => extension.__test__.checkWorkspace(),
     () => extension.__test__.exportRecovery({ id: "backup", provider: "minio" }),
   ];
   for (const action of actions) await assert.rejects(action, /Workspace Trust/);
