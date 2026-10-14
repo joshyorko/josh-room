@@ -47,8 +47,10 @@ def test_main_ci_builds_a_versioned_candidate_only_after_every_required_check_pa
     steps = _steps(candidate)
     assert "npm run package" in steps
     assert "--version \"$VERSION\"" in steps
+    assert '--candidate "$candidate"' in steps
     assert "--source-sha \"$SOURCE_SHA\"" in steps
     assert "--ci-run-id \"$CI_RUN_ID\"" in steps
+    assert 'cmp "$candidate" "dist/release-candidate/josh-room-$VERSION.vsix"' in steps
     assert "release-candidate-${{ steps.version.outputs.version }}-${{ github.sha }}" in str(candidate)
     upload = next(step for step in candidate["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
     assert upload["with"]["retention-days"] == "90"
