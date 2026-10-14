@@ -237,7 +237,10 @@ def reconcile_release_assets(
     release = _object(release, "GitHub release")
     if release.get("tag_name") != expected_tag:
         raise ValueError("staged release tag does not match this candidate")
-    if tag_target_sha != source_sha:
+    if not tag_target_sha and release.get("draft") is True:
+        if not SOURCE_SHA.fullmatch(source_sha) or release.get("target_commitish") != source_sha:
+            raise ValueError("untagged draft release target differs from the exact source SHA")
+    elif tag_target_sha != source_sha:
         raise ValueError("staged release Git tag target SHA differs from the exact source SHA")
     if release.get("prerelease") is not False:
         raise ValueError("standalone release candidate is incorrectly marked as a prerelease")
