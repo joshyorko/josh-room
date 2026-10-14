@@ -16,7 +16,7 @@ SOURCE_SHA = "a" * 40
 BRANCH_SHA = "b" * 40
 
 
-def _handoff(tmp_path, *, existing_pr=False, ahead=True, rebased=False):
+def _handoff(tmp_path, *, existing_pr=False, ahead=True, rebased=False, branch_version="0.1.33"):
     workflow = yaml.safe_load((ROOT / ".github/workflows/rcc-candidate-qualification.yml").read_text())
     step = next(item for item in workflow["jobs"]["promote"]["steps"] if item.get("name") == "Open or update coherent consumer promotion PR")
     script = step["run"].replace("${{ github.sha }}", SOURCE_SHA)
@@ -54,6 +54,9 @@ elif name == "gh" and args[:2] == ["pr", "list"]:
         "platforms": {platform: {"input_digest": "sha256:" + "f" * 64, "artifact_digest": "sha256:" + "1" * 64} for platform in ("linux-x64", "win32-x64")},
         "jat_platforms": {platform: {"digest": "sha256:" + "2" * 64} for platform in ("linux-x64", "win32-x64")},
     }
+    package = tmp_path / "vscode-extension" / "package.json"
+    package.parent.mkdir()
+    package.write_text(json.dumps({"version": branch_version}))
     report_path = tmp_path / "controller-promotion-report.json"
     report_path.write_text(json.dumps(report))
     env = os.environ | {
@@ -98,3 +101,12 @@ def test_rebased_unchanged_candidate_is_pushed_with_exact_lease_before_ci(tmp_pa
     assert push in calls
     assert not any(call[:2] == ["git", "commit"] for call in calls)
     assert calls.index(push) < next(index for index, call in enumerate(calls) if call[:3] == ["gh", "workflow", "run"])
+
+
+@pytest.mark.skipif(not shutil.which("bash") or not shutil.which("jq"), reason="Bash and jq are required for the Actions shell contract")
+def test_unchanged_retry_reports_existing_candidate_version_without_bumping_it(tmp_path):
+    _, report_path, report = _handoff(tmp_path, branch_version="0.1.34")
+    expected = report | {"release_version": "0.1.34"}
+    assert json.loads(report_path.read_text()) == expected
+    assert "Next standalone VSIX version: 0.1.34" in (tmp_path / "controller-promotion-pr.md").read_text()
+    assert json.loads((tmp_path / "vscode-extension/package.json").read_text())["version"] == "0.1.34"

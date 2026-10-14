@@ -306,6 +306,11 @@ jobs:
           # A previous attempt may have pushed successfully before PR creation
           # or CI dispatch failed. Resume those steps without another commit.
           if git diff --quiet origin/main HEAD; then exit 0; fi
+          # The branch may already be one version ahead of the main preflight.
+          # Report its actual candidate version without modifying its pins.
+          release_version=$(jq -er '.version' vscode-extension/package.json)
+          jq --arg version "$release_version" '.release_version = $version' "$report" > "$report.tmp"
+          mv "$report.tmp" "$report"
           promotion_sha=$(git rev-parse HEAD)
           if [[ "$promotion_sha" != "$branch_tip" ]]; then
             if [[ -n "$branch_tip" ]]; then
