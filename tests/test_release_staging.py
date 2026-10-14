@@ -2,8 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.release_staging import (
     build_receipt,
@@ -181,3 +187,55 @@ def test_published_release_retry_verifies_exact_assets_without_reupload(tmp_path
     assert missing == []
     with pytest.raises(ValueError, match="public release is missing staged assets"):
         reconcile_release_assets({**release, "assets": []}, staged, expected_tag=release["tag_name"], source_sha=SOURCE_SHA, tag_target_sha=SOURCE_SHA)
+
+
+@pytest.mark.skipif(not shutil.which("bash") or not shutil.which("sha256sum"), reason="Bash and sha256sum are required for the staging shell contract")
+def test_workflow_stage_receipt_survives_default_artifact_upload(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
+    steps = workflow["jobs"]["stage-candidate"]["steps"]
+    stage = next(step for step in steps if step.get("name") == "Create exact release stage files and provenance receipt")
+    upload = next(step for step in steps if step.get("with", {}).get("name") == "release-stage-files")
+    assert upload["with"].get("include-hidden-files", False) is False
+
+    candidate = tmp_path / "ci-release-candidate"
+    candidate.mkdir()
+    (candidate / "josh-room-0.1.33.vsix").write_bytes(b"synthetic vsix")
+    (candidate / "candidate.json").write_text("{}")
+    (tmp_path / "release-readiness.json").write_text(json.dumps(CHECKS))
+    manifest = tmp_path / "vscode-extension/runtime/manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps(RUNTIME))
+    (tmp_path / "release-lock.json").write_text(json.dumps(LOCK))
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    uv = commands / "uv"
+    # Model uv's output boundary, including its default hidden metadata file.
+    uv.write_text(f"#!{sys.executable}\n" + '''import pathlib, sys
+assert sys.argv[1] == "build"
+dist = pathlib.Path("dist")
+if "--no-create-gitignore" not in sys.argv[2:]:
+    (dist / ".gitignore").write_text("*")
+(dist / "synthetic.whl").write_bytes(b"synthetic wheel")
+(dist / "synthetic.tar.gz").write_bytes(b"synthetic sdist")
+''')
+    uv.chmod(0o755)
+    env = os.environ | {
+        "PATH": str(commands) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+        "PYTHONPATH": str(root), "RUNNER_TEMP": str(tmp_path),
+        "SOURCE_SHA": SOURCE_SHA, "VERSION": "0.1.33", "CI_RUN_ID": "101",
+        "GITHUB_RUN_ID": str(STAGE_RUN["id"]), "STAGE_WORKFLOW_ID": str(STAGE_RUN["workflow_id"]),
+    }
+    result = subprocess.run(["bash", "-c", stage["run"]], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    downloaded = tmp_path / "downloaded"
+    downloaded.mkdir()
+    for path in (tmp_path / "dist").iterdir():
+        if not path.name.startswith("."):
+            shutil.copyfile(path, downloaded / path.name)
+    receipt = json.loads((downloaded / "release-candidate.json").read_text())
+    validated = validate_staged_files(
+        downloaded, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix",
+        version="0.1.33", checks=CHECKS, runtime=runtime_identity(RUNTIME, LOCK), stage_run=STAGE_RUN,
+    )
+    assert set(validated) == set(receipt["assets"])

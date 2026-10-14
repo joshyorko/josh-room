@@ -147,7 +147,7 @@ jobs:
           cp "$RUNNER_TEMP/ci-release-candidate/josh-room-$VERSION.vsix" dist/
           cp "$RUNNER_TEMP/ci-release-candidate/candidate.json" dist/vsix-candidate.json
           cp "$RUNNER_TEMP/release-readiness.json" dist/ci-readiness.json
-          uv build
+          uv build --no-create-gitignore
           (cd dist && sha256sum *.vsix *.whl *.tar.gz > SHA256SUMS)
           python -m scripts.release_staging create \
             --directory dist \
