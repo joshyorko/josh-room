@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.32",
+  "version": "0.1.34",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -15,7 +15,9 @@
   "engines": {
     "vscode": "^1.90.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onStartupFinished",
     "onCommand:joshRoom.save",
@@ -59,7 +61,9 @@
     "onView:joshRoom.rooms"
   ],
   "main": "./extension.js",
-  "extensionKind": ["workspace"],
+  "extensionKind": [
+    "workspace"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
@@ -195,7 +199,7 @@
       },
       {
         "command": "joshRoom.optimizeRoomStore",
-        "title": "Josh: Optimize Room Store…",
+        "title": "Josh: Optimize Room Store\u2026",
         "icon": "$(tools)"
       },
       {
@@ -208,7 +212,6 @@
         "title": "Josh: Refresh Rooms",
         "icon": "$(refresh)"
       },
-
       {
         "command": "joshRoom.prepare",
         "title": "Josh: Load Storage / Prepare Runtime",
@@ -246,17 +249,17 @@
       },
       {
         "command": "joshRoom.jatServe",
-        "title": "JAT: Serve Haul…",
+        "title": "JAT: Serve Haul\u2026",
         "icon": "$(server-process)"
       },
       {
         "command": "joshRoom.jatExport",
-        "title": "JAT: Export Images…",
+        "title": "JAT: Export Images\u2026",
         "icon": "$(archive)"
       },
       {
         "command": "joshRoom.jatCopy",
-        "title": "JAT: Copy / Seed…",
+        "title": "JAT: Copy / Seed\u2026",
         "icon": "$(copy)"
       }
     ],
@@ -293,36 +296,148 @@
     ],
     "menus": {
       "view/title": [
-        { "command": "joshRoom.new", "when": "view == joshRoom.rooms", "group": "navigation@1" },
-        { "command": "joshRoom.addStorage", "when": "view == joshRoom.rooms", "group": "navigation@2" },
-        { "command": "joshRoom.save", "when": "view == joshRoom.rooms", "group": "navigation@2" },
-        { "command": "joshRoom.refresh", "when": "view == joshRoom.rooms", "group": "navigation@3" },
-        { "command": "joshRoom.prepare", "when": "view == joshRoom.rooms", "group": "4_load" }
+        {
+          "command": "joshRoom.new",
+          "when": "view == joshRoom.rooms",
+          "group": "navigation@1"
+        },
+        {
+          "command": "joshRoom.addStorage",
+          "when": "view == joshRoom.rooms",
+          "group": "navigation@2"
+        },
+        {
+          "command": "joshRoom.save",
+          "when": "view == joshRoom.rooms",
+          "group": "navigation@2"
+        },
+        {
+          "command": "joshRoom.refresh",
+          "when": "view == joshRoom.rooms",
+          "group": "navigation@3"
+        },
+        {
+          "command": "joshRoom.prepare",
+          "when": "view == joshRoom.rooms",
+          "group": "4_load"
+        }
       ],
       "view/item/context": [
-        { "command": "joshRoom.connectStorage", "when": "view == joshRoom.rooms && viewItem == provider-connection", "group": "inline@1" },
-        { "command": "joshRoom.reconnectStorage", "when": "view == joshRoom.rooms && viewItem == provider-connection-expired", "group": "inline@1" },
-        { "command": "joshRoom.editConnection", "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)", "group": "inline@2" },
-        { "command": "joshRoom.disconnectStorage", "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)", "group": "inline@3" },
-        { "command": "joshRoom.editStorageSettings", "when": "view == joshRoom.rooms && viewItem == dimension", "group": "inline@2" },
-        { "command": "joshRoom.initializeEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-uninitialized", "group": "inline@1" },
-        { "command": "joshRoom.initializeEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-insecure", "group": "inline@1" },
-        { "command": "joshRoom.migrateEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-legacy", "group": "inline@1" },
-        { "command": "joshRoom.resumeEncryption", "when": "view == joshRoom.rooms && viewItem == dimension-resumable", "group": "inline@1" },
-        { "command": "joshRoom.exportRecovery", "when": "view == joshRoom.rooms && viewItem == dimension", "group": "inline@3" },
-        { "command": "joshRoom.enter", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@1" },
-        { "command": "joshRoom.link", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
-        { "command": "joshRoom.repair", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" },
-        { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@2" },
-        { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == jat", "group": "inline@2" },
-        { "command": "joshRoom.inspectLogicalSnapshot", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@1" },
-        { "command": "joshRoom.exportPortableJat", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@2" },
-        { "command": "joshRoom.extractLogicalSnapshot", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@3" },
-        { "command": "joshRoom.serve", "when": "view == joshRoom.rooms && viewItem == logical-jat", "group": "logical@4" },
-        { "command": "joshRoom.verifyRoomStore", "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/", "group": "room-store@1" },
-        { "command": "joshRoom.optimizeRoomStore", "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/", "group": "room-store@2" },
-        { "command": "joshRoom.reconcileRoomStore", "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/", "group": "room-store@3" },
-        { "command": "joshRoom.remove", "when": "view == joshRoom.rooms && viewItem == room", "group": "inline@3" }
+        {
+          "command": "joshRoom.connectStorage",
+          "when": "view == joshRoom.rooms && viewItem == provider-connection",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.reconnectStorage",
+          "when": "view == joshRoom.rooms && viewItem == provider-connection-expired",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.editConnection",
+          "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)",
+          "group": "inline@2"
+        },
+        {
+          "command": "joshRoom.disconnectStorage",
+          "when": "view == joshRoom.rooms && (viewItem == provider-connection || viewItem == provider-connection-connected || viewItem == provider-connection-expired)",
+          "group": "inline@3"
+        },
+        {
+          "command": "joshRoom.editStorageSettings",
+          "when": "view == joshRoom.rooms && viewItem == dimension",
+          "group": "inline@2"
+        },
+        {
+          "command": "joshRoom.initializeEncryption",
+          "when": "view == joshRoom.rooms && viewItem == dimension-uninitialized",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.initializeEncryption",
+          "when": "view == joshRoom.rooms && viewItem == dimension-insecure",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.migrateEncryption",
+          "when": "view == joshRoom.rooms && viewItem == dimension-legacy",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.resumeEncryption",
+          "when": "view == joshRoom.rooms && viewItem == dimension-resumable",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.exportRecovery",
+          "when": "view == joshRoom.rooms && viewItem == dimension",
+          "group": "inline@3"
+        },
+        {
+          "command": "joshRoom.enter",
+          "when": "view == joshRoom.rooms && viewItem == room",
+          "group": "inline@1"
+        },
+        {
+          "command": "joshRoom.link",
+          "when": "view == joshRoom.rooms && viewItem == room",
+          "group": "inline@2"
+        },
+        {
+          "command": "joshRoom.repair",
+          "when": "view == joshRoom.rooms && viewItem == room",
+          "group": "inline@3"
+        },
+        {
+          "command": "joshRoom.serve",
+          "when": "view == joshRoom.rooms && viewItem == room",
+          "group": "inline@2"
+        },
+        {
+          "command": "joshRoom.serve",
+          "when": "view == joshRoom.rooms && viewItem == jat",
+          "group": "inline@2"
+        },
+        {
+          "command": "joshRoom.inspectLogicalSnapshot",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "logical@1"
+        },
+        {
+          "command": "joshRoom.exportPortableJat",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "logical@2"
+        },
+        {
+          "command": "joshRoom.extractLogicalSnapshot",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "logical@3"
+        },
+        {
+          "command": "joshRoom.serve",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "logical@4"
+        },
+        {
+          "command": "joshRoom.verifyRoomStore",
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/",
+          "group": "room-store@1"
+        },
+        {
+          "command": "joshRoom.optimizeRoomStore",
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/",
+          "group": "room-store@2"
+        },
+        {
+          "command": "joshRoom.reconcileRoomStore",
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/",
+          "group": "room-store@3"
+        },
+        {
+          "command": "joshRoom.remove",
+          "when": "view == joshRoom.rooms && viewItem == room",
+          "group": "inline@3"
+        }
       ]
     }
   }

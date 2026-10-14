@@ -42,10 +42,16 @@ def test_readme_and_workflows_are_josh_room_first():
     assert "docker build" not in workflows
 
 def test_environment_artifact_boundary_is_current_and_other_projections_deferred():
-    architecture = (ROOT / "docs/architecture.md").read_text()
     readme = (ROOT / "README.md").read_text()
     deferred = (ROOT / "docs/DEFERRED-INTEGRATIONS.md").read_text()
-    assert "immutable JAT RCC v18.19.5 Environment" in architecture
+    rcc_version = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())["rcc"]["version"]
+    for name in (
+        "README.md", "docs/architecture.md", "docs/DEFERRED-INTEGRATIONS.md",
+        "docs/adr/0007-deferred-integrations.md", "docs/native-room-store.md",
+    ):
+        assert re.findall(r"RCC\s+(v\d+\.\d+\.\d+)", (ROOT / name).read_text()) == [rcc_version], name
+    components = (ROOT / "docs/room-store-components.md").read_text()
+    assert f"RCC version is pinned to `{rcc_version}`" in components
     assert "rcc_environment=auto" in readme
     assert "Actions Runtime integration" in deferred and "remain deferred" in deferred
 
