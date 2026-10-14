@@ -54,10 +54,23 @@ CLI options. Template publication passes `ghcr.io` as the registry and
 sources, candidate bytes, runtime pins, tag targets, or unexpected release
 assets. The template validation workflow remains validation-only.
 
-The current published JAT runtime `v0.1.11-jat-runtime` carries RCC 18.19.5
-receipts, while the verified controller candidate is RCC 18.19.6. The in-repo
-pipeline therefore continues to block runtime promotion until an authorized
-JAT owner publishes compatible verified receipts. No upstream JAT edits or
+The repository must allow GitHub Actions to create pull requests. If that
+permission is disabled, maintenance leaves its generated branch and published
+controller evidence intact and reports the PR-creation failure. It does not
+change repository permissions. After the permission is corrected, the PR
+handoff can resume without another promotion commit. A rebased branch is
+pushed with an exact lease, and the full CI dispatch names its resulting SHA.
+An unchanged branch with no diff from `main` does not create an empty PR.
+The handoff retains the detailed preflight report when the branch already
+contains the generated update, so a retry does not erase source or artifact
+provenance from the PR description.
+
+Compatible immutable JAT runtime `v0.1.12-jat-runtime` is available with RCC
+18.19.6 and original JAT source `dbbf1c8e09d52cc1e01d45259112eb3e9ee3147f`.
+Its Linux and Windows postpublication checks passed in
+[verification run 38631798037](https://github.com/joshyorko/josh-all-the-things/actions/runs/38631798037).
+That read-only run records verifier code `2d1447b827166f488ddb56d90ebfdfbbfcb3b09c`
+separately from the runtime source. Room still adopts these pins only through
+the generated consumer PR and its review and CI gates. No upstream JAT edits,
 release, tag, package, template publication, or deployment are part of local
-validation. Hosted approval and publication behavior is guarded by workflow
-contracts but has not been exercised as a live release.
+validation.

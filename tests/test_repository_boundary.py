@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import zipfile
 from pathlib import Path
@@ -333,7 +334,7 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
     ).read_bytes()
 
 
-def test_v0_1_32_release_tuple_is_consistent_and_consumed_by_both_entries():
+def test_candidate_runtime_tuple_and_published_release_are_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
     runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     assert lock["format_version"] == 1
@@ -347,12 +348,15 @@ def test_v0_1_32_release_tuple_is_consistent_and_consumed_by_both_entries():
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
-    assert artifact["release_tag"] == "v0.1.11-jat-runtime"
+    assert artifact["release_tag"] == artifact["archive_url"].split("/releases/download/", 1)[1].split("/", 1)[0]
+    assert re.fullmatch(r"v\d+\.\d+\.\d+-jat-runtime", artifact["release_tag"])
+    assert runtime["jat"]["git_sha"] == lock["jat"]["git_sha"]
+    for platform in ("linux-x64", "win32-x64"):
+        assert f"/releases/download/{artifact['release_tag']}/" in runtime["jat"]["environment_artifacts"][platform]["archive"]["url"]
     assert len(artifact["archive_sha256"]) == 64
     assert artifact["archive_size"] > 0
     assert artifact["rcc_artifact_digest"].startswith("sha256:")
-    assert artifact["rcc_version"] == "v18.19.5"
-    assert runtime["jat"]["rcc"]["version"] == "v18.19.5"
+    assert artifact["rcc_version"] == runtime["jat"]["rcc"]["version"]
     assert runtime["jat"]["rcc"] == lock["jat"]["rcc"]
     assert lock["rcc"]["version"] == "v18.19.6"
     assert lock["rcc"]["source_sha"] == "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0"
