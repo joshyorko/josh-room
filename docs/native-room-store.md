@@ -28,7 +28,7 @@ josh-room snapshot create my-room --source . --dimension archive --confirm-delet
 
 Save installs the checksum-pinned Restic 0.19.1 runtime on demand. Preview does not install it. Preview and Enter require an already prepared, verified runtime.
 
-When the source contains `robot.yaml`, Save captures the RCC Environment Artifact and stores its RCCA as a Room Store component. Save requires RCC v18.19.5 and fails closed if RCC cannot publish or export that artifact. The source workspace and its robot files also remain part of the complete Restic snapshot.
+When the source contains `robot.yaml`, Save captures the RCC Environment Artifact and stores its RCCA as a Room Store component. Save requires RCC v18.19.6 and fails closed if RCC cannot publish or export that artifact. The source workspace and its robot files also remain part of the complete Restic snapshot.
 
 The CLI does not capture requested Hauler images yet. It fails closed when you pass `--image` or `--all-images`.
 
