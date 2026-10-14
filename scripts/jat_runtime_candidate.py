@@ -168,6 +168,7 @@ def verify_release(
     release_commit_sha: str,
     expected_rcc: dict[str, Any],
     asset_payloads: dict[str, bytes],
+    source_archive_payload: bytes,
 ) -> dict[str, Any]:
     release = _object(release, "JAT runtime release")
     tag = str(release.get("tag_name", ""))
@@ -176,6 +177,12 @@ def verify_release(
         raise ValueError("latest JAT runtime release is not a published prerelease")
     if not re.fullmatch(r"[0-9a-f]{40}", release_commit_sha):
         raise ValueError("JAT release tag does not resolve to the recorded JAT source")
+    source_archive = {
+        "asset": f"josh-all-the-things-{release_commit_sha}.tar.gz",
+        "url": f"https://api.github.com/repos/{JAT_OWNER}/{JAT_REPO}/tarball/{release_commit_sha}",
+        "sha256": hashlib.sha256(source_archive_payload).hexdigest(),
+        "size": len(source_archive_payload),
+    }
 
     expected_rcc = _object(expected_rcc, "RCC candidate")
     rcc_version = expected_rcc.get("version")
@@ -268,6 +275,7 @@ def verify_release(
         "repository": f"https://github.com/{JAT_OWNER}/{JAT_REPO}",
         "release_tag": tag,
         "source_sha": release_commit_sha,
+        "source_archive": source_archive,
         "rcc_version": rcc_version,
         "rcc_source_sha": rcc_source_sha,
         "rcc_platforms": rcc_platforms,
@@ -287,6 +295,17 @@ def validate_candidate(candidate: dict[str, Any], *, expected_rcc: dict[str, Any
     _parse_tag_version(str(tag))
     if not isinstance(candidate.get("source_sha"), str) or not re.fullmatch(r"[0-9a-f]{40}", candidate["source_sha"]):
         raise ValueError("JAT runtime candidate has no exact source commit")
+    source_sha = candidate["source_sha"]
+    source_archive = _object(candidate.get("source_archive"), "JAT source archive receipt")
+    expected_source_archive = {
+        "asset": f"josh-all-the-things-{source_sha}.tar.gz",
+        "url": f"https://api.github.com/repos/{JAT_OWNER}/{JAT_REPO}/tarball/{source_sha}",
+    }
+    if any(source_archive.get(key) != value for key, value in expected_source_archive.items()):
+        raise ValueError("JAT source archive is not bound to the verified producer commit")
+    _validate_digest(source_archive.get("sha256"), "JAT source archive SHA256")
+    if type(source_archive.get("size")) is not int or source_archive["size"] < 1:
+        raise ValueError("JAT source archive has an invalid size")
     if candidate.get("rcc_version") != expected_rcc.get("version"):
         raise ValueError("JAT runtime candidate RCC version differs from the controller candidate")
     if candidate.get("rcc_source_sha") != expected_rcc.get("source_sha"):
@@ -338,11 +357,14 @@ def fetch_latest_candidate(expected_rcc: dict[str, Any]) -> dict[str, Any]:
         if asset is None or not isinstance(asset.get("browser_download_url"), str):
             raise ValueError(f"required JAT release asset is missing: {name}")
         payloads[name] = _download(asset["browser_download_url"])
+    release_commit_sha = _resolve_tag_commit(tag)
+    source_archive_url = f"https://api.github.com/repos/{JAT_OWNER}/{JAT_REPO}/tarball/{release_commit_sha}"
     return verify_release(
         selected,
-        release_commit_sha=_resolve_tag_commit(tag),
+        release_commit_sha=release_commit_sha,
         expected_rcc=expected_rcc,
         asset_payloads=payloads,
+        source_archive_payload=_download(source_archive_url),
     )
 
 

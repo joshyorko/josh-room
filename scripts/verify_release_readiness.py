@@ -15,8 +15,12 @@ CI_REQUIRED_CHECKS = frozenset(
         "windows-private-runtime",
         "managed-runtime-consumer (ubuntu-latest)",
         "managed-runtime-consumer (windows-latest)",
+        "release-candidate",
     }
 )
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+GITHUB_ACTIONS_APP_ID = 15368
+REPOSITORY = "joshyorko/josh-room"
 PLATFORMS = {
     "linux-x64": "linux_amd64",
     "win32-x64": "windows_amd64",
@@ -25,47 +29,117 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def validate_green_checks(check_runs: list[dict[str, Any]], *, source_sha: str) -> dict[str, Any]:
+def _full_name(value: Any) -> str | None:
+    if isinstance(value, dict):
+        name = value.get("full_name")
+        return name if isinstance(name, str) else None
+    return value if isinstance(value, str) else None
+
+
+def validate_green_checks(
+    workflow_run: dict[str, Any],
+    workflow_jobs: list[dict[str, Any]],
+    check_runs: list[dict[str, Any]],
+    *,
+    source_sha: str,
+    workflow_id: int,
+    repository: str = REPOSITORY,
+    expected_branch: str = "main",
+) -> dict[str, Any]:
+    """Validate jobs only through their exact trusted GitHub Actions run."""
     if not SOURCE_SHA.fullmatch(source_sha):
         raise ValueError("release source must be a full lowercase Git SHA")
+    if type(workflow_id) is not int or workflow_id < 1:
+        raise ValueError("trusted CI workflow ID must be positive")
+    workflow_run = _object(workflow_run, "trusted CI workflow run")
+    run_id = workflow_run.get("id")
+    if type(run_id) is not int or run_id < 1:
+        raise ValueError("trusted CI workflow run has no exact run ID")
+    if workflow_run.get("workflow_id") != workflow_id or workflow_run.get("path") != CI_WORKFLOW_PATH:
+        raise ValueError("CI run does not come from the trusted ci.yml workflow")
+    if _full_name(workflow_run.get("repository")) != repository:
+        raise ValueError("CI run belongs to an unexpected repository")
+    if _full_name(workflow_run.get("head_repository")) != repository:
+        raise ValueError("CI run source is not from the trusted repository")
+    if workflow_run.get("head_sha") != source_sha or workflow_run.get("head_branch") != expected_branch:
+        raise ValueError("trusted CI run does not match the exact source SHA and branch")
+    if workflow_run.get("event") not in {"push", "workflow_dispatch"}:
+        raise ValueError("trusted CI run was not started by a supported first-party event")
+    if workflow_run.get("status") != "completed" or workflow_run.get("conclusion") != "success":
+        raise ValueError("trusted CI workflow run is not fully green")
+
+    if not isinstance(workflow_jobs, list):
+        raise TypeError("trusted workflow jobs must be a list")
     if not isinstance(check_runs, list):
         raise TypeError("GitHub check runs must be a list")
-    latest_by_name: dict[str, dict[str, Any]] = {}
-    for run in check_runs:
-        if not isinstance(run, dict):
-            raise TypeError("GitHub check run entries must be objects")
-        name = run.get("name")
-        if name not in CI_REQUIRED_CHECKS:
-            continue
-        if run.get("head_sha") != source_sha:
-            # A stale rerun at an unrelated SHA cannot satisfy this source.
-            continue
-        previous = latest_by_name.get(name)
-        ordering = (str(run.get("started_at", "")), int(run.get("id", 0)))
-        previous_ordering = (
-            str(previous.get("started_at", "")), int(previous.get("id", 0))
-        ) if previous else ("", 0)
-        if previous is None or ordering > previous_ordering:
-            latest_by_name[name] = run
-
-    missing = CI_REQUIRED_CHECKS - latest_by_name.keys()
+    jobs_by_name: dict[str, dict[str, Any]] = {}
+    for job in workflow_jobs:
+        if not isinstance(job, dict):
+            raise TypeError("trusted workflow job entries must be objects")
+        name = job.get("name")
+        if name in CI_REQUIRED_CHECKS:
+            if name in jobs_by_name:
+                raise ValueError(f"trusted CI run has duplicate required job: {name}")
+            jobs_by_name[name] = job
+    missing = CI_REQUIRED_CHECKS - jobs_by_name.keys()
     if missing:
         raise ValueError(f"exact-source CI is missing required checks: {', '.join(sorted(missing))}")
+
+    check_runs_by_id: dict[int, dict[str, Any]] = {}
+    for check in check_runs:
+        if not isinstance(check, dict):
+            raise TypeError("GitHub check run entries must be objects")
+        check_id = check.get("id")
+        if type(check_id) is int:
+            check_runs_by_id[check_id] = check
+
     failed = []
     report = {}
     for name in sorted(CI_REQUIRED_CHECKS):
-        run = latest_by_name[name]
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
+        job = jobs_by_name[name]
+        job_id = job.get("id")
+        check = check_runs_by_id.get(job_id) if type(job_id) is int else None
+        if (
+            job.get("run_id") != run_id
+            or job.get("head_sha") != source_sha
+            or job.get("status") != "completed"
+            or job.get("conclusion") != "success"
+            or check is None
+            or check.get("name") != name
+            or check.get("head_sha") != source_sha
+            or check.get("status") != "completed"
+            or check.get("conclusion") != "success"
+            or not isinstance(check.get("app"), dict)
+            or check["app"].get("id") != GITHUB_ACTIONS_APP_ID
+            or check["app"].get("slug") != "github-actions"
+            or check.get("details_url") != job.get("html_url")
+        ):
             failed.append(name)
+        check_run_id = job_id if type(job_id) is int else None
         report[name] = {
-            "id": run.get("id"),
-            "status": run.get("status"),
-            "conclusion": run.get("conclusion"),
-            "head_sha": run.get("head_sha"),
+            "id": check_run_id,
+            "status": job.get("status"),
+            "conclusion": job.get("conclusion"),
+            "head_sha": job.get("head_sha"),
+            "app_id": check.get("app", {}).get("id") if check else None,
+            "run_id": job.get("run_id"),
         }
     if failed:
-        raise ValueError(f"exact-source CI is not fully green: {', '.join(failed)}")
-    return {"source_sha": source_sha, "checks": report}
+        raise ValueError(f"trusted exact-source CI jobs are missing or not green: {', '.join(failed)}")
+    return {
+        "source_sha": source_sha,
+        "workflow": {
+            "id": workflow_id,
+            "path": CI_WORKFLOW_PATH,
+            "run_id": run_id,
+            "run_attempt": workflow_run.get("run_attempt"),
+            "event": workflow_run.get("event"),
+            "branch": expected_branch,
+            "repository": repository,
+            "head_sha": source_sha,
+        },
+        "checks": report,
+    }
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -320,10 +394,28 @@ def _check_run_list(value: Any) -> list[dict[str, Any]]:
     raise TypeError("GitHub check-run JSON has an unsupported shape")
 
 
+def _workflow_job_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict) and isinstance(value.get("jobs"), list):
+        return value["jobs"]
+    if isinstance(value, list):
+        jobs: list[dict[str, Any]] = []
+        for page in value:
+            if isinstance(page, dict) and isinstance(page.get("jobs"), list):
+                jobs.extend(page["jobs"])
+            elif isinstance(page, list):
+                jobs.extend(page)
+        return jobs
+    raise TypeError("GitHub workflow-job JSON has an unsupported shape")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--workflow-id", required=True, type=int)
+    parser.add_argument("--workflow-run", type=Path, required=True)
+    parser.add_argument("--workflow-jobs", type=Path, required=True)
     parser.add_argument("--check-runs", type=Path, required=True)
+    parser.add_argument("--expected-branch", default="main")
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--release-lock", type=Path, required=True)
     parser.add_argument("--controller-release", type=Path)
@@ -334,7 +426,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report: dict[str, Any] = {"status": "BLOCKED", "source_sha": args.source_sha}
     try:
-        check_report = validate_green_checks(_check_run_list(_load(args.check_runs)), source_sha=args.source_sha)
+        check_report = validate_green_checks(
+            _object(_load(args.workflow_run), "trusted CI workflow run"),
+            _workflow_job_list(_load(args.workflow_jobs)),
+            _check_run_list(_load(args.check_runs)),
+            source_sha=args.source_sha,
+            workflow_id=args.workflow_id,
+            expected_branch=args.expected_branch,
+        )
         runtime = _load(args.runtime)
         lock = _load(args.release_lock)
         runtime_report = validate_runtime_compatibility(runtime, lock)

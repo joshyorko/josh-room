@@ -1,31 +1,52 @@
 # RCC maintenance and release staging
 
 The RCC maintenance workflow qualifies controller runtime artifacts on Linux
-and Windows, then checks the latest published JAT runtime receipts against the
-same RCC release and source commit. It only opens or updates a draft Josh Room
-pull request when both runtime families have matching platform receipts. If the
-JAT producer has not published artifacts for that RCC version, maintenance
-reports the upstream dependency and does not rewrite the JAT pin.
+and Windows and checks the latest published JAT runtime receipts against the
+same RCC version and source. If JAT has not published a compatible artifact,
+maintenance records the dependency and stops before promotion. It never
+relabels or republishes immutable JAT artifacts.
 
-The release workflow is a separate, manual two-step operation. First, an owner
-stages the exact current `main` source SHA after the required CI checks are
-green. This verifies the controller and JAT release metadata, checks the draft
-VSIX, builds the Python distributions, records their digests and runtime
-identities in `release-candidate.json`, and reconciles matching assets into the
-draft release. The Git tag must resolve to the exact source SHA. Re-running a
-stage is safe when the release already contains the same assets; conflicting or
-unexpected assets stop the workflow.
+When a verified JAT release advances its producer source, Josh Room records the
+exact release tag, commit, source archive digest, workflow receipt, and platform
+receipts in a draft consumer promotion PR. The PR describes the previous-to-new
+JAT source handoff and waits for consumer review and merge. The handoff does not
+edit `joshyorko/josh-all-the-things`; any upstream JAT source change still
+requires separate authorization. A successful runtime promotion also advances
+the extension patch version consistently in both extension copies, runtime
+manifests, candidate locks, and template bootstrap pins.
 
-To publish, Josh starts a separate `publish` dispatch for the same tag and SHA
-and selects `APPROVE`. The workflow checks the source is still the current
-`main`, confirms the same four CI checks are green for that SHA, validates the
-staged receipt and release asset digests, then publishes the GitHub release and
-Dev Container template. The template workflow that runs on template changes is
-validation-only; it has no package publication permission.
+GitHub does not start pull-request workflows for a PR created with
+`GITHUB_TOKEN`. After opening or updating the draft promotion PR, maintenance
+uses the supported `workflow_dispatch` event to start `ci.yml` on the exact PR
+branch SHA. The run verifies that checkout SHA against the supplied SHA and
+executes the full Linux/Windows CI matrix.
+This dispatch path becomes available after the updated `ci.yml` reaches the
+default branch; its first main-branch CI run also builds and stages the exact
+main candidate.
 
-JAT is maintained in `joshyorko/josh-all-the-things`. A new JAT artifact must
-come from that repository with its own source, workflow, and platform receipts.
-Josh Room maintenance must fail closed if those receipts do not match the RCC
-candidate. It must not relabel or republish immutable JAT artifacts. Hosted
-workflow approval behavior and live release publication still require owner
-operation and have not been exercised by local synthetic tests.
+On `main`, the trusted `ci.yml` run builds a versioned VSIX only after the
+required tests and managed-runtime checks pass. After that workflow completes
+successfully, the release workflow validates its exact workflow ID/path, run,
+jobs, GitHub Actions check app, repository, branch, and source SHA. It then
+downloads the VSIX candidate from that exact CI run, verifies its packaged
+source bytes and receipt, builds the Python distributions, and uploads a
+90-day Actions workflow artifact containing the candidate, checksums, runtime
+identities, and provenance receipt. Staging does not create a Git tag or
+release.
+
+To publish, Josh dispatches the release workflow with the exact current source
+SHA and staging run ID, then selects `APPROVE`. The workflow revalidates the
+trusted CI run, stage run, candidate bytes, controller/JAT release assets and
+digests, and current `main`. Only after that gate does it create or safely
+resume the exact versioned draft release/tag, reconcile the staged assets, and
+publish the GitHub release and Dev Container template. Retries reject changed
+sources, candidate bytes, runtime pins, tag targets, or unexpected release
+assets. The template validation workflow remains validation-only.
+
+The current published JAT runtime `v0.1.11-jat-runtime` carries RCC 18.19.5
+receipts, while the verified controller candidate is RCC 18.19.6. The in-repo
+pipeline therefore continues to block runtime promotion until an authorized
+JAT owner publishes compatible verified receipts. No upstream JAT edits or
+release, tag, package, template publication, or deployment are part of local
+validation. Hosted approval and publication behavior is guarded by workflow
+contracts but has not been exercised as a live release.

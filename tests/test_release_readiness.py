@@ -8,6 +8,8 @@ import pytest
 
 from scripts.verify_release_readiness import (
     CI_REQUIRED_CHECKS,
+    CI_WORKFLOW_PATH,
+    GITHUB_ACTIONS_APP_ID,
     validate_green_checks,
     validate_release_assets,
     validate_runtime_compatibility,
@@ -17,34 +19,92 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SHA = "a" * 40
 
 
-def _green_checks():
-    return [
-        {"name": name, "head_sha": SOURCE_SHA, "status": "completed", "conclusion": "success"}
-        for name in CI_REQUIRED_CHECKS
-    ]
+def _trusted_ci():
+    workflow_id = 341135066
+    run_id = 12345
+    run = {
+        "id": run_id,
+        "workflow_id": workflow_id,
+        "path": CI_WORKFLOW_PATH,
+        "repository": {"full_name": "joshyorko/josh-room"},
+        "head_repository": {"full_name": "joshyorko/josh-room"},
+        "head_sha": SOURCE_SHA,
+        "head_branch": "main",
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "run_attempt": 1,
+    }
+    jobs = []
+    checks = []
+    for index, name in enumerate(sorted(CI_REQUIRED_CHECKS), start=1):
+        job_id = 1000 + index
+        details_url = f"https://github.com/joshyorko/josh-room/actions/runs/{run_id}/job/{job_id}"
+        jobs.append({
+            "id": job_id,
+            "name": name,
+            "run_id": run_id,
+            "head_sha": SOURCE_SHA,
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": details_url,
+        })
+        checks.append({
+            "id": job_id,
+            "name": name,
+            "head_sha": SOURCE_SHA,
+            "status": "completed",
+            "conclusion": "success",
+            "app": {"id": GITHUB_ACTIONS_APP_ID, "slug": "github-actions"},
+            "details_url": details_url,
+        })
+    return workflow_id, run, jobs, checks
 
 
 def test_release_readiness_requires_the_complete_ci_matrix_on_exact_source_sha():
-    report = validate_green_checks(_green_checks(), source_sha=SOURCE_SHA)
+    workflow_id, run, jobs, checks = _trusted_ci()
+    report = validate_green_checks(run, jobs, checks, source_sha=SOURCE_SHA, workflow_id=workflow_id)
 
     assert report["source_sha"] == SOURCE_SHA
+    assert report["workflow"]["path"] == CI_WORKFLOW_PATH
+    assert report["workflow"]["run_id"] == 12345
     assert set(report["checks"]) == set(CI_REQUIRED_CHECKS)
 
 
 @pytest.mark.parametrize("change", ["missing", "failed", "in_progress", "stale_sha"])
 def test_release_readiness_rejects_incomplete_failed_or_stale_ci(change):
-    checks = _green_checks()
+    workflow_id, run, jobs, checks = _trusted_ci()
     if change == "missing":
-        checks = checks[:-1]
+        jobs = jobs[:-1]
     elif change == "failed":
-        checks[0]["conclusion"] = "failure"
+        jobs[0]["conclusion"] = "failure"
     elif change == "in_progress":
-        checks[0]["status"] = "in_progress"
+        jobs[0]["status"] = "in_progress"
     else:
+        run["head_sha"] = "b" * 40
         checks[0]["head_sha"] = "b" * 40
 
     with pytest.raises(ValueError):
-        validate_green_checks(checks, source_sha=SOURCE_SHA)
+        validate_green_checks(run, jobs, checks, source_sha=SOURCE_SHA, workflow_id=workflow_id)
+
+
+def test_same_name_checks_from_an_untrusted_workflow_or_app_cannot_satisfy_ci():
+    workflow_id, run, jobs, checks = _trusted_ci()
+    run["workflow_id"] = workflow_id + 1
+    with pytest.raises(ValueError, match="trusted ci.yml"):
+        validate_green_checks(run, jobs, checks, source_sha=SOURCE_SHA, workflow_id=workflow_id)
+
+    workflow_id, run, jobs, checks = _trusted_ci()
+    checks[0]["app"] = {"id": 99999, "slug": "untrusted-check-app"}
+    with pytest.raises(ValueError, match="not green"):
+        validate_green_checks(run, jobs, checks, source_sha=SOURCE_SHA, workflow_id=workflow_id)
+
+
+def test_ci_job_names_from_another_run_cannot_be_reused():
+    workflow_id, run, jobs, checks = _trusted_ci()
+    jobs[0]["run_id"] = run["id"] + 1
+    with pytest.raises(ValueError, match="not green"):
+        validate_green_checks(run, jobs, checks, source_sha=SOURCE_SHA, workflow_id=workflow_id)
 
 
 def test_release_readiness_rejects_current_controller_jat_rcc_split():

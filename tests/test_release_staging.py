@@ -9,8 +9,10 @@ from scripts.release_staging import (
     build_receipt,
     reconcile_release_assets,
     runtime_identity,
+    validate_stage_run,
     validate_staged_files,
 )
+from scripts.verify_release_readiness import CI_REQUIRED_CHECKS
 
 SOURCE_SHA = "a" * 40
 RUNTIME = {
@@ -29,7 +31,38 @@ LOCK = {
     "controller": {"release_tag": "controller-candidate"},
     "jat": {"rcc": {"source_sha": "c" * 40}},
 }
-CHECKS = {"source_sha": SOURCE_SHA, "checks": {"test": {"id": 101, "status": "completed", "conclusion": "success", "head_sha": SOURCE_SHA}}}
+CHECKS = {
+    "source_sha": SOURCE_SHA,
+    "workflow": {
+        "id": 77,
+        "path": ".github/workflows/ci.yml",
+        "run_id": 101,
+        "run_attempt": 1,
+        "event": "push",
+        "branch": "main",
+        "repository": "joshyorko/josh-room",
+        "head_sha": SOURCE_SHA,
+    },
+    "checks": {
+        name: {"id": 101 + index, "status": "completed", "conclusion": "success", "head_sha": SOURCE_SHA, "run_id": 101, "app_id": 15368}
+        for index, name in enumerate(sorted(CI_REQUIRED_CHECKS))
+    },
+}
+STAGE_RUN = {
+    "id": 202,
+    "workflow_id": 88,
+    "path": ".github/workflows/release.yml",
+    "event": "workflow_run",
+    "repository": "joshyorko/josh-room",
+    "source_sha": SOURCE_SHA,
+}
+STAGE_RUN_API = {
+    **STAGE_RUN,
+    "status": "completed",
+    "conclusion": "success",
+    "head_branch": "main",
+    "repository": {"full_name": "joshyorko/josh-room"},
+}
 
 
 def _files(directory):
@@ -65,6 +98,7 @@ def test_candidate_receipt_binds_source_sha_checks_and_exact_assets(tmp_path):
         version="0.1.33",
         checks=CHECKS,
         runtime=identity,
+        stage_run=STAGE_RUN,
     )
     (staged / "release-candidate.json").write_text(json.dumps(receipt))
 
@@ -76,6 +110,7 @@ def test_candidate_receipt_binds_source_sha_checks_and_exact_assets(tmp_path):
         version="0.1.33",
         checks=CHECKS,
         runtime=identity,
+        stage_run=STAGE_RUN,
     )
 
     assert set(validated) == set(receipt["assets"])
@@ -87,19 +122,31 @@ def test_staged_receipt_rejects_changed_source_checks_runtime_or_asset_bytes(tmp
     staged = tmp_path / "staged"
     _files(staged)
     identity = runtime_identity(RUNTIME, LOCK)
-    receipt = build_receipt(staged, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity)
+    receipt = build_receipt(staged, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, stage_run=STAGE_RUN)
 
     with pytest.raises(ValueError, match="source SHA"):
-        validate_staged_files(staged, receipt, source_sha="d" * 40, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity)
+        validate_staged_files(staged, receipt, source_sha="d" * 40, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, stage_run=STAGE_RUN)
     with pytest.raises(ValueError, match="check receipts"):
-        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks={"source_sha": "a" * 40, "checks": {"test": {"id": 102}}}, runtime=identity)
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks={"source_sha": "a" * 40, "checks": {"test": {"id": 102}}}, runtime=identity, stage_run=STAGE_RUN)
     changed = json.loads(json.dumps(identity))
     changed["jat"]["platforms"]["linux-x64"]["archive_sha256"] = "9" * 64
     with pytest.raises(ValueError, match="runtime receipts"):
-        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=changed)
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=changed, stage_run=STAGE_RUN)
     (staged / "josh-room-0.1.33.vsix").write_bytes(b"changed")
     with pytest.raises(ValueError, match="asset differs"):
-        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity)
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, stage_run=STAGE_RUN)
+
+
+def test_stage_run_provenance_is_exact_and_rejects_other_workflow_runs():
+    assert validate_stage_run(STAGE_RUN_API, expected_run_id=202, expected_workflow_id=88, source_sha=SOURCE_SHA) == STAGE_RUN
+
+    spoofed = {**STAGE_RUN_API, "workflow_id": 999}
+    with pytest.raises(ValueError, match="trusted release workflow"):
+        validate_stage_run(spoofed, expected_run_id=202, expected_workflow_id=88, source_sha=SOURCE_SHA)
+
+    stale = {**STAGE_RUN_API, "conclusion": "failure"}
+    with pytest.raises(ValueError, match="trusted release workflow"):
+        validate_stage_run(stale, expected_run_id=202, expected_workflow_id=88, source_sha=SOURCE_SHA)
 
 
 def test_release_asset_reconciliation_is_idempotent_and_rejects_conflicts(tmp_path):

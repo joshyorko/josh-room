@@ -60,7 +60,8 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert bootstrap.is_file()
     body = bootstrap.read_text()
     assert "Optional golden-host extension copy complete" in body
-    assert "joshyorko.josh-room-0.1.32" in body
+    extension_version = json.loads((ROOT / "vscode-extension/package.json").read_text())["version"]
+    assert f"joshyorko.josh-room-{extension_version}" in body
     assert "Room of Requirement" not in body
     assert "brew" not in body.lower()
     assert "action-server" not in body
@@ -145,7 +146,8 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     extension = (ROOT / "vscode-extension/extension.js").read_text()
 
-    assert package["version"] == "0.1.32"
+    lock = json.loads((ROOT / "release-lock.json").read_text())
+    assert package["version"] == lock["candidate_version"]
     assert package["scripts"]["package"]
     assert (ROOT / "vscode-extension/.vscodeignore").is_file()
     vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
@@ -197,7 +199,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
-    assert "joshyorko.josh-room-0.1.32" in bootstrap
+    assert f"joshyorko.josh-room-{package['version']}" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
     assert template_package["contributes"] == package["contributes"]
     assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
@@ -333,13 +335,13 @@ def test_v0_1_32_release_tuple_is_consistent_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
     runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     assert lock["format_version"] == 1
-    assert lock["candidate_version"] == "0.1.32"
-    assert lock["josh_room"]["version"] == "0.1.32"
+    assert lock["candidate_version"] == runtime["extension_version"]
     assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
     assert lock["josh_room"]["git_sha"] == FEATURE_MERGE_SHA
     promotion = json.loads((ROOT / "release-promotion.json").read_text())
-    assert promotion == {"version": "0.1.32", "sha256": PROMOTED_VSIX_SHA256}
+    assert promotion["version"] == lock["josh_room"]["version"] == "0.1.32"
+    assert promotion == {"version": lock["josh_room"]["version"], "sha256": PROMOTED_VSIX_SHA256}
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")

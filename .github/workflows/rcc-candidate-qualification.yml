@@ -174,6 +174,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -312,6 +313,11 @@ jobs:
           Source commit: $(jq -r '.source_sha' "$report")
           JAT release: $(jq -r '.jat_release_tag' "$report")
           JAT source commit: $(jq -r '.jat_source_sha' "$report")
+          JAT source handoff: $(jq -r '.jat_source_handoff.from' "$report") -> $(jq -r '.jat_source_handoff.to' "$report")
+          JAT source archive SHA256: $(jq -r '.jat_source_archive.sha256 // "see runtime manifest diff"' "$report")
+          Next standalone VSIX version: $(jq -r '.release_version' "$report")
+
+          The consumer PR is the approval handoff for changing the pinned upstream JAT source. It updates only this repository's exact published JAT tag, source archive, and receipts. No upstream source is edited.
 
           Linux input/artifact: $(jq -r '.platforms["linux-x64"].input_digest + " / " + .platforms["linux-x64"].artifact_digest' "$report")
           Windows input/artifact: $(jq -r '.platforms["win32-x64"].input_digest + " / " + .platforms["win32-x64"].artifact_digest' "$report")
@@ -325,6 +331,9 @@ jobs:
           else
             gh pr edit "$open_pr" --title 'chore: promote verified RCC and JAT runtimes' --body-file "$RUNNER_TEMP/controller-promotion-pr.md"
           fi
+          promotion_sha=$(git rev-parse HEAD)
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch" --field source_sha="$promotion_sha"
+          echo "Dispatched full ci.yml workflow_dispatch for automated PR source $promotion_sha." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload promotion report
         if: always()
         uses: actions/upload-artifact@v4

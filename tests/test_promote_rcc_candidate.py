@@ -10,11 +10,14 @@ import pytest
 
 import scripts.promote_rcc_candidate as promoter
 from scripts.promote_rcc_candidate import (
+    BOOTSTRAP_FILES,
     CONTROLLER_MANIFESTS,
     FREEZE_DIRS,
     FREEZES,
     LOCKS,
+    PACKAGE_MANIFESTS,
     PLATFORM_ASSETS,
+    RELEASE_CANDIDATE_LOCKS,
     ROBOT_FILES,
     RUNTIME_MANIFESTS,
     _load_receipts,
@@ -46,6 +49,12 @@ def _jat_candidate(candidate, *, source="c" * 40):
         "repository": "https://github.com/joshyorko/josh-all-the-things",
         "release_tag": release_tag,
         "source_sha": source,
+        "source_archive": {
+            "asset": f"josh-all-the-things-{source}.tar.gz",
+            "url": f"https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/{source}",
+            "sha256": "7" * 64,
+            "size": 4321,
+        },
         "rcc_version": candidate["version"],
         "rcc_source_sha": candidate["source_sha"],
         "rcc_platforms": candidate["platforms"],
@@ -66,6 +75,14 @@ def test_promotion_cli_imports_when_run_by_workflow():
 
 
 def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
+    for relative in BOOTSTRAP_FILES:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("code --install-extension joshyorko.josh-room-0.1.32\n", encoding="utf-8")
+    for relative in PACKAGE_MANIFESTS:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"name": "josh-room", "version": "0.1.32"}, indent=2) + "\n", encoding="utf-8")
     for relative in (*CONTROLLER_MANIFESTS, *RUNTIME_MANIFESTS, *LOCKS, *ROBOT_FILES):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +103,7 @@ def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
                 "environment_artifact": {"digest": "sha256:" + "e" * 64, "specification_digest": "sha256:" + "f" * 64, "archive": {"asset": "old-jat.rcca", "url": "https://example.test/old-jat.rcca", "sha256": "6" * 64, "size": 50}},
                 "environment_artifacts": {},
             }
-            path.write_text(json.dumps({"schema_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {}, "jat": old_jat}, indent=2) + "\n")
+            path.write_text(json.dumps({"schema_version": 1, "extension_version": "0.1.32", "rcc": {"version": "v18.19.5"}, "controller": {}, "jat": old_jat}, indent=2) + "\n")
         else:
             old_jat = {
                 "repository": "https://github.com/joshyorko/josh-all-the-things",
@@ -98,7 +115,7 @@ def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
                 "environment_artifacts": {},
                 "rcc": {"version": "v18.19.5", "platforms": {}},
             }
-            path.write_text(json.dumps({"format_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {"platforms": {}}, "jat": old_jat}, indent=2) + "\n")
+            path.write_text(json.dumps({"format_version": 1, "candidate_version": "0.1.32", "josh_room": {"version": "0.1.32", "git_sha": "a" * 40}, "rcc": {"version": "v18.19.5"}, "controller": {"platforms": {}}, "jat": old_jat}, indent=2) + "\n")
 
     candidate = {
         "version": "v18.19.6",
@@ -139,7 +156,7 @@ def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
 
 
 def _inputs(root: Path) -> set[Path]:
-    return {root / relative for relative in (*CONTROLLER_MANIFESTS, *RUNTIME_MANIFESTS, *LOCKS, *ROBOT_FILES, *(directory / freeze for directory in FREEZE_DIRS for freeze in FREEZES.values()))}
+    return {root / relative for relative in (*CONTROLLER_MANIFESTS, *RUNTIME_MANIFESTS, *LOCKS, *PACKAGE_MANIFESTS, *RELEASE_CANDIDATE_LOCKS, *BOOTSTRAP_FILES, *ROBOT_FILES, *(directory / freeze for directory in FREEZE_DIRS for freeze in FREEZES.values()))}
 
 
 def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_path: Path):
@@ -152,6 +169,14 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
     assert report["status"] == "PASS"
     assert report["no_change"] is False
     assert report["artifact_release_tag"].startswith(f"rcc-v18.19.6-controller-{'a' * 40}-")
+    assert report["release_version"] == "0.1.33"
+    assert report["jat_source_handoff"] == {
+        "from": "c" * 40,
+        "to": "c" * 40,
+        "release_tag": "v0.1.12-jat-runtime",
+        "requires_consumer_review": False,
+        "state": "same_pinned_source",
+    }
     for relative in RUNTIME_MANIFESTS:
         manifest = json.loads((root / relative).read_text())
         assert manifest["rcc"]["version"] == "v18.19.6"
@@ -170,6 +195,16 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
         assert lock["rcc"]["source_sha"] == "b" * 40
         assert lock["controller"]["source_sha"] == "a" * 40
         assert lock["controller"]["platforms"]["win32-x64"]["input_digest"] == "sha256:" + "3" * 64
+    for relative in PACKAGE_MANIFESTS:
+        assert json.loads((root / relative).read_text())["version"] == "0.1.33"
+    for relative in RUNTIME_MANIFESTS:
+        manifest = json.loads((root / relative).read_text())
+        assert manifest["extension_version"] == "0.1.33"
+        assert manifest["jat"]["source_archive"]["url"].endswith("/tarball/" + "c" * 40)
+    for relative in RELEASE_CANDIDATE_LOCKS:
+        assert json.loads((root / relative).read_text())["candidate_version"] == "0.1.33"
+    for relative in BOOTSTRAP_FILES:
+        assert "joshyorko.josh-room-0.1.33" in (root / relative).read_text()
     for relative in ROBOT_FILES:
         assert "environment_windows_amd64_freeze.yaml" in (root / relative).read_text()
     assert (root / FREEZE_DIRS[0] / FREEZES["win32-x64"]).read_bytes() == (artifacts / "rcc-controller-candidate-win32-x64" / FREEZES["win32-x64"]).read_bytes()
@@ -204,15 +239,23 @@ def test_missing_or_stale_platform_receipt_leaves_every_consumer_file_unchanged(
     assert {path: path.read_bytes() for path in before} == before
 
 
-def test_changed_jat_source_requires_upstream_source_archive_receipt_before_any_write(tmp_path: Path):
+def test_reviewable_consumer_pr_hands_off_to_a_verified_new_jat_source(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
-    before = {path: path.read_bytes() for path in _inputs(root) if path.exists()}
 
-    with pytest.raises(ValueError, match="JAT source changed in josh-all-the-things"):
-        promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate, source="d" * 40))
+    report = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate, source="d" * 40))
 
-    assert {path: path.read_bytes() for path in before} == before
+    assert report["status"] == "PASS"
+    assert report["jat_source_handoff"] == {
+        "from": "c" * 40,
+        "to": "d" * 40,
+        "release_tag": "v0.1.12-jat-runtime",
+        "requires_consumer_review": True,
+        "state": "awaiting_consumer_pr_review",
+    }
+    manifest = json.loads((root / RUNTIME_MANIFESTS[0]).read_text())
+    assert manifest["jat"]["git_sha"] == "d" * 40
+    assert manifest["jat"]["source_archive"]["sha256"] == "7" * 64
 
 
 def test_superseded_jat_release_blocks_promotion_before_any_write(tmp_path: Path, monkeypatch):

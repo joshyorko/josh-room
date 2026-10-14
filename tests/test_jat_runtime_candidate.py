@@ -81,7 +81,8 @@ def _fixture():
     assets["jat-runtime-provenance.json"] = {"name": "jat-runtime-provenance.json", "digest": "sha256:" + hashlib.sha256(provenance_body).hexdigest(), "size": len(provenance_body)}
     release = {"tag_name": tag, "draft": False, "prerelease": True, "target_commitish": JAT_SHA, "assets": list(assets.values())}
     expected_rcc = {"version": RCC_VERSION, "source_sha": RCC_SHA, "platforms": rcc_platforms}
-    return release, expected_rcc, payloads
+    source_archive_payload = b"synthetic pinned JAT source archive"
+    return release, expected_rcc, payloads, source_archive_payload
 
 
 def test_select_latest_jat_release_does_not_fall_back_to_an_older_compatible_build():
@@ -93,19 +94,21 @@ def test_select_latest_jat_release_does_not_fall_back_to_an_older_compatible_bui
 
 
 def test_jat_release_requires_matching_rcc_and_two_verified_platform_receipts():
-    release, expected_rcc, payloads = _fixture()
+    release, expected_rcc, payloads, source_archive = _fixture()
 
-    candidate = verify_release(release, release_commit_sha=JAT_SHA, expected_rcc=expected_rcc, asset_payloads=payloads)
+    candidate = verify_release(release, release_commit_sha=JAT_SHA, expected_rcc=expected_rcc, asset_payloads=payloads, source_archive_payload=source_archive)
 
     assert candidate["release_tag"] == "v0.1.12-jat-runtime"
     assert candidate["source_sha"] == JAT_SHA
     assert candidate["rcc_version"] == RCC_VERSION
+    assert candidate["source_archive"]["sha256"] == hashlib.sha256(source_archive).hexdigest()
+    assert candidate["source_archive"]["size"] == len(source_archive)
     assert candidate["environment_artifacts"]["linux-x64"]["digest"].startswith("sha256:")
     assert candidate["environment_artifacts"]["win32-x64"]["archive"]["sha256"] == release["assets"][2]["digest"].removeprefix("sha256:")
 
 
 def test_jat_receipt_from_controller_incompatible_rcc_is_rejected():
-    release, expected_rcc, payloads = _fixture()
+    release, expected_rcc, payloads, source_archive = _fixture()
     receipt = json.loads(payloads["jat-runtime-linux-amd64.json"])
     receipt["rcc_version"] = "v18.19.5"
     payload = json.dumps(receipt).encode()
@@ -115,19 +118,19 @@ def test_jat_receipt_from_controller_incompatible_rcc_is_rejected():
     asset["size"] = len(payload)
 
     with pytest.raises(ValueError, match="RCC version differs"):
-        verify_release(release, release_commit_sha=JAT_SHA, expected_rcc=expected_rcc, asset_payloads=payloads)
+        verify_release(release, release_commit_sha=JAT_SHA, expected_rcc=expected_rcc, asset_payloads=payloads, source_archive_payload=source_archive)
 
 
 def test_jat_release_archive_digest_must_match_github_release_asset_metadata():
-    release, expected_rcc, payloads = _fixture()
+    release, expected_rcc, payloads, source_archive = _fixture()
     release["assets"][0]["digest"] = "sha256:" + "0" * 64
 
     with pytest.raises(ValueError, match="archive asset metadata differs"):
-        verify_release(release, release_commit_sha=JAT_SHA, expected_rcc=expected_rcc, asset_payloads=payloads)
+        verify_release(release, release_commit_sha=JAT_SHA, expected_rcc=expected_rcc, asset_payloads=payloads, source_archive_payload=source_archive)
 
 
 def test_jat_candidate_source_must_match_the_release_tag_target():
-    release, expected_rcc, payloads = _fixture()
+    release, expected_rcc, payloads, source_archive = _fixture()
 
     with pytest.raises(ValueError, match="does not resolve to the recorded JAT source"):
-        verify_release(release, release_commit_sha="c" * 40, expected_rcc=expected_rcc, asset_payloads=payloads)
+        verify_release(release, release_commit_sha="c" * 40, expected_rcc=expected_rcc, asset_payloads=payloads, source_archive_payload=source_archive)

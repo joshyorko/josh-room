@@ -42,6 +42,13 @@ def verify(root, candidate, tag="v0.1.26-standalone-vsix"):
     )
 
 
+def verify_staged(root, candidate, *extra_args):
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(root), "--candidate", str(candidate), *extra_args],
+        capture_output=True, text=True, check=False,
+    )
+
+
 def test_verifies_exact_candidate_without_modifying_archive(tmp_path):
     root, candidate, pin = fixture(tmp_path)
     before = candidate.read_bytes()
@@ -81,3 +88,61 @@ def test_rejects_candidate_or_source_drift_without_rebuilding(tmp_path, failure)
     assert result.returncode != 0
     assert "candidate verification failed" in result.stderr
     assert (candidate.read_bytes() if candidate.exists() else None) == before
+
+
+def test_build_ci_candidate_does_not_need_a_release_tag_or_existing_digest_pin(tmp_path):
+    root, candidate, _pin = fixture(tmp_path)
+    (root / "release-promotion.json").unlink()
+    candidate.rename(tmp_path / "josh-room-0.1.26.vsix")
+    candidate = tmp_path / "josh-room-0.1.26.vsix"
+    receipt = tmp_path / "candidate.json"
+
+    result = verify_staged(
+        root,
+        candidate,
+        "--version", "0.1.26",
+        "--source-sha", "a" * 40,
+        "--ci-run-id", "12345",
+        "--report", str(receipt),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(receipt.read_text())
+    assert payload["artifact"] == candidate.name
+    assert payload["version"] == "0.1.26"
+    assert payload["source_sha"] == "a" * 40
+    assert payload["ci_run_id"] == 12345
+    assert payload["size"] == candidate.stat().st_size
+
+
+@pytest.mark.parametrize("change", ["source", "run", "artifact"])
+def test_candidate_receipt_rejects_stale_source_or_run_or_artifact(tmp_path, change):
+    root, candidate, _pin = fixture(tmp_path)
+    (root / "release-promotion.json").unlink()
+    candidate.rename(tmp_path / "josh-room-0.1.26.vsix")
+    candidate = tmp_path / "josh-room-0.1.26.vsix"
+    receipt = tmp_path / "candidate.json"
+    report_args = ["--report", str(receipt)]
+    baseline = verify_staged(
+        root, candidate, "--version", "0.1.26", "--source-sha", "a" * 40,
+        "--ci-run-id", "12345", *report_args,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+    report = json.loads(receipt.read_text())
+    expected_sha = "a" * 40
+    expected_run = "12345"
+    if change == "source":
+        expected_sha = "b" * 40
+    elif change == "run":
+        expected_run = "54321"
+    else:
+        report["sha256"] = "0" * 64
+        receipt.write_text(json.dumps(report))
+
+    result = verify_staged(
+        root, candidate, "--version", "0.1.26", "--source-sha", expected_sha,
+        "--ci-run-id", expected_run, "--verify-report", str(receipt),
+    )
+
+    assert result.returncode != 0
+    assert "candidate receipt differs" in result.stderr

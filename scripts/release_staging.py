@@ -10,8 +10,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from scripts.verify_release_readiness import CI_REQUIRED_CHECKS
+
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml"
+REPOSITORY = "joshyorko/josh-room"
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -102,6 +106,7 @@ def build_receipt(
     version: str,
     checks: dict[str, Any],
     runtime: dict[str, Any],
+    stage_run: dict[str, Any],
 ) -> dict[str, Any]:
     if not SOURCE_SHA.fullmatch(source_sha):
         raise ValueError("release source must be a full lowercase Git SHA")
@@ -110,19 +115,47 @@ def build_receipt(
     checks = _object(checks, "exact-source CI check report")
     if checks.get("source_sha") != source_sha or not isinstance(checks.get("checks"), dict) or not checks["checks"]:
         raise ValueError("CI check receipts are missing or belong to another source SHA")
+    workflow = _object(checks.get("workflow"), "trusted CI workflow receipt")
+    if (
+        workflow.get("path") != ".github/workflows/ci.yml"
+        or workflow.get("head_sha") != source_sha
+        or workflow.get("repository") != REPOSITORY
+        or type(workflow.get("id")) is not int
+        or type(workflow.get("run_id")) is not int
+    ):
+        raise ValueError("CI receipt is not bound to the trusted exact-source ci.yml run")
+    if set(checks["checks"]) != CI_REQUIRED_CHECKS:
+        raise ValueError("CI receipt does not contain the complete trusted release check set")
     for name, check in checks["checks"].items():
         check = _object(check, f"CI check {name}")
-        if check.get("head_sha") != source_sha or check.get("status") != "completed" or check.get("conclusion") != "success":
+        if (
+            check.get("head_sha") != source_sha
+            or check.get("status") != "completed"
+            or check.get("conclusion") != "success"
+            or check.get("run_id") != workflow["run_id"]
+            or check.get("app_id") != 15368
+        ):
             raise ValueError(f"CI check receipt is not green for the exact source SHA: {name}")
     runtime = _object(runtime, "runtime receipt")
     if _object(runtime.get("controller"), "controller runtime receipt").get("rcc_version") != _object(runtime.get("jat"), "JAT runtime receipt").get("rcc_version"):
         raise ValueError("controller and JAT runtime receipts are not paired")
+    stage_run = _object(stage_run, "candidate stage workflow run")
+    if (
+        type(stage_run.get("id")) is not int
+        or type(stage_run.get("workflow_id")) is not int
+        or stage_run.get("path") != RELEASE_WORKFLOW_PATH
+        or stage_run.get("event") != "workflow_run"
+        or stage_run.get("repository") != REPOSITORY
+        or stage_run.get("source_sha") != source_sha
+    ):
+        raise ValueError("candidate stage receipt is not bound to its exact release workflow run")
     return {
         "schema_version": 1,
         "release_tag": release_tag,
         "source_sha": source_sha,
         "version": version,
         "checks": checks,
+        "stage_run": stage_run,
         "runtime": runtime,
         "assets": _file_records(directory),
     }
@@ -137,6 +170,7 @@ def validate_staged_files(
     version: str,
     checks: dict[str, Any],
     runtime: dict[str, Any],
+    stage_run: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
     receipt = _object(receipt, "staged release receipt")
     if receipt.get("schema_version") != 1:
@@ -147,6 +181,8 @@ def validate_staged_files(
         raise ValueError("staged release receipt tag or version differs from the candidate")
     if receipt.get("checks") != checks:
         raise ValueError("staged release receipt check receipts differ from the current exact-source CI")
+    if receipt.get("stage_run") != stage_run:
+        raise ValueError("staged release receipt belongs to a different stage workflow run")
     if receipt.get("runtime") != runtime:
         raise ValueError("staged release receipt runtime receipts differ from the current candidate")
     expected = _object(receipt.get("assets"), "staged release assets")
@@ -154,6 +190,40 @@ def validate_staged_files(
     if observed != expected:
         raise ValueError("a staged release asset differs from its exact receipt")
     return observed
+
+
+def validate_stage_run(
+    stage_run: dict[str, Any],
+    *,
+    expected_run_id: int,
+    expected_workflow_id: int,
+    source_sha: str,
+    repository: str = REPOSITORY,
+) -> dict[str, Any]:
+    stage_run = _object(stage_run, "candidate stage workflow run")
+    stage_repository = stage_run.get("repository")
+    stage_repository = stage_repository.get("full_name") if isinstance(stage_repository, dict) else None
+    if (
+        stage_run.get("id") != expected_run_id
+        or stage_run.get("workflow_id") != expected_workflow_id
+        or stage_run.get("path") != RELEASE_WORKFLOW_PATH
+        or stage_run.get("event") != "workflow_run"
+        or stage_run.get("status") != "completed"
+        or stage_run.get("conclusion") != "success"
+        or stage_run.get("head_branch") != "main"
+        or stage_repository != repository
+    ):
+        raise ValueError("staged candidate was not produced by a successful trusted release workflow run")
+    if not SOURCE_SHA.fullmatch(source_sha):
+        raise ValueError("staged candidate source must be a full lowercase Git SHA")
+    return {
+        "id": expected_run_id,
+        "workflow_id": expected_workflow_id,
+        "path": RELEASE_WORKFLOW_PATH,
+        "event": "workflow_run",
+        "repository": repository,
+        "source_sha": source_sha,
+    }
 
 
 def reconcile_release_assets(
@@ -219,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("--runtime", type=Path, required=True)
     create.add_argument("--release-lock", type=Path, required=True)
     create.add_argument("--output", type=Path, required=True)
+    create.add_argument("--stage-run-id", type=int, required=True)
+    create.add_argument("--stage-workflow-id", type=int, required=True)
 
     verify = commands.add_parser("verify", help="verify downloaded staged assets against the exact candidate")
     verify.add_argument("--directory", type=Path, required=True)
@@ -228,6 +300,9 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--checks", type=Path, required=True)
     verify.add_argument("--runtime", type=Path, required=True)
     verify.add_argument("--release-lock", type=Path, required=True)
+    verify.add_argument("--stage-run-json", type=Path, required=True)
+    verify.add_argument("--stage-run-id", type=int, required=True)
+    verify.add_argument("--stage-workflow-id", type=int, required=True)
 
     reconcile = commands.add_parser("reconcile", help="compare staged bytes with existing GitHub release assets")
     reconcile.add_argument("--directory", type=Path, required=True)
@@ -245,11 +320,25 @@ def main(argv: list[str] | None = None) -> int:
                 version=args.version,
                 checks=_load(args.checks),
                 runtime=runtime_identity(_load(args.runtime), _load(args.release_lock)),
+                stage_run={
+                    "id": args.stage_run_id,
+                    "workflow_id": args.stage_workflow_id,
+                    "path": RELEASE_WORKFLOW_PATH,
+                    "event": "workflow_run",
+                    "repository": REPOSITORY,
+                    "source_sha": args.source_sha,
+                },
             )
             _write(args.output, receipt)
             result = {"status": "PASS", "receipt": str(args.output), "asset_count": len(receipt["assets"])}
         elif args.command == "verify":
             receipt = _load(args.directory / "release-candidate.json")
+            stage_run = validate_stage_run(
+                _load(args.stage_run_json),
+                expected_run_id=args.stage_run_id,
+                expected_workflow_id=args.stage_workflow_id,
+                source_sha=args.source_sha,
+            )
             files = validate_staged_files(
                 args.directory,
                 receipt,
@@ -258,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
                 version=args.version,
                 checks=_load(args.checks),
                 runtime=runtime_identity(_load(args.runtime), _load(args.release_lock)),
+                stage_run=stage_run,
             )
             result = {"status": "PASS", "verified_asset_count": len(files)}
         else:

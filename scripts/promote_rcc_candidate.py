@@ -59,6 +59,19 @@ RUNTIME_MANIFESTS = (
     Path("vscode-extension/runtime/manifest.json"),
     Path("templates/room/vscode-extension/runtime/manifest.json"),
 )
+PACKAGE_MANIFESTS = (
+    Path("vscode-extension/package.json"),
+    Path("templates/room/vscode-extension/package.json"),
+)
+BOOTSTRAP_FILES = (
+    Path(".devcontainer/bootstrap.sh"),
+    Path("templates/room/.devcontainer/bootstrap.sh"),
+)
+RELEASE_CANDIDATE_LOCKS = (
+    Path("release-lock.json"),
+    Path("templates/room/vscode-extension/runtime/release-lock.json"),
+)
+VERSION_LINE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
 def _digest(path: Path) -> str:
@@ -195,18 +208,28 @@ def _validate_jat_candidate(root: Path, candidate: dict, jat_candidate: dict) ->
         "platforms": candidate.get("platforms"),
     }
     verified = validate_jat_candidate(jat_candidate, expected_rcc=expected_rcc)
-    current_values = [_read_json(root / relative).get("jat") for relative in RUNTIME_MANIFESTS]
+    current_values = []
+    for relative in RUNTIME_MANIFESTS:
+        current = _read_json(root / relative).get("jat")
+        current_values.append(current if isinstance(current, dict) else {})
+    current_sources = {value.get("git_sha") for value in current_values}
+    if len(current_sources) != 1 or not next(iter(current_sources)):
+        raise ValueError("current JAT source pins differ across the consumer manifests")
+    previous_source_sha = next(iter(current_sources))
+    lock_sources = [
+        _read_json(root / relative).get("jat", {}).get("git_sha")
+        for relative in LOCKS
+        if (root / relative).is_file()
+    ]
+    if any(value is not None and value != previous_source_sha for value in lock_sources):
+        raise ValueError("current JAT source pins differ across consumer manifests and release locks")
     for current in current_values:
-        current = current if isinstance(current, dict) else {}
-        current_sha = current.get("git_sha")
-        if current_sha != verified["source_sha"]:
-            raise ValueError(
-                "JAT source changed in josh-all-the-things; automatic consumer source updates are blocked pending separate upstream-owner approval"
-            )
         current_tag = _jat_tag_from_manifest(current)
         if _jat_release_version(verified["release_tag"]) < _jat_release_version(current_tag):
             raise ValueError("JAT runtime candidate would downgrade the immutable release pin")
         if verified["release_tag"] == current_tag:
+            if previous_source_sha != verified["source_sha"]:
+                raise ValueError("a published JAT release tag cannot change its pinned producer source")
             current_artifacts = current.get("environment_artifacts")
             if isinstance(current_artifacts, dict):
                 current_artifacts = {
@@ -219,7 +242,77 @@ def _validate_jat_candidate(root: Path, candidate: dict, jat_candidate: dict) ->
                 }
             if current_artifacts != verified.get("environment_artifacts") or current.get("rcc", {}).get("version") != verified["rcc_version"]:
                 raise ValueError("JAT runtime candidate conflicts with an immutable release tag already pinned by this repository")
+    verified["source_handoff"] = {
+        "from": previous_source_sha,
+        "to": verified["source_sha"],
+        "release_tag": verified["release_tag"],
+        "requires_consumer_review": previous_source_sha != verified["source_sha"],
+        "state": "awaiting_consumer_pr_review" if previous_source_sha != verified["source_sha"] else "same_pinned_source",
+    }
     return verified
+
+
+def _next_extension_version(root: Path) -> str:
+    versions = {_read_json(root / relative).get("version") for relative in PACKAGE_MANIFESTS}
+    if len(versions) != 1:
+        raise ValueError("extension package versions differ across consumer manifests")
+    current = next(iter(versions))
+    runtime_versions = {_read_json(root / relative).get("extension_version") for relative in RUNTIME_MANIFESTS}
+    candidate_versions = {
+        version
+        for relative in RELEASE_CANDIDATE_LOCKS
+        if (root / relative).is_file()
+        if (version := _read_json(root / relative).get("candidate_version")) is not None
+    }
+    if runtime_versions != {current} or (candidate_versions and candidate_versions != {current}):
+        raise ValueError("extension package, runtime, and candidate lock versions are not synchronized")
+    match = VERSION_LINE.fullmatch(str(current))
+    if not match:
+        raise ValueError("extension package version is not a stable semantic version")
+    major, minor, patch = map(int, match.groups())
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def _version_update(
+    root: Path,
+    version: str,
+    base_changes: list[tuple[Path, bytes]],
+) -> list[tuple[Path, bytes]]:
+    planned = {path: data for path, data in base_changes}
+
+    def read(path: Path) -> dict[str, Any]:
+        data = planned.get(path)
+        return json.loads(data) if data is not None else _read_json(path)
+
+    changed: list[tuple[Path, bytes]] = []
+    current_versions = {_read_json(root / relative).get("version") for relative in PACKAGE_MANIFESTS}
+    if len(current_versions) != 1:
+        raise ValueError("extension package versions differ across consumer manifests")
+    current_version = next(iter(current_versions))
+    for relative in PACKAGE_MANIFESTS:
+        path = root / relative
+        value = read(path)
+        value["version"] = version
+        changed.append((path, (json.dumps(value, indent=2) + "\n").encode()))
+    for relative in RUNTIME_MANIFESTS:
+        path = root / relative
+        value = read(path)
+        value["extension_version"] = version
+        changed.append((path, (json.dumps(value, indent=2) + "\n").encode()))
+    for relative in RELEASE_CANDIDATE_LOCKS:
+        path = root / relative
+        value = read(path)
+        value["candidate_version"] = version
+        changed.append((path, (json.dumps(value, indent=2) + "\n").encode()))
+    current_extension_id = f"joshyorko.josh-room-{current_version}"
+    next_extension_id = f"joshyorko.josh-room-{version}"
+    for relative in BOOTSTRAP_FILES:
+        path = root / relative
+        text = path.read_text(encoding="utf-8")
+        if current_extension_id not in text:
+            raise ValueError(f"template bootstrap does not pin the current extension version: {relative}")
+        changed.append((path, text.replace(current_extension_id, next_extension_id).encode()))
+    return [(path, data) for path, data in changed if not path.is_file() or path.read_bytes() != data]
 
 
 def _build_update(
@@ -238,6 +331,7 @@ def _build_update(
         jat = value.setdefault("jat", {})
         jat["git_sha"] = jat_candidate["source_sha"]
         jat["release_tag"] = jat_candidate["release_tag"]
+        jat["source_archive"] = json.loads(json.dumps(jat_candidate["source_archive"]))
         jat["producer_workflow_run"] = jat_candidate.get("workflow_run")
         jat["rcc"] = {
             "version": jat_candidate["rcc_version"],
@@ -403,6 +497,10 @@ def promote_candidate(
     changes = _build_update(root, candidate, receipts, source_sha, release_tag, verified_jat)
     if not changes:
         return {"status": "PASS", "no_change": True, "changed_files": [], "candidate": candidate["version"]}
+    release_version = _next_extension_version(root)
+    merged_changes = {path: data for path, data in changes}
+    merged_changes.update(_version_update(root, release_version, changes))
+    changes = [(path, data) for path, data in merged_changes.items()]
     if prepare:
         for path, data in changes:
             if path.suffix == ".json":
@@ -422,6 +520,9 @@ def promote_candidate(
         "artifact_release_tag": release_tag,
         "jat_release_tag": verified_jat["release_tag"],
         "jat_source_sha": verified_jat["source_sha"],
+        "jat_source_archive": verified_jat["source_archive"],
+        "jat_source_handoff": verified_jat["source_handoff"],
+        "release_version": release_version,
         "jat_rcc_version": verified_jat["rcc_version"],
         "platforms": {platform: items["receipt"] for platform, items in receipts.items()},
     }
