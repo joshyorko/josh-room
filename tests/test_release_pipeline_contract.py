@@ -122,7 +122,7 @@ def test_only_explicit_owner_dispatch_can_create_tag_publish_release_and_templat
     assert "jq empty templates/room/.devcontainer/devcontainer.json" in preflight
     assert "bash -n templates/room/.devcontainer/bootstrap.sh" in preflight
     publish_run = publish["steps"][publish_index]["run"]
-    assert 'gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true' in publish_run
+    assert 'gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -f tag_name="$RELEASE_TAG" -F draft=false -f make_latest=true' in publish_run
     assert publish["steps"][publish_index]["env"]["RELEASE_ID"] == "${{ steps.draft.outputs.release_id }}"
     assert '--namespace "$GITHUB_REPOSITORY/templates"' in publish_run
     assert "--namespace ghcr.io/" not in publish_run
