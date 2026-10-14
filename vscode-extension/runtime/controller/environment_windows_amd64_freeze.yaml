@@ -22,7 +22,7 @@ dependencies:
 - vcomp14=14.51.36247
 - pip:
   - boto3==1.43.82
-  - botocore==1.43.113
+  - botocore==1.43.114
   - jmespath==1.1.0
   - psutil==7.2.2
   - python-dateutil==2.9.0.post0
