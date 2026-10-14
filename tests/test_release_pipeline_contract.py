@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -61,11 +64,12 @@ def test_release_stages_from_trusted_green_ci_without_preexisting_release_tag_or
     assert "check-runs?per_page=100" in _steps(stage)
     assert "--slurp" not in _steps(stage)
     assert "release-candidate-${{ steps.source.outputs.version }}-${{ github.event.workflow_run.head_sha }}" in str(stage)
+    assert "python -m scripts.release_staging create" in _steps(stage)
+    assert "python scripts/release_staging.py" not in _steps(stage)
     download = next(step for step in stage["steps"] if step.get("uses", "").startswith("actions/download-artifact"))
     assert download["with"]["run-id"] == "${{ github.event.workflow_run.id }}"
     assert "verify_release_readiness.py" in _steps(stage)
     assert "verify_release_candidate.py" in _steps(stage)
-    assert "release_staging.py create" in _steps(stage)
     upload = next(step for step in stage["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
     assert upload["with"]["name"] == "release-stage-files"
     assert upload["with"]["retention-days"] == "90"
@@ -85,13 +89,50 @@ def test_only_explicit_owner_dispatch_can_create_tag_publish_release_and_templat
     assert publish["permissions"]["packages"] == "write"
     steps = _steps(publish)
     assert "actions/download-artifact@v8" in str(publish)
-    assert "release_staging.py verify" in steps
+    assert "python -m scripts.release_staging verify" in steps
+    assert "python -m scripts.release_staging reconcile" in steps
+    assert "python scripts/release_staging.py" not in steps
     assert "verify_release_candidate.py" in steps
     assert "gh release create" in steps
     assert "gh release upload" in steps
     assert "--target \"$SOURCE_SHA\" --draft" in steps
     assert "devcontainer templates publish" in steps
-    assert steps.index("gh release edit \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false") < steps.index("devcontainer templates publish")
+    step_names = [step.get("name") for step in publish["steps"]]
+    preflight_index = step_names.index("Install pinned Dev Container CLI and preflight template publication")
+    create_index = step_names.index("Create or safely resume the owner-approved draft release")
+    publish_index = step_names.index("Publish the verified release and approved template")
+    assert preflight_index < create_index < publish_index
+    preflight = _steps({"steps": [publish["steps"][preflight_index]]})
+    assert "npm install --global @devcontainers/cli@0.89.0" in preflight
+    assert 'test "$(devcontainer --version)" = "0.89.0"' in preflight
+    assert "devcontainer templates publish --help" in preflight
+    assert "grep -Fq -- '--registry'" in preflight
+    assert "grep -Fq -- '--namespace'" in preflight
+    assert "jq -e '.id == \"room\"" in preflight
+    assert "jq empty templates/room/.devcontainer/devcontainer.json" in preflight
+    assert "bash -n templates/room/.devcontainer/bootstrap.sh" in preflight
+    publish_run = publish["steps"][publish_index]["run"]
+    assert "gh release edit \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false" in publish_run
+    assert "gh release edit \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false" in steps
+    assert '--namespace "$GITHUB_REPOSITORY/templates"' in publish_run
+    assert "--namespace ghcr.io/" not in publish_run
+
+
+def test_release_staging_module_entrypoint_imports_with_clean_python_environment():
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.release_staging", "--help"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "{create,verify,reconcile}" in result.stdout
 
 
 def test_readiness_binds_workflow_id_path_jobs_and_actions_app():

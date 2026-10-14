@@ -39,7 +39,11 @@ SHA and staging run ID, then selects `APPROVE`. The workflow revalidates the
 trusted CI run, stage run, candidate bytes, controller/JAT release assets and
 digests, and current `main`. Only after that gate does it create or safely
 resume the exact versioned draft release/tag, reconcile the staged assets, and
-publish the GitHub release and Dev Container template. Retries reject changed
+publish the GitHub release and Dev Container template. Before creating the
+draft release/tag, it installs the pinned Dev Container CLI 0.89.0 and checks
+the template manifest, configuration, bootstrap syntax, and required publish
+CLI options. Template publication passes `ghcr.io` as the registry and
+`$GITHUB_REPOSITORY/templates` as the namespace. Retries reject changed
 sources, candidate bytes, runtime pins, tag targets, or unexpected release
 assets. The template validation workflow remains validation-only.
 

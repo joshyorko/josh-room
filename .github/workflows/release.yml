@@ -149,7 +149,7 @@ jobs:
           cp "$RUNNER_TEMP/release-readiness.json" dist/ci-readiness.json
           uv build
           (cd dist && sha256sum *.vsix *.whl *.tar.gz > SHA256SUMS)
-          python scripts/release_staging.py create \
+          python -m scripts.release_staging create \
             --directory dist \
             --source-sha "$SOURCE_SHA" \
             --release-tag "v$VERSION-standalone-vsix" \
@@ -262,7 +262,7 @@ jobs:
             --controller-tag-sha "$controller_tag_sha" \
             --jat-tag-sha "$jat_tag_sha" \
             --report "$RUNNER_TEMP/release-readiness.json"
-          python scripts/release_staging.py verify \
+          python -m scripts.release_staging verify \
             --directory "$staged" \
             --source-sha "$SOURCE_SHA" \
             --release-tag "v$VERSION-standalone-vsix" \
@@ -282,6 +282,19 @@ jobs:
             --verify-report "$staged/vsix-candidate.json"
           tag="v$VERSION-standalone-vsix"
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Install pinned Dev Container CLI and preflight template publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global @devcontainers/cli@0.89.0
+          test "$(devcontainer --version)" = "0.89.0"
+          help_file="$RUNNER_TEMP/devcontainer-template-publish-help.txt"
+          devcontainer templates publish --help > "$help_file"
+          grep -Fq -- '--registry' "$help_file"
+          grep -Fq -- '--namespace' "$help_file"
+          jq -e '.id == "room" and (.version | test("^[0-9]+[.][0-9]+[.][0-9]+$"))' templates/room/devcontainer-template.json
+          jq empty templates/room/.devcontainer/devcontainer.json
+          bash -n templates/room/.devcontainer/bootstrap.sh
       - name: Create or safely resume the owner-approved draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -312,7 +325,7 @@ jobs:
             test "$tag_sha" = "$SOURCE_SHA"
           fi
           staged="$RUNNER_TEMP/release-stage-files"
-          python scripts/release_staging.py reconcile \
+          python -m scripts.release_staging reconcile \
             --directory "$staged" \
             --release-json "$RUNNER_TEMP/standalone-release.json" \
             --release-tag "$RELEASE_TAG" --source-sha "$SOURCE_SHA" \
@@ -323,7 +336,7 @@ jobs:
             gh release upload "$RELEASE_TAG" "$staged/$name" --repo "$GITHUB_REPOSITORY"
           done < <(jq -r '.missing_assets[]' "$RUNNER_TEMP/reconcile-report.json")
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/standalone-release.json"
-          python scripts/release_staging.py reconcile \
+          python -m scripts.release_staging reconcile \
             --directory "$staged" \
             --release-json "$RUNNER_TEMP/standalone-release.json" \
             --release-tag "$RELEASE_TAG" --source-sha "$SOURCE_SHA" \
@@ -352,7 +365,7 @@ jobs:
           printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           devcontainer templates publish \
             --registry ghcr.io \
-            --namespace ghcr.io/$GITHUB_REPOSITORY/templates \
+            --namespace "$GITHUB_REPOSITORY/templates" \
             templates/room
           version=$(jq -r .version templates/room/devcontainer-template.json)
           echo "Published $RELEASE_TAG and approved room template:$version for exact source $SOURCE_SHA." >> "$GITHUB_STEP_SUMMARY"
