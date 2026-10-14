@@ -107,9 +107,9 @@ def test_ci_job_names_from_another_run_cannot_be_reused():
         validate_green_checks(run, jobs, checks, source_sha=SOURCE_SHA, workflow_id=workflow_id)
 
 
-def test_release_readiness_rejects_current_controller_jat_rcc_split():
-    runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
-    lock = json.loads((ROOT / "release-lock.json").read_text())
+def test_release_readiness_rejects_controller_jat_rcc_split():
+    runtime, lock = _coherent_release_fixture()
+    runtime["jat"]["rcc"]["version"] = "v18.19.999"
 
     with pytest.raises(ValueError, match="controller and JAT RCC pins are not paired"):
         validate_runtime_compatibility(runtime, lock)

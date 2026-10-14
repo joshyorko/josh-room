@@ -292,17 +292,32 @@ jobs:
             --jat-candidate "$RUNNER_TEMP/jat-candidate/jat-runtime-candidate.json" \
             --artifacts "$RUNNER_TEMP/rcc-candidates" \
             --source-sha "${{ github.sha }}" \
-            --report "$RUNNER_TEMP/controller-promotion-report.json"
+            --report "$RUNNER_TEMP/controller-branch-promotion-report.json"
           report="$RUNNER_TEMP/controller-promotion-report.json"
-          mapfile -t files < <(jq -r '.changed_files[]' "$report")
-          if [[ ${#files[@]} -eq 0 ]]; then exit 0; fi
-          git add "${files[@]}"
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'chore: promote verified RCC controller artifacts'
-          if [[ -n "$branch_tip" ]]; then
-            git push --force-with-lease="refs/heads/$branch:$branch_tip" --set-upstream origin "$branch"
-          else
-            git push --set-upstream origin "$branch"
+          branch_report="$RUNNER_TEMP/controller-branch-promotion-report.json"
+          mapfile -t files < <(jq -r '.changed_files[]' "$branch_report")
+          if [[ ${#files[@]} -gt 0 ]]; then
+            cp "$branch_report" "$report"
+            git add "${files[@]}"
+            if ! git diff --cached --quiet; then
+              git commit -m 'chore: promote verified RCC controller artifacts'
+            fi
+          fi
+          # A previous attempt may have pushed successfully before PR creation
+          # or CI dispatch failed. Resume those steps without another commit.
+          if git diff --quiet origin/main HEAD; then exit 0; fi
+          # The branch may already be one version ahead of the main preflight.
+          # Report its actual candidate version without modifying its pins.
+          release_version=$(jq -er '.version' vscode-extension/package.json)
+          jq --arg version "$release_version" '.release_version = $version' "$report" > "$report.tmp"
+          mv "$report.tmp" "$report"
+          promotion_sha=$(git rev-parse HEAD)
+          if [[ "$promotion_sha" != "$branch_tip" ]]; then
+            if [[ -n "$branch_tip" ]]; then
+              git push --force-with-lease="refs/heads/$branch:$branch_tip" --set-upstream origin "$branch"
+            else
+              git push --set-upstream origin "$branch"
+            fi
           fi
           open_pr=$(gh pr list --state open --base main --head "$GITHUB_REPOSITORY_OWNER:$branch" --json number --jq '.[0].number // empty')
           cat > "$RUNNER_TEMP/controller-promotion-pr.md" <<EOF
