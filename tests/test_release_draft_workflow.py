@@ -81,6 +81,8 @@ elif name == "gh":
         elif endpoint.endswith("/releases/91"):
             s["id_reads"] += 1
             if "PATCH" in args:
+                # GitHub drops a pending tag when PATCH omits tag_name (gh edit preserves it).
+                s["release"]["tag_name"] = next((a.split("=", 1)[1] for a in args if a.startswith("tag_name=")), "untagged-synthetic")
                 target = next((a.split("=", 1)[1] for a in args if a.startswith("target_commitish=")), None)
                 if target:
                     s["release"]["target_commitish"] = target

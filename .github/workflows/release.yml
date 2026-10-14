@@ -356,7 +356,7 @@ jobs:
                 '.tag_name == $tag and .target_commitish == $old and .draft == true and .prerelease == false and .assets == [] and .body == $body' \
                 "$RUNNER_TEMP/standalone-release.json"
               gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-                -f target_commitish="$SOURCE_SHA" \
+                -f tag_name="$RELEASE_TAG" -f target_commitish="$SOURCE_SHA" \
                 -f body="Exact CI-qualified Josh Room candidate for source $SOURCE_SHA. Published after explicit owner approval." > /dev/null
               gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/standalone-release.json"
               test "$(jq -r .target_commitish "$RUNNER_TEMP/standalone-release.json")" = "$SOURCE_SHA"
@@ -405,7 +405,7 @@ jobs:
             --tag-target-sha "$tag_sha" > "$RUNNER_TEMP/reconcile-report.json"
           jq -e '.missing_assets | length == 0' "$RUNNER_TEMP/reconcile-report.json"
           if [[ $(jq -r .draft "$RUNNER_TEMP/standalone-release.json") == true ]]; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -f tag_name="$RELEASE_TAG" -F draft=false -f make_latest=true
           fi
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/standalone-release.json"
           jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft == false and .prerelease == false' "$RUNNER_TEMP/standalone-release.json"
