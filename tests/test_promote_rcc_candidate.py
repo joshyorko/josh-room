@@ -24,6 +24,36 @@ from scripts.promote_rcc_candidate import (
 )
 
 
+def _jat_candidate(candidate, *, source="c" * 40):
+    release_tag = "v0.1.12-jat-runtime"
+    platforms = {}
+    for platform, (release_asset, asset_digest, spec_digest) in {
+        "linux-x64": ("jat-runtime-linux-amd64.rcca", "8", "a"),
+        "win32-x64": ("jat-runtime-windows-amd64.rcca", "9", "b"),
+    }.items():
+        platforms[platform] = {
+            "digest": "sha256:" + asset_digest * 64,
+            "specification_digest": "sha256:" + spec_digest * 64,
+            "archive": {
+                "asset": release_asset,
+                "url": f"https://github.com/joshyorko/josh-all-the-things/releases/download/{release_tag}/{release_asset}",
+                "sha256": ("c" if platform == "linux-x64" else "d") * 64,
+                "size": 1234 if platform == "linux-x64" else 5678,
+            },
+        }
+    return {
+        "status": "QUALIFIED",
+        "repository": "https://github.com/joshyorko/josh-all-the-things",
+        "release_tag": release_tag,
+        "source_sha": source,
+        "rcc_version": candidate["version"],
+        "rcc_source_sha": candidate["source_sha"],
+        "rcc_platforms": candidate["platforms"],
+        "environment_artifact": platforms["linux-x64"],
+        "environment_artifacts": platforms,
+    }
+
+
 def test_promotion_cli_imports_when_run_by_workflow():
     result = subprocess.run(
         [sys.executable, str(Path(promoter.__file__).with_name("promote_rcc_candidate.py")), "--help"],
@@ -32,7 +62,7 @@ def test_promotion_cli_imports_when_run_by_workflow():
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "Prepare a complete, receipt-bound RCC controller consumer update" in result.stdout
+    assert "Prepare a complete, receipt-bound controller and JAT runtime consumer update" in result.stdout
 
 
 def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
@@ -48,9 +78,27 @@ def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
         elif "controller-artifact-manifest" in path.name:
             path.write_text(json.dumps({"schema_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {"robot": "controller/robot.yaml"}}, indent=2) + "\n")
         elif path in [root / relative for relative in RUNTIME_MANIFESTS]:
-            path.write_text(json.dumps({"schema_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {}}, indent=2) + "\n")
+            old_jat = {
+                "git_sha": "c" * 40,
+                "release_tag": "v0.1.11-jat-runtime",
+                "source_archive": {"asset": "jat-source.tar.gz", "url": "https://example.test/jat-source.tar.gz", "sha256": "7" * 64, "size": 100},
+                "rcc": {"version": "v18.19.5", "platforms": {}},
+                "environment_artifact": {"digest": "sha256:" + "e" * 64, "specification_digest": "sha256:" + "f" * 64, "archive": {"asset": "old-jat.rcca", "url": "https://example.test/old-jat.rcca", "sha256": "6" * 64, "size": 50}},
+                "environment_artifacts": {},
+            }
+            path.write_text(json.dumps({"schema_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {}, "jat": old_jat}, indent=2) + "\n")
         else:
-            path.write_text(json.dumps({"format_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {"platforms": {}}}, indent=2) + "\n")
+            old_jat = {
+                "repository": "https://github.com/joshyorko/josh-all-the-things",
+                "version": "git-cccccccc",
+                "git_sha": "c" * 40,
+                "release_tag": "v0.1.11-jat-runtime",
+                "source_archive": {"asset": "jat-source.tar.gz", "url": "https://example.test/jat-source.tar.gz", "sha256": "7" * 64, "size": 100},
+                "environment_artifact": {"release_tag": "v0.1.11-jat-runtime", "archive_url": "https://example.test/old-jat.rcca", "archive_sha256": "6" * 64, "archive_size": 50, "rcc_artifact_digest": "sha256:" + "e" * 64, "rcc_specification_digest": "sha256:" + "f" * 64, "rcc_version": "v18.19.5", "platform": "linux_amd64"},
+                "environment_artifacts": {},
+                "rcc": {"version": "v18.19.5", "platforms": {}},
+            }
+            path.write_text(json.dumps({"format_version": 1, "rcc": {"version": "v18.19.5"}, "controller": {"platforms": {}}, "jat": old_jat}, indent=2) + "\n")
 
     candidate = {
         "version": "v18.19.6",
@@ -97,8 +145,9 @@ def _inputs(root: Path) -> set[Path]:
 def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
+    jat_candidate = _jat_candidate(candidate)
 
-    report = promote_candidate(root, candidate, artifacts, "a" * 40)
+    report = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate)
 
     assert report["status"] == "PASS"
     assert report["no_change"] is False
@@ -106,7 +155,11 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
     for relative in RUNTIME_MANIFESTS:
         manifest = json.loads((root / relative).read_text())
         assert manifest["rcc"]["version"] == "v18.19.6"
-        assert manifest["jat"]["rcc"]["version"] == "v18.19.5"
+        assert manifest["jat"]["rcc"]["version"] == "v18.19.6"
+        assert manifest["jat"]["environment_artifact"]["archive"]["url"].startswith(
+            "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.12-jat-runtime/"
+        )
+        assert manifest["jat"]["environment_artifacts"]["win32-x64"]["digest"].startswith("sha256:")
         assert set(manifest["controller"]["environment_artifacts"]) == {"linux-x64", "win32-x64"}
         assert manifest["controller"]["environment_artifacts"]["linux-x64"]["source_sha"] == "a" * 40
         assert manifest["controller"]["environment_artifacts"]["win32-x64"]["archive"]["url"].endswith("josh-room-controller-windows-amd64.rcca")
@@ -121,7 +174,7 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
         assert "environment_windows_amd64_freeze.yaml" in (root / relative).read_text()
     assert (root / FREEZE_DIRS[0] / FREEZES["win32-x64"]).read_bytes() == (artifacts / "rcc-controller-candidate-win32-x64" / FREEZES["win32-x64"]).read_bytes()
 
-    second = promote_candidate(root, candidate, artifacts, "a" * 40)
+    second = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate)
     assert second["no_change"] is True
     assert second["changed_files"] == []
 
@@ -132,7 +185,8 @@ def test_first_promotion_bootstraps_missing_template_lock_from_root_lock(tmp_pat
     template_lock = root / LOCKS[1]
     template_lock.unlink()
 
-    report = promote_candidate(root, candidate, artifacts, "a" * 40)
+    jat_candidate = _jat_candidate(candidate)
+    report = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate)
 
     assert report["status"] == "PASS"
     assert str(LOCKS[1]) in report["changed_files"]
@@ -145,19 +199,47 @@ def test_missing_or_stale_platform_receipt_leaves_every_consumer_file_unchanged(
     before = {path: path.read_bytes() for path in _inputs(root) if path.exists()}
 
     with pytest.raises(ValueError, match="stale for the requested source commit"):
-        promote_candidate(root, candidate, artifacts, "9" * 40)
+        promote_candidate(root, candidate, artifacts, "9" * 40, jat_candidate=_jat_candidate(candidate))
+
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_changed_jat_source_requires_upstream_source_archive_receipt_before_any_write(tmp_path: Path):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    before = {path: path.read_bytes() for path in _inputs(root) if path.exists()}
+
+    with pytest.raises(ValueError, match="JAT source changed in josh-all-the-things"):
+        promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate, source="d" * 40))
+
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_superseded_jat_release_blocks_promotion_before_any_write(tmp_path: Path, monkeypatch):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    jat_candidate = _jat_candidate(candidate)
+    before = {path: path.read_bytes() for path in _inputs(root) if path.exists()}
+    monkeypatch.setattr(promoter, "fetch_release", lambda: {"tag_name": "v18.19.6"})
+    monkeypatch.setattr(promoter, "verify_release", lambda _release: candidate)
+    latest_jat = _jat_candidate(candidate)
+    latest_jat["release_tag"] = "v0.1.13-jat-runtime"
+    monkeypatch.setattr(promoter, "fetch_latest_jat_candidate", lambda _rcc: latest_jat)
+
+    with pytest.raises(ValueError, match="JAT runtime candidate was superseded before promotion"):
+        promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, verify_latest=True)
 
     assert {path: path.read_bytes() for path in before} == before
     (artifacts / "rcc-controller-candidate-win32-x64" / "josh-room-controller-windows-amd64.json").unlink()
     with pytest.raises(FileNotFoundError):
-        promote_candidate(root, candidate, artifacts, "a" * 40)
+        promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate))
     assert {path: path.read_bytes() for path in before} == before
 
 
 def test_existing_artifact_release_is_reused_only_when_every_asset_matches(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
-    promotion = promote_candidate(root, candidate, artifacts, "a" * 40)
+    promotion = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate))
     assets = []
     for directory in artifacts.iterdir():
         for path in directory.iterdir():
@@ -191,7 +273,7 @@ def test_superseded_rcc_candidate_blocks_promotion_before_any_write(tmp_path: Pa
     monkeypatch.setattr(promoter, "verify_release", lambda _release: {**candidate, "version": "v18.19.7"})
 
     with pytest.raises(ValueError, match="superseded before promotion"):
-        promote_candidate(root, candidate, artifacts, "a" * 40, verify_latest=True)
+        promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate), verify_latest=True)
 
     assert {path: path.read_bytes() for path in before} == before
 
@@ -201,7 +283,7 @@ def test_plan_only_reports_exact_changes_without_writing_consumer_files(tmp_path
     candidate = _write_fixture(root, artifacts)
     before = {path: path.read_bytes() for path in _inputs(root) if path.exists()}
 
-    report = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
+    report = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate), prepare=False)
 
     assert report["status"] == "PASS"
     assert report["no_change"] is False
@@ -212,12 +294,13 @@ def test_plan_only_reports_exact_changes_without_writing_consumer_files(tmp_path
 def test_no_change_detection_repairs_template_drift(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
-    first = promote_candidate(root, candidate, artifacts, "a" * 40)
+    jat_candidate = _jat_candidate(candidate)
+    first = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate)
     assert first["status"] == "PASS"
     template_lock = root / LOCKS[1]
     template_lock.write_text('{"format_version": 1, "rcc": {}, "controller": {}}\n', encoding="utf-8")
 
-    repair = promote_candidate(root, candidate, artifacts, "a" * 40)
+    repair = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate)
 
     assert repair["no_change"] is False
     assert str(LOCKS[1]) in repair["changed_files"]
@@ -227,12 +310,13 @@ def test_no_change_detection_repairs_template_drift(tmp_path: Path):
 def test_artifact_release_tag_binds_complete_input_digests(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
-    first = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
+    jat_candidate = _jat_candidate(candidate)
+    first = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, prepare=False)
     receipt_path = artifacts / "rcc-controller-candidate-linux-x64" / "josh-room-controller-linux-amd64.json"
     receipt = json.loads(receipt_path.read_text())
     receipt["input_digest"] = receipt["input_digest"][:-1] + "4"
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
-    second = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
+    second = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, prepare=False)
 
     assert first["artifact_release_tag"] != second["artifact_release_tag"]
 
@@ -240,14 +324,15 @@ def test_artifact_release_tag_binds_complete_input_digests(tmp_path: Path):
 def test_artifact_release_tag_binds_source_sha_even_if_inputs_are_unchanged(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
-    original = promote_candidate(root, candidate, artifacts, "a" * 40, prepare=False)
+    jat_candidate = _jat_candidate(candidate)
+    original = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, prepare=False)
     for platform in PLATFORM_ASSETS:
         receipt_path = artifacts / f"rcc-controller-candidate-{platform}" / f"{Path(PLATFORM_ASSETS[platform]).stem}.json"
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         receipt["source"] = "9" * 40
         receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
 
-    updated = promote_candidate(root, candidate, artifacts, "9" * 40, prepare=False)
+    updated = promote_candidate(root, candidate, artifacts, "9" * 40, jat_candidate=jat_candidate, prepare=False)
 
     assert original["artifact_release_tag"] != updated["artifact_release_tag"]
     assert original["artifact_release_tag"].endswith("-" + "2" * 64 + "-" + "3" * 64)

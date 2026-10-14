@@ -11,10 +11,6 @@ on:
           - linux-x64
           - win32-x64
         default: linux-x64
-      rcc_sha256:
-        description: Exact SHA256 of the official RCC v18.19.5 platform asset
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -28,22 +24,23 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Download and verify pinned RCC v18.19.5
+      - name: Download and verify the manifest-pinned RCC executable
         shell: bash
-        env:
-          RCC_SHA256: ${{ inputs.rcc_sha256 }}
         run: |
           set -euo pipefail
-          [[ "$RCC_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]
+          version=$(jq -er '.rcc.version' vscode-extension/runtime/controller-artifact-manifest.json)
           url=$(jq -er '.rcc.platforms["linux-x64"].url' vscode-extension/runtime/controller-artifact-manifest.json)
+          sha=$(jq -er '.rcc.platforms["linux-x64"].sha256' vscode-extension/runtime/controller-artifact-manifest.json)
+          [[ "$version" =~ ^v18\.19\.[0-9]+$ ]]
+          [[ "$url" == "https://github.com/joshyorko/rcc/releases/download/$version/rcc-linux64" ]]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
           curl --fail --location --proto '=https' --tlsv1.2 "$url" -o "$RUNNER_TEMP/rcc-linux64"
-          printf '%s  %s\n' "$RCC_SHA256" "$RUNNER_TEMP/rcc-linux64" | sha256sum --check --status
+          printf '%s  %s\n' "$sha" "$RUNNER_TEMP/rcc-linux64" | sha256sum --check --status
           chmod 0700 "$RUNNER_TEMP/rcc-linux64"
+          echo "RCC_SHA256=$sha" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/rcc-linux64" version
       - name: Build, fresh-acquire, no-build verify, and execute controller artifact
         shell: bash
-        env:
-          RCC_SHA256: ${{ inputs.rcc_sha256 }}
         run: |
           set -euo pipefail
           python scripts/build_controller_artifact.py \
@@ -66,22 +63,24 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Download and verify pinned RCC v18.19.5
+      - name: Download and verify the manifest-pinned RCC executable
         shell: pwsh
-        env:
-          RCC_SHA256: ${{ inputs.rcc_sha256 }}
         run: |
-          if ($env:RCC_SHA256 -notmatch '^[0-9a-fA-F]{64}$') { throw 'A real v18.19.5 Windows RCC SHA256 is required.' }
           $manifest = Get-Content vscode-extension/runtime/controller-artifact-manifest.json | ConvertFrom-Json
-          $url = $manifest.rcc.platforms.'win32-x64'.url
+          $version = $manifest.rcc.version
+          $pin = $manifest.rcc.platforms.'win32-x64'
+          $url = $pin.url
+          $sha = $pin.sha256
+          if ($version -notmatch '^v18\.19\.[0-9]+$') { throw 'The manifest has an unexpected RCC version.' }
+          if ($url -ne "https://github.com/joshyorko/rcc/releases/download/$version/rcc-windows64.exe") { throw 'Windows RCC URL is not version-bound.' }
+          if ($sha -notmatch '^[0-9a-f]{64}$') { throw 'The Windows RCC manifest checksum is invalid.' }
           $rcc = Join-Path $env:RUNNER_TEMP 'rcc-windows64.exe'
           Invoke-WebRequest -Uri $url -OutFile $rcc
-          if ((Get-FileHash $rcc -Algorithm SHA256).Hash.ToLower() -ne $env:RCC_SHA256.ToLower()) { throw 'RCC SHA256 mismatch.' }
+          if ((Get-FileHash $rcc -Algorithm SHA256).Hash.ToLower() -ne $sha.ToLower()) { throw 'RCC SHA256 mismatch.' }
+          "RCC_SHA256=$sha" >> $env:GITHUB_ENV
           & $rcc version
       - name: Build, fresh-acquire, no-build verify, and execute controller artifact
         shell: pwsh
-        env:
-          RCC_SHA256: ${{ inputs.rcc_sha256 }}
         run: |
           python scripts/build_controller_artifact.py `
             --manifest vscode-extension/runtime/controller-artifact-manifest.json `

@@ -1,152 +1,382 @@
-name: Publish release artifacts
+name: Stage and publish release artifacts
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
+      operation:
+        description: Stage a verified draft, or publish a previously staged exact release
+        required: true
+        type: choice
+        options: [stage, publish]
       release_tag:
         description: Exact staged release tag (vX.Y.Z-standalone-vsix)
         required: true
         type: string
       source_sha:
-        description: Exact tested source commit already merged into main
+        description: Exact current main commit whose full CI must be green
         required: true
         type: string
+      owner_approval:
+        description: Josh must select APPROVE in a separate publish dispatch
+        required: true
+        type: choice
+        default: REJECT
+        options: [REJECT, APPROVE]
 
 permissions:
-  contents: write
+  contents: read
+  checks: read
 
 concurrency:
-  group: release-${{ inputs.release_tag || github.ref_name }}
+  group: release-${{ inputs.release_tag }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  release-readiness:
+    if: github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-      RELEASE_SHA: ${{ inputs.source_sha || github.sha }}
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.source_sha }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - name: Verify tag and package version
+      - name: Resolve and reject stale release sources
         id: version
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "joshyorko/josh-room"
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch origin main --tags
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            test "$GITHUB_REF" = refs/heads/main
-            git merge-base --is-ancestor "$RELEASE_SHA" origin/main
-          fi
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
           version=$(node -p "require('./vscode-extension/package.json').version")
-          test "${RELEASE_TAG}" = "v${version}-standalone-vsix"
+          test "$RELEASE_TAG" = "v${version}-standalone-vsix"
           test "$(node -p "require('./templates/room/vscode-extension/package.json').version")" = "$version"
           test "$(jq -r .extension_version vscode-extension/runtime/manifest.json)" = "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Verify staged tested VSIX
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$RELEASE_SHA")" >> "$GITHUB_ENV"
+      - name: Require all CI checks green for this exact source SHA
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          tag_ref="refs/tags/${RELEASE_TAG}"
-          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
-          if [ -z "$tag_sha" ]; then
-            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/check-runs" \
+            > "$RUNNER_TEMP/check-runs.json"
+          controller_tag=$(jq -er '.controller.release_tag' release-lock.json)
+          jat_tag=$(jq -er '.jat.environment_artifact.release_tag' release-lock.json)
+          resolve_tag_sha() {
+            local repository="$1" tag="$2" sha
+            sha=$(git ls-remote "$repository" "refs/tags/${tag}^{}" | awk 'NR == 1 {print $1}')
+            if [[ -z "$sha" ]]; then sha=$(git ls-remote "$repository" "refs/tags/$tag" | awk 'NR == 1 {print $1}'); fi
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            printf '%s\n' "$sha"
+          }
+          controller_tag_sha=$(resolve_tag_sha "https://github.com/$GITHUB_REPOSITORY.git" "$controller_tag")
+          jat_tag_sha=$(resolve_tag_sha "https://github.com/joshyorko/josh-all-the-things.git" "$jat_tag")
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$controller_tag" \
+            > "$RUNNER_TEMP/controller-release.json"
+          gh api "repos/joshyorko/josh-all-the-things/releases/tags/$jat_tag" \
+            > "$RUNNER_TEMP/jat-release.json"
+          python scripts/verify_release_readiness.py \
+            --source-sha "$RELEASE_SHA" \
+            --check-runs "$RUNNER_TEMP/check-runs.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json \
+            --controller-release "$RUNNER_TEMP/controller-release.json" \
+            --jat-release "$RUNNER_TEMP/jat-release.json" \
+            --controller-tag-sha "$controller_tag_sha" \
+            --jat-tag-sha "$jat_tag_sha" \
+            --report "$RUNNER_TEMP/release-readiness.json"
+          cat "$RUNNER_TEMP/release-readiness.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate the exact template inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            .id == "room" and
+            (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+            (.name | type == "string" and length > 0) and
+            (.description | type == "string" and length > 0)
+          ' templates/room/devcontainer-template.json
+          jq empty templates/room/.devcontainer/devcontainer.json
+          bash -n templates/room/.devcontainer/bootstrap.sh
+      - name: Verify the exact draft VSIX candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
+          OPERATION: ${{ inputs.operation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/standalone-release.json"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" --arg operation "$OPERATION" '
+            .tag_name == $tag and
+            .prerelease == false and
+            (.draft == true or ($operation == "publish" and .draft == false))
+          ' "$RUNNER_TEMP/standalone-release.json"
+          candidate_dir="$RUNNER_TEMP/release-candidate"
+          mkdir -p "$candidate_dir"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "josh-room-${{ steps.version.outputs.version }}.vsix" \
+            --dir "$candidate_dir"
+          python scripts/verify_release_candidate.py \
+            --candidate "$candidate_dir/josh-room-${{ steps.version.outputs.version }}.vsix" \
+            --tag "$RELEASE_TAG"
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}')
           fi
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -z "$tag_sha" ]; then
-            : # Tag creation follows verification of the existing draft and exact asset.
-          else
-            test "$tag_sha" = "$RELEASE_SHA"
-          fi
-          version="${{ steps.version.outputs.version }}"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish,tagName | \
-            jq -e --arg sha "$RELEASE_SHA" --arg tag "$RELEASE_TAG" \
-              '.isDraft == true and .targetCommitish == $sha and .tagName == $tag'
+          test "$tag_sha" = "$RELEASE_SHA"
+      - name: Build and receipt the exact release assets for staging
+        if: inputs.operation == 'stage'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
           mkdir -p dist
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "josh-room-${version}.vsix" --dir dist
+            --pattern "josh-room-${{ steps.version.outputs.version }}.vsix" --dir dist
           python scripts/verify_release_candidate.py \
-            --candidate "dist/josh-room-${version}.vsix" --tag "$RELEASE_TAG"
-      - name: Create verified release tag
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag_ref="refs/tags/${RELEASE_TAG}"
-          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
-          if [ -z "$tag_sha" ]; then
-            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
-          fi
-          if [ -z "$tag_sha" ]; then
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f "ref=$tag_ref" -f "sha=$RELEASE_SHA"
-          else
-            test "$tag_sha" = "$RELEASE_SHA"
-          fi
-          # Never replace a conflicting ref, including a race with another writer.
-          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
-          if [ -z "$tag_sha" ]; then
-            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
-          fi
-          test "$tag_sha" = "$RELEASE_SHA"
-      - name: Build Python artifacts and checksums
-        shell: bash
-        run: |
-          set -euo pipefail
+            --candidate "dist/josh-room-${{ steps.version.outputs.version }}.vsix" \
+            --tag "$RELEASE_TAG"
           uv build
-          (cd dist && sha256sum * > SHA256SUMS)
+          (cd dist && sha256sum *.vsix *.whl *.tar.gz > SHA256SUMS)
+          python scripts/release_staging.py create \
+            --directory dist \
+            --source-sha "$RELEASE_SHA" \
+            --release-tag "$RELEASE_TAG" \
+            --version "${{ steps.version.outputs.version }}" \
+            --checks "$RUNNER_TEMP/release-readiness.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json \
+            --output dist/release-candidate.json
       - uses: actions/upload-artifact@v7
+        if: inputs.operation == 'stage'
         with:
-          name: josh-room-dist
+          name: release-stage-files
           path: dist/
-      - name: Publish GitHub release
+          if-no-files-found: error
+          retention-days: 14
+      - name: Verify the existing staged release before approval
+        if: inputs.operation == 'publish'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          staged="$RUNNER_TEMP/staged-release"
+          mkdir -p "$staged"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$staged"
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}')
+          fi
+          python scripts/release_staging.py verify \
+            --directory "$staged" \
+            --source-sha "$RELEASE_SHA" \
+            --release-tag "$RELEASE_TAG" \
+            --version "$RELEASE_VERSION" \
+            --checks "$RUNNER_TEMP/release-readiness.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json
+          python scripts/release_staging.py reconcile \
+            --directory "$staged" \
+            --release-json "$RUNNER_TEMP/standalone-release.json" \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$RELEASE_SHA" \
+            --tag-target-sha "$tag_sha"
+
+  stage:
+    if: github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko' && inputs.operation == 'stage'
+    needs: [release-readiness]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-stage-files
+          path: ${{ runner.temp }}/release-stage-files
+      - name: Verify exact release tag and reconcile draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}')
+          fi
+          test "$tag_sha" = "$RELEASE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/standalone-release.json"
+          missing="$RUNNER_TEMP/missing-release-assets.json"
+          python scripts/release_staging.py reconcile \
+            --directory "$RUNNER_TEMP/release-stage-files" \
+            --release-json "$RUNNER_TEMP/standalone-release.json" \
+            --release-tag "$RELEASE_TAG" --source-sha "$RELEASE_SHA" \
+            --tag-target-sha "$tag_sha" > "$RUNNER_TEMP/reconcile-report.json"
+          jq -r '.missing_assets[]' "$RUNNER_TEMP/reconcile-report.json" > "$missing"
+          while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            test -f "$RUNNER_TEMP/release-stage-files/$name"
+            gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/release-stage-files/$name" --repo "$GITHUB_REPOSITORY"
+          done < "$missing"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/standalone-release.json"
+          python scripts/release_staging.py reconcile \
+            --directory "$RUNNER_TEMP/release-stage-files" \
+            --release-json "$RUNNER_TEMP/standalone-release.json" \
+            --release-tag "$RELEASE_TAG" --source-sha "$RELEASE_SHA" \
+            --tag-target-sha "$tag_sha"
+          echo "Staged $RELEASE_TAG for source $RELEASE_SHA. No public release or template was published." >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    if: github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko' && inputs.operation == 'publish' && inputs.owner_approval == 'APPROVE'
+    needs: [release-readiness]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install Dev Container CLI
+        run: npm install --global @devcontainers/cli@0.88.0
+      - name: Recheck exact source, CI, staged release, and artifact digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
+          RELEASE_VERSION: ${{ needs.release-readiness.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/check-runs" \
+            > "$RUNNER_TEMP/check-runs.json"
+          controller_tag=$(jq -er '.controller.release_tag' release-lock.json)
+          jat_tag=$(jq -er '.jat.environment_artifact.release_tag' release-lock.json)
+          resolve_tag_sha() {
+            local repository="$1" tag="$2" sha
+            sha=$(git ls-remote "$repository" "refs/tags/${tag}^{}" | awk 'NR == 1 {print $1}')
+            if [[ -z "$sha" ]]; then sha=$(git ls-remote "$repository" "refs/tags/$tag" | awk 'NR == 1 {print $1}'); fi
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            printf '%s\n' "$sha"
+          }
+          controller_tag_sha=$(resolve_tag_sha "https://github.com/$GITHUB_REPOSITORY.git" "$controller_tag")
+          jat_tag_sha=$(resolve_tag_sha "https://github.com/joshyorko/josh-all-the-things.git" "$jat_tag")
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$controller_tag" \
+            > "$RUNNER_TEMP/controller-release.json"
+          gh api "repos/joshyorko/josh-all-the-things/releases/tags/$jat_tag" \
+            > "$RUNNER_TEMP/jat-release.json"
+          python scripts/verify_release_readiness.py \
+            --source-sha "$RELEASE_SHA" \
+            --check-runs "$RUNNER_TEMP/check-runs.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json \
+            --controller-release "$RUNNER_TEMP/controller-release.json" \
+            --jat-release "$RUNNER_TEMP/jat-release.json" \
+            --controller-tag-sha "$controller_tag_sha" \
+            --jat-tag-sha "$jat_tag_sha" \
+            --report "$RUNNER_TEMP/release-readiness.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/standalone-release.json"
+          staged="$RUNNER_TEMP/staged-release"
+          mkdir -p "$staged"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$staged"
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}')
+          fi
+          python scripts/release_staging.py verify \
+            --directory "$staged" --source-sha "$RELEASE_SHA" \
+            --release-tag "$RELEASE_TAG" --version "$RELEASE_VERSION" \
+            --checks "$RUNNER_TEMP/release-readiness.json" \
+            --runtime vscode-extension/runtime/manifest.json --release-lock release-lock.json
+          python scripts/release_staging.py reconcile \
+            --directory "$staged" --release-json "$RUNNER_TEMP/standalone-release.json" \
+            --release-tag "$RELEASE_TAG" --source-sha "$RELEASE_SHA" --tag-target-sha "$tag_sha"
+          python scripts/verify_release_candidate.py \
+            --candidate "$staged/josh-room-${RELEASE_VERSION}.vsix" --tag "$RELEASE_TAG"
+      - name: Publish the verified GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          test "$(git rev-parse origin/main)" = "$RELEASE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/standalone-release.json"
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}')
+          fi
+          test "$tag_sha" = "$RELEASE_SHA"
+          if [[ $(jq -r .draft "$RUNNER_TEMP/standalone-release.json") == true ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/standalone-release.json"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" \
+            '.tag_name == $tag and .draft == false and .prerelease == false' \
+            "$RUNNER_TEMP/standalone-release.json"
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}')
+          fi
+          test "$tag_sha" = "$RELEASE_SHA"
+      - name: Publish the approved Dev Container template
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          # Never upload over the tested VSIX. Only ancillary artifacts are new.
-          gh release upload "$RELEASE_TAG" dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY"
-          # Re-download immediately before publication to detect draft-asset drift.
-          verify_dir=$(mktemp -d)
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "josh-room-${version}.vsix" --dir "$verify_dir"
-          python scripts/verify_release_candidate.py \
-            --candidate "$verify_dir/josh-room-${version}.vsix" --tag "$RELEASE_TAG"
-          tag_ref="refs/tags/${RELEASE_TAG}"
-          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
-          if [ -z "$tag_sha" ]; then
-            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
-          fi
-          test "$tag_sha" = "$RELEASE_SHA"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish,tagName | \
-            jq -e --arg sha "$RELEASE_SHA" --arg tag "$RELEASE_TAG" \
-              '.isDraft == true and .targetCommitish == $sha and .tagName == $tag'
-          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish,tagName | \
-            jq -e --arg sha "$RELEASE_SHA" --arg tag "$RELEASE_TAG" \
-              '.isDraft == false and .targetCommitish == $sha and .tagName == $tag'
-          published_dir=$(mktemp -d)
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern "josh-room-${version}.vsix" --dir "$published_dir"
-          python scripts/verify_release_candidate.py \
-            --candidate "$published_dir/josh-room-${version}.vsix" --tag "$RELEASE_TAG"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          devcontainer templates publish \
+            --registry ghcr.io \
+            --namespace "$GITHUB_REPOSITORY/templates" \
+            templates/room
+          version=$(jq -r .version templates/room/devcontainer-template.json)
+          echo "Published ghcr.io/$GITHUB_REPOSITORY/templates/room:$version after owner approval." >> "$GITHUB_STEP_SUMMARY"

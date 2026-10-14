@@ -287,16 +287,15 @@ def test_prepare_workspace_relocates_controller_and_leaves_clean_room(tmp_path):
     assert not any(room.iterdir())
 
 
-def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
+def test_template_workflow_validates_inputs_without_publishing():
     workflow = (ROOT / ".github/workflows/publish-template.yml").read_text()
     assert 'paths:' in workflow
     assert '"templates/room/**"' in workflow
-    assert "packages: write" in workflow
-    assert "docker/login-action@" in workflow
-    assert "secrets.GITHUB_TOKEN" in workflow
-    assert "devcontainer templates publish" in workflow
-    assert "--namespace ${{ github.repository }}/templates" in workflow
-    assert '"templates/room"' in workflow
+    assert "packages: write" not in workflow
+    assert "docker/login-action@" not in workflow
+    assert "devcontainer templates publish" not in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "jq -e" in workflow
     assert "docker build" not in workflow
     assert "build-image" not in workflow
 
