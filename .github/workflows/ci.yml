@@ -121,12 +121,13 @@ jobs:
           mkdir -p dist/release-candidate
           candidate="vscode-extension/josh-room-$VERSION.vsix"
           test -f "$candidate"
-          cp "$candidate" dist/release-candidate/
           python scripts/verify_release_candidate.py \
-            --candidate "dist/release-candidate/josh-room-$VERSION.vsix" \
+            --candidate "$candidate" \
             --version "$VERSION" --source-sha "$SOURCE_SHA" \
             --ci-run-id "$CI_RUN_ID" \
             --report "dist/release-candidate/candidate.json"
+          cp "$candidate" dist/release-candidate/
+          cmp "$candidate" "dist/release-candidate/josh-room-$VERSION.vsix"
       - uses: actions/upload-artifact@v7
         with:
           name: release-candidate-${{ steps.version.outputs.version }}-${{ github.sha }}
