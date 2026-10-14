@@ -63,6 +63,7 @@ PACKAGE_MANIFESTS = (
     Path("vscode-extension/package.json"),
     Path("templates/room/vscode-extension/package.json"),
 )
+TEMPLATE_MANIFEST = Path("templates/room/devcontainer-template.json")
 BOOTSTRAP_FILES = (
     Path(".devcontainer/bootstrap.sh"),
     Path("templates/room/.devcontainer/bootstrap.sh"),
@@ -294,6 +295,15 @@ def _version_update(
         value = read(path)
         value["version"] = version
         changed.append((path, (json.dumps(value, indent=2) + "\n").encode()))
+    template_path = root / TEMPLATE_MANIFEST
+    template = read(template_path)
+    template_version = template.get("version")
+    match = VERSION_LINE.fullmatch(str(template_version))
+    if not match:
+        raise ValueError("Dev Container template version is not a stable semantic version")
+    major, minor, patch = map(int, match.groups())
+    template["version"] = f"{major}.{minor}.{patch + 1}"
+    changed.append((template_path, (json.dumps(template, indent=2) + "\n").encode()))
     for relative in RUNTIME_MANIFESTS:
         path = root / relative
         value = read(path)

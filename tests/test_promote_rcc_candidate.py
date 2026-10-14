@@ -20,6 +20,7 @@ from scripts.promote_rcc_candidate import (
     RELEASE_CANDIDATE_LOCKS,
     ROBOT_FILES,
     RUNTIME_MANIFESTS,
+    TEMPLATE_MANIFEST,
     _load_receipts,
     promote_candidate,
     verify_downloaded_assets,
@@ -117,6 +118,10 @@ def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
             }
             path.write_text(json.dumps({"format_version": 1, "candidate_version": "0.1.32", "josh_room": {"version": "0.1.32", "git_sha": "a" * 40}, "rcc": {"version": "v18.19.5"}, "controller": {"platforms": {}}, "jat": old_jat}, indent=2) + "\n")
 
+    template_path = root / TEMPLATE_MANIFEST
+    template_path.parent.mkdir(parents=True, exist_ok=True)
+    template_path.write_text(json.dumps({"id": "room", "version": "0.1.2"}, indent=2) + "\n")
+
     candidate = {
         "version": "v18.19.6",
         "source_sha": "b" * 40,
@@ -156,7 +161,7 @@ def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
 
 
 def _inputs(root: Path) -> set[Path]:
-    return {root / relative for relative in (*CONTROLLER_MANIFESTS, *RUNTIME_MANIFESTS, *LOCKS, *PACKAGE_MANIFESTS, *RELEASE_CANDIDATE_LOCKS, *BOOTSTRAP_FILES, *ROBOT_FILES, *(directory / freeze for directory in FREEZE_DIRS for freeze in FREEZES.values()))}
+    return {root / relative for relative in (*CONTROLLER_MANIFESTS, *RUNTIME_MANIFESTS, *LOCKS, *PACKAGE_MANIFESTS, TEMPLATE_MANIFEST, *RELEASE_CANDIDATE_LOCKS, *BOOTSTRAP_FILES, *ROBOT_FILES, *(directory / freeze for directory in FREEZE_DIRS for freeze in FREEZES.values()))}
 
 
 def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_path: Path):
@@ -197,6 +202,7 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
         assert lock["controller"]["platforms"]["win32-x64"]["input_digest"] == "sha256:" + "3" * 64
     for relative in PACKAGE_MANIFESTS:
         assert json.loads((root / relative).read_text())["version"] == "0.1.33"
+    assert json.loads((root / TEMPLATE_MANIFEST).read_text())["version"] == "0.1.3"
     for relative in RUNTIME_MANIFESTS:
         manifest = json.loads((root / relative).read_text())
         assert manifest["extension_version"] == "0.1.33"
