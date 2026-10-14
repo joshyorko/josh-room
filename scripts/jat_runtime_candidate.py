@@ -11,6 +11,7 @@ import re
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 JAT_OWNER = "joshyorko"
 JAT_REPO = "josh-all-the-things"
@@ -56,7 +57,12 @@ def _request_json(url: str) -> Any:
 
 
 def _download(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "josh-room-rcc-maintenance"})
+    headers = {"User-Agent": "josh-room-rcc-maintenance"}
+    token = os.environ.get("GH_TOKEN")
+    if urlsplit(url).hostname == "api.github.com" and token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Accept"] = "application/vnd.github+json"
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=60) as response:
         return response.read()
 

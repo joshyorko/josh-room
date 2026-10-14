@@ -5,11 +5,45 @@ import json
 
 import pytest
 
+import scripts.jat_runtime_candidate as jat_candidate
 from scripts.jat_runtime_candidate import select_latest_release, verify_release
 
 JAT_SHA = "a" * 40
 RCC_SHA = "b" * 40
 RCC_VERSION = "v18.19.6"
+
+
+@pytest.mark.parametrize(
+    ("url", "authenticated"),
+    [
+        ("https://api.github.com/repos/example/project/tarball/" + JAT_SHA, True),
+        ("https://github.com/example/project/releases/download/v1/archive.rcca", False),
+    ],
+)
+def test_download_sends_github_token_only_to_github_api(monkeypatch, url, authenticated):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b"synthetic archive"
+
+    requests = []
+
+    def open_request(request, *, timeout):
+        requests.append((request, timeout))
+        return Response()
+
+    monkeypatch.setenv("GH_TOKEN", "synthetic-token")
+    monkeypatch.setattr(jat_candidate.urllib.request, "urlopen", open_request)
+
+    assert jat_candidate._download(url) == b"synthetic archive"
+    request, timeout = requests[0]
+    assert timeout == 60
+    assert request.get_header("Authorization") == ("Bearer synthetic-token" if authenticated else None)
 
 
 def _fixture():

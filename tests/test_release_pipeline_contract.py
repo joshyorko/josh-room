@@ -31,6 +31,12 @@ def test_ci_workflow_can_be_dispatched_for_automation_created_prs_at_an_exact_sh
     assert promotion["permissions"]["actions"] == "write"
     assert "gh workflow run ci.yml" in _steps(promotion)
     assert '--field source_sha="$promotion_sha"' in _steps(promotion)
+    promotion_steps = _steps(promotion)
+    assert '.jat_platforms["linux-x64"].digest' in promotion_steps
+    assert '.jat_platforms["win32-x64"].digest' in promotion_steps
+    jat_verification = _workflow("rcc-candidate-qualification.yml")["jobs"]["jat-runtime-candidate"]
+    fetch_step = next(step for step in jat_verification["steps"] if step.get("id") == "verify")
+    assert fetch_step["env"]["GH_TOKEN"] == "${{ github.token }}"
 
 
 def test_main_ci_builds_a_versioned_candidate_only_after_every_required_check_passes():

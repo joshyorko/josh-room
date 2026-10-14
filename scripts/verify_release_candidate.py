@@ -43,6 +43,7 @@ def verify(
     if expected is not None and observed != expected:
         raise ValueError("candidate checksum does not match tested archive")
     source_root = (root / "vscode-extension").resolve()
+    candidate_path = candidate.resolve()
     ignore_file = source_root / ".vscodeignore"
     ignores = ignore_file.read_text().splitlines() if ignore_file.exists() else []
     if any(pattern.startswith("!") for pattern in ignores):
@@ -50,6 +51,7 @@ def verify(
     expected_sources = {
         path.relative_to(source_root).as_posix()
         for path in source_root.rglob("*") if path.is_file()
+        and path.resolve() != candidate_path
         and path.name not in {".vscodeignore", ".gitignore"}
         and not any(fnmatch.fnmatch(path.relative_to(source_root).as_posix(), pattern)
                     for pattern in ignores if pattern and not pattern.startswith("#"))

@@ -115,6 +115,24 @@ def test_build_ci_candidate_does_not_need_a_release_tag_or_existing_digest_pin(t
     assert payload["size"] == candidate.stat().st_size
 
 
+def test_build_ci_candidate_inside_extension_is_not_counted_as_source(tmp_path):
+    root, candidate, _pin = fixture(tmp_path)
+    (root / "release-promotion.json").unlink()
+    candidate.rename(root / "vscode-extension/josh-room-0.1.26.vsix")
+    candidate = root / "vscode-extension/josh-room-0.1.26.vsix"
+
+    result = verify_staged(
+        root,
+        candidate,
+        "--version", "0.1.26",
+        "--source-sha", "a" * 40,
+        "--ci-run-id", "12345",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["source_files"] == 5
+
+
 @pytest.mark.parametrize("change", ["source", "run", "artifact"])
 def test_candidate_receipt_rejects_stale_source_or_run_or_artifact(tmp_path, change):
     root, candidate, _pin = fixture(tmp_path)
