@@ -59,10 +59,16 @@ def _request_json(url: str) -> Any:
 def _download(url: str) -> bytes:
     headers = {"User-Agent": "josh-room-rcc-maintenance"}
     token = os.environ.get("GH_TOKEN")
+    authorization = None
     if urlsplit(url).hostname == "api.github.com" and token:
-        headers["Authorization"] = f"Bearer {token}"
+        authorization = f"Bearer {token}"
         headers["Accept"] = "application/vnd.github+json"
     request = urllib.request.Request(url, headers=headers)
+    if authorization:
+        # urllib's redirect handler copies ordinary headers to the redirected
+        # request. Keep credentials out of that set so API downloads cannot
+        # forward GH_TOKEN to the release CDN.
+        request.add_unredirected_header("Authorization", authorization)
     with urllib.request.urlopen(request, timeout=60) as response:
         return response.read()
 

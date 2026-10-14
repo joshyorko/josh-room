@@ -46,6 +46,42 @@ def test_download_sends_github_token_only_to_github_api(monkeypatch, url, authen
     assert request.get_header("Authorization") == ("Bearer synthetic-token" if authenticated else None)
 
 
+def test_download_does_not_forward_github_token_through_api_redirect(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b"synthetic archive"
+
+    requests = []
+
+    def open_request(request, *, timeout):
+        requests.append(request)
+        return Response()
+
+    monkeypatch.setenv("GH_TOKEN", "synthetic-token")
+    monkeypatch.setattr(jat_candidate.urllib.request, "urlopen", open_request)
+
+    assert jat_candidate._download("https://api.github.com/repos/example/project/tarball/" + JAT_SHA)
+    api_request = requests[0]
+    assert api_request.get_header("Authorization") == "Bearer synthetic-token"
+
+    redirected = jat_candidate.urllib.request.HTTPRedirectHandler().redirect_request(
+        api_request,
+        None,
+        302,
+        "Found",
+        {},
+        "https://codeload.github.com/example/project/legacy.tar.gz/" + JAT_SHA,
+    )
+    assert redirected is not None
+    assert redirected.get_header("Authorization") is None
+
+
 def _fixture():
     tag = "v0.1.12-jat-runtime"
     assets = {}
