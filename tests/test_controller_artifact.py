@@ -179,6 +179,14 @@ def test_checked_in_controller_manifest_and_consumers_are_exact_and_in_parity():
     workflow = (root / ".github/workflows/controller-artifact.yml").read_text()
     assert "workflow_dispatch" in workflow
     assert "v18.19.2" not in workflow
+    assert "v18.19.5" not in workflow
+    assert "inputs.rcc_sha256" not in workflow
+    assert "jq -er '.rcc.version'" in workflow
+    assert "jq -er '.rcc.platforms[\"linux-x64\"].sha256'" in workflow
+    assert "$manifest.rcc.version" in workflow
+    assert workflow.count('echo "RCC_SHA256=$sha" >> "$GITHUB_ENV"') == 1
+    assert '"RCC_SHA256=$sha" >> $env:GITHUB_ENV' in workflow
+    assert "RCC_SHA256: ${{ env.RCC_SHA256 }}" not in workflow
     assert "required: true" in workflow
 
 

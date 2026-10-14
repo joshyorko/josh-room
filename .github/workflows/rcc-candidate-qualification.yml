@@ -1,4 +1,4 @@
-name: RCC controller maintenance
+name: RCC controller and JAT maintenance
 
 on:
   pull_request:
@@ -6,13 +6,17 @@ on:
     paths:
       - ".github/workflows/rcc-candidate-qualification.yml"
       - "scripts/promote_rcc_candidate.py"
+      - "scripts/jat_runtime_candidate.py"
       - "scripts/build_controller_artifact.py"
       - "scripts/rcc_maintenance.py"
+      - "scripts/verify_release_readiness.py"
       - "scripts/controller_crypto_smoke.py"
       - "vscode-extension/runtime/controller/**"
       - "tests/test_controller_artifact.py"
       - "tests/test_rcc_maintenance.py"
       - "tests/test_promote_rcc_candidate.py"
+      - "tests/test_jat_runtime_candidate.py"
+      - "tests/test_release_readiness.py"
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
@@ -101,13 +105,76 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  promote:
-    if: github.event_name != 'pull_request' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main'
+  jat-runtime-candidate:
     needs: qualify
+    runs-on: ubuntu-latest
+    outputs:
+      qualified: ${{ steps.verdict.outputs.qualified }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: rcc-controller-candidate-linux-x64
+          path: ${{ runner.temp }}/rcc-controller-candidate-linux-x64
+      - name: Verify latest upstream JAT receipts against this RCC release
+        id: verify
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: >-
+          python scripts/jat_runtime_candidate.py
+          --rcc-report "$RUNNER_TEMP/rcc-controller-candidate-linux-x64/rcc-candidate-report.json"
+          --report "$RUNNER_TEMP/jat-runtime-candidate.json"
+      - name: Report JAT compatibility gate
+        id: verdict
+        if: always()
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/jat-runtime-candidate.json"
+          if [[ ! -f "$report" ]]; then
+            echo 'qualified=false' >> "$GITHUB_OUTPUT"
+            echo 'JAT verification did not produce a report.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          status=$(jq -r '.status // "BLOCKED"' "$report")
+          error=$(jq -r '.error // "unknown verification failure"' "$report")
+          if [[ "$status" == QUALIFIED ]]; then
+            echo 'qualified=true' >> "$GITHUB_OUTPUT"
+            echo 'Both JAT platform receipts match the verified RCC candidate.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'qualified=false' >> "$GITHUB_OUTPUT"
+            echo "JAT maintenance is blocked: $error" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$EVENT_NAME" == pull_request && "$error" == 'ValueError: JAT runtime RCC version differs from the controller candidate '* ]]; then
+              echo 'This pull request changes the pipeline; the incompatible upstream pin is reported as a dependency and prevents promotion.' >> "$GITHUB_STEP_SUMMARY"
+            else
+              exit 1
+            fi
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rcc-jat-runtime-candidate
+          path: ${{ runner.temp }}/jat-runtime-candidate.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  promote:
+    if: github.event_name != 'pull_request' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && needs.jat-runtime-candidate.outputs.qualified == 'true'
+    needs: [qualify, jat-runtime-candidate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -121,6 +188,10 @@ jobs:
           pattern: rcc-controller-candidate-*
           path: ${{ runner.temp }}/rcc-candidates
           merge-multiple: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: rcc-jat-runtime-candidate
+          path: ${{ runner.temp }}/jat-candidate
       - name: Validate receipts and prepare coherent source/template/lock update
         id: prepare
         shell: bash
@@ -132,6 +203,7 @@ jobs:
           test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
           python scripts/promote_rcc_candidate.py \
             --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+            --jat-candidate "$RUNNER_TEMP/jat-candidate/jat-runtime-candidate.json" \
             --artifacts "$RUNNER_TEMP/rcc-candidates" \
             --source-sha "$SOURCE_SHA" \
             --report "$RUNNER_TEMP/controller-promotion-report.json" \
@@ -184,6 +256,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$existing"
           python scripts/promote_rcc_candidate.py \
             --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+            --jat-candidate "$RUNNER_TEMP/jat-candidate/jat-runtime-candidate.json" \
             --artifacts "$RUNNER_TEMP/rcc-candidates" --source-sha "$SOURCE_SHA" \
             --existing-release-json "$existing" --release-tag "$RELEASE_TAG" --tag-target-sha "$tag_sha"
           mkdir -p "$RUNNER_TEMP/published-controller-assets"
@@ -202,7 +275,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          branch='maintenance/rcc-controller'
+          branch='maintenance/rcc-runtimes'
           branch_tip=''
           git fetch origin main
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
@@ -216,6 +289,7 @@ jobs:
           fi
           python scripts/promote_rcc_candidate.py \
             --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
+            --jat-candidate "$RUNNER_TEMP/jat-candidate/jat-runtime-candidate.json" \
             --artifacts "$RUNNER_TEMP/rcc-candidates" \
             --source-sha "${{ github.sha }}" \
             --report "$RUNNER_TEMP/controller-promotion-report.json"
@@ -232,22 +306,34 @@ jobs:
           fi
           open_pr=$(gh pr list --state open --base main --head "$GITHUB_REPOSITORY_OWNER:$branch" --json number --jq '.[0].number // empty')
           cat > "$RUNNER_TEMP/controller-promotion-pr.md" <<EOF
-          Promotes a native RCC controller qualification into the consumer manifests, templates, freezes, and release lock.
+          Promotes matching controller and JAT runtime qualifications into the consumer manifests, templates, freezes, and release locks.
 
           RCC version: $(jq -r '.candidate' "$report")
           Artifact release: $(jq -r '.artifact_release_tag' "$report")
           Source commit: $(jq -r '.source_sha' "$report")
+          JAT release: $(jq -r '.jat_release_tag' "$report")
+          JAT source commit: $(jq -r '.jat_source_sha' "$report")
+          JAT source handoff: $(jq -r '.jat_source_handoff.from' "$report") -> $(jq -r '.jat_source_handoff.to' "$report")
+          JAT source archive SHA256: $(jq -r '.jat_source_archive.sha256 // "see runtime manifest diff"' "$report")
+          Next standalone VSIX version: $(jq -r '.release_version' "$report")
+
+          The consumer PR is the approval handoff for changing the pinned upstream JAT source. It updates only this repository's exact published JAT tag, source archive, and receipts. No upstream source is edited.
 
           Linux input/artifact: $(jq -r '.platforms["linux-x64"].input_digest + " / " + .platforms["linux-x64"].artifact_digest' "$report")
           Windows input/artifact: $(jq -r '.platforms["win32-x64"].input_digest + " / " + .platforms["win32-x64"].artifact_digest' "$report")
+          Linux JAT artifact: $(jq -r '.jat_platforms["linux-x64"].digest' "$report")
+          Windows JAT artifact: $(jq -r '.jat_platforms["win32-x64"].digest' "$report")
 
           Qualification run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
           EOF
           if [[ -z "$open_pr" ]]; then
-            gh pr create --base main --head "$branch" --title 'chore: promote verified RCC controller artifacts' --body-file "$RUNNER_TEMP/controller-promotion-pr.md"
+            gh pr create --base main --head "$branch" --title 'chore: promote verified RCC and JAT runtimes' --body-file "$RUNNER_TEMP/controller-promotion-pr.md" --draft
           else
-            gh pr edit "$open_pr" --title 'chore: promote verified RCC controller artifacts' --body-file "$RUNNER_TEMP/controller-promotion-pr.md"
+            gh pr edit "$open_pr" --title 'chore: promote verified RCC and JAT runtimes' --body-file "$RUNNER_TEMP/controller-promotion-pr.md"
           fi
+          promotion_sha=$(git rev-parse HEAD)
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch" --field source_sha="$promotion_sha"
+          echo "Dispatched full ci.yml workflow_dispatch for automated PR source $promotion_sha." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload promotion report
         if: always()
         uses: actions/upload-artifact@v4
