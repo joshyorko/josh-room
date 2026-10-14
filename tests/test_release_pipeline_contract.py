@@ -65,7 +65,9 @@ def test_release_stages_from_trusted_green_ci_without_preexisting_release_tag_or
     assert trigger["workflows"] == ["CI"]
     assert trigger["types"] == ["completed"]
     assert trigger["branches"] == ["main"]
-    assert set(dispatch) == {"source_sha", "stage_run_id", "owner_approval"}
+    assert set(dispatch) == {"source_sha", "stage_run_id", "owner_approval", "resume_empty_draft_id", "expected_draft_source_sha"}
+    assert dispatch["resume_empty_draft_id"]["required"] == "false"
+    assert dispatch["expected_draft_source_sha"]["required"] == "false"
     assert dispatch["owner_approval"]["default"] == "REJECT"
     assert "gh release create" not in _steps(stage)
     assert "gh release upload" not in _steps(stage)
@@ -120,8 +122,8 @@ def test_only_explicit_owner_dispatch_can_create_tag_publish_release_and_templat
     assert "jq empty templates/room/.devcontainer/devcontainer.json" in preflight
     assert "bash -n templates/room/.devcontainer/bootstrap.sh" in preflight
     publish_run = publish["steps"][publish_index]["run"]
-    assert "gh release edit \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false" in publish_run
-    assert "gh release edit \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false" in steps
+    assert 'gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true' in publish_run
+    assert publish["steps"][publish_index]["env"]["RELEASE_ID"] == "${{ steps.draft.outputs.release_id }}"
     assert '--namespace "$GITHUB_REPOSITORY/templates"' in publish_run
     assert "--namespace ghcr.io/" not in publish_run
 
