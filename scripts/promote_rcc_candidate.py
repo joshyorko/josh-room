@@ -302,7 +302,8 @@ def _version_update(
     if not match:
         raise ValueError("Dev Container template version is not a stable semantic version")
     major, minor, patch = map(int, match.groups())
-    template["version"] = f"{major}.{minor}.{patch + 1}"
+    next_template_version = f"{major}.{minor}.{patch + 1}"
+    template["version"] = next_template_version
     changed.append((template_path, (json.dumps(template, indent=2) + "\n").encode()))
     for relative in RUNTIME_MANIFESTS:
         path = root / relative
@@ -313,6 +314,7 @@ def _version_update(
         path = root / relative
         value = read(path)
         value["candidate_version"] = version
+        value.setdefault("template", {})["version"] = next_template_version
         changed.append((path, (json.dumps(value, indent=2) + "\n").encode()))
     current_extension_id = f"joshyorko.josh-room-{current_version}"
     next_extension_id = f"joshyorko.josh-room-{version}"
@@ -534,6 +536,15 @@ def promote_candidate(
         "jat_source_handoff": verified_jat["source_handoff"],
         "release_version": release_version,
         "jat_rcc_version": verified_jat["rcc_version"],
+        "jat_platforms": {
+            platform: {
+                "digest": artifact["digest"],
+                "specification_digest": artifact["specification_digest"],
+                "archive_sha256": artifact["archive"]["sha256"],
+                "archive_size": artifact["archive"]["size"],
+            }
+            for platform, artifact in verified_jat["environment_artifacts"].items()
+        },
         "platforms": {platform: items["receipt"] for platform, items in receipts.items()},
     }
 

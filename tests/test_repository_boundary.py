@@ -148,7 +148,9 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
 
     lock = json.loads((ROOT / "release-lock.json").read_text())
     assert package["version"] == lock["candidate_version"]
-    assert package["scripts"]["package"]
+    assert package["scripts"]["package"] == "npx --yes @vscode/vsce@4.0.0 package --no-dependencies"
+    template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
+    assert template_package["scripts"]["package"] == package["scripts"]["package"]
     assert (ROOT / "vscode-extension/.vscodeignore").is_file()
     vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
     assert "runtime/controller/**/__pycache__/**" in vscodeignore

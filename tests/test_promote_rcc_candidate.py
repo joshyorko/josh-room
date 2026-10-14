@@ -116,7 +116,7 @@ def _write_fixture(root: Path, artifacts: Path, *, source: str = "a" * 40):
                 "environment_artifacts": {},
                 "rcc": {"version": "v18.19.5", "platforms": {}},
             }
-            path.write_text(json.dumps({"format_version": 1, "candidate_version": "0.1.32", "josh_room": {"version": "0.1.32", "git_sha": "a" * 40}, "rcc": {"version": "v18.19.5"}, "controller": {"platforms": {}}, "jat": old_jat}, indent=2) + "\n")
+            path.write_text(json.dumps({"format_version": 1, "candidate_version": "0.1.32", "josh_room": {"version": "0.1.32", "git_sha": "a" * 40}, "template": {"oci": "ghcr.io/example/room", "version": "0.1.2"}, "rcc": {"version": "v18.19.5"}, "controller": {"platforms": {}}, "jat": old_jat}, indent=2) + "\n")
 
     template_path = root / TEMPLATE_MANIFEST
     template_path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,7 +208,12 @@ def test_promotion_updates_both_consumers_from_verified_platform_receipts(tmp_pa
         assert manifest["extension_version"] == "0.1.33"
         assert manifest["jat"]["source_archive"]["url"].endswith("/tarball/" + "c" * 40)
     for relative in RELEASE_CANDIDATE_LOCKS:
-        assert json.loads((root / relative).read_text())["candidate_version"] == "0.1.33"
+        lock = json.loads((root / relative).read_text())
+        assert lock["candidate_version"] == "0.1.33"
+        assert lock["template"]["version"] == "0.1.3"
+    assert report["jat_platforms"]["linux-x64"]["digest"] == "sha256:" + "8" * 64
+    assert report["jat_platforms"]["win32-x64"]["digest"] == "sha256:" + "9" * 64
+    assert report["jat_platforms"]["linux-x64"]["archive_sha256"] == "c" * 64
     for relative in BOOTSTRAP_FILES:
         assert "joshyorko.josh-room-0.1.33" in (root / relative).read_text()
     for relative in ROBOT_FILES:
@@ -354,6 +359,21 @@ def test_no_change_detection_repairs_template_drift(tmp_path: Path):
     assert repair["no_change"] is False
     assert str(LOCKS[1]) in repair["changed_files"]
     assert json.loads(template_lock.read_text())["controller"]["source_sha"] == "a" * 40
+
+
+def test_promotion_repairs_stale_template_lock_versions(tmp_path: Path):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    lock = json.loads((root / RELEASE_CANDIDATE_LOCKS[1]).read_text())
+    lock["template"]["version"] = "0.1.1"
+    (root / RELEASE_CANDIDATE_LOCKS[1]).write_text(json.dumps(lock), encoding="utf-8")
+
+    report = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=_jat_candidate(candidate))
+
+    assert report["status"] == "PASS"
+    assert json.loads((root / TEMPLATE_MANIFEST).read_text())["version"] == "0.1.3"
+    for relative in RELEASE_CANDIDATE_LOCKS:
+        assert json.loads((root / relative).read_text())["template"]["version"] == "0.1.3"
 
 
 def test_artifact_release_tag_binds_complete_input_digests(tmp_path: Path):

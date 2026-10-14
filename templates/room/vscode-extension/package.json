@@ -10,7 +10,7 @@
   },
   "scripts": {
     "test": "node --test *.test.js",
-    "package": "npx --yes @vscode/vsce package --no-dependencies"
+    "package": "npx --yes @vscode/vsce@4.0.0 package --no-dependencies"
   },
   "engines": {
     "vscode": "^1.90.0"

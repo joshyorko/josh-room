@@ -6,6 +6,11 @@ same RCC version and source. If JAT has not published a compatible artifact,
 maintenance records the dependency and stops before promotion. It never
 relabels or republishes immutable JAT artifacts.
 
+The VSIX packager is pinned to `@vscode/vsce` 4.0.0. Promotion updates the
+template version in `devcontainer-template.json` and both release locks in the
+same candidate, and its report includes each qualified JAT platform digest for
+the generated PR description.
+
 When a verified JAT release advances its producer source, Josh Room records the
 exact release tag, commit, source archive digest, workflow receipt, and platform
 receipts in a draft consumer promotion PR. The PR describes the previous-to-new
@@ -20,6 +25,8 @@ GitHub does not start pull-request workflows for a PR created with
 uses the supported `workflow_dispatch` event to start `ci.yml` on the exact PR
 branch SHA. The run verifies that checkout SHA against the supplied SHA and
 executes the full Linux/Windows CI matrix.
+JAT source archive requests use that read-only workflow token only on the
+GitHub API host.
 This dispatch path becomes available after the updated `ci.yml` reaches the
 default branch; its first main-branch CI run also builds and stages the exact
 main candidate.
