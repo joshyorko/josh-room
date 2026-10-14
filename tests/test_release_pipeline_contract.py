@@ -65,7 +65,9 @@ def test_release_stages_from_trusted_green_ci_without_preexisting_release_tag_or
     assert trigger["workflows"] == ["CI"]
     assert trigger["types"] == ["completed"]
     assert trigger["branches"] == ["main"]
-    assert set(dispatch) == {"source_sha", "stage_run_id", "owner_approval"}
+    assert set(dispatch) == {"source_sha", "stage_run_id", "owner_approval", "resume_empty_draft_id", "expected_draft_source_sha"}
+    assert dispatch["resume_empty_draft_id"]["required"] == "false"
+    assert dispatch["expected_draft_source_sha"]["required"] == "false"
     assert dispatch["owner_approval"]["default"] == "REJECT"
     assert "gh release create" not in _steps(stage)
     assert "gh release upload" not in _steps(stage)

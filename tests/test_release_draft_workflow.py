@@ -23,7 +23,7 @@ def _fixture(tmp_path, mode):
     (staged / "release-candidate.json").write_text("{}")
     assets = [{"name": p.name, "size": p.stat().st_size, "digest": "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()} for p in staged.iterdir()]
     release = {"id": 91, "tag_name": TAG, "target_commitish": SOURCE, "draft": True, "prerelease": False, "assets": []}
-    state = {"release": release, "tag_sha": "", "creates": 0, "uploads": 0, "publishes": 0, "templates": 0, "list_reads": 0, "id_reads": 0, "mode": mode}
+    state = {"release": release, "tag_sha": "", "creates": 0, "uploads": 0, "publishes": 0, "templates": 0, "retargets": 0, "list_reads": 0, "id_reads": 0, "mode": mode}
     if mode == "new":
         state["release"] = None
     elif mode == "partial-draft":
@@ -41,6 +41,8 @@ def _fixture(tmp_path, mode):
         release.update(draft=False, assets=assets)
     elif mode == "orphan-tag":
         state.update(release=None, tag_sha=SOURCE)
+    if state["release"]:
+        state["release"]["body"] = f"Exact CI-qualified Josh Room candidate for source {state['release']['target_commitish']}. Published after explicit owner approval."
     (tmp_path / "state.json").write_text(json.dumps(state))
     template = tmp_path / "templates/room/devcontainer-template.json"
     template.parent.mkdir(parents=True)
@@ -78,7 +80,13 @@ elif name == "gh":
             print(json.dumps([s["release"]] * (2 if s["mode"] == "duplicate-drafts" else 1) if s["release"] else []))
         elif endpoint.endswith("/releases/91"):
             s["id_reads"] += 1
-            if "PATCH" in args: publish()
+            if "PATCH" in args:
+                target = next((a.split("=", 1)[1] for a in args if a.startswith("target_commitish=")), None)
+                if target:
+                    s["release"]["target_commitish"] = target
+                    s["release"]["body"] = next(a.split("=", 1)[1] for a in args if a.startswith("body="))
+                    s["retargets"] += 1
+                else: publish()
             print(json.dumps(s["release"]))
         else: raise AssertionError(args)
     elif args[:2] == ["release", "create"]:
@@ -107,6 +115,7 @@ save()
         "SOURCE_SHA": SOURCE, "RELEASE_TAG": TAG, "GITHUB_REPOSITORY": "example/synthetic-room",
         "GITHUB_ACTOR": "synthetic-owner", "GH_TOKEN": "synthetic-token", "GITHUB_OUTPUT": str(tmp_path / "output"),
         "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        "RESUME_EMPTY_DRAFT_ID": "", "EXPECTED_DRAFT_SOURCE_SHA": "",
     }
 
 
@@ -150,3 +159,57 @@ def test_draft_recovery_rejects_wrong_source_tag_or_assets_before_mutation(tmp_p
     assert result.returncode != 0
     state = json.loads((tmp_path / "state.json").read_text())
     assert all(state[key] == 0 for key in ("creates", "uploads", "publishes", "templates"))
+
+
+def test_explicit_empty_draft_recovery_and_already_applied_retry(tmp_path):
+    env = _fixture(tmp_path, "stale-draft")
+    env.update(RESUME_EMPTY_DRAFT_ID="91", EXPECTED_DRAFT_SOURCE_SHA="b" * 40)
+    result = _run(tmp_path, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["retargets"] == 1 and state["publishes"] == 1
+    assert state["release"]["target_commitish"] == SOURCE and state["tag_sha"] == SOURCE
+    assert state["release"]["body"] == f"Exact CI-qualified Josh Room candidate for source {SOURCE}. Published after explicit owner approval."
+    result = _run(tmp_path, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    retried = json.loads((tmp_path / "state.json").read_text())
+    assert all(retried[key] == state[key] for key in ("retargets", "creates", "uploads", "publishes"))
+
+
+@pytest.mark.parametrize("conflict", ["asset", "published", "tag", "source", "id", "id-only", "source-only", "invalid-id", "invalid-source", "prerelease", "missing-release", "release-tag", "custom-body"])
+def test_explicit_empty_draft_recovery_rejects_conflicts_before_mutation(tmp_path, conflict):
+    env = _fixture(tmp_path, "stale-draft")
+    env.update(RESUME_EMPTY_DRAFT_ID="91", EXPECTED_DRAFT_SOURCE_SHA="b" * 40)
+    path = tmp_path / "state.json"
+    state = json.loads(path.read_text())
+    if conflict == "asset":
+        state["release"]["assets"] = [{"name": "unexpected", "size": 1, "digest": "sha256:" + "0" * 64}]
+    elif conflict == "published":
+        state["release"]["draft"] = False
+    elif conflict == "tag":
+        state["tag_sha"] = SOURCE
+    elif conflict == "source":
+        env["EXPECTED_DRAFT_SOURCE_SHA"] = "c" * 40
+    elif conflict == "id":
+        env["RESUME_EMPTY_DRAFT_ID"] = "92"
+    elif conflict == "id-only":
+        env["EXPECTED_DRAFT_SOURCE_SHA"] = ""
+    elif conflict == "source-only":
+        env["RESUME_EMPTY_DRAFT_ID"] = ""
+    elif conflict == "invalid-id":
+        env["RESUME_EMPTY_DRAFT_ID"] = "not-an-id"
+    elif conflict == "invalid-source":
+        env["EXPECTED_DRAFT_SOURCE_SHA"] = "main"
+    elif conflict == "prerelease":
+        state["release"]["prerelease"] = True
+    elif conflict == "missing-release":
+        state["release"] = None
+    elif conflict == "release-tag":
+        state["release"]["tag_name"] = "v0.0.0-wrong"
+    elif conflict == "custom-body":
+        state["release"]["body"] = "Custom release content must not be overwritten."
+    path.write_text(json.dumps(state))
+    result = _run(tmp_path, env)
+    assert result.returncode != 0
+    observed = json.loads(path.read_text())
+    assert all(observed[key] == 0 for key in ("retargets", "creates", "uploads", "publishes", "templates"))

@@ -15,6 +15,14 @@ on:
         description: Workflow run ID that staged this exact source candidate
         required: true
         type: string
+      resume_empty_draft_id:
+        description: Optional existing empty draft ID to resume after requalifying main
+        required: false
+        type: string
+      expected_draft_source_sha:
+        description: Required with draft ID; exact previous source SHA of that empty draft
+        required: false
+        type: string
       owner_approval:
         description: Josh must select APPROVE to create the tag and publish
         required: true
@@ -301,11 +309,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
+          RESUME_EMPTY_DRAFT_ID: ${{ inputs.resume_empty_draft_id }}
+          EXPECTED_DRAFT_SOURCE_SHA: ${{ inputs.expected_draft_source_sha }}
         shell: bash
         run: |
           set -euo pipefail
           git fetch origin main --tags
           test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          if [[ -n "$RESUME_EMPTY_DRAFT_ID$EXPECTED_DRAFT_SOURCE_SHA" ]]; then
+            [[ "$RESUME_EMPTY_DRAFT_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$EXPECTED_DRAFT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          fi
           load_release() {
             if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/standalone-release.json"; then return; fi
             # The tag endpoint excludes drafts; authenticated listings include them.
@@ -316,6 +330,7 @@ jobs:
           }
           load_release
           if [[ $(jq -r 'type' "$RUNNER_TEMP/standalone-release.json") == null ]]; then
+            test -z "$RESUME_EMPTY_DRAFT_ID"
             if git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG" >/dev/null; then
               echo "The exact release tag exists without a resumable release; refusing to retarget it." >&2
               exit 1
@@ -332,6 +347,23 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/standalone-release.json"
           tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
           if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
+          if [[ -n "$RESUME_EMPTY_DRAFT_ID" ]]; then
+            test "$release_id" = "$RESUME_EMPTY_DRAFT_ID"
+            if [[ $(jq -r .target_commitish "$RUNNER_TEMP/standalone-release.json") != "$SOURCE_SHA" ]]; then
+              test -z "$tag_sha"
+              jq -e --arg tag "$RELEASE_TAG" --arg old "$EXPECTED_DRAFT_SOURCE_SHA" \
+                --arg body "Exact CI-qualified Josh Room candidate for source $EXPECTED_DRAFT_SOURCE_SHA. Published after explicit owner approval." \
+                '.tag_name == $tag and .target_commitish == $old and .draft == true and .prerelease == false and .assets == [] and .body == $body' \
+                "$RUNNER_TEMP/standalone-release.json"
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+                -f target_commitish="$SOURCE_SHA" \
+                -f body="Exact CI-qualified Josh Room candidate for source $SOURCE_SHA. Published after explicit owner approval." > /dev/null
+              gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/standalone-release.json"
+              test "$(jq -r .target_commitish "$RUNNER_TEMP/standalone-release.json")" = "$SOURCE_SHA"
+              tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+              if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
+            fi
+          fi
           staged="$RUNNER_TEMP/release-stage-files"
           python -m scripts.release_staging reconcile \
             --directory "$staged" \
