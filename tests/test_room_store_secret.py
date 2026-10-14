@@ -162,3 +162,14 @@ def test_room_store_keyring_scope_uses_domain_and_secret_generation(monkeypatch)
         ("store", ("room-store-00000000-0000-4000-8000-000000000001-1", "room-store-secret", secret())),
         ("lookup", ("room-store-00000000-0000-4000-8000-000000000001-1", "room-store-secret")),
     ]
+
+
+@pytest.mark.parametrize("domain,generation,value", [
+    ("invalid", 1, secret()),
+    ("00000000-0000-4000-8000-000000000001", 0, secret()),
+    ("00000000-0000-4000-8000-000000000001", 1, "invalid"),
+])
+def test_unavailable_native_cache_still_validates_material(monkeypatch, domain, generation, value):
+    monkeypatch.setattr(keyring, "available", lambda: False)
+    with pytest.raises(ValueError):
+        keyring.store_room_store_secret(domain, generation, value)

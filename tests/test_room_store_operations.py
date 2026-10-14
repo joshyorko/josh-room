@@ -285,6 +285,42 @@ def _operations(tmp_path, workspace, store, catalog, *, binding=None):
     )
 
 
+@pytest.mark.parametrize("fail_at", ["factory", "context-entry"])
+def test_save_restic_open_failure_preserves_safe_stage_diagnostic(tmp_path, fail_at):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic workspace\n", encoding="utf-8")
+    catalog = _Catalog()
+    operations = _operations(tmp_path, workspace, _Store(), catalog)
+    failure = ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+
+    if fail_at == "factory":
+        def fail_open(**_kwargs):
+            raise failure
+
+        operations.store_factory = fail_open
+    else:
+        class FailingContext:
+            def __enter__(self):
+                raise failure
+
+            def __exit__(self, *_args):
+                return False
+
+        operations.store_factory = lambda **_kwargs: FailingContext()
+    with pytest.raises(RoomStoreOperationsError) as caught:
+        operations.save()
+
+    assert caught.value.result == {
+        "stage": "restic-store-open",
+        "command": "restic-store.open",
+        "restic_error_code": "invalid-configuration",
+        "cause": "restic store configuration is invalid",
+    }
+    assert catalog.published == []
+    assert catalog.marker_rows == []
+
+
 def test_save_publishes_complete_descriptor_before_marker_and_uses_explicit_parent(
     tmp_path,
 ):
@@ -1006,3 +1042,35 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
     )
     assert (restored / "file.txt").read_text(encoding="utf-8") == "first version\n"
     assert len(markers) == 2
+
+
+@pytest.mark.parametrize("upgraded", [False, True])
+def test_headless_save_uses_remote_keyset_without_native_secret_cache(tmp_path, monkeypatch, upgraded):
+    from test_minio_encryption_flow import DOMAIN_ID, dimension
+    from test_room_store_material import RoomStoreBackend, v1_keyset
+
+    from josh_room import auth, keyring
+    from josh_room.encryption_domain import EncryptionKeyset
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello", encoding="utf-8")
+    store, catalog = _Store(), _Catalog()
+    operations = _operations(tmp_path, workspace, store, catalog)
+    original = v1_keyset()
+    if upgraded:
+        original = original.upgrade_for_room_store()
+    backend = RoomStoreBackend(control=original.to_json())
+    operations.dimension = dimension(encryption_domain_id=DOMAIN_ID)
+    operations.backend = backend
+    operations.ensure_keyset = auth.ensure_room_store_keyset
+    operations.bind_repository = auth.bind_room_store_repository
+    monkeypatch.setattr(keyring, "available", lambda: False)
+    monkeypatch.setattr(keyring, "secure_store", lambda *_args: pytest.fail("no fallback write"))
+
+    result = operations.save()
+
+    assert result.status == "saved"
+    assert catalog.order == ["publish", "marker"]
+    assert EncryptionKeyset.from_json(backend.control).room_store.repository_id == REPOSITORY_ID
+    assert not list((tmp_path / "private").iterdir())

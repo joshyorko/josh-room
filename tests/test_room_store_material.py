@@ -71,6 +71,33 @@ def test_concurrent_v1_upgraders_reload_and_cache_the_remote_winner(monkeypatch)
     assert EncryptionKeyset.from_json(backend.control).room_store.secret == winner.room_store.secret
 
 
+@pytest.mark.parametrize("upgraded", [False, True])
+def test_missing_native_keyring_uses_durable_room_store_material(monkeypatch, upgraded):
+    from josh_room import keyring
+
+    original = v1_keyset()
+    if upgraded:
+        original = original.upgrade_for_room_store()
+    backend = RoomStoreBackend(control=original.to_json())
+    monkeypatch.setattr(keyring, "available", lambda: False)
+    monkeypatch.setattr(keyring, "secure_store", lambda *_args: pytest.fail("no fallback write"))
+    selected = dimension(encryption_domain_id=DOMAIN_ID)
+
+    material = auth_module.ensure_room_store_keyset(selected, backend)
+    bound = auth_module.bind_room_store_repository(
+        selected, backend, "a" * 64, expected_generation=1,
+    )
+    repeated = auth_module.bind_room_store_repository(
+        selected, backend, "a" * 64, expected_generation=2,
+    )
+
+    assert material.room_store.secret == bound.room_store.secret
+    assert bound.room_store.repository_id == "a" * 64
+    assert bound.room_store.generation == 2
+    assert repeated == bound
+    assert EncryptionKeyset.from_json(backend.control) == bound
+
+
 def test_keyring_cache_failure_happens_after_the_durable_upgrade(monkeypatch):
     backend = RoomStoreBackend(control=v1_keyset().to_json())
     monkeypatch.setattr(
@@ -183,3 +210,17 @@ def test_repository_binding_rejects_wrong_dimension_and_password(monkeypatch):
             "a" * 64,
             expected_generation=1,
         )
+
+
+def test_native_cache_write_error_is_not_optional(monkeypatch):
+    from josh_room import keyring
+
+    backend = RoomStoreBackend(control=v1_keyset().to_json())
+    monkeypatch.setattr(keyring, "available", lambda: True)
+
+    def fail_write(*_args):
+        raise keyring.SecureBackendError("synthetic native write failure")
+
+    monkeypatch.setattr(keyring, "secure_store", fail_write)
+    with pytest.raises(RuntimeError, match="secret import failed"):
+        auth_module.ensure_room_store_keyset(dimension(encryption_domain_id=DOMAIN_ID), backend)

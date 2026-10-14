@@ -852,6 +852,14 @@ def test_provider_environment_is_allowlisted_and_password_never_enters_argv(
     "repository",
     [
         "s3:http://storage.example.test/bucket/repository",
+        "s3:http://localhost.attacker.test/bucket/repository",
+        # Reject non-canonical IP spellings instead of interpreting them as
+        # loopback through a resolver-specific normalization rule.
+        "s3:http://127.1/bucket/repository",
+        "s3:http://2130706433/bucket/repository",
+        "s3:http://0x7f000001/bucket/repository",
+        "s3:http://%31%32%37.0.0.1/bucket/repository",
+        "s3:http://[::ffff:127.0.0.1]/bucket/repository",
         "s3:https://synthetic-user:synthetic-secret@storage.example.test/bucket/repository",
         "s3:https://storage.example.test/bucket/repository?password=synthetic-secret",
         "s3:https://storage.example.test:invalid/bucket/repository",
@@ -874,6 +882,23 @@ def test_s3_repository_locator_rejects_embedded_credentials_and_unverified_urls(
 
     assert failure.value.code == module.ResticStoreErrorCode.INVALID_CONFIGURATION
     assert "synthetic-secret" not in str(failure.value)
+
+
+@pytest.mark.parametrize("authority", ["127.0.0.1:9000", "127.9.8.7:9000", "localhost:9000", "[::1]:9000"])
+def test_s3_repository_accepts_http_only_for_canonical_loopback(authority, tmp_path):
+    module = api()
+    password = tmp_path / "password"
+    password.write_text("synthetic-password\n")
+    password.chmod(0o600)
+    repository = f"s3:http://{authority}/bucket/repository"
+
+    store = module.ResticStore(
+        repository=repository,
+        cache_dir=tmp_path / "cache",
+        password_file=password,
+    )
+
+    assert store._repository == repository
 
 
 def test_backup_cancellation_uses_shared_owned_process_terminator(tmp_path):

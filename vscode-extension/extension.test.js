@@ -178,6 +178,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
   const openDialogCalls = [];
   const inputBoxCalls = [];
   const infoCalls = [];
+  const errorCalls = [];
   const warningCalls = [];
   const openExternalCalls = [];
   const executeCalls = [];
@@ -303,6 +304,10 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
           infoCalls.push(args);
           return infoResponses.shift();
         },
+        showErrorMessage: async (...args) => {
+          errorCalls.push(args);
+          return undefined;
+        },
         showWarningMessage: async (...args) => {
           warningCalls.push(args);
           return warningResponses.shift();
@@ -356,6 +361,7 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
     openDialogCalls,
     inputBoxCalls,
     infoCalls,
+    errorCalls,
     warningCalls,
     openExternalCalls,
     executeCalls,
@@ -423,7 +429,7 @@ function loadExtensionWithRealProcesses(vscodeMock) {
 function stubRuntimeAcquisition(t, extension, acquire) {
   extension.__test__.setRuntimeForTests(undefined);
   const runtime = require("./runtime");
-  const originals = { ensureManagedRcc: runtime.ensureManagedRcc, ensureControllerRuntime: runtime.ensureControllerRuntime };
+  const originals = { ensureManagedRcc: runtime.ensureManagedRcc, ensureManagedJatRcc: runtime.ensureManagedJatRcc, ensureControllerRuntime: runtime.ensureControllerRuntime };
   t.after(() => Object.assign(runtime, originals));
   let starts = 0;
   runtime.ensureManagedRcc = async (_context, _manifest, options) => {
@@ -431,6 +437,7 @@ function stubRuntimeAcquisition(t, extension, acquire) {
     options.onProgress?.({ message: "Downloading RCC" });
     return { executable: "/synthetic/managed-rcc", version: "v18.19.5" };
   };
+  runtime.ensureManagedJatRcc = async () => ({ executable: "/synthetic/jat-rcc", version: "v18.19.5" });
   runtime.ensureControllerRuntime = async (_context, _manifest, _rcc, options) => {
     options.onProgress?.({ message: "Importing controller Environment Artifact" });
     options.onOutput?.("stdout", '{"private":"synthetic-private-result"}\n');
@@ -830,6 +837,41 @@ test("failed controller result also accepts top-level JAT status and diagnostics
   );
 });
 
+test("Save exposes inner capture evidence instead of the RCC final wrapper", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-capture-evidence-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const artifact = "sha256:" + "b".repeat(64);
+  const cause = "artifact is not local and no provider was supplied";
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    fs.writeFileSync(args[args.indexOf("--receipt-file") + 1], JSON.stringify({
+      artifactDigest: artifact, exitCode: 2,
+    }));
+    fs.writeFileSync(options.env.JOSH_ROOM_RESULT_FILE, JSON.stringify({
+      ok: false, error: "rcc-capture-failed", stage: "rcc-component-capture",
+      command: "rcc env acquire", exit_status: 1, diagnostic: cause,
+      stdout: cause, stderr: `[rcc] exit status will be: 1! /home/synthetic-user/private`,
+    }));
+    return { code: 2, stdout: "", stderr: "[rcc] exit status will be: 2!" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests({
+    command: "/test/rcc",
+    args: (args, receipt) => [...args, "--artifact", artifact, "--receipt-file", receipt],
+    env: {}, controllerArtifact: artifact, jatRoot: root,
+  });
+  await assert.rejects(extension.__test__.runJoshRoom(["snapshot", "create", "synthetic"], root), (error) => {
+    assert.ok(error.message.includes(cause), error.message);
+    assert.equal(error.controller_exit_status, 2);
+    assert.equal(error.result.exit_status, 1);
+    assert.equal(error.result.stage, "rcc-component-capture");
+    assert.equal(error.result.command, "rcc env acquire");
+    assert.doesNotMatch(JSON.stringify(error), /\/home\/synthetic-user/);
+    assert.ok(error.message.length <= 4096);
+    return true;
+  });
+});
+
 test("Cloudflare authorization remains R2-only", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-encryption-auth-error-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
@@ -1067,6 +1109,120 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   assert.equal(quickPickCalls.length >= 3, true);
   assert.deepEqual(quickPickCalls[1].items.map((item) => item.display_name || item.label), ["Archive", "Backup"]);
   assert.match(spawnHarness.calls.at(-1).args.join(" "), /--dimension backup/);
+});
+
+for (const repairDecision of ["Clean stale worktree records and retry", "Cancel"]) test(`Save repair approval is bounded and ${repairDecision === "Cancel" ? "cancellable" : "retries with the exact digest"}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-worktree-repair-"));
+  const source = path.join(root, "source");
+  fs.mkdirSync(source);
+  const dimension = { id: "backup", display_name: "Backup", provider: "minio", rooms: [] };
+  const digest = "d".repeat(64);
+  const repairRecord = {
+    repository: path.join(source, "repo"),
+    administrative_path: path.join(source, "repo", ".git", "worktrees", "stale"),
+    worktree_path: path.join(source, "deleted-worktree"),
+  };
+  const { vscode, statusItem, warningCalls } = createVscodeMock(root);
+  const previewError = {
+    ok: false,
+    error: "stale-worktree-repair-available",
+    message: "stale Git worktree records can be cleaned before retrying Save",
+    repair_records: [repairRecord],
+    repair_repository: repairRecord.repository,
+    proposal_digest: digest,
+  };
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
+    if (args[0] === "encryption" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "ready" }) };
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      return spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "preview").length === 1
+        ? { code: 1, stdout: JSON.stringify(previewError) }
+        : { stdout: JSON.stringify(nativePreview()) };
+    }
+    if (args[0] === "workspace" && args[1] === "worktree-repair") return { stdout: JSON.stringify({ ok: true, state: "repaired" }) };
+    if (args[0] === "snapshot" && args[1] === "create") return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "synthetic-room", snapshot_id: "jat-1", data_added_bytes: 0, scanned_bytes: 0 }) };
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: source }]);
+  vscode.inputBoxResponses.push("Synthetic Room");
+  vscode.quickPickResponses.push({ create: true }, dimension, { label: "Workspace only", allImages: false });
+  vscode.warningResponses.push(repairDecision);
+  vscode.infoResponses.push("Save");
+
+  if (repairDecision === "Cancel") {
+    await assert.rejects(extension.__test__.saveRoom({ forceCreate: true }));
+    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair"), false);
+    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"), false);
+    fs.rmSync(root, { recursive: true, force: true });
+    return;
+  }
+  assert.equal(await extension.__test__.saveRoom({ forceCreate: true }), "saved");
+  const repair = spawnHarness.calls.find((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair");
+  assert.ok(repair);
+  assert.equal(repair.args[repair.args.indexOf("--proposal-digest") + 1], digest);
+  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "preview").length, 2);
+  assert.ok(warningCalls.some(([message]) => message.includes(repairRecord.worktree_path)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Check Workspace accepts the CLI's nonzero validation receipt and shows sanitized guidance", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-check-workspace-test-"));
+  fs.writeFileSync(path.join(root, "notes.txt"), "keep me\n");
+  const payload = {
+    ok: false,
+    code: "workspace-invalid",
+    error: "Git storage is not self-contained and portable; linked worktrees are unsupported",
+    remediation: "Inspect linked worktrees with `git worktree prune --dry-run --verbose`; repair Git storage manually before saving.",
+    diagnostic: "Rejected private path /home/synthetic/host/worktree and AGE-SECRET-KEY-PRIVATE",
+  };
+  const { vscode, statusItem, errorCalls, outputChannel, logLines } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.deepEqual(args.slice(0, 1), ["workspace-check"]);
+    return { code: 2, stdout: JSON.stringify(payload) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests(outputChannel);
+  const before = fs.readFileSync(path.join(root, "notes.txt"));
+
+  const result = await extension.__test__.checkWorkspace();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "workspace-invalid");
+  assert.ok(errorCalls[0][0].includes("git worktree prune --dry-run --verbose"));
+  assert.equal(errorCalls[0][0].includes("/home/synthetic/host"), false);
+  assert.equal(errorCalls[0][0].includes("AGE-SECRET-KEY-PRIVATE"), false);
+  assert.ok(logLines.some((line) => line.includes("workspace-invalid")));
+  assert.equal(spawnHarness.calls.length, 1);
+  assert.equal(spawnHarness.calls[0].args.includes("--workspace"), true);
+  assert.deepEqual(fs.readFileSync(path.join(root, "notes.txt")), before);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("Check Workspace runs without a Room marker or storage/provider query", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-check-workspace-clean-"));
+  const { vscode, statusItem, infoCalls, outputChannel } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.equal(args[0], "workspace-check");
+    return { stdout: JSON.stringify({
+      ok: true, scope: "local-workspace-validation", entry_count: 0,
+      workspace_signature: "a".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: "b".repeat(64), logical_bytes: 0,
+    }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setOutputChannelForTests(outputChannel);
+
+  const result = await extension.__test__.checkWorkspace();
+
+  assert.equal(result.ok, true);
+  assert.equal(infoCalls[0][0], "Workspace valid · 0 entries");
+  assert.deepEqual(spawnHarness.calls.map((call) => call.args[0]), ["workspace-check"]);
+  assert.equal(fs.existsSync(path.join(root, ".josh-room.json")), false);
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 for (const forceCreate of [false, true]) for (const refreshFailure of [false, true]) test(`${forceCreate ? "New" : "Save"} Room uses a migrated MinIO keyset without an extension cache; refresh failure=${refreshFailure}`, async () => {
@@ -1338,7 +1494,7 @@ test("dirty tracking marks watcher changes immediately without rescanning each e
   assert.equal(statusCalls(), startupStatusCalls);
 });
 
-function createNativeSaveFixture(root, { preview, saveResult, onSave } = {}) {
+function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult } = {}) {
   const dimension = {
     id: "backup",
     display_name: "Backup",
@@ -1370,7 +1526,7 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave } = {}) {
       return { stdout: JSON.stringify(saveResult) };
     }
     if (args[0] === "status") {
-      return { stdout: JSON.stringify({ ok: false, state: "unknown" }) };
+      return { stdout: JSON.stringify(typeof statusResult === "function" ? statusResult() : statusResult || { ok: false, state: "unknown" }) };
     }
     if (args[0] === "encryption" && args[1] === "status") {
       return { stdout: JSON.stringify({ ok: true, state: "ready" }) };
@@ -1497,11 +1653,14 @@ test("native Save confirms suspicious deletions with the exact preview token", a
   assert.match(fixture.warningCalls[0][0], /25 deleted entries/);
 });
 
-for (const externalComponents of [false, true]) test(`trusted no-event Save ${externalComponents ? "rechecks external components" : "skips all controller and secret work"}`, async () => {
+for (const externalComponents of [false, true]) test(`trusted no-event Save ${externalComponents ? "rechecks external components" : "checks native metadata without secret work"}`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-fast-noop-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
   const fixture = createNativeSaveFixture(root, {
     preview: nativePreview({ previous_entry_count: 3, restic_data_added_bytes: 1024, rcc_capture_pending: false }),
+    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
+      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha },
     saveResult: {
       ok: true,
       status: "saved",
@@ -1553,13 +1712,14 @@ for (const externalComponents of [false, true]) test(`trusted no-event Save ${ex
     assert.ok(fixture.spawnHarness.calls.length > callsAfterSave);
     assert.ok(fixture.secretReads > secretReadsAfterSave);
   } else {
-    assert.equal(fixture.spawnHarness.calls.length, callsAfterSave);
+    assert.equal(fixture.spawnHarness.calls.length, callsAfterSave + 2 * samples.length);
+    assert.equal(fixture.spawnHarness.calls.slice(callsAfterSave).every((call) => call.args[0] === "status"), true);
     assert.equal(fixture.secretReads, secretReadsAfterSave);
     assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
     if (process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH) fs.writeFileSync(
       process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH,
       `${JSON.stringify({ fixture: "real Save command with synthetic native UI and prior verified receipt", samples_ms: samples,
-        controller_calls: 0, secret_reads: 0, provider_rcc_jat_restic_calls: 0 })}\n`,
+        controller_calls: 2 * samples.length, secret_reads: 0, provider_jat_restic_calls: 0 })}\n`,
     );
   }
   assert.equal(fixture.statusItem.text.includes("Saved"), true);
@@ -1571,6 +1731,9 @@ for (const boundary of ["image choice", "completion choice"]) test(`a change dur
   const source = path.join(root, "source.txt");
   fs.writeFileSync(source, "initial");
   const fixture = createNativeSaveFixture(root, {
+    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
+      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha },
     preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
     saveResult: {
       ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2",
@@ -1616,6 +1779,49 @@ for (const boundary of ["image choice", "completion choice"]) test(`a change dur
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
   assert.equal(changed, true);
   assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length, createsBefore + 1);
+});
+
+for (const changeAt of ["before prompt", "during prompt"]) test(`a Git object change ${changeAt} without a watcher event cannot use cached no-op Save`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-git-no-event-"));
+  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  let changed = false;
+  const fixture = createNativeSaveFixture(root, {
+    statusResult: () => ({ ok: !changed, state: changed ? "changed" : "clean", path_matches: true,
+      signature_matches: !changed, policy_matches: true, workspace_signature: (changed ? "d" : "c").repeat(64),
+      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha }),
+    preview: nativePreview({ rcc_capture_pending: false }),
+    saveResult: { ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2",
+      dimension_id: "backup", encryption_domain_id: "domain-a", workspace_signature: "c".repeat(64),
+      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha },
+    onSave: (_args, { root: saveRoot, project }) => {
+      project.latest = "jat-2";
+      project.snapshots = [{ snapshot_id: "jat-2" }];
+      writeStatMarker(saveRoot, { snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha });
+    },
+  });
+  fixture.vscode.infoResponses.push("Save", undefined);
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  const changeGit = () => {
+    fs.mkdirSync(path.join(root, ".git", "objects", "ab"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git", "objects", "ab", "local-object"), "synthetic object");
+    changed = true; // Deliberately do not dispatch a VS Code watcher event.
+  };
+  if (changeAt === "before prompt") changeGit();
+  else {
+    const original = fixture.vscode.window.showInformationMessage;
+    fixture.vscode.window.showInformationMessage = async (...args) => {
+      const answer = await original(...args);
+      if (args[0] === "Already saved — 0 bytes uploaded") changeGit();
+      return answer;
+    };
+  }
+  fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
+  fixture.vscode.quickPickResponses.push({ allImages: false }, { project: fixture.project });
+  fixture.vscode.infoResponses.push(...(changeAt === "before prompt" ? ["Save", undefined] : ["Done", "Save", undefined]));
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[0] === "status").length, changeAt === "before prompt" ? 1 : 2);
+  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length, 2);
+  assert.equal(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"), changeAt === "during prompt");
 });
 
 test("a mode change invalidates the trusted Save receipt and reaches the Room Store", async () => {
@@ -1666,6 +1872,9 @@ test("choosing another Room invalidates the trusted Save receipt and preserves d
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-destination-change-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
   const fixture = createNativeSaveFixture(root, {
+    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
+      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
+      capture_policy_sha256: policySha },
     preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
     saveResult: {
       ok: true,
@@ -5277,6 +5486,7 @@ test("Workspace Trust blocks executable, recovery, and workspace-reading actions
     () => extension.__test__.serveRoom({ id: "room", dimension: { id: "backup", provider: "minio" } }),
     () => extension.__test__.linkRoom(),
     () => extension.__test__.repairRoom(),
+    () => extension.__test__.checkWorkspace(),
     () => extension.__test__.exportRecovery({ id: "backup", provider: "minio" }),
   ];
   for (const action of actions) await assert.rejects(action, /Workspace Trust/);

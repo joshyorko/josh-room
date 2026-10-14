@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.27",
+  "version": "0.1.32",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -19,6 +19,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:joshRoom.save",
+    "onCommand:joshRoom.checkWorkspace",
     "onCommand:joshRoom.new",
     "onCommand:joshRoom.addStorage",
     "onCommand:joshRoom.connectCloudflare",
@@ -151,6 +152,11 @@
         "command": "joshRoom.save",
         "title": "Josh: Save Room",
         "icon": "$(save-as)"
+      },
+      {
+        "command": "joshRoom.checkWorkspace",
+        "title": "Josh: Check Workspace",
+        "icon": "$(check-all)"
       },
       {
         "command": "joshRoom.enter",

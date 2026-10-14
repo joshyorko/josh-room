@@ -60,7 +60,9 @@ test("dirty tracking notices workspace content and ignores bookkeeping noise", (
   assert.equal(shouldMarkDirty("__pycache__"), false);
   assert.equal(shouldMarkDirty("__pycache__/module.pyc"), false);
   assert.equal(shouldMarkDirty("src/__pycache__"), false);
-  assert.equal(shouldMarkDirty(".git/index"), false);
+  assert.equal(shouldMarkDirty(".git/index"), true);
+  assert.equal(shouldMarkDirty("nested/.git/refs/heads/venv"), true);
+  assert.equal(shouldMarkDirty("nested/.git/objects/ab/local-only-object"), true);
   assert.equal(shouldMarkDirty("src/__pycache__/app.pyc"), false);
   assert.equal(shouldMarkDirty(".pytest_cache/v/cache/nodeids"), false);
   assert.equal(shouldMarkDirty("node_modules/.cache/tool/value"), false);

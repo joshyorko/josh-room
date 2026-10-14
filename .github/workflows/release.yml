@@ -1,102 +1,371 @@
-name: Publish release artifacts
+name: Stage and publish release artifacts
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact staged main commit whose CI candidate is to be published
+        required: true
+        type: string
+      stage_run_id:
+        description: Workflow run ID that staged this exact source candidate
+        required: true
+        type: string
+      owner_approval:
+        description: Josh must select APPROVE to create the tag and publish
+        required: true
+        type: choice
+        default: REJECT
+        options: [REJECT, APPROVE]
 
 permissions:
-  contents: write
+  contents: read
+  actions: read
+  checks: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.source_sha || github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  stage-candidate:
+    if: github.event_name == 'workflow_run' && github.repository == 'joshyorko/josh-room' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      version: ${{ steps.source.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - name: Verify tag and package version
-        id: version
+      - name: Validate the exact trusted CI source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "joshyorko/josh-room"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          git fetch origin main --tags
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
           version=$(node -p "require('./vscode-extension/package.json').version")
-          test "${GITHUB_REF_NAME}" = "v${version}-standalone-vsix"
-          test "$(node -p "require('./templates/room/vscode-extension/package.json').version")" = "$version"
-          test "$(jq -r .extension_version vscode-extension/runtime/manifest.json)" = "$version"
+          test "$version" = "$(node -p "require('./templates/room/vscode-extension/package.json').version")"
+          test "$version" = "$(jq -r .extension_version vscode-extension/runtime/manifest.json)"
+          test "$version" = "$(jq -r .extension_version templates/room/vscode-extension/runtime/manifest.json)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Verify staged tested VSIX
+          echo "ci_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "stage_workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml" --jq .id)" >> "$GITHUB_OUTPUT"
+      - name: Verify CI run, required jobs, app identity, and runtime release receipts
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
         shell: bash
         run: |
           set -euo pipefail
-          tag_ref="refs/tags/${GITHUB_REF_NAME}"
-          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
-          if [ -z "$tag_sha" ]; then
-            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
-          fi
-          test "$tag_sha" = "$GITHUB_SHA"
-          version="${{ steps.version.outputs.version }}"
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish,tagName | \
-            jq -e --arg sha "$GITHUB_SHA" --arg tag "$GITHUB_REF_NAME" \
-              '.isDraft == true and .targetCommitish == $sha and .tagName == $tag'
-          mkdir -p dist
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --pattern "josh-room-${version}.vsix" --dir dist
+          ci_workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml" --jq .id)
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID" > "$RUNNER_TEMP/ci-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/ci-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA/check-runs?per_page=100" > "$RUNNER_TEMP/check-runs.json"
+          controller_tag=$(jq -er '.controller.release_tag' release-lock.json)
+          jat_tag=$(jq -er '.jat.environment_artifact.release_tag' release-lock.json)
+          resolve_tag_sha() {
+            local repository="$1" tag="$2" sha
+            sha=$(git ls-remote "$repository" "refs/tags/${tag}^{}" | awk 'NR == 1 {print $1}')
+            if [[ -z "$sha" ]]; then sha=$(git ls-remote "$repository" "refs/tags/$tag" | awk 'NR == 1 {print $1}'); fi
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            printf '%s\n' "$sha"
+          }
+          controller_tag_sha=$(resolve_tag_sha "https://github.com/$GITHUB_REPOSITORY.git" "$controller_tag")
+          jat_tag_sha=$(resolve_tag_sha "https://github.com/joshyorko/josh-all-the-things.git" "$jat_tag")
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$controller_tag" > "$RUNNER_TEMP/controller-release.json"
+          gh api "repos/joshyorko/josh-all-the-things/releases/tags/$jat_tag" > "$RUNNER_TEMP/jat-release.json"
+          python scripts/verify_release_readiness.py \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-id "$ci_workflow_id" \
+            --workflow-run "$RUNNER_TEMP/ci-run.json" \
+            --workflow-jobs "$RUNNER_TEMP/ci-jobs.json" \
+            --check-runs "$RUNNER_TEMP/check-runs.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json \
+            --controller-release "$RUNNER_TEMP/controller-release.json" \
+            --jat-release "$RUNNER_TEMP/jat-release.json" \
+            --controller-tag-sha "$controller_tag_sha" \
+            --jat-tag-sha "$jat_tag_sha" \
+            --report "$RUNNER_TEMP/release-readiness.json"
+          cat "$RUNNER_TEMP/release-readiness.json" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-candidate-${{ steps.source.outputs.version }}-${{ github.event.workflow_run.head_sha }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/ci-release-candidate
+      - name: Verify the versioned VSIX against the exact CI source and artifact receipt
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          VERSION: ${{ steps.source.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
           python scripts/verify_release_candidate.py \
-            --candidate "dist/josh-room-${version}.vsix" --tag "$GITHUB_REF_NAME"
-      - name: Build Python artifacts and checksums
+            --root . \
+            --candidate "$RUNNER_TEMP/ci-release-candidate/josh-room-$VERSION.vsix" \
+            --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" \
+            --ci-run-id "$CI_RUN_ID" \
+            --verify-report "$RUNNER_TEMP/ci-release-candidate/candidate.json"
+      - name: Create exact release stage files and provenance receipt
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          VERSION: ${{ steps.source.outputs.version }}
+          STAGE_WORKFLOW_ID: ${{ steps.source.outputs.stage_workflow_id }}
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+          cp "$RUNNER_TEMP/ci-release-candidate/josh-room-$VERSION.vsix" dist/
+          cp "$RUNNER_TEMP/ci-release-candidate/candidate.json" dist/vsix-candidate.json
+          cp "$RUNNER_TEMP/release-readiness.json" dist/ci-readiness.json
           uv build
-          (cd dist && sha256sum * > SHA256SUMS)
+          (cd dist && sha256sum *.vsix *.whl *.tar.gz > SHA256SUMS)
+          python -m scripts.release_staging create \
+            --directory dist \
+            --source-sha "$SOURCE_SHA" \
+            --release-tag "v$VERSION-standalone-vsix" \
+            --version "$VERSION" \
+            --checks "$RUNNER_TEMP/release-readiness.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json \
+            --stage-run-id "$GITHUB_RUN_ID" \
+            --stage-workflow-id "$STAGE_WORKFLOW_ID" \
+            --output dist/release-candidate.json
       - uses: actions/upload-artifact@v7
         with:
-          name: josh-room-dist
+          name: release-stage-files
           path: dist/
-      - name: Publish GitHub release
+          if-no-files-found: error
+          retention-days: 90
+      - name: Report staged candidate for owner review
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          VERSION: ${{ steps.source.outputs.version }}
+        run: echo "Staged v$VERSION for exact main source $SOURCE_SHA as a workflow artifact. No Git tag, release, or template was published." >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko' && inputs.owner_approval == 'APPROVE'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Reject stale source and download its staged run artifact
+        id: source
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          STAGE_RUN_ID: ${{ inputs.stage_run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          # Never upload over the tested VSIX. Only ancillary artifacts are new.
-          gh release upload "$GITHUB_REF_NAME" dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY"
-          # Re-download immediately before publication to detect draft-asset drift.
-          verify_dir=$(mktemp -d)
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --pattern "josh-room-${version}.vsix" --dir "$verify_dir"
+          test "$GITHUB_REPOSITORY" = "joshyorko/josh-room"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STAGE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          git fetch origin main --tags
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          version=$(node -p "require('./vscode-extension/package.json').version")
+          test "$version" = "$(node -p "require('./templates/room/vscode-extension/package.json').version")"
+          test "$version" = "$(jq -r .extension_version vscode-extension/runtime/manifest.json)"
+          test "$version" = "$(jq -r .extension_version templates/room/vscode-extension/runtime/manifest.json)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=v${version}-standalone-vsix" >> "$GITHUB_OUTPUT"
+          echo "stage_workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml" --jq .id)" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-stage-files
+          run-id: ${{ inputs.stage_run_id }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/release-stage-files
+      - name: Verify stage run, trusted CI provenance, runtime pins, and every staged digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          STAGE_RUN_ID: ${{ inputs.stage_run_id }}
+          STAGE_WORKFLOW_ID: ${{ steps.source.outputs.stage_workflow_id }}
+          VERSION: ${{ steps.source.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          staged="$RUNNER_TEMP/release-stage-files"
+          test "$(jq -r .source_sha "$staged/release-candidate.json")" = "$SOURCE_SHA"
+          ci_run_id=$(jq -er '.checks.workflow.run_id' "$staged/release-candidate.json")
+          ci_workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml" --jq .id)
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STAGE_RUN_ID" > "$RUNNER_TEMP/stage-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_run_id" > "$RUNNER_TEMP/ci-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_run_id/jobs?per_page=100" > "$RUNNER_TEMP/ci-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_SHA/check-runs?per_page=100" > "$RUNNER_TEMP/check-runs.json"
+          controller_tag=$(jq -er '.controller.release_tag' release-lock.json)
+          jat_tag=$(jq -er '.jat.environment_artifact.release_tag' release-lock.json)
+          resolve_tag_sha() {
+            local repository="$1" tag="$2" sha
+            sha=$(git ls-remote "$repository" "refs/tags/${tag}^{}" | awk 'NR == 1 {print $1}')
+            if [[ -z "$sha" ]]; then sha=$(git ls-remote "$repository" "refs/tags/$tag" | awk 'NR == 1 {print $1}'); fi
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            printf '%s\n' "$sha"
+          }
+          controller_tag_sha=$(resolve_tag_sha "https://github.com/$GITHUB_REPOSITORY.git" "$controller_tag")
+          jat_tag_sha=$(resolve_tag_sha "https://github.com/joshyorko/josh-all-the-things.git" "$jat_tag")
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$controller_tag" > "$RUNNER_TEMP/controller-release.json"
+          gh api "repos/joshyorko/josh-all-the-things/releases/tags/$jat_tag" > "$RUNNER_TEMP/jat-release.json"
+          python scripts/verify_release_readiness.py \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-id "$ci_workflow_id" \
+            --workflow-run "$RUNNER_TEMP/ci-run.json" \
+            --workflow-jobs "$RUNNER_TEMP/ci-jobs.json" \
+            --check-runs "$RUNNER_TEMP/check-runs.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json \
+            --controller-release "$RUNNER_TEMP/controller-release.json" \
+            --jat-release "$RUNNER_TEMP/jat-release.json" \
+            --controller-tag-sha "$controller_tag_sha" \
+            --jat-tag-sha "$jat_tag_sha" \
+            --report "$RUNNER_TEMP/release-readiness.json"
+          python -m scripts.release_staging verify \
+            --directory "$staged" \
+            --source-sha "$SOURCE_SHA" \
+            --release-tag "v$VERSION-standalone-vsix" \
+            --version "$VERSION" \
+            --checks "$RUNNER_TEMP/release-readiness.json" \
+            --runtime vscode-extension/runtime/manifest.json \
+            --release-lock release-lock.json \
+            --stage-run-json "$RUNNER_TEMP/stage-run.json" \
+            --stage-run-id "$STAGE_RUN_ID" \
+            --stage-workflow-id "$STAGE_WORKFLOW_ID"
           python scripts/verify_release_candidate.py \
-            --candidate "$verify_dir/josh-room-${version}.vsix" --tag "$GITHUB_REF_NAME"
-          tag_ref="refs/tags/${GITHUB_REF_NAME}"
-          tag_sha=$(git ls-remote origin "${tag_ref}^{}" | awk 'NR == 1 {print $1}')
-          if [ -z "$tag_sha" ]; then
-            tag_sha=$(git ls-remote origin "$tag_ref" | awk 'NR == 1 {print $1}')
+            --root . \
+            --candidate "$staged/josh-room-$VERSION.vsix" \
+            --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" \
+            --ci-run-id "$ci_run_id" \
+            --verify-report "$staged/vsix-candidate.json"
+          tag="v$VERSION-standalone-vsix"
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Install pinned Dev Container CLI and preflight template publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global @devcontainers/cli@0.89.0
+          test "$(devcontainer --version)" = "0.89.0"
+          help_file="$RUNNER_TEMP/devcontainer-template-publish-help.txt"
+          devcontainer templates publish --help > "$help_file"
+          grep -Fq -- '--registry' "$help_file"
+          grep -Fq -- '--namespace' "$help_file"
+          jq -e '.id == "room" and (.version | test("^[0-9]+[.][0-9]+[.][0-9]+$"))' templates/room/devcontainer-template.json
+          jq empty templates/room/.devcontainer/devcontainer.json
+          bash -n templates/room/.devcontainer/bootstrap.sh
+      - name: Create or safely resume the owner-approved draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/standalone-release.json"; then
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+            if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
+            test "$tag_sha" = "$SOURCE_SHA"
+          else
+            if git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG" >/dev/null; then
+              echo "The exact release tag exists without a resumable release; refusing to retarget it." >&2
+              exit 1
+            fi
+            version=${RELEASE_TAG#v}
+            version=${version%-standalone-vsix}
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$SOURCE_SHA" --draft --title "Josh Room $version" \
+              --notes "Exact CI-qualified Josh Room candidate for source $SOURCE_SHA. Published after explicit owner approval."
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/standalone-release.json"
+            tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+            if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
+            test "$tag_sha" = "$SOURCE_SHA"
           fi
-          test "$tag_sha" = "$GITHUB_SHA"
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish,tagName | \
-            jq -e --arg sha "$GITHUB_SHA" --arg tag "$GITHUB_REF_NAME" \
-              '.isDraft == true and .targetCommitish == $sha and .tagName == $tag'
-          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish,tagName | \
-            jq -e --arg sha "$GITHUB_SHA" --arg tag "$GITHUB_REF_NAME" \
-              '.isDraft == false and .targetCommitish == $sha and .tagName == $tag'
-          published_dir=$(mktemp -d)
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --pattern "josh-room-${version}.vsix" --dir "$published_dir"
-          python scripts/verify_release_candidate.py \
-            --candidate "$published_dir/josh-room-${version}.vsix" --tag "$GITHUB_REF_NAME"
+          staged="$RUNNER_TEMP/release-stage-files"
+          python -m scripts.release_staging reconcile \
+            --directory "$staged" \
+            --release-json "$RUNNER_TEMP/standalone-release.json" \
+            --release-tag "$RELEASE_TAG" --source-sha "$SOURCE_SHA" \
+            --tag-target-sha "$tag_sha" > "$RUNNER_TEMP/reconcile-report.json"
+          while IFS= read -r name; do
+            [[ -n "$name" ]] || continue
+            test -f "$staged/$name"
+            gh release upload "$RELEASE_TAG" "$staged/$name" --repo "$GITHUB_REPOSITORY"
+          done < <(jq -r '.missing_assets[]' "$RUNNER_TEMP/reconcile-report.json")
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/standalone-release.json"
+          python -m scripts.release_staging reconcile \
+            --directory "$staged" \
+            --release-json "$RUNNER_TEMP/standalone-release.json" \
+            --release-tag "$RELEASE_TAG" --source-sha "$SOURCE_SHA" \
+            --tag-target-sha "$tag_sha"
+      - name: Publish the verified release and approved template
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/standalone-release.json"
+          tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
+          test "$tag_sha" = "$SOURCE_SHA"
+          if [[ $(jq -r .draft "$RUNNER_TEMP/standalone-release.json") == true ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/standalone-release.json"
+          jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft == false and .prerelease == false' "$RUNNER_TEMP/standalone-release.json"
+          git fetch origin main --tags
+          test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          devcontainer templates publish \
+            --registry ghcr.io \
+            --namespace "$GITHUB_REPOSITORY/templates" \
+            templates/room
+          version=$(jq -r .version templates/room/devcontainer-template.json)
+          echo "Published $RELEASE_TAG and approved room template:$version for exact source $SOURCE_SHA." >> "$GITHUB_STEP_SUMMARY"

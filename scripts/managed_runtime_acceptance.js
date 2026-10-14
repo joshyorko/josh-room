@@ -155,8 +155,9 @@ async function main() {
     const options = { platform, onProgress: (event) => events.push(event) };
 
     const rcc = await runtime.ensureManagedRcc(context, manifest, options);
+    const jatRcc = await runtime.ensureManagedJatRcc(context, manifest, options);
     const controller = await runtime.ensureControllerRuntime(context, manifest, rcc, options);
-    const jat = await runtime.ensureJatRuntime(context, manifest, rcc, options);
+    const jat = await runtime.ensureJatRuntime(context, manifest, jatRcc, options);
 
     const controllerPin = runtime.selectControllerArtifact(manifest.controller, platform);
     const jatPin = runtime.selectJatArtifact(manifest.jat, platform);
@@ -170,6 +171,7 @@ async function main() {
       JOSH_ROOM_EXTENSION_MODE: "1",
       JOSH_ROOM_RCC_HOME: paths.rccHome,
       JOSH_ROOM_RCC_EXE: rcc.executable,
+      JOSH_ROOM_JAT_RCC_EXE: jatRcc.executable,
       JOSH_ROOM_CONTROLLER_ROOT: controllerRoot,
       JOSH_ROOM_CONTROLLER_ARTIFACT: controller.artifact,
       JOSH_ROOM_JAT_ROOT: jat.jatRoot,
@@ -244,7 +246,7 @@ async function main() {
         JAT_RUN_DIR: path.join(root, `jat-run-${name}`),
         PYTHONPATH: [path.join(jat.jatRoot, "src"), jat.jatRoot, controllerRoot].join(path.delimiter),
       };
-      const child = childProcess.spawn(rcc.executable, [
+      const child = childProcess.spawn(jatRcc.executable, [
         "--no-build", "env", "exec", "--artifact", jatPin.digest, "--permissive-local", "--json", "--",
         "python", "-m", "jat.cli", "serve", "--haul", haul, "--mode", "files",
         "--fileserver-port", String(port), "--json",
@@ -313,6 +315,17 @@ async function main() {
     if (resticPhase0.status !== "passed" || resticPhase0.engine_version !== "0.19.1") {
       throw new Error("managed restic feasibility did not pass on the selected platform");
     }
+    environment.PATH = `${path.dirname(resticInstallation.executable)}${path.delimiter}${environment.PATH || process.env.PATH || ""}`;
+    const gitRecoveryResultFile = path.join(evidenceDir, "git-recovery.json");
+    runManagedTool([
+      "python", path.join(repository, "scripts", "git_recovery_acceptance.py"),
+      "--jat-root", jat.jatRoot, "--result-file", gitRecoveryResultFile,
+    ], "git-recovery");
+    const gitRecovery = JSON.parse(await fsp.readFile(gitRecoveryResultFile, "utf8"));
+    if (gitRecovery.save_enter !== "passed" || gitRecovery.portable_jat !== "passed"
+      || gitRecovery.git_repositories !== 4 || gitRecovery.noop_added_bytes !== 0) {
+      throw new Error("managed Git recovery fidelity acceptance failed");
+    }
     const identityPath = path.join(root, "age-identity.txt");
     await fsp.writeFile(identityPath, `${identityBodies.join("\n")}\n`, { mode: 0o600 });
     const instance = path.join(root, "room-instance");
@@ -327,11 +340,49 @@ async function main() {
     // JAT extracts Build archives into <payload_path>/workspace and keeps the source basename.
     const source = path.join(root, "workspace");
     await fsp.mkdir(source, { recursive: true, mode: 0o700 });
+    const checkWorkspace = path.join(root, "workspace-check-unmarked");
+    await fsp.mkdir(checkWorkspace, { recursive: true, mode: 0o700 });
+    await fsp.writeFile(path.join(checkWorkspace, "notes.txt"), "read-only workspace check\n");
+    executeController(["workspace-check", "--workspace", checkWorkspace, "--json"], "workspace-check-unmarked");
+    const checkReceiptPath = path.join(paths.logsRoot, "managed-controller-workspace-check-unmarked-result.json");
+    const checkReceipt = readManagedResult(checkReceiptPath);
+    if (checkReceipt?.ok !== true || checkReceipt.scope !== "local-workspace-validation" || checkReceipt.entry_count !== 1) {
+      throw new Error("managed unmarked workspace check did not return a valid local receipt");
+    }
+    const invalidCheckWorkspace = path.join(root, "workspace-check-linked-gitfile");
+    await fsp.mkdir(invalidCheckWorkspace, { recursive: true, mode: 0o700 });
+    await fsp.writeFile(path.join(invalidCheckWorkspace, ".git"), "gitdir: /outside/host/repository/.git\n");
+    let invalidCheckExit;
+    try {
+      executeController(["workspace-check", "--workspace", invalidCheckWorkspace, "--json"], "workspace-check-invalid");
+    } catch (error) {
+      invalidCheckExit = error.status;
+    }
+    const invalidCheckReceipt = readManagedResult(path.join(paths.logsRoot, "managed-controller-workspace-check-invalid-result.json"));
+    if (!Number.isInteger(invalidCheckExit) || invalidCheckExit === 0
+      || invalidCheckReceipt?.ok !== false || invalidCheckReceipt.code !== "workspace-invalid"
+      || !String(invalidCheckReceipt.error).includes("absolute Git pointers")) {
+      throw new Error("managed invalid workspace check did not return its sanitized nonzero validation result");
+    }
+    await fsp.writeFile(path.join(evidenceDir, "workspace-check.json"), JSON.stringify({
+      platform,
+      unmarked: checkReceipt,
+      invalid: { exit_status: invalidCheckExit, result: invalidCheckReceipt },
+    }, null, 2) + "\n");
     const sourceReadme = path.join(source, "README.md");
     await fsp.writeFile(sourceReadme, "managed runtime legacy local JAT acceptance\n");
     await fsp.chmod(sourceReadme, 0o444);
     const sourceReadmeBytes = await fsp.readFile(sourceReadme);
     const sourceReadmeMode = (await fsp.stat(sourceReadme)).mode;
+    if (platform === "linux-x64") {
+      await fsp.copyFile(
+        path.join(jat.jatRoot, "environment_linux_amd64_freeze.yaml"),
+        path.join(source, "environment_linux_amd64_freeze.yaml"),
+      );
+      await fsp.writeFile(path.join(source, "robot.yaml"),
+        "tasks:\n  Example:\n    shell: python -c \"print('synthetic')\"\n"
+        + "environmentConfigs:\n  - environment_linux_amd64_freeze.yaml\n");
+    }
     executeController(["dimensions", "list", "--json"], "dimensions-list");
     executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "legacy-local-jat-save");
     executeController(["enter", "demo", "--snapshot", "latest", "--backend", "local", "--ide", "terminal", "--json"], "legacy-local-jat-enter");
@@ -348,7 +399,39 @@ async function main() {
     }
     const haul = path.join(root, "managed-runtime.haul.tar.zst");
     executeController(["jat", "build", "--source", source, "--output", haul, "--json"], "jat-build");
-    executeController(["jat", "inspect", "--haul", haul, "--json"], "jat-inspect");
+    const captureRobot = (folder, output, name) => runManagedTool([
+      "python", "-c",
+      "import json, sys; from pathlib import Path; from josh_room.jat import run_build; "
+      + "result = run_build(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), rcc_environment='required'); "
+      + "print(json.dumps({'success': result['success'], 'exit_status': result['exit_status'], "
+      + "'rcc_component_captured': isinstance(result.get('environment_artifact'), dict)}))",
+      jat.jatRoot, folder, output,
+    ], name);
+    const componentHaul = platform === "linux-x64" ? path.join(root, "managed-runtime-with-rcc.haul.tar.zst") : haul;
+    if (platform === "linux-x64") {
+      captureRobot(source, componentHaul, "jat-build-with-rcc");
+    }
+    executeController(["jat", "inspect", "--haul", componentHaul, "--json"], "jat-inspect");
+    const componentInventory = readManagedResult(path.join(paths.logsRoot, "managed-controller-jat-inspect-result.json"));
+    if (platform === "linux-x64" && componentInventory?.anchors?.rcc_environment !== true) {
+      throw new Error("managed robot workspace capture omitted its RCC component");
+    }
+    if (platform === "linux-x64") {
+      const largerSource = path.join(root, "larger-workspace");
+      await fsp.mkdir(largerSource, { mode: 0o700 });
+      for (const name of ["robot.yaml", "environment_linux_amd64_freeze.yaml"]) {
+        await fsp.copyFile(path.join(source, name), path.join(largerSource, name));
+      }
+      for (let index = 0; index < 2048; index += 1) {
+        await fsp.writeFile(path.join(largerSource, `entry-${index}.txt`), `synthetic entry ${index}\n`);
+      }
+      const largerHaul = path.join(root, "larger-workspace.haul.tar.zst");
+      captureRobot(largerSource, largerHaul, "jat-build-larger");
+      executeController(["jat", "inspect", "--haul", largerHaul, "--json"], "jat-inspect-larger");
+      if (readManagedResult(path.join(paths.logsRoot, "managed-controller-jat-inspect-larger-result.json"))?.anchors?.rcc_environment !== true) {
+        throw new Error("larger managed robot workspace capture omitted its RCC component");
+      }
+    }
     const legacyJatRestore = path.join(root, "legacy-jat-clean-room");
     executeController([
       "jat", "restore", "--haul", haul, "--destination", legacyJatRestore, "--json",
@@ -431,7 +514,7 @@ async function main() {
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
     await runtime.ensureControllerRuntime(context, manifest, rcc, { ...options, download: unavailableProvider });
-    await runtime.ensureJatRuntime(context, manifest, rcc, { ...options, download: unavailableProvider });
+    await runtime.ensureJatRuntime(context, manifest, jatRcc, { ...options, download: unavailableProvider });
     if (events.slice(beforeWarm).some((event) => /Downloading|Importing/.test(event.message || ""))) {
       throw new Error("warm managed-runtime reuse attempted a provider download");
     }
@@ -484,8 +567,10 @@ async function main() {
       source_sha: childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
       vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
       rcc: { version: rcc.version, source_sha: lock.rcc.source_sha, asset: rccPin.asset, ...(await fileIdentity(runtime, rcc.executable)) },
+      jat_rcc: { version: jatRcc.version, asset: runtime.readManifest(manifest).jat.rcc.platforms[platform].asset, ...(await fileIdentity(runtime, jatRcc.executable)) },
       dependencies: { boto3: dependencyProbe },
       private_runtime: privateRuntime,
+      git_recovery: gitRecovery,
       windows_room_store_acceptance: windowsRoomStoreAcceptance,
       restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {

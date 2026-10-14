@@ -27,7 +27,7 @@ On a plain supported Linux amd64 VS Code or VS Code Insiders host, install the
 released VSIX directly:
 
 ```bash
-code-insiders --install-extension /path/to/josh-room-0.1.27.vsix
+code-insiders --install-extension /path/to/josh-room-0.1.32.vsix
 ```
 
 The extension acquires its pinned RCC binary and JAT Environment Artifact under
@@ -56,7 +56,7 @@ consumers:
 
 ```bash
 devcontainer templates apply \
-  --template ghcr.io/joshyorko/josh-room/templates/room:0.1.0
+  --template ghcr.io/joshyorko/josh-room/templates/room:0.1.2
 ```
 
 The OCI template is an additional standards-based distribution path. DevPod
@@ -166,6 +166,7 @@ Storage, encryption, and hydration remain owned by the CLI.
 ## Commands
 
 ```text
+josh-room workspace-check [--workspace <path>] [--json]
 josh-room doctor [--backend local|r2] [--ide terminal|vscode|vscode-insiders] [--json]
 josh-room projects list [--backend local|r2] [--json]
 josh-room rooms remove <project> [--backend local|r2] [--json]
@@ -188,6 +189,12 @@ josh-room jat serve --haul <haul.tar.zst> [--mode auto|files|registry|both] [--j
 josh-room jat export --haul <haul.tar.zst> --output <images.tar> [--json]
 josh-room jat copy --haul <haul.tar.zst> --to <registry://...|dir://...> [--retries <n>] [--plain-http] [--insecure] [--json]
 ```
+
+The native extension also offers **Josh: Check Workspace**. This read-only
+check uses the same local workspace validation as Save and does not query a
+provider or prove that a Room Store Save will succeed. If linked Git worktrees
+are reported, inspect them with `git worktree prune --dry-run --verbose`; Josh
+Room never prunes them automatically.
 
 `provider connection` and `provider bucket` are the canonical storage boundary.
 The older `connections` and `buckets` command families remain compatibility

@@ -3,7 +3,6 @@
   "exclude": [
     "**/.josh-room.json",
     "**/.DS_Store",
-    "**/.git",
     "**/.pytest_cache",
     "**/.ruff_cache",
     "**/.venv",

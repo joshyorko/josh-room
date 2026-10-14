@@ -4,8 +4,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
-FEATURE_MERGE_SHA = "c64ca50604feec9c1cd0c9bd6eb02223194df162"
-PROMOTED_VSIX_SHA256 = "df76f05c725b8fa9ce5ce6c5e2abe8744b6902873da50498114b3e6786c3e7c4"
+FEATURE_MERGE_SHA = "4e4f5d68133d1b562bdc80eb66bc07fca5db76a9"
+PROMOTED_VSIX_SHA256 = "4cb6d27fc52eb0f35cbfed2fdd3e21bc5f29785efa1fa82c9cee245c25a1f7c2"
 
 
 def test_repository_contains_no_copied_ror_implementation():
@@ -60,7 +60,8 @@ def test_template_bootstrap_is_product_owned_and_distro_agnostic():
     assert bootstrap.is_file()
     body = bootstrap.read_text()
     assert "Optional golden-host extension copy complete" in body
-    assert "joshyorko.josh-room-0.1.27" in body
+    extension_version = json.loads((ROOT / "vscode-extension/package.json").read_text())["version"]
+    assert f"joshyorko.josh-room-{extension_version}" in body
     assert "Room of Requirement" not in body
     assert "brew" not in body.lower()
     assert "action-server" not in body
@@ -77,6 +78,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     package = json.loads((ROOT / "vscode-extension/package.json").read_text())
     commands = {item["command"] for item in package["contributes"]["commands"]}
     assert commands == {
+        "joshRoom.checkWorkspace",
         "joshRoom.addStorage",
         "joshRoom.connectCloudflare",
         "joshRoom.reconnectCloudflare",
@@ -144,14 +146,15 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     extension = (ROOT / "vscode-extension/extension.js").read_text()
 
-    assert package["version"] == "0.1.27"
+    lock = json.loads((ROOT / "release-lock.json").read_text())
+    assert package["version"] == lock["candidate_version"]
     assert package["scripts"]["package"]
     assert (ROOT / "vscode-extension/.vscodeignore").is_file()
     vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
     assert "runtime/controller/**/__pycache__/**" in vscodeignore
     assert "runtime/controller/**/*.pyc" in vscodeignore
     assert runtime["extension_version"] == package["version"]
-    assert runtime["rcc"]["version"] == "v18.19.5"
+    assert runtime["rcc"]["version"] == "v18.19.6"
     assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
     assert runtime["jat"]["environment_artifact"]["digest"].startswith("sha256:")
     assert "ensureManagedRcc" in extension and "ensureJatRuntime" in extension
@@ -174,6 +177,8 @@ def test_real_vsix_contains_the_owned_runtime_contract(tmp_path):
         names = set(archive.namelist())
         assert "extension/runtime.js" in names
         assert "extension/runtime/manifest.json" in names
+        assert "extension/runtime/restic-manifest.json" in names
+        assert "extension/runtime/controller/install_restic.py" in names
         assert "extension/runtime/controller/robot.yaml" in names
         assert "extension/runtime/controller/conda.yaml" in names
         assert any(name.startswith("extension/runtime/controller/josh_room/") and name.endswith(".py") for name in names)
@@ -194,7 +199,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     assert remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
-    assert "joshyorko.josh-room-0.1.27" in bootstrap
+    assert f"joshyorko.josh-room-{package['version']}" in bootstrap
     template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
     assert template_package["contributes"] == package["contributes"]
     assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
@@ -284,16 +289,15 @@ def test_prepare_workspace_relocates_controller_and_leaves_clean_room(tmp_path):
     assert not any(room.iterdir())
 
 
-def test_template_publish_workflow_is_narrow_and_uses_devcontainer_cli():
+def test_template_workflow_validates_inputs_without_publishing():
     workflow = (ROOT / ".github/workflows/publish-template.yml").read_text()
     assert 'paths:' in workflow
     assert '"templates/room/**"' in workflow
-    assert "packages: write" in workflow
-    assert "docker/login-action@" in workflow
-    assert "secrets.GITHUB_TOKEN" in workflow
-    assert "devcontainer templates publish" in workflow
-    assert "--namespace ${{ github.repository }}/templates" in workflow
-    assert '"templates/room"' in workflow
+    assert "packages: write" not in workflow
+    assert "docker/login-action@" not in workflow
+    assert "devcontainer templates publish" not in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "jq -e" in workflow
     assert "docker build" not in workflow
     assert "build-image" not in workflow
 
@@ -327,16 +331,17 @@ def test_kubernetes_secret_authority_is_narrow_and_automatic():
     ).read_bytes()
 
 
-def test_v0_1_27_release_tuple_is_consistent_and_consumed_by_both_entries():
+def test_v0_1_32_release_tuple_is_consistent_and_consumed_by_both_entries():
     lock = json.loads((ROOT / "release-lock.json").read_text())
+    runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
     assert lock["format_version"] == 1
-    assert lock["candidate_version"] == "0.1.27"
-    assert lock["josh_room"]["version"] == "0.1.27"
+    assert lock["candidate_version"] == runtime["extension_version"]
     assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
     assert len(lock["josh_room"]["git_sha"]) == 40
     assert lock["josh_room"]["git_sha"] == FEATURE_MERGE_SHA
     promotion = json.loads((ROOT / "release-promotion.json").read_text())
-    assert promotion == {"version": "0.1.27", "sha256": PROMOTED_VSIX_SHA256}
+    assert promotion["version"] == lock["josh_room"]["version"] == "0.1.32"
+    assert promotion == {"version": lock["josh_room"]["version"], "sha256": PROMOTED_VSIX_SHA256}
     assert len(lock["jat"]["git_sha"]) == 40
     artifact = lock["jat"]["environment_artifact"]
     assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
@@ -345,8 +350,10 @@ def test_v0_1_27_release_tuple_is_consistent_and_consumed_by_both_entries():
     assert artifact["archive_size"] > 0
     assert artifact["rcc_artifact_digest"].startswith("sha256:")
     assert artifact["rcc_version"] == "v18.19.5"
-    assert lock["rcc"]["version"] == "v18.19.5"
-    assert lock["rcc"]["source_sha"] == "d1aec7d0bb897a81274423c7a6bb747233f9c263"
+    assert runtime["jat"]["rcc"]["version"] == "v18.19.5"
+    assert runtime["jat"]["rcc"] == lock["jat"]["rcc"]
+    assert lock["rcc"]["version"] == "v18.19.6"
+    assert lock["rcc"]["source_sha"] == "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0"
     assert lock["rcc"]["managed_asset"] == "rcc-linux64"
     assert len(lock["rcc"]["managed_asset_sha256"]) == 64
     for config_path in (

@@ -24,7 +24,41 @@ while computing the digest; no source paths or content enter the descriptor,
 logs, or component metadata. A source change during capture fails closed.
 The RCC version is pinned to `v18.19.5`; absence, version mismatch, incomplete
 native metadata, or an invalid export stops Save before publishing the logical
-JAT. Component restore remains separate from workspace restore.
+JAT. RCC publish, export, and archive verification complete before upgrading
+the Room Store keyset or opening Restic. Failed RCC preparation therefore
+performs no provider writes, including transient Restic lock writes, on fresh
+or existing MinIO stores. Completed preparation records archive, reuse, or
+absence explicitly; source changes do not restart RCC after Restic opens.
+Component restore remains separate from workspace restore.
 
 Homebrew recovery and Hauler content remain separate component owners and are
 not inferred from an RCC capture.
+
+In extension mode, component capture uses the exact managed RCC executable
+handed off by the extension; a missing handoff fails closed instead of searching
+the host PATH. Nested JAT execution puts that RCC directory first in its
+inherited PATH; RCC supplies the selected artifact's own runtime tools while
+retaining access to its host compatibility probes (such as `uname`).
+Publish and export select RCC's local provider. If publication metadata omits
+the platform, acquisition verifies the exact exported archive and published
+digest under `--no-build --permissive-local` before component backup.
+The private `ROBOCORP_HOME`, artifact pins, `--no-build` execution, and receipt
+verification remain unchanged.
+
+Capture failures report the command identity, stage, inner exit status, and
+bounded sanitized stdout/stderr. Nested Build failures also retain allowlisted
+RCC receipt and JAT result summaries before temporary receipt cleanup. Private
+paths, credentials, and raw request arguments are not included in this evidence.
+Preview does not run component capture or publish remote state.
+
+Unexpected Python failures in native Save retain `error: save-failed` and add
+`stage`, `cause_type`, and `diagnostic` to the public failure receipt. The stage
+is the last entered Save boundary (for example, `rcc-component-prepare` or
+`restic-store-open`). Only program-owned stages and a fixed list of built-in
+exception types are exposed; other types become `UnexpectedError`. Exception
+messages, arguments, custom class names, paths, and stack traces are omitted.
+The diagnostic is a fixed sentence constructed from those allowlisted values.
+Known capture, cancellation, deletion-confirmation, and publication errors keep
+their existing receipts. A stage is not evidence of completed capture or
+publication; validate the controller RCC receipt and any inner capture receipt
+separately.

@@ -259,3 +259,12 @@ def test_secret_capability_is_not_in_repr_or_url(authority):
     value, _ = authority
     assert CAPABILITY not in repr(value)
     assert CAPABILITY not in value._url("material")
+
+
+def test_r2_still_requires_native_secret_custody(authority, monkeypatch):
+    value, _broker = authority
+    monkeypatch.setattr(client.keyring, "store_room_store_secret", lambda *_args: (_ for _ in ()).throw(
+        client.keyring.NativeSecretBackendUnavailable("unavailable")
+    ))
+    with pytest.raises(client.R2RoomStoreError, match="room_store_native_keyring_unavailable"):
+        value.ensure_material()

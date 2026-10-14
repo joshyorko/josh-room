@@ -59,6 +59,10 @@ class SecureBackendError(RuntimeError):
     """Raised when no approved native secret authority can be used."""
 
 
+class NativeSecretBackendUnavailable(RuntimeError):
+    """Native custody is unavailable; callers must not substitute plaintext storage."""
+
+
 def _platform_name(platform_name: str | None = None) -> str:
     value = platform_name or sys.platform
     if value.startswith("linux"):
@@ -669,7 +673,7 @@ def lookup_room_store_secret(domain_id: str, generation: int) -> str:
 
     profile = _room_store_secret_scope(domain_id, generation)
     if not available():
-        raise RuntimeError("OS Secret Service is unavailable")
+        raise NativeSecretBackendUnavailable("OS Secret Service is unavailable")
     try:
         value = secure_lookup(profile, "room-store-secret")
     except SecureBackendError as error:
@@ -684,7 +688,7 @@ def store_room_store_secret(domain_id: str, generation: int, value: str) -> None
     profile = _room_store_secret_scope(domain_id, generation)
     validate_room_store_secret(value)
     if not available():
-        raise RuntimeError("OS Secret Service is unavailable")
+        raise NativeSecretBackendUnavailable("OS Secret Service is unavailable")
     try:
         secure_store(profile, "room-store-secret", value)
     except SecureBackendError as error:

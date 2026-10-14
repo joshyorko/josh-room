@@ -590,6 +590,7 @@ async function initializeManagedRuntime(context, progressReporter, cancellationT
   return {
     manifest,
     rcc,
+    jatRcc: undefined,
     jat: undefined,
     controller,
     controllerRoot,
@@ -604,6 +605,15 @@ function operationNeedsJat(args) {
 
 async function ensureJatForState(context, state, progressReporter, cancellationToken) {
   if (cancellationToken?.isCancellationRequested) throw cancellationError();
+  if (!state.jatRcc) {
+    state.jatRcc = state.manifest.jat?.rcc
+      ? await managedRuntime.ensureManagedJatRcc(
+        context,
+        state.manifest,
+        runtimeProgressOptions(progressReporter, cancellationToken),
+      )
+      : state.rcc;
+  }
   if (state.mode === "local-build-fallback") {
     const jatRoot = await managedRuntime.ensureJatSource(
       context,
@@ -614,7 +624,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
     let identity;
     const localJat = await managedRuntime.buildLocalJatArtifact(
       context,
-      state.rcc,
+      state.jatRcc,
       path.join(jatRoot, "robot.yaml"),
       {
         ...runtimeProgressOptions(progressReporter, cancellationToken),
@@ -644,7 +654,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       await managedRuntime.verifyJatArtifact(
         context,
         state.manifest,
-        state.rcc,
+        state.jatRcc,
         state.jat.artifact,
         runtimeProgressOptions(progressReporter, cancellationToken),
       );
@@ -653,7 +663,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
       const jat = await managedRuntime.ensureJatRuntime(
         context,
         state.manifest,
-        state.rcc,
+        state.jatRcc,
         { ...runtimeProgressOptions(progressReporter, cancellationToken), forceArchive: true },
       );
       state.jat = jat;
@@ -673,7 +683,7 @@ async function ensureJatForState(context, state, progressReporter, cancellationT
     } };
     managedJatPromise = Promise.resolve().then(() => {
       reporter.event({ stage: "runtime", message: "Preparing JAT runtime for this operation" });
-      return managedRuntime.ensureJatRuntime(context, state.manifest, state.rcc,
+      return managedRuntime.ensureJatRuntime(context, state.manifest, state.jatRcc,
         runtimeProgressOptions(reporter, preparation.controller.token));
     }).then((jat) => {
       if (preparation.controller.token.isCancellationRequested) throw cancellationError();
@@ -730,6 +740,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
       rccExecutable: state.rcc.executable,
       controllerRoot: state.controllerRoot,
       jatRoot: state.jat?.jatRoot,
+      jatRccExecutable: state.jatRcc?.executable,
       jatArtifact: state.jat?.artifact,
       jatSourceSha: state.jat?.sourceSha,
       controllerArtifact: state.controller?.artifact,
@@ -742,8 +753,12 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
   };
 }
 
-async function writeRuntimeCredentials(environment, { extensionMode = true } = {}) {
+async function writeRuntimeCredentials(environment, { extensionMode = true, authFree = false } = {}) {
   environment.JOSH_ROOM_EXTENSION_MODE = extensionMode ? "1" : "0";
+  if (authFree) {
+    delete environment.JOSH_ROOM_PROVIDER_CREDENTIALS;
+    return () => {};
+  }
   if (!extensionContext?.secrets?.get) return () => {};
   const serialized = await extensionContext.secrets.get(CREDENTIALS_SECRET);
   if (!serialized) return () => {};
@@ -1093,6 +1108,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
+      authFree: args[0] === "status",
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
@@ -1217,7 +1233,9 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       }
       if (receiptPresent && receiptExit !== 0) {
         cleanup();
-        if (result && result.ok === false) {
+        if (result && result.ok === false && args[0] === "workspace-check") {
+          resolve({ stdout: JSON.stringify(redactResultDiagnostics(result)), stderr, runtime, controllerExitStatus: code });
+        } else if (result && result.ok === false) {
           reject(controllerFailure(result, { controllerExitStatus: code, controllerStderr: stderr }));
         } else {
           const failure = new Error(controllerErrorText(receiptObject?.error) || `RCC controller exited with status ${code}`);
@@ -1273,9 +1291,8 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
     const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options);
     const { stdout, runtime } = execution;
     const result = parseControllerOutput(stdout);
-    // `status` deliberately returns ok=false for a changed or unlinked
-    // workspace. That is authoritative state, not an operation failure.
-    if (!result.ok && args[0] !== "status") {
+    // `status` and `workspace-check` return authoritative validation results, including failures.
+    if (!result.ok && !["status", "workspace-check"].includes(args[0])) {
       throw controllerFailure(result, {
         controllerExitStatus: execution.controllerExitStatus,
         controllerStderr: execution.stderr,
@@ -1289,6 +1306,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
       throw cancellationError();
     }
     if (error.result) {
+      if (args[0] === "workspace-check") return redactResultDiagnostics(error.result);
       if (args[0] === "status") {
         outputChannel?.info(`DONE · status (${error.result.state || "unknown"})`);
         return error.result;
@@ -1312,6 +1330,7 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
         outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
         return result;
       }
+      if (args[0] === "workspace-check") return redactResultDiagnostics(result);
       throw controllerFailure(result, {
         controllerExitStatus: error.controller_exit_status,
         controllerStderr: error.stderr,
@@ -1730,6 +1749,26 @@ async function approveRoomStorePreview(preview) {
   return action === "Save" ? "" : undefined;
 }
 
+async function approveStaleWorktreeRepair(result, source, dimension, encryptionMaterial) {
+  const records = Array.isArray(result?.repair_records) ? result.repair_records : [];
+  if (!records.length) return false;
+  const details = records.map((record) => `${record.repository}\n  ${record.administrative_path} → ${record.worktree_path}`).join("\n");
+  const action = await vscode.window.showWarningMessage(
+    `Save found stale Git worktree records in ${result.repair_repository || "the selected workspace"}.\n\n${details}\n\nClean stale worktree records and retry Save?`,
+    { modal: true },
+    "Clean stale worktree records and retry",
+    "Cancel",
+  );
+  if (action !== "Clean stale worktree records and retry") return false;
+  await runSelectedEncryption(
+    ["workspace", "worktree-repair", "--workspace", source, "--approve", "--proposal-digest", result.proposal_digest],
+    source,
+    dimension,
+    { title: "Cleaning stale Git worktree records…", action: "repair stale Git worktree records", encryptionMaterial },
+  );
+  return true;
+}
+
 function nativeSaveBindingMatches(result, marker, source, policy) {
   if (!result || !marker || marker.format_version !== 3 || !policy) return false;
   let canonicalPath;
@@ -1792,6 +1831,16 @@ function trustedLocalSaveReceipt(source, cwd) {
   return trustedSaveReceipt;
 }
 
+async function nativeSaveReceiptStillMatches(source, receipt) {
+  let status;
+  try { status = await runJoshRoom(["status"], source); } catch (_error) { return false; }
+  return status?.ok === true && status.state === "clean"
+    && status.path_matches === true && status.signature_matches === true && status.policy_matches === true
+    && status.workspace_signature === receipt.workspace_signature
+    && status.signature_algorithm === receipt.signature_algorithm
+    && status.capture_policy_sha256 === receipt.capture_policy_sha256;
+}
+
 function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   let canonicalSource;
   let canonicalWorkspace;
@@ -1852,6 +1901,18 @@ function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   });
 }
 
+async function checkWorkspace() {
+  assertWorkspaceTrusted("check the workspace");
+  const workspace = activeWorkspace();
+  const result = await runOperation("Checking workspace…", ["workspace-check", "--workspace", workspace], workspace, { action: "check the workspace" });
+  const detail = result.ok ? `Workspace valid · ${result.entry_count} entries` : `${result.code || "workspace-invalid"}: ${result.error || "workspace validation failed"}`;
+  const remediation = result.ok ? "" : sanitizeControllerText(result.remediation || "");
+  const message = [sanitizeControllerText(detail), remediation].filter(Boolean).join(". ");
+  outputChannel?.appendLine(`Workspace check: ${message}`);
+  if (result.ok) await vscode.window.showInformationMessage(message);
+  else await vscode.window.showErrorMessage(message);
+  return result;
+}
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
@@ -1877,14 +1938,18 @@ async function saveRoom(options = {}) {
       ignoreFocusOut: true,
     });
     if (!imageChoice) return "cancelled";
+    // VS Code intentionally suppresses some .git events. Event silence is
+    // never evidence that a recovery point contains the current Git objects.
     if (trustedLocalSaveReceipt(source, cwd) === cachedReceipt
-      && Boolean(imageChoice.allImages) === cachedReceipt.all_images) {
+      && Boolean(imageChoice.allImages) === cachedReceipt.all_images
+      && await nativeSaveReceiptStillMatches(source, cachedReceipt)) {
       const action = await vscode.window.showInformationMessage(
         "Already saved — 0 bytes uploaded",
         "Done",
         "Choose another Room",
       );
       if (action !== "Choose another Room"
+        && await nativeSaveReceiptStillMatches(source, cachedReceipt)
         && trustedLocalSaveReceipt(source, cwd) === cachedReceipt) {
         refreshRoomStatus();
         return "already-saved";
@@ -2003,12 +2068,25 @@ async function saveRoom(options = {}) {
       ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
       targetDimensionId || selectedDimensionId,
     );
-    preview = await runSelectedEncryption(
-      previewArgs,
-      source,
-      targetDimension || { id: targetDimensionId, provider: targetProvider },
-      { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
-    );
+    try {
+      preview = await runSelectedEncryption(
+        previewArgs,
+        source,
+        targetDimension || { id: targetDimensionId, provider: targetProvider },
+        { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
+      );
+    } catch (error) {
+      if (error?.result?.error !== "stale-worktree-repair-available"
+        || !(await approveStaleWorktreeRepair(error.result, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, encryptionMaterial))) {
+        throw error;
+      }
+      preview = await runSelectedEncryption(
+        previewArgs,
+        source,
+        targetDimension || { id: targetDimensionId, provider: targetProvider },
+        { title: "Re-checking workspace…", action: "retry a Room Store Save preview", encryptionMaterial },
+      );
+    }
     assertValidRoomStorePreview(preview);
     deletionConfirmationToken = await approveRoomStorePreview(preview);
     if (deletionConfirmationToken === undefined) return "cancelled";
@@ -3043,6 +3121,7 @@ function activate(context) {
     markWorkspaceChange(document.uri);
   }));
   register(context, "joshRoom.save", saveRoom);
+  register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
@@ -3069,6 +3148,7 @@ function activate(context) {
 module.exports = { activate };
 module.exports.__test__ = {
   enterRoom,
+  checkWorkspace,
   resetNativeBaseline,
   saveRoom,
   getRoomStatusForTests: () => roomStatus,

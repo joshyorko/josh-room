@@ -14,7 +14,7 @@ from josh_room.catalog import Catalog
 from josh_room.local_store import ImmutableLocalStore, ObjectRef
 from josh_room.operations import copy_snapshot_stream, create_snapshot
 
-FEATURE_MERGE_SHA = "c64ca50604feec9c1cd0c9bd6eb02223194df162"
+RELEASE_SOURCE_SHA = "4e4f5d68133d1b562bdc80eb66bc07fca5db76a9"
 
 
 def _dimension(provider, endpoint, bucket, profile):
@@ -42,13 +42,13 @@ def _snapshot(*, origin=None):
     return body
 
 
-def test_clean_bootstrap_uses_exact_feature_merge_and_cli_contract():
+def test_clean_bootstrap_uses_exact_release_source_and_cli_contract():
     lock = json.loads(Path("release-lock.json").read_text())
-    assert lock["josh_room"]["git_sha"] == FEATURE_MERGE_SHA
+    assert lock["josh_room"]["git_sha"] == RELEASE_SOURCE_SHA
     assert "josh-room = \"josh_room.cli:main\"" in Path("pyproject.toml").read_text()
     for path in (Path(".devcontainer/bootstrap.sh"), Path("templates/room/.devcontainer/bootstrap.sh")):
         body = path.read_text()
-        assert "joshyorko.josh-room-0.1.27" in body
+        assert "joshyorko.josh-room-0.1.32" in body
         assert "uv tool install" not in body
         assert "brew" not in body.lower()
 
@@ -351,7 +351,7 @@ def test_save_post_publication_verification_failure_keeps_committed_marker_hones
 
 
 def test_python_fingerprint_matches_native_noise_exclusions(tmp_path):
-    excluded = (".josh-room.json", ".DS_Store", ".git", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules", "__pycache__")
+    excluded = (".josh-room.json", ".DS_Store", ".pytest_cache", ".ruff_cache", ".venv", "venv", "node_modules", "__pycache__")
     import subprocess
 
     native = subprocess.run(

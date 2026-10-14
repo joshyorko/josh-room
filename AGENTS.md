@@ -33,3 +33,9 @@ identity in the bucket.
 Verify with the focused Python tests, the real JAT/age local vertical when those
 tools are installed, JSON/shell checks, secret scanning, and `git diff --check`.
 Report unavailable tools and secret-gated R2 tests as skipped, never passed.
+
+For every pull request, state the documentation impact, exact verification
+evidence, and remaining limits. Follow [CONTRIBUTING.md](CONTRIBUTING.md) for
+when to update canonical docs and how to report evidence. Keep this file focused
+on repository-wide agent boundaries; do not weaken security or publication
+protections to make a change easier to document.

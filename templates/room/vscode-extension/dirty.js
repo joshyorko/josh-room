@@ -124,6 +124,8 @@ function compileCapturePolicy(defaults = readDefaultCapturePolicy(), { ignoreTex
     if (!normalized || normalized.startsWith("/") || normalized.includes("\\")) return false;
     const parts = normalized.split("/");
     if (parts.some((part) => !part || part === "." || part === "..")) return false;
+    const gitIndex = parts.indexOf(".git");
+    if (gitIndex !== -1) return gitIndex > 0 && isExcluded(parts.slice(0, gitIndex).join("/"));
     if (activeRuntimeRelative) {
       const runtime = activeRuntimeRelative.split("/");
       if (runtime.every((part, index) => parts[index] === part)) return true;

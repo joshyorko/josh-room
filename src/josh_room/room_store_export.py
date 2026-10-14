@@ -15,6 +15,7 @@ from typing import Any, Self
 
 from . import jat
 from .cancellation import CLICancelled
+from .git_workspace import GitWorkspaceError, validate_git_storage
 from .logical_jat import LogicalJat
 from .private_paths import (
     PrivatePathError,
@@ -370,6 +371,32 @@ def _semantic_workspace(root: Path, policy) -> dict[str, tuple[Any, ...]]:
     return result
 
 
+def _separate_staged_hardlinks(root: Path, paths: frozenset[str]) -> None:
+    """JAT rejects tar hardlink members; copy only owned staging files.
+
+    Git local clones commonly share object files. Preserve each path's bytes
+    and mode without modifying the original workspace or Restic snapshot.
+    """
+    for relative in sorted(paths):
+        path = root / relative
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink <= 1:
+            continue
+        directory_mode = stat.S_IMODE(path.parent.stat().st_mode)
+        temporary = None
+        try:
+            path.parent.chmod(directory_mode | stat.S_IWUSR)
+            descriptor, name = tempfile.mkstemp(prefix=".josh-room-copy-", dir=path.parent)
+            os.close(descriptor)
+            temporary = Path(name)
+            shutil.copy2(path, temporary, follow_symlinks=False)
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            path.parent.chmod(directory_mode)
+
+
 def _verify_inspection(
     inspection: dict[str, Any],
     components: dict[str, Any],
@@ -605,12 +632,16 @@ def export_portable_jat(
                 _validate_snapshot_entries(workspace_rows)
                 restic.restore(snapshot_id, workspace_stage)
                 policy = load_capture_policy(workspace_stage)
-                _scan_workspace(workspace_stage, policy)
+                scan = _scan_workspace(workspace_stage, policy)
+                validate_git_storage(workspace_stage, scan.paths, portable_export=True)
+                _separate_staged_hardlinks(workspace_stage, scan.paths)
                 _semantic_workspace(workspace_stage, policy)
             except CLICancelled:
                 raise
             except PortableExportError:
                 raise
+            except GitWorkspaceError as error:
+                raise PortableExportError(str(error)) from None
             except (
                 OSError,
                 ResticStoreError,

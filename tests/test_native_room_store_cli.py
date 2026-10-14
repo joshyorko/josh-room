@@ -117,6 +117,29 @@ def test_native_save_sends_rcc_workspace_to_component_resolver(tmp_path, monkeyp
     assert calls[0][1]["rcc_runtime"] is None
 
 
+def test_managed_native_save_hands_off_selected_rcc_without_path_lookup(tmp_path, monkeypatch):
+    from josh_room import cli
+
+    (tmp_path / "robot.yaml").write_text("tasks:\n  Build:\n", encoding="utf-8")
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "1")
+    monkeypatch.setenv("JOSH_ROOM_RCC_EXE", "/synthetic/managed/rcc")
+    monkeypatch.setattr(cli, "_room_identity", lambda _value: ("demo", "Demo"))
+    monkeypatch.setattr(cli, "_effective_dimension", lambda _args: type("Dimension", (), {"provider": "minio"})())
+    calls = []
+    monkeypatch.setattr(cli, "save_room_store", lambda *args, **kwargs: calls.append(kwargs) or {"ok": True})
+    args = build_parser().parse_args([
+        "snapshot", "create", "demo", "--source", str(tmp_path), "--backend", "minio",
+    ])
+    args._selected_encryption_material = object()
+
+    assert cli.dispatch(args, tmp_path / "instance")["ok"]
+    assert calls[0]["rcc_runtime"] == "/synthetic/managed/rcc"
+    (tmp_path / "robot.yaml").unlink()
+    calls.clear()
+    assert cli.dispatch(args, tmp_path / "instance")["ok"]
+    assert calls[0]["rcc_runtime"] is None
+
+
 def test_minio_save_uses_room_store_bridge_without_jat_inputs(tmp_path, monkeypatch):
     from josh_room import cli
 

@@ -22,7 +22,7 @@ import tempfile
 import unicodedata
 import uuid
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +31,7 @@ from typing import Any
 from .auth import bind_room_store_repository, ensure_room_store_keyset
 from .cancellation import CLICancelled, defer_sigterm_cancellation
 from .catalog import CatalogConflict
+from .git_workspace import GitWorkspaceError, validate_git_storage
 from .logical_jat import LogicalJat
 from .restic_store import (
     BackupProgress,
@@ -54,6 +55,18 @@ _WINDOWS_RESERVED = {
 _ENTRY_TYPES = {"dir", "file", "symlink"}
 _WINDOWS_HOST = os.name == "nt"
 
+# Only these program-owned values may cross the public Save error boundary.
+SAVE_STAGES = frozenset({
+    "restic-runtime", "private-runtime", "operations-build", "operation-save",
+    "catalog-read", "workspace-scan", "rcc-component-prepare",
+    "private-roots", "room-store-keyset", "room-store-password",
+    "restic-store-open", "repository-initialize", "repository-bind",
+    "parent-validation", "component-capture", "workspace-backup",
+    "snapshot-verification", "workspace-verification", "descriptor-build",
+    "descriptor-publication", "marker-write", "save-result",
+    "save-receipt", "private-runtime-cleanup",
+})
+
 
 def _windows_change_time_ns(path: Path, expected_stat: os.stat_result) -> int:
     try:
@@ -68,10 +81,42 @@ class RoomStoreOperationsError(RuntimeError):
     """Stable, path-free failure at the Room Store operation boundary."""
 
     def __init__(
-        self, message: str, *, deletion_confirmation_token: str | None = None
+        self,
+        message: str,
+        *,
+        deletion_confirmation_token: str | None = None,
+        result: Mapping[str, Any] | None = None,
     ) -> None:
         self.deletion_confirmation_token = deletion_confirmation_token
+        self.result = dict(result or {})
         super().__init__(message)
+
+
+class WorkspaceValidationError(RoomStoreOperationsError):
+    """Path-free diagnostic from the metadata-only workspace scanner."""
+
+
+def _restic_store_open_error(error: ResticStoreError) -> RoomStoreOperationsError:
+    return RoomStoreOperationsError(
+        "Restic store could not be opened",
+        result={
+            "stage": "restic-store-open",
+            "command": "restic-store.open",
+            "restic_error_code": error.code.value,
+            "cause": str(error),
+        },
+    )
+
+
+@contextmanager
+def _opened_restic_store(store: Any):
+    """Report errors from store construction/entry without mislabeling its body."""
+    with ExitStack() as stack:
+        try:
+            opened = stack.enter_context(store)
+        except ResticStoreError as error:
+            raise _restic_store_open_error(error) from None
+        yield opened
 
 
 class RoomStorePublicationError(RoomStoreOperationsError):
@@ -141,7 +186,7 @@ def _validate_name(name: str) -> None:
     if (
         not name
         or name in {".", ".."}
-        or any(character in name for character in '<>:"|?*\\\x00')
+        or any(character in name for character in '<>:"|?*\\\x00\r\n')
         or name.endswith((" ", "."))
         or name.split(".", 1)[0].upper() in _WINDOWS_RESERVED
     ):
@@ -284,6 +329,8 @@ def _validate_snapshot_entries(
 def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
     try:
         resolved_root = root.resolve(strict=True)
+        if any(char in str(resolved_root) for char in "\r\n"):
+            raise RoomStoreOperationsError("workspace path cannot be restored safely")
         if not resolved_root.is_dir():
             raise RoomStoreOperationsError("workspace is not a directory")
         root_device = resolved_root.stat().st_dev
@@ -311,6 +358,12 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
             raise RoomStoreOperationsError(
                 "workspace cannot be scanned safely"
             ) from error
+        names = {child.name for child in children}
+        if (policy is not None and {"HEAD", "config", "objects"} <= names
+                and (directory / "HEAD").is_file() and (directory / "objects").is_dir()
+                and any(policy.is_excluded(f"{prefix}/{name}" if prefix else name)
+                        for name in ("HEAD", "config", "objects"))):
+            raise RoomStoreOperationsError("Bare Git metadata is excluded; include the complete repository before saving")
         for child in children:
             path = Path(child.path)
             relative = f"{prefix}/{child.name}" if prefix else child.name
@@ -375,6 +428,10 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
                 raise RoomStoreOperationsError("workspace contains a special file")
 
     visit(resolved_root)
+    try:
+        validate_git_storage(resolved_root, paths)
+    except GitWorkspaceError as error:
+        raise RoomStoreOperationsError(str(error)) from None
     digest = hashlib.sha256(b"\n".join(records)).hexdigest()
     return WorkspaceScan(
         digest,
@@ -390,10 +447,13 @@ def scan_workspace_for_status(root: Path) -> WorkspaceScan:
     root = Path(root)
     runtime_value = os.environ.get("ROBOCORP_HOME")
     runtime = Path(runtime_value) if runtime_value else None
-    policy = load_capture_policy(
-        root, active_runtime_root=runtime if runtime and runtime.is_dir() else None
-    )
-    return _scan_workspace(root, policy)
+    try:
+        policy = load_capture_policy(
+            root, active_runtime_root=runtime if runtime and runtime.is_dir() else None
+        )
+        return _scan_workspace(root, policy)
+    except RoomStoreOperationsError as error:
+        raise WorkspaceValidationError(str(error)) from None
 
 
 def _deletion_token(
@@ -462,6 +522,7 @@ class RoomStoreOperations:
         descriptor_metadata: Mapping[str, Any],
         resolve_components: Callable[[Any, LogicalJat | None], Mapping[str, Any]]
         | None = None,
+        prepare_components: Callable[[LogicalJat | None], None] | None = None,
         active_runtime_root: Path | None = None,
         secure_private_file: Callable[[int, Path, int], None] | None = None,
         validate_private_directory: Callable[[Path], None] | None = None,
@@ -482,6 +543,7 @@ class RoomStoreOperations:
         self.write_marker = write_marker
         self.descriptor_metadata = copy.deepcopy(dict(descriptor_metadata))
         self.resolve_components = resolve_components
+        self.prepare_components = prepare_components
         self.active_runtime_root = active_runtime_root
         self.secure_private_file = secure_private_file
         self.validate_private_directory = validate_private_directory
@@ -505,7 +567,7 @@ class RoomStoreOperations:
         try:
             self._protect_private_file(descriptor, Path(name))
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-                stream.write("\n".join(policy.restic_excludes()))
+                stream.write("\n".join(policy.resolved_restic_excludes(self.workspace)))
                 stream.write("\n")
         except BaseException:
             try:
@@ -611,20 +673,27 @@ class RoomStoreOperations:
                 )
 
     def _open_store(self):
+        self.save_stage = "private-roots"
         self._validate_private_roots()
+        self.save_stage = "room-store-keyset"
         keyset = self.ensure_keyset(self.dimension, self.backend)
         metadata = getattr(keyset, "room_store", None)
         secret = getattr(metadata, "secret", None)
         generation = getattr(metadata, "generation", None)
         if metadata is None or type(generation) is not int:
             raise RoomStoreOperationsError("Room Store keyset is unavailable")
+        self.save_stage = "room-store-password"
         password_file = self._password_file(secret)
         try:
+            self.save_stage = "restic-store-open"
             store = self.store_factory(
                 repository=self.repository,
                 cache_dir=self.cache_dir,
                 password_file=password_file,
             )
+        except ResticStoreError as error:
+            password_file.unlink(missing_ok=True)
+            raise _restic_store_open_error(error) from None
         except BaseException:
             password_file.unlink(missing_ok=True)
             raise
@@ -694,7 +763,10 @@ class RoomStoreOperations:
 
     def preview(self, parent: LogicalJat | None = None) -> SavePreview:
         policy = self._policy()
-        scan = _scan_workspace(self.workspace, policy)
+        try:
+            scan = _scan_workspace(self.workspace, policy)
+        except RoomStoreOperationsError as error:
+            raise WorkspaceValidationError(str(error)) from None
         selected_parent = parent
         latest, _etag = self.read_latest()
         if selected_parent is None:
@@ -821,8 +893,10 @@ class RoomStoreOperations:
         cancellation: Any = None,
         preflight_scan: tuple[str, WorkspaceScan] | None = None,
     ) -> SaveResult:
+        self.save_stage = "catalog-read"
         latest, etag = self.read_latest()
         selected_parent = parent if parent is not None else latest
+        self.save_stage = "workspace-scan"
         policy = self._policy()
         reused_scan = bool(
             isinstance(preflight_scan, tuple)
@@ -833,12 +907,18 @@ class RoomStoreOperations:
             and preflight_scan[1].capture_policy_sha256 == policy.sha256
         )
         before = preflight_scan[1] if reused_scan else _scan_workspace(self.workspace, policy)
+        if self.prepare_components is not None:
+            self.save_stage = "rcc-component-prepare"
+            self.prepare_components(latest)
         keyset, password_file, store = self._open_store()
         try:
-            with store as opened:
+            with _opened_restic_store(store) as opened:
+                self.save_stage = "repository-initialize"
                 repository_info = opened.initialize()
                 initial_data_added = getattr(opened, "data_added_bytes", None)
+                self.save_stage = "repository-bind"
                 self._bind_repository(keyset, repository_info.repository_id)
+                self.save_stage = "parent-validation"
                 if selected_parent is not None:
                     parent_body = selected_parent.to_dict()
                     if (
@@ -882,6 +962,7 @@ class RoomStoreOperations:
                     )
                 components = copy.deepcopy(self.descriptor_metadata["components"])
                 if self.resolve_components is not None:
+                    self.save_stage = "component-capture"
                     resolved_components = self.resolve_components(opened, latest)
                     if not isinstance(resolved_components, Mapping) or set(
                         resolved_components
@@ -890,6 +971,7 @@ class RoomStoreOperations:
                             "native component resolver returned an invalid component set"
                         )
                     components = copy.deepcopy(dict(resolved_components))
+                self.save_stage = "workspace-verification"
                 catalog_signature = (
                     self.read_catalog_signature()
                     if self.read_catalog_signature is not None
@@ -922,6 +1004,7 @@ class RoomStoreOperations:
                         before.signature_algorithm,
                         policy.sha256,
                     )
+                self.save_stage = "workspace-backup"
                 exclude_file = self._exclude_file(policy)
                 try:
                     summary = opened.backup(
@@ -935,6 +1018,7 @@ class RoomStoreOperations:
                     )
                 finally:
                     exclude_file.unlink(missing_ok=True)
+                self.save_stage = "snapshot-verification"
                 if summary.snapshot_id is None and summary.force_scan:
                     raise RoomStoreOperationsError(
                         "Restic reported a no-op after a forced content scan"
@@ -1014,6 +1098,7 @@ class RoomStoreOperations:
                     raise RoomStoreOperationsError(
                         "Restic snapshot inventory does not match the validated workspace"
                     )
+                self.save_stage = "workspace-verification"
                 after_policy = self._policy()
                 after = _scan_workspace(self.workspace, after_policy)
                 if (
@@ -1023,6 +1108,7 @@ class RoomStoreOperations:
                     raise RoomStoreOperationsError(
                         "workspace or capture policy changed during save"
                     )
+                self.save_stage = "descriptor-build"
                 descriptor = self._descriptor(
                     selected_parent
                     if snapshot.parent_snapshot_id is not None
@@ -1038,6 +1124,7 @@ class RoomStoreOperations:
                 commit_error: BaseException | None = None
                 deferred_cancel: CLICancelled | None = None
                 try:
+                    self.save_stage = "descriptor-publication"
                     with defer_sigterm_cancellation():
                         try:
                             self.publish_descriptor(
@@ -1077,6 +1164,7 @@ class RoomStoreOperations:
                 except (OSError, RuntimeError, ValueError):
                     dirty = True
                 try:
+                    self.save_stage = "marker-write"
                     self.write_marker(
                         descriptor,
                         clean=not dirty,

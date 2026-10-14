@@ -1,9 +1,7 @@
 import hashlib
 import json
-import os
 import subprocess
 import sys
-import textwrap
 import zipfile
 from pathlib import Path
 
@@ -40,6 +38,13 @@ def fixture(tmp_path):
 def verify(root, candidate, tag="v0.1.26-standalone-vsix"):
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--root", str(root), "--candidate", str(candidate), "--tag", tag],
+        capture_output=True, text=True, check=False,
+    )
+
+
+def verify_staged(root, candidate, *extra_args):
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(root), "--candidate", str(candidate), *extra_args],
         capture_output=True, text=True, check=False,
     )
 
@@ -85,86 +90,59 @@ def test_rejects_candidate_or_source_drift_without_rebuilding(tmp_path, failure)
     assert (candidate.read_bytes() if candidate.exists() else None) == before
 
 
-def workflow_step(name):
-    workflow = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
-    step = workflow.split(f"      - name: {name}\n", 1)[1].split("\n      - ", 1)[0]
-    return textwrap.dedent(step.split("        run: |\n", 1)[1]).replace(
-        "${{ steps.version.outputs.version }}", "0.1.26",
+def test_build_ci_candidate_does_not_need_a_release_tag_or_existing_digest_pin(tmp_path):
+    root, candidate, _pin = fixture(tmp_path)
+    (root / "release-promotion.json").unlink()
+    candidate.rename(tmp_path / "josh-room-0.1.26.vsix")
+    candidate = tmp_path / "josh-room-0.1.26.vsix"
+    receipt = tmp_path / "candidate.json"
+
+    result = verify_staged(
+        root,
+        candidate,
+        "--version", "0.1.26",
+        "--source-sha", "a" * 40,
+        "--ci-run-id", "12345",
+        "--report", str(receipt),
     )
 
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(receipt.read_text())
+    assert payload["artifact"] == candidate.name
+    assert payload["version"] == "0.1.26"
+    assert payload["source_sha"] == "a" * 40
+    assert payload["ci_run_id"] == 12345
+    assert payload["size"] == candidate.stat().st_size
 
-@pytest.mark.parametrize("failure", [None, "checksum", "source", "not-draft", "wrong-source-sha", "wrong-tag-sha", "tag-moved-before-publish", "missing-download", "changed-before-publish", "changed-after-publish"])
-def test_workflow_promotes_only_verified_draft_asset(tmp_path, failure):
+
+@pytest.mark.parametrize("change", ["source", "run", "artifact"])
+def test_candidate_receipt_rejects_stale_source_or_run_or_artifact(tmp_path, change):
     root, candidate, _pin = fixture(tmp_path)
-    (root / "scripts").mkdir()
-    (root / "scripts/verify_release_candidate.py").symlink_to(SCRIPT)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "python").symlink_to(sys.executable)
-    gh = bin_dir / "gh"
-    git = bin_dir / "git"
-    git.write_text(f"#!{sys.executable}\n" + textwrap.dedent('''\
-        import os, pathlib, sys
-        args = sys.argv[1:]
-        if args[:2] != ["ls-remote", "origin"]:
-            raise AssertionError(args)
-        root = pathlib.Path.cwd()
-        count_file = root / "git-calls"
-        count = int(count_file.read_text()) + 1 if count_file.exists() else 1
-        count_file.write_text(str(count))
-        failure = os.environ["SCENARIO"]
-        if failure == "wrong-tag-sha" or (failure == "tag-moved-before-publish" and count > 1):
-            tag_sha = "b" * 40
-        else:
-            tag_sha = os.environ["GITHUB_SHA"]
-        print(f"{tag_sha}\t{args[2]}")
-    '''))
-    git.chmod(0o700)
-    gh.write_text(f"#!{sys.executable}\n" + textwrap.dedent('''\
-        import json, os, pathlib, shutil, sys
-        args = sys.argv[1:]
-        root = pathlib.Path.cwd()
-        log = root / "gh-calls.jsonl"
-        previous = log.read_text().splitlines() if log.exists() else []
-        with log.open("a") as stream:
-            stream.write(json.dumps(args) + "\\n")
-        failure = os.environ["SCENARIO"]
-        if args[:2] == ["release", "view"]:
-            print(json.dumps({"isDraft": failure != "not-draft" and not (root / "published").exists(), "targetCommitish": "wrong" if failure == "wrong-source-sha" else os.environ["GITHUB_SHA"], "tagName": os.environ["GITHUB_REF_NAME"]}))
-        elif args[:2] == ["release", "download"]:
-            if failure == "missing-download": sys.exit(1)
-            target = pathlib.Path(args[args.index("--dir") + 1]) / args[args.index("--pattern") + 1]
-            shutil.copyfile(os.environ["CANDIDATE"], target)
-            if failure == "changed-before-publish" and any(json.loads(line)[:2] == ["release", "download"] for line in previous):
-                target.write_bytes(target.read_bytes() + b"changed")
-            if failure == "changed-after-publish" and (root / "published").exists():
-                target.write_bytes(target.read_bytes() + b"changed")
-        elif args[:2] == ["release", "upload"]:
-            assert "--clobber" not in args
-            assert not any(arg.endswith(".vsix") for arg in args)
-            assert all(pathlib.Path(arg).is_file() for arg in args[3:args.index("--repo")])
-        elif args[:2] == ["release", "edit"]:
-            assert "--draft=false" in args
-            (root / "published").touch()
-        else:
-            raise AssertionError(args)
-    '''))
-    gh.chmod(0o700)
-    if failure == "checksum":
-        candidate.write_bytes(candidate.read_bytes() + b"changed")
-    elif failure == "source":
-        (root / "vscode-extension/extension.js").write_text("changed")
-    before = candidate.read_bytes()
-    env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
-           "GITHUB_REPOSITORY": "joshyorko/josh-room", "GITHUB_REF_NAME": "v0.1.26-standalone-vsix",
-           "GITHUB_SHA": "a" * 40, "CANDIDATE": str(candidate), "SCENARIO": failure or ""}
-    result = subprocess.run(["bash", "-c", workflow_step("Verify staged tested VSIX")], cwd=root, env=env, capture_output=True, text=True, check=False)
-    if result.returncode == 0:
-        for name in ["package.whl", "package.tar.gz", "SHA256SUMS"]:
-            (root / "dist" / name).write_text("synthetic ancillary artifact")
-        result = subprocess.run(["bash", "-c", workflow_step("Publish GitHub release")], cwd=root, env=env, capture_output=True, text=True, check=False)
-    assert (result.returncode == 0) == (failure is None), result.stderr
-    assert (root / "published").exists() == (failure in [None, "changed-after-publish"])
-    assert candidate.read_bytes() == before
-    calls = [json.loads(line) for line in (root / "gh-calls.jsonl").read_text().splitlines()] if (root / "gh-calls.jsonl").exists() else []
-    assert all(call[:2] in [["release", action] for action in ["view", "download", "upload", "edit"]] for call in calls)
+    (root / "release-promotion.json").unlink()
+    candidate.rename(tmp_path / "josh-room-0.1.26.vsix")
+    candidate = tmp_path / "josh-room-0.1.26.vsix"
+    receipt = tmp_path / "candidate.json"
+    report_args = ["--report", str(receipt)]
+    baseline = verify_staged(
+        root, candidate, "--version", "0.1.26", "--source-sha", "a" * 40,
+        "--ci-run-id", "12345", *report_args,
+    )
+    assert baseline.returncode == 0, baseline.stderr
+    report = json.loads(receipt.read_text())
+    expected_sha = "a" * 40
+    expected_run = "12345"
+    if change == "source":
+        expected_sha = "b" * 40
+    elif change == "run":
+        expected_run = "54321"
+    else:
+        report["sha256"] = "0" * 64
+        receipt.write_text(json.dumps(report))
+
+    result = verify_staged(
+        root, candidate, "--version", "0.1.26", "--source-sha", expected_sha,
+        "--ci-run-id", expected_run, "--verify-report", str(receipt),
+    )
+
+    assert result.returncode != 0
+    assert "candidate receipt differs" in result.stderr
