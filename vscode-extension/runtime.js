@@ -228,7 +228,7 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
   throwIfCancelled(options);
   const record = readLocalFallbackRecord(context);
   if (!localFallbackRecordMatches(record, expected)) return false;
-  const environment = { ...process.env, ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
+  const environment = { ...rccProcessEnvironment(), ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
   const runJson = runtimeCommand(options);
   try {
     options.onProgress?.({ phase: "reuse", message: "Verifying cached local controller environment" });
@@ -248,7 +248,7 @@ async function verifyLocalFallback(context, rccRuntime, controllerRobot, expecte
 
 async function prepareLocalController(context, rccRuntime, controllerRobot, options = {}) {
   throwIfCancelled(options);
-  const environment = { ...process.env, ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
+  const environment = { ...rccProcessEnvironment(), ROBOCORP_HOME: privatePaths(context).rccHome, RCC_HOLOTREE_MODE: "private" };
   options.onProgress?.({ phase: "local-controller", message: "Building controller environment locally" });
   const runJson = runtimeCommand(options);
   const result = await runJson(
@@ -263,7 +263,7 @@ async function prepareLocalController(context, rccRuntime, controllerRobot, opti
 async function verifyLocalJatArtifact(context, rccRuntime, artifact, jatRobot, options = {}) {
   throwIfCancelled(options);
   const paths = privatePaths(context);
-  const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
+  const environment = { ...rccProcessEnvironment(), ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
   await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
   const receiptFile = path.join(paths.logsRoot, `local-jat-reuse-${process.pid}-${Date.now()}.json`);
   try {
@@ -310,7 +310,7 @@ async function buildLocalJatArtifact(context, rccRuntime, jatRobot, options = {}
 async function buildLocalJatArtifactUnlocked(context, rccRuntime, jatRobot, options = {}) {
   throwIfCancelled(options);
   const paths = privatePaths(context);
-  const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
+  const environment = { ...rccProcessEnvironment(), ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
   const runJson = runtimeCommand(options);
   options.onProgress?.({ phase: "local-jat", message: "Building local JAT artifact once" });
   const published = await runJson(
@@ -666,7 +666,7 @@ async function verifyJatArtifact(context, manifestSource, rccRuntime, artifactDi
   const paths = privatePaths(context);
   await fs.promises.mkdir(paths.logsRoot, { recursive: true, mode: 0o700 });
   const environment = {
-    ...process.env,
+    ...rccProcessEnvironment(),
     ROBOCORP_HOME: paths.rccHome,
     RCC_HOLOTREE_MODE: "private",
   };
@@ -683,6 +683,29 @@ async function verifyJatArtifact(context, manifestSource, rccRuntime, artifactDi
     throw new Error("acquired JAT environment failed Hauler version verification");
   }
   return artifactDigest;
+}
+
+function artifactArchivePath(root, archivePin) {
+  // Asset basenames are reused across releases; the verified archive digest is
+  // the cache identity. Keep older cache entries untouched during upgrades.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(archivePin.asset)) {
+    throw new Error("environment archive asset must be a safe basename");
+  }
+  return path.join(root, `${archivePin.sha256}-${archivePin.asset}`);
+}
+
+function rccProcessEnvironment() {
+  const environment = { ...process.env };
+  if (process.platform === "linux") {
+    // Desktop launchers often omit sbin, where the real ldconfig probe lives.
+    // Preserve caller precedence and never substitute a compatibility probe.
+    const entries = environment.PATH ? environment.PATH.split(path.delimiter) : [];
+    for (const directory of ["/usr/sbin", "/sbin"]) {
+      if (!entries.includes(directory)) entries.push(directory);
+    }
+    environment.PATH = entries.join(path.delimiter);
+  }
+  return environment;
 }
 
 async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {}) {
@@ -705,7 +728,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   }
   const paths = privatePaths(context);
   await fs.promises.mkdir(paths.jatArtifactRoot, { recursive: true, mode: 0o700 });
-  const archivePath = path.join(paths.jatArtifactRoot, archivePin.asset);
+  const archivePath = artifactArchivePath(paths.jatArtifactRoot, archivePin);
   const download = (url, destination) => cancellableCall(options.download || downloadFile, [url, destination], options);
   let archiveCached = false;
   if (await isRegularFile(archivePath)) {
@@ -745,7 +768,7 @@ async function ensureJatRuntime(context, manifestSource, rccRuntime, options = {
   const ensureSource = options.ensureSource || ensureJatSource;
   const jatRoot = await cancellableCall(ensureSource, [context, jat], options);
   const environment = {
-    ...process.env,
+    ...rccProcessEnvironment(),
     ROBOCORP_HOME: paths.rccHome,
     RCC_HOLOTREE_MODE: "private",
   };
@@ -811,7 +834,7 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
   }
   const paths = privatePaths(context);
   await fs.promises.mkdir(paths.controllerArtifactRoot, { recursive: true, mode: 0o700 });
-  const archivePath = path.join(paths.controllerArtifactRoot, archivePin.asset);
+  const archivePath = artifactArchivePath(paths.controllerArtifactRoot, archivePin);
   const download = (url, destination) => cancellableCall(options.download || downloadFile, [url, destination], options);
   let archiveCached = false;
   if (await isRegularFile(archivePath)) {
@@ -847,7 +870,7 @@ async function ensureControllerRuntime(context, manifestSource, rccRuntime, opti
       await fs.promises.rm(temporaryDirectory, { recursive: true, force: true });
     }
   }
-  const environment = { ...process.env, ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
+  const environment = { ...rccProcessEnvironment(), ROBOCORP_HOME: paths.rccHome, RCC_HOLOTREE_MODE: "private" };
   const runJson = runtimeCommand(options);
   let acquired;
   try {
@@ -903,7 +926,7 @@ function runtimeEnvironment(context, runtime, workspace) {
     JOSH_ROOM_EXTENSION_VERSION: roomVersion,
     XDG_RUNTIME_DIR: path.join(paths.runtimeRoot, "xdg-runtime"),
     PYTHONPATH: values.controllerRoot || paths.controllerRoot,
-    PATH: [managedBin, process.env.PATH].filter(Boolean).join(path.delimiter),
+    PATH: [managedBin, rccProcessEnvironment().PATH].filter(Boolean).join(path.delimiter),
     JOSH_ROOM_EXTENSION_MODE: "1",
     ...(workspace ? { JOSH_ROOM_WORKSPACE_ROOT: path.resolve(workspace) } : {}),
   };

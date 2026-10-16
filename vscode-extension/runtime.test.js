@@ -286,7 +286,7 @@ test("cancelling a cached artifact probe cannot fall through to archive import",
   const { manifest, archive } = controllerFixture();
   const archiveRoot = path.join(root, "runtime", "controller-artifact");
   fs.mkdirSync(archiveRoot, { recursive: true });
-  fs.writeFileSync(path.join(archiveRoot, "controller.rcca"), archive);
+  fs.writeFileSync(path.join(archiveRoot, `${digest(archive)}-controller.rcca`), archive);
   const calls = [];
   await assert.rejects(ensureControllerRuntime(context(root), manifest, { executable: process.execPath, version: "v18.19.2" }, {
     cancellationToken: source.token,
@@ -306,7 +306,7 @@ test("controller does not claim cached materialization reuse when RCC must impor
   const { manifest, archive, artifact } = controllerFixture();
   const archiveRoot = path.join(root, "runtime", "controller-artifact");
   fs.mkdirSync(archiveRoot, { recursive: true });
-  fs.writeFileSync(path.join(archiveRoot, "controller.rcca"), archive);
+  fs.writeFileSync(path.join(archiveRoot, `${digest(archive)}-controller.rcca`), archive);
   const events = [];
   await ensureControllerRuntime(context(root), manifest, { executable: process.execPath, version: "v18.19.2" }, {
     onProgress: (event) => events.push(event),
@@ -973,7 +973,7 @@ test("cached JAT archive reuses local artifact digest without reimporting 6596 a
   const asset = "jat-runtime-linux-amd64.rcca";
   const artifactRoot = path.join(root, "runtime", "jat-artifact");
   fs.mkdirSync(artifactRoot, { recursive: true });
-  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  fs.writeFileSync(path.join(artifactRoot, `${digest(archive)}-${asset}`), archive);
   const manifest = manifestFor(Buffer.from("rcc"), {
     jat: {
       git_sha: "b".repeat(40),
@@ -1006,7 +1006,7 @@ test("forced JAT recovery imports the pinned archive instead of reusing cached m
   const asset = "jat-runtime-linux-amd64.rcca";
   const artifactRoot = path.join(root, "runtime", "jat-artifact");
   fs.mkdirSync(artifactRoot, { recursive: true });
-  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  fs.writeFileSync(path.join(artifactRoot, `${digest(archive)}-${asset}`), archive);
   const manifest = manifestFor(Buffer.from("rcc"), {
     jat: {
       git_sha: "e".repeat(40),
@@ -1039,7 +1039,7 @@ test("invalid cached JAT verification imports the pinned archive", async () => {
   const asset = "jat-runtime-linux-amd64.rcca";
   const artifactRoot = path.join(root, "runtime", "jat-artifact");
   fs.mkdirSync(artifactRoot, { recursive: true });
-  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  fs.writeFileSync(path.join(artifactRoot, `${digest(archive)}-${asset}`), archive);
   const manifest = manifestFor(Buffer.from("rcc"), {
     jat: {
       git_sha: "1".repeat(40),
@@ -1072,7 +1072,7 @@ test("cached JAT archive imports only when the local RCC artifact is genuinely a
   const asset = "jat-runtime-linux-amd64.rcca";
   const artifactRoot = path.join(root, "runtime", "jat-artifact");
   fs.mkdirSync(artifactRoot, { recursive: true });
-  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  fs.writeFileSync(path.join(artifactRoot, `${digest(archive)}-${asset}`), archive);
   const manifest = manifestFor(Buffer.from("rcc"), {
     jat: {
       git_sha: "f".repeat(40),
@@ -1182,7 +1182,7 @@ test("cached controller archive reuses local artifact digest without archive imp
   const asset = "josh-room-controller-linux-amd64.rcca";
   const artifactRoot = path.join(root, "runtime", "controller-artifact");
   fs.mkdirSync(artifactRoot, { recursive: true });
-  fs.writeFileSync(path.join(artifactRoot, asset), archive);
+  fs.writeFileSync(path.join(artifactRoot, `${digest(archive)}-${asset}`), archive);
   const manifest = manifestFor(Buffer.from("rcc"), {
     controller: {
       environment_artifact: {
@@ -1285,4 +1285,137 @@ test("ensureJatSource extracts a verified GitHub source archive without host tar
   assert.equal(fs.readFileSync(path.join(sourceRoot, "robot.yaml"), "utf8"), "tasks:\n  Doctor:\n");
   assert.equal(fs.readFileSync(path.join(sourceRoot, "src/jat/__init__.py"), "utf8"), "__version__ = 'test'\n");
   assert.equal(fs.readFileSync(path.join(sourceRoot, ".josh-room-source"), "utf8").trim(), sha);
+});
+
+for (const kind of ["controller", "jat"]) {
+  const asset = `${kind}-runtime.rcca`;
+  const ensure = kind === "controller" ? ensureControllerRuntime : ensureJatRuntime;
+  function fixture(archive) {
+    const artifact = `sha256:${digest(Buffer.concat([Buffer.from("artifact:"), archive]))}`;
+    const component = {
+      environment_artifact: {
+        digest: artifact,
+        archive: {
+          asset,
+          url: `https://github.com/joshyorko/${kind === "jat" ? "josh-all-the-things" : "josh-room"}/releases/download/test/${asset}`,
+          sha256: digest(archive), size: archive.length,
+        },
+      },
+      ...(kind === "jat" ? { git_sha: "b".repeat(40) } : {}),
+    };
+    return { manifest: manifestFor(Buffer.from("rcc"), { [kind]: component }), artifact };
+  }
+  function options(root, archive, artifact, downloads) {
+    return {
+      platform: "linux-x64",
+      ensureSource: async () => path.join(root, "jat-source"),
+      download: async (_url, destination) => { downloads.push(destination); fs.writeFileSync(destination, archive); },
+      runJson: async (_executable, args) => args[1] === "acquire"
+        ? { artifactDigest: artifact, verification: { valid: true } }
+        : { artifactDigest: artifact, exitCode: 0 },
+    };
+  }
+
+  test(`${kind} cache upgrades retain old archives and use the new pinned digest`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cache-upgrade-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const cacheRoot = path.join(root, "runtime", `${kind}-artifact`);
+    fs.mkdirSync(cacheRoot, { recursive: true });
+    const legacy = Buffer.from("legacy basename cache");
+    fs.writeFileSync(path.join(cacheRoot, asset), legacy);
+    const downloads = [];
+    const rcc = { executable: "/managed/rcc", version: "v18.19.7" };
+    const versions = [Buffer.from("first pinned archive"), Buffer.from("new pinned archive with different size")];
+    for (const archive of versions) {
+      const { manifest, artifact } = fixture(archive);
+      const result = await ensure(context(root), manifest, rcc, options(root, archive, artifact, downloads));
+      assert.equal(result.archive, path.join(cacheRoot, `${digest(archive)}-${asset}`));
+      assert.deepEqual(fs.readFileSync(result.archive), archive);
+    }
+    assert.equal(downloads.length, 2);
+    assert.deepEqual(fs.readFileSync(path.join(cacheRoot, asset)), legacy);
+    assert.deepEqual(fs.readFileSync(path.join(cacheRoot, `${digest(versions[0])}-${asset}`)), versions[0]);
+  });
+
+  test(`${kind} tampered cache for the same pin fails before download or RCC`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cache-tampered-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const archive = Buffer.from("expected archive");
+    const { manifest } = fixture(archive);
+    const cacheRoot = path.join(root, "runtime", `${kind}-artifact`);
+    fs.mkdirSync(cacheRoot, { recursive: true });
+    const cachePath = path.join(cacheRoot, `${digest(archive)}-${asset}`);
+    const corrupted = Buffer.alloc(archive.length, 120);
+    fs.writeFileSync(cachePath, corrupted);
+    await assert.rejects(ensure(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.7" }, {
+      platform: "linux-x64",
+      download: async () => assert.fail("must not replace corrupted cache"),
+      runJson: async () => assert.fail("must not execute an unverified artifact"),
+    }), /cached .* checksum mismatch/);
+    assert.deepEqual(fs.readFileSync(cachePath), corrupted);
+  });
+
+  test(`${kind} digest-addressed cache refuses symlinks`, { skip: process.platform === "win32" }, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cache-link-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const archive = Buffer.from("expected archive");
+    const { manifest } = fixture(archive);
+    const cacheRoot = path.join(root, "runtime", `${kind}-artifact`);
+    fs.mkdirSync(cacheRoot, { recursive: true });
+    const target = path.join(root, "unrelated-file");
+    fs.writeFileSync(target, archive);
+    fs.symlinkSync(target, path.join(cacheRoot, `${digest(archive)}-${asset}`));
+    await assert.rejects(ensure(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.7" }, {
+      platform: "linux-x64",
+      download: async () => assert.fail("must not follow a cache symlink"),
+      runJson: async () => assert.fail("must not execute a linked archive"),
+    }), /not a regular file/);
+    assert.deepEqual(fs.readFileSync(target), archive);
+  });
+
+  test(`${kind} artifact asset rejects directory traversal`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-cache-path-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const { manifest } = fixture(Buffer.from("archive"));
+    manifest[kind].environment_artifact.archive.asset = "../outside.rcca";
+    await assert.rejects(ensure(context(root), manifest, { executable: "/managed/rcc", version: "v18.19.7" }, {
+      platform: "linux-x64", download: async () => assert.fail("unsafe asset must not download"),
+    }), /safe basename/);
+  });
+}
+
+test("Linux RCC launches append real system library tools without changing caller PATH precedence", { skip: process.platform !== "linux" }, async (t) => {
+  const previous = process.env.PATH;
+  process.env.PATH = "/synthetic/tools:/usr/bin:/bin:/usr/sbin";
+  t.after(() => { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-system-tools-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { archive, manifest, artifact } = controllerFixture();
+  const rcc = { executable: "/managed/rcc", version: "v18.19.7" };
+  const expected = "/synthetic/tools:/usr/bin:/bin:/usr/sbin:/sbin";
+  const launches = [];
+  await ensureControllerRuntime(context(root), manifest, rcc, {
+    platform: "linux-x64",
+    download: async (_url, destination) => fs.writeFileSync(destination, archive),
+    runJson: async (_executable, _args, opts) => {
+      launches.push(opts.env.PATH);
+      return { artifactDigest: artifact, verification: { valid: true } };
+    },
+  });
+  const jatManifest = manifestFor(Buffer.from("rcc"), {
+    jat: { git_sha: "b".repeat(40), environment_artifact: manifest.controller.environment_artifact },
+  });
+  await ensureJatRuntime(context(root), jatManifest, rcc, {
+    platform: "linux-x64",
+    ensureSource: async () => path.join(root, "jat-source"),
+    download: async (_url, destination) => fs.writeFileSync(destination, archive),
+    runJson: async (_executable, args, opts) => {
+      launches.push(opts.env.PATH);
+      return args[1] === "acquire" ? { artifactDigest: artifact, verification: { valid: true } }
+        : { artifactDigest: artifact, exitCode: 0 };
+    },
+  });
+  assert.deepEqual(launches, [expected, expected, expected]);
+  assert.equal(runtimeEnvironment(context(root), { rccExecutable: rcc.executable }).PATH, `/managed:${expected}`);
+  assert.equal(process.env.PATH, "/synthetic/tools:/usr/bin:/bin:/usr/sbin");
 });
