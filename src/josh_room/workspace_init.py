@@ -118,9 +118,9 @@ def append_exclusions(
         additions.append(directive)
     if not additions:
         return {"ok": True, "state": "unchanged"}
-    suffix = (
-        ("" if not raw or raw.endswith(b"\n") else "\n") + "\n".join(additions) + "\n"
-    )
+    # Always separate our rules from a concurrent writer's unterminated line.
+    # O_APPEND preserves their bytes; a leading newline prevents rule fusion.
+    suffix = "\n" + "\n".join(additions) + "\n"
     combined = raw + suffix.encode()
     if len(combined) > _IGNORE_LIMIT:
         raise ValueError("workspace ignore file exceeds 64 KiB")

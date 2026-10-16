@@ -110,3 +110,19 @@ def test_read_only_initialization_fails_without_file(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         initialize_workspace(tmp_path)
     assert not (tmp_path / ".josh-roomignore").exists()
+
+
+def test_concurrent_unterminated_append_cannot_fuse_approved_rule(tmp_path, monkeypatch):
+    (tmp_path / 'worktree').mkdir()
+    initialize_workspace(tmp_path)
+    ignore = tmp_path / '.josh-roomignore'
+    original_write = os.write
+    def racing_write(descriptor, data):
+        with ignore.open('ab') as other:
+            other.write(b'concurrent-prefix')
+        return original_write(descriptor, data)
+    monkeypatch.setattr(os, 'write', racing_write)
+    with pytest.raises(ValueError, match='changed during append'):
+        append_exclusions(tmp_path, ['worktree'], expected_token=policy_edit_token(tmp_path))
+    assert b'concurrent-prefix\nworktree/**\n' in ignore.read_bytes()
+    assert b'concurrent-prefixworktree' not in ignore.read_bytes()
