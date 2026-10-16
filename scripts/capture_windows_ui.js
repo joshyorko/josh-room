@@ -107,7 +107,8 @@ async function main() {
   fs.writeFileSync(ignore, "# full-repository is the compatibility default\n");
   stage = "full-repository-native-check";
   await command();
-  await until(async () => /git-storage|Git storage is not self-contained|Git storage|workspace-invalid/.test(await text()), 90000, "fresh full-repository Git blocker");
+  const gitResult = await until(async () => (await text()).match(/git-storage[^\n]*|Git storage[^\n]*/), 90000, "fresh full-repository Git blocker");
+  receipt.full_repository_ui_result = gitResult[0].slice(0, 500);
   receipt.checks.push("native-command-policy-change-rejects-unsupported-git");
   if (fs.readFileSync(path.join(fixture, ".git"), "utf8") !== "gitdir: Z:/synthetic-unavailable-admin\n") throw new Error("Original fixture Git entry changed");
   receipt.checks.push("original-fixture-git-entry-unchanged");
