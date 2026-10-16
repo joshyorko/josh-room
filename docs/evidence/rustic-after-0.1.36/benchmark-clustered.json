@@ -1,0 +1,116 @@
+{
+  "cache_contract": "cold application caches; OS caches are not evicted; sequential engine runs",
+  "engines": {
+    "restic": {
+      "binary_sha256": "20d4142678d0d95ec11a4759def1b73fd9190abc9ca19e4b62d067c0b387e639",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "changed_save": 5,
+        "changed_warm_unchanged_save": 2,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 7,
+        "inventory_cold": 2,
+        "inventory_warm": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "snapshot_inventory": 1,
+        "staged_restore": 5,
+        "warm_unchanged_save": 2
+      },
+      "data_added": {
+        "changed": 1818071,
+        "initial": 137875207
+      },
+      "seconds": {
+        "changed_save": 20.768743,
+        "changed_warm_unchanged_save": 3.177497,
+        "complete_restore_comparison": 12.242965,
+        "full_data_check": 1.958616,
+        "initial_save": 25.002266,
+        "inventory_cold": 5.492665,
+        "inventory_warm": 0.363141,
+        "metadata_scan_first": 2.009065,
+        "metadata_scan_repeat": 2.129682,
+        "snapshot_inventory": 0.628036,
+        "staged_restore": 14.616703,
+        "warm_unchanged_save": 3.517658
+      }
+    },
+    "rustic": {
+      "binary_sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "changed_save": 11,
+        "changed_warm_unchanged_save": 3,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 257,
+        "inventory_cold": 252,
+        "inventory_warm": 0,
+        "inventory_warm_tree_blobs": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "snapshot_inventory": 1,
+        "staged_restore": 4,
+        "warm_unchanged_save": 3
+      },
+      "data_added": {
+        "changed": 1819818,
+        "initial": 137956566
+      },
+      "seconds": {
+        "changed_save": 23.569859,
+        "changed_warm_unchanged_save": 3.537198,
+        "complete_restore_comparison": 12.664543,
+        "full_data_check": 1.987017,
+        "initial_save": 199.37571,
+        "inventory_cold": 138.364017,
+        "inventory_warm": 0.363464,
+        "inventory_warm_tree_blobs": 1.373464,
+        "metadata_scan_first": 1.526876,
+        "metadata_scan_repeat": 1.731589,
+        "snapshot_inventory": 0.43723,
+        "staged_restore": 8.549116,
+        "warm_unchanged_save": 9.123777
+      }
+    }
+  },
+  "fixture": {
+    "bytes_per_file": 1024,
+    "change_distribution": "every hundredth file ID in round-robin directories; changes cluster in five directories",
+    "changed_directories": 5,
+    "changed_files": 1000,
+    "directories": 250,
+    "files": 100000,
+    "same_size_restored_mtime": true
+  },
+  "platform": "Linux-x86_64",
+  "python": "3.12.14",
+  "source_binding": {
+    "method": "all recorded source_files SHA-256 values match this commit; original run began from precommit worktree",
+    "verified_commit": "56eb5dd6c90cc0f3b4bddb90f7664225b6f7bb40"
+  },
+  "source_files": {
+    "scripts/git_recovery_acceptance.py": "f3b5846ea208124c75877ba2059e7bdf469c617b4b72b29401289a4e236c0767",
+    "scripts/rustic_production_benchmark.py": "44a121559e9ec370cdba12cf7fe6b1c47ed98309803d99f5775e7307cfaa9d75",
+    "src/josh_room/restic_store.py": "9ce8f0636e2b077b9b13d85c3bdf5693386af37e1be13900f6d6271d50b388e7",
+    "src/josh_room/room_store_operations.py": "43159b371ade7ef09bcae239c61e8544689f9f28afc6072b42dcd5841d6c853a",
+    "src/josh_room/rustic_store.py": "cf1000a0b33f8cf9b38c9db8c6eae7afb0841133d5624c92931d4bdd4c634001"
+  },
+  "source_sha": "2d8d948358646eb33bfcc5f56f79df7767a86288",
+  "status": "PASS",
+  "storage": "disposable local format-2 repositories; synthetic catalog/keyset callbacks"
+}

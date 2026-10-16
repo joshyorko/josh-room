@@ -1,0 +1,36 @@
+{
+  "checks": {
+    "all_restored_bytes": "PASS",
+    "full": "PASS",
+    "independent_restic_full_check": "PASS",
+    "metadata": "PASS",
+    "subset": "PASS"
+  },
+  "fixture": {
+    "changed_files": 1000,
+    "directories": 250,
+    "files": 100000
+  },
+  "pre_fix_reproduction": {
+    "diagnostic_category": "cache pack temporary-file rename ENOENT",
+    "fixture": "separate synthetic 100k-file repository",
+    "independent_restic_full_check": "PASS",
+    "native_exit": 0,
+    "production_policy": "reject unexpected diagnostics",
+    "subsequent_warm_check": "PASS"
+  },
+  "scope": "real adapter full/subset/metadata checks and all restored bytes on a separate synthetic diagnostic repository; not a timing replacement for either benchmark",
+  "seconds": {
+    "full": 2.7521763779996036,
+    "metadata": 1.147832440000002,
+    "restore": 6.525247816000046,
+    "subset": 2.4030868329996338
+  },
+  "source_files": {
+    "src/josh_room/restic_store.py": "195b2e84f65712a042d3a69d34d1bda95677b28a910e2b1f49d7b27f4c303b61",
+    "src/josh_room/room_store_operations.py": "43159b371ade7ef09bcae239c61e8544689f9f28afc6072b42dcd5841d6c853a",
+    "src/josh_room/rustic_store.py": "56bb3cf11b539d904082d4b377eabd3e802929cf310e3f4c05954efd0ffa51b2"
+  },
+  "source_sha": "3ab1d565a05b367a37b60afa175cc303545d31f7",
+  "status": "PASS"
+}

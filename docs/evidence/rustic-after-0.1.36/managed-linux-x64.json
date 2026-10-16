@@ -1,0 +1,58 @@
+{
+  "workflow_run": 38981680771,
+  "job_id": 117243748422,
+  "job_url": "https://github.com/joshyorko/josh-room/actions/runs/38981680771/job/117243748422",
+  "result": "rustic-managed-consumer-pass",
+  "scope": "installed Rustic Save/restore, two-recipient age catalogs and portable JAT; default Restic gates are separate",
+  "platform": "linux-x64",
+  "source_sha": "13d6d7f1d8b39cf0af4a8f16a869343e41f9d627",
+  "vsix": {
+    "asset": "candidate.vsix",
+    "sha256": "4d96de0a9d5ae098fc4dd0d65c4328b4a16d6794df9f5d2cdd32555d939f1594",
+    "size": 523921,
+    "extension_version": "0.1.36"
+  },
+  "rcc": {
+    "version": "v18.19.7",
+    "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+    "size": 22401186
+  },
+  "controller": {
+    "artifact": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+    "expected": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b"
+  },
+  "jat": {
+    "source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "artifact": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+    "expected": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4"
+  },
+  "private_runtime": {
+    "status": "passed",
+    "platform": "linux",
+    "checks": [
+      "private-directory-owner-and-access",
+      "private-file-owner-and-access",
+      "symlink-rejection"
+    ]
+  },
+  "rustic_qualification": {
+    "age_catalog_two_recipients": "passed",
+    "engine": "rustic",
+    "git_metadata_added_bytes": 14008,
+    "git_metadata_incremental": "passed",
+    "git_repositories": 4,
+    "initial_added_bytes": 114784,
+    "noop": "already-saved",
+    "noop_added_bytes": 0,
+    "noop_seconds": 0.5268532709999931,
+    "parent_reuse": "passed",
+    "portable_jat": "passed",
+    "save_enter": "passed",
+    "source_unchanged": "passed",
+    "version": "0.11.4",
+    "binary": {
+      "sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+      "size": 28028600
+    }
+  }
+}

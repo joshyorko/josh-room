@@ -1,0 +1,54 @@
+{
+  "workflow_run": 38981680771,
+  "job_id": 117243748569,
+  "job_url": "https://github.com/joshyorko/josh-room/actions/runs/38981680771/job/117243748569",
+  "result": "rustic-platform-blocked",
+  "scope": "Windows product admission blocked; Rustic JAT/age composition is NOT RUN",
+  "platform": "win32-x64",
+  "source_sha": "13d6d7f1d8b39cf0af4a8f16a869343e41f9d627",
+  "vsix": {
+    "asset": "candidate.vsix",
+    "sha256": "e1a585a36fa3432dcb1ad47c253d1bcd113ec9c680464abc76c973c9e81ddda4",
+    "size": 527097,
+    "extension_version": "0.1.36"
+  },
+  "rcc": {
+    "version": "v18.19.7",
+    "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+    "size": 20130816
+  },
+  "controller": {
+    "artifact": "sha256:21083fb6628d37d6042c0879fe92c2b7441a7150b1cb17232c41cdefbf1a2c11",
+    "expected": "sha256:21083fb6628d37d6042c0879fe92c2b7441a7150b1cb17232c41cdefbf1a2c11"
+  },
+  "jat": {
+    "source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "artifact": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+    "expected": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e"
+  },
+  "private_runtime": {
+    "status": "passed",
+    "platform": "win32",
+    "checks": [
+      "native-directory-owner-dacl-inheritance",
+      "private-directory-owner-and-access",
+      "native-file-owner-dacl",
+      "private-file-owner-and-access",
+      "native-system-clock-advanced-after-baseline",
+      "same-size-edit-restored-mtime-changes-native-changetime",
+      "symlink-rejection",
+      "inherited-acl-rejection",
+      "protected-directory-recheck"
+    ]
+  },
+  "rustic_qualification": {
+    "engine": "rustic",
+    "version": "0.11.4",
+    "platform_support": "blocked",
+    "code": "store-engine-platform-unsupported",
+    "reason": "pinned Windows Rustic omits mode metadata and restores read-only files writable",
+    "save_enter": "NOT RUN",
+    "age_catalog_two_recipients": "NOT RUN",
+    "portable_jat": "NOT RUN"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "result": "FAIL",
+  "platform": "win32-x64",
+  "pinned_engine": "rustic-0.11.4",
+  "native_probe": {
+    "source_sha": "fbfc940013f3e710b42dcf15f3b5aa6c1f8ec2f1",
+    "workflow_run": 38980771129,
+    "job_id": 117240862994,
+    "job_url": "https://github.com/joshyorko/josh-room/actions/runs/38980771129/job/117240862994",
+    "source_mode": "0o444",
+    "snapshot_mode": null,
+    "restored_mode": "0o666",
+    "targeted_file_bytes": "PASS before the strict mode assertion"
+  },
+  "managed_failure": {
+    "source_sha": "3ab1d565a05b367a37b60afa175cc303545d31f7",
+    "workflow_run": 38978906616,
+    "job_id": 117234878274,
+    "job_url": "https://github.com/joshyorko/josh-room/actions/runs/38978906616/job/117234878274",
+    "stage": "initial Git workspace restore byte/mode tree comparison",
+    "portable_jat": "NOT RUN after this failure"
+  },
+  "pinned_upstream": {
+    "rustic_core": "0.13.0",
+    "source_crate_sha256": "ddab48a7f892b4943d9bffe7be44746c443982ae06ffcc3b2be55b31999b1725",
+    "release_lock_url": "https://github.com/rustic-rs/rustic/blob/v0.11.4/Cargo.lock",
+    "source_crate_url": "https://static.crates.io/crates/rustic_core/rustic_core-0.13.0.crate",
+    "windows_capture": "src/backend/ignore/mapper.rs nix_infos returns no mode",
+    "windows_restore": "src/backend/local_destination.rs set_permission is a no-op"
+  },
+  "mitigation": {
+    "source_sha": "13d6d7f1d8b39cf0af4a8f16a869343e41f9d627",
+    "public_windows_selection": "BLOCKED",
+    "error_code": "store-engine-platform-unsupported",
+    "default_engine": "restic-0.19.1",
+    "readonly_acceptance": "strict assertion retained; not xfail, not suppressed",
+    "scope": "low-level adapter remains available for owned qualification probes; public Room Store selection rejects Windows before runtime installation"
+  },
+  "managed_diagnostic_reproduction": {
+    "source_sha": "fbfc940013f3e710b42dcf15f3b5aa6c1f8ec2f1",
+    "workflow_run": 38980771129,
+    "job_id": 117240863216,
+    "job_url": "https://github.com/joshyorko/josh-room/actions/runs/38980771129/job/117240863216",
+    "byte_mismatches": 0,
+    "mode_mismatches": 21,
+    "missing_files": 0,
+    "unexpected_files": 0,
+    "source_readonly_mode": "0o444",
+    "restored_mode": "0o666"
+  }
+}

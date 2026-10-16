@@ -1,0 +1,139 @@
+{
+  "cache_contract": "cold application caches; OS caches are not evicted; sequential engine runs",
+  "engines": {
+    "restic": {
+      "binary_sha256": "20d4142678d0d95ec11a4759def1b73fd9190abc9ca19e4b62d067c0b387e639",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "adapter_warm_scan": 1,
+        "changed_save": 5,
+        "changed_warm_unchanged_save": 2,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 7,
+        "inventory_cold": 2,
+        "inventory_warm": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "snapshot_inventory": 1,
+        "staged_restore": 5,
+        "warm_unchanged_save": 2
+      },
+      "data_added": {
+        "changed": 36680289,
+        "initial": 138056294
+      },
+      "seconds": {
+        "adapter_warm_scan": 4.974637,
+        "changed_save": 23.514572,
+        "changed_warm_unchanged_save": 6.107764,
+        "complete_restore_comparison": 17.1045,
+        "full_data_check": 3.318907,
+        "initial_save": 26.927999,
+        "inventory_cold": 6.389719,
+        "inventory_warm": 0.649303,
+        "metadata_scan_first": 1.674906,
+        "metadata_scan_repeat": 2.045774,
+        "snapshot_inventory": 0.690666,
+        "staged_restore": 24.351632,
+        "warm_unchanged_save": 4.367858
+      }
+    },
+    "rustic": {
+      "binary_sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "adapter_warm_scan": 1,
+        "changed_save": 256,
+        "changed_warm_unchanged_save": 3,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 257,
+        "inventory_cold": 252,
+        "inventory_warm": 0,
+        "inventory_warm_tree_blobs": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "snapshot_inventory": 1,
+        "staged_restore": 4,
+        "warm_unchanged_save": 3
+      },
+      "data_added": {
+        "changed": 36680537,
+        "initial": 138056543
+      },
+      "seconds": {
+        "adapter_warm_scan": 5.30088,
+        "changed_save": 174.098504,
+        "changed_warm_unchanged_save": 3.542532,
+        "complete_restore_comparison": 15.733901,
+        "full_data_check": 1.965779,
+        "initial_save": 220.576105,
+        "inventory_cold": 140.408461,
+        "inventory_warm": 0.417759,
+        "inventory_warm_tree_blobs": 1.30863,
+        "metadata_scan_first": 2.4353,
+        "metadata_scan_repeat": 1.79031,
+        "snapshot_inventory": 0.39664,
+        "staged_restore": 11.523332,
+        "warm_unchanged_save": 3.704292
+      }
+    }
+  },
+  "execution_environment": {
+    "earlier_runs_filesystem": "tmpfs",
+    "engine_order": [
+      "restic",
+      "rustic"
+    ],
+    "fixture_filesystem": "overlayfs",
+    "fixture_location": "owned disposable workspace directory",
+    "host_page_cache": "not evicted"
+  },
+  "fixture": {
+    "bytes_per_file": 1024,
+    "change_distribution": "first one percent of file IDs, distributed across directories",
+    "changed_directories": 250,
+    "changed_files": 1000,
+    "directories": 250,
+    "files": 100000,
+    "same_size_restored_mtime": true
+  },
+  "platform": "Linux-x86_64",
+  "python": "3.12.14",
+  "qualified_core_binding": {
+    "commit": "13d6d7f1d8b39cf0af4a8f16a869343e41f9d627",
+    "note": "later commits only add Windows product admission refusal and qualification diagnostics; measured core and benchmark bytes are unchanged",
+    "operations_fixture_function_sha256": "cef5b87302a764d4fd7bf8706036b5deae8deeb4b9b45e00beb28d1cfbf6ad3a",
+    "verified_files": {
+      "scripts/rustic_production_benchmark.py": "3e66bc5502baa0c23df4e8ad11463d1e0cb004ade9bae905070c6705625d02c5",
+      "src/josh_room/restic_store.py": "195b2e84f65712a042d3a69d34d1bda95677b28a910e2b1f49d7b27f4c303b61",
+      "src/josh_room/room_store_operations.py": "43159b371ade7ef09bcae239c61e8544689f9f28afc6072b42dcd5841d6c853a",
+      "src/josh_room/rustic_store.py": "56bb3cf11b539d904082d4b377eabd3e802929cf310e3f4c05954efd0ffa51b2"
+    }
+  },
+  "source_files": {
+    "scripts/git_recovery_acceptance.py": "8ff2cb9cbd2208e782743903d19edc181c754f5fe68a5692402d8de513a5b082",
+    "scripts/rustic_production_benchmark.py": "3e66bc5502baa0c23df4e8ad11463d1e0cb004ade9bae905070c6705625d02c5",
+    "src/josh_room/restic_store.py": "195b2e84f65712a042d3a69d34d1bda95677b28a910e2b1f49d7b27f4c303b61",
+    "src/josh_room/room_store_operations.py": "43159b371ade7ef09bcae239c61e8544689f9f28afc6072b42dcd5841d6c853a",
+    "src/josh_room/rustic_store.py": "56bb3cf11b539d904082d4b377eabd3e802929cf310e3f4c05954efd0ffa51b2"
+  },
+  "source_sha": "3ab1d565a05b367a37b60afa175cc303545d31f7",
+  "source_tree": "c8c8989e0561746b8421919c75cf080e0770b85e",
+  "status": "PASS",
+  "storage": "disposable local format-2 repositories; synthetic catalog/keyset callbacks",
+  "tracked_source_dirty": false
+}

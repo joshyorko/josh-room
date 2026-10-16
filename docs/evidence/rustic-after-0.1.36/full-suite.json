@@ -1,0 +1,130 @@
+{
+  "baseline": {
+    "failed": [
+      "tests.test_auth::test_legacy_handoff_requires_a_private_parent",
+      "tests.test_capture_policy::test_private_policy_loader_rejects_shared_config_directory",
+      "tests.test_cli_contract::test_mixed_provider_copy_authorizes_only_the_r2_side",
+      "tests.test_jat::test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes",
+      "tests.test_minio_encryption_flow::test_dimensions_hierarchy_resolves_minio_before_reading_a_legacy_catalog",
+      "tests.test_minio_encryption_flow::test_mixed_copy_routes_cloudflare_only_for_the_r2_side",
+      "tests.test_minio_encryption_flow::test_configured_minio_command_uses_private_handoff_without_cloudflare_session",
+      "tests.test_pcc_hooks::test_remove_without_owned_hooks_is_idempotent",
+      "tests.test_pcc_hooks::test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact",
+      "tests.test_pcc_hooks::test_install_preserves_unrelated_hooks_and_remove_rolls_back",
+      "tests.test_pcc_hooks::test_status_detects_stale_runtime_manifest",
+      "tests.test_pcc_hooks::test_stale_repair_and_command_windows_contract",
+      "tests.test_pcc_hooks::test_unowned_same_command_conflicts_with_install",
+      "tests.test_pcc_hooks::test_remove_refuses_unowned_duplicate_canonical_command",
+      "tests.test_private_runtime_probe::test_windows_changetime_probe_closes_writer_before_observing_metadata",
+      "tests.test_provider_connections::test_dimension_hierarchy_reads_one_catalog_and_returns_rooms_with_jats",
+      "tests.test_repository_boundary::test_real_vsix_contains_the_owned_runtime_contract"
+    ],
+    "passed": 0,
+    "skipped": 0
+  },
+  "baseline_reproduction": "all 17 failing node IDs rerun in a separate exact-main worktree with the same interpreter and environment; all 17 fail",
+  "baseline_source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+  "candidate": {
+    "failed": [
+      "tests.test_auth::test_legacy_handoff_requires_a_private_parent",
+      "tests.test_capture_policy::test_private_policy_loader_rejects_shared_config_directory",
+      "tests.test_cli_contract::test_mixed_provider_copy_authorizes_only_the_r2_side",
+      "tests.test_jat::test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes",
+      "tests.test_minio_encryption_flow::test_dimensions_hierarchy_resolves_minio_before_reading_a_legacy_catalog",
+      "tests.test_minio_encryption_flow::test_mixed_copy_routes_cloudflare_only_for_the_r2_side",
+      "tests.test_minio_encryption_flow::test_configured_minio_command_uses_private_handoff_without_cloudflare_session",
+      "tests.test_pcc_hooks::test_remove_without_owned_hooks_is_idempotent",
+      "tests.test_pcc_hooks::test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact",
+      "tests.test_pcc_hooks::test_install_preserves_unrelated_hooks_and_remove_rolls_back",
+      "tests.test_pcc_hooks::test_status_detects_stale_runtime_manifest",
+      "tests.test_pcc_hooks::test_stale_repair_and_command_windows_contract",
+      "tests.test_pcc_hooks::test_unowned_same_command_conflicts_with_install",
+      "tests.test_pcc_hooks::test_remove_refuses_unowned_duplicate_canonical_command",
+      "tests.test_private_runtime_probe::test_windows_changetime_probe_closes_writer_before_observing_metadata",
+      "tests.test_provider_connections::test_dimension_hierarchy_reads_one_catalog_and_returns_rooms_with_jats",
+      "tests.test_repository_boundary::test_real_vsix_contains_the_owned_runtime_contract"
+    ],
+    "passed": 1993,
+    "skipped": 12
+  },
+  "candidate_source_sha": "01abf73b0df8a8e1819b4d242597d36b91432b71",
+  "command": "python -m pytest -q -m \"not r2 and not first_run\"",
+  "deselected": 2,
+  "environment_limits": [
+    "inherited umask 0077 changes mode-based fixture assumptions",
+    "PCC executable/config trust failures",
+    "existing detached JAT descendant cleanup failure",
+    "local npm cache parent unavailable for VSIX test"
+  ],
+  "final_run": {
+    "baseline_replay": {
+      "failed": [
+        "tests.test_auth::test_legacy_handoff_requires_a_private_parent",
+        "tests.test_capture_policy::test_private_policy_loader_rejects_shared_config_directory",
+        "tests.test_cli_contract::test_mixed_provider_copy_authorizes_only_the_r2_side",
+        "tests.test_jat::test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes",
+        "tests.test_minio_encryption_flow::test_dimensions_hierarchy_resolves_minio_before_reading_a_legacy_catalog",
+        "tests.test_minio_encryption_flow::test_mixed_copy_routes_cloudflare_only_for_the_r2_side",
+        "tests.test_minio_encryption_flow::test_configured_minio_command_uses_private_handoff_without_cloudflare_session",
+        "tests.test_pcc_hooks::test_remove_without_owned_hooks_is_idempotent",
+        "tests.test_pcc_hooks::test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact",
+        "tests.test_pcc_hooks::test_install_preserves_unrelated_hooks_and_remove_rolls_back",
+        "tests.test_pcc_hooks::test_status_detects_stale_runtime_manifest",
+        "tests.test_pcc_hooks::test_stale_repair_and_command_windows_contract",
+        "tests.test_pcc_hooks::test_unowned_same_command_conflicts_with_install",
+        "tests.test_pcc_hooks::test_remove_refuses_unowned_duplicate_canonical_command",
+        "tests.test_private_runtime_probe::test_windows_changetime_probe_closes_writer_before_observing_metadata",
+        "tests.test_provider_connections::test_dimension_hierarchy_reads_one_catalog_and_returns_rooms_with_jats"
+      ],
+      "passed": 0,
+      "skipped": 0
+    },
+    "baseline_source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+    "candidate": {
+      "failed": [
+        "tests.test_auth::test_legacy_handoff_requires_a_private_parent",
+        "tests.test_capture_policy::test_private_policy_loader_rejects_shared_config_directory",
+        "tests.test_cli_contract::test_mixed_provider_copy_authorizes_only_the_r2_side",
+        "tests.test_jat::test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes",
+        "tests.test_minio_encryption_flow::test_dimensions_hierarchy_resolves_minio_before_reading_a_legacy_catalog",
+        "tests.test_minio_encryption_flow::test_mixed_copy_routes_cloudflare_only_for_the_r2_side",
+        "tests.test_minio_encryption_flow::test_configured_minio_command_uses_private_handoff_without_cloudflare_session",
+        "tests.test_pcc_hooks::test_remove_without_owned_hooks_is_idempotent",
+        "tests.test_pcc_hooks::test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact",
+        "tests.test_pcc_hooks::test_install_preserves_unrelated_hooks_and_remove_rolls_back",
+        "tests.test_pcc_hooks::test_status_detects_stale_runtime_manifest",
+        "tests.test_pcc_hooks::test_stale_repair_and_command_windows_contract",
+        "tests.test_pcc_hooks::test_unowned_same_command_conflicts_with_install",
+        "tests.test_pcc_hooks::test_remove_refuses_unowned_duplicate_canonical_command",
+        "tests.test_private_runtime_probe::test_windows_changetime_probe_closes_writer_before_observing_metadata",
+        "tests.test_provider_connections::test_dimension_hierarchy_reads_one_catalog_and_returns_rooms_with_jats"
+      ],
+      "passed": 1997,
+      "skipped": 12
+    },
+    "command": "python -m pytest -q -m \"not r2 and not first_run\"",
+    "deselected": 2,
+    "environment_change": "owned temporary npm cache; same inherited umask 0077",
+    "new_failing_nodes": [],
+    "result": "FAIL",
+    "source_sha": "3ab1d565a05b367a37b60afa175cc303545d31f7"
+  },
+  "local_vsix_retry": {
+    "environment_change": "npm_config_cache points to owned disposable temporary directory",
+    "original_failure_retained": true,
+    "passed": 1,
+    "result": "PASS",
+    "scope": "actual VSIX package content test"
+  },
+  "node_extension": {
+    "failed": 0,
+    "passed": 304,
+    "skipped": 2
+  },
+  "result": "FAIL",
+  "secret_scan": {
+    "result": "PASS",
+    "scope": "isolated branch commits since inspected main; no raw secrets retained",
+    "tool": "Gitleaks 8.30.1"
+  }
+}

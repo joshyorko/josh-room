@@ -1,0 +1,26 @@
+{
+  "scope": "actual native contracts; raw Windows read-only preservation remains FAIL and product selection is blocked",
+  "results": [
+    {
+      "id": 117243748667,
+      "platform": "linux-x64",
+      "summary": [
+        "11 passed, 5 skipped in 28.53s"
+      ],
+      "source_sha": "13d6d7f1d8b39cf0af4a8f16a869343e41f9d627",
+      "workflow_run": 38981680771,
+      "job_url": "https://github.com/joshyorko/josh-room/actions/runs/38981680771/job/117243748667"
+    },
+    {
+      "id": 117243748605,
+      "platform": "win32-x64",
+      "summary": [
+        "FAILED tests/test_rustic_live.py::test_real_readonly_file_restore_preserves_mode - AssertionError: {'source_mode': '0o444', 'snapshot_mode': None, 'restored_mode': '0o666', 'native_windows': True}",
+        "1 failed, 10 passed, 5 skipped in 29.54s"
+      ],
+      "source_sha": "13d6d7f1d8b39cf0af4a8f16a869343e41f9d627",
+      "workflow_run": 38981680771,
+      "job_url": "https://github.com/joshyorko/josh-room/actions/runs/38981680771/job/117243748605"
+    }
+  ]
+}
