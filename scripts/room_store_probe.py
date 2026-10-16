@@ -26,6 +26,10 @@ from urllib.parse import urlsplit
 PINNED_VERSION = "0.19.1"
 REPOSITORY_FORMAT = 2
 EDIT_FRACTION_LIMIT = 0.50
+# restic 0.19.1 uses chunker v0.4.0, whose default maximum chunk is 8 MiB.
+# Keep the file much larger than a chunk so a legitimate large changed chunk
+# cannot consume most of the fixture and randomly fail the unchanged 50% gate.
+FIXTURE_PAYLOAD_BYTES = 64 * 1024 * 1024
 DEFAULT_EVIDENCE_FILE = Path(tempfile.gettempdir()) / "josh-room-restic-phase0-evidence.json"
 
 
@@ -302,7 +306,7 @@ def _write_fixture(root: Path) -> None:
     root.mkdir(parents=True)
     (root / "src").mkdir()
     (root / "src" / "README.txt").write_text("synthetic Room Store fixture\n")
-    (root / "src" / "payload.bin").write_bytes(secrets.token_bytes(8 * 1024 * 1024))
+    (root / "src" / "payload.bin").write_bytes(secrets.token_bytes(FIXTURE_PAYLOAD_BYTES))
     (root / "data").mkdir()
     (root / "data" / "record.json").write_text('{"fixture":true}\n')
 
