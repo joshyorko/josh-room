@@ -49,8 +49,18 @@ jobs:
           Pop-Location
           & (Join-Path $code 'bin/code.cmd') --user-data-dir (Join-Path $ui 'profile') --extensions-dir (Join-Path $ui 'extensions') --install-extension $vsix --force
           if ($LASTEXITCODE -ne 0) { throw 'Disposable candidate installation failed' }
+          $codeVersion = (& (Join-Path $code 'bin/code.cmd') --version | Where-Object { $_ -match '^\d+\.\d+\.\d+' } | Select-Object -First 1)
+          if (-not $codeVersion) { throw 'Actual VS Code CLI version unavailable' }
+          "CAPTURE_VSCODE_VERSION=$codeVersion" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "CAPTURE_UI_ROOT=$ui" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "CAPTURE_CODE_ROOT=$code" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "CAPTURE_VSIX=$vsix" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - name: Drive native Windows renderer commands without screenshots
         run: node scripts/capture_windows_ui.js
+      - name: Retain text qualification receipt only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capture-windows-ui-receipt
+          path: ${{ runner.temp }}/capture-native-ui/receipt.json
+          if-no-files-found: ignore

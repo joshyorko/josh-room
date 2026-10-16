@@ -36,7 +36,9 @@ async function main() {
   receipt.source_sha = cp.execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   receipt.vsix_sha256 = sha(vsix);
   receipt.extension_version = pkg.version;
-  receipt.vscode_version = JSON.parse(fs.readFileSync(path.join(codeRoot, "resources/app/package.json"))).version;
+  receipt.vscode_version = process.env.CAPTURE_VSCODE_VERSION;
+  if (!/^\d+\.\d+\.\d+/.test(receipt.vscode_version || "")) throw new Error("Actual VS Code CLI version is unavailable");
+  receipt.vscode_executable_sha256 = sha(path.join(codeRoot, "Code.exe"));
   const installed = fs.readdirSync(extensions).filter((name) => name.toLowerCase() === `joshyorko.josh-room-${pkg.version}`.toLowerCase());
   if (installed.length !== 1) throw new Error("Installed candidate extension identity mismatch");
   const installedRoot = path.join(extensions, installed[0]);
@@ -120,5 +122,6 @@ main().catch((error) => { receipt.error = String(error.message).slice(0,500); pr
   if (child?.pid) { try { cp.execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch {} }
   const body = JSON.stringify(receipt, null, 2);
   console.log(body);
+  if (process.env.CAPTURE_UI_ROOT) fs.writeFileSync(path.join(process.env.CAPTURE_UI_ROOT, "receipt.json"), body + "\n");
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### Windows packaged native UI qualification\n\n\`\`\`json\n${body}\n\`\`\`\n`);
 });
