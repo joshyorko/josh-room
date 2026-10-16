@@ -1,0 +1,102 @@
+{
+  "status": "passed",
+  "source": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "candidate": {
+    "filename": "josh-room-b69eaea-r2-minio.vsix",
+    "sha256": "3e9a616874e43093e1c3fcb77b6c1006da008c61c37574970323a9b735b96f57",
+    "bytes": 509620,
+    "version": "0.1.36",
+    "installed_exact_files": 102,
+    "installed_package_json_equal_excluding_vscode_metadata": true
+  },
+  "environment": {
+    "platform": "Debian13 Linux x64 disposable Docker with Xvfb",
+    "vscode": "1.142.0",
+    "rcc": "18.19.7",
+    "storage": "Moto5.1.15 S3-compatible emulator",
+    "profile": "Existing campaign-owned disposable profile; previous private config backed up before fixture-only registry reset",
+    "runtime_cache_retained": true
+  },
+  "authority_fixture": {
+    "method": "Installed packaged auth._write_runtime with random synthetic authority payload and task-owned recovery identity",
+    "live_oauth": false,
+    "real_cloudflare_credentials": false,
+    "initial_minio_connections": 0,
+    "session_snapshot_minio_connections_after_flow": 0,
+    "all_four_runtime_session_files_byte_unchanged": true,
+    "credentials_identity_expiry_unchanged": true,
+    "session_still_active": true
+  },
+  "native_steps": [
+    {
+      "action": "Josh: Add Storage \u2192 MinIO \u2192 new endpoint and credentials",
+      "result": "New connection minio-127-0-0-3-59000 created while R2 runtime snapshot active; credentials entered in actual native masked inputs"
+    },
+    {
+      "action": "Native connection reuse \u2192 bucket listing",
+      "result": "Existing Moto buckets visible; new connection was not seeded into session snapshot"
+    },
+    {
+      "action": "Create new bucket room-r2-minio-native \u2192 bucket access check \u2192 add Dimension",
+      "result": "Passed; connected-bucket native notification shown"
+    },
+    {
+      "action": "Josh: New Room \u2192 select synthetic source \u2192 name \u2192 exclusions Continue \u2192 fresh scan \u2192 MinIO encryption initialization \u2192 workspace-only preview \u2192 Save",
+      "result": "Passed without dismissing encryption-ready notice; 4logical entries,114B selected content,1.6KB restic data added"
+    },
+    {
+      "action": "Make original synthetic source unavailable; Josh: Enter Room",
+      "result": "New Room loaded in native picker, recovery point restored to different path and opened"
+    },
+    {
+      "action": "Josh: Inspect Logical JAT \u2192 select new snapshot",
+      "result": "Native snapshot picker and inspect succeeded; Logical JAT notification showed114B workspace and1.6KB restic data added"
+    }
+  ],
+  "dimension_id": "minio-minio-127-0-0-3-59000-room-r2-minio-native",
+  "snapshot_id": "3b0aa9ab4fa5423794f9f3c356521ed3",
+  "restore": {
+    "status": "passed",
+    "original_unavailable": true,
+    "original_file_hashes_unchanged": 4,
+    "restored_hashes": {
+      ".josh-roomignore": "aa5449dc21c00dea5e24d697c40aa07195761cb9e92718cb849282f6bf256135",
+      "project.txt": "a1cec5f968ea0d03b182eef3fe5d9c6d1118f4af918705fc6e4d0c0d9c650e3e",
+      "uploads/selected.txt": "b5824805534ca47b69d83eae304e0dfdb4fe44e0e04581a541fd5f91656d3984"
+    },
+    "excluded_generated_absent": true,
+    "all_four_session_files_unchanged": true,
+    "session_expiry_unchanged_and_active": true,
+    "session_snapshot_has_zero_minio_connections": true
+  },
+  "fixture_networking": {
+    "initial_attempt": "127.0.0.3 alias omitted from container NO_PROXY; default curl403 versus direct curl200; first bucketlist forbidden",
+    "remedy": "Added127.0.0.3 only to disposable launcher NO_PROXY/no_proxy and restarted disposable VSCode; reused created connection",
+    "product_code_change": false,
+    "session_bytes_preserved_across_restart": true
+  },
+  "commands": [
+    "docker restart --timeout 2 room-ui-acceptance",
+    "docker exec room-ui-acceptance <ACQUIRED_CONTROLLER>/bin/python <DISPOSABLE_UI>/prepare-r2-session.py",
+    "node <DISPOSABLE_UI>/native-step.js command <native command title>",
+    "node <DISPOSABLE_UI>/native-secret.js access|secret",
+    "python <DISPOSABLE_UI>/verify-r2-minio.py"
+  ],
+  "limitations": [
+    "Synthetic authority session construction is not a live OAuth/browser/Cloudflare qualification.",
+    "Moto emulator is not a real MinIO server.",
+    "Visible Windows UI not run by this agent.",
+    "Existing shared RCC-home username warning was nonblocking."
+  ],
+  "boundaries": {
+    "production_writes": false,
+    "source_overlay": false,
+    "runtime_fallback": false,
+    "cache_clear": false,
+    "secret_service_probe_sentinel": false,
+    "cli_minio_credential_seeding": false,
+    "published": false,
+    "real_user_extension_replaced": false,
+    "raw_dom_screenshots_logs": "local only"
+  }
+}

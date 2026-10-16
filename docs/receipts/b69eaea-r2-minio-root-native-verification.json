@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "source_sha": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "vsix_sha256": "3e9a616874e43093e1c3fcb77b6c1006da008c61c37574970323a9b735b96f57",
+  "installed_exact_payload_files": 102,
+  "installed_package_json_matches_excluding_vscode_metadata": true,
+  "restore_rechecked_independently": {
+    "status": "passed",
+    "original_unavailable": true,
+    "original_file_hashes_unchanged": 4,
+    "restored_hashes": {
+      ".josh-roomignore": "aa5449dc21c00dea5e24d697c40aa07195761cb9e92718cb849282f6bf256135",
+      "project.txt": "a1cec5f968ea0d03b182eef3fe5d9c6d1118f4af918705fc6e4d0c0d9c650e3e",
+      "uploads/selected.txt": "b5824805534ca47b69d83eae304e0dfdb4fe44e0e04581a541fd5f91656d3984"
+    },
+    "excluded_generated_absent": true,
+    "all_four_session_files_unchanged": true,
+    "session_expiry_unchanged_and_active": true,
+    "session_snapshot_has_zero_minio_connections": true
+  },
+  "scope": "Native Linux disposable fixture with synthetic R2 session and actual MinIO S3 adapter against Moto, not live Cloudflare OAuth or real MinIO infrastructure",
+  "room_publication": "NOT_PERFORMED"
+}

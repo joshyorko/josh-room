@@ -1,0 +1,16 @@
+{
+  "source_sha": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "tree_sha": "68423d859e09bca1ddd9e45d4ef42a9a70a5bac4",
+  "previous_source": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+  "old_vsix_sha256": "7fbf0fd59f2279f7a99f84b855b386721d568f0c2e0dcdf034ba3a2cccfb34ed",
+  "new_vsix_sha256": "3e9a616874e43093e1c3fcb77b6c1006da008c61c37574970323a9b735b96f57",
+  "file_count": 105,
+  "byte_identical_files": 104,
+  "changed_files": {
+    "extension/runtime/controller/josh_room/config.py": {
+      "old_sha256": "156332ac2fee17aceffb73d975dce30237b09b606c65406b65b696404977ded5",
+      "new_sha256": "c47c887c74a2d1d690d85beb5726ffdb9b6541588e1c8380474ccdc3177ad8b1"
+    }
+  },
+  "scope": "Only packaged config.py changed; not a behavioral qualification of the new package"
+}
