@@ -694,9 +694,23 @@ function artifactArchivePath(root, archivePin) {
   return path.join(root, `${archivePin.sha256}-${archivePin.asset}`);
 }
 
-function rccProcessEnvironment() {
-  const environment = { ...process.env };
-  if (process.platform === "linux") {
+function mergeRuntimeEnvironment(inherited, overrides = {}, platform = process.platform) {
+  if (platform !== "win32") return { ...inherited, ...overrides };
+  const normalize = (source) => {
+    const result = { ...source };
+    // Node selects the lexically first case-insensitive duplicate on Windows.
+    const keys = Object.keys(result).filter((key) => key.toLowerCase() === "path").sort();
+    const value = keys.length ? result[keys[0]] : undefined;
+    for (const key of keys) delete result[key];
+    if (keys.length) result.PATH = value;
+    return result;
+  };
+  return { ...normalize(inherited), ...normalize(overrides) };
+}
+
+function rccProcessEnvironment(source = process.env, platform = process.platform) {
+  const environment = mergeRuntimeEnvironment(source, {}, platform);
+  if (platform === "linux") {
     // Desktop launchers often omit sbin, where the real ldconfig probe lives.
     // Preserve caller precedence and never substitute a compatibility probe.
     const entries = environment.PATH ? environment.PATH.split(path.delimiter) : [];
@@ -1269,6 +1283,8 @@ module.exports = {
   selectControllerArtifact,
   selectJatArtifact,
   runtimeEnvironment,
+  rccProcessEnvironment,
+  mergeRuntimeEnvironment,
   haulerVersionCommand,
   localFallbackReason,
   parseJsonOutput,

@@ -1419,3 +1419,43 @@ test("Linux RCC launches append real system library tools without changing calle
   assert.equal(runtimeEnvironment(context(root), { rccExecutable: rcc.executable }).PATH, `/managed:${expected}`);
   assert.equal(process.env.PATH, "/synthetic/tools:/usr/bin:/bin:/usr/sbin");
 });
+
+test("Windows runtime PATH merging preserves mixed-case inherited paths and override precedence", () => {
+  const { mergeRuntimeEnvironment, rccProcessEnvironment } = require("./runtime");
+  const inherited = { Path: "C:\\Windows\\System32;C:\\caller", OTHER: "unchanged" };
+  assert.deepEqual(rccProcessEnvironment(inherited, "win32"), { PATH: inherited.Path, OTHER: "unchanged" });
+  const merged = mergeRuntimeEnvironment(inherited, { PATH: `C:\\managed;${inherited.Path}` }, "win32");
+  assert.deepEqual(merged, { PATH: `C:\\managed;${inherited.Path}`, OTHER: "unchanged" });
+  assert.equal(inherited.Path, "C:\\Windows\\System32;C:\\caller");
+  assert.equal(Object.keys(merged).filter(key => key.toLowerCase() === "path").length, 1);
+});
+
+test("Windows duplicate PATH keys follow Node's lexical first-key rule before explicit overrides", () => {
+  const { mergeRuntimeEnvironment } = require("./runtime");
+  const duplicate = { Path: "second", PATH: "first", path: "third", KEEP: "yes" };
+  assert.deepEqual(mergeRuntimeEnvironment(duplicate, {}, "win32"), { PATH: "first", KEEP: "yes" });
+  assert.deepEqual(mergeRuntimeEnvironment(duplicate, { pAtH: "override" }, "win32"), { PATH: "override", KEEP: "yes" });
+  assert.deepEqual(mergeRuntimeEnvironment(duplicate, { Path: "" }, "win32"), { PATH: "", KEEP: "yes" });
+});
+
+test("Non-Windows environment merging keeps case-sensitive PATH keys unchanged", () => {
+  const { mergeRuntimeEnvironment } = require("./runtime");
+  assert.deepEqual(mergeRuntimeEnvironment({ Path: "case-sensitive", PATH: "/caller", KEEP: "yes" }, { PATH: "/managed:/caller" }, "linux"), {
+    Path: "case-sensitive", PATH: "/managed:/caller", KEEP: "yes",
+  });
+});
+
+test("controller runtimeEnvironment retains VS Code's Windows Path key", () => {
+  const previousEnv = process.env;
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  try {
+    process.env = { ...previousEnv, Path: "C:\\Windows\\System32;C:\\caller" };
+    delete process.env.PATH;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const environment = runtimeEnvironment(context(os.tmpdir()), { rccExecutable: "/managed/rcc.exe" });
+    assert.ok(environment.PATH.includes("C:\\Windows\\System32;C:\\caller"), "controller PATH must retain inherited system tools");
+  } finally {
+    process.env = previousEnv;
+    Object.defineProperty(process, "platform", platformDescriptor);
+  }
+});

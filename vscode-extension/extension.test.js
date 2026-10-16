@@ -6263,3 +6263,29 @@ test("exported native activation registers the contributed workspace scan", () =
   assert.ok(extensionPackageJson.contributes.commands.some((command) => command.command === "joshRoom.checkWorkspace"));
   assert.equal(typeof commandCallbacks.get("joshRoom.checkWorkspace"), "function");
 });
+
+test("GUI controller spawn merges Windows Path into one canonical PATH", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-path-"));
+  const { vscode } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setRuntimeForTests({
+    command: "/test/rcc", args: args => args,
+    env: { PATH: "C:\\managed;C:\\Windows\\System32" }, jatRoot: root,
+  });
+  const previousEnv = process.env;
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  try {
+    process.env = { ...previousEnv, Path: "C:\\Windows\\System32" };
+    delete process.env.PATH;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    await extension.__test__.runJoshRoom(["status"], root);
+    const environment = spawnHarness.calls[0].options.env;
+    assert.deepEqual(Object.keys(environment).filter(key => key.toLowerCase() === "path"), ["PATH"]);
+    assert.equal(environment.PATH, "C:\\managed;C:\\Windows\\System32");
+  } finally {
+    process.env = previousEnv;
+    Object.defineProperty(process, "platform", platformDescriptor);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
