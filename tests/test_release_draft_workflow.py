@@ -24,7 +24,7 @@ def _fixture(tmp_path, mode):
     assets = [{"name": p.name, "size": p.stat().st_size, "digest": "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()} for p in staged.iterdir()]
     release = {"id": 91, "tag_name": TAG, "target_commitish": SOURCE, "draft": True, "prerelease": False, "assets": []}
     state = {"release": release, "tag_sha": "", "creates": 0, "uploads": 0, "publishes": 0, "templates": 0, "retargets": 0, "list_reads": 0, "id_reads": 0, "mode": mode}
-    if mode == "new":
+    if mode in {"new", "new-hidden", "new-read-lag", "new-read-unavailable"}:
         state["release"] = None
     elif mode == "partial-draft":
         release["assets"] = assets[:1]
@@ -50,6 +50,7 @@ def _fixture(tmp_path, mode):
     commands = tmp_path / "commands"
     commands.mkdir()
     boundary = '''import hashlib, json, os, pathlib, sys
+from urllib.parse import parse_qs, urlsplit
 path = pathlib.Path(os.environ["STATE"])
 s = json.loads(path.read_text())
 args = sys.argv[1:]
@@ -69,17 +70,37 @@ if name == "git":
         elif "--exit-code" in args: sys.exit(2)
 elif name == "gh":
     if args[0] == "api":
-        endpoint = next(a for a in args[1:] if a.startswith("repos/"))
-        if "/releases/tags/" in endpoint:
+        endpoint = next(a for a in args[1:] if a.startswith(("repos/", "https://uploads.github.com/")))
+        if endpoint.endswith("/releases") and "POST" in args:
+            assert s["release"] is None and not s["tag_sha"], "duplicate release or tag creation"
+            field = lambda key: next(a.split("=", 1)[1] for a in args if a.startswith(key + "="))
+            assert field("draft") == "true" and field("prerelease") == "false"
+            s["release"] = {"id":91,"tag_name":field("tag_name"),"target_commitish":field("target_commitish"),"draft":True,"prerelease":False,"assets":[],"body":field("body")}
+            s["creates"] += 1
+            print(json.dumps(s["release"]))
+        elif endpoint.startswith("https://uploads.github.com/"):
+            assert "/releases/91/assets?" in endpoint and "POST" in args
+            assert "Content-Type: application/octet-stream" in args
+            p = pathlib.Path(args[args.index("--input") + 1])
+            name = parse_qs(urlsplit(endpoint).query)["name"][0]
+            assert name == p.name
+            assert not any(a["name"] == name for a in s["release"]["assets"]), "asset overwrite"
+            s["release"]["assets"].append({"name":name,"size":p.stat().st_size,"digest":"sha256:"+hashlib.sha256(p.read_bytes()).hexdigest()})
+            s["uploads"] += 1
+            print(json.dumps(s["release"]["assets"][-1]))
+        elif "/releases/tags/" in endpoint:
             if not s["release"] or s["release"]["draft"]: fail()
             print(json.dumps(s["release"]))
         elif endpoint.endswith("/releases?per_page=100"):
             s["list_reads"] += 1
-            if s["mode"] == "list-failure": fail()
+            if s["mode"] in {"list-failure", "resume-hidden"}: fail()
+            if s["mode"] == "new-hidden" and s["creates"]: fail()
             print("[]")  # A preceding nonmatching page from --paginate.
             print(json.dumps([s["release"]] * (2 if s["mode"] == "duplicate-drafts" else 1) if s["release"] else []))
         elif endpoint.endswith("/releases/91"):
             s["id_reads"] += 1
+            if "PATCH" not in args and (s["mode"] == "new-read-unavailable" or (s["mode"] == "new-read-lag" and s["id_reads"] < 3)): fail()
+            if not s["release"]: fail()
             if "PATCH" in args:
                 # GitHub drops a pending tag when PATCH omits tag_name (gh edit preserves it).
                 s["release"]["tag_name"] = next((a.split("=", 1)[1] for a in args if a.startswith("tag_name=")), "untagged-synthetic")
@@ -89,7 +110,7 @@ elif name == "gh":
                     s["release"]["body"] = next(a.split("=", 1)[1] for a in args if a.startswith("body="))
                     s["retargets"] += 1
                 else: publish()
-            print(json.dumps(s["release"]))
+            print(json.dumps(s["release"] | {"id": 92} if s["mode"] == "mismatched-id" else s["release"]))
         else: raise AssertionError(args)
     elif args[:2] == ["release", "create"]:
         assert s["release"] is None and not s["tag_sha"], "duplicate release or tag creation"
@@ -103,11 +124,12 @@ elif name == "gh":
         s["uploads"] += 1
     elif args[:2] == ["release", "edit"]: publish()
     else: raise AssertionError(args)
+elif name == "sleep": pass
 elif name == "docker": sys.stdin.read()
 elif name == "devcontainer": s["templates"] += 1
 save()
 '''
-    for name in ("git", "gh", "docker", "devcontainer"):
+    for name in ("git", "gh", "docker", "devcontainer", "sleep"):
         command = commands / name
         command.write_text(f"#!{sys.executable}\n" + boundary)
         command.chmod(0o755)
@@ -154,7 +176,7 @@ def test_draft_discovery_upload_publication_and_published_retry(tmp_path, mode):
     assert all(retried[key] == state[key] for key in ("creates", "uploads", "publishes"))
 
 
-@pytest.mark.parametrize("mode", ["stale-draft", "wrong-tag", "conflicting-asset", "published-without-tag", "orphan-tag", "list-failure", "duplicate-drafts"])
+@pytest.mark.parametrize("mode", ["stale-draft", "wrong-tag", "conflicting-asset", "published-without-tag", "orphan-tag", "list-failure", "duplicate-drafts", "mismatched-id"])
 def test_draft_recovery_rejects_wrong_source_tag_or_assets_before_mutation(tmp_path, mode):
     env = _fixture(tmp_path, mode)
     result = _run(tmp_path, env)
@@ -215,3 +237,39 @@ def test_explicit_empty_draft_recovery_rejects_conflicts_before_mutation(tmp_pat
     assert result.returncode != 0
     observed = json.loads(path.read_text())
     assert all(observed[key] == 0 for key in ("retargets", "creates", "uploads", "publishes", "templates"))
+
+
+@pytest.mark.parametrize("mode", ["new-hidden", "new-read-lag"])
+def test_created_draft_uses_returned_id_without_rediscovery(tmp_path, mode):
+    env = _fixture(tmp_path, mode)
+    result = _run(tmp_path, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["creates"] == 1 and state["list_reads"] == 1
+    assert state["uploads"] == 2 and state["publishes"] == 1
+    assert state["id_reads"] >= (3 if mode == "new-read-lag" else 1)
+
+
+def test_created_draft_read_failure_is_bounded_and_preserves_created_draft(tmp_path):
+    env = _fixture(tmp_path, "new-read-unavailable")
+    result = _run(tmp_path, env)
+    assert result.returncode != 0
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert state["creates"] == 1 and state["id_reads"] == 5
+    assert state["release"]["draft"] and state["release"]["assets"] == []
+    assert state["uploads"] == state["publishes"] == state["templates"] == 0
+    assert "release ID 91 after 5 attempts" in result.stderr
+
+
+def test_explicit_resume_loads_by_id_when_listing_is_unavailable(tmp_path):
+    env = _fixture(tmp_path, "stale-draft")
+    env.update(RESUME_EMPTY_DRAFT_ID="91", EXPECTED_DRAFT_SOURCE_SHA="b" * 40)
+    path = tmp_path / "state.json"
+    state = json.loads(path.read_text())
+    state["mode"] = "resume-hidden"
+    path.write_text(json.dumps(state))
+    result = _run(tmp_path, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads(path.read_text())
+    assert state["list_reads"] == state["creates"] == 0
+    assert state["retargets"] == state["publishes"] == 1
