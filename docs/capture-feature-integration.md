@@ -1,11 +1,10 @@
 # Capture features: integration and release sequence
 
-Room PR #147 and JAT PR #21 are a subsequent feature delivery. They must not be
-added to the staged Room 0.1.35 maintenance release or its existing draft.
-The maintenance owner controls that draft and the main release workflow.
-Josh has authorized qualified feature integration and preparation of the next
-release. Final Room publication remains with Josh. Supporting JAT runtime
-publication requires its exact new version/source/artifact proposal first.
+Room PR #147 and JAT PR #21 are merged for the subsequent 0.1.36 feature delivery.
+The published Room 0.1.35 maintenance release and its artifacts remain unchanged.
+Josh authorized qualified feature integration and publication of supporting JAT
+runtime 0.1.14 from its exact reviewed source and artifact proposal. Final Room
+publication remains with Josh.
 
 ## Review boundary
 
@@ -16,7 +15,9 @@ of JAT's filtered-capture capability.
 
 JAT provides explicit literal exclusions through its standalone CLI, service and
 thin RCC adapters. Filtered Room exports require this contract and the exact
-qualified JAT source/runtime pair. The current published JAT runtime must not be
+qualified JAT source/runtime pair. The 0.1.36 candidate adopts published
+[`v0.1.14-jat-runtime`](https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.14-jat-runtime)
+at `fe43065a654d1649ba9ebe5a6f202eac612e4385`. Earlier runtime pins must not be
 silently treated as supporting filtered capture.
 
 ## Safe order
@@ -62,6 +63,7 @@ silently treated as supporting filtered capture.
 - Separate passing, failed, blocked and unrun gates. Moto fixtures do not prove
   live MinIO/R2 behavior. No denied screenshot upload is required for evidence.
 
-The minimal owner decision after a qualified handoff is approval to merge the
-named feature heads into the subsequent delivery and approval of its new version
-and artifact adoption. Publishing remains a separate decision.
+Feature merges and supporting JAT publication are complete. The remaining owner
+action after final Room qualification is to publish the named 0.1.36 source and
+staging run through the existing release workflow. A stage created before JAT
+0.1.14 adoption is historical evidence and must not be used for that release.
