@@ -12,7 +12,7 @@ from robocorp import log
 
 from .cancellation import terminate_owned_process as _terminate_process
 from .progress import report_progress
-from .workspace_policy import CapturePolicy
+from .workspace_policy import CapturePolicy, load_capture_policy
 
 _STDOUT_LIMIT = 1_048_576
 _RESULT_LIMIT = 1_048_576
@@ -457,6 +457,7 @@ def _capture_selection(source: Path, policy: CapturePolicy) -> list[str]:
     visited = 0
     deadline = time.monotonic() + 60
     root = source.resolve(strict=True)
+    _verify_capture_policy(root, policy)
 
     def failed(error):
         raise ValueError("workspace exclusion selection is incomplete") from error
@@ -474,7 +475,14 @@ def _capture_selection(source: Path, policy: CapturePolicy) -> list[str]:
                 values.append(relative)
         directories[:] = sorted(name for name in directories if not policy.is_excluded(
             (parent / name).relative_to(root).as_posix()))
+    _verify_capture_policy(root, policy)
     return sorted(values)
+
+
+def _verify_capture_policy(source: Path, policy: CapturePolicy) -> None:
+    runtime = source / policy.active_runtime_relative if policy.active_runtime_relative else None
+    if load_capture_policy(source, active_runtime_root=runtime).sha256 != policy.sha256:
+        raise ValueError("workspace capture policy changed; review a fresh preview")
 
 
 def _require_filtered_capture(jat_root: Path) -> None:
@@ -544,7 +552,10 @@ def run_build(
         request["exclude_extras"] = True
     if retries is not None:
         request["retries"] = int(retries)
-    return _run_task(jat_root, "Build", request)
+    result = _run_task(jat_root, "Build", request)
+    if capture_policy is not None:
+        _verify_capture_policy(source, capture_policy)
+    return result
 
 
 def run_restore(jat_root: Path, haul: Path, destination: Path) -> dict:

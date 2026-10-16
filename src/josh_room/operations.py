@@ -145,9 +145,14 @@ def create_snapshot(
         report_progress("build", "Building portable Room haul")
         policy = load_capture_policy(source)
         selection = {"capture_policy": policy} if getattr(policy, "capture_mode", "full-repository") == "source-only" else {}
+        if selection:
+            from .room_store_operations import _scan_workspace
+            _scan_workspace(source, policy)
         producer = run_build(jat_root, source, haul, images=images, all_images=all_images, rcc_environment="auto", **selection)
         payload_size, payload_digest = _file_metadata(haul)
-        manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source, source_fingerprint)}
+        source_metadata = ({"workspace_fingerprint": source_fingerprint, "capture_mode": policy.capture_mode,
+                            "capture_policy_sha256": policy.sha256} if selection else _source_metadata(source, source_fingerprint))
+        manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": source_metadata}
         if isinstance(producer.get("environment_artifact"), dict):
             manifest["environment_artifact"] = producer["environment_artifact"]
         envelope = Path(work) / "snapshot.jroom"

@@ -40,3 +40,10 @@ def test_filtered_handoff_passes_literal_paths_and_mode(tmp_path, monkeypatch):
     jat.run_build(tmp_path, source, tmp_path / 'out', capture_policy=load_capture_policy(source))
     assert seen['workspace_exclusions'] == ['node_modules']
     assert seen['capture_mode'] == 'full-repository'
+
+
+def test_policy_edit_after_review_refuses_handoff(tmp_path):
+    policy = load_capture_policy(tmp_path)
+    (tmp_path / '.josh-roomignore').write_text('generated\n')
+    with pytest.raises(ValueError, match='policy changed'):
+        jat._capture_selection(tmp_path, policy)
