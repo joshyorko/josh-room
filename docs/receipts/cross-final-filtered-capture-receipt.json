@@ -1,0 +1,22 @@
+{
+  "jat_source_sha": "d084ade2adf2945b6aa1f04ddb9ad32ed53b43c2",
+  "room_source_sha": "3d28f0ec74a74971e45d4ecbd14eab4597bfb1c4",
+  "jat_environment_artifact": "sha256:47d319a70e29d98bc24cfebef244195b0be11e205b70f4d9aa2878798dcfe0c0",
+  "rcc_version": "v18.19.7",
+  "capsule_sha256": "a2e58865d7aabe3bde6dd6d23cc0a3a33445cabc925d2b9e40a20fca0053d345",
+  "capsule_size": 2193,
+  "selected_files_verified": [
+    "app.py",
+    "data.db",
+    "keep-worktree/draft.txt",
+    "package.json"
+  ],
+  "source_unchanged": true,
+  "original_unavailable_during_restore": true,
+  "excluded_entries_absent": true,
+  "jat_archive_sha256": "90b4ccb42580f93811c78b65b508d5877a01abb0ab27ee224297aded92963e46",
+  "hosted_run": 38928605678,
+  "hosted_artifact": 12058112452,
+  "external_source_overlay": false,
+  "scope": "Room adapter + exact hosted embedded JAT artifact; candidate-owned source symlinks only, no checkout source overlay; not VSIX UI"
+}

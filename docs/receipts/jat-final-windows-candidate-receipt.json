@@ -1,0 +1,75 @@
+{
+  "archive": {
+    "filename": "jat-filtered-candidate.rcca",
+    "sha256": "c9148b6404893f21373f600b152e28d74d5c1ebc391884682e859dd5fcbfdea8",
+    "size": 104094462
+  },
+  "artifact_digest": "sha256:dde47aaed6ed4a3c998e0c6b4f5e7061893a70ae47f1ce1f9d16b523e3064488",
+  "candidate_only": true,
+  "format_version": 1,
+  "jat_git_sha": "d084ade2adf2945b6aa1f04ddb9ad32ed53b43c2",
+  "legacy_blueprint_key": "2870039b6d4e9cba",
+  "platform": "windows_amd64",
+  "qualification": {
+    "capsule_sha256": "a619e9a0dd10f4b9074ff829864da2c807dca62e9cc243bd88802700b0ff2fbf",
+    "capsule_size": 2027,
+    "capture_policy": {
+      "capture_mode": "source-only",
+      "complete": true,
+      "excluded_count": 4,
+      "excluded_sample": [
+        ".git",
+        "build [literal]",
+        "generated",
+        "worktree"
+      ],
+      "exclusion_rules_count": 3,
+      "exclusion_rules_truncated": false,
+      "findings": [],
+      "included_count": 7,
+      "included_sample": [
+        ".",
+        ".env",
+        "database.db",
+        "main.py",
+        "package-lock.json",
+        "uploads",
+        "uploads/data.bin"
+      ],
+      "policy_sha256": "c9b6dc6a76368df5acbc79ed6a6bede4ca3a6b7b3f3b609ce119d0dd12dea991",
+      "summary_truncated": false,
+      "version": 1,
+      "warning": "Excluded files are not recoverable. Source-only capsules omit Git history and staging state; excluded worktree files are not backed up. JAT does not guarantee Git worktree relocation.",
+      "workspace_exclusions": [
+        "build [literal]",
+        "generated",
+        "worktree"
+      ]
+    },
+    "capture_policy_version": 1,
+    "embedded_source_verified": true,
+    "external_source_overlay": false,
+    "format_version": 1,
+    "jat_git_sha": "d084ade2adf2945b6aa1f04ddb9ad32ed53b43c2",
+    "original_source_unavailable": true,
+    "restored_files": {
+      ".env": "f612b89bcdbc401379f644d7e48572e3470f77dcd4c39416405d80952ad7089e",
+      "database.db": "3726be13b01617485eb349cafa83d1c5133640ab94462d5156db3d2ecf27fe9d",
+      "main.py": "ce89fcb30ede1fced34ed7e1b707954b5c04d9897eb542e6babced218c0bb683",
+      "package-lock.json": "d8c9f2728aa278ebcd33ccedf3ad309a866870ad5fb93a03526b4b7655c9e911",
+      "uploads/data.bin": "13692b220bd25271129f69d1fcbe278e219a14565763257d10a3bddbb58f3d55"
+    },
+    "retained_unsafe_link": "passed",
+    "source_unchanged": true,
+    "success": true
+  },
+  "rcc_source": {
+    "asset": "rcc-windows64.exe",
+    "commit": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+    "repository": "https://github.com/joshyorko/rcc",
+    "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+    "tag": "v18.19.7"
+  },
+  "specification_digest": "sha256:ccfe7654f0fe03cc46445859553f21f9dc0d90575fb9ca0ff141ae779fd6d9f2",
+  "success": true
+}

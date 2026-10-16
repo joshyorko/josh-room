@@ -1,0 +1,12 @@
+{
+  "source_sha": "995c3b6953ba5880e2a21db3ceb3bceec5d90fb3",
+  "source_tree": "5f0c9f67363e718c8d84537b6c5569313970872e",
+  "platform": "linux-x64",
+  "files": {
+    "josh-room-capture-candidate.vsix": "664d02f071ab632ac3f4e493608a85495120e32c3f9b8a31afd6b5197e09cfda",
+    "tests.xml": "f3eff16fd4b2844cb145d3f4108349c8a74aabbcfd63077e510535439d51f04f"
+  },
+  "scope": "native capture tests and review package; no release or installation",
+  "local_ui_candidate_sha256": "b64c17189ca8c577b9f1fa3720fadb25b602dca8c35337dc3b2630822c3638d2",
+  "uncompressed_payload_differences": []
+}

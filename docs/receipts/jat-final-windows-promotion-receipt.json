@@ -1,0 +1,55 @@
+{
+  "archive": {
+    "filename": "jat-filtered-candidate.rcca",
+    "sha256": "c9148b6404893f21373f600b152e28d74d5c1ebc391884682e859dd5fcbfdea8",
+    "size": 104094462
+  },
+  "artifact_digest": "sha256:dde47aaed6ed4a3c998e0c6b4f5e7061893a70ae47f1ce1f9d16b523e3064488",
+  "format_version": 3,
+  "hauler_version": "v2.1.1",
+  "jat_git_sha": "d084ade2adf2945b6aa1f04ddb9ad32ed53b43c2",
+  "legacy_blueprint_key": "2870039b6d4e9cba",
+  "operation": "build",
+  "platform": "windows_amd64",
+  "rcc_executable": "candidate-rcc.exe",
+  "rcc_source": {
+    "asset": "rcc-windows64.exe",
+    "commit": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+    "repository": "https://github.com/joshyorko/rcc",
+    "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+    "tag": "v18.19.7"
+  },
+  "rcc_version": "v18.19.7",
+  "specification_digest": "sha256:ccfe7654f0fe03cc46445859553f21f9dc0d90575fb9ca0ff141ae779fd6d9f2",
+  "success": true,
+  "verified_acquire": {
+    "fresh_home": true,
+    "no_build": true
+  },
+  "verified_exec": {
+    "fresh_home": true
+  },
+  "verified_hauler": {
+    "command": [
+      "hauler",
+      "version"
+    ],
+    "exit_code": 0,
+    "fresh_home": true,
+    "launcher": [
+      "python",
+      "-c",
+      "import os, shutil, subprocess, sys; executable = shutil.which('hauler'); prefix = os.environ.get('CONDA_PREFIX'); prefix_root = os.path.realpath(prefix) if prefix else ''; resolved = os.path.realpath(executable) if executable else ''; python_resolved = os.path.realpath(sys.executable); inside = bool(prefix_root and resolved.startswith(prefix_root + os.sep)); python_inside = bool(prefix_root and python_resolved.startswith(prefix_root + os.sep)); sys.exit(127 if not (inside and python_inside) else subprocess.run([resolved, 'version'], check=False).returncode)"
+    ],
+    "resolved_under_conda_prefix": true
+  },
+  "verified_no_build": {
+    "fresh_home": true,
+    "no_build": true
+  },
+  "verified_warm_reuse": {
+    "fresh_home": true,
+    "no_build": true,
+    "provider_unavailable": true
+  }
+}

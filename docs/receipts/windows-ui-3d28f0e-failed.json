@@ -1,0 +1,36 @@
+{
+  "gate": "packaged-windows-native-check-workspace",
+  "status": "failed",
+  "checks": [
+    "installed-candidate-payload-matches-source"
+  ],
+  "full_save_restore": "NOT RUN",
+  "screenshots": "NOT CREATED",
+  "source_sha": "3d28f0ec74a74971e45d4ecbd14eab4597bfb1c4",
+  "vsix_sha256": "d4688e96d7e271f46be29660b3d5fa8159b6f3366e4de43b0a0cc81839b6c98c",
+  "extension_version": "0.1.35",
+  "vscode_version": "1.142.0",
+  "vscode_executable_sha256": "5ca701a1facb91fec1ac6bbae11fc837821a1da34ddebb91a0bad7e87ab88144",
+  "renderer_ready": {
+    "ready_state": "complete",
+    "visibility": "visible",
+    "focused": true,
+    "workbench_present": true,
+    "editor_present": true,
+    "palette_present": false,
+    "palette_visible": false,
+    "active_element": "DIV"
+  },
+  "error": "Timed out: source-only native workspace check result",
+  "renderer_diagnostics": {
+    "ready_state": "complete",
+    "visibility": "visible",
+    "focused": true,
+    "workbench_present": true,
+    "editor_present": true,
+    "palette_present": true,
+    "palette_visible": false,
+    "active_element": "DIV"
+  },
+  "final_stage": "source-only-native-check"
+}
