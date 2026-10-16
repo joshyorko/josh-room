@@ -1,0 +1,15 @@
+{
+  "source_sha": "35341da6378a0af38cf869710f5c6a10913f06c3",
+  "status": "passed",
+  "environment": "Native Linux x64; Python3.13.11 from existing RCC18.19.7-acquired JAT artifact; manifest-pinned restic0.19.1; disposable local tempfile repository",
+  "command": "env PYTHONPATH=$FIX_REPO/src $RCC_ACQUIRED_PYTHON scripts/room_store_probe.py --restic $PINNED_RESTIC --evidence-file $EVIDENCE/restic64-native-linux.json",
+  "actual_probe_receipt": "restic64-native-linux.json",
+  "probe_receipt_sha256": "38f813a02beea15e0f5f60201352d682f4d396871ca6722e958e4c7e815b921e",
+  "unit_command": "docker run --rm -v /workspace:/workspace -w $FIX_REPO room-campaign-tests pytest tests/test_room_store_probe.py -q",
+  "unit_result": "15passed",
+  "not_claimed": [
+    "NativeWindows (separate hosted consumer gate pending at this checkpoint)",
+    "Live MinIO/R2",
+    "New full packaged UI execution"
+  ]
+}
