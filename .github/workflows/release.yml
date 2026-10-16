@@ -178,7 +178,10 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
           VERSION: ${{ steps.source.outputs.version }}
-        run: echo "Staged v$VERSION for exact main source $SOURCE_SHA as a workflow artifact. No Git tag, release, or template was published." >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "Staged v$VERSION for exact main source $SOURCE_SHA as a workflow artifact. No Git tag, release, or template was published." >> "$GITHUB_STEP_SUMMARY"
+          echo 'Staged release SHA256SUMS:' | tee -a "$GITHUB_STEP_SUMMARY"
+          cat dist/SHA256SUMS | tee -a "$GITHUB_STEP_SUMMARY"
 
   publish:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko' && inputs.owner_approval == 'APPROVE'

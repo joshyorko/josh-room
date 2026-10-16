@@ -22,7 +22,7 @@ Source files are read as regular, non-symlink files with bounded size and
 closure depth. The hash record contains relative source names and bytes only
 while computing the digest; no source paths or content enter the descriptor,
 logs, or component metadata. A source change during capture fails closed.
-The RCC version is pinned to `v18.19.6`; absence, version mismatch, incomplete
+The RCC version is pinned to `v18.19.7`; absence, version mismatch, incomplete
 native metadata, or an invalid export stops Save before publishing the logical
 JAT. RCC publish, export, and archive verification complete before upgrading
 the Room Store keyset or opening Restic. Failed RCC preparation therefore

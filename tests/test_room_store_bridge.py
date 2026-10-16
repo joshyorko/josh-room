@@ -413,7 +413,7 @@ def test_managed_robot_capture_reaches_local_room_store_and_failure_never_publis
     )
     assert saved["status"] == "saved"
     assert captured[0]["kind"] == "rcca" and captured[0]["archive_size"] > 0
-    assert captured[0]["rcc_version"] == "v18.19.6"
+    assert captured[0]["rcc_version"] == "v18.19.7"
     assert backend.catalog is not None and backend.objects
     before = copy.deepcopy((backend.catalog, backend.objects, backend.control))
     robot.write_text(robot.read_text() + "\n# changed synthetic capture input\n")
@@ -535,7 +535,7 @@ def test_rcc_preparation_failure_never_opens_restic_or_mutates_provider(
 
     def rcc(argv, **_kwargs):
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.6\n"
+            return b"RCC version: v18.19.7\n"
         if argv[2] == failed_command:
             raise room_store_components.RoomStoreComponentError(
                 "synthetic RCC preparation failed",
@@ -717,7 +717,7 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
         "legacy_blueprint_key": "synthetic-rcca-key",
         "archive_sha256": synthetic_archive_sha256,
         "archive_size": len(synthetic_archive),
-        "rcc_version": "v18.19.5",
+        "rcc_version": bridge.RCC_VERSION,
         "platform": "linux-x64",
         "robot_relative_path": "robot.yaml",
     }
@@ -762,7 +762,7 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
             "artifact_digest": "sha256:" + "1" * 64,
             "specification_digest": "sha256:" + "2" * 64,
             "platform": "linux-x64",
-            "rcc_version": "v18.19.5",
+            "rcc_version": bridge.RCC_VERSION,
             "robot_relative_path": "robot.yaml",
             "source_input_sha256": bridge.source_input_sha256(workspace),
         }

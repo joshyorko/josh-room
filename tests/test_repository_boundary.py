@@ -163,7 +163,9 @@ def test_vsix_owns_the_runtime_bootstrap_contract():
     assert "runtime/controller/**/__pycache__/**" in vscodeignore
     assert "runtime/controller/**/*.pyc" in vscodeignore
     assert runtime["extension_version"] == package["version"]
-    assert runtime["rcc"]["version"] == "v18.19.6"
+    from josh_room.room_store_components import RCC_VERSION
+
+    assert runtime["rcc"]["version"] == RCC_VERSION == "v18.19.7"
     assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
     assert runtime["jat"]["environment_artifact"]["digest"].startswith("sha256:")
     assert "ensureManagedRcc" in extension and "ensureJatRuntime" in extension
@@ -364,8 +366,8 @@ def test_candidate_runtime_tuple_and_published_release_are_consumed_by_both_entr
     assert artifact["rcc_artifact_digest"].startswith("sha256:")
     assert artifact["rcc_version"] == runtime["jat"]["rcc"]["version"]
     assert runtime["jat"]["rcc"] == lock["jat"]["rcc"]
-    assert lock["rcc"]["version"] == "v18.19.6"
-    assert lock["rcc"]["source_sha"] == "f35d6d52242b09cdf37a9f6fe9f0aaa0d85764e0"
+    assert lock["rcc"]["version"] == "v18.19.7"
+    assert lock["rcc"]["source_sha"] == "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
     assert lock["rcc"]["managed_asset"] == "rcc-linux64"
     assert len(lock["rcc"]["managed_asset_sha256"]) == 64
     for config_path in (
