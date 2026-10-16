@@ -34,6 +34,14 @@ new connections and Dimensions use the reusable connection model. Use an
 explicit `--dimension` for CLI operations when more than one destination is
 available.
 
+An active Cloudflare session does not freeze the local MinIO registry. New or
+updated MinIO connections and Dimensions are read from persisted configuration,
+including disconnects and removed records. Session-issued R2 settings and
+encryption recipients remain scoped to that session; reading the registry does
+not rewrite its credentials, identity or expiry. If a record changes provider
+under the same identifier during an active session, reconnect storage instead
+of mixing its old authorization with the new provider.
+
 The default `r2` backend remains unchanged and is the only backend that starts
 Cloudflare OAuth/session acquisition. Josh Room verifies SHA-256 and byte size
 itself; provider ETags are never treated as content integrity.
