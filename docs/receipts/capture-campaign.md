@@ -76,14 +76,25 @@ HOME, Node available, and the existing pinned restic 0.19.1 on PATH.
 - PASS: changed-file Ruff, `git diff --check`, targeted added-line secret/private
   path scan, and `python scripts/sync_controller_sources.py` (zero drift).
 
-Earlier environment failures are retained: missing child-process PYTHONPATH,
-missing writable HOME, host Node tests selecting Python without botocore, and
-container packaging without npm. Correctly configured focused checks and package
-checks passed. Broader runs hit baseline doctor/authority/storage failures (all
-reproduced on untouched base) before HOME was corrected. A subsequent broad run
-terminated without a pytest summary around 60%; it is incomplete, not a suite
-pass. The existing detached-process cancellation test separately fails on both
-base and candidate in this container. Full-suite green is not claimed.
+The hosted [CI test job](https://github.com/joshyorko/josh-room/actions/runs/38892717571/job/116945829752)
+passed for campaign head `7c20aef844bce1d7f6950b6078727d88dbef90e8`:
+`uv run pytest -q` reported **1901 passed, 28 skipped**; Node reported
+**287 passed, 2 skipped, 0 failed**; Ruff and `git diff --check` passed.
+The job checked out GitHub's synthetic PR merge
+`4d4f9100171b0bcf48aacbd66a0a79d1233db678`. Its tree
+`1ba2e7a59730cfa8ad897dd70873fd93fbd8bfef` equals the campaign head's tree,
+so this evidence verifies the same source contents.
+
+Earlier container failures remain distinct from that hosted result: missing
+child-process PYTHONPATH, missing writable HOME, host Node selecting Python
+without botocore, and packaging without npm. The recorded broad HOME-adjusted
+run ended normally at its five-failure limit: **1388 passed, 37 skipped,
+2 deselected, 5 failed**. Four failures were missing installed Room package
+metadata (`runtime-version-unavailable`); one was a Secret Service expectation
+that differs when `/.dockerenv` identifies a container. This was not an abrupt
+exit at 60%. The existing detached-process cancellation test also fails on both
+base and candidate in this container. These local failures do not establish
+regressions or replace the hosted full-suite evidence.
 
 ## Remaining acceptance and release gates
 
