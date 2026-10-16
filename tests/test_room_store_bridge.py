@@ -717,7 +717,7 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
         "legacy_blueprint_key": "synthetic-rcca-key",
         "archive_sha256": synthetic_archive_sha256,
         "archive_size": len(synthetic_archive),
-        "rcc_version": "v18.19.5",
+        "rcc_version": bridge.RCC_VERSION,
         "platform": "linux-x64",
         "robot_relative_path": "robot.yaml",
     }
@@ -762,7 +762,7 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
             "artifact_digest": "sha256:" + "1" * 64,
             "specification_digest": "sha256:" + "2" * 64,
             "platform": "linux-x64",
-            "rcc_version": "v18.19.5",
+            "rcc_version": bridge.RCC_VERSION,
             "robot_relative_path": "robot.yaml",
             "source_input_sha256": bridge.source_input_sha256(workspace),
         }
