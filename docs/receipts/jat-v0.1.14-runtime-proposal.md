@@ -1,6 +1,6 @@
 # Proposed v0.1.14-jat-runtime: exact merged-source candidate
 
-Proposal only; no tag, release, registry write or publication executed. Proposed source: fe43065a654d1649ba9ebe5a6f202eac612e4385 (merged JAT21), RCC v18.19.7, Hauler v2.1.1. Do not substitute earlier branch artifacts.
+Historical approved proposal. Publication completed; see [publication receipt](jat-v0.1.14-publication-receipt.json) and [immutable prerelease](https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.14-jat-runtime). Exact source: fe43065a654d1649ba9ebe5a6f202eac612e4385 (merged JAT21), RCC v18.19.7, Hauler v2.1.1. Do not substitute earlier branch artifacts.
 
 Candidate run https://github.com/joshyorko/josh-all-the-things/actions/runs/38934211098 passed Linux and Windows embedded restore and actual schema-v3 promotion gates. Standard push run38934211121 passed Linux/Windows; publishing jobs skipped. Both downloaded ZIP hashes/sizes and contained archive hashes/sizes, source identity, artifact/specification digests and schema-v3 receipts verified. Linux freshly reacquired and requalified without external source overlay, exit0.
 
@@ -15,7 +15,7 @@ Resolved-freeze packaging gate PASSED. Exact Linux acquired artifact generated a
 
 Windows freeze SHA256 a3e029f0417aa52ee76fd2dd7a75176ec1f6e0f2662bc6f709de6c8e08616d30,843bytes. Its proof used checksum-pinned RCC18.19.7 Windows binary d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be. The exact freeze bytes and recovery receipts accompany this proposal as jat-fe430-{linux,windows}-resolved-freeze.yaml and jat-fe430-{linux,windows}-freeze-receipt.json.
 
-Publication remains pending explicit supporting-runtime authorization; no technical freeze-recovery blocker remains. Assemble the native eight release assets using these recovered freezes, unchanged renamed archives and promotion receipts, actual approved-publication provenance and SHA256SUMS. Do not rebuild from the recovered freeze: it is supporting evidence for existing archive bytes, not a replacement artifact specification. Exact source/release tag/provenance and remote uploaded hashes must still be verified at approved staging. Final feature Room publication remains Josh's action.
+The user explicitly approved supporting-runtime publication, which is complete; no technical freeze-recovery blocker remained. The following assembly description records the approved proposal. Assemble the native eight release assets using these recovered freezes, unchanged renamed archives and promotion receipts, actual approved-publication provenance and SHA256SUMS. Do not rebuild from the recovered freeze: it is supporting evidence for existing archive bytes, not a replacement artifact specification. Exact source/release tag/provenance and remote uploaded hashes must still be verified at approved staging. Final feature Room publication remains Josh's action.
 
 
 ## Requested supporting publication scope

@@ -1,0 +1,74 @@
+{
+  "id": 415200660,
+  "html_url": "https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.14-jat-runtime",
+  "tag_name": "v0.1.14-jat-runtime",
+  "target_commitish": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+  "draft": false,
+  "prerelease": true,
+  "immutable": true,
+  "published_at": "2026-10-16T17:19:41Z",
+  "assets": [
+    {
+      "name": "environment_linux_amd64_freeze.yaml",
+      "size": 1112,
+      "digest": "sha256:9f261fa13e0c808afa4398f6f5f5db5da0f7e186e286230e02bb9e44fcdd82af",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/environment_linux_amd64_freeze.yaml"
+    },
+    {
+      "name": "environment_windows_amd64_freeze.yaml",
+      "size": 843,
+      "digest": "sha256:a3e029f0417aa52ee76fd2dd7a75176ec1f6e0f2662bc6f709de6c8e08616d30",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/environment_windows_amd64_freeze.yaml"
+    },
+    {
+      "name": "jat-runtime-linux-amd64.json",
+      "size": 2038,
+      "digest": "sha256:8789619a65b7f5da1753b2bef2175a88d40a602b1de6437a591603510eb51e90",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-linux-amd64.json"
+    },
+    {
+      "name": "jat-runtime-linux-amd64.rcca",
+      "size": 170877798,
+      "digest": "sha256:de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-linux-amd64.rcca"
+    },
+    {
+      "name": "jat-runtime-provenance.json",
+      "size": 1582,
+      "digest": "sha256:cceef528fe5e07bf85c2024972cbe4ae651a09e112d94dd3a6458312249e57dd",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-provenance.json"
+    },
+    {
+      "name": "jat-runtime-windows-amd64.json",
+      "size": 2105,
+      "digest": "sha256:898f809028835ba53bf8e66e649e90c337396ebe769ce20cac9f6d9a6f449d75",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-windows-amd64.json"
+    },
+    {
+      "name": "jat-runtime-windows-amd64.rcca",
+      "size": 104094478,
+      "digest": "sha256:8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-windows-amd64.rcca"
+    },
+    {
+      "name": "SHA256SUMS",
+      "size": 684,
+      "digest": "sha256:4944742673a86c72ec8c755034c90d014fb0a0ce5e8796011b371f9095aedfc6",
+      "browser_download_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/SHA256SUMS"
+    }
+  ],
+  "qualified_source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+  "candidate_run": 38934211098,
+  "carrier_publication_run": 38938335140,
+  "github_publication_run": 38938737552,
+  "carrier_driver_sha": "5427945dcb6721838367a68c3711ee0995838a9c",
+  "release_driver_sha": "c870dd1191e4b9a940eb8b77c1b1aa9d71a0eebb",
+  "archive_rebuild": false,
+  "authorization": "Explicit user approval: Approve JAT runtime publication",
+  "final_room_publication": "Josh only",
+  "retained_failures": [
+    "Local ORAS login: registry denied before any push. Dedicated native Actions publisher succeeded.",
+    "Local GitHub asset uploads: HTTP401 before any asset; reconciled known draft415200660, Actions completed same draft."
+  ],
+  "registry_readback": "Authenticated immutable manifest bytes and archive/receipt layer hashes verified by completion run; unauthenticated fetch required authentication."
+}

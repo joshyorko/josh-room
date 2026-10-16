@@ -50,6 +50,7 @@
     "jat-runtime-provenance.json with actual approved OCI carriers",
     "SHA256SUMS"
   ],
-  "authorization": "PENDING explicit supporting-runtime publication approval; feature merges approved separately",
-  "final_room_publication": "Josh only"
+  "authorization": "APPROVED by user: Approve JAT runtime publication",
+  "final_room_publication": "Josh only",
+  "completion_receipt": "jat-v0.1.14-publication-receipt.json"
 }
