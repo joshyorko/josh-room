@@ -1,5 +1,67 @@
 # Rustic production integration readiness
 
+## Qualification after 0.1.36
+
+The isolated `qualify/rustic-after-0.1.36-20261016` branch reapplies PR #108
+onto inspected main `19723c71d64f81bd664cf34491d13014c213773d`. PR #108 was
+still `ce4bca3c4e491fea7247df9572a32966d26f740c` before this work. Neither
+main nor PR #108 is rewritten. This is qualification for a subsequent release;
+0.1.36 versions, release locks and staged artifacts are not changed.
+
+Restic 0.19.1 remains the default. Rustic 0.11.4 is explicit opt-in only.
+The installer now applies and verifies private native permissions to newly
+created runtime directories, version-probe profiles, executables and digest
+markers. Existing public directories/files fail closed. On POSIX the executable
+is owner-only executable, mode 0700; secret/profile/marker files are 0600.
+Windows uses the existing protected owner/SYSTEM ACL contract.
+
+Rustic destructive `forget` and `prune` now fail before spawning with
+`maintenance-unsafe`, including when confirmed. Dry-run plans remain available.
+Rustic does not honor Restic locks. A local mutex or a lock-list preflight
+cannot establish that remote writers stopped. No concurrent destructive
+maintenance across engines is supported. To use Restic maintenance, first stop
+all Rustic and Restic writers on every host and keep them stopped through the
+operation. This operator procedure is not distributed coordination, and is not
+a qualification of mixed concurrent maintenance.
+
+Scoped custom CA files remain rejected on Windows before any child starts.
+The official pinned Windows executable uses native trust. This branch does not
+import certificates into host trust, bypass TLS, rebuild upstream binaries or
+claim Windows custom-CA parity.
+
+Reproduction commands:
+
+```sh
+uv sync --group dev
+uv run python -m josh_room --help
+uv run pytest -q tests/test_rustic_store.py tests/test_rustic_runtime.py
+# Supply explicitly verified binaries. These touch disposable synthetic data.
+PYTHONPATH=src:. uv run python scripts/rustic_production_benchmark.py \
+  --restic /path/to/restic --rustic /path/to/rustic --output benchmark.json
+```
+
+The benchmark calls production `RoomStoreOperations`, `ResticStore` and
+`RusticStore`. It uses synthetic in-memory catalog/keyset callbacks and actual
+encrypted local repositories. It records first/repeat metadata scans, cold/warm
+authenticated inventory, warm tree blobs, initial/no-op/changed Save, full-data
+checks, snapshot inventory and staged restore with complete file-byte comparison.
+The default fixture has 100,000 1-KiB files in 250 directories; 1,000 same-size
+files change with their mtimes restored. Cold means empty application caches;
+OS page caches are not evicted. This is not live-provider performance evidence.
+
+`.github/workflows/rustic-qualification.yml` runs native Linux/Windows tests
+and installed managed RCC/JAT/age consumers on the isolated branch. The managed
+consumer first preserves the default Restic checks, then separately runs Rustic
+Git-fidelity Save/Enter and actual portable JAT export/clean-room restore with
+`JOSH_ROOM_QUALIFY_RUSTIC=1`. Results must be read from the exact workflow SHA;
+adding the workflow is not evidence that its checks passed. These workflows have
+read-only repository permission and no release/publication job.
+
+Fresh results and remaining blockers are recorded below as runs finish.
+The old observations in the following section are historical, not rerun proof.
+
+## Original PR evidence, October 6
+
 Draft release-candidate input on `experiment/rustic-production`, based on main
 `eaa53f9934854b874ec822709c7d32120109371a` (v0.1.27). This is not release-ready.
 No merge, tag, release, infrastructure change, or benchmark-checkout modification

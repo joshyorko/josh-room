@@ -1,0 +1,76 @@
+name: Rustic isolated qualification
+
+on:
+  push:
+    branches: [qualify/rustic-after-0.1.36-20261016]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: windows-latest
+            platform: win32-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv sync --group dev
+      - name: Install exact manifest-pinned engines in disposable runtime
+        shell: python
+        env:
+          QUALIFICATION_PLATFORM: ${{ matrix.platform }}
+        run: |
+          import os, pathlib, subprocess
+          runtime = pathlib.Path(os.environ['RUNNER_TEMP']) / 'rustic-qualification-runtime'
+          env = dict(os.environ, PYTHONPATH='src')
+          for engine in ('restic', 'rustic'):
+              subprocess.run(['uv', 'run', 'python', f'scripts/install_{engine}.py', '--manifest', f'vscode-extension/runtime/{engine}-manifest.json', '--destination', str(runtime), '--platform', os.environ['QUALIFICATION_PLATFORM']], env=env, check=True)
+          native = os.environ['QUALIFICATION_PLATFORM']
+          suffix = '.exe' if native == 'win32-x64' else ''
+          with open(os.environ['GITHUB_ENV'], 'a') as target:
+              target.write(f'JOSH_ROOM_RUSTIC_QUALIFICATION_RUNTIME={runtime}\n')
+              for engine, version in [('restic','0.19.1'), ('rustic','0.11.4')]:
+                  target.write(f'JOSH_ROOM_{engine.upper()}_TEST_BINARY={runtime / engine / version / native / (engine + suffix)}\n')
+      - name: Exercise native installer, ACLs, cancellation and real engine Save/restore
+        run: uv run pytest -q tests/test_rustic_live.py tests/test_rustic_native.py --junitxml=dist/rustic-native.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rustic-native-${{ matrix.platform }}-${{ github.sha }}
+          path: dist/rustic-native.xml
+
+  managed:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Qualify managed RCC/JAT/age plus Rustic portable export
+        env:
+          JOSH_ROOM_QUALIFY_RUSTIC: '1'
+        run: node scripts/managed_runtime_acceptance.js
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rustic-managed-${{ matrix.os }}-${{ github.sha }}
+          path: dist/managed-runtime-evidence
+          if-no-files-found: ignore

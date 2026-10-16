@@ -84,6 +84,7 @@ class ResticStoreErrorCode(StrEnum):
     TIMED_OUT = "timed-out"
     PROGRESS_CALLBACK_FAILED = "progress-callback-failed"
     CONFIRMATION_REQUIRED = "confirmation-required"
+    MAINTENANCE_UNSAFE = "maintenance-unsafe"
 
 
 _ERROR_MESSAGES = {
@@ -103,6 +104,7 @@ _ERROR_MESSAGES = {
     ResticStoreErrorCode.TIMED_OUT: "restic operation timed out",
     ResticStoreErrorCode.PROGRESS_CALLBACK_FAILED: "restic progress handler failed",
     ResticStoreErrorCode.CONFIRMATION_REQUIRED: "explicit maintenance confirmation is required",
+    ResticStoreErrorCode.MAINTENANCE_UNSAFE: "destructive maintenance requires repository-wide writer coordination",
 }
 
 

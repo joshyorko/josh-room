@@ -84,7 +84,11 @@ def contents(root: Path) -> dict:
             for path in root.rglob("*") if path.is_file()}
 
 
-def operations(root: Path, workspace: Path):
+def operations(root: Path, workspace: Path, *, engine: str = "restic", executable: str | None = None):
+    from josh_room.restic_store import ResticStore
+    from josh_room.rustic_store import RusticStore
+
+    adapter = {"restic": ResticStore, "rustic": RusticStore}[engine]
     state = {"latest": None, "signature": None}
     secret = SimpleNamespace(secret=base64.urlsafe_b64encode(b"s" * 32).decode().rstrip("="),
                              generation=1, repository_id=None)
@@ -104,12 +108,13 @@ def operations(root: Path, workspace: Path):
     result = RoomStoreOperations(
         workspace=workspace, repository=root / "encrypted-restic", cache_dir=root / "cache",
         password_dir=root / "private", dimension=object(), backend=object(),
+        store_factory=lambda **kwargs: adapter(**kwargs, executable=executable or engine),
         ensure_keyset=lambda *_args: keyset, bind_repository=bind,
         read_latest=lambda: (state["latest"], None), read_catalog_signature=lambda: state["signature"],
         publish_descriptor=publish, write_marker=lambda *_args, **_kwargs: None,
         descriptor_metadata={"dimension_id": "synthetic", "encryption_domain_id": "synthetic",
             "room_id": "synthetic", "components": dict.fromkeys(("rcc_environment", "homebrew_recovery", "hauler_content")),
-            "source": {}, "producer": {"josh_room_version": "0.1.31", "restic_version": "0.19.1",
+            "source": {}, "producer": {"josh_room_version": "0.1.36", "restic_version": "rustic-0.11.4" if engine == "rustic" else "0.19.1",
             "source_platform": "linux-x64" if os.name != "nt" else "win32-x64",
             "restore_platforms": ["linux-x64", "win32-x64"]}},
         secure_private_file=secure_private_file, validate_private_directory=validate_private_directory,
@@ -117,7 +122,7 @@ def operations(root: Path, workspace: Path):
     return result
 
 
-def exercise(root: Path, jat_root: Path | None = None) -> dict:
+def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None) -> dict:
     workspace = root / "workspace"
     repos = [Path("services/one"), Path("services/deep/two"), Path("library")]
     for relative in repos:
@@ -137,7 +142,7 @@ def exercise(root: Path, jat_root: Path | None = None) -> dict:
     (workspace / ".josh-roomignore").write_text("**/.git\n**/.git/objects\n")
     expected = {str(relative): identity(workspace / relative) for relative in repos}
     before = contents(workspace)
-    op = operations(root, workspace)
+    op = operations(root, workspace, engine=engine, executable=executable)
     first = op.save()
     started = time.monotonic()
     noop = op.save()
@@ -200,7 +205,7 @@ def exercise(root: Path, jat_root: Path | None = None) -> dict:
             portable = "passed"
         finally:
             password_file.unlink(missing_ok=True)
-    return {"git_repositories": len(repos), "save_enter": "passed", "git_metadata_incremental": "passed",
+    return {"engine": engine, "git_repositories": len(repos), "save_enter": "passed", "git_metadata_incremental": "passed",
             "noop": "already-saved", "noop_added_bytes": 0, "noop_seconds": noop_seconds,
             "git_metadata_added_bytes": second.data_added_bytes, "initial_added_bytes": first.data_added_bytes,
             "parent_reuse": "passed" if os.name != "nt" else "existing-windows-forced-content-scan",
@@ -211,6 +216,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jat-root", type=Path, required=True)
     parser.add_argument("--result-file", type=Path, required=True)
+    parser.add_argument("--engine", choices=("restic", "rustic"), default="restic")
+    parser.add_argument("--executable", type=Path)
     args = parser.parse_args()
     # Git's internal GIT_DIR bound is distinct from core.longpaths. RCC's
     # deeply nested Windows temp root is not a representative restore target.
@@ -221,7 +228,7 @@ def main() -> None:
         if not temporary_parent:
             temporary_parent = str(Path(os.environ["LOCALAPPDATA"]) / "Temp")
     with tempfile.TemporaryDirectory(prefix="jr-git-", dir=temporary_parent) as name:
-        result = exercise(Path(name), args.jat_root)
+        result = exercise(Path(name), args.jat_root, engine=args.engine, executable=str(args.executable) if args.executable else None)
     args.result_file.write_text(json.dumps(result, sort_keys=True) + "\n")
     print(json.dumps(result, sort_keys=True))
 

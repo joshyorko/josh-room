@@ -16,7 +16,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -38,6 +38,8 @@ from .restic_store import (
     MAX_SNAPSHOT_INVENTORY,
     BackupProgress,
     BackupSummary,
+    ForgetPlan,
+    MaintenanceResult,
     RepositoryInfo,
     ResticStore,
     ResticStoreError,
@@ -685,6 +687,22 @@ class RusticStore(ResticStore):
         if target.exists() or target.is_symlink() or not parent.is_dir():
             raise RusticStoreError("invalid-configuration")
         self._capture(["restore", snapshot_id, str(parent / target.name)])
+
+    def forget(
+        self, snapshot_ids: Iterable[str], *, plan: ForgetPlan, confirmed: bool = False
+    ) -> MaintenanceResult:
+        self._require_initialized()
+        if confirmed is True:
+            # Rustic ignores Restic locks. Confirmation cannot establish that
+            # remote or external writers have stopped, so never admit deletion.
+            raise RusticStoreError("maintenance-unsafe")
+        return super().forget(snapshot_ids, plan=plan, confirmed=confirmed)
+
+    def prune(self, dry_run: bool = True, *, confirmed: bool = False) -> MaintenanceResult:
+        self._require_initialized()
+        if dry_run is False and confirmed is True:
+            raise RusticStoreError("maintenance-unsafe")
+        return super().prune(dry_run=dry_run, confirmed=confirmed)
 
 
 def parse_tree_node(node: Any, prefix: str) -> tuple[SnapshotEntry, str | None]:

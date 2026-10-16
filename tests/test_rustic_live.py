@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from josh_room.private_paths import protect_private_directory, protect_private_file
 from josh_room.restic_store import ResticStore, ResticStoreError
 from josh_room.rustic_store import RusticStore
 
@@ -24,6 +25,7 @@ def authorities(tmp_path):
     password = tmp_path / "password"
     password.write_text("synthetic-live-contract-password")
     password.chmod(0o600)
+    protect_private_file(password)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "subdir").mkdir()
@@ -63,13 +65,12 @@ def lifecycle(store, workspace, tmp_path):
         (workspace / "subdir/file.txt").write_text("after!\n")
         changed = opened.backup(workspace, parent=seed.snapshot_id)
         assert changed.snapshot_id
-        assert (
-            opened.snapshot(changed.snapshot_id).parent_snapshot_id == seed.snapshot_id
-        )
+        expected_parent = None if os.name == "nt" else seed.snapshot_id
+        assert opened.snapshot(changed.snapshot_id).parent_snapshot_id == expected_parent
         noop = opened.backup(workspace, parent=changed.snapshot_id)
         if os.name != "nt":
             assert noop.snapshot_id is None
-        assert len(opened.snapshots()) == 2
+        assert len(opened.snapshots()) == (3 if os.name == "nt" else 2)
         opened.check()
         opened.check(read_data=True)
         opened.check(read_data_subset="1/2")
@@ -79,14 +80,16 @@ def lifecycle(store, workspace, tmp_path):
         plan = opened.plan_forget([seed.snapshot_id])
         with pytest.raises(ResticStoreError):
             opened.forget([seed.snapshot_id], plan=plan)
-        opened.forget([seed.snapshot_id], plan=plan, confirmed=True)
-        assert [item.snapshot_id for item in opened.snapshots()] == [
-            changed.snapshot_id
-        ]
+        with pytest.raises(ResticStoreError) as error:
+            opened.forget([seed.snapshot_id], plan=plan, confirmed=True)
+        assert error.value.code.value == "maintenance-unsafe"
+        assert seed.snapshot_id in {item.snapshot_id for item in opened.snapshots()}
         opened.prune()
         with pytest.raises(ResticStoreError):
             opened.prune(dry_run=False)
-        opened.prune(dry_run=False, confirmed=True)
+        with pytest.raises(ResticStoreError) as error:
+            opened.prune(dry_run=False, confirmed=True)
+        assert error.value.code.value == "maintenance-unsafe"
         opened.check(read_data=True)
         return opened.repository_info.repository_id, changed.snapshot_id
 
@@ -134,8 +137,8 @@ def test_restic_rustic_repository_round_trip(binary, authorities, tmp_path):
         **{**kwargs, "cache_dir": tmp_path / "restic-cache"}, executable=restic
     ) as store:
         assert store.open_existing().repository_id == identity
-        assert (
-            store.snapshot(changed.snapshot_id).parent_snapshot_id == seed.snapshot_id
+        assert store.snapshot(changed.snapshot_id).parent_snapshot_id == (
+            None if os.name == "nt" else seed.snapshot_id
         )
         store.check(read_data=True)
         store.restore(changed.snapshot_id, tmp_path / "restic-restore")
@@ -198,8 +201,10 @@ def test_room_store_operations_real_save_noop_restore(binary, tmp_path):
 
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
+    protect_private_directory(private)
     cache = tmp_path / "cache"
     cache.mkdir(mode=0o700)
+    protect_private_directory(cache)
 
     def factory(**kwargs):
         return _restic_store_factory(
@@ -245,13 +250,16 @@ def test_room_store_operations_real_save_noop_restore(binary, tmp_path):
         )
         assert operations.save().status == "saved"
         seed = state["latest"]
-        assert operations.save().status == "already-saved"
-        (workspace / "file.txt").write_text("after!\n")
+        assert operations.save().status == ("saved" if os.name == "nt" else "already-saved")
+        seed = state["latest"]
+        source = workspace / "file.txt"
+        before = source.stat()
+        source.write_text("after!\n")
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
         assert operations.save().status == "saved"
         changed = state["latest"]
-        assert (
-            changed.to_dict()["workspace"]["parent_snapshot_id"]
-            == seed.to_dict()["workspace"]["snapshot_id"]
+        assert changed.to_dict()["workspace"].get("parent_snapshot_id") == (
+            None if os.name == "nt" else seed.to_dict()["workspace"]["snapshot_id"]
         )
         result = operations.restore(
             changed, tmp_path / "restored", write_restore_marker=lambda *_: None

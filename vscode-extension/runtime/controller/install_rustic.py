@@ -23,6 +23,12 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
+from josh_room.private_paths import (
+    PrivatePathError,
+    protect_private_directory,
+    protect_private_file,
+    verify_private_path,
+)
 from josh_room.tls import system_ssl_context
 
 VERSION = "0.11.4"
@@ -39,26 +45,34 @@ class InstallError(RuntimeError):
         self.diagnostic = diagnostic
 
 
-def _regular_file(path: Path) -> bool:
+def _regular_file(path: Path, *, executable: bool = False) -> bool:
     try:
         info = path.lstat()
     except FileNotFoundError:
         return False
     if not stat.S_ISREG(info.st_mode):
         raise InstallError("managed rustic destination is not a regular file")
+    try:
+        if executable and os.name != "nt":
+            if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                raise PrivatePathError("private executable permissions are unsafe")
+        else:
+            verify_private_path(path, directory=False)
+    except PrivatePathError:
+        raise InstallError("managed rustic file is not private") from None
     return True
 
 
 def _ensure_runtime_directory(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
-        info = path.lstat()
-    except OSError as exc:
-        raise InstallError(
-            "managed rustic runtime directory could not be inspected"
-        ) from exc
-    if not stat.S_ISDIR(info.st_mode):
-        raise InstallError("managed rustic runtime directory is not a real directory")
+        try:
+            path.mkdir(parents=True, mode=0o700)
+        except FileExistsError:
+            verify_private_path(path, directory=True)
+        else:
+            protect_private_directory(path)
+    except (OSError, PrivatePathError):
+        raise InstallError("managed rustic runtime directory is not private") from None
 
 
 def _manifest_pin(manifest_path: Path, platform: str) -> tuple[dict, dict]:
@@ -241,8 +255,10 @@ def _extract_archive(archive: Path, destination: Path, platform: str) -> None:
 def _verify_version(binary: Path) -> None:
     try:
         with tempfile.TemporaryDirectory(prefix=".rustic-version-") as name:
+            protect_private_directory(Path(name))
             profile = Path(name) / "profile.toml"
             profile.write_text("[global]\n", encoding="utf-8")
+            protect_private_file(profile)
             environment = {
                 key: os.environ[key]
                 for key in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR")
@@ -306,7 +322,7 @@ def install_rustic(
     _ensure_runtime_directory(version_root)
     executable = version_root / pin["binary"]
     digest_marker = version_root / (pin["binary"] + ".sha256")
-    if _regular_file(executable):
+    if _regular_file(executable, executable=platform == "linux-x64"):
         if not _regular_file(digest_marker):
             raise InstallError("managed rustic cache is missing its verified digest")
         try:
@@ -334,12 +350,14 @@ def install_rustic(
         prefix=".rustic-install-", dir=version_root
     ) as temporary_name:
         temporary_directory = Path(temporary_name)
+        protect_private_directory(temporary_directory)
         archive = temporary_directory / pin["asset"]
         extracted = temporary_directory / pin["binary"]
         download(pin["url"], archive, pin["size"])
         if _sha256_file(archive) != pin["sha256"]:
             raise InstallError("official rustic release archive checksum mismatch")
         _extract_archive(archive, extracted, platform)
+        protect_private_file(extracted)
         if platform == "linux-x64":
             extracted.chmod(0o700)
         check_version(extracted)
@@ -349,8 +367,7 @@ def install_rustic(
             marker_file.write((binary_digest + "\n").encode("ascii"))
             marker_file.flush()
             os.fsync(marker_file.fileno())
-        if os.name != "nt":
-            marker_temporary.chmod(0o600)
+        protect_private_file(marker_temporary)
         os.replace(marker_temporary, digest_marker)
         os.replace(extracted, executable)
         _fsync_directory(version_root, platform)

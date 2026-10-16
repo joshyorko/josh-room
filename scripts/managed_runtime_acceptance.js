@@ -512,6 +512,26 @@ async function main() {
       await fsp.copyFile(roomStoreResultFile, path.join(evidenceDir, "windows-room-store-acceptance.json"));
     }
 
+    let rusticQualification = { status: "not-requested" };
+    if (process.env.JOSH_ROOM_QUALIFY_RUSTIC === "1") {
+      const installed = JSON.parse(runManagedTool([
+        "python", path.join(controllerRoot, "install_rustic.py"),
+        "--manifest", path.join(extension, "runtime", "rustic-manifest.json"),
+        "--destination", paths.runtimeRoot, "--platform", platform,
+      ], "rustic-install").trim());
+      const resultFile = path.join(evidenceDir, "rustic-managed-git-recovery.json");
+      runManagedTool([
+        "python", path.join(repository, "scripts", "git_recovery_acceptance.py"),
+        "--jat-root", jat.jatRoot, "--result-file", resultFile,
+        "--engine", "rustic", "--executable", installed.executable,
+      ], "rustic-managed-git-recovery");
+      rusticQualification = JSON.parse(await fsp.readFile(resultFile, "utf8"));
+      if (rusticQualification.engine !== "rustic" || rusticQualification.save_enter !== "passed"
+        || rusticQualification.portable_jat !== "passed") {
+        throw new Error("managed Rustic Save/Enter/portable JAT acceptance failed");
+      }
+    }
+
     const beforeWarm = events.length;
     const unavailableProvider = async () => { throw new Error("provider must not be contacted after acquisition"); };
     await runtime.ensureControllerRuntime(context, manifest, rcc, { ...options, download: unavailableProvider });
@@ -573,6 +593,7 @@ async function main() {
       private_runtime: privateRuntime,
       git_recovery: gitRecovery,
       windows_room_store_acceptance: windowsRoomStoreAcceptance,
+      rustic_qualification: rusticQualification,
       restic: { version: resticInstallation.version, platform, ...(await fileIdentity(runtime, resticInstallation.executable)), metrics: resticPhase0.metrics },
       controller: {
         release_tag: lock.controller.release_tag,

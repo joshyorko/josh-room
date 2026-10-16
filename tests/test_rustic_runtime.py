@@ -193,3 +193,35 @@ def test_version_probe_never_inherits_host_profile_or_authority(tmp_path, monkey
 
     monkeypatch.setattr(installer.subprocess, "run", run)
     installer._verify_version(tmp_path / "rustic")
+
+
+def test_installer_rejects_existing_public_runtime(tmp_path):
+    import os
+
+    if os.name != "posix":
+        pytest.skip("POSIX mode fixture; native Windows checks inspect actual ACLs")
+    runtime = tmp_path / "public-runtime"
+    runtime.mkdir(mode=0o755)
+    runtime.chmod(0o755)
+    archive = archive_bytes()
+    with pytest.raises(installer.InstallError, match="private"):
+        installer.install_rustic(
+            manifest_fixture(tmp_path, archive), runtime, "linux-x64",
+            download=download_fixture(archive), verify_version=lambda _: None,
+        )
+
+
+def test_installer_protects_and_verifies_actual_runtime_paths(tmp_path):
+    from josh_room.private_paths import verify_private_path
+
+    archive = archive_bytes()
+    runtime = tmp_path / "runtime"
+    result = installer.install_rustic(
+        manifest_fixture(tmp_path, archive), runtime, "linux-x64",
+        download=download_fixture(archive), verify_version=lambda _: None,
+    )
+    binary = Path(result["executable"])
+    for directory in (runtime, runtime / "rustic", runtime / "rustic/0.11.4", binary.parent):
+        verify_private_path(directory, directory=True)
+    installer._regular_file(binary, executable=True)
+    verify_private_path(binary.with_name(binary.name + ".sha256"), directory=False)

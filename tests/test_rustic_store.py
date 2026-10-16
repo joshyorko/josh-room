@@ -386,3 +386,17 @@ def test_missing_repository_may_initialize_but_auth_failure_never_does(authority
     ):
         store.initialize()
     assert not any("init" in argv for argv in calls)
+
+
+@pytest.mark.parametrize("operation", ["forget", "prune"])
+def test_rustic_destructive_maintenance_is_blocked_before_spawn(authority, operation):
+    from josh_room.restic_store import ForgetPlan
+
+    with RusticStore(**authority, process_factory=lambda *_a, **_k: pytest.fail("spawned destructive maintenance")) as store:
+        store._repository_info = RepositoryInfo("e" * 64, 2)
+        with pytest.raises(ResticStoreError) as error:
+            if operation == "forget":
+                store.forget([PARENT], plan=ForgetPlan("e" * 64, (PARENT,), (TREE,)), confirmed=True)
+            else:
+                store.prune(dry_run=False, confirmed=True)
+        assert error.value.code.value == "maintenance-unsafe"
