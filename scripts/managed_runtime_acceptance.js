@@ -239,6 +239,31 @@ async function main() {
       { inheritStreams: false, resultFile: path.join(paths.logsRoot, `managed-controller-${name}-result.json`) },
     );
     const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
+    const qualifyRustic = async () => {
+      const privateRuntime = path.join(root, "rustic-private-runtime");
+      runManagedTool([
+        "python", "-c",
+        "import sys; from pathlib import Path; from josh_room.private_paths import protect_private_directory; root=Path(sys.argv[1]); root.mkdir(mode=0o700); protect_private_directory(root)",
+        privateRuntime,
+      ], "rustic-private-root");
+      const installed = JSON.parse(runManagedTool([
+        "python", path.join(controllerRoot, "install_rustic.py"),
+        "--manifest", path.join(extension, "runtime", "rustic-manifest.json"),
+        "--destination", privateRuntime, "--platform", platform,
+      ], "rustic-install").trim());
+      const resultFile = path.join(evidenceDir, "rustic-managed-git-recovery.json");
+      runManagedTool([
+        "python", path.join(repository, "scripts", "git_recovery_acceptance.py"),
+        "--jat-root", jat.jatRoot, "--result-file", resultFile,
+        "--engine", "rustic", "--executable", installed.executable,
+      ], "rustic-managed-git-recovery");
+      const checks = JSON.parse(await fsp.readFile(resultFile, "utf8"));
+      if (checks.engine !== "rustic" || checks.save_enter !== "passed"
+        || checks.portable_jat !== "passed" || checks.age_catalog_two_recipients !== "passed") {
+        throw new Error("managed Rustic Save/Enter/age/portable JAT acceptance failed");
+      }
+      return { ...checks, version: installed.version, binary: await fileIdentity(runtime, installed.executable) };
+    };
     const runManagedJatServe = async (haul, name) => {
       const port = await reservePort();
       const jatEnvironment = {
@@ -301,6 +326,24 @@ async function main() {
     ], "private-runtime").trim());
     if (privateRuntime.status !== "passed") {
       throw new Error("managed private runtime protection did not pass");
+    }
+    if (process.env.JOSH_ROOM_QUALIFY_RUSTIC_ONLY === "1") {
+      const checks = await qualifyRustic();
+      const evidence = {
+        result: "rustic-managed-consumer-pass",
+        scope: "installed Rustic Save/restore, two-recipient age catalogs and portable JAT; default Restic gates are separate",
+        platform,
+        source_sha: childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
+        vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },
+        rcc: { version: rcc.version, ...(await fileIdentity(runtime, rcc.executable)) },
+        controller: { artifact: controller.artifact, expected: controllerPin.digest },
+        jat: { source_sha: jat.sourceSha, artifact: jat.artifact, expected: jatPin.digest },
+        private_runtime: privateRuntime,
+        rustic_qualification: checks,
+      };
+      await fsp.writeFile(path.join(evidenceDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
+      console.log(JSON.stringify(evidence, null, 2));
+      return;
     }
     const resticInstallation = JSON.parse(runManagedTool([
       "python", path.join(controllerRoot, "install_restic.py"),
@@ -514,23 +557,7 @@ async function main() {
 
     let rusticQualification = { status: "not-requested" };
     if (process.env.JOSH_ROOM_QUALIFY_RUSTIC === "1") {
-      const installed = JSON.parse(runManagedTool([
-        "python", path.join(controllerRoot, "install_rustic.py"),
-        "--manifest", path.join(extension, "runtime", "rustic-manifest.json"),
-        "--destination", paths.runtimeRoot, "--platform", platform,
-      ], "rustic-install").trim());
-      const resultFile = path.join(evidenceDir, "rustic-managed-git-recovery.json");
-      runManagedTool([
-        "python", path.join(repository, "scripts", "git_recovery_acceptance.py"),
-        "--jat-root", jat.jatRoot, "--result-file", resultFile,
-        "--engine", "rustic", "--executable", installed.executable,
-      ], "rustic-managed-git-recovery");
-      rusticQualification = JSON.parse(await fsp.readFile(resultFile, "utf8"));
-      if (rusticQualification.engine !== "rustic" || rusticQualification.save_enter !== "passed"
-        || rusticQualification.portable_jat !== "passed"
-        || rusticQualification.age_catalog_two_recipients !== "passed") {
-        throw new Error("managed Rustic Save/Enter/portable JAT acceptance failed");
-      }
+      rusticQualification = await qualifyRustic();
     }
 
     const beforeWarm = events.length;

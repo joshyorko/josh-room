@@ -72,6 +72,7 @@ jobs:
       - name: Qualify managed RCC/JAT/age plus Rustic portable export
         env:
           JOSH_ROOM_QUALIFY_RUSTIC: '1'
+          JOSH_ROOM_QUALIFY_RUSTIC_ONLY: '1'
         run: node scripts/managed_runtime_acceptance.js
       - uses: actions/upload-artifact@v7
         if: always()
