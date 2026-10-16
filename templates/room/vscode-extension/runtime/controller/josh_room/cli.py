@@ -157,6 +157,14 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     workspace = commands.add_parser("workspace", help="inspect or repair workspace metadata")
     workspace_commands = workspace.add_subparsers(dest="workspace_command", required=True)
+    for action in ("init", "exclude"):
+        operation = workspace_commands.add_parser(action)
+        operation.add_argument("--workspace", type=Path, required=True)
+        if action == "exclude":
+            operation.add_argument("--rule", action="append", default=[])
+            operation.add_argument("--expected-token", required=True)
+            operation.add_argument("--source-only", action="store_true")
+        _json_option(operation)
     worktree = workspace_commands.add_parser("worktree-repair", help="propose or apply stale Git worktree record cleanup")
     worktree.add_argument("--workspace", type=Path, required=True)
     worktree.add_argument("--approve", action="store_true", help="apply the exact dry-run proposal")
@@ -1486,6 +1494,12 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "workspace":
+        if args.workspace_command == "init":
+            from .workspace_init import initialize_workspace
+            return initialize_workspace(args.workspace)
+        if args.workspace_command == "exclude":
+            from .workspace_init import append_exclusions
+            return append_exclusions(args.workspace, args.rule, expected_token=args.expected_token, source_only=args.source_only)
         if args.workspace_command != "worktree-repair":
             raise ValueError("unsupported workspace operation")
         from .git_worktree_repair import (
@@ -1943,28 +1957,8 @@ def dispatch(args, instance: Path) -> dict:
             return {"format_version": 1, **result, "context": context_status(args.workspace)}
         return result
     if args.command == "workspace-check":
-        from .room_store_operations import (
-            WorkspaceValidationError,
-            scan_workspace_for_status,
-        )
-        try:
-            scan = scan_workspace_for_status(args.workspace)
-        except WorkspaceValidationError as error:
-            diagnostic = str(error)
-            remediation = (
-                "Inspect linked worktrees with `git worktree prune --dry-run --verbose`; repair Git storage manually before saving."
-                if "linked worktrees" in diagnostic
-                else "Fix the reported workspace validation issue and run the check again."
-            )
-            return {"ok": False, "error": diagnostic, "code": "workspace-invalid", "remediation": remediation}
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return {
-                "ok": False,
-                "error": "Workspace could not be checked safely.",
-                "code": "workspace-invalid",
-                "remediation": "Check that the workspace is accessible and run the check again.",
-            }
-        return {"ok": True, "scope": "local-workspace-validation", "workspace_signature": scan.signature, "signature_algorithm": scan.signature_algorithm, "capture_policy_sha256": scan.capture_policy_sha256, "entry_count": len(scan.paths), "logical_bytes": scan.logical_bytes}
+        from .workspace_report import workspace_report
+        return workspace_report(args.workspace)
     if args.command in {"link", "repair"}:
         from .workspace_state import read_workspace_marker
         marker = None

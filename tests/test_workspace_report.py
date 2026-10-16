@@ -134,3 +134,19 @@ def test_relative_link_escapes_and_cycles_never_stat_external_paths(
         "cycle-b",
     }
     assert all(row["code"] == "unsafe-symlink" for row in result["findings"])
+
+
+def test_git_relative_pointer_never_inspects_external_target(tmp_path, monkeypatch):
+    from josh_room.git_workspace import GitWorkspaceError, _pointer
+
+    root = tmp_path / 'source'
+    root.mkdir()
+    (root / 'linked').symlink_to('../external')
+    original = Path.lstat
+    def confined(path, *args, **kwargs):
+        assert path != tmp_path / 'external'
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'lstat', confined)
+    for value in ('../external', 'linked/config'):
+        with pytest.raises(GitWorkspaceError):
+            _pointer(root, root, value, frozenset({'linked', 'linked/config'}))

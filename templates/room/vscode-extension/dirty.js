@@ -111,6 +111,14 @@ function compileCapturePolicy(defaults = readDefaultCapturePolicy(), { ignoreTex
     activeRuntimeRelative = activeParts.join("/");
   } else activeRuntimeRelative = null;
 
+  const directives = (ignoreText || "").split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => line.startsWith("# josh-room capture-mode:"));
+  let captureMode = "full-repository";
+  if (directives.length) {
+    if (directives.length !== 1) throw new Error("workspace capture mode must be specified exactly once");
+    captureMode = directives[0].split(":").slice(1).join(":").trim();
+    if (!["full-repository", "source-only"].includes(captureMode)) throw new Error("unsupported workspace capture mode");
+  }
   const digest = crypto.createHash("sha256");
   digest.update(defaultsRaw, "utf8");
   digest.update(ignoreText === undefined || ignoreText === null ? "\0ignore-absent\0" : "\0ignore-present\0", "utf8");
@@ -125,7 +133,7 @@ function compileCapturePolicy(defaults = readDefaultCapturePolicy(), { ignoreTex
     const parts = normalized.split("/");
     if (parts.some((part) => !part || part === "." || part === "..")) return false;
     const gitIndex = parts.indexOf(".git");
-    if (gitIndex !== -1) return gitIndex > 0 && isExcluded(parts.slice(0, gitIndex).join("/"));
+    if (gitIndex !== -1) return captureMode === "source-only" || gitIndex > 0 && isExcluded(parts.slice(0, gitIndex).join("/"));
     if (activeRuntimeRelative) {
       const runtime = activeRuntimeRelative.split("/");
       if (runtime.every((part, index) => parts[index] === part)) return true;
@@ -143,10 +151,11 @@ function compileCapturePolicy(defaults = readDefaultCapturePolicy(), { ignoreTex
         if (base) result.push(base);
       } else result.push(`${rendered}/**`);
     }
+    if (captureMode === "source-only") result.push("**/.git", "**/.git/**");
     if (activeRuntimeRelative) result.push(activeRuntimeRelative, `${activeRuntimeRelative}/**`);
     return [...new Set(result)];
   };
-  return Object.freeze({ sha256, patterns: Object.freeze(patterns), activeRuntimeRelative, isExcluded, resticExcludes });
+  return Object.freeze({ sha256, captureMode, patterns: Object.freeze(patterns), activeRuntimeRelative, isExcluded, resticExcludes });
 }
 
 function loadCapturePolicy(workspaceRoot, { activeRuntimeRoot } = {}) {
@@ -428,6 +437,7 @@ async function* sortedDirectoryNames(directory) {
 
 async function fingerprintWorkspace(root, policy = DEFAULT_CAPTURE_POLICY) {
   const digest = crypto.createHash("sha256");
+  if (policy.captureMode === "source-only") digest.update(`source-only\0${policy.sha256}\0`);
   await traverseWorkspace(root, async (relative, absolute) => {
     const fingerprint = await fingerprintFile(absolute);
     digest.update(relative);

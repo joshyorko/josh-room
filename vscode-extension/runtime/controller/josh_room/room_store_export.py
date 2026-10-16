@@ -631,9 +631,10 @@ def export_portable_jat(
                 workspace_rows = list(restic.entries(snapshot_id))
                 _validate_snapshot_entries(workspace_rows)
                 restic.restore(snapshot_id, workspace_stage)
+                _scan_workspace(workspace_stage, None, capture_mode=body.get("capture_mode", "full-repository"))
                 policy = load_capture_policy(workspace_stage)
                 scan = _scan_workspace(workspace_stage, policy)
-                validate_git_storage(workspace_stage, scan.paths, portable_export=True)
+                validate_git_storage(workspace_stage, scan.paths, portable_export=True, capture_mode=body.get("capture_mode", "full-repository"))
                 _separate_staged_hardlinks(workspace_stage, scan.paths)
                 _semantic_workspace(workspace_stage, policy)
             except CLICancelled:
@@ -659,6 +660,8 @@ def export_portable_jat(
                 descriptor, restic, staging / "components", cancellation
             )
             build_kwargs: dict[str, Any] = {}
+            if body.get("capture_mode", "full-repository") == "source-only":
+                build_kwargs["capture_policy"] = policy
             if materialized.rcc_archive is not None:
                 if materialized.jat_rcc_metadata is None:
                     raise PortableExportError(
@@ -762,6 +765,7 @@ def export_portable_jat(
             try:
                 if workspace_container.is_symlink() or set(workspace_container.iterdir()) != {restored_workspace}:
                     raise PortableExportError("JAT clean-room workspace root identity does not match")
+                _scan_workspace(restored_workspace, None, capture_mode=body.get("capture_mode", "full-repository"))
                 restored_policy = load_capture_policy(restored_workspace)
                 _scan_workspace(restored_workspace, restored_policy)
                 actual_workspace = _semantic_workspace(

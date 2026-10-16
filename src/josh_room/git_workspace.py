@@ -58,7 +58,21 @@ def _pointer(root: Path, base: Path, value: str, paths: set[str] | frozenset[str
             or any(char in value for char in "\x00\r\n")):
         raise GitWorkspaceError(_POINTER_ERROR)
     try:
-        target = (base / value).resolve(strict=True)
+        parts = list(base.relative_to(root).parts)
+        for component in value.split("/"):
+            if component in {"", "."}:
+                continue
+            if component == "..":
+                if not parts:
+                    raise ValueError
+                parts.pop()
+                continue
+            parts.append(component)
+            # Git storage may not depend on linked metadata. Check each
+            # component before advancing; never resolve an external target.
+            if stat.S_ISLNK(root.joinpath(*parts).lstat().st_mode):
+                raise ValueError
+        target = root.joinpath(*parts)
         relative = target.relative_to(root).as_posix()
         if relative != "." and relative not in paths:
             raise ValueError
