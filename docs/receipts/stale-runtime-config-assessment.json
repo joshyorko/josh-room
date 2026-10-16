@@ -1,0 +1,52 @@
+{
+  "assessment": "unresolved-stale-runtime-config",
+  "boundaries": {
+    "credentials_present": false,
+    "keyring_calls": false,
+    "network_calls": false,
+    "production_source_modified": false,
+    "provider_operations": false,
+    "temporary_fixture_removed": true,
+    "user_configuration_accessed": false
+  },
+  "execution": {
+    "command": "python3 <EVIDENCE>/reproduce_stale_runtime_config.py",
+    "dependencies_installed": false,
+    "environment": "existing task Python; repository source imported directly; temporary synthetic configuration only",
+    "interpreter": {
+      "implementation": "CPython",
+      "version": "3.12.14"
+    },
+    "working_directory": "<REVIEWED_CHECKOUT>"
+  },
+  "format_version": 1,
+  "result": {
+    "expected": {
+      "persisted_connection_present": true,
+      "runtime_lookup_missing": true,
+      "session_snapshot_unchanged": true
+    },
+    "observed": {
+      "persisted_connection_present": true,
+      "runtime_lookup_missing": true,
+      "session_snapshot_unchanged": true
+    },
+    "status": "REPRODUCED_CONFIGURATION_LAYER"
+  },
+  "scope": {
+    "fix_status": "UNRESOLVED_NO_REPAIR_ATTEMPTED",
+    "full_r2_then_minio_ui_sequence": "NOT_REPRODUCED",
+    "later_missing_rooms": "NOT_REPRODUCED",
+    "reported_immediate_bucket_error_causality": "HIGH_CONFIDENCE_SOURCE_LEAD_NOT_FULL_UI_PROOF"
+  },
+  "source_git_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+  "source_references": {
+    "bucket_lookup_missing_error": "src/josh_room/cli.py:1903",
+    "connection_creation": "src/josh_room/cli.py:1873",
+    "persisted_write": "src/josh_room/config.py:383",
+    "runtime_snapshot_selection": "src/josh_room/auth.py:475",
+    "session_snapshot_copy": "src/josh_room/auth.py:639",
+    "session_snapshot_write": "src/josh_room/auth.py:695",
+    "snapshot_read_precedence": "src/josh_room/config.py:367"
+  }
+}
