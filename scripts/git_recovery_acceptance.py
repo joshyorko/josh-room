@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from josh_room import jat
 from josh_room.private_paths import (
     protect_private_directory,
+    protect_private_file,
     secure_private_file,
     validate_private_directory,
 )
@@ -122,6 +123,37 @@ def operations(root: Path, workspace: Path, *, engine: str = "restic", executabl
     return result
 
 
+def _enable_age_catalog(op: RoomStoreOperations, root: Path) -> None:
+    """Exercise actual managed age at the synthetic catalog boundary."""
+    from josh_room import crypto
+    from josh_room.logical_jat import LogicalJat
+
+    identities = [root / "private" / (name + ".agekey") for name in ("operational", "recovery")]
+    for identity in identities:
+        crypto.generate_identity(identity)
+        protect_private_file(identity)
+    recipients = [crypto.derive_recipient(identity) for identity in identities]
+    encrypted = root / "private" / "catalog.age"
+    publish = op.publish_descriptor
+
+    def publish_encrypted(descriptor, **kwargs):
+        raw = descriptor.to_json().encode()
+        crypto.encrypt(raw, recipients, encrypted)
+        protect_private_file(encrypted)
+        for identity in identities:
+            assert crypto.decrypt(encrypted, [identity]) == raw
+        publish(descriptor, **kwargs)
+
+    def read_encrypted():
+        if not encrypted.exists():
+            return None, None
+        descriptor = LogicalJat.from_json(crypto.decrypt(encrypted, [identities[0]]))
+        return descriptor, None
+
+    op.publish_descriptor = publish_encrypted
+    op.read_latest = read_encrypted
+
+
 def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None) -> dict:
     workspace = root / "workspace"
     repos = [Path("services/one"), Path("services/deep/two"), Path("library")]
@@ -143,6 +175,9 @@ def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic"
     expected = {str(relative): identity(workspace / relative) for relative in repos}
     before = contents(workspace)
     op = operations(root, workspace, engine=engine, executable=executable)
+    age_catalog = jat_root is not None and engine == "rustic"
+    if age_catalog:
+        _enable_age_catalog(op, root)
     first = op.save()
     started = time.monotonic()
     noop = op.save()
@@ -205,7 +240,8 @@ def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic"
             portable = "passed"
         finally:
             password_file.unlink(missing_ok=True)
-    return {"engine": engine, "git_repositories": len(repos), "save_enter": "passed", "git_metadata_incremental": "passed",
+    return {"engine": engine, "age_catalog_two_recipients": "passed" if age_catalog else "not-run",
+            "git_repositories": len(repos), "save_enter": "passed", "git_metadata_incremental": "passed",
             "noop": "already-saved", "noop_added_bytes": 0, "noop_seconds": noop_seconds,
             "git_metadata_added_bytes": second.data_added_bytes, "initial_added_bytes": first.data_added_bytes,
             "parent_reuse": "passed" if os.name != "nt" else "existing-windows-forced-content-scan",

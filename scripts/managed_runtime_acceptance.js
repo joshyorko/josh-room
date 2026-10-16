@@ -527,7 +527,8 @@ async function main() {
       ], "rustic-managed-git-recovery");
       rusticQualification = JSON.parse(await fsp.readFile(resultFile, "utf8"));
       if (rusticQualification.engine !== "rustic" || rusticQualification.save_enter !== "passed"
-        || rusticQualification.portable_jat !== "passed") {
+        || rusticQualification.portable_jat !== "passed"
+        || rusticQualification.age_catalog_two_recipients !== "passed") {
         throw new Error("managed Rustic Save/Enter/portable JAT acceptance failed");
       }
     }
