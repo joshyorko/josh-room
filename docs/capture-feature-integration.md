@@ -3,8 +3,9 @@
 Room PR #147 and JAT PR #21 are a subsequent feature delivery. They must not be
 added to the staged Room 0.1.35 maintenance release or its existing draft.
 The maintenance owner controls that draft and the main release workflow.
-This document prepares review and qualification; it does not authorize merging
-or publishing either feature PR.
+Josh has authorized qualified feature integration and preparation of the next
+release. Final Room publication remains with Josh. Supporting JAT runtime
+publication requires its exact new version/source/artifact proposal first.
 
 ## Review boundary
 
@@ -20,9 +21,9 @@ silently treated as supporting filtered capture.
 
 ## Safe order
 
-1. Let the maintenance owner finish the isolated 0.1.35 release. Keep its draft,
-   assets, tags and release workflow under that owner's control. Reconcile any
-   merged main changes into the feature branch before final qualification.
+1. Preserve published maintenance release 0.1.35 at
+   `e773963106829668c9bca8bf94c045c99f8267f1`, including its assets, tags and
+   template. Reconcile subsequent main changes before final qualification.
 2. Review JAT PR #21 and Room PR #147 at their named heads. Check focused/full tests,
    platform receipts, actual packaged UI evidence and remaining limitations.
 3. After explicit merge authorization, integrate JAT's filtered capability.
@@ -36,7 +37,7 @@ silently treated as supporting filtered capture.
    line. Adopt the exact qualified JAT artifact/source pair in one reviewed
    follow-up. Native Room saves can integrate independently, but do not claim
    filtered export acceptance until this adoption is verified.
-6. Prepare a new Room feature candidate (recommended next patch: 0.1.36) with its
+6. Prepare the new Room 0.1.36 feature candidate and template 0.1.6 with their
    version, lock, manifests, canonical controller and template mirrors consistent.
    Rebuild and run candidate/readiness checks against that exact final source.
    Repeat packaged Save/relocated restore and exact filtered-export acceptance.
