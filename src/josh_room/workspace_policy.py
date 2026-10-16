@@ -179,6 +179,7 @@ class CapturePolicy:
     sha256: str
     patterns: tuple[tuple[str, ...], ...]
     active_runtime_relative: str | None
+    capture_mode: str = "full-repository"
 
     def is_excluded(self, relative_path: str | Path) -> bool:
         parts = _normalized_relative(relative_path)
@@ -187,6 +188,8 @@ class CapturePolicy:
         # Git storage is indivisible. A branch named venv, for example, is
         # history, not a generated environment. Ancestor exclusions still apply.
         if ".git" in parts:
+            if self.capture_mode == "source-only":
+                return True
             index = parts.index(".git")
             return bool(index and self.is_excluded("/".join(parts[:index])))
         if self.active_runtime_relative:
@@ -222,6 +225,8 @@ class CapturePolicy:
             for pattern in self.patterns
             for rendered in _restic_patterns(pattern)
         ]
+        if self.capture_mode == "source-only":
+            values.extend(("**/.git", "**/.git/**"))
         if self.active_runtime_relative:
             values.extend(
                 (self.active_runtime_relative, f"{self.active_runtime_relative}/**")
@@ -259,6 +264,15 @@ def load_capture_policy(
         raise ValueError("workspace must be a directory")
     defaults_raw, defaults = _read_defaults()
     ignore_raw = _read_ignore(root)
+    capture_mode = "full-repository"
+    directives = [line.strip() for line in (ignore_raw or b"").decode("utf-8").splitlines()
+                  if line.strip().startswith("# josh-room capture-mode:")]
+    if directives:
+        if len(directives) != 1:
+            raise ValueError("workspace capture mode must be specified exactly once")
+        capture_mode = directives[0].split(":", 1)[1].strip()
+        if capture_mode not in {"full-repository", "source-only"}:
+            raise ValueError("unsupported workspace capture mode")
     patterns = tuple(
         _parts(item, rule="workspace capture default") for item in defaults["exclude"]
     )
@@ -291,4 +305,4 @@ def load_capture_policy(
         digest.update(ignore_raw)
     digest.update(b"\0active-runtime\0")
     digest.update((runtime_relative or "").encode("utf-8"))
-    return CapturePolicy(digest.hexdigest(), patterns, runtime_relative)
+    return CapturePolicy(digest.hexdigest(), patterns, runtime_relative, capture_mode)

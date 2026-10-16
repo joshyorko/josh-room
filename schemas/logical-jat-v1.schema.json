@@ -29,6 +29,7 @@
     "created_at": { "type": "string", "format": "date-time", "maxLength": 40 },
     "parent_logical_jat_id": { "$ref": "#/$defs/opaque_id" },
     "origin_room_id": { "$ref": "#/$defs/opaque_id" },
+    "capture_mode": { "enum": ["full-repository", "source-only"] },
     "capture_policy_sha256": { "$ref": "#/$defs/sha256" },
     "workspace": { "$ref": "#/$defs/workspace" },
     "components": { "$ref": "#/$defs/components" },
