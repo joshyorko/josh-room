@@ -118,6 +118,34 @@ def test_real_policy_excludes_are_exclusions(binary, authorities, tmp_path):
         assert not any(path.startswith("private") for path in paths)
 
 
+def test_real_readonly_file_restore_preserves_mode(binary, authorities, tmp_path):
+    import stat
+
+    kwargs, workspace = authorities
+    source = workspace / "readonly.bin"
+    source.write_bytes(b"synthetic read-only Git-object-like payload")
+    source.chmod(0o444)
+    try:
+        with RusticStore(**kwargs, executable=binary) as store:
+            store.initialize()
+            summary = store.backup(workspace)
+            row = next(row for row in store.entries(summary.snapshot_id) if row.path == "readonly.bin")
+            destination = tmp_path / "readonly-restored"
+            store.restore(summary.snapshot_id, destination)
+            restored = destination / "readonly.bin"
+            assert restored.read_bytes() == source.read_bytes()
+            expected = stat.S_IMODE(source.stat().st_mode)
+            observed = stat.S_IMODE(restored.stat().st_mode)
+            assert observed == expected, {
+                "source_mode": oct(expected), "snapshot_mode": row.mode,
+                "restored_mode": oct(observed), "native_windows": os.name == "nt",
+            }
+    finally:
+        source.chmod(0o600)
+        if (tmp_path / "readonly-restored/readonly.bin").exists():
+            (tmp_path / "readonly-restored/readonly.bin").chmod(0o600)
+
+
 @pytest.mark.parametrize("capture_mode", ["full-repository", "source-only"])
 def test_real_current_resolved_policy_preserves_git_history(binary, authorities, tmp_path, capture_mode):
     from josh_room.workspace_policy import load_capture_policy
