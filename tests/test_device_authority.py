@@ -9,6 +9,7 @@ from josh_room.keyring import BackendStatus
 
 
 def test_backend_allowlist_and_session_diagnostics(monkeypatch):
+    monkeypatch.setattr(keyring, "_container_kind", lambda _environ: None)
     class Result:
         returncode = 1
         stdout = ""
@@ -26,6 +27,24 @@ def test_backend_allowlist_and_session_diagnostics(monkeypatch):
     missing = keyring.backend_status(platform_name="linux", environ={}, runner=lambda *_args, **_kwargs: Result())
     assert missing.available is False
     assert missing.reason == "session-bus-missing"
+
+
+@pytest.mark.parametrize(("code", "stderr", "available"), [
+    (1, "", True),
+    (1, "permission denied", False),
+    (1, "cannot connect to DBus", False),
+    (1, "unknown failure", False),
+    (2, "", False),
+])
+def test_linux_empty_lookup_is_reachable_without_hiding_errors(monkeypatch, code, stderr, available):
+    monkeypatch.setattr(keyring, "_trusted_helper", lambda _name: True)
+    result = SimpleNamespace(returncode=code, stdout="", stderr=stderr)
+    status = keyring.backend_status(
+        platform_name="linux",
+        environ={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/synthetic-session"},
+        runner=lambda *_args, **_kwargs: result,
+    )
+    assert status.available is available
 
 
 def test_require_secure_backend_returns_available_status(monkeypatch):

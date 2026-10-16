@@ -26,6 +26,7 @@ _TOP_LEVEL = {
     "parent_logical_jat_id",
     "origin_room_id",
     "capture_policy_sha256",
+    "capture_mode",
     "workspace",
     "components",
     "source",
@@ -202,9 +203,11 @@ def _validate(body: object) -> dict[str, Any]:
     descriptor = _object(
         body,
         "descriptor",
-        _TOP_LEVEL - {"parent_logical_jat_id", "origin_room_id"},
-        {"parent_logical_jat_id", "origin_room_id"},
+        _TOP_LEVEL - {"parent_logical_jat_id", "origin_room_id", "capture_mode"},
+        {"parent_logical_jat_id", "origin_room_id", "capture_mode"},
     )
+    if descriptor.get("capture_mode", "full-repository") not in {"full-repository", "source-only"}:
+        raise ValueError("unsupported workspace capture mode")
     _integer(descriptor["format_version"], "format version", minimum=1, maximum=1)
     if descriptor["payload_kind"] != "room-store-v1":
         raise ValueError("unsupported logical JAT payload kind")

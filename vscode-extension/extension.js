@@ -730,7 +730,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
   return {
     command: state.rcc.executable,
     args: localFallback
-      ? (args) => ["run", "--silent", "-r", path.join(state.controllerRoot, "robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"]
+      ? (args) => ["run", "--silent", "--interactive", "-r", path.join(state.controllerRoot, "robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"]
       : (args, receiptFile) => [
         "--no-build", "env", "exec", "--artifact", state.controller.artifact,
         "--permissive-local", "--receipt-file", receiptFile, "--inherit-streams", "--json",
@@ -1105,7 +1105,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   try {
     runtime = await runtimeFor(cwd, args, progressReporter, cancellationToken);
     if (cancellationToken?.isCancellationRequested) throw cancellationError();
-    environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
+    environment = managedRuntime.mergeRuntimeEnvironment(process.env, { ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath });
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
       authFree: args[0] === "status",
@@ -1901,10 +1901,98 @@ function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   });
 }
 
+async function editWorkspaceExclusions(source) {
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(source, ".josh-roomignore")));
+  await vscode.window.showTextDocument(document);
+  const action = await vscode.window.showInformationMessage(
+    "Edit exclusions, then save the file and choose Continue. Excluded files stay local but are not backed up.",
+    "Continue",
+  );
+  if (action !== "Continue" || document.isDirty) return false;
+  trustedSaveReceipt = undefined;
+  return true;
+}
+
+async function initializeRoomExclusions(source) {
+  const initialized = await runOperation("Initializing Room exclusions…", ["workspace", "init", "--workspace", source], source,
+    { action: "initialize Room exclusions" });
+  trustedSaveReceipt = undefined;
+  const action = await vscode.window.showInformationMessage(
+    "Room exclusions are in .josh-roomignore. Excluded files stay local but are not included in future snapshots.",
+    "Continue", "Edit exclusions", ...(initialized.capture_mode !== "source-only" ? ["Use source-only"] : []), "Cancel",
+  );
+  if (action === "Use source-only") {
+    const approved = await vscode.window.showWarningMessage(
+      "Use source-only capture? Git history and staging state will not be backed up. Excluded worktree files are also omitted. Original repositories remain untouched.",
+      { modal: true }, "Use source-only",
+    );
+    if (approved !== "Use source-only") return false;
+    await runOperation("Selecting source-only capture…", ["workspace", "exclude", "--workspace", source,
+      "--expected-token", initialized.policy_edit_sha256, "--source-only"], source, { action: "select source-only capture" });
+    return true;
+  }
+  if (action === "Edit exclusions") return editWorkspaceExclusions(source);
+  return action === "Continue";
+}
+
+function displayWorkspaceReport(result) {
+  outputChannel?.appendLine(`Workspace scan: ${result.ok ? "valid" : "blocked"}; coverage ${result.complete === false ? "incomplete" : "complete"}`);
+  for (const finding of result.findings || []) {
+    outputChannel?.appendLine(`${finding.code}: ${(finding.paths || []).join(", ")} — ${sanitizeControllerText(finding.message)}`);
+  }
+  if (result.stop_reason) outputChannel?.appendLine(`Scan stopped: ${result.stop_reason}`);
+}
+
+async function reviewWorkspaceBeforeSave(source) {
+  for (;;) {
+    const result = await runOperation("Scanning selected workspace…", ["workspace-check", "--workspace", source], source,
+      { action: "scan selected workspace" });
+    displayWorkspaceReport(result);
+    if (result.ok && result.complete !== false) return true;
+    const candidates = [...new Set((result.findings || []).map((row) => row.exclusion_candidate).filter(Boolean))].sort();
+    const hasGit = (result.findings || []).some((row) => row.code === "git-storage");
+    const action = await vscode.window.showWarningMessage(
+      hasGit
+        ? "Linked worktrees or Git storage dependencies block capture. Excluded worktree files stay local but are not backed up. Excluding a checkout alone may leave main-repository administrative records."
+        : "Workspace validation found blockers or incomplete coverage. Review the report and exclusions before saving.",
+      "Open report", "Edit exclusions", ...(candidates.length ? ["Review exclusions"] : []),
+      ...(hasGit && result.capture_mode !== "source-only" ? ["Use source-only"] : []), "Cancel",
+    );
+    if (!action || action === "Cancel") return false;
+    if (action === "Open report") { outputChannel?.show(true); continue; }
+    if (action === "Edit exclusions") {
+      await runOperation("Initializing Room exclusions…", ["workspace", "init", "--workspace", source], source,
+        { action: "initialize Room exclusions" });
+      if (!await editWorkspaceExclusions(source)) return false;
+      continue;
+    }
+    let rules = [];
+    const sourceOnly = action === "Use source-only";
+    if (!sourceOnly) {
+      const picked = await vscode.window.showQuickPick(candidates.map((relative) => ({
+        label: relative, description: "Unsupported linked checkout; files will not be backed up", picked: false,
+      })), { title: "Review exact worktree exclusions", canPickMany: true, ignoreFocusOut: true });
+      if (!picked?.length) return false;
+      rules = picked.map((item) => item.label);
+    }
+    const consequence = sourceOnly
+      ? "Use source-only capture? Git history and staging state will not be backed up. Existing exclusions and excluded worktree files remain omitted. Original repositories stay untouched."
+      : `Append these exact exclusions?\n${rules.map((rule) => `${rule}/**`).join("\n")}\nTheir local files remain untouched but will not be backed up. Git administrative dependencies may still block capture.`;
+    const approved = await vscode.window.showWarningMessage(consequence, { modal: true }, "Apply and rescan");
+    if (approved !== "Apply and rescan") return false;
+    const args = ["workspace", "exclude", "--workspace", source, "--expected-token", result.policy_edit_sha256];
+    for (const rule of rules) args.push("--rule", rule);
+    if (sourceOnly) args.push("--source-only");
+    await runOperation("Applying approved exclusions…", args, source, { action: "apply reviewed exclusions" });
+    trustedSaveReceipt = undefined;
+  }
+}
+
 async function checkWorkspace() {
   assertWorkspaceTrusted("check the workspace");
   const workspace = activeWorkspace();
   const result = await runOperation("Checking workspace…", ["workspace-check", "--workspace", workspace], workspace, { action: "check the workspace" });
+  displayWorkspaceReport(result);
   const detail = result.ok ? `Workspace valid · ${result.entry_count} entries` : `${result.code || "workspace-invalid"}: ${result.error || "workspace validation failed"}`;
   const remediation = result.ok ? "" : sanitizeControllerText(result.remediation || "");
   const message = [sanitizeControllerText(detail), remediation].filter(Boolean).join(". ");
@@ -1931,7 +2019,7 @@ async function saveRoom(options = {}) {
     { label: "Workspace + all tagged local OCI images", allImages: true },
   ];
   let imageChoice;
-  const cachedReceipt = trustedLocalSaveReceipt(source, cwd);
+  const cachedReceipt = options.forceCreate ? undefined : trustedLocalSaveReceipt(source, cwd);
   if (cachedReceipt) {
     imageChoice = await vscode.window.showQuickPick(imageChoices, {
       title: "Include local OCI images?",
@@ -2014,6 +2102,8 @@ async function saveRoom(options = {}) {
       if (confirmed !== "Replace Latest") return "cancelled";
     }
   }
+  if (selected.create && !await initializeRoomExclusions(source)) return "cancelled";
+  if (!await reviewWorkspaceBeforeSave(source)) return "cancelled";
   const targetProvider = nativeRegistry.providerKey(
     targetDimension?.provider || selected.project?.provider || selected.project?.dimension?.provider,
   );
@@ -2068,25 +2158,12 @@ async function saveRoom(options = {}) {
       ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
       targetDimensionId || selectedDimensionId,
     );
-    try {
-      preview = await runSelectedEncryption(
-        previewArgs,
-        source,
-        targetDimension || { id: targetDimensionId, provider: targetProvider },
-        { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
-      );
-    } catch (error) {
-      if (error?.result?.error !== "stale-worktree-repair-available"
-        || !(await approveStaleWorktreeRepair(error.result, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, encryptionMaterial))) {
-        throw error;
-      }
-      preview = await runSelectedEncryption(
-        previewArgs,
-        source,
-        targetDimension || { id: targetDimensionId, provider: targetProvider },
-        { title: "Re-checking workspace…", action: "retry a Room Store Save preview", encryptionMaterial },
-      );
-    }
+    preview = await runSelectedEncryption(
+      previewArgs,
+      source,
+      targetDimension || { id: targetDimensionId, provider: targetProvider },
+      { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
+    );
     assertValidRoomStorePreview(preview);
     deletionConfirmationToken = await approveRoomStorePreview(preview);
     if (deletionConfirmationToken === undefined) return "cancelled";
@@ -3151,6 +3228,8 @@ module.exports.__test__ = {
   checkWorkspace,
   resetNativeBaseline,
   saveRoom,
+  initializeRoomExclusions,
+  reviewWorkspaceBeforeSave,
   getRoomStatusForTests: () => roomStatus,
   setSelectedDimensionId(value) {
     selectedDimensionId = value;
@@ -3511,7 +3590,7 @@ async function connectEncryption(item, options = {}) {
       if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), prepared.value);
       selectedDimensionId = dimensionIdValue;
       roomsProvider && await roomsProvider.reload();
-      await vscode.window.showInformationMessage("MinIO encryption is ready. Cloudflare R2 was not connected.");
+      void vscode.window.showInformationMessage("MinIO encryption is ready.");
       return "initialized";
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
@@ -3904,11 +3983,14 @@ async function addStorage() {
   const reuseChoice = existingConnections.length > 0
     ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
       label: connection.display_name || connection.name || connection.id,
+      description: connection.id || connection.connection_id,
+      detail: connection.endpoint,
       connection,
     })).concat([{ label: "$(add) New MinIO Connection…", create: true }]), {
       title: "Josh: Choose a MinIO Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
     })
     : undefined;
+  if (existingConnections.length > 0 && !reuseChoice) return "cancelled";
   if (reuseChoice && !reuseChoice.create) {
     const connection = reuseChoice.connection || reuseChoice;
     endpoint = connection.endpoint;
@@ -4778,6 +4860,7 @@ function activateNative(context) {
     if (workspaceBaseline) markWorkspaceChange(document.uri);
   }));
   register(context, "joshRoom.save", saveRoom);
+  register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.addStorage", addStorage);
   register(context, "joshRoom.connectCloudflare", connectCloudflare);

@@ -47,3 +47,16 @@ josh-room enter my-room --dimension archive --snapshot latest --ide vscode
 ```
 
 The Room Store adapter currently supports MinIO Dimensions. R2, local storage, and explicit portable JAT creation keep their existing paths.
+
+## Connecting storage
+
+MinIO connection selection shows the connection ID and endpoint so connections
+with the same display name can be distinguished. Cancelling this selection does
+not start credential entry. Selecting an already configured bucket is safe to
+repeat: an identical Dimension definition is reused without rewriting config;
+a different definition under the same ID is rejected instead of overwritten.
+
+An empty Secret Service lookup is normal before the first credential is stored.
+The native helper's silent no-match exit is recognized as reachable; locked,
+disconnected and other error results remain unavailable. Credentials still use
+the native secure store, never a plaintext fallback.

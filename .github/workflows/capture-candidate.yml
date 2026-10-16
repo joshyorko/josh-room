@@ -1,0 +1,61 @@
+name: Capture campaign candidate
+
+on:
+  push:
+    branches: [feature/capture-campaign]
+
+permissions:
+  contents: read
+
+jobs:
+  capture-policy:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: windows-latest
+            platform: win32-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: uv sync --group dev
+      - name: Install manifest-pinned restic into disposable candidate directory
+        env:
+          CANDIDATE_PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          uv run python scripts/install_restic.py --manifest vscode-extension/runtime/restic-manifest.json --destination "$RUNNER_TEMP/capture-restic" --platform "$CANDIDATE_PLATFORM" > "$RUNNER_TEMP/capture-restic.json"
+          uv run python -c 'import json,os,pathlib; receipt=json.load(open(pathlib.Path(os.environ["RUNNER_TEMP"])/"capture-restic.json")); open(os.environ["GITHUB_PATH"],"a").write(str(pathlib.Path(receipt["executable"]).parent)+"\n")'
+      - name: Qualify native source-only capture and policy compatibility
+        run: uv run pytest tests/test_workspace_policy.py tests/test_workspace_init.py tests/test_source_only_capture.py tests/test_logical_jat.py -q --junitxml=dist/capture-candidate/tests.xml
+      - name: Package review-only extension
+        if: runner.os == 'Linux'
+        working-directory: vscode-extension
+        run: npm run package -- --out ../dist/capture-candidate/josh-room-capture-candidate.vsix
+      - name: Record exact candidate identity
+        if: always()
+        shell: python
+        env:
+          CANDIDATE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path('dist/capture-candidate')
+          root.mkdir(parents=True, exist_ok=True)
+          files = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir() if p.is_file()}
+          receipt = {'source_sha': os.environ['GITHUB_SHA'], 'source_tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(), 'platform': os.environ['CANDIDATE_PLATFORM'], 'files': files, 'scope': 'native capture tests and review package; no release or installation'}
+          (root / 'identity.json').write_text(json.dumps(receipt, indent=2) + '\n')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capture-candidate-${{ matrix.platform }}-${{ github.sha }}
+          path: dist/capture-candidate/
+          retention-days: 90

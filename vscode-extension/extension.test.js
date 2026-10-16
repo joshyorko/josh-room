@@ -1102,7 +1102,7 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
     { dimension: { id: "backup", display_name: "Backup", provider: "minio" } },
     { label: "Workspace only", allImages: false },
   );
-  vscode.infoResponses.push("Save");
+  vscode.infoResponses.push("Continue", "Save");
 
   await extension.__test__.saveRoom();
 
@@ -1111,7 +1111,7 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   assert.match(spawnHarness.calls.at(-1).args.join(" "), /--dimension backup/);
 });
 
-for (const repairDecision of ["Clean stale worktree records and retry", "Cancel"]) test(`Save repair approval is bounded and ${repairDecision === "Cancel" ? "cancellable" : "retries with the exact digest"}`, async () => {
+for (const repairDecision of ["Clean stale worktree records and retry", "Cancel"]) test(`Save never mutates Git records after preview failure (${repairDecision})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-worktree-repair-"));
   const source = path.join(root, "source");
   fs.mkdirSync(source);
@@ -1149,21 +1149,12 @@ for (const repairDecision of ["Clean stale worktree records and retry", "Cancel"
   vscode.inputBoxResponses.push("Synthetic Room");
   vscode.quickPickResponses.push({ create: true }, dimension, { label: "Workspace only", allImages: false });
   vscode.warningResponses.push(repairDecision);
-  vscode.infoResponses.push("Save");
+  vscode.infoResponses.push("Continue", "Save");
 
-  if (repairDecision === "Cancel") {
-    await assert.rejects(extension.__test__.saveRoom({ forceCreate: true }));
-    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair"), false);
-    assert.equal(spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"), false);
-    fs.rmSync(root, { recursive: true, force: true });
-    return;
-  }
-  assert.equal(await extension.__test__.saveRoom({ forceCreate: true }), "saved");
-  const repair = spawnHarness.calls.find((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair");
-  assert.ok(repair);
-  assert.equal(repair.args[repair.args.indexOf("--proposal-digest") + 1], digest);
-  assert.equal(spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "preview").length, 2);
-  assert.ok(warningCalls.some(([message]) => message.includes(repairRecord.worktree_path)));
+  await assert.rejects(extension.__test__.saveRoom({ forceCreate: true }));
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "workspace" && call.args[1] === "worktree-repair"), false);
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"), false);
+  assert.equal(warningCalls.some(([message]) => message.includes(repairRecord.worktree_path)), false);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -1245,6 +1236,8 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
       saved = true;
       return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "test-room", snapshot_id: "new-jat", data_added_bytes: 5, scanned_bytes: 10 }) };
     }
+    if (args[0] === "workspace" && args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created" }) };
+    if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
     throw new Error(`Unexpected controller operation: ${args[0]} ${args[1]}`);
   });
   const extension = loadExtension(vscode, spawnHarness.spawn);
@@ -1257,7 +1250,7 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
   vscode.inputBoxResponses.push("Test Room");
   if (!forceCreate) vscode.quickPickResponses.push({ create: true });
   vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
-  vscode.infoResponses.push("Save");
+  vscode.infoResponses.push("Continue", "Save");
   assert.equal(await extension.__test__.saveRoom({ forceCreate }), "saved");
   assert.equal(spawnHarness.calls.filter(({ args }) => args[0] === "snapshot" && args[1] === "create").length, 1);
   if (refreshFailure) {
@@ -1271,11 +1264,19 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
   assert.deepEqual(openExternalCalls, []);
 });
 
-test("Save Room to a fresh MinIO Dimension authorizes encryption once and preserves the target", async () => {
+test("Save Room to a fresh MinIO Dimension continues without dismissing its ready notice", { timeout: 3000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-minio-auth-test-"));
   const source = path.join(root, "source-room");
   fs.mkdirSync(source);
   const { vscode, statusItem, openExternalCalls, infoCalls } = createVscodeMock(root);
+  const showInformationMessage = vscode.window.showInformationMessage;
+  vscode.window.showInformationMessage = (...args) => {
+    if (args[0].includes("MinIO encryption is ready")) {
+      infoCalls.push(args);
+      return new Promise(() => {});
+    }
+    return showInformationMessage(...args);
+  };
   const recovery = path.join(root, "recovery.identity");
   fs.writeFileSync(recovery, "AGE-SECRET-KEY-recovery\n", { mode: 0o600 });
   const spawnHarness = createSpawnHarness(({ args }) => {
@@ -1319,7 +1320,7 @@ test("Save Room to a fresh MinIO Dimension authorizes encryption once and preser
     { label: "Import Existing Recovery Key", action: "import" },
     { label: "Workspace only", allImages: false },
   );
-  vscode.infoResponses.push(undefined, "Save");
+  vscode.infoResponses.push("Continue", "Save");
 
   assert.equal(await extension.__test__.saveRoom(), "saved");
   assert.deepEqual(openExternalCalls, []);
@@ -1515,6 +1516,8 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
   const { vscode, statusItem, infoCalls, warningCalls, watcherCallbacks } = createVscodeMock(root);
   let secretReads = 0;
   const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "workspace" && args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created" }) };
+    if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
     if (args[0] === "dimensions" && args[1] === "list") {
       return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
     }
@@ -1907,7 +1910,7 @@ test("choosing another Room invalidates the trusted Save receipt and preserves d
     { create: true },
   );
   fixture.vscode.inputBoxResponses.push("Another Room");
-  fixture.vscode.infoResponses.push("Choose another Room", "Save", undefined);
+  fixture.vscode.infoResponses.push("Choose another Room", "Continue", "Save", undefined);
 
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
 
@@ -3759,6 +3762,16 @@ test("warm local fallback verifies and reuses its saved JAT artifact", async (t)
   assert.equal(operation.options.env.JOSH_ROOM_JAT_ARTIFACT, artifact);
 });
 
+test("local fallback forwards credential input through RCC stdin without argv secrets", async (t) => {
+  const { root, spawnHarness, extension } = await createLocalFallbackFixture(t);
+  const payload = JSON.stringify({ "access-key-id": "fixture-access", "secret-access-key": "fixture-secret" });
+  await extension.__test__.runJoshRoom(["provider", "connection", "create"], root, undefined, undefined, payload);
+  const operation = spawnHarness.calls.filter((call) => call.args[0] === "run").at(-1);
+  assert.ok(operation.args.includes("--interactive"));
+  assert.equal(operation.child.stdinPayload, payload);
+  assert.doesNotMatch(operation.args.join(" "), /fixture-access|fixture-secret/);
+});
+
 test("non-JAT operation leaves the local fallback JAT artifact lazy", async (t) => {
   const fixture = await createLocalFallbackFixture(t);
   const { root, state, spawnHarness, extension } = fixture;
@@ -3833,6 +3846,21 @@ test("portable runtime retry clears only the scoped fallback marker", async () =
 
   assert.equal(await extension.__test__.clearLocalFallback(), "portable-runtime-retry");
   assert.equal(fs.existsSync(marker), false);
+});
+
+test("canceling MinIO connection reuse does not prompt for replacement credentials", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-storage-cancel-"));
+  const { vscode, statusItem, inputBoxCalls, quickPickCalls } = createVscodeMock(root);
+  const connection = { id: "fixture", display_name: "MinIO", provider: "minio", endpoint: "https://fixture.invalid" };
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true, connections: [connection] }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ provider: "minio" }, undefined);
+  assert.equal(await extension.__test__.addStorage(), "cancelled");
+  assert.equal(inputBoxCalls.length, 0);
+  const choice = quickPickCalls.at(-1).items[0];
+  assert.equal(choice.description, "fixture");
+  assert.equal(choice.detail, "https://fixture.invalid");
 });
 
 test("MinIO Add Storage asks for concrete settings without invoking Cloudflare OAuth", async () => {
@@ -6159,4 +6187,105 @@ test("non-JSON controller failures sanitize bounded stdout and stderr before ret
     return true;
   });
   assert.equal(logLines.some((line) => line.includes(identity) || line.includes(recipient)), false);
+});
+
+test("new Room initialization targets selected source and offers explicit source-only for healthy repositories", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-init-review-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, "selected"); fs.mkdirSync(source);
+  const { vscode, statusItem, infoCalls, warningCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    assert.equal(options.cwd, source);
+    assert.equal(args[args.indexOf("--workspace") + 1], source);
+    if (args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created", capture_mode: "full-repository", policy_edit_sha256: "a".repeat(64) }) };
+    assert.equal(args[1], "exclude");
+    assert.ok(args.includes("--source-only"));
+    assert.equal(args[args.indexOf("--expected-token") + 1], "a".repeat(64));
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn); extension.__test__.setStatusItem(statusItem);
+  vscode.infoResponses.push("Use source-only"); vscode.warningResponses.push("Use source-only");
+  assert.equal(await extension.__test__.initializeRoomExclusions(source), true);
+  assert.ok(infoCalls[0].includes("Edit exclusions"));
+  assert.match(warningCalls[0][0], /Git history and staging state will not be backed up/);
+  assert.equal(spawnHarness.calls.length, 2);
+});
+
+for (const decision of ["Apply and rescan", "Cancel"]) test(`worktree exclusion review is explicit and ${decision}`, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-scan-review-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, "selected"); fs.mkdirSync(source);
+  const { vscode, statusItem, quickPickCalls, warningCalls } = createVscodeMock(root);
+  let scans = 0;
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.equal(args[args.indexOf("--workspace") + 1], source);
+    if (args[0] === "workspace-check") {
+      scans += 1;
+      return { stdout: JSON.stringify(scans > 1 ? { ok: true, complete: true, findings: [] } : {
+        ok: false, complete: true, capture_mode: "full-repository", policy_edit_sha256: "b".repeat(64),
+        findings: ["worktrees/one", "worktrees/two"].map((relative) => ({ code: "git-storage", paths: [`${relative}/.git`], message: "linked worktrees unsupported", exclusion_candidate: relative })),
+      }), code: scans > 1 ? 0 : 1 };
+    }
+    assert.equal(args[1], "exclude");
+    assert.deepEqual(args.filter((arg, index) => args[index - 1] === "--rule"), ["worktrees/two"]);
+    assert.ok(!args.includes("--source-only"));
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn); extension.__test__.setStatusItem(statusItem);
+  vscode.warningResponses.push("Review exclusions", decision);
+  vscode.quickPickResponses.push([{ label: "worktrees/two" }]);
+  assert.equal(await extension.__test__.reviewWorkspaceBeforeSave(source), decision !== "Cancel");
+  assert.equal(quickPickCalls[0].options.canPickMany, true);
+  assert.ok(quickPickCalls[0].items.every((item) => item.picked === false));
+  assert.match(warningCalls[1][0], /worktrees\/two\/\*\*/);
+  assert.equal(scans, decision === "Cancel" ? 1 : 2);
+  assert.equal(spawnHarness.calls.some(({ args }) => args[1] === "exclude"), decision !== "Cancel");
+});
+
+test("incomplete scan never continues even when a malformed result claims ok", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-scan-incomplete-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true, complete: false, findings: [], stop_reason: "time-limit" }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn); extension.__test__.setStatusItem(statusItem);
+  vscode.warningResponses.push("Cancel");
+  assert.equal(await extension.__test__.reviewWorkspaceBeforeSave(root), false);
+  assert.equal(spawnHarness.calls.length, 1);
+});
+
+
+test("exported native activation registers the contributed workspace scan", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-scan-registration-"));
+  const { vscode, commandCallbacks } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("activation must stay read-only"); });
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [], secrets: { get: async () => undefined } });
+  assert.ok(extensionPackageJson.contributes.commands.some((command) => command.command === "joshRoom.checkWorkspace"));
+  assert.equal(typeof commandCallbacks.get("joshRoom.checkWorkspace"), "function");
+});
+
+test("GUI controller spawn merges Windows Path into one canonical PATH", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-windows-path-"));
+  const { vscode } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setRuntimeForTests({
+    command: "/test/rcc", args: args => args,
+    env: { PATH: "C:\\managed;C:\\Windows\\System32" }, jatRoot: root,
+  });
+  const previousEnv = process.env;
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  try {
+    process.env = { ...previousEnv, Path: "C:\\Windows\\System32" };
+    delete process.env.PATH;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    await extension.__test__.runJoshRoom(["status"], root);
+    const environment = spawnHarness.calls[0].options.env;
+    assert.deepEqual(Object.keys(environment).filter(key => key.toLowerCase() === "path"), ["PATH"]);
+    assert.equal(environment.PATH, "C:\\managed;C:\\Windows\\System32");
+  } finally {
+    process.env = previousEnv;
+    Object.defineProperty(process, "platform", platformDescriptor);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -326,7 +326,49 @@ def _validate_snapshot_entries(
     return entries
 
 
-def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
+def _validate_workspace_link(root: Path, relative: str, root_device: int, check_budget=None) -> None:
+    """Resolve metadata one component at a time without stepping outside root."""
+    pending = relative.split("/")
+    resolved: list[str] = []
+    links = 0
+    while pending:
+        if check_budget is not None:
+            check_budget()
+        component = pending.pop(0)
+        if component in {"", "."}:
+            continue
+        if component == "..":
+            if not resolved:
+                raise ValueError("external symlink")
+            resolved.pop()
+            continue
+        candidate = root.joinpath(*resolved, component)
+        metadata = candidate.lstat()
+        _require_same_device(root_device, metadata.st_dev)
+        if stat.S_ISLNK(metadata.st_mode):
+            links += 1
+            if links > 40:
+                raise ValueError("cyclic or excessive symlink chain")
+            target = os.readlink(candidate)
+            if not target or target.startswith(("/", "\\")) or "\\" in target or re.match(r"^[A-Za-z]:", target):
+                raise ValueError("unsafe symlink")
+            # Resolve .. lexically first so no outside path is ever inspected.
+            depth = len(resolved)
+            for part in target.split("/"):
+                if part == "..":
+                    depth -= 1
+                    if depth < 0:
+                        raise ValueError("external symlink")
+                elif part not in {"", "."}:
+                    depth += 1
+            pending = target.split("/") + pending
+        else:
+            if pending and not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("symlink traverses a non-directory")
+            resolved.append(component)
+
+
+def _scan_workspace(root: Path, policy: CapturePolicy | None, *, capture_mode: str = "full-repository", diagnostics=None) -> WorkspaceScan:
     try:
         resolved_root = root.resolve(strict=True)
         if any(char in str(resolved_root) for char in "\r\n"):
@@ -339,10 +381,18 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
 
     records: list[bytes] = []
     paths: set[str] = set()
-    folded_paths: set[str] = set()
+    folded_paths: dict[str, str] = {}
     logical_bytes = 0
 
     def visit(directory: Path, prefix: str = "") -> None:
+        try:
+            visit_directory(directory, prefix)
+        except (RoomStoreOperationsError, OSError, RecursionError) as error:
+            if diagnostics is None:
+                raise
+            diagnostics.add("unreadable-subtree", [prefix or "."], str(error), incomplete=True)
+
+    def visit_directory(directory: Path, prefix: str = "") -> None:
         nonlocal logical_bytes
         try:
             _require_same_device(
@@ -353,7 +403,17 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
                 "workspace cannot be scanned safely"
             ) from error
         try:
-            children = sorted(os.scandir(directory), key=lambda entry: entry.name)
+            children = []
+            iterator = os.scandir(directory)
+            try:
+                for entry in iterator:
+                    if diagnostics is not None:
+                        diagnostics.check_budget(entry=True)
+                    children.append(entry)
+            finally:
+                if hasattr(iterator, "close"):
+                    iterator.close()
+            children.sort(key=lambda entry: entry.name)
         except OSError as error:
             raise RoomStoreOperationsError(
                 "workspace cannot be scanned safely"
@@ -369,67 +429,84 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None) -> WorkspaceScan:
             relative = f"{prefix}/{child.name}" if prefix else child.name
             if policy is not None and policy.is_excluded(relative):
                 continue
-            _relative_parts(relative)
-            if _portable_path_key(relative) in folded_paths:
-                raise RoomStoreOperationsError(
-                    "workspace has paths that conflict on Windows"
-                )
-            folded_paths.add(_portable_path_key(relative))
+            if diagnostics is not None:
+                diagnostics.check_budget()
             try:
-                # Windows DirEntry caches omit device and file identity.
-                metadata = (
-                    path.stat(follow_symlinks=False)
-                    if _WINDOWS_HOST
-                    else child.stat(follow_symlinks=False)
-                )
-            except OSError as error:
-                raise RoomStoreOperationsError(
-                    "workspace changed during safety scan"
-                ) from error
-            mode = stat.S_IMODE(metadata.st_mode)
-            _require_same_device(root_device, metadata.st_dev)
-            if stat.S_ISLNK(metadata.st_mode):
-                target = os.readlink(path)
-                if (
-                    not target
-                    or os.path.isabs(target)
-                    or "\\" in target
-                    or re.match(r"^[A-Za-z]:", target)
-                ):
-                    raise RoomStoreOperationsError(
-                        "workspace contains an unsafe symlink"
-                    )
+                _relative_parts(relative)
+            except RoomStoreOperationsError as error:
+                if diagnostics is None:
+                    raise
+                diagnostics.add("invalid-name", [relative], str(error))
+            if _portable_path_key(relative) in folded_paths:
+                if diagnostics is None:
+                    raise RoomStoreOperationsError("workspace has paths that conflict on Windows")
+                diagnostics.add("path-collision", [folded_paths[_portable_path_key(relative)], relative],
+                                "workspace has paths that conflict on Windows")
+            folded_paths[_portable_path_key(relative)] = relative
+            try:
                 try:
-                    resolved = path.resolve(strict=True)
-                    resolved.relative_to(resolved_root)
-                    _require_same_device(root_device, resolved.stat().st_dev)
-                except (OSError, RuntimeError, ValueError) as error:
+                    # Windows DirEntry caches omit device and file identity.
+                    metadata = (
+                        path.stat(follow_symlinks=False)
+                        if _WINDOWS_HOST
+                        else child.stat(follow_symlinks=False)
+                    )
+                except OSError as error:
                     raise RoomStoreOperationsError(
-                        "workspace contains a dangling, cyclic, or external symlink"
+                        "workspace changed during safety scan"
                     ) from error
-                paths.add(relative)
-                records.append(f"{relative}\0link\0{target}\0{mode}".encode())
-            elif stat.S_ISDIR(metadata.st_mode):
-                paths.add(relative)
-                records.append(f"{relative}\0dir\0{mode}".encode())
-                visit(path, relative)
-            elif stat.S_ISREG(metadata.st_mode):
-                paths.add(relative)
-                logical_bytes += metadata.st_size
-                change_time = (
-                    _windows_change_time_ns(path, metadata)
-                    if _WINDOWS_HOST
-                    else metadata.st_ctime_ns
-                )
-                records.append(
-                    f"{relative}\0file\0{metadata.st_size}\0{metadata.st_mtime_ns}\0{change_time}\0{mode}".encode()
-                )
-            else:
-                raise RoomStoreOperationsError("workspace contains a special file")
+                mode = stat.S_IMODE(metadata.st_mode)
+                _require_same_device(root_device, metadata.st_dev)
+                if stat.S_ISLNK(metadata.st_mode):
+                    target = os.readlink(path)
+                    if (
+                        not target
+                        or os.path.isabs(target)
+                        or "\\" in target
+                        or re.match(r"^[A-Za-z]:", target)
+                    ):
+                        raise RoomStoreOperationsError(
+                            "workspace contains an unsafe symlink"
+                        )
+                    try:
+                        _validate_workspace_link(resolved_root, relative, root_device,
+                                                 diagnostics.check_budget if diagnostics else None)
+                    except (OSError, RuntimeError, ValueError) as error:
+                        raise RoomStoreOperationsError(
+                            "workspace contains a dangling, cyclic, or external symlink"
+                        ) from error
+                    paths.add(relative)
+                    records.append(f"{relative}\0link\0{target}\0{mode}".encode())
+                elif stat.S_ISDIR(metadata.st_mode):
+                    paths.add(relative)
+                    records.append(f"{relative}\0dir\0{mode}".encode())
+                    visit(path, relative)
+                elif stat.S_ISREG(metadata.st_mode):
+                    paths.add(relative)
+                    logical_bytes += metadata.st_size
+                    change_time = (
+                        _windows_change_time_ns(path, metadata)
+                        if _WINDOWS_HOST
+                        else metadata.st_ctime_ns
+                    )
+                    records.append(
+                        f"{relative}\0file\0{metadata.st_size}\0{metadata.st_mtime_ns}\0{change_time}\0{mode}".encode()
+                    )
+                else:
+                    raise RoomStoreOperationsError("workspace contains a special file")
+            except (RoomStoreOperationsError, OSError) as error:
+                if diagnostics is None:
+                    raise
+                message = str(error)
+                code = ("unsafe-symlink" if "symlink" in message else
+                        "filesystem-boundary" if "filesystem boundary" in message else
+                        "special-file" if "special file" in message else "unreadable-entry")
+                diagnostics.add(code, [relative], message, incomplete=code in {"filesystem-boundary", "unreadable-entry"})
 
     visit(resolved_root)
     try:
-        validate_git_storage(resolved_root, paths)
+        validate_git_storage(resolved_root, paths, capture_mode=policy.capture_mode if policy else capture_mode,
+                             **({"on_error": diagnostics.git_error, "check_budget": diagnostics.check_budget} if diagnostics else {}))
     except GitWorkspaceError as error:
         raise RoomStoreOperationsError(str(error)) from None
     digest = hashlib.sha256(b"\n".join(records)).hexdigest()
@@ -460,7 +537,7 @@ def _deletion_token(
     parent_id: str, deleted: tuple[str, ...], scan: WorkspaceScan
 ) -> str:
     value = json.dumps(
-        [parent_id, scan.signature, deleted], separators=(",", ":"), ensure_ascii=True
+        [parent_id, scan.signature, scan.capture_policy_sha256, deleted], separators=(",", ":"), ensure_ascii=True
     )
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -623,9 +700,9 @@ class RoomStoreOperations:
             )
         os.fchmod(descriptor, 0o600)
 
-    def _validate_private_roots(self) -> None:
+    def _validate_private_roots(self, *, require_workspace: bool = True) -> None:
         try:
-            root = self.workspace.resolve(strict=True)
+            root = self.workspace.resolve(strict=require_workspace)
             cache = self.cache_dir.resolve()
             private = self.password_dir.resolve()
             cache.relative_to(root)
@@ -672,9 +749,9 @@ class RoomStoreOperations:
                     "Room Store private directory permissions are unsafe"
                 )
 
-    def _open_store(self):
+    def _open_store(self, *, require_workspace: bool = True):
         self.save_stage = "private-roots"
-        self._validate_private_roots()
+        self._validate_private_roots(require_workspace=require_workspace)
         self.save_stage = "room-store-keyset"
         keyset = self.ensure_keyset(self.dimension, self.backend)
         metadata = getattr(keyset, "room_store", None)
@@ -810,6 +887,7 @@ class RoomStoreOperations:
             "room_id": self.descriptor_metadata["room_id"],
             "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "capture_policy_sha256": policy.sha256,
+            "capture_mode": policy.capture_mode,
             "workspace": {
                 "engine": "restic",
                 "repository_id": repository_id,
@@ -862,6 +940,7 @@ class RoomStoreOperations:
         return (
             latest_body["logical_jat_id"] == parent_body["logical_jat_id"]
             and latest_body["capture_policy_sha256"] == policy.sha256
+            and latest_body.get("capture_mode", "full-repository") == policy.capture_mode
             and latest_body["components"] == components
             and latest_body["source"] == self.descriptor_metadata["source"]
             and latest_body["producer"] == self.descriptor_metadata["producer"]
@@ -1274,7 +1353,7 @@ class RoomStoreOperations:
         keyset = None
         password_file = None
         if restic_store is None:
-            keyset, password_file, store = self._open_store()
+            keyset, password_file, store = self._open_store(require_workspace=False)
         else:
             store = restic_store
         try:
@@ -1334,10 +1413,10 @@ class RoomStoreOperations:
                             )
                     stage = staging_root / "workspace"
                     opened.restore(snapshot.snapshot_id, stage)
-                    _scan_workspace(stage, None)
+                    _scan_workspace(stage, None, capture_mode=body.get("capture_mode", "full-repository"))
                     if prepare_restored_workspace is not None:
                         prepare_restored_workspace(stage, descriptor, opened)
-                    _scan_workspace(stage, None)
+                    _scan_workspace(stage, None, capture_mode=body.get("capture_mode", "full-repository"))
                     write_restore_marker(stage, target, descriptor)
                     _rename_directory_noreplace(stage, target)
                     return RestoreResult(descriptor, target)

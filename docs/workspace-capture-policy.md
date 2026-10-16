@@ -2,9 +2,9 @@
 
 Josh Room uses the versioned defaults in `src/josh_room/workspace_capture_defaults.json` for workspace fingerprints, dirty tracking, and capture exclusions. The VS Code extension reads the packaged copy at `runtime/controller/josh_room/workspace_capture_defaults.json`; the package copy is generated from the canonical source file. Both files must have identical contents.
 
-The defaults exclude these names at every directory depth: `.josh-room.json`, `.DS_Store`, `.pytest_cache`, `.ruff_cache`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.robocorp`, and `.rcc_home`. Git metadata is recovery content: included `.git` directories and files, objects, refs, indexes, hooks, config, reflogs and stashes are preserved. Exclusions cannot prune `.git` or its descendants, even when a ref is named `venv` or a workspace ignore rule names `.git`. An excluded ancestor, such as `node_modules`, still excludes its whole subtree. A caller may also pass the resolved active runtime root explicitly. When it is inside the workspace, that directory and its contents are excluded unless they are Git metadata; its relative path contributes to the policy SHA256. A runtime root outside the workspace adds no exclusion. The workspace root itself cannot be selected as the active runtime root.
+The defaults exclude these names at every directory depth: `.josh-room.json`, `.DS_Store`, `.pytest_cache`, `.ruff_cache`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.robocorp`, and `.rcc_home`. In the default full-repository mode, Git metadata is recovery content: included `.git` directories and files, objects, refs, indexes, hooks, config, reflogs and stashes are preserved. Exclusions cannot prune `.git` or its descendants, even when a ref is named `venv` or a workspace ignore rule names `.git`. An excluded ancestor, such as `node_modules`, still excludes its whole subtree. A caller may also pass the resolved active runtime root explicitly. When it is inside the workspace, that directory and its contents are excluded unless they are Git metadata; its relative path contributes to the policy SHA256. A runtime root outside the workspace adds no exclusion. The workspace root itself cannot be selected as the active runtime root.
 
-An optional UTF-8 `.josh-roomignore` file adds exclusions. Each nonblank line is one POSIX-style pattern. A pattern with `/` is rooted at the workspace root; a single-component pattern such as `*.tmp` matches that basename at any depth. Lines starting with `#` are comments. `*` and `?` match within one path component; a component equal to `**` matches zero or more components. Adjacent `**` components are collapsed. A matching directory excludes its descendants. Rules are limited to 128 non-comment lines, 1,024 characters, and 128 path components. Bracket expressions, absolute paths, `.`, `..`, backslashes, and `!` negation are rejected. Git ignore files and Git ignore behavior are not read. The ignore file must be a regular, non-symlink file no larger than 64 KiB; invalid rules fail policy loading rather than silently changing capture.
+An optional UTF-8 `.josh-roomignore` file adds exclusions. Each nonblank line is one POSIX-style pattern. A pattern with `/` is rooted at the workspace root; a single-component pattern such as `*.tmp` matches that basename at any depth. Lines starting with `#` are comments except the explicit capture-mode directive documented below. `*` and `?` match within one path component; a component equal to `**` matches zero or more components. Adjacent `**` components are collapsed. A matching directory excludes its descendants. Rules are limited to 128 non-comment lines, 1,024 characters, and 128 path components. Bracket expressions, absolute paths, `.`, `..`, backslashes, and `!` negation are rejected. Git ignore files and Git ignore behavior are not read. The ignore file must be a regular, non-symlink file no larger than 64 KiB; invalid rules fail policy loading rather than silently changing capture.
 
 The ignore file itself is not excluded by default. Its exact UTF-8 contents, including comments and line endings, contribute to `capture_policy_sha256`, so any edit changes the policy identity. The shared defaults bytes and the explicit active runtime path also contribute. A changed policy therefore changes the workspace fingerprint when the caller binds the policy hash into that fingerprint or snapshot metadata.
 
@@ -17,3 +17,74 @@ VS Code may suppress `.git` watcher events. Watcher events only mark changes; ca
 Snapshots created with the old `.git` exclusion remain readable, but cannot restore Git metadata that was never captured. The changed defaults invalidate old policy/no-op identities; a new Save from an intact original workspace is required for complete Git recovery. Do not overwrite a damaged workspace, reinitialize repositories, or infer missing local history from remotes.
 
 `CACHEDIR.TAG` is not interpreted. A tag must not silently hide its containing directory.
+
+## Explicit source-only capture
+
+Full-repository capture remains the default, including for older descriptors
+without a `capture_mode` field. To choose source-only capture, record exactly one
+of these directives in the selected folder's `.josh-roomignore`:
+
+```text
+# josh-room capture-mode: source-only
+```
+
+This choice excludes complete `.git` administrative entries at every depth,
+including linked-worktree pointer files. Selected project files are saved;
+Git history, branches, staging state, and explicitly excluded worktree files are
+not backed up. A remote push does not establish recovery of that omitted data.
+Working directories remain included unless separately selected for exclusion.
+No original repository, administrative registration, or source file is changed.
+Unknown or duplicate mode directives fail policy loading. Use
+`# josh-room capture-mode: full-repository` (or remove the directive) to restore
+the full-repository contract; an ordinary `.git` ignore pattern cannot do so.
+
+Mode changes alter the policy digest and invalidate no-op and deletion-preview
+confirmation state. New descriptors record `capture_mode`; old descriptors keep
+full-repository semantics. Restore still requires an absent destination and
+checks the complete staged payload, rejecting Git metadata in a source-only
+snapshot, refusing retained bare Git stores, and retaining filesystem link, special-file, and portable-name checks.
+Portable source-only exports use the filtered JAT capability and fail if that
+capability is unavailable. Source-only is not relocatable Git-worktree recovery.
+
+## Initialize, inspect and approve exclusions
+
+New Room creation initializes the selected source folder (which can differ from
+VS Code's workspace) after its name and destination have been confirmed. The
+comments-first `.josh-roomignore` starter adds no active exclusions. Existing
+files retain their bytes and timestamps; invalid, symlink and nonregular files
+fail safely. Initialization is also available explicitly:
+
+```sh
+josh-room workspace init --workspace ./selected-project --json
+josh-room workspace-check --workspace ./selected-project --json
+```
+
+Status and scanning never initialize or edit the file. **Edit exclusions** opens
+the selected folder's file; save those edits before choosing **Continue**. The
+new-Room prompt also offers **Use source-only** with a separate consequence
+confirmation, including for healthy repositories. Canceling before initialization
+creates nothing; canceling later leaves the initialized file and approved edits.
+
+Before preview, Save runs a bounded diagnostic pass using the Save validators.
+The report includes ordered findings with stable codes and relative paths,
+collision pairs, a `complete` coverage flag, and explicit truncation/cancellation
+state. Default limits are 100,000 directory entries, 200 findings and 15 seconds.
+Unreadable subtrees and filesystem boundaries leave coverage incomplete. A
+blocked or incomplete check exits nonzero and never authorizes Save; Save still
+performs its own current-state checks.
+
+Native Quick Pick offers worktree directories with nothing selected. A second
+confirmation lists the exact proposed exclusions and backup consequence. Only
+approved directories are appended, with `/**` to keep single directory names
+rooted. Unsupported literal glob characters are refused. A policy edit digest
+rejects stale reviews; appending preserves existing bytes and detects changes
+before writing. Edits made by unrelated programs cannot be locked out, so
+concurrent editing should be stopped before applying an exclusion. Review and
+rescan after any reported concurrent-change error.
+
+Every approved edit invalidates the cached Save receipt and triggers a fresh
+scan before preview. Ignoring a checkout alone does not resolve the main
+repository's administrative pointers. Choose source-only explicitly or stop and
+inspect the remaining report; Save does not prune or repair Git records.
+Diagnostic paths are intended for local review. Do not publish the report or
+Output log without removing private filenames and paths.

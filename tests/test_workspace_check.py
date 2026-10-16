@@ -89,7 +89,7 @@ def test_stale_linked_worktree_reports_sanitized_action_and_never_prunes(tmp_pat
     assert payload["code"] == "workspace-invalid"
     assert "linked worktrees are unsupported" in payload["error"]
     assert "git worktree prune --dry-run --verbose" in payload["remediation"]
-    assert "/outside-worktree" not in json.dumps(payload)
+    assert str(external) not in json.dumps(payload)
     assert _tree_digest(workspace) == before
     records = subprocess.run(["git", "-C", str(repository), "worktree", "list", "--porcelain"], check=True, capture_output=True, text=True, timeout=30).stdout
     assert "check-fixture" in records

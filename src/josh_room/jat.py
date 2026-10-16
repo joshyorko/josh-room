@@ -1,8 +1,10 @@
+import ast
 import json
 import os
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from robocorp import log
 
 from .cancellation import terminate_owned_process as _terminate_process
 from .progress import report_progress
+from .workspace_policy import CapturePolicy, load_capture_policy
 
 _STDOUT_LIMIT = 1_048_576
 _RESULT_LIMIT = 1_048_576
@@ -448,6 +451,57 @@ def _run_jat_cli(jat_root: Path, cli_args: list[str], *, foreground: bool = Fals
             rcc_receipt.unlink(missing_ok=True)
 
 
+def _capture_selection(source: Path, policy: CapturePolicy) -> list[str]:
+    """Translate Room rules to JAT literal roots without following links."""
+    values = []
+    visited = 0
+    deadline = time.monotonic() + 60
+    root = source.resolve(strict=True)
+    _verify_capture_policy(root, policy)
+
+    def failed(error):
+        raise ValueError("workspace exclusion selection is incomplete") from error
+
+    for directory, directories, files in os.walk(root, followlinks=False, onerror=failed):
+        parent = Path(directory)
+        for name in sorted((*directories, *files)):
+            visited += 1
+            if visited > 1_000_000 or time.monotonic() >= deadline:
+                raise ValueError("workspace exclusion selection exceeded its scan limit")
+            relative = (parent / name).relative_to(root).as_posix()
+            if policy.is_excluded(relative):
+                if "\\" in relative or any(ord(char) < 32 for char in relative):
+                    raise ValueError("workspace exclusion cannot be represented safely in JAT")
+                values.append(relative)
+        directories[:] = sorted(name for name in directories if not policy.is_excluded(
+            (parent / name).relative_to(root).as_posix()))
+    _verify_capture_policy(root, policy)
+    return sorted(values)
+
+
+def _verify_capture_policy(source: Path, policy: CapturePolicy) -> None:
+    runtime = source / policy.active_runtime_relative if policy.active_runtime_relative else None
+    if load_capture_policy(source, active_runtime_root=runtime).sha256 != policy.sha256:
+        raise ValueError("workspace capture policy changed; review a fresh preview")
+
+
+def _require_filtered_capture(jat_root: Path) -> None:
+    """Check the exact consumed checkout, never assume a runtime pin supports filters."""
+    try:
+        module = ast.parse((jat_root / "src/jat/models.py").read_text())
+        supported = any(
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "WORKSPACE_CAPTURE_POLICY_VERSION"
+                    for target in node.targets)
+            and isinstance(node.value, ast.Constant) and node.value.value == 1
+            for node in module.body
+        )
+    except (OSError, SyntaxError, UnicodeError):
+        supported = False
+    if not supported:
+        raise ValueError("selected JAT artifact does not support filtered capture policy v1")
+
+
 def run_build(
     jat_root: Path,
     source: Path,
@@ -465,6 +519,7 @@ def run_build(
     chunk_size: str | None = None,
     exclude_extras: bool = False,
     retries: int | None = None,
+    capture_policy: CapturePolicy | None = None,
 ) -> dict:
     if (rcc_archive is None) != (rcc_metadata is None):
         raise ValueError("saved RCC archive and metadata must be supplied together")
@@ -474,6 +529,10 @@ def run_build(
         "images": images or [],
         "all_images": all_images,
     }
+    if capture_policy is not None:
+        _require_filtered_capture(jat_root)
+        request["workspace_exclusions"] = _capture_selection(source, capture_policy)
+        request["capture_mode"] = getattr(capture_policy, "capture_mode", "full-repository")
     if rcc_environment is not None:
         request["rcc_environment"] = rcc_environment
     if images_files:
@@ -493,7 +552,10 @@ def run_build(
         request["exclude_extras"] = True
     if retries is not None:
         request["retries"] = int(retries)
-    return _run_task(jat_root, "Build", request)
+    result = _run_task(jat_root, "Build", request)
+    if capture_policy is not None:
+        _verify_capture_policy(source, capture_policy)
+    return result
 
 
 def run_restore(jat_root: Path, haul: Path, destination: Path) -> dict:
