@@ -96,6 +96,17 @@ exit at 60%. The existing detached-process cancellation test also fails on both
 base and candidate in this container. These local failures do not establish
 regressions or replace the hosted full-suite evidence.
 
+A final container run with editable package metadata and explicit HOME/PYTHONPATH
+completed: **1875 passed, 41 skipped, 13 failed**. Seven hook tests rejected the
+root container reading a checkout owned by another UID; the public-storage test
+also encountered Git's ownership check. Packaging lacked npm. The two existing
+container authority/cancellation failures remained. Two real-restic bridge tests
+use unchanged synthetic RCC `v18.19.5` metadata against the unchanged `v18.19.6`
+constant and therefore report pending RCC capture. Those fixtures and production
+bridge files are unchanged from the campaign base; runtime-version maintenance
+belongs to the separate RCC task. No campaign regression was identified by this
+investigation, and this local run is not reported as passing.
+
 ## Remaining acceptance and release gates
 
 - NOT RUN: visible packaged VS Code create → edit exclusions → scan → resolve
