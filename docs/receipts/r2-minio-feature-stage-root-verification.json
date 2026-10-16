@@ -1,0 +1,14 @@
+{
+  "status": "PASS",
+  "source_sha": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "kind": "feature-review-stage",
+  "publication_eligible": false,
+  "asset_hashes_and_sizes_verified": 6,
+  "zip_file_count": 7,
+  "archive_sha256": "4ae7500d9da005da3622ac34d2864599bfecefedc990bd7fb7fa31e5f286824b",
+  "archive_size": 2786112,
+  "main_stage": "PENDING_SPECIFIC_PR152_MERGE_APPROVAL",
+  "merge_denial_known_unexecuted": true,
+  "merge_retry_attempted": false,
+  "room_publication": "NOT_PERFORMED"
+}

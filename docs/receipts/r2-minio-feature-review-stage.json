@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "kind": "feature-review-stage",
+  "source_sha": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "tree_sha": "68423d859e09bca1ddd9e45d4ef42a9a70a5bac4",
+  "version": "0.1.36",
+  "assets": {
+    "josh-room-0.1.36.vsix": {
+      "sha256": "3e9a616874e43093e1c3fcb77b6c1006da008c61c37574970323a9b735b96f57",
+      "size": 509620
+    },
+    "josh_room-0.1.0.dev0-py3-none-any.whl": {
+      "sha256": "8be094c79ee5235382f181f6aac106b12beee356bc601bba1d6e1a60487a7ff8",
+      "size": 419000
+    },
+    "josh_room-0.1.0.dev0.tar.gz": {
+      "sha256": "dacefffb8292f99b314a1430262bb005d33debfdf03ae74d96c8dd2e68aa3538",
+      "size": 1872877
+    },
+    "qualification.json": {
+      "sha256": "acfec08bfbe8a7f270b999550d014c4d7aed8d1fd5552d52c901704e6efca444",
+      "size": 1863
+    },
+    "vsix-candidate.json": {
+      "sha256": "06c4ccd1e5bc48659f9237e3eda4e89ccccd700efcc565d9dd0c82d51a02697f",
+      "size": 347
+    },
+    "SHA256SUMS": {
+      "sha256": "6174ec6af14061d0e3ea6e796a03f068780fa2d8b2afd144f77c75725436ab20",
+      "size": 457
+    }
+  },
+  "qualification": "qualification.json",
+  "publication_eligible": false,
+  "guarded_main_stage": {
+    "status": "PENDING_SPECIFIC_PR152_MERGE_APPROVAL",
+    "merge_action": "DENIED_BY_AUTOMATIC_APPROVAL_REVIEW",
+    "target": "joshyorko/josh-room#152 at b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+    "reason": "Prior merge approval scoped to PR21 and PR147; current repair request authorized testing and staging, not this merge",
+    "verified_unmerged": true,
+    "retry_attempted": false
+  },
+  "boundary": "Review-only feature artifacts; not a trusted main release-stage receipt; no publication"
+}

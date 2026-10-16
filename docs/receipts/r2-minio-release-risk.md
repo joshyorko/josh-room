@@ -1,3 +1,5 @@
+Repair update: [qualified PR #152 and feature review stage](r2-minio-repair-handoff.md). The repair is unmerged pending specific merge approval; the source4274a59/main-stage evidence below remains historical and unresolved.
+
 # Unresolved R2 OAuth→MinIO release risk
 
 Publication recommendation for Room 0.1.36 source `4274a59fd4a15e97bf51dd2f74aca7ef41bac86e`: **HOLD**. The reported real 0.1.35 provider transition failure remains unresolved. This campaign assessed source and synthetic configuration only, without a competing repair or access to user credentials, buckets or configuration.

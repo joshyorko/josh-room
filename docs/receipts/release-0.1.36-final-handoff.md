@@ -1,3 +1,5 @@
+Repair update: [qualified PR #152 and feature review stage](r2-minio-repair-handoff.md). The repair is unmerged pending specific merge approval; the source4274a59/main-stage evidence below remains historical and unresolved.
+
 # Room 0.1.36 candidate handoff — publication on hold
 
 **Do not publish this candidate while the R2→MinIO failure is unresolved.** Josh reported a real 0.1.35 failure after R2 OAuth then MinIO: connection creation completed, immediate bucket lookup reported `connection [id] is missing`, and later buckets appeared without rooms. Current 0.1.36 source retains the stale configuration-snapshot path. A disposable configuration-only reproduction confirms that a newly persisted connection is absent from runtime-snapshot lookup. Full provider/UI causality and the later missing rooms are **NOT_REPRODUCED**; no fix is claimed. Josh owns the repair. No user credentials, configuration or buckets were accessed. [Assessment and reproducible evidence](r2-minio-release-risk.md).

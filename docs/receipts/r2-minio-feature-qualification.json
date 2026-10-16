@@ -1,0 +1,50 @@
+{
+  "source_sha": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "tree_sha": "68423d859e09bca1ddd9e45d4ef42a9a70a5bac4",
+  "pr": "https://github.com/joshyorko/josh-room/pull/152",
+  "ci": {
+    "run_id": 38952556154,
+    "conclusion": "success",
+    "python_passed": 1933,
+    "python_skipped": 28,
+    "node_passed": 304,
+    "node_skipped": 2,
+    "both_native_consumers": "PASS",
+    "windows_private_runtime": "PASS"
+  },
+  "rcc_qualification": {
+    "run_id": 38952556199,
+    "linux": "PASS",
+    "windows": "PASS",
+    "jat_candidate": "PASS",
+    "promotion": "SKIPPED"
+  },
+  "template": {
+    "run_id": 38952556155,
+    "status": "PASS"
+  },
+  "native_ui": {
+    "scope": "Actual installed Linux extension; synthetic active R2 session; native MinIO adapter against disposable Moto; native Save/Room and snapshot loading/relocated restore/logical JAT inspection",
+    "status": "PASS",
+    "vsix_sha256": "3e9a616874e43093e1c3fcb77b6c1006da008c61c37574970323a9b735b96f57",
+    "snapshot_id": "3b0aa9ab4fa5423794f9f3c356521ed3",
+    "all_original_files_unchanged": 4,
+    "all_r2_session_files_unchanged": 4,
+    "session_snapshot_minio_connections": 0,
+    "root_independent_verification": "PASS"
+  },
+  "hosted_artifact": {
+    "id": 12068569853,
+    "zip_sha256": "76975a3132f1ed7728c249639e7e18bad04d0701b6c0e8ae66e30bf4d42e5627",
+    "candidate_vsix_sha256": "7c10b580c121d7d256418680eb9ea8d05d1e09a016672f9f1841d4ab1716a66c",
+    "all_105_candidate_files_equal_native_ui_package": true
+  },
+  "python_distributions_config_equals_canonical": true,
+  "build": "Declared python-build tooling in existing Docker image; isolated hatchling1.32.4 build environments, no host installation",
+  "unrun": [
+    "Live Cloudflare OAuth",
+    "Real MinIO infrastructure",
+    "Full Windows GUI Save/restore"
+  ],
+  "raw_private_fixture_material_included": false
+}

@@ -1,0 +1,8 @@
+{
+  "artifact": "r2-minio-b69eaea-feature-review-stage.zip",
+  "sha256": "4ae7500d9da005da3622ac34d2864599bfecefedc990bd7fb7fa31e5f286824b",
+  "size": 2786112,
+  "source_sha": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "kind": "feature-review-stage",
+  "publication_eligible": false
+}
