@@ -12,6 +12,7 @@ const sha = (file) => crypto.createHash("sha256").update(fs.readFileSync(file)).
 const receipt = { gate: "packaged-windows-native-check-workspace", status: "failed", checks: [], full_save_restore: "NOT RUN", screenshots: "NOT CREATED" };
 let child;
 let socket;
+let getDiagnostics;
 let stage = "preflight";
 async function until(fn, timeout, label) {
   const deadline = Date.now() + timeout;
@@ -86,6 +87,19 @@ async function main() {
     if (result.exceptionDetails) throw new Error("Renderer evaluation failed");
     return result.result.value;
   };
+  getDiagnostics = async () => evaluate(`(() => {
+    const workbench = document.querySelector('.monaco-workbench');
+    const palette = document.querySelector('.quick-input-widget input');
+    return { ready_state: document.readyState, visibility: document.visibilityState,
+      focused: document.hasFocus(), workbench_present: !!workbench,
+      editor_present: !!document.querySelector('.part.editor'),
+      palette_present: !!palette, palette_visible: !!palette && palette.getBoundingClientRect().width > 0,
+      active_element: document.activeElement?.tagName || null };
+  })()`);
+  await until(() => evaluate("document.readyState === 'complete' && !!document.querySelector('.monaco-workbench .part.editor')"), 60000, "loaded native workbench");
+  await send("Page.bringToFront");
+  await evaluate("window.focus()");
+  receipt.renderer_ready = await getDiagnostics();
   const key = async (key, code, virtual, modifiers = 0) => {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: virtual, modifiers });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtual, modifiers });
@@ -93,7 +107,12 @@ async function main() {
   const text = () => evaluate("document.body.innerText");
   const command = async () => {
     await key("Escape", "Escape", 27);
-    await key("P", "KeyP", 80, 10);
+    await send("Page.bringToFront");
+    await evaluate("window.focus()");
+    const point = await evaluate("(() => { const r = document.querySelector('.part.editor').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()");
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point, button: "left", clickCount: 1 });
+    await key("F1", "F1", 112);
     await until(() => evaluate("!!Array.from(document.querySelectorAll('.quick-input-widget input')).find(e=>e.getBoundingClientRect().width>0)"), 15000, "native command palette");
     await key("a", "KeyA", 65, 2);
     await send("Input.insertText", { text: ">Josh: Check Workspace" });
@@ -116,7 +135,11 @@ async function main() {
   receipt.checks.push("original-fixture-git-entry-unchanged");
   receipt.status = "passed";
 }
-main().catch((error) => { receipt.error = String(error.message).slice(0,500); process.exitCode = 1; }).finally(() => {
+main().catch(async (error) => {
+  receipt.error = String(error.message).slice(0,500);
+  if (getDiagnostics) { try { receipt.renderer_diagnostics = await getDiagnostics(); } catch {} }
+  process.exitCode = 1;
+}).finally(() => {
   receipt.final_stage = stage;
   socket?.close();
   if (child?.pid) { try { cp.execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch {} }
