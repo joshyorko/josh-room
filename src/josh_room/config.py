@@ -369,15 +369,55 @@ def private_config() -> dict | None:
     if runtime:
         path = Path(runtime)
         if path.is_file():
-            return json.loads(path.read_text())
+            snapshot = json.loads(path.read_text())
+            if not isinstance(snapshot, dict):
+                raise TypeError("runtime configuration must be an object")
+            persisted = persisted_config()
+            if persisted is None:
+                return snapshot
+            return _current_minio_config(snapshot, persisted)
     return persisted_config()
+
+
+def _current_minio_config(snapshot: dict, persisted: dict) -> dict:
+    """Refresh local storage records without replacing session-issued authority."""
+    merged = dict(snapshot)
+    snapshot_minio_dimensions = set()
+    for registry_name, read_records in (("connections", connection_configs), ("dimensions", dimension_configs)):
+        previous = read_records(snapshot)
+        current = read_records(persisted)
+        for record_id in previous.keys() & current.keys():
+            if previous[record_id].provider != current[record_id].provider:
+                raise ValueError(f"{registry_name} provider changed for {record_id}; reconnect storage")
+        if registry_name == "dimensions":
+            snapshot_minio_dimensions = {key for key, value in previous.items() if value.provider == "minio"}
+        if registry_name in snapshot or registry_name in persisted:
+            merged[registry_name] = {
+                key: value for key, value in snapshot.get(registry_name, {}).items()
+                if previous[key].provider != "minio"
+            } | {
+                key: value for key, value in persisted.get(registry_name, {}).items()
+                if current[key].provider == "minio"
+            }
+    merged.pop("minio", None)
+    if "minio" in persisted:
+        merged["minio"] = persisted["minio"]
+    for setting in ("default_backend", "default_dimension"):
+        if setting in persisted:
+            merged[setting] = persisted[setting]
+        elif snapshot.get(setting) in snapshot_minio_dimensions or snapshot.get(setting) == "minio":
+            merged.pop(setting, None)
+    return merged
 
 
 def persisted_config() -> dict | None:
     path = config_dir() / "config.json"
     if not path.is_file():
         return None
-    return json.loads(path.read_text())
+    body = json.loads(path.read_text())
+    if not isinstance(body, dict):
+        raise TypeError("private configuration must be an object")
+    return body
 
 
 def save_private_config(body: dict) -> Path:
