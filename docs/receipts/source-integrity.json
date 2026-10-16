@@ -1,0 +1,6 @@
+{
+  "original_entries_verified": 50,
+  "changed_original_entries": [],
+  "editor_workspace_ignore_exists": false,
+  "selected_source_ignore": "# Josh Room exclusions: excluded files stay local but are not backed up.\n# Built-in defaults already exclude common environments and caches.\n# Rules add exclusions; they cannot undo built-in defaults. This is not gitignore.\n# Use relative paths and * / ** globs. Reinclusion (!), absolute paths and [] are unsupported.\n# Uncomment only generated folders you intend to omit, for example:\n# tools/ci-venv\n# build/generated\n# Keep source, manifests, lockfiles, configuration, databases and uploads you need.\ngenerated-env/**\n\nworktree-two/**\n\n# josh-room capture-mode: source-only\n"
+}

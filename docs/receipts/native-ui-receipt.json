@@ -1,0 +1,98 @@
+{
+  "status": "partial-native-acceptance-save-blocked",
+  "candidate": {
+    "source_commit": "60b73937628d3909a34b08772849cbc1a56ccf90",
+    "filename": "josh-room-capture-60b7393.vsix",
+    "sha256": "92aeafdcb9cc03f95644e53285918c32e1537f3b8f2eaf1d222a29332ec99246",
+    "installed_version": "0.1.34",
+    "installed_files_verified_equal_to_archive": [
+      "extension.js",
+      "dirty.js",
+      "runtime/controller/josh_room/cli.py",
+      "runtime/controller/josh_room/workspace_report.py"
+    ]
+  },
+  "environment": {
+    "vscode_version": "1.142.0",
+    "vscode_commit": "6d62b1d5dace93a33b3a6d3eca1317bd5e15bcb1",
+    "os": "Debian 13 x64 disposable Docker + Xvfb",
+    "storage": "Moto 5.1.15 isolated S3-compatible emulator, localhost:59000",
+    "scope": "synthetic fixtures; disposable VS Code profile and extension directory; no installed user extension replaced",
+    "rcc": "18.19.6 manifest pin unchanged"
+  },
+  "passed_native_steps": [
+    "Existing fixture connection bucket access and Dimension creation",
+    "New Room selects /acceptance/selected-source, distinct from /acceptance/editor-workspace",
+    "Initializer creates only selected source .josh-roomignore",
+    "Edit exclusions opens real Monaco editor; explicit generated-env/** edit saved",
+    "Aggregate full-repository scan reports four Git findings",
+    "Native multiselect starts with zero selections; explicitly selects only worktree-two",
+    "Confirmation lists exact worktree-two/** and backup/admin-record warning",
+    "Apply triggers fresh scan, still blocked by main repo registration and retained worktree-one",
+    "Explicit source-only consequence modal confirmed",
+    "Apply triggers fresh complete valid source-only scan",
+    "Recovery key generation and encrypted emulator keyset initialization",
+    "Workspace-only preview shows 10 logical entries and 704 B",
+    "Native Save confirmation entered actual managed runtime preparation",
+    "Separate cancellation fixture: select linked worktree in native multiselect, reach exact linked/** confirmation, click Cancel; existing ignore bytes unchanged and no apply command executed."
+  ],
+  "blocked": [
+    {
+      "action": "Native Save",
+      "target": "UI Capture Fixture in disposable Moto Dimension",
+      "outcome": "failed",
+      "reason": "Pinned RCC18.19.6 JAT managed artifact rejects os.requiredLibraries ld-linux-x86-64.so.2; worker reports empty library set. UI: managed RCC did not produce an execution receipt.",
+      "timestamp": "2026-10-16T11:35:56.283",
+      "environment_check": "Actual VSCode PATH includes /sbin and /usr/sbin; /sbin/ldconfig executable and loader listed by ldconfig -p. No runtime pin/source edits attempted."
+    },
+    {
+      "action": "Native restore to different path with original unavailable",
+      "outcome": "unrun-dependent-blocker",
+      "reason": "Native Save failed before snapshot creation."
+    }
+  ],
+  "other_gaps": [
+    "Native Add Storage credential submission failed on locally built fallback: Expecting value line1 column1. Existing fixture connection was seeded through actual packaged CLI and SecretService, so fully native Add Storage is not passed.",
+    "Initial pinned controller artifact import had same library compatibility rejection; authorized native Build Locally fallback used.",
+    "SecretService empty lookup probe returned1 with empty stderr and was considered unavailable; fixture reachability sentinel required for storage setup.",
+    "No complete packaged create-to-restore acceptance claim."
+  ],
+  "integrity": {
+    "original_entries_verified": 50,
+    "changed_original_entries": [],
+    "editor_workspace_ignore_exists": false,
+    "selected_source_ignore": "# Josh Room exclusions: excluded files stay local but are not backed up.\n# Built-in defaults already exclude common environments and caches.\n# Rules add exclusions; they cannot undo built-in defaults. This is not gitignore.\n# Use relative paths and * / ** globs. Reinclusion (!), absolute paths and [] are unsupported.\n# Uncomment only generated folders you intend to omit, for example:\n# tools/ci-venv\n# build/generated\n# Keep source, manifests, lockfiles, configuration, databases and uploads you need.\ngenerated-env/**\n\nworktree-two/**\n\n# josh-room capture-mode: source-only\n"
+  },
+  "evidence": [
+    "edit-selected-ignore.png",
+    "grouped-git-findings.png",
+    "worktree-zero-selected.png",
+    "confirm-exact-worktree.png",
+    "source-only-confirmation.png",
+    "native-save-blocked.png",
+    "native-gate.log",
+    "source-integrity.json"
+  ],
+  "remaining": [
+    "Coordinate runtime-library compatibility failure with maintenance owner without changing campaign pins.",
+    "Rerun native Save and restore using this exact candidate in a compatible managed-runtime environment.",
+    "Verify restored hashes, metadata/exclusion absence, and original unavailable restore."
+  ],
+  "native_cancellation": {
+    "status": "passed",
+    "source": "/acceptance/cancel-source",
+    "sequence": [
+      "existing custom ignore initialized without overwrite",
+      "complete full-repository scan finds linked worktree and main registration",
+      "Review exclusions starts0 selected",
+      "explicitly select linked",
+      "confirm dialog exact linked/**",
+      "click Cancel"
+    ],
+    "before_sha256": "b207bcb637edd244d509b2bafe5dd03be3bde1274719f780e2cf9484943e3bfa",
+    "after_sha256": "b207bcb637edd244d509b2bafe5dd03be3bde1274719f780e2cf9484943e3bfa",
+    "bytes": 55,
+    "unchanged": true
+  },
+  "public_evidence_note": "Screenshots remain local after automatic approval review rejected public image upload; sanitized text receipts published instead."
+}

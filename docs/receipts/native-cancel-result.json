@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "source": "/acceptance/cancel-source",
+  "sequence": [
+    "existing custom ignore initialized without overwrite",
+    "complete full-repository scan finds linked worktree and main registration",
+    "Review exclusions starts0 selected",
+    "explicitly select linked",
+    "confirm dialog exact linked/**",
+    "click Cancel"
+  ],
+  "before_sha256": "b207bcb637edd244d509b2bafe5dd03be3bde1274719f780e2cf9484943e3bfa",
+  "after_sha256": "b207bcb637edd244d509b2bafe5dd03be3bde1274719f780e2cf9484943e3bfa",
+  "bytes": 55,
+  "unchanged": true
+}

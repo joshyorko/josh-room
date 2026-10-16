@@ -1,0 +1,10 @@
+2026-10-16 11:31:51.342 [info] Workspace scan: valid; coverage complete
+2026-10-16 11:33:13.422 [info] START · controller snapshot preview UI Capture Fixture --source /acceptance/selected-source --dimension minio-ui-fixture-room-ui-fixture
+2026-10-16 11:35:56.280 [info] 2026-10-16T11:35:56.280Z RCC stderr: Error: reject incompatible environment artifact: incompatible environment artifact [system-library]: os.requiredLibraries requires ld-linux-x86-64.so.2, worker has
+2026-10-16 11:35:56.280 [info] ░░░░░░░░░░░░░░░░░░░░ … · Error: reject incompatible environment artifact: incompatible environment artifact [system-library]: os.requiredLibraries requires ld-linux-x86-64.so.2, worker has
+2026-10-16 11:35:56.280 [info] 2026-10-16T11:35:56.280Z RCC stderr: Note: Now running rcc v18.19.6. There is newer rcc version v18.19.7 available, released at 15.10.2026.
+2026-10-16 11:35:56.280 [info] ░░░░░░░░░░░░░░░░░░░░ … · Note: Now running rcc v18.19.6. There is newer rcc version v18.19.7 available, released at 15.10.2026.
+2026-10-16 11:35:56.280 [info] 2026-10-16T11:35:56.280Z RCC stderr: Error: [rcc v18.19.6] reject incompatible environment artifact: incompatible environment artifact [system-library]: os.requiredLibraries requires ld-linux-x86-64.so.2, worker has
+2026-10-16 11:35:56.280 [info] ░░░░░░░░░░░░░░░░░░░░ … · Error: [rcc v18.19.6] reject incompatible environment artifact: incompatible environment artifact [system-library]: os.requiredLibraries requires ld-linux-x86-64.so.2, worker has
+2026-10-16 11:35:56.283 [error] managed RCC did not produce an execution receipt
+2026-10-16 11:35:56.283 [error] FAILED · Saving UI Capture Fixture · managed RCC did not produce an execution receipt

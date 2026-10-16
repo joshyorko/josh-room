@@ -1,0 +1,21 @@
+Note: Now ru
+Note: Now ru
+2026-10-16 11:37:54.940 [info] START · controller dimensions list
+2026-10-16 11:37:54.940 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 11:37:54.945 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 11:38:01.306 [info] ███████░░░░░░░░░░░░░ 35% · Reading encrypted Room catalog
+2026-10-16 11:38:02.432 [info] DONE · dimensions
+2026-10-16 11:38:02.433 [info] ████████████████████ 100% · Complete
+2026-10-16 11:38:07.203 [info] START · controller workspace init --workspace /acceptance/cancel-source
+2026-10-16 11:38:07.203 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 11:38:07.213 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 11:38:10.356 [info] DONE · workspace
+2026-10-16 11:38:10.356 [info] ████████████████████ 100% · Complete
+2026-10-16 11:38:15.196 [info] START · controller workspace-check --workspace /acceptance/cancel-source
+2026-10-16 11:38:15.196 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 11:38:15.205 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 11:38:17.453 [info] DONE · workspace-check
+2026-10-16 11:38:17.453 [info] ████████████████████ 100% · Complete
+2026-10-16 11:38:17.453 [info] Workspace scan: blocked; coverage complete
+2026-10-16 11:38:17.453 [info] git-storage: linked/.git — Git storage is not self-contained and portable; use an ordinary checkout or relative in-workspace submodule storage before saving (external or absolute Git pointers and linked worktrees are unsupported)
+2026-10-16 11:38:17.453 [info] git-storage: repo/.git/worktrees/linked/gitdir — Git storage is not self-contained and portable; use an ordinary checkout or relative in-workspace submodule storage before saving (external or absolute Git pointers and linked worktrees are unsupported)

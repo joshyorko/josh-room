@@ -107,28 +107,121 @@ bridge files are unchanged from the campaign base; runtime-version maintenance
 belongs to the separate RCC task. No campaign regression was identified by this
 investigation, and this local run is not reported as passing.
 
+## Follow-up candidate qualification
+
+Final executable source is `60b73937628d3909a34b08772849cbc1a56ccf90`;
+`ae4ab4334c25809772aff66780bc6af4762d8f64` only formats test imports.
+Visible UI testing exposed a missing native `joshRoom.checkWorkspace`
+registration, fixed with a regression test. Native Windows testing exposed
+CRT newline translation in ignore-file reads; `O_BINARY` now preserves the raw
+policy bytes used by JavaScript fingerprints. Full-repository protections remain.
+
+[Full hosted test job](https://github.com/joshyorko/josh-room/actions/runs/38893875252/job/116950078297)
+passed: **1902 Python tests, 28 skipped; 288 Node tests, 2 skipped**; Ruff and diff checks passed.
+Synthetic PR merge `33ff1ce1244622a5c3df9a536050ed126603886d` has tree
+`f35dd326ee9e9d9ac6cd5cc739cf555e27cf5eb0`, exactly equal to `ae4ab43`.
+This replaces the earlier broad-suite uncertainty. [Managed-runtime Linux consumer](https://github.com/joshyorko/josh-room/actions/runs/38893875252/job/116950077813)
+also passed; its [evidence artifact](https://github.com/joshyorko/josh-room/actions/runs/38893875252/artifacts/12043032732) is retained. The Windows managed-runtime consumer is pending
+and is not covered by the passing test-job claim.
+
+[Native Linux and Windows candidate workflow](https://github.com/joshyorko/josh-room/actions/runs/38893868899)
+passed **77 tests on each platform**, with no skips, including actual restic
+source-only Save and original-unavailable restore. The
+[Linux VSIX and receipt](https://github.com/joshyorko/josh-room/actions/runs/38893868899/artifacts/12043341063)
+and [Windows test receipt](https://github.com/joshyorko/josh-room/actions/runs/38893868899/artifacts/12043635209)
+are durable workflow artifacts. Downloaded Linux package hash was verified:
+`2120b0a8fbc7c3df1b1a90aae7273bc0418c844da3fc9977148a31cab5485f41`.
+See `hosted-vsix-receipt.json` for exact source and test-file hashes.
+
+JAT now embeds its source and thin task bridge in the candidate artifact.
+[Linux and native Windows qualification](https://github.com/joshyorko/josh-all-the-things/actions/runs/38893454020)
+passed at `e1332dd30e5aefd6820df36889adc86a4b7915dc`: embedded file hashes,
+no checkout overlay, five byte-exact restored files, original source unavailable,
+and retained unsafe-link rejection (neither platform skipped that check).
+[Linux artifact](https://github.com/joshyorko/josh-all-the-things/actions/runs/38893454020/artifacts/12042762601)
+SHA256 `d0ccc70eca1b6733f12fd48d1d135a85aec94a91a7c03141c624f767e71e99e7`;
+[Windows artifact](https://github.com/joshyorko/josh-all-the-things/actions/runs/38893454020/artifacts/12042573212)
+SHA256 `3a7cb0367f3a8271f0ae6345891338c2e6fe8d97cd793f8387af68a22f51d9c6`.
+These JAT artifacts expire 2026-11-15; retain them before expiry if review continues.
+
+Room `ae4ab43` consumed the exact downloaded hosted Linux JAT artifact through
+RCC18.19.6. Its temporary adapter paths symlinked only to the acquired artifact's
+embedded package and task bridge; no JAT checkout source overlay was used.
+Actual build and restore passed, original fixture was renamed unavailable,
+selected app/database/worktree/manifest bytes matched, excluded entries were
+absent, and source hashes remained unchanged. See
+`cross-hosted-capture-receipt.json`. Capsule SHA256:
+`ef76418c50759eec6827513c372ce5096e331a78d4a2817e031c4559e9db24a2`.
+This supersedes the earlier source-overlay proof for exact candidate integration.
+Release pins deliberately remain unchanged and do not yet select this candidate.
+
 ## Remaining acceptance and release gates
 
-- NOT RUN: visible packaged VS Code create → edit exclusions → scan → resolve
-  findings → Save → restore. No VS Code/display is available in this environment.
-- NOT RUN: candidate source packaged into and consumed from a newly qualified
-  JAT runtime artifact. Existing release pins deliberately remain unchanged;
-  old JAT source fails closed when filtered capture is requested.
-- NOT RUN: native Windows qualification and live-provider writes. Only
-  disposable fixtures/storage were used. JAT mixed-image smoke lacked its local
-  BusyBox image; JAT also records existing full-lint findings.
-- Native source-only saves do not depend on JAT #19. Complete #145 UX depends
-  on #144 and #146, integrated here. Filtered portable export additionally
-  depends on JAT PR #21 and exact consumed-artifact qualification.
+Visible packaged VS Code acceptance is **partial; native Save failed and restore
+is blocked**, not passed. Exact local VSIX `60b7393` SHA256
+`92aeafdcb9cc03f95644e53285918c32e1537f3b8f2eaf1d222a29332ec99246`
+ran in VS Code1.142.0 / Debian13 Docker+Xvfb with a disposable profile,
+SecretService and Moto5.1.15 S3 emulator. Installed feature files matched the VSIX.
+The actual UI passed selected-folder initialization (different editor workspace),
+Monaco exclusion editing, grouped Git findings, zero-preselected multiselect,
+exact-rule confirmation, fresh scan still rejecting main-repository registrations,
+explicit source-only confirmation, complete valid rescan, recovery key creation,
+and Save preview/confirmation. All50 original fixture file/link hashes stayed
+unchanged. Only approved ignore-file content was added to the selected source.
+Native cancellation also passed using a separate real linked-worktree fixture:
+select one folder, inspect exact-rule modal, then Cancel; existing55-byte ignore
+content remained byte-identical and no exclude/snapshot-create command ran.
+See `native-cancel-result.json` and `native-cancel.log`.
 
-Before release: review both drafts; coordinate with the RCC maintenance owner;
-qualify a JAT candidate artifact and update pins in a separately authorized
-release effort; rebuild the VSIX; run the visible flow against isolated storage;
-run platform/full-suite gates and reconcile existing failures. Merge, tag,
-publish, deploy and extension replacement require separate authorization.
+At2026-10-16T11:35:56 native Save for `UI Capture Fixture` failed before snapshot
+creation: pinned RCC18.19.6 rejected the JAT artifact with
+`os.requiredLibraries requires ld-linux-x86-64.so.2, worker has` an empty set;
+the UI reported `managed RCC did not produce an execution receipt`.
+Actual app PATH includes /sbin and /usr/sbin; ldconfig exists and lists that loader.
+No pin/source changes or native Save bypass were attempted. Native restore is
+unrun because no snapshot exists. This is an execution failure, not an approval
+denial or uncertain success.
+
+Initial controller import had the same library rejection; native Build Locally
+fallback succeeded. Native Add Storage credential submission then failed with
+JSON decoding because fallback stdin was not forwarded. Disposable connection
+setup used the packaged CLI and real SecretService; the empty-keyring probe
+also required a synthetic reachability item. Fully native storage setup is
+therefore not passed. See `native-ui-receipt.json`, `native-gate.log`, and
+`source-integrity.json`. No live-provider acceptance was performed.
+
+Automatic approval review rejected screenshot upload to the public repository
+because an uninspected image could disclose workspace details. Screenshots remain
+local; these sanitized textual receipts are the public evidence alternative.
+
+Native source-only saves do not depend on JAT #19. Complete #145 UX depends
+on #144 and #146, integrated here. Filtered portable export additionally depends
+on JAT PR #21 and the qualified exact artifact above.
+
+Before release: review both drafts, coordinate runtime adoption with the separate
+RCC maintenance owner, resolve visible UI/runtime gates, rebuild the VSIX with
+approved release pins, and rerun acceptance. Merge, tag, publish, deploy and
+installed extension replacement require separate authorization.
 
 Focused Python command (inside the test container):
 
 ```sh
 python -m pytest tests/test_workspace_policy.py tests/test_workspace_check.py tests/test_workspace_init.py tests/test_workspace_report.py tests/test_source_only_capture.py tests/test_git_workspace.py tests/test_logical_jat.py tests/test_room_store_operations.py tests/test_room_store_export.py tests/test_jat_capture_handoff.py tests/test_repository_boundary.py --deselect tests/test_repository_boundary.py::test_real_vsix_contains_the_owned_runtime_contract -q
 ```
+
+Post-maintenance review commands (run in repo-native managed/CI tooling, not an
+arbitrary host environment):
+
+```sh
+python scripts/sync_controller_sources.py
+git diff --check
+uv run ruff check src tests
+uv run pytest -q
+node --test vscode-extension/*.test.js
+npm --prefix vscode-extension run package
+```
+
+Then install the resulting candidate only into a disposable VS Code profile and
+repeat the native creation/exclusion/Save/restore flow against isolated storage.
+The release owner must select the qualified JAT artifact and approved RCC pins;
+this campaign does not authorize those changes or any merge/publication.
