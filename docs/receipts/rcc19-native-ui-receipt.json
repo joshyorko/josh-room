@@ -1,0 +1,135 @@
+{
+  "status": "native-save-and-relocated-restore-passed",
+  "candidate": {
+    "source_commit": "c9a6fce16f49e01b6317693e5262315f98eff1c6",
+    "version": "0.1.35",
+    "file": "josh-room-rcc19-candidate.vsix",
+    "sha256": "a5c49d032739f3a3f86904ed7a664a0f3aa867505f9679b61777cada8390d4bc",
+    "installed_files_equal_to_archive": [
+      "extension.js",
+      "dirty.js",
+      "runtime/controller/josh_room/cli.py",
+      "runtime/controller/josh_room/workspace_report.py",
+      "runtime/manifest.json"
+    ]
+  },
+  "environment": {
+    "vscode": "1.142.0",
+    "vscode_commit": "6d62b1d5dace93a33b3a6d3eca1317bd5e15bcb1",
+    "os": "Debian13 x64 Docker plus Xvfb",
+    "storage": "Moto5.1.15 S3-compatible emulator localhost:59000; disposable bucket room-ui-fixture",
+    "profile": "disposable acceptance profile",
+    "rcc_version": "18.19.7",
+    "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+    "runtime_mode": "pinned controller and JAT artifacts; no local-build fallback in successful run",
+    "artifacts": {
+      "controller": {
+        "artifact_digest": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+        "archive_sha256": "9a05f6c631686519453b96ef550e62362fc582a6b66b4c57d61e95c7b76a3761",
+        "archive_size": 101002872
+      },
+      "jat": {
+        "artifact_digest": "sha256:9b71cba250c5038e5464651c068afdd281f577310c59a317ace483697a554fb1",
+        "archive_sha256": "b474a8dc3055410611b6ae476f05bb8e801c0a4f6d0fcc175550ed338e8dcfe5",
+        "archive_size": 170816177
+      }
+    }
+  },
+  "native_save": {
+    "status": "passed",
+    "room": "UI RCC19 Capture Fixture",
+    "snapshot_id": "dd58b4152c624be4833b9167cfadd0c4",
+    "timestamp": "2026-10-16T12:38:32.228",
+    "source": "/acceptance/selected-source",
+    "capture_mode": "source-only",
+    "logical_entries": 10,
+    "scan_bytes": 704,
+    "reported_restic_added": "4.3 KB",
+    "steps": [
+      "New Room",
+      "select existing fixture source distinct from editor workspace",
+      "enter new Room name",
+      "initialize preserves existing policy",
+      "Continue",
+      "fresh valid complete scan",
+      "Workspace only",
+      "preview",
+      "Save"
+    ]
+  },
+  "native_restore": {
+    "status": "passed",
+    "original_path_unavailable": true,
+    "original_entries_verified_unchanged": 50,
+    "destination": "/acceptance/editor-workspace/ui-rcc19-capture-fixture",
+    "snapshot_id": "dd58b4152c624be4833b9167cfadd0c4",
+    "restored_sha256": {
+      "src/app.py": "2a0a2fa1ba5e11c601c8d01a6a7c7a46632c18abbff194505425780430eee3bc",
+      "package.json": "2e9d863d304a57d8abf788eb8b1bf77879d4116ef1c901e126479c7c9a2c5fe0",
+      "data.db": "0ff45b2913c191e91ea776b2f28e2153c5cc86626f886a9c4da7a21ecc3ee7cf",
+      "uploads/fixture.txt": "d95e0fe35d4458c32288f58a3393eb20a420c8528387a016ec09d4b7f8bd9d9b",
+      "worktree-one/draft.txt": "ef22fff6d2329ab3f95bda4690064d3a83e073a608f6ce93a4a34343450466a2"
+    },
+    "ignore_bytes_preserved": true,
+    "excluded_absent": [
+      "all .git entries",
+      "generated-env",
+      "worktree-two"
+    ],
+    "inventory": [
+      ".josh-room.json",
+      ".josh-roomignore",
+      "data.db",
+      "package.json",
+      "repo",
+      "src",
+      "src/app.py",
+      "uploads",
+      "uploads/fixture.txt",
+      "worktree-one",
+      "worktree-one/draft.txt"
+    ]
+  },
+  "restore_ui": {
+    "command": "Josh: Enter Room",
+    "timestamp": "2026-10-16T12:39:23.484",
+    "result": "native folder opened after hydrate",
+    "original_unavailable_method": "Renamed only disposable selected-source to unavailable-original after verifying50 original file/link hashes."
+  },
+  "setup_failures_and_remediation": [
+    {
+      "failure": "cached controller environment archive size mismatch",
+      "remediation": "Removed only old disposable cached controller archive; fetched and verified new manifest-pinned archive.",
+      "limitation": "Stable archive basename upgrade cache behavior needs follow-up; this was not an out-of-box upgrade pass."
+    },
+    {
+      "failure": "RCC18.19.7 controller import required ld-linux-x86-64.so.2 but worker library set empty",
+      "remediation": "Created disposable /usr/bin/ldconfig symlink to real /usr/sbin/ldconfig and restarted app. Actual library inventory then satisfied compatibility checks; no artifact/check/pin/code modifications.",
+      "evidence": "RCC18.19.7 upstream compatibility_linux.go calls exec.Command(ldconfig,-p); real ldconfig lists required loader."
+    }
+  ],
+  "prior_ui_evidence": {
+    "receipt": "native-ui-receipt.json",
+    "candidate": "60b7393, version0.1.34",
+    "passed": [
+      "selected-folder initialization",
+      "actual exclusion editing",
+      "aggregate failures",
+      "native explicit worktree selection and confirmation",
+      "source-only consequence confirmation and rescan",
+      "native cancellation preserves ignore bytes"
+    ],
+    "note": "These earlier interactive gates are attributed to earlier candidate. New candidate independently passed fresh native Save and relocated restore with preserved policy."
+  },
+  "remaining_limitations": [
+    "Storage credentials were seeded with actual packaged CLI in earlier setup; fresh native Add Storage remains unqualified.",
+    "Actual storage is Moto S3 emulator, not native MinIO or R2.",
+    "No screenshot publication attempted or retried.",
+    "No Windows native UI test performed."
+  ],
+  "evidence": [
+    "rcc19-native-gate.log",
+    "rcc19-native-restore-result.json",
+    "rcc19-manifest-evidence.json"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "original_path_unavailable": true,
+  "original_entries_verified_unchanged": 50,
+  "destination": "/acceptance/editor-workspace/ui-rcc19-capture-fixture",
+  "snapshot_id": "dd58b4152c624be4833b9167cfadd0c4",
+  "restored_sha256": {
+    "src/app.py": "2a0a2fa1ba5e11c601c8d01a6a7c7a46632c18abbff194505425780430eee3bc",
+    "package.json": "2e9d863d304a57d8abf788eb8b1bf77879d4116ef1c901e126479c7c9a2c5fe0",
+    "data.db": "0ff45b2913c191e91ea776b2f28e2153c5cc86626f886a9c4da7a21ecc3ee7cf",
+    "uploads/fixture.txt": "d95e0fe35d4458c32288f58a3393eb20a420c8528387a016ec09d4b7f8bd9d9b",
+    "worktree-one/draft.txt": "ef22fff6d2329ab3f95bda4690064d3a83e073a608f6ce93a4a34343450466a2"
+  },
+  "ignore_bytes_preserved": true,
+  "excluded_absent": [
+    "all .git entries",
+    "generated-env",
+    "worktree-two"
+  ],
+  "inventory": [
+    ".josh-room.json",
+    ".josh-roomignore",
+    "data.db",
+    "package.json",
+    "repo",
+    "src",
+    "src/app.py",
+    "uploads",
+    "uploads/fixture.txt",
+    "worktree-one",
+    "worktree-one/draft.txt"
+  ]
+}
