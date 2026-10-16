@@ -45,3 +45,46 @@ checks the complete staged payload, rejecting Git metadata in a source-only
 snapshot, refusing retained bare Git stores, and retaining filesystem link, special-file, and portable-name checks.
 Portable source-only exports use the filtered JAT capability and fail if that
 capability is unavailable. Source-only is not relocatable Git-worktree recovery.
+
+## Initialize, inspect and approve exclusions
+
+New Room creation initializes the selected source folder (which can differ from
+VS Code's workspace) after its name and destination have been confirmed. The
+comments-first `.josh-roomignore` starter adds no active exclusions. Existing
+files retain their bytes and timestamps; invalid, symlink and nonregular files
+fail safely. Initialization is also available explicitly:
+
+```sh
+josh-room workspace init --workspace ./selected-project --json
+josh-room workspace-check --workspace ./selected-project --json
+```
+
+Status and scanning never initialize or edit the file. **Edit exclusions** opens
+the selected folder's file; save those edits before choosing **Continue**. The
+new-Room prompt also offers **Use source-only** with a separate consequence
+confirmation, including for healthy repositories. Canceling before initialization
+creates nothing; canceling later leaves the initialized file and approved edits.
+
+Before preview, Save runs a bounded diagnostic pass using the Save validators.
+The report includes ordered findings with stable codes and relative paths,
+collision pairs, a `complete` coverage flag, and explicit truncation/cancellation
+state. Default limits are 100,000 directory entries, 200 findings and 15 seconds.
+Unreadable subtrees and filesystem boundaries leave coverage incomplete. A
+blocked or incomplete check exits nonzero and never authorizes Save; Save still
+performs its own current-state checks.
+
+Native Quick Pick offers worktree directories with nothing selected. A second
+confirmation lists the exact proposed exclusions and backup consequence. Only
+approved directories are appended, with `/**` to keep single directory names
+rooted. Unsupported literal glob characters are refused. A policy edit digest
+rejects stale reviews; appending preserves existing bytes and detects changes
+before writing. Edits made by unrelated programs cannot be locked out, so
+concurrent editing should be stopped before applying an exclusion. Review and
+rescan after any reported concurrent-change error.
+
+Every approved edit invalidates the cached Save receipt and triggers a fresh
+scan before preview. Ignoring a checkout alone does not resolve the main
+repository's administrative pointers. Choose source-only explicitly or stop and
+inspect the remaining report; Save does not prune or repair Git records.
+Diagnostic paths are intended for local review. Do not publish the report or
+Output log without removing private filenames and paths.
