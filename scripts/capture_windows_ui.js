@@ -87,7 +87,34 @@ async function main() {
     if (result.exceptionDetails) throw new Error("Renderer evaluation failed");
     return result.result.value;
   };
-  getDiagnostics = async () => evaluate(`(() => {
+  const sanitize = (value) => {
+    let text = String(value);
+    for (const known of [installedRoot, fixture, profile, extensions, codeRoot, temp, root].sort((a, b) => b.length - a.length)) {
+      text = text.split(known).join("<disposable-path>");
+      text = text.split(known.replaceAll("\\", "/")).join("<disposable-path>");
+    }
+    return text.replace(/[A-Za-z]:[\\/][^\s"'<>]*/g, "<windows-path>")
+      .replace(/https?:\/\/[^\s"'<>]+/g, "<url>").slice(0, 600);
+  };
+  const notifications = new Map();
+  const captureNotifications = async () => {
+    const messages = await evaluate(`Array.from(document.querySelectorAll('.notification-list-item-message, .monaco-dialog-message'))
+      .filter(e => e.getBoundingClientRect().width > 0).slice(0, 12).map(e => e.innerText.slice(0, 2000))`);
+    for (const raw of messages) {
+      const message = sanitize(raw);
+      if (!notifications.has(message) && notifications.size < 16) {
+        const errorClass = /checksum|artifact|digest/i.test(message) ? "artifact" :
+          /rcc|runtime|python|controller/i.test(message) ? "runtime-controller" :
+          /network|download|connection/i.test(message) ? "network" :
+          /error|fail|unable|cannot/i.test(message) ? "other-error" : "informational";
+        notifications.set(message, { stage, message, error_class: errorClass });
+      }
+    }
+    receipt.notifications = [...notifications.values()];
+  };
+  getDiagnostics = async () => {
+    await captureNotifications();
+    return evaluate(`(() => {
     const workbench = document.querySelector('.monaco-workbench');
     const palette = document.querySelector('.quick-input-widget input');
     return { ready_state: document.readyState, visibility: document.visibilityState,
@@ -96,6 +123,7 @@ async function main() {
       palette_present: !!palette, palette_visible: !!palette && palette.getBoundingClientRect().width > 0,
       active_element: document.activeElement?.tagName || null };
   })()`);
+  };
   await until(() => evaluate("document.readyState === 'complete' && !!document.querySelector('.monaco-workbench .part.editor')"), 60000, "loaded native workbench");
   await send("Page.bringToFront");
   await evaluate("window.focus()");
@@ -104,7 +132,7 @@ async function main() {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: virtual, modifiers });
     await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtual, modifiers });
   };
-  const text = () => evaluate("document.body.innerText");
+  const text = async () => { await captureNotifications(); return evaluate("document.body.innerText"); };
   const command = async () => {
     await key("Escape", "Escape", 27);
     await send("Page.bringToFront");
@@ -116,9 +144,19 @@ async function main() {
     await until(() => evaluate("!!Array.from(document.querySelectorAll('.quick-input-widget input')).find(e=>e.getBoundingClientRect().width>0)"), 15000, "native command palette");
     await key("a", "KeyA", 65, 2);
     await send("Input.insertText", { text: ">Josh: Check Workspace" });
-    await until(async () => /Josh: Check Workspace/.test(await text()), 20000, "installed extension command registration");
-    await sleep(1000);
-    await key("Enter", "Enter", 13);
+    const row = await until(() => evaluate(`(() => {
+      const rows = Array.from(document.querySelectorAll('.quick-input-widget .monaco-list-row'))
+        .filter(e => e.getBoundingClientRect().width > 0 &&
+          Array.from(e.querySelectorAll('.label-name, .monaco-highlighted-label'))
+            .some(label => label.textContent.trim() === 'Josh: Check Workspace'));
+      if (rows.length !== 1) return null;
+      const r = rows[0].getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    })()`), 30000, "exact visible installed extension command row");
+    receipt.command_selections ??= [];
+    receipt.command_selections.push({ stage, label: "Josh: Check Workspace", exact_visible_rows: 1 });
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", ...row, button: "left", clickCount: 1 });
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...row, button: "left", clickCount: 1 });
   };
   stage = "source-only-native-check";
   await command();
