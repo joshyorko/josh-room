@@ -13,6 +13,7 @@ const receipt = { gate: "packaged-windows-native-check-workspace", status: "fail
 let child;
 let socket;
 let getDiagnostics;
+let getFailureDiagnostics;
 let stage = "preflight";
 async function until(fn, timeout, label) {
   const deadline = Date.now() + timeout;
@@ -96,6 +97,48 @@ async function main() {
     return text.replace(/[A-Za-z]:[\\/][^\s"'<>]*/g, "<windows-path>")
       .replace(/https?:\/\/[^\s"'<>]+/g, "<url>").slice(0, 600);
   };
+  getFailureDiagnostics = () => {
+    const result = { output_logs_examined: 0, output_log_bytes: 0, failure_lines: [],
+      receipt_files: [], traversal_truncated: false, unreadable_entries: 0 };
+    let entries = 0;
+    const visit = (directory, depth, type) => {
+      if (depth > 8 || entries >= 500) { result.traversal_truncated = true; return; }
+      let children;
+      try { children = fs.readdirSync(directory, { withFileTypes: true }); }
+      catch { result.unreadable_entries++; return; }
+      for (const entry of children) {
+        if (++entries > 500) { result.traversal_truncated = true; break; }
+        if (entry.isSymbolicLink()) continue;
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) { visit(file, depth + 1, type); continue; }
+        if (!entry.isFile()) continue;
+        try {
+          if (type === "output" && /josh[ _-]*room.*\.log$/i.test(entry.name) && result.output_logs_examined < 8) {
+            const size = fs.statSync(file).size;
+            const length = Math.min(size, 65536);
+            const buffer = Buffer.alloc(length);
+            const fd = fs.openSync(file, "r");
+            try { fs.readSync(fd, buffer, 0, length, size - length); } finally { fs.closeSync(fd); }
+            result.output_logs_examined++;
+            result.output_log_bytes += size;
+            for (const line of buffer.toString("utf8").split(/\r?\n/)) {
+              // Only already-sanitized extension RCC/controller diagnostics, never stdout or environment dumps.
+              if (!/RCC stderr:|Unable to read (?:RCC|controller result) receipt|RCC did not produce a controller receipt/.test(line)) continue;
+              if (/credential|password|secret|token|authorization|access.?key|private.?key/i.test(line)) continue;
+              if (result.failure_lines.length < 24) result.failure_lines.push(sanitize(line));
+            }
+          }
+          if (type === "runtime" && /(?:receipt|controller).*\.json$/i.test(entry.name) && result.receipt_files.length < 16) {
+            // Receipt contents may contain environments: report only finite file metadata.
+            result.receipt_files.push({ kind: /receipt/i.test(entry.name) ? "receipt" : "controller-json", bytes: fs.statSync(file).size });
+          }
+        } catch { result.unreadable_entries++; }
+      }
+    };
+    visit(path.join(profile, "logs"), 0, "output");
+    visit(path.join(profile, "User", "globalStorage", "joshyorko.josh-room", "logs"), 0, "runtime");
+    return result;
+  };
   const notifications = new Map();
   const captureNotifications = async () => {
     const messages = await evaluate(`Array.from(document.querySelectorAll('.notification-list-item-message, .monaco-dialog-message'))
@@ -176,6 +219,7 @@ async function main() {
 main().catch(async (error) => {
   receipt.error = String(error.message).slice(0,500);
   if (getDiagnostics) { try { receipt.renderer_diagnostics = await getDiagnostics(); } catch {} }
+  if (getFailureDiagnostics) { try { receipt.controller_failure_diagnostics = getFailureDiagnostics(); } catch { receipt.controller_failure_diagnostics = { extraction_failed: true }; } }
   process.exitCode = 1;
 }).finally(() => {
   receipt.final_stage = stage;
