@@ -170,7 +170,10 @@ def _probe_linux(
     if any(token in stderr for token in ("locked", "access denied", "permission denied")):
         diagnostics.append("secret-service-locked")
         return BackendStatus("linux-secret-service", "linux", False, True, "locked", tuple(diagnostics))
-    if returncode == 0 or "no such secret" in stderr or "not found" in stderr:
+    # secret-tool lookup exits 1 silently when the service is reachable but
+    # the requested item does not exist (normal for a fresh secret store).
+    no_match = returncode == 1 and not stderr.strip() and not str(getattr(result, "stdout", "") or "").strip()
+    if returncode == 0 or no_match or "no such secret" in stderr or "not found" in stderr:
         diagnostics.append("secret-service-reachable")
         return BackendStatus("linux-secret-service", "linux", True, False, "available", tuple(diagnostics))
     diagnostics.append("secret-service-error")

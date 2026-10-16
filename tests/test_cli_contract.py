@@ -536,6 +536,26 @@ def test_dimension_add_rejects_duplicate_named_dimension(tmp_path, monkeypatch, 
     assert json.loads((tmp_path / "config.json").read_text()) == config
 
 
+def test_dimension_add_reuses_identical_record_without_writing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
+    config = {"dimensions": {"archive": {
+        "display_name": "Archive", "provider": "r2",
+        "endpoint": "https://archive.example.invalid", "bucket": "archive",
+        "credential_profile": "archive-profile",
+    }}}
+    filename = tmp_path / "config.json"
+    filename.write_text(json.dumps(config))
+    before = filename.read_bytes()
+    monkeypatch.setattr("josh_room.cli.save_private_config", lambda _config: pytest.fail("identical add must not rewrite config"))
+    assert main([
+        "dimensions", "add", "archive", "--display-name", "Archive", "--provider", "r2",
+        "--endpoint", "https://archive.example.invalid", "--bucket", "archive",
+        "--credential-profile", "archive-profile", "--json",
+    ]) == 0
+    assert json.loads(capsys.readouterr().out)["updated"] is False
+    assert filename.read_bytes() == before
+
+
 def test_enter_requires_a_project_or_lists_projects(capsys):
     assert main(["enter", "--backend", "local", "--json"]) == 2
     assert "project" in json.loads(capsys.readouterr().out)["error"]

@@ -3754,6 +3754,16 @@ test("warm local fallback verifies and reuses its saved JAT artifact", async (t)
   assert.equal(operation.options.env.JOSH_ROOM_JAT_ARTIFACT, artifact);
 });
 
+test("local fallback forwards credential input through RCC stdin without argv secrets", async (t) => {
+  const { root, spawnHarness, extension } = await createLocalFallbackFixture(t);
+  const payload = JSON.stringify({ "access-key-id": "fixture-access", "secret-access-key": "fixture-secret" });
+  await extension.__test__.runJoshRoom(["provider", "connection", "create"], root, undefined, undefined, payload);
+  const operation = spawnHarness.calls.filter((call) => call.args[0] === "run").at(-1);
+  assert.ok(operation.args.includes("--interactive"));
+  assert.equal(operation.child.stdinPayload, payload);
+  assert.doesNotMatch(operation.args.join(" "), /fixture-access|fixture-secret/);
+});
+
 test("non-JAT operation leaves the local fallback JAT artifact lazy", async (t) => {
   const fixture = await createLocalFallbackFixture(t);
   const { root, state, spawnHarness, extension } = fixture;
@@ -3828,6 +3838,21 @@ test("portable runtime retry clears only the scoped fallback marker", async () =
 
   assert.equal(await extension.__test__.clearLocalFallback(), "portable-runtime-retry");
   assert.equal(fs.existsSync(marker), false);
+});
+
+test("canceling MinIO connection reuse does not prompt for replacement credentials", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-storage-cancel-"));
+  const { vscode, statusItem, inputBoxCalls, quickPickCalls } = createVscodeMock(root);
+  const connection = { id: "fixture", display_name: "MinIO", provider: "minio", endpoint: "https://fixture.invalid" };
+  const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true, connections: [connection] }) }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push({ provider: "minio" }, undefined);
+  assert.equal(await extension.__test__.addStorage(), "cancelled");
+  assert.equal(inputBoxCalls.length, 0);
+  const choice = quickPickCalls.at(-1).items[0];
+  assert.equal(choice.description, "fixture");
+  assert.equal(choice.detail, "https://fixture.invalid");
 });
 
 test("MinIO Add Storage asks for concrete settings without invoking Cloudflare OAuth", async () => {

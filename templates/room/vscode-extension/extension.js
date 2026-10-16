@@ -730,7 +730,7 @@ async function runtimeFor(cwd, args = [], progressReporter, cancellationToken) {
   return {
     command: state.rcc.executable,
     args: localFallback
-      ? (args) => ["run", "--silent", "-r", path.join(state.controllerRoot, "robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"]
+      ? (args) => ["run", "--silent", "--interactive", "-r", path.join(state.controllerRoot, "robot.yaml"), "-t", "Josh Room", "--", ...args, "--json"]
       : (args, receiptFile) => [
         "--no-build", "env", "exec", "--artifact", state.controller.artifact,
         "--permissive-local", "--receipt-file", receiptFile, "--inherit-streams", "--json",
@@ -3983,11 +3983,14 @@ async function addStorage() {
   const reuseChoice = existingConnections.length > 0
     ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
       label: connection.display_name || connection.name || connection.id,
+      description: connection.id || connection.connection_id,
+      detail: connection.endpoint,
       connection,
     })).concat([{ label: "$(add) New MinIO Connection…", create: true }]), {
       title: "Josh: Choose a MinIO Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
     })
     : undefined;
+  if (existingConnections.length > 0 && !reuseChoice) return "cancelled";
   if (reuseChoice && !reuseChoice.create) {
     const connection = reuseChoice.connection || reuseChoice;
     endpoint = connection.endpoint;

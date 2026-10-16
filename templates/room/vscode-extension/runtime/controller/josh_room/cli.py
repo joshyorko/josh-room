@@ -1938,14 +1938,17 @@ def dispatch(args, instance: Path) -> dict:
             return {"ok": True, "dimensions": [_dimension_metadata(key, value) for key, value in dimensions]}
         config = persisted_config() or {}
         records = dict(config.get("dimensions", {}))
-        if args.dimension_command == "add" and args.dimension in records:
-            raise ValueError(f"Dimension {args.dimension} already exists")
         current = records.get(args.dimension, {})
         values = {**current}
         for field, key in (("display_name", "display_name"), ("provider", "provider"), ("connection_id", "connection_id"), ("endpoint", "endpoint"), ("bucket", "bucket"), ("credential_profile", "credential_profile"), ("region", "region"), ("catalog_key", "catalog_key")):
             value = getattr(args, field.replace("-", "_"), None)
             if value is not None:
                 values[key] = value
+        if args.dimension_command == "add" and args.dimension in records:
+            if values != current:
+                raise ValueError(f"Dimension {args.dimension} already exists")
+            DimensionRegistry(config).get(args.dimension)
+            return {"ok": True, "dimension": args.dimension, "updated": False}
         records[args.dimension] = values
         DimensionRegistry({**config, "dimensions": records}).get(args.dimension)
         config["dimensions"] = records
