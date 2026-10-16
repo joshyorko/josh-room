@@ -1,5 +1,10 @@
 # Room 0.1.36 feature candidate
 
+Historical pre-adoption checkpoint. Room147 and JAT21 are now merged, and
+[approved JAT0.1.14 publication](jat-v0.1.14-publication-receipt.json) is complete.
+Runtime adoption is qualifying in [Room150](https://github.com/joshyorko/josh-room/pull/150).
+The historical package/source receipts below remain attributed to their original runs.
+
 Published maintenance Room 0.1.35 and template 0.1.5 remain unchanged at
 `e773963106829668c9bca8bf94c045c99f8267f1`. The subsequent feature candidate
 advances the extension to 0.1.36 and template to 0.1.6 through the existing

@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "actual_tag_commits": {
+    "controller": "78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0",
+    "jat": "fe43065a654d1649ba9ebe5a6f202eac612e4385"
+  },
+  "release_asset_results": [
+    {
+      "controller_release": "rcc-v18.19.7-controller-78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0-7bc855dc8d87f76fbd231242637c1b0c47915d8621db4576e79ff85972851ef6-c9520865e1c14c71a8867c2d455fdaf95c6bde7420851012ebca7e8443244e00",
+      "jat_release": "v0.1.14-jat-runtime"
+    },
+    {
+      "controller_release": "rcc-v18.19.7-controller-78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0-7bc855dc8d87f76fbd231242637c1b0c47915d8621db4576e79ff85972851ef6-c9520865e1c14c71a8867c2d455fdaf95c6bde7420851012ebca7e8443244e00",
+      "jat_release": "v0.1.14-jat-runtime"
+    }
+  ]
+}

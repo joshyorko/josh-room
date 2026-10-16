@@ -1,0 +1,85 @@
+{
+  "status": "passed",
+  "scope": "Native Room Save, relocated Room restore, Export Portable JAT, native JAT Restore",
+  "source": "5fba3bb711b09366bea1122bd20f6e02e9cc07ef",
+  "version": "0.1.36",
+  "template_version": "0.1.6",
+  "vsix": "$EVIDENCE_ROOT/josh-room-5fba3bb-jat14-native.vsix",
+  "vsix_sha256": "d1eefbf5716e0603ca022e0d45ec625945af4fc1ad33608e162bfabda9bc8930",
+  "platform": "Debian 13 Linux x64; actual VS Code 1.142.0 under Xvfb",
+  "storage": "Disposable Moto 5.1.15 S3-compatible emulator; existing natively created connection",
+  "rcc_version": "18.19.7",
+  "runtime": {
+    "jat_source": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "release": "v0.1.14-jat-runtime",
+    "artifact_digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+    "archive_sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09"
+  },
+  "snapshot": "3d949c63fc844f59b36437037d59a210",
+  "original": "$FIXTURE_ROOT/jat14-source",
+  "original_unavailable_at_restore": true,
+  "room_restore": {
+    "path": "$FIXTURE_ROOT/editor-workspace/jat14-native-fixture",
+    "status": "passed",
+    "original_path_unavailable": true,
+    "original_entries_unchanged": 50,
+    "restored_sha256": {
+      "project.txt": "468f43a7cdde9d6849bee96321b4b939c7d4b6887bf1f78d923a183b06450ca7",
+      "data.db": "18c3f4721c10b2c588b0ed6d7f2757439bc664e994bfd30c34d2046e9e4b36f5",
+      "uploads/selected.txt": "dd02b44e3e3de47b5b08106faed785e2bf58478d354673894f2cbe42b88a515b",
+      "worktree-keep/draft.txt": "f30c1c5280069f02a9ccf5453d6d7452454aa38d9a3ba6d5564b0415cba9a242",
+      ".josh-roomignore": "9f251a87e00d25b92fe92401a3aa69a840af5ee19cfa6ff7e4046cd0fe91a50f"
+    },
+    "excluded_absent": [
+      "all .git entries",
+      "generated including unsafe symlink",
+      "worktree-exclude"
+    ]
+  },
+  "portable_export": {
+    "path": "$FIXTURE_ROOT/jat14-export.haul.tar.zst",
+    "sha256": "59f10d02fc74024d84796521b13f1dfe0540b11861d5d67bf8d8b78a6f48ffbe",
+    "bytes": 2256,
+    "native_export_internal_inspect_and_restore_verification": "passed"
+  },
+  "portable_restore": {
+    "destination": "$FIXTURE_ROOT/jat14-portable-restored",
+    "payload_path": "$FIXTURE_ROOT/jat14-portable-restored/workspace/workspace",
+    "status": "passed",
+    "original_path_unavailable": true,
+    "original_entries_unchanged": 50,
+    "restored_sha256": {
+      "project.txt": "468f43a7cdde9d6849bee96321b4b939c7d4b6887bf1f78d923a183b06450ca7",
+      "data.db": "18c3f4721c10b2c588b0ed6d7f2757439bc664e994bfd30c34d2046e9e4b36f5",
+      "uploads/selected.txt": "dd02b44e3e3de47b5b08106faed785e2bf58478d354673894f2cbe42b88a515b",
+      "worktree-keep/draft.txt": "f30c1c5280069f02a9ccf5453d6d7452454aa38d9a3ba6d5564b0415cba9a242",
+      ".josh-roomignore": "9f251a87e00d25b92fe92401a3aa69a840af5ee19cfa6ff7e4046cd0fe91a50f"
+    },
+    "excluded_absent": [
+      "all .git entries",
+      "generated including unsafe symlink",
+      "worktree-exclude"
+    ]
+  },
+  "controls": "Actual native command palette, pickers and file dialogs via keyboard/click; no mocked extension APIs",
+  "remediations": {
+    "probe_sentinel": false,
+    "test_ldconfig_symlink": false,
+    "cache_clearing": false,
+    "cli_credential_seeding": false
+  },
+  "limits": [
+    "Direct native JAT Pack raw-folder command was not tested and is not claimed to honor Room ignore policy.",
+    "Standalone explicit filtered JAT capture is separately qualified by orchestrator.",
+    "This scoped runtime-adoption flow does not relabel prior full create/edit/scan/cancel/source-only UI evidence at 62fd601.",
+    "Windows visible UI not run by this agent.",
+    "No release publication or real installed extension replacement."
+  ],
+  "verification_commands": [
+    "python $FIXTURE_ROOT/verify-jat14.py $FIXTURE_ROOT/editor-workspace/jat14-native-fixture $FIXTURE_ROOT/jat14-room-restore.json",
+    "python $FIXTURE_ROOT/verify-jat14.py $FIXTURE_ROOT/jat14-portable-restored/workspace/workspace $FIXTURE_ROOT/jat14-portable-restore.json"
+  ],
+  "raw_ui_evidence_local_only": true,
+  "initial_packaging_enospc": "Resolved after parent reclaimed positively idle duplicate materializations; known-unexecuted packaging retry passed.",
+  "path_aliases": "FIXTURE_ROOT and EVIDENCE_ROOT replace disposable absolute paths; no real workspace used."
+}

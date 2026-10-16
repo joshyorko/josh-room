@@ -1,0 +1,16 @@
+{
+  "source": "bdf08abccb186c3dd51877d15816f62869c95387",
+  "vsix": "$EVIDENCE_ROOT/josh-room-bdf08ab-jat14-native.vsix",
+  "vsix_sha256": "cd1c6aeca35e8270e0264168755fe3b3d8bc20a43a2d2e347f0ea598825ef7e5",
+  "installed_exact_files": 102,
+  "installed_package_json_equal_excluding_vscode_metadata": true,
+  "native_scan": {
+    "status": "passed",
+    "folder": "$FIXTURE_ROOT/editor-workspace/jat14-native-fixture",
+    "visible_result": "Workspace valid \u00b7 8 entries"
+  },
+  "full_flow_at_source": "5fba3bb711b09366bea1122bd20f6e02e9cc07ef",
+  "parity_receipt": "bdf08ab-vsix-parity.json",
+  "profile": "disposable",
+  "raw_evidence_local_only": true
+}

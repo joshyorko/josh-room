@@ -1,3 +1,5 @@
+Historical campaign checkpoint; see [subsequent0.1.36 report](release-0.1.36-readiness.md) and [published JAT0.1.14](jat-v0.1.14-publication-receipt.json).
+
 # Subsequent capture feature candidate: qualification handoff
 
 The actual packaged Linux native workflow passed on feature source

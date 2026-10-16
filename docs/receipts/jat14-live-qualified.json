@@ -1,0 +1,64 @@
+{
+  "environment_artifact": {
+    "archive": {
+      "asset": "jat-runtime-linux-amd64.rcca",
+      "sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+      "size": 170877798,
+      "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-linux-amd64.rcca"
+    },
+    "digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+    "specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431"
+  },
+  "environment_artifacts": {
+    "linux-x64": {
+      "archive": {
+        "asset": "jat-runtime-linux-amd64.rcca",
+        "sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+        "size": 170877798,
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-linux-amd64.rcca"
+      },
+      "digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+      "specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431"
+    },
+    "win32-x64": {
+      "archive": {
+        "asset": "jat-runtime-windows-amd64.rcca",
+        "sha256": "8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
+        "size": 104094478,
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-windows-amd64.rcca"
+      },
+      "digest": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+      "specification_digest": "sha256:716adb4f9b65b98f954ec564000ffb981562748b25a90d9f02947a17e3f7157b"
+    }
+  },
+  "rcc_platforms": {
+    "linux-x64": {
+      "asset": "rcc-linux64",
+      "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+      "size": 22401186,
+      "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-linux64"
+    },
+    "win32-x64": {
+      "asset": "rcc-windows64.exe",
+      "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+      "size": 20130816,
+      "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-windows64.exe"
+    }
+  },
+  "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+  "rcc_version": "v18.19.7",
+  "release_tag": "v0.1.14-jat-runtime",
+  "repository": "https://github.com/joshyorko/josh-all-the-things",
+  "source_archive": {
+    "asset": "josh-all-the-things-fe43065a654d1649ba9ebe5a6f202eac612e4385.tar.gz",
+    "sha256": "5c1ee4f380df2cd45ff3791156ae79fce5a45cf1092f8746b9fe1e85c6d94f13",
+    "size": 143616,
+    "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/fe43065a654d1649ba9ebe5a6f202eac612e4385"
+  },
+  "source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+  "status": "QUALIFIED",
+  "workflow_run": {
+    "id": 38934211098,
+    "url": "https://github.com/joshyorko/josh-all-the-things/actions/runs/38934211098"
+  }
+}

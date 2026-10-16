@@ -1,0 +1,8 @@
+{
+  "tested_source": "5fba3bb711b09366bea1122bd20f6e02e9cc07ef",
+  "final_source": "bdf08abccb186c3dd51877d15816f62869c95387",
+  "tested_vsix_sha256": "d1eefbf5716e0603ca022e0d45ec625945af4fc1ad33608e162bfabda9bc8930",
+  "final_vsix_sha256": "cd1c6aeca35e8270e0264168755fe3b3d8bc20a43a2d2e347f0ea598825ef7e5",
+  "all_uncompressed_zip_files_equal": true,
+  "entry_count": 105
+}

@@ -1,0 +1,13 @@
+{
+  "status": "passed",
+  "scope": "independent actualfile andVSIXverification; notanotherUIexecution",
+  "ui_tested_source": "5fba3bb711b09366bea1122bd20f6e02e9cc07ef",
+  "final_candidate_source": "bdf08abccb186c3dd51877d15816f62869c95387",
+  "all_original_file_link_entries_unchanged": 50,
+  "room_relocated_restore_file_hashes_match": 5,
+  "jat_relocated_restore_file_hashes_match": 5,
+  "excluded_git_metadata_generated_and_omitted_worktree_absent": true,
+  "all_uncompressed_vsix_files_identical": 105,
+  "final_candidate_vsix_sha256": "cd1c6aeca35e8270e0264168755fe3b3d8bc20a43a2d2e347f0ea598825ef7e5",
+  "portable_jat_sha256": "59f10d02fc74024d84796521b13f1dfe0540b11861d5d67bf8d8b78a6f48ffbe"
+}
