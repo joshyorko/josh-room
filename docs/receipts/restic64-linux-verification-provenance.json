@@ -5,7 +5,7 @@
   "command": "env PYTHONPATH=$FIX_REPO/src $RCC_ACQUIRED_PYTHON scripts/room_store_probe.py --restic $PINNED_RESTIC --evidence-file $EVIDENCE/restic64-native-linux.json",
   "actual_probe_receipt": "restic64-native-linux.json",
   "probe_receipt_sha256": "38f813a02beea15e0f5f60201352d682f4d396871ca6722e958e4c7e815b921e",
-  "unit_command": "docker run --rm -v /workspace:/workspace -w $FIX_REPO room-campaign-tests pytest tests/test_room_store_probe.py -q",
+  "unit_command": "docker run --rm -v $WORKSPACE_ROOT:$WORKSPACE_ROOT -w $FIX_REPO room-campaign-tests pytest tests/test_room_store_probe.py -q",
   "unit_result": "15passed",
   "not_claimed": [
     "NativeWindows (separate hosted consumer gate pending at this checkpoint)",

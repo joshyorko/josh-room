@@ -8,10 +8,12 @@
   "artifact_id": 12063522788,
   "artifact_zip_sha256": "72a2faf0146b496ba858aa499ccf2612f79d9e1eb09150e4f372a4d5ab37945b",
   "raw_path_free_probe_receipt": "main152-windows-restic-phase0-failed.json",
-  "probe_receipt_sha256": "4e8a7f91d787dba97ac528baccd75e7f7e6c85330c2bc5b31ccf75735f8ea86b",
+  "probe_receipt_sha256": "36515ac7e032a8c4a24dd0c99a882fec99c7393518e7283d7e688d9b0b7f9936",
   "candidate_packaging": "SKIPPED",
   "final_stage": "NOT CREATED",
   "resolution_pr": 151,
   "resolution_source": "35341da6378a0af38cf869710f5c6a10913f06c3",
-  "resolution": "Increase only disposable incompressible file from8MiB to64MiB;50%bound and assertions unchanged. No retry of failed run."
+  "resolution": "Increase only disposable incompressible file from8MiB to64MiB;50%bound and assertions unchanged. No retry of failed run.",
+  "archive_probe_receipt_sha256": "4e8a7f91d787dba97ac528baccd75e7f7e6c85330c2bc5b31ccf75735f8ea86b",
+  "receipt_representation": "JSON field values unchanged. Archived Windows receipt CRLF; repository text representation LF. Both hashes are recorded."
 }
