@@ -712,10 +712,13 @@ class ResticStore:
         env.update(self._provider_env)
         return env
 
+    def _command_environment(self, args: list[str]) -> dict[str, str]:
+        return self._environment()
+
     def _spawn(self, args: list[str], *, cwd: Path | None = None) -> Any:
         kwargs: dict[str, Any] = {
             "cwd": cwd,
-            "env": self._environment(),
+            "env": self._command_environment(args),
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
             "stderr": self._stderr,

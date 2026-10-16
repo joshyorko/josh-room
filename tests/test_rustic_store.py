@@ -419,3 +419,22 @@ def test_resolved_exclusions_reject_other_authority_roots(authority, tmp_path):
     excludes.write_text(str(tmp_path / "other-workspace/private") + "\n")
     with RusticStore(**authority) as store, pytest.raises(ResticStoreError):
         store._exclude_file(excludes, workspace)
+
+
+@pytest.mark.parametrize("options", [{}, {"read_data": True}, {"read_data_subset": "1/2"}])
+def test_integrity_checks_bypass_native_cache(authority, options):
+    calls = []
+
+    def spawn(argv, **kwargs):
+        assert "RUSTIC_CACHE_DIR" not in kwargs["env"]
+        calls.append(argv)
+        return FakeProcess(b"")
+
+    with RusticStore(**authority, process_factory=spawn) as store:
+        store._repository_info = RepositoryInfo("e" * 64, 2)
+        store.check(**options)
+        assert store._environment()["RUSTIC_CACHE_DIR"] == str(store._cache_dir)
+    assert "--no-cache" in calls[0]
+    assert calls[0].index("--no-cache") < calls[0].index("check")
+    if "read_data_subset" in options:
+        assert "--read-data" in calls[0]

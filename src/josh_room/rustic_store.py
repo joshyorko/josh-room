@@ -350,6 +350,14 @@ class RusticStore(ResticStore):
                 env[scoped] = json.dumps(self._provider_env[original])
         return env
 
+    def _command_environment(self, args: list[str]) -> dict[str, str]:
+        env = super()._command_environment(args)
+        if "--no-cache" in args:
+            # Clap treats the cache-dir environment setting as an explicit
+            # option, which conflicts with the no-cache flag.
+            env.pop("RUSTIC_CACHE_DIR", None)
+        return env
+
     @contextmanager
     def _process(self, args: list[str], *, cwd: Path | None = None) -> Iterator[Any]:
         self._orphan = None
@@ -382,8 +390,13 @@ class RusticStore(ResticStore):
             raise RusticStoreError("version-mismatch")
 
     def _capture(self, args: list[str], **kwargs: Any) -> tuple[int, bytes]:
-        if args and args[0] == "check" and "--read-data-subset" in args:
-            args = [*args, "--read-data"]
+        if args and args[0] == "check":
+            if "--read-data-subset" in args:
+                args = [*args, "--read-data"]
+            # Integrity checks must read repository bytes, not cached copies.
+            # Pinned Rustic also races concurrent pack-cache writers on cold
+            # full checks, emitting warnings despite a native zero exit.
+            args = ["--no-cache", *args]
         return super()._capture(args, **kwargs)
 
     def _read_repository_info(
