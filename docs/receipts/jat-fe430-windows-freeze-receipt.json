@@ -1,0 +1,22 @@
+{
+  "format_version": 1,
+  "success": true,
+  "operation": "recover-existing-artifact-freeze",
+  "proof_driver_sha": "74641d260210a2824a5bbf54dcb966694a537865",
+  "jat_git_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+  "artifact_digest": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+  "specification_digest": "sha256:716adb4f9b65b98f954ec564000ffb981562748b25a90d9f02947a17e3f7157b",
+  "archive": {
+    "filename": "jat-filtered-candidate.rcca",
+    "sha256": "8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
+    "size": 104094478
+  },
+  "rcc_version": "v18.19.7",
+  "no_build": true,
+  "external_source_overlay": false,
+  "freeze": {
+    "filename": "environment_windows_amd64_freeze.yaml",
+    "sha256": "a3e029f0417aa52ee76fd2dd7a75176ec1f6e0f2662bc6f709de6c8e08616d30",
+    "size": 843
+  }
+}

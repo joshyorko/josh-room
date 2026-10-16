@@ -1,0 +1,34 @@
+[
+  {
+    "platform": "linux",
+    "artifact_id": 12059063021,
+    "zip_sha256": "5ab460fd2493d0a58f8e042065720ac7eeee915da93b6e157e5ff1680a46852e",
+    "zip_size": 167780647,
+    "archive": {
+      "filename": "jat-filtered-candidate.rcca",
+      "sha256": "bb1f7c889cbed2f7537da9bc0a1d278fbaf6e04b9044ab5e8bfd49f0eec4c83c",
+      "size": 170877706
+    },
+    "artifact_digest": "sha256:7cf0618aa46300e49f50740d363eb2b47577847c390c46ddd2aff7e4f8dfa3a0",
+    "specification_digest": "sha256:3ea59573ab7d1f726189b41a5d147adffc97b58bba94dd759a8e9819a93cb1c6",
+    "source": "2f9c671985cfcc055d5ab54e6e2e5bc5127c78f6",
+    "rcc": "v18.19.7",
+    "candidate_only": true
+  },
+  {
+    "platform": "windows",
+    "artifact_id": 12059462493,
+    "zip_sha256": "7d15c97f732306b380569e81b3008483c83faf6f5d885e2897754e30a7cf321e",
+    "zip_size": 102336546,
+    "archive": {
+      "filename": "jat-filtered-candidate.rcca",
+      "sha256": "25b58fea4f9dfaa20f8938579dac0d655092702ee6e4177bddf6970503ef911e",
+      "size": 104094482
+    },
+    "artifact_digest": "sha256:288387b6a7410a1a7333170497ee3a6ce91d2fc5367922812319c2307a275304",
+    "specification_digest": "sha256:d707df83ece8447408cc2de3914be82818953a47f2b100cc00b1b4341ae9b917",
+    "source": "2f9c671985cfcc055d5ab54e6e2e5bc5127c78f6",
+    "rcc": "v18.19.7",
+    "candidate_only": true
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "source_sha": "4bfe690c4b43ba7e822b92594383c68cee928c9c",
+  "scope": "Finite expected native UI strings extracted from locally retained fixture renderer text; raw renderer text not published",
+  "checks": {
+    "4bfe690-native-zero-selected.txt": {
+      "worktree-exclude": true,
+      "0 Selected": true
+    },
+    "4bfe690-native-exclusion-confirm.txt": {
+      "worktree-exclude/**": true,
+      "will not be backed up": true,
+      "Git administrative dependencies may still block capture": true
+    },
+    "4bfe690-native-sourceonly-confirm.txt": {
+      "Git history and staging state will not be backed up": true,
+      "Original repositories stay untouched": true
+    },
+    "4bfe690-native-ready-flow.txt": {
+      "MinIO encryption is ready.": true,
+      "Include local OCI images?": true
+    }
+  }
+}

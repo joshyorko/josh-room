@@ -1,0 +1,30 @@
+[
+  {
+    "platform": "linux",
+    "artifact_id": 12060820191,
+    "source": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "archive": {
+      "filename": "jat-filtered-candidate.rcca",
+      "sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+      "size": 170877798
+    },
+    "artifact_digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+    "specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431",
+    "blueprint_digest": "sha256:aafcf3a5dfe6ab3ece22c95b63db2037d9c351d3bace2e06fe4dd4c31484d02f",
+    "rcc": "v18.19.7"
+  },
+  {
+    "platform": "windows",
+    "artifact_id": 12059169968,
+    "source": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "archive": {
+      "filename": "jat-filtered-candidate.rcca",
+      "sha256": "8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
+      "size": 104094478
+    },
+    "artifact_digest": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+    "specification_digest": "sha256:716adb4f9b65b98f954ec564000ffb981562748b25a90d9f02947a17e3f7157b",
+    "blueprint_digest": "sha256:6e20200f64f3c6b5d217641ac7ce5ef1266d75dcaf2a40cedaba3d6e9345ae1b",
+    "rcc": "v18.19.7"
+  }
+]

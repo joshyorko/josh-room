@@ -1,0 +1,22 @@
+{
+  "source_sha": "62fd601f50f5bd67823a8b3a474c0036f2f60b29",
+  "scope": "Finite expected native UI strings extracted from local fixture renderer text; raw text not published",
+  "checks": {
+    "final62-zero-selected.txt": {
+      "0 Selected": true,
+      "worktree-exclude": true
+    },
+    "final62-exclusion-confirm.txt": {
+      "worktree-exclude/**": true,
+      "Git administrative dependencies may still block capture": true
+    },
+    "final62-sourceonly-confirm.txt": {
+      "Git history and staging state will not be backed up": true,
+      "Original repositories stay untouched": true
+    },
+    "final62-ready-flow.txt": {
+      "MinIO encryption is ready.": true,
+      "Include local OCI images?": true
+    }
+  }
+}

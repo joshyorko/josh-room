@@ -1,0 +1,29 @@
+{
+  "operation": "recover-existing-artifact-freeze",
+  "success": true,
+  "jat_git_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+  "artifact_digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+  "archive": {
+    "filename": "jat-filtered-candidate.rcca",
+    "sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+    "size": 170877798
+  },
+  "rcc_version": "v18.19.7",
+  "rcc_source": {
+    "asset": "rcc-linux64",
+    "commit": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+    "repository": "https://github.com/joshyorko/rcc",
+    "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+    "tag": "v18.19.7"
+  },
+  "no_build": true,
+  "commands": [
+    "--no-build ht vars --robot <exact-descriptors>/robot.yaml --json",
+    "--no-build task run --robot <exact-descriptors>/robot.yaml --task JAT -- --help"
+  ],
+  "freeze": {
+    "filename": "environment_linux_amd64_freeze.yaml",
+    "sha256": "9f261fa13e0c808afa4398f6f5f5db5da0f7e186e286230e02bb9e44fcdd82af",
+    "size": 1112
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "status": "passed-same-package-full-native-flow-linux",
+  "candidate": {
+    "source_commit": "4bfe690c4b43ba7e822b92594383c68cee928c9c",
+    "file": "josh-room-4bfe690-native-candidate.vsix",
+    "sha256": "44f2ac4b4af6c79cb75c49dbecf7baefda1e9c8bb14fb28623cd0377adf1afa5",
+    "extension_version": "0.1.36",
+    "template_version": "0.1.6",
+    "installed_verification": "102files byte-identical; package.json semantically identical excluding VSCode-added __metadata",
+    "source_clean_after_packaging": true
+  },
+  "packaging": {
+    "command": "npm run package -- --out /workspace/campaign-evidence/josh-room-4bfe690-native-candidate.vsix",
+    "working_directory": "vscode-extension",
+    "container": "room-campaign-tests",
+    "node": "mounted provided Node runtime",
+    "native_package_tool": "@vscode/vsce@4.0.0",
+    "dependencies": "isolated container npm cache only; no host project install",
+    "note": "Initial unreadable CA-path attempt stopped; successful run used readable system CA bundle without verification bypass."
+  },
+  "environment": {
+    "platform": "Linux x64 Debian13 Docker + Xvfb",
+    "vscode": "1.142.0",
+    "rcc": "18.19.7",
+    "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+    "storage": "Moto5.1.15 S3-compatible emulator",
+    "runtime_artifacts": {
+      "controller": {
+        "digest": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+        "archive_sha256": "9a05f6c631686519453b96ef550e62362fc582a6b66b4c57d61e95c7b76a3761"
+      },
+      "jat": {
+        "digest": "sha256:9b71cba250c5038e5464651c068afdd281f577310c59a317ace483697a554fb1",
+        "archive_sha256": "b474a8dc3055410611b6ae476f05bb8e801c0a4f6d0fcc175550ed338e8dcfe5"
+      }
+    },
+    "no_runtime_fallback": true,
+    "no_probe_sentinel": true,
+    "no_test_ldconfig_symlink": true,
+    "no_cache_clear": true,
+    "no_cli_credential_seeding": true
+  },
+  "native_flow": [
+    {
+      "step": "Add Storage",
+      "result": "Reused prior natively created connection; created room-release136-native bucket, checked access and added fresh Dimension."
+    },
+    {
+      "step": "Create",
+      "result": "Selected /acceptance/release136-source, distinct from editor workspace. Ignore absent; native initializer created it only in selected folder."
+    },
+    {
+      "step": "Edit exclusions",
+      "result": "Native Edit exclusions opened Monaco. Typed generated/** and saved."
+    },
+    {
+      "step": "Scan",
+      "result": "Four independent Git findings: both main repo worktree registrations plus both checkout .git pointers."
+    },
+    {
+      "step": "Review selections",
+      "result": "Native multiselect started0selected; explicitly selected only worktree-exclude."
+    },
+    {
+      "step": "Confirm exclusions",
+      "result": "Confirmed exact worktree-exclude/** with backup/admin warnings."
+    },
+    {
+      "step": "Rescan",
+      "result": "Fresh scan remained blocked by3Gitfindings, correctly preserving main repository administrative blockers."
+    },
+    {
+      "step": "Source-only",
+      "result": "Explicit native confirmation explained loss of Git history/staging backup and that original repositories stay untouched."
+    },
+    {
+      "step": "Rescan/preview",
+      "result": "Fresh valid complete scan;5logicalentries634B preview."
+    },
+    {
+      "step": "New Dimension encryption",
+      "result": "Native initialization using existing disposable recovery identity. Ready toast stayed visible while next picker appeared; no dismissal."
+    },
+    {
+      "step": "Save",
+      "result": "Native Save succeeded16:35:29.291;Restic data added2.4KB."
+    },
+    {
+      "step": "Relocated restore",
+      "result": "Renamed only disposable original to make old path unavailable; native Enter Room restored different path and opened folder16:36:06.803."
+    }
+  ],
+  "restore": {
+    "status": "passed",
+    "snapshot_id": "03970717991940099821c5696ca42f7f",
+    "original_path_unavailable": true,
+    "original_file_hashes_unchanged": 47,
+    "destination": "/acceptance/editor-workspace/release136-native-fixture",
+    "restored_sha256": {
+      "project.txt": "298d3e339d23cd07e648b37184cbc904b31356697bfa53092da85f83affd0771",
+      "worktree-keep/draft.txt": "95ce7b22f7731f1909003ea710659b04467be6a554cb96c4040f380113740644"
+    },
+    "ignore_sha256": "9ea805ca7882b8f01a06dc4e0cfecc2222a9191240520479419379e202d70022",
+    "ignore_bytes_match_source": true,
+    "excluded_absent": [
+      "all .git entries",
+      "generated",
+      "worktree-exclude"
+    ],
+    "inventory": [
+      ".josh-room.json",
+      ".josh-roomignore",
+      "project.txt",
+      "repo",
+      "worktree-keep",
+      "worktree-keep/draft.txt"
+    ]
+  },
+  "remaining_unrun_on_exact_candidate": [
+    "Native cancellation was not repeated on4bfe; earlier candidate cancellation receipts remain separately attributed.",
+    "Windows native UI not available in this Linux environment; parent owns separate Windows gate."
+  ],
+  "limitations": [
+    "Moto emulator, not actual MinIO/R2.",
+    "Existing native connection and disposable recovery identity reused; fresh credential creation independently qualified on505.",
+    "Old CLI-seeded ui-fixture generated catalog warning, did not block this native connection/flow.",
+    "RCC shared-home acceptance/agent warning observed; operations completed."
+  ],
+  "evidence": [
+    "4bfe690-native-ui.log",
+    "4bfe690-native-flow-extract.json",
+    "4bfe690-native-restore.json",
+    "4bfe690-native-installed-payload.json"
+  ],
+  "boundaries": [
+    "No source edits/commits/pushes",
+    "Only disposable extension profile updated",
+    "No tags/releases/deployment/publication",
+    "No screenshot publication"
+  ],
+  "sanitization": "Raw renderer text remains local. Published finite-string extraction records only expected tested UI copy."
+}

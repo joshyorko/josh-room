@@ -1,0 +1,55 @@
+{
+  "operation": "proposed-supporting-runtime-publication",
+  "release_tag": "v0.1.14-jat-runtime",
+  "source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+  "producer_run": 38934211098,
+  "rcc_version": "v18.19.7",
+  "platforms": {
+    "linux": {
+      "artifact_digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+      "carrier_tag": "ghcr.io/joshyorko/josh-all-the-things-jat-runtime:linux_amd64-ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4"
+    },
+    "windows": {
+      "artifact_digest": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+      "carrier_tag": "ghcr.io/joshyorko/josh-all-the-things-jat-runtime:windows_amd64-65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e"
+    }
+  },
+  "verified_staged_inputs": [
+    {
+      "file": "jat-runtime-linux-amd64.rcca",
+      "sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+      "size": 170877798
+    },
+    {
+      "file": "jat-runtime-linux-amd64.json",
+      "sha256": "8789619a65b7f5da1753b2bef2175a88d40a602b1de6437a591603510eb51e90",
+      "size": 2038
+    },
+    {
+      "file": "environment_linux_amd64_freeze.yaml",
+      "sha256": "9f261fa13e0c808afa4398f6f5f5db5da0f7e186e286230e02bb9e44fcdd82af",
+      "size": 1112
+    },
+    {
+      "file": "jat-runtime-windows-amd64.rcca",
+      "sha256": "8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
+      "size": 104094478
+    },
+    {
+      "file": "jat-runtime-windows-amd64.json",
+      "sha256": "898f809028835ba53bf8e66e649e90c337396ebe769ce20cac9f6d9a6f449d75",
+      "size": 2105
+    },
+    {
+      "file": "environment_windows_amd64_freeze.yaml",
+      "sha256": "a3e029f0417aa52ee76fd2dd7a75176ec1f6e0f2662bc6f709de6c8e08616d30",
+      "size": 843
+    }
+  ],
+  "remaining_generated_assets": [
+    "jat-runtime-provenance.json with actual approved OCI carriers",
+    "SHA256SUMS"
+  ],
+  "authorization": "PENDING explicit supporting-runtime publication approval; feature merges approved separately",
+  "final_room_publication": "Josh only"
+}

@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "snapshot_id": "fd4cf050b0144ad6b811f353d1b1d1a9",
+  "original_path_unavailable": true,
+  "original_file_hashes_unchanged": 47,
+  "destination": "/acceptance/editor-workspace/final62-native-fixture",
+  "restored_sha256": {
+    "project.txt": "473ef0ac5d2e8070f3f11a237e149f5e332da57a56341608c1f7554e4950685c",
+    "worktree-keep/draft.txt": "89f21de581eaa14aec9cd1afaa67d652ba4ae33cfb3d90cb6af313a56e2750dc"
+  },
+  "ignore_sha256": "9ea805ca7882b8f01a06dc4e0cfecc2222a9191240520479419379e202d70022",
+  "ignore_bytes_match": true,
+  "excluded_absent": [
+    "all .git entries",
+    "generated",
+    "worktree-exclude"
+  ]
+}

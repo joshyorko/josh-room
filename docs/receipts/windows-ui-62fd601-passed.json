@@ -1,0 +1,89 @@
+{
+  "gate": "packaged-windows-native-check-workspace",
+  "status": "passed",
+  "checks": [
+    "installed-candidate-payload-matches-source",
+    "native-command-source-only-valid",
+    "native-command-policy-change-rejects-unsupported-git",
+    "original-fixture-git-entry-unchanged"
+  ],
+  "full_save_restore": "NOT RUN",
+  "screenshots": "NOT CREATED",
+  "source_sha": "62fd601f50f5bd67823a8b3a474c0036f2f60b29",
+  "vsix_sha256": "d5c007418cde5a5f6d5ba6e11a21eed60a9a7abb73d57e4b5d395d2fbbd62e71",
+  "extension_version": "0.1.36",
+  "vscode_version": "1.142.0",
+  "vscode_executable_sha256": "5ca701a1facb91fec1ac6bbae11fc837821a1da34ddebb91a0bad7e87ab88144",
+  "notifications": [
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Resolving managed RCC \u00b7 \u2026 \u00b7 elapsed 00:00",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Downloading RCC \u00b7 \u2026 \u00b7 elapsed 00:00",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Verifying RCC SHA256 \u00b7 \u2026 \u00b7 elapsed 00:02",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Downloading controller Environment Artifact \u00b7 \u2026 \u00b7 elapsed 00:03",
+      "error_class": "artifact"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Importing controller Environment Artifact into private RCC storage \u00b7 \u2026 \u00b7 elapsed 00:05",
+      "error_class": "artifact"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Starting Josh Room controller \u00b7 \u2026 \u00b7 elapsed 00:36",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Workspace valid \u00b7 2 entries",
+      "error_class": "informational"
+    },
+    {
+      "stage": "full-repository-native-check",
+      "message": "Checking workspace\u2026: Starting Josh Room controller \u00b7 \u2026 \u00b7 elapsed 00:00",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "full-repository-native-check",
+      "message": "workspace-invalid: Git storage is not self-contained and portable; use an ordinary checkout or relative in-workspace submodule storage before saving (external or absolute Git pointers and linked worktrees are unsupported). Inspect linked worktrees with `git worktree prune --dry-run --verbose`; choose source-only explicitly or repair Git storage manually before saving.",
+      "error_class": "informational"
+    }
+  ],
+  "renderer_ready": {
+    "ready_state": "complete",
+    "visibility": "visible",
+    "focused": true,
+    "workbench_present": true,
+    "editor_present": true,
+    "palette_present": false,
+    "palette_visible": false,
+    "active_element": "DIV"
+  },
+  "command_selections": [
+    {
+      "stage": "source-only-native-check",
+      "label": "Josh: Check Workspace",
+      "exact_visible_rows": 1
+    },
+    {
+      "stage": "full-repository-native-check",
+      "label": "Josh: Check Workspace",
+      "exact_visible_rows": 1
+    }
+  ],
+  "source_only_ui_result": "Workspace valid \u00b7 2 entries",
+  "full_repository_ui_result": "Git storage is not self-contained and portable; use an ordinary checkout or relative in-workspace submodule storage before saving (external or absolute Git pointers and linked worktrees are unsupported). Inspect linked worktrees with `git worktree prune --dry-run --verbose`; choose source-only explicitly or repair Git storage manually before saving.",
+  "final_stage": "full-repository-native-check"
+}

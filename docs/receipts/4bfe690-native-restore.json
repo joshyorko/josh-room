@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "snapshot_id": "03970717991940099821c5696ca42f7f",
+  "original_path_unavailable": true,
+  "original_file_hashes_unchanged": 47,
+  "destination": "/acceptance/editor-workspace/release136-native-fixture",
+  "restored_sha256": {
+    "project.txt": "298d3e339d23cd07e648b37184cbc904b31356697bfa53092da85f83affd0771",
+    "worktree-keep/draft.txt": "95ce7b22f7731f1909003ea710659b04467be6a554cb96c4040f380113740644"
+  },
+  "ignore_sha256": "9ea805ca7882b8f01a06dc4e0cfecc2222a9191240520479419379e202d70022",
+  "ignore_bytes_match_source": true,
+  "excluded_absent": [
+    "all .git entries",
+    "generated",
+    "worktree-exclude"
+  ],
+  "inventory": [
+    ".josh-room.json",
+    ".josh-roomignore",
+    "project.txt",
+    "repo",
+    "worktree-keep",
+    "worktree-keep/draft.txt"
+  ]
+}

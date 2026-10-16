@@ -1,0 +1,128 @@
+{
+  "status": "passed-full-native-flow-including-cancel-linux",
+  "candidate": {
+    "source_commit": "62fd601f50f5bd67823a8b3a474c0036f2f60b29",
+    "filename": "josh-room-62fd601-native-candidate.vsix",
+    "sha256": "7472a9624da838e761554d3b06c610b7aad116f5924ccefb38d9f5d151cb54a1",
+    "extension_version": "0.1.36",
+    "template_version": "0.1.6",
+    "installed_byte_equal_file_count": 102,
+    "installed_package_json": "semantic equality excluding VSCode-added __metadata"
+  },
+  "packaging": {
+    "command": "npm run package -- --out /workspace/campaign-evidence/josh-room-62fd601-native-candidate.vsix",
+    "working_directory": "vscode-extension",
+    "environment": "room-campaign-tests container; provided Node mounted read-only; isolated npm cache",
+    "tool": "@vscode/vsce@4.0.0",
+    "host_dependencies_installed": false
+  },
+  "environment": {
+    "platform": "Linux x64 Debian13 Docker + Xvfb",
+    "vscode": "1.142.0",
+    "storage": "Moto5.1.15 S3-compatible emulator",
+    "runtime": {
+      "controller": {
+        "digest": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+        "archive_sha256": "9a05f6c631686519453b96ef550e62362fc582a6b66b4c57d61e95c7b76a3761"
+      },
+      "jat": {
+        "digest": "sha256:9b71cba250c5038e5464651c068afdd281f577310c59a317ace483697a554fb1",
+        "archive_sha256": "b474a8dc3055410611b6ae476f05bb8e801c0a4f6d0fcc175550ed338e8dcfe5"
+      },
+      "rcc": {
+        "version": "18.19.7",
+        "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48"
+      }
+    },
+    "probe_sentinel_present": false,
+    "test_ldconfig_symlink_present": false,
+    "cache_cleared": false,
+    "runtime_fallback_used": false,
+    "cli_credential_seed_used": false
+  },
+  "native_storage": {
+    "bucket": "room-final62-native",
+    "dimension": "minio-minio-127-0-0-1-59000-room-final62-native",
+    "connection": "minio-127-0-0-1-59000",
+    "connection_origin": "previously created through native controls",
+    "bucket_created_natively": true,
+    "new_encryption_dimension_initialized_natively": true,
+    "existing_disposable_recovery_identity_reused": true
+  },
+  "native_ui_checks": {
+    "initialized_selected_folder": true,
+    "selected_folder_differs_editor_workspace": true,
+    "editor_workspace_ignore_absent": true,
+    "native_monaco_edit_rule": "generated/**",
+    "initial_git_findings": 4,
+    "initial_picker_selection_count": 0,
+    "cancel_selected_item": "worktree-exclude",
+    "cancel_left_ignore_unchanged": true,
+    "cancel_wrote_no_exclusions": true,
+    "approved_selected_items": [
+      "worktree-exclude"
+    ],
+    "exact_exclusion_confirmation": true,
+    "post_exclusion_git_findings": 3,
+    "fresh_scan_still_blocked_after_checkout_exclusion": true,
+    "source_only_explicit_warning_confirmed": true,
+    "fresh_source_only_scan_valid_complete": true,
+    "encryption_notice_nonblocking_without_dismissal": true,
+    "native_preview_entries": 5,
+    "native_preview_bytes": 614
+  },
+  "cancellation": {
+    "status": "passed",
+    "action": "Selected worktree-exclude then Escape at native multiselect before approval",
+    "ignore_unchanged": true,
+    "before_sha256": "f37bab33dcf81904df0241c35da96bac4bab51ecdd26dfa8e9092c97082f706b",
+    "after_sha256": "f37bab33dcf81904df0241c35da96bac4bab51ecdd26dfa8e9092c97082f706b",
+    "exclusion_not_written": true,
+    "no_apply_command_before_cancel": true
+  },
+  "save": {
+    "status": "passed",
+    "timestamp": "2026-10-16 16:48:43.063",
+    "snapshot_id": "fd4cf050b0144ad6b811f353d1b1d1a9",
+    "reported_restic_added": "2.4 KB"
+  },
+  "restore": {
+    "status": "passed",
+    "snapshot_id": "fd4cf050b0144ad6b811f353d1b1d1a9",
+    "original_path_unavailable": true,
+    "original_file_hashes_unchanged": 47,
+    "destination": "/acceptance/editor-workspace/final62-native-fixture",
+    "restored_sha256": {
+      "project.txt": "473ef0ac5d2e8070f3f11a237e149f5e332da57a56341608c1f7554e4950685c",
+      "worktree-keep/draft.txt": "89f21de581eaa14aec9cd1afaa67d652ba4ae33cfb3d90cb6af313a56e2750dc"
+    },
+    "ignore_sha256": "9ea805ca7882b8f01a06dc4e0cfecc2222a9191240520479419379e202d70022",
+    "ignore_bytes_match": true,
+    "excluded_absent": [
+      "all .git entries",
+      "generated",
+      "worktree-exclude"
+    ]
+  },
+  "restore_timestamp": "2026-10-16 16:49:23.254",
+  "publication_evidence_policy": "Raw renderer text/logs and screenshots not published; structured receipt includes only finite results and synthetic fixture hashes.",
+  "limitations": [
+    "Linux UI gate only; Windows qualification owned separately by parent.",
+    "Storage is Moto emulator, not actual MinIO/R2.",
+    "Existing native connection and disposable recovery identity reused.",
+    "Unrelated old CLI-seeded ui-fixture produced catalog warnings; final62 native flow completed.",
+    "RCC sharedhome username warning observed; capture/restore completed."
+  ],
+  "boundaries": [
+    "No source edits/commits/pushes by UI agent",
+    "Only disposable profile extension replaced",
+    "No release/tag/deploy/publication",
+    "No live user repositories/storage touched"
+  ],
+  "evidence": [
+    "62fd601-native-flow-extract.json",
+    "62fd601-native-cancel.json",
+    "62fd601-native-restore.json"
+  ],
+  "root_verification": "Archive hash/version/current canonical runtime+extension/controller payload; actual restore bytes/exclusion inventory and all 47 original file hashes independently verified."
+}

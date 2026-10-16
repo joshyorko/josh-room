@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "action": "Selected worktree-exclude then Escape at native multiselect before approval",
+  "ignore_unchanged": true,
+  "before_sha256": "f37bab33dcf81904df0241c35da96bac4bab51ecdd26dfa8e9092c97082f706b",
+  "after_sha256": "f37bab33dcf81904df0241c35da96bac4bab51ecdd26dfa8e9092c97082f706b",
+  "exclusion_not_written": true,
+  "no_apply_command_before_cancel": true
+}

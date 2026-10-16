@@ -1,0 +1,80 @@
+{
+  "gate": "packaged-windows-native-check-workspace",
+  "status": "failed",
+  "checks": [
+    "installed-candidate-payload-matches-source"
+  ],
+  "full_save_restore": "NOT RUN",
+  "screenshots": "NOT CREATED",
+  "source_sha": "f41c6088993d75a58c21eb71a5411797f6d0f924",
+  "vsix_sha256": "22091eacb30044f30a41e068d2c03623295702bd82244b203f4a0551488bcd42",
+  "extension_version": "0.1.35",
+  "vscode_version": "1.142.0",
+  "vscode_executable_sha256": "5ca701a1facb91fec1ac6bbae11fc837821a1da34ddebb91a0bad7e87ab88144",
+  "notifications": [
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Downloading RCC \u00b7 \u2026 \u00b7 elapsed 00:00",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Verifying RCC SHA256 \u00b7 \u2026 \u00b7 elapsed 00:01",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Managed RCC ready \u00b7 \u2026 \u00b7 elapsed 00:03",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Downloading controller Environment Artifact \u00b7 \u2026 \u00b7 elapsed 00:03",
+      "error_class": "artifact"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Importing controller Environment Artifact into private RCC storage \u00b7 \u2026 \u00b7 elapsed 00:04",
+      "error_class": "artifact"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "Checking workspace\u2026: Starting Josh Room controller \u00b7 \u2026 \u00b7 elapsed 00:24",
+      "error_class": "runtime-controller"
+    },
+    {
+      "stage": "source-only-native-check",
+      "message": "RCC did not produce a controller receipt",
+      "error_class": "runtime-controller"
+    }
+  ],
+  "renderer_ready": {
+    "ready_state": "complete",
+    "visibility": "visible",
+    "focused": true,
+    "workbench_present": true,
+    "editor_present": true,
+    "palette_present": false,
+    "palette_visible": false,
+    "active_element": "DIV"
+  },
+  "command_selections": [
+    {
+      "stage": "source-only-native-check",
+      "label": "Josh: Check Workspace",
+      "exact_visible_rows": 1
+    }
+  ],
+  "error": "Timed out: source-only native workspace check result",
+  "renderer_diagnostics": {
+    "ready_state": "complete",
+    "visibility": "visible",
+    "focused": true,
+    "workbench_present": true,
+    "editor_present": true,
+    "palette_present": true,
+    "palette_visible": false,
+    "active_element": "DIV"
+  },
+  "final_stage": "source-only-native-check"
+}
