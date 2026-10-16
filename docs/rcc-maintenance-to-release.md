@@ -119,6 +119,13 @@ published 0.1.35 artifacts are untouched. Final source qualification and a fresh
 stage must follow adoption. Josh still supplies that exact source SHA, stage run
 ID, and `APPROVE` for final Room publication.
 
+Managed consumer acceptance uses a separate synthetic Python RCC project to
+verify user environment capture and restored artifact anchors. Its environment
+must not copy JAT's producer freeze: that freeze contains JAT source-relative
+installation hooks and belongs to the producer checkout. The user-project
+capture, larger workspace capture and required RCC anchor assertions remain
+part of the native consumer gate.
+
 ## Resume an interrupted empty draft
 
 The publish workflow retains the release ID returned by the create API and

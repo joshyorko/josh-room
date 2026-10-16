@@ -375,13 +375,14 @@ async function main() {
     const sourceReadmeBytes = await fsp.readFile(sourceReadme);
     const sourceReadmeMode = (await fsp.stat(sourceReadme)).mode;
     if (platform === "linux-x64") {
-      await fsp.copyFile(
-        path.join(jat.jatRoot, "environment_linux_amd64_freeze.yaml"),
-        path.join(source, "environment_linux_amd64_freeze.yaml"),
-      );
+      // This is the user's synthetic RCC project, independent of JAT's runtime.
+      // JAT's producer freeze contains install hooks relative to its own source
+      // checkout; those hooks do not belong to this independent fixture.
+      await fsp.writeFile(path.join(source, "environment_linux_amd64.yaml"),
+        "channels:\n  - conda-forge\ndependencies:\n  - python=3.13.11\n");
       await fsp.writeFile(path.join(source, "robot.yaml"),
         "tasks:\n  Example:\n    shell: python -c \"print('synthetic')\"\n"
-        + "environmentConfigs:\n  - environment_linux_amd64_freeze.yaml\n");
+        + "environmentConfigs:\n  - environment_linux_amd64.yaml\n");
     }
     executeController(["dimensions", "list", "--json"], "dimensions-list");
     executeController(["snapshot", "create", "demo", "--source", source, "--backend", "local", "--json"], "legacy-local-jat-save");
@@ -419,7 +420,7 @@ async function main() {
     if (platform === "linux-x64") {
       const largerSource = path.join(root, "larger-workspace");
       await fsp.mkdir(largerSource, { mode: 0o700 });
-      for (const name of ["robot.yaml", "environment_linux_amd64_freeze.yaml"]) {
+      for (const name of ["robot.yaml", "environment_linux_amd64.yaml"]) {
         await fsp.copyFile(path.join(source, name), path.join(largerSource, name));
       }
       for (let index = 0; index < 2048; index += 1) {
