@@ -1,0 +1,138 @@
+{
+  "status": "passed-linux-native-storage-save-relocated-restore",
+  "candidate": {
+    "source_commit": "505998ad43ef711dc2769e1dc5ba22df623906b2",
+    "filename": "josh-room-feature-readiness.vsix",
+    "sha256": "b8b53fa3323c4b8c4ada26a543a09676761a5d68f2293f2889b8aa08fec9908e",
+    "version": "0.1.35",
+    "installed_files_verified_equal_to_archive": [
+      "extension.js",
+      "runtime.js",
+      "dirty.js",
+      "runtime/controller/josh_room/cli.py",
+      "runtime/manifest.json"
+    ],
+    "scope": "feature candidate only; not published maintenance release"
+  },
+  "environment": {
+    "platform": "Linux x64 Debian13 disposable Docker plus Xvfb",
+    "vscode_version": "1.142.0",
+    "rcc": "18.19.7",
+    "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+    "storage": "Moto5.1.15 S3-compatible emulator",
+    "test_ldconfig_symlink_removed": true,
+    "probe_sentinel_absent": true,
+    "runtime_fallback_used": false,
+    "old_archive_caches_retained": true,
+    "verified_artifacts": {
+      "controller": {
+        "artifact_digest": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+        "archive_sha256": "9a05f6c631686519453b96ef550e62362fc582a6b66b4c57d61e95c7b76a3761",
+        "old_basename_cache_preserved": true
+      },
+      "jat": {
+        "artifact_digest": "sha256:9b71cba250c5038e5464651c068afdd281f577310c59a317ace483697a554fb1",
+        "archive_sha256": "b474a8dc3055410611b6ae476f05bb8e801c0a4f6d0fcc175550ed338e8dcfe5",
+        "old_basename_cache_preserved": true
+      }
+    }
+  },
+  "add_storage": {
+    "status": "passed",
+    "sequence": [
+      "native Add Storage",
+      "MinIO",
+      "New connection",
+      "127.0.0.1:59000 endpoint",
+      "fresh credentials through password prompts",
+      "create room-readiness-native bucket",
+      "access check",
+      "Dimension creation",
+      "Connected confirmation"
+    ],
+    "credential_seed_used": false,
+    "connection_id": "minio-127-0-0-1-59000",
+    "dimension_id": "minio-minio-127-0-0-1-59000-room-readiness-native",
+    "probe_evidence": {
+      "synthetic_probe_sentinel_present": false,
+      "before_exit": 1,
+      "synthetic_sentinel_removed": false,
+      "after_exit": 1,
+      "after_stdout_empty": true,
+      "after_stderr_empty": true
+    }
+  },
+  "existing_bucket_repeat": {
+    "status": "passed",
+    "ui_result": "Connected MinIO bucket room-readiness-native",
+    "config_byte_comparison": {
+      "config_bytes_unchanged": true,
+      "before_sha256": "9d02baffb6911f812a7da5d60539b507a6a3ac255671ab1e30bb31d68fbee8f4",
+      "after_sha256": "9d02baffb6911f812a7da5d60539b507a6a3ac255671ab1e30bb31d68fbee8f4"
+    },
+    "duplicate_error": false
+  },
+  "reuse_picker_cancel": {
+    "status": "passed",
+    "action": "Escape at native Choose a MinIO Connection picker",
+    "config_bytes_unchanged": true,
+    "no_connection_create_after_cancel": true,
+    "endpoint_and_connection_id_visible": true
+  },
+  "save": {
+    "status": "passed",
+    "timestamp": "2026-10-16T15:57:20.480",
+    "room": "Readiness Native Fixture",
+    "source": "/acceptance/readiness-source",
+    "capture_mode": "source-only",
+    "snapshot_id": "c46c2597b54a4c8c90c89a6e89bcdb7c",
+    "logical_entries": 4,
+    "scan_bytes": 107,
+    "reported_restic_added": "1.5 KB",
+    "encryption": "fresh Dimension initialized natively using existing disposable recovery identity"
+  },
+  "restore": {
+    "status": "passed",
+    "snapshot_id": "c46c2597b54a4c8c90c89a6e89bcdb7c",
+    "destination": "/acceptance/editor-workspace/readiness-native-fixture",
+    "original_path_unavailable": true,
+    "original_file_hashes_unchanged": 4,
+    "restored_sha256": {
+      "project.txt": "2fcbb89afda1d4f19b391953894ae3fc6fb7be65b4d4c83a749b7269a7c359dd",
+      "uploads/selected.txt": "4b39953402d163ff605823d62cb2b1b4ec564276c821edc8259f613ab98a7dd0",
+      ".josh-roomignore": "aa5449dc21c00dea5e24d697c40aa07195761cb9e92718cb849282f6bf256135"
+    },
+    "excluded_absent": [
+      "generated",
+      "all .git entries"
+    ],
+    "inventory": [
+      ".josh-room.json",
+      ".josh-roomignore",
+      "project.txt",
+      "uploads",
+      "uploads/selected.txt"
+    ]
+  },
+  "restore_timestamp": "2026-10-16T15:57:52.180",
+  "limitations": [
+    "Storage is Moto emulator, not actual MinIO/R2.",
+    "No Windows native UI available in this execution environment; parent has separate Windows qualification work.",
+    "Native encryption-ready informational notification required dismissal before Save continued.",
+    "Catalog warnings from old CLI-seeded ui-fixture credential profile did not block new native connection or Save/restore.",
+    "RCC warned shared ROBocorp home usernames acceptance/agent during concurrent parent verification; operations completed.",
+    "Full linked-worktree select/confirm/cancel evidence remains attributed to earlier candidate; this candidate verifies fresh storage and short source-only Save/restore."
+  ],
+  "evidence": [
+    "readiness-native-gate.log",
+    "readiness-restore-result.json",
+    "readiness-repeat-result.json",
+    "readiness-manifest.json"
+  ],
+  "boundaries": [
+    "No source edits by UI agent",
+    "No publication/tag/deployment/merge",
+    "Only disposable extension profile updated",
+    "No screenshot publication attempted"
+  ]
+}

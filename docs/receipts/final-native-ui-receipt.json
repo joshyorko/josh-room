@@ -1,0 +1,102 @@
+{
+  "status": "passed-final-executable-native-save-relocated-restore",
+  "candidate": {
+    "source_commit": "995c3b6953ba5880e2a21db3ceb3bceec5d90fb3",
+    "file": "josh-room-final-feature-candidate.vsix",
+    "sha256": "b64c17189ca8c577b9f1fa3720fadb25b602dca8c35337dc3b2630822c3638d2",
+    "version": "0.1.35",
+    "installed_payload_equal_to_archive": [
+      "extension.js",
+      "runtime.js",
+      "dirty.js",
+      "runtime/controller/josh_room/cli.py",
+      "runtime/manifest.json"
+    ],
+    "scope": "unpublished feature candidate; not staged maintenance release"
+  },
+  "environment": {
+    "os": "Debian13 Linux x64 disposable Docker + Xvfb",
+    "vscode": "1.142.0",
+    "rcc": "18.19.7",
+    "storage": "Moto5.1.15 S3-compatible emulator",
+    "runtime_fallback": false,
+    "synthetic_probe_sentinel": false,
+    "test_ldconfig_symlink": false,
+    "cache_clear_performed": false,
+    "runtime_archives": {
+      "controller": {
+        "digest": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+        "sha256": "9a05f6c631686519453b96ef550e62362fc582a6b66b4c57d61e95c7b76a3761",
+        "old_basename_cache_retained": true
+      },
+      "jat": {
+        "digest": "sha256:9b71cba250c5038e5464651c068afdd281f577310c59a317ace483697a554fb1",
+        "sha256": "b474a8dc3055410611b6ae476f05bb8e801c0a4f6d0fcc175550ed338e8dcfe5",
+        "old_basename_cache_retained": true
+      }
+    }
+  },
+  "native_storage": {
+    "new_bucket": "room-final-native",
+    "dimension": "minio-minio-127-0-0-1-59000-room-final-native",
+    "connection": "minio-127-0-0-1-59000",
+    "connection_origin": "freshly created through native controls on prior505candidate, no CLI credential seed",
+    "new_bucket_created_and_access_checked_through_ui": true
+  },
+  "ready_notification_gate": {
+    "status": "passed",
+    "new_dimension_encryption_initialized": true,
+    "notice_dismissed": false,
+    "native_images_picker_appeared_while_ready_notice_visible": true,
+    "evidence": "final-notice-flow-result.json"
+  },
+  "save": {
+    "status": "passed",
+    "timestamp": "2026-10-16T16:00:43.517",
+    "room": "Final Native Fixture",
+    "source": "/acceptance/final-source",
+    "capture_mode": "source-only",
+    "snapshot_id": "931d1bb09e1a4e858649814bbd808164",
+    "logical_entries": 2,
+    "scan_bytes": 82,
+    "restic_added_bytes": 822
+  },
+  "restore": {
+    "status": "passed",
+    "snapshot_id": "931d1bb09e1a4e858649814bbd808164",
+    "original_path_unavailable": true,
+    "original_file_hashes_unchanged": 3,
+    "destination": "/acceptance/editor-workspace/final-native-fixture",
+    "restored_sha256": {
+      "project.txt": "0f10daf7f9c4d7943ba3cde08fbed5396c2edb0d98e68a0b506bda667aec7e07",
+      ".josh-roomignore": "a72ec96dee90820b0081b36e88ca34703fe445a29469a5cc327d9d6938df6266"
+    },
+    "excluded_absent": [
+      "excluded",
+      "all .git entries"
+    ]
+  },
+  "restore_timestamp": "2026-10-16T16:01:15.497",
+  "prior_gate_lineage": [
+    "readiness-native-ui-receipt.json qualifies505freshstorage/reuse/cancel",
+    "rcc19-native-ui-receipt.json qualifiesc9a6fceworktreefixtureSaveRestore",
+    "native-ui-receipt.json records60binteractiveexclusionflow"
+  ],
+  "limitations": [
+    "Linux native UI only in this environment; Windows evidence owned separately by parent.",
+    "Moto emulator, not native MinIO/R2.",
+    "Existing disposable recovery identity reused for new encryptionDimension.",
+    "Unrelated old CLI-seeded profile produced catalog warning; new native credentials and final SaveRestore succeeded."
+  ],
+  "evidence": [
+    "final-native-gate.log",
+    "final-notice-flow-result.json",
+    "final-restore-result.json"
+  ],
+  "boundaries": [
+    "Only disposable profile extension replaced",
+    "No merge/tag/release/deploy",
+    "No screenshot publication attempts"
+  ],
+  "sanitization": "Full renderer text retained locally; public extraction records only tested notice and picker presence."
+}

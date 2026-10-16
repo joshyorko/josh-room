@@ -1,0 +1,333 @@
+2026-10-16 15:47:02.337 [info] START · controller provider connection list
+2026-10-16 15:47:02.340 [info] ░░░░░░░░░░░░░░░░░░░░ … · Resolving managed RCC
+2026-10-16 15:47:02.353 [info] ░░░░░░░░░░░░░░░░░░░░ … · Resolving managed RCC
+2026-10-16 15:47:02.603 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing cached verified RCC
+2026-10-16 15:47:02.604 [info] ░░░░░░░░░░░░░░░░░░░░ … · Preparing Josh Room controller environment
+2026-10-16 15:47:02.613 [info] ░░░░░░░░░░░░░░░░░░░░ … · Downloading controller Environment Artifact
+2026-10-16 15:47:07.107 [info] ░░░░░░░░░░░░░░░░░░░░ … · Verifying controller Environment Artifact
+2026-10-16 15:47:07.356 [info] ░░░░░░░░░░░░░░░░░░░░ … · Importing controller Environment Artifact into private RCC storage
+2026-10-16 15:47:14.780 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:16.457 [info] DONE · provider
+2026-10-16 15:47:16.458 [info] ████████████████████ 100% · Complete
+2026-10-16 15:47:32.923 [info] START · controller provider connection create --provider minio --endpoint http://127.0.0.1:59000/
+2026-10-16 15:47:32.924 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:32.931 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:34.617 [info] DONE · provider
+2026-10-16 15:47:34.617 [info] ████████████████████ 100% · Complete
+2026-10-16 15:47:34.629 [info] START · controller provider bucket list --provider minio --connection minio-127-0-0-1-59000
+2026-10-16 15:47:34.630 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:34.636 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:36.623 [info] DONE · provider
+2026-10-16 15:47:36.624 [info] ████████████████████ 100% · Complete
+2026-10-16 15:47:38.755 [info] START · controller provider bucket create --provider minio --connection minio-127-0-0-1-59000 --bucket room-readiness-native
+2026-10-16 15:47:38.755 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:38.762 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:40.830 [info] DONE · provider
+2026-10-16 15:47:40.830 [info] ████████████████████ 100% · Complete
+2026-10-16 15:47:40.831 [info] START · controller provider bucket check --provider minio --connection minio-127-0-0-1-59000 --bucket room-readiness-native
+2026-10-16 15:47:40.831 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:40.862 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:42.914 [info] DONE · provider
+2026-10-16 15:47:42.914 [info] ████████████████████ 100% · Complete
+2026-10-16 15:47:42.915 [info] START · controller dimensions add minio-minio-127-0-0-1-59000-room-readiness-native --display-name room-readiness-native --provider minio --bucket room-readiness-native --connection minio-127-0-0-1-59000
+2026-10-16 15:47:42.915 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:42.928 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:44.766 [info] DONE · dimensions
+2026-10-16 15:47:44.767 [info] ████████████████████ 100% · Complete
+2026-10-16 15:47:44.768 [info] START · controller dimensions list
+2026-10-16 15:47:44.768 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:44.779 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:46.529 [info] DONE · dimensions
+2026-10-16 15:47:46.530 [info] START · controller provider connection list
+2026-10-16 15:47:46.530 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:46.541 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:48.320 [info] DONE · provider
+2026-10-16 15:47:48.321 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:47:48.321 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:48.330 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:50.562 [info] 2026-10-16T15:47:50.561Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:47:50.562 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:47:50.567 [warning] Unable to load Dimension minio-minio-127-0-0-1-59000-room-readiness-native: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:47:50.567 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-localhost-59000-room-native-storage-fixture
+2026-10-16 15:47:50.567 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:50.578 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:52.671 [info] 2026-10-16T15:47:52.671Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:47:52.672 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:47:52.674 [warning] Unable to load Dimension minio-minio-localhost-59000-room-native-storage-fixture: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:47:52.674 [info] START · controller dimensions list --with-hierarchy --dimension minio-ui-fixture-room-ui-fixture
+2026-10-16 15:47:52.674 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:47:52.679 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:47:54.629 [info] 2026-10-16T15:47:54.629Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:47:54.629 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:47:54.632 [warning] Unable to load Dimension minio-ui-fixture-room-ui-fixture: runtime credential profile is unavailable: josh-room-ui-fixture
+2026-10-16 15:47:54.642 [info] ████████████████████ 100% · Complete
+2026-10-16 15:55:25.002 [info] START · controller provider connection list
+2026-10-16 15:55:25.002 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:25.014 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:26.964 [info] 2026-10-16T15:55:26.964Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:26.964 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:26.967 [info] DONE · provider
+2026-10-16 15:55:26.967 [info] ████████████████████ 100% · Complete
+2026-10-16 15:55:32.470 [info] START · controller provider bucket list --provider minio --connection minio-127-0-0-1-59000
+2026-10-16 15:55:32.470 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:32.479 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:34.598 [info] 2026-10-16T15:55:34.598Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:34.598 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:34.600 [info] DONE · provider
+2026-10-16 15:55:34.600 [info] ████████████████████ 100% · Complete
+2026-10-16 15:55:34.916 [info] START · controller provider bucket check --provider minio --connection minio-127-0-0-1-59000 --bucket room-readiness-native
+2026-10-16 15:55:34.916 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:34.926 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:37.153 [info] 2026-10-16T15:55:37.153Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:37.153 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:37.154 [info] DONE · provider
+2026-10-16 15:55:37.154 [info] ████████████████████ 100% · Complete
+2026-10-16 15:55:37.154 [info] START · controller dimensions add minio-minio-127-0-0-1-59000-room-readiness-native --display-name room-readiness-native --provider minio --bucket room-readiness-native --connection minio-127-0-0-1-59000
+2026-10-16 15:55:37.154 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:37.163 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:38.961 [info] 2026-10-16T15:55:38.960Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:38.961 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:38.962 [info] DONE · dimensions
+2026-10-16 15:55:38.962 [info] ████████████████████ 100% · Complete
+2026-10-16 15:55:38.962 [info] START · controller dimensions list
+2026-10-16 15:55:38.962 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:38.979 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:40.666 [info] 2026-10-16T15:55:40.666Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:40.666 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:40.669 [info] DONE · dimensions
+2026-10-16 15:55:40.669 [info] START · controller provider connection list
+2026-10-16 15:55:40.669 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:40.676 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:42.341 [info] 2026-10-16T15:55:42.341Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:42.342 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:42.343 [info] DONE · provider
+2026-10-16 15:55:42.344 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:55:42.344 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:42.349 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:44.352 [info] 2026-10-16T15:55:44.352Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:44.353 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:44.353 [info] 2026-10-16T15:55:44.352Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:55:44.353 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:55:44.355 [warning] Unable to load Dimension minio-minio-127-0-0-1-59000-room-readiness-native: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:55:44.355 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-localhost-59000-room-native-storage-fixture
+2026-10-16 15:55:44.355 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:44.363 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:46.539 [info] 2026-10-16T15:55:46.538Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:46.539 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:46.539 [info] 2026-10-16T15:55:46.538Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:55:46.539 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:55:46.543 [warning] Unable to load Dimension minio-minio-localhost-59000-room-native-storage-fixture: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:55:46.543 [info] START · controller dimensions list --with-hierarchy --dimension minio-ui-fixture-room-ui-fixture
+2026-10-16 15:55:46.544 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:46.557 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:48.459 [info] 2026-10-16T15:55:48.459Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:48.459 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:48.460 [info] 2026-10-16T15:55:48.460Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:55:48.460 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:55:48.461 [warning] Unable to load Dimension minio-ui-fixture-room-ui-fixture: runtime credential profile is unavailable: josh-room-ui-fixture
+2026-10-16 15:55:48.464 [info] ████████████████████ 100% · Complete
+2026-10-16 15:55:52.880 [info] START · controller provider connection list
+2026-10-16 15:55:52.881 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:55:52.889 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:55:54.620 [info] 2026-10-16T15:55:54.620Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:54.620 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:55:54.622 [info] DONE · provider
+2026-10-16 15:55:54.622 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:07.031 [info] START · controller dimensions list
+2026-10-16 15:56:07.031 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:07.041 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:08.863 [info] 2026-10-16T15:56:08.863Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:08.863 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:08.865 [info] DONE · dimensions
+2026-10-16 15:56:08.865 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:08.865 [info] START · controller provider connection list
+2026-10-16 15:56:08.865 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:08.909 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:10.821 [info] 2026-10-16T15:56:10.820Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:10.821 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:10.823 [info] DONE · provider
+2026-10-16 15:56:10.823 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:10.823 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:56:10.823 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:10.853 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:13.042 [info] 2026-10-16T15:56:13.041Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:13.042 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:13.042 [info] 2026-10-16T15:56:13.042Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:56:13.042 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:56:13.043 [error] FAILED · Loading saved Rooms · MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:56:13.044 [warning] Unable to load Dimension minio-minio-127-0-0-1-59000-room-readiness-native: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:56:13.044 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-localhost-59000-room-native-storage-fixture
+2026-10-16 15:56:13.044 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:13.067 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:15.321 [info] 2026-10-16T15:56:15.320Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:15.321 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:15.321 [info] 2026-10-16T15:56:15.321Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:56:15.321 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:56:15.324 [error] FAILED · Loading saved Rooms · MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:56:15.325 [warning] Unable to load Dimension minio-minio-localhost-59000-room-native-storage-fixture: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:56:15.325 [info] START · controller dimensions list --with-hierarchy --dimension minio-ui-fixture-room-ui-fixture
+2026-10-16 15:56:15.325 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:15.346 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:17.302 [info] 2026-10-16T15:56:17.302Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:17.303 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:17.303 [info] 2026-10-16T15:56:17.302Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:56:17.303 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:56:17.306 [error] FAILED · Loading saved Rooms · runtime credential profile is unavailable: josh-room-ui-fixture
+2026-10-16 15:56:17.306 [warning] Unable to load Dimension minio-ui-fixture-room-ui-fixture: runtime credential profile is unavailable: josh-room-ui-fixture
+2026-10-16 15:56:22.403 [info] START · controller workspace init --workspace /acceptance/readiness-source
+2026-10-16 15:56:22.404 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:22.409 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:24.173 [info] 2026-10-16T15:56:24.172Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:24.173 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:24.175 [info] DONE · workspace
+2026-10-16 15:56:24.175 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:26.580 [info] START · controller workspace-check --workspace /acceptance/readiness-source
+2026-10-16 15:56:26.580 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:26.591 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:28.406 [info] 2026-10-16T15:56:28.405Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:28.406 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:28.409 [info] DONE · workspace-check
+2026-10-16 15:56:28.409 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:28.409 [info] Workspace scan: valid; coverage complete
+2026-10-16 15:56:28.410 [info] START · controller encryption status --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:56:30.372 [info] 2026-10-16T15:56:30.372Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:30.373 [info] DONE · encryption
+2026-10-16 15:56:30.376 [info] START · controller encryption initialize --dimension minio-minio-127-0-0-1-59000-room-readiness-native --recovery-handoff [REDACTED] --material-handoff [REDACTED]
+2026-10-16 15:56:30.376 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:30.389 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:32.566 [info] 2026-10-16T15:56:32.563Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:32.566 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:32.568 [info] DONE · encryption
+2026-10-16 15:56:32.569 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:32.627 [info] START · controller dimensions list
+2026-10-16 15:56:32.627 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:32.646 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:34.368 [info] 2026-10-16T15:56:34.368Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:34.368 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:34.371 [info] DONE · dimensions
+2026-10-16 15:56:34.371 [info] START · controller provider connection list
+2026-10-16 15:56:34.371 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:34.379 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:36.040 [info] 2026-10-16T15:56:36.039Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:36.040 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:36.041 [info] DONE · provider
+2026-10-16 15:56:36.041 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:56:36.041 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:36.056 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:38.162 [info] ███████░░░░░░░░░░░░░ 35% · Reading encrypted Room catalog
+2026-10-16 15:56:38.201 [info] 2026-10-16T15:56:38.201Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:38.201 [info] ███████░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:38.202 [info] DONE · dimensions
+2026-10-16 15:56:38.202 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-localhost-59000-room-native-storage-fixture
+2026-10-16 15:56:38.202 [info] ███████░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:38.211 [info] ███████░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:40.262 [info] 2026-10-16T15:56:40.262Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:40.262 [info] ███████░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:40.266 [info] 2026-10-16T15:56:40.266Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:56:40.266 [info] ███████░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:56:40.268 [warning] Unable to load Dimension minio-minio-localhost-59000-room-native-storage-fixture: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:56:40.268 [info] START · controller dimensions list --with-hierarchy --dimension minio-ui-fixture-room-ui-fixture
+2026-10-16 15:56:40.268 [info] ███████░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:40.275 [info] ███████░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:42.192 [info] 2026-10-16T15:56:42.192Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:42.192 [info] ███████░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:42.193 [info] 2026-10-16T15:56:42.193Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:56:42.193 [info] ███████░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:56:42.197 [warning] Unable to load Dimension minio-ui-fixture-room-ui-fixture: runtime credential profile is unavailable: josh-room-ui-fixture
+2026-10-16 15:56:42.202 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:48.713 [info] START · controller encryption status --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:56:50.836 [info] 2026-10-16T15:56:50.835Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:50.838 [info] DONE · encryption
+2026-10-16 15:56:50.849 [info] START · controller snapshot preview Readiness Native Fixture --source /acceptance/readiness-source --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:56:50.849 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:50.858 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:56:52.999 [info] 2026-10-16T15:56:52.998Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:52.999 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:53.004 [info] DONE · snapshot
+2026-10-16 15:56:53.004 [info] ████████████████████ 100% · Complete
+2026-10-16 15:56:53.460 [info] START · controller encryption status --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:56:55.681 [info] 2026-10-16T15:56:55.681Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:56:55.685 [info] DONE · encryption
+2026-10-16 15:56:55.703 [info] START · controller snapshot create Readiness Native Fixture --source /acceptance/readiness-source --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:56:55.703 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:56:55.706 [info] ░░░░░░░░░░░░░░░░░░░░ … · Resolving managed RCC
+2026-10-16 15:56:55.865 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing cached verified RCC
+2026-10-16 15:56:55.866 [info] ░░░░░░░░░░░░░░░░░░░░ … · Preparing JAT runtime for this operation
+2026-10-16 15:56:55.867 [info] ░░░░░░░░░░░░░░░░░░░░ … · Downloading JAT Environment Artifact
+2026-10-16 15:57:02.659 [info] ░░░░░░░░░░░░░░░░░░░░ … · Verifying JAT Environment Artifact
+2026-10-16 15:57:03.088 [info] ░░░░░░░░░░░░░░░░░░░░ … · Importing JAT Environment Artifact into private RCC storage
+2026-10-16 15:57:11.585 [info] 2026-10-16T15:57:11.585Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:11.585 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:11.589 [info] ░░░░░░░░░░░░░░░░░░░░ … · Checking host/artifact compatibility
+2026-10-16 15:57:13.009 [info] 2026-10-16T15:57:13.008Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:13.009 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:13.011 [info] ░░░░░░░░░░░░░░░░░░░░ … · Materializing JAT Holotree
+2026-10-16 15:57:13.018 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:20.336 [info] ██████████████████░░ 92% · Encrypted Room uploaded • 100% · 1.30 / 1.30 KiB
+2026-10-16 15:57:20.336 [info] ███████████████████░ 94% · Verifying encrypted R2 object
+2026-10-16 15:57:20.477 [info] 2026-10-16T15:57:20.476Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:20.477 [info] ███████████████████░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:20.480 [info] DONE · readiness-native-fixture
+2026-10-16 15:57:20.480 [info] ████████████████████ 100% · Complete
+2026-10-16 15:57:30.447 [info] START · controller dimensions list
+2026-10-16 15:57:30.447 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:57:30.452 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:32.153 [info] 2026-10-16T15:57:32.153Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:32.154 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:32.155 [info] DONE · dimensions
+2026-10-16 15:57:32.155 [info] ████████████████████ 100% · Complete
+2026-10-16 15:57:32.155 [info] START · controller provider connection list
+2026-10-16 15:57:32.155 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:57:32.177 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:33.832 [info] 2026-10-16T15:57:33.831Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:33.832 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:33.834 [info] DONE · provider
+2026-10-16 15:57:33.835 [info] ████████████████████ 100% · Complete
+2026-10-16 15:57:33.835 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:57:33.835 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:57:33.857 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:35.963 [info] ███████░░░░░░░░░░░░░ 35% · Reading encrypted Room catalog
+2026-10-16 15:57:35.963 [info] ███████░░░░░░░░░░░░░ 35% · Room catalog is ready
+2026-10-16 15:57:36.054 [info] 2026-10-16T15:57:36.053Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:36.054 [info] ███████░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:36.055 [info] DONE · dimensions
+2026-10-16 15:57:36.055 [info] ████████████████████ 100% · Complete
+2026-10-16 15:57:36.056 [info] START · controller dimensions list --with-hierarchy --dimension minio-minio-localhost-59000-room-native-storage-fixture
+2026-10-16 15:57:36.056 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:57:36.074 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:38.063 [info] 2026-10-16T15:57:38.063Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:38.063 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:38.064 [info] 2026-10-16T15:57:38.064Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:57:38.064 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:57:38.065 [error] FAILED · Loading your Rooms... · MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:57:38.066 [warning] Unable to load Dimension minio-minio-localhost-59000-room-native-storage-fixture: MinIO encryption is uninitialized; provide public recovery recipients
+2026-10-16 15:57:38.066 [info] START · controller dimensions list --with-hierarchy --dimension minio-ui-fixture-room-ui-fixture
+2026-10-16 15:57:38.066 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:57:38.077 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:40.033 [info] 2026-10-16T15:57:40.033Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:40.033 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:40.035 [info] 2026-10-16T15:57:40.035Z RCC stderr: [rcc] exit status will be: 2!
+2026-10-16 15:57:40.035 [info] ░░░░░░░░░░░░░░░░░░░░ … · [rcc] exit status will be: 2!
+2026-10-16 15:57:40.036 [error] FAILED · Loading your Rooms... · runtime credential profile is unavailable: josh-room-ui-fixture
+2026-10-16 15:57:40.036 [warning] Unable to load Dimension minio-ui-fixture-room-ui-fixture: runtime credential profile is unavailable: josh-room-ui-fixture
+2026-10-16 15:57:42.988 [info] START · controller snapshots list readiness-native-fixture --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:57:42.988 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:57:42.994 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:45.097 [info] █████████████████░░░ 85% · Reading encrypted Room catalog
+2026-10-16 15:57:45.097 [info] █████████████████░░░ 85% · Room catalog is ready
+2026-10-16 15:57:45.236 [info] 2026-10-16T15:57:45.236Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:45.236 [info] █████████████████░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:45.237 [info] DONE · snapshots
+2026-10-16 15:57:45.237 [info] ████████████████████ 100% · Complete
+2026-10-16 15:57:45.247 [info] START · controller hydrate readiness-native-fixture --snapshot latest --destination /acceptance/editor-workspace/readiness-native-fixture --ide terminal --dimension minio-minio-127-0-0-1-59000-room-readiness-native
+2026-10-16 15:57:45.247 [info] ░░░░░░░░░░░░░░░░░░░░ … · Reusing ready managed runtime
+2026-10-16 15:57:46.510 [info] 2026-10-16T15:57:46.509Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:46.510 [info] ░░░░░░░░░░░░░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:46.521 [info] ░░░░░░░░░░░░░░░░░░░░ … · Starting Josh Room controller
+2026-10-16 15:57:49.121 [info] ███░░░░░░░░░░░░░░░░░ 15% · Reading encrypted Room catalog
+2026-10-16 15:57:49.221 [info] ███░░░░░░░░░░░░░░░░░ 15% · Room catalog is ready
+2026-10-16 15:57:50.023 [info] ████████████░░░░░░░░ 58% · Downloading encrypted Room • 100% · 1.30 / 1.30 KiB
+2026-10-16 15:57:52.177 [info] 2026-10-16T15:57:52.177Z RCC stderr: Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:52.177 [info] ████████████░░░░░░░░ … · Warning: More than one user is using same ROBOCORP_HOME location! Those users are: acceptance, agent!
+2026-10-16 15:57:52.180 [info] DONE · readiness-native-fixture
+2026-10-16 15:57:52.180 [info] ████████████████████ 100% · Complete

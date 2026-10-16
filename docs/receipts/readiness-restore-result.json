@@ -1,0 +1,23 @@
+{
+  "status": "passed",
+  "snapshot_id": "c46c2597b54a4c8c90c89a6e89bcdb7c",
+  "destination": "/acceptance/editor-workspace/readiness-native-fixture",
+  "original_path_unavailable": true,
+  "original_file_hashes_unchanged": 4,
+  "restored_sha256": {
+    "project.txt": "2fcbb89afda1d4f19b391953894ae3fc6fb7be65b4d4c83a749b7269a7c359dd",
+    "uploads/selected.txt": "4b39953402d163ff605823d62cb2b1b4ec564276c821edc8259f613ab98a7dd0",
+    ".josh-roomignore": "aa5449dc21c00dea5e24d697c40aa07195761cb9e92718cb849282f6bf256135"
+  },
+  "excluded_absent": [
+    "generated",
+    "all .git entries"
+  ],
+  "inventory": [
+    ".josh-room.json",
+    ".josh-roomignore",
+    "project.txt",
+    "uploads",
+    "uploads/selected.txt"
+  ]
+}

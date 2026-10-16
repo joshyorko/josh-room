@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "snapshot_id": "931d1bb09e1a4e858649814bbd808164",
+  "original_path_unavailable": true,
+  "original_file_hashes_unchanged": 3,
+  "destination": "/acceptance/editor-workspace/final-native-fixture",
+  "restored_sha256": {
+    "project.txt": "0f10daf7f9c4d7943ba3cde08fbed5396c2edb0d98e68a0b506bda667aec7e07",
+    ".josh-roomignore": "a72ec96dee90820b0081b36e88ca34703fe445a29469a5cc327d9d6938df6266"
+  },
+  "excluded_absent": [
+    "excluded",
+    "all .git entries"
+  ]
+}

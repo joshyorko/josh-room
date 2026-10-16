@@ -1,0 +1,8 @@
+{
+  "status": "passed",
+  "candidate_source_sha": "995c3b6953ba5880e2a21db3ceb3bceec5d90fb3",
+  "ready_notice_visible": true,
+  "native_image_picker_visible_at_same_time": true,
+  "notice_dismissal_performed": false,
+  "scope": "sanitized extraction from actual renderer text; no screenshot or full workspace text publication"
+}
