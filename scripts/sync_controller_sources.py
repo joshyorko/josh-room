@@ -25,11 +25,18 @@ def synchronize(root: Path, *, names: list[str] | None = None) -> list[str]:
             if not target.exists() or target.read_bytes() != content:
                 target.write_bytes(content)
                 changed.append(str(target.relative_to(root)))
-        installer = root / relative / "install_restic.py"
-        content = (root / "scripts/install_restic.py").read_bytes()
-        if not installer.exists() or installer.read_bytes() != content:
-            installer.write_bytes(content)
-            changed.append(str(installer.relative_to(root)))
+        for engine in ("restic", "rustic"):
+            installer = root / relative / f"install_{engine}.py"
+            content = (root / f"scripts/install_{engine}.py").read_bytes()
+            if not installer.exists() or installer.read_bytes() != content:
+                installer.write_bytes(content)
+                changed.append(str(installer.relative_to(root)))
+            manifest = root / "vscode-extension/runtime" / f"{engine}-manifest.json"
+            target = root / relative / ".." / manifest.name
+            content = manifest.read_bytes()
+            if not target.exists() or target.read_bytes() != content:
+                target.write_bytes(content)
+                changed.append(str(target.relative_to(root)))
     return changed
 
 
