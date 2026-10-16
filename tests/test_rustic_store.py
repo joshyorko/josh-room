@@ -400,3 +400,22 @@ def test_rustic_destructive_maintenance_is_blocked_before_spawn(authority, opera
             else:
                 store.prune(dry_run=False, confirmed=True)
         assert error.value.code.value == "maintenance-unsafe"
+
+
+@pytest.mark.parametrize("suffix", ["../outside", "unescaped*", "bad\\q", "trailing\\"])
+def test_resolved_exclusions_reject_traversal_and_nonliteral_syntax(authority, tmp_path, suffix):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    excludes = tmp_path / "excludes"
+    excludes.write_text(str(workspace / suffix) + "\n")
+    with RusticStore(**authority) as store, pytest.raises(ResticStoreError):
+        store._exclude_file(excludes, workspace)
+
+
+def test_resolved_exclusions_reject_other_authority_roots(authority, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    excludes = tmp_path / "excludes"
+    excludes.write_text(str(tmp_path / "other-workspace/private") + "\n")
+    with RusticStore(**authority) as store, pytest.raises(ResticStoreError):
+        store._exclude_file(excludes, workspace)

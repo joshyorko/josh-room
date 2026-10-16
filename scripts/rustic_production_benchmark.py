@@ -40,6 +40,8 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
     source_root = Path(__file__).resolve().parents[1]
     result = {
         "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_root, text=True).strip(),
+        "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=source_root, text=True).strip(),
+        "tracked_source_dirty": bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=source_root)),
         "source_files": {name: identity(source_root / name) for name in (
             "src/josh_room/rustic_store.py", "src/josh_room/restic_store.py",
             "src/josh_room/room_store_operations.py", "scripts/rustic_production_benchmark.py",
@@ -47,7 +49,10 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
         "platform": platform.system() + "-" + platform.machine(),
         "python": platform.python_version(),
         "fixture": {"files": count, "directories": directories, "bytes_per_file": 1024,
-                    "changed_files": len(range(0, count, 100)), "same_size_restored_mtime": True},
+                    "changed_files": max(1, count // 100),
+                    "changed_directories": min(directories, max(1, count // 100)),
+                    "change_distribution": "first one percent of file IDs, distributed across directories",
+                    "same_size_restored_mtime": True},
         "cache_contract": "cold application caches; OS caches are not evicted; sequential engine runs",
         "storage": "disposable local format-2 repositories; synthetic catalog/keyset callbacks",
         "engines": {},
@@ -104,9 +109,19 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
         assert len(cold_scan.paths) == count + directories
         initial = timed("initial_save", op.save)
         assert initial.status == "saved"
+        if os.name != "nt":
+            _keyset, password, scan_store = op._open_store()
+            try:
+                with scan_store as opened:
+                    opened.open_existing()
+                    opened.snapshot(initial.snapshot_id)
+                    scanned = timed("adapter_warm_scan", lambda: opened.backup(workspace, parent=initial.snapshot_id))
+                    assert scanned.snapshot_id is None
+            finally:
+                password.unlink(missing_ok=True)
         noop = timed("warm_unchanged_save", op.save)
         assert noop.status == "already-saved" and noop.data_added_bytes == 0
-        for index in range(0, count, 100):
+        for index in range(max(1, count // 100)):
             path = workspace / f"d{index % directories:04d}/f{index:06d}.bin"
             before = path.stat()
             path.write_bytes(hashlib.sha256(f"synthetic-edit-{index:06d}".encode()).digest() * 32)

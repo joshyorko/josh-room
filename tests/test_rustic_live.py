@@ -118,6 +118,35 @@ def test_real_policy_excludes_are_exclusions(binary, authorities, tmp_path):
         assert not any(path.startswith("private") for path in paths)
 
 
+@pytest.mark.parametrize("capture_mode", ["full-repository", "source-only"])
+def test_real_current_resolved_policy_preserves_git_history(binary, authorities, tmp_path, capture_mode):
+    from josh_room.workspace_policy import load_capture_policy
+
+    kwargs, workspace = authorities
+    history = workspace / ".git/refs/heads"
+    history.mkdir(parents=True)
+    (history / "node_modules").write_text("synthetic retained branch")
+    generated = workspace / "nested[1]/node_modules"
+    generated.mkdir(parents=True)
+    (generated / "token").write_text("synthetic excluded bytes")
+    keep = workspace / "nested[1]/keep"
+    keep.write_text("keep exact literal path")
+    if capture_mode == "source-only":
+        (workspace / ".josh-roomignore").write_text("# josh-room capture-mode: source-only\n")
+    policy = load_capture_policy(workspace)
+    excludes = tmp_path / "resolved-policy"
+    excludes.write_text("\n".join(policy.resolved_restic_excludes(workspace)) + "\n")
+    with RusticStore(**kwargs, executable=binary) as store:
+        store.initialize()
+        summary = store.backup(workspace, excludes=excludes)
+        paths = {row.path for row in store.entries(summary.snapshot_id)}
+        assert (".git/refs/heads/node_modules" in paths) == (capture_mode == "full-repository")
+        if capture_mode == "source-only":
+            assert not any(path == ".git" or path.startswith(".git/") for path in paths)
+        assert "nested[1]/keep" in paths
+        assert not any(path.startswith("nested[1]/node_modules") for path in paths)
+
+
 def test_restic_rustic_repository_round_trip(binary, authorities, tmp_path):
     restic = os.environ.get("JOSH_ROOM_RESTIC_TEST_BINARY")
     if not restic:

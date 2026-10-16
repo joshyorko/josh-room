@@ -427,7 +427,7 @@ class RusticStore(ResticStore):
         self._repository_info = None
         return super().open_existing()
 
-    def _exclude_file(self, excludes: Path) -> Path:
+    def _exclude_file(self, excludes: Path, root: Path) -> Path:
         try:
             with Path(excludes).open("rb") as stream:
                 raw = stream.read(self._max_capture_bytes + 1)
@@ -441,6 +441,38 @@ class RusticStore(ResticStore):
         lines = []
         for pattern in patterns:
             if not pattern or pattern.startswith("#"):
+                continue
+            if Path(pattern).is_absolute():
+                # Current Room policy resolves exclusions to absolute Go
+                # path.Match literals so broad globs cannot discard Git
+                # internals. Decode only that literal syntax, confine it to
+                # this workspace, then quote it for Rustic's rooted globs.
+                decoded = []
+                index = 0
+                while index < len(pattern):
+                    char = pattern[index]
+                    if char == "\\":
+                        index += 1
+                        if index == len(pattern) or pattern[index] not in "*?[]\\":
+                            raise RusticStoreError("invalid-configuration")
+                        char = pattern[index]
+                    elif char in "*?[]":
+                        raise RusticStoreError("invalid-configuration")
+                    decoded.append(char)
+                    index += 1
+                try:
+                    relative = Path("".join(decoded)).relative_to(root)
+                except ValueError:
+                    raise RusticStoreError("invalid-configuration") from None
+                if not relative.parts or ".." in relative.parts:
+                    raise RusticStoreError("invalid-configuration")
+                literal = "".join(
+                    "\\" + char if char in "*?[]{}\\" else char
+                    for char in relative.as_posix()
+                )
+                if "\x00" in literal:
+                    raise RusticStoreError("invalid-configuration")
+                lines.extend(("!/" + literal, "!/" + literal + "/**"))
                 continue
             if pattern.startswith(("!", "/")) or any(
                 c in pattern for c in "\x00\\[]{}"
@@ -484,7 +516,7 @@ class RusticStore(ResticStore):
         elif parent is not None:
             args.extend(["--parent", parent])
         if excludes is not None:
-            args.extend(["--glob-file", str(self._exclude_file(excludes))])
+            args.extend(["--glob-file", str(self._exclude_file(excludes, root))])
         args.extend(["--", "."])
         with self._process(args, cwd=root) as process:
 
