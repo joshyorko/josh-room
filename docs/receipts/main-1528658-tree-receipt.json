@@ -1,0 +1,10 @@
+{
+  "qualified_source_sha": "bdf08abccb186c3dd51877d15816f62869c95387",
+  "integrated_source_sha": "15286581b86abc1aa7f1b5ad3a537466bf959936",
+  "qualified_tree": "a49e7a2ec498ee9264bd821496a0b206e3598965",
+  "integrated_tree": "a49e7a2ec498ee9264bd821496a0b206e3598965",
+  "tree_identical": true,
+  "version": "0.1.36",
+  "jat_release": "v0.1.14-jat-runtime",
+  "scope": "Full Git tree equality; UI receipts retain original tested sources; exact main CI and staging separate."
+}
