@@ -22,6 +22,7 @@ from .envelope import build_envelope_file, read_envelope_file, verify_envelope_f
 from .jat import run_build, run_restore, run_serve
 from .local_store import ImmutableLocalStore, ObjectRef
 from .progress import report_progress
+from .workspace_policy import load_capture_policy
 from .workspace_state import (
     read_workspace_marker,
     workspace_fingerprint,
@@ -142,7 +143,9 @@ def create_snapshot(
     with tempfile.TemporaryDirectory(dir=instance) as work:
         haul = Path(work) / "payload.haul.tar.zst"
         report_progress("build", "Building portable Room haul")
-        producer = run_build(jat_root, source, haul, images=images, all_images=all_images, rcc_environment="auto")
+        policy = load_capture_policy(source)
+        selection = {"capture_policy": policy} if getattr(policy, "capture_mode", "full-repository") == "source-only" else {}
+        producer = run_build(jat_root, source, haul, images=images, all_images=all_images, rcc_environment="auto", **selection)
         payload_size, payload_digest = _file_metadata(haul)
         manifest = {"format_version": 1, "project_id": project_id, "snapshot_id": _snapshot_id(), "created_at": datetime.now(UTC).isoformat(), "payload": {"format": "jat-hauler", "sha256": payload_digest, "size": payload_size, "producer_version": producer["version"]}, "source": _source_metadata(source, source_fingerprint)}
         if isinstance(producer.get("environment_artifact"), dict):
