@@ -1,0 +1,66 @@
+{
+  "checks": {
+    "managed-runtime-consumer (ubuntu-latest)": {
+      "app_id": 15368,
+      "conclusion": "success",
+      "head_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+      "id": 117120057760,
+      "run_id": 38944493749,
+      "status": "completed"
+    },
+    "managed-runtime-consumer (windows-latest)": {
+      "app_id": 15368,
+      "conclusion": "success",
+      "head_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+      "id": 117120057733,
+      "run_id": 38944493749,
+      "status": "completed"
+    },
+    "release-candidate": {
+      "app_id": 15368,
+      "conclusion": "success",
+      "head_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+      "id": 117125699011,
+      "run_id": 38944493749,
+      "status": "completed"
+    },
+    "test": {
+      "app_id": 15368,
+      "conclusion": "success",
+      "head_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+      "id": 117120057778,
+      "run_id": 38944493749,
+      "status": "completed"
+    },
+    "windows-private-runtime": {
+      "app_id": 15368,
+      "conclusion": "success",
+      "head_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+      "id": 117120057454,
+      "run_id": 38944493749,
+      "status": "completed"
+    }
+  },
+  "controller_release": "rcc-v18.19.7-controller-78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0-7bc855dc8d87f76fbd231242637c1b0c47915d8621db4576e79ff85972851ef6-c9520865e1c14c71a8867c2d455fdaf95c6bde7420851012ebca7e8443244e00",
+  "controller_source_sha": "78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0",
+  "jat_release": "v0.1.14-jat-runtime",
+  "jat_source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+  "platforms": [
+    "linux-x64",
+    "win32-x64"
+  ],
+  "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+  "rcc_version": "v18.19.7",
+  "source_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+  "status": "PASS",
+  "workflow": {
+    "branch": "main",
+    "event": "push",
+    "head_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+    "id": 341135066,
+    "path": ".github/workflows/ci.yml",
+    "repository": "joshyorko/josh-room",
+    "run_attempt": 1,
+    "run_id": 38944493749
+  }
+}

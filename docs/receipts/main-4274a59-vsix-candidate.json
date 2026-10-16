@@ -1,0 +1,11 @@
+{
+  "artifact": "josh-room-0.1.36.vsix",
+  "ci_run_id": 38944493749,
+  "ci_workflow_path": ".github/workflows/ci.yml",
+  "schema_version": 1,
+  "sha256": "7fbf0fd59f2279f7a99f84b855b386721d568f0c2e0dcdf034ba3a2cccfb34ed",
+  "size": 509157,
+  "source_files": 103,
+  "source_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+  "version": "0.1.36"
+}

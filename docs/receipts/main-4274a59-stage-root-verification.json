@@ -1,0 +1,28 @@
+{
+  "status": "PASS",
+  "source_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+  "stage_run_id": 38946219816,
+  "artifact_id": 12064968004,
+  "zip_sha256": "7ebe64b0c53c0ab910a8a6f606a3ab25a1aafcac97baf548dd76b0bef66f4916",
+  "zip_size": 2782249,
+  "all_six_asset_hashes_and_sizes_verified": true,
+  "canonical_release_staging_verify": "PASS",
+  "canonical_verifier_environment": "Existing CPython 3.12.14, standard library, no dependency install",
+  "canonical_verifier_command": "python3 -m scripts.release_staging verify --directory <DISPOSABLE_STAGE> --source-sha 4274a59fd4a15e97bf51dd2f74aca7ef41bac86e --release-tag v0.1.36-standalone-vsix --version 0.1.36 --checks <DISPOSABLE_STAGE>/ci-readiness.json --runtime vscode-extension/runtime/manifest.json --release-lock release-lock.json --stage-run-json <EVIDENCE>/main-4274a59-stage-run.json --stage-run-id 38946219816 --stage-workflow-id 341135067",
+  "comparisons": [
+    {
+      "artifact": "josh-room-bdf08ab-jat14-native.vsix",
+      "sha256": "cd1c6aeca35e8270e0264168755fe3b3d8bc20a43a2d2e347f0ea598825ef7e5",
+      "all_105_files_identical": true
+    },
+    {
+      "artifact": "josh-room-5fba3bb-jat14-native.vsix",
+      "sha256": "d1eefbf5716e0603ca022e0d45ec625945af4fc1ad33608e162bfabda9bc8930",
+      "all_105_files_identical": true
+    }
+  ],
+  "jat14_pins_verified": true,
+  "scope": "Stage integrity and executable payload parity; not new full GUI execution or provider-transition qualification",
+  "publication_recommendation": "HOLD_UNRESOLVED_R2_TO_MINIO",
+  "room_publication": "NOT_PERFORMED"
+}

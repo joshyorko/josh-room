@@ -1,3 +1,5 @@
+Current handoff: [0.1.36 candidate — publication on hold](release-0.1.36-final-handoff.md). The R2→MinIO transition remains unresolved; the historical evidence below does not establish a fix.
+
 Historical campaign checkpoint; see [subsequent0.1.36 report](release-0.1.36-readiness.md) and [published JAT0.1.14](jat-v0.1.14-publication-receipt.json).
 
 # Subsequent capture feature candidate: qualification handoff

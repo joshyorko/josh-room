@@ -1,3 +1,5 @@
+Current handoff: [0.1.36 candidate — publication on hold](release-0.1.36-final-handoff.md). The R2→MinIO transition remains unresolved; the historical evidence below does not establish a fix.
+
 # Room 0.1.36 feature candidate
 
 Historical pre-adoption checkpoint. Room147 and JAT21 are now merged, and
