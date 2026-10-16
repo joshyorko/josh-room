@@ -91,6 +91,34 @@ owner review. Josh must still supply the exact current source SHA, staging run
 ID, and `APPROVE`; leave both empty-draft recovery fields blank for a new
 release. Staging does not publish the extension or template.
 
+## 0.1.36 filtered-capture runtime adoption
+
+The subsequent 0.1.36 extension candidate and 0.1.6 template retain the 0.1.35
+controller and RCC 18.19.7 pins. Their JAT source and both platform artifact pins
+advance together to immutable
+[`v0.1.14-jat-runtime`](https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.14-jat-runtime),
+source `fe43065a654d1649ba9ebe5a6f202eac612e4385`. This runtime embeds JAT's
+explicit filtered-capture implementation; the previous dependency-only runtime
+does not establish that capability.
+
+The Linux and Windows source-embedded archives passed filtered restore and native
+schema-v3 promotion qualification in
+[run 38934211098](https://github.com/joshyorko/josh-all-the-things/actions/runs/38934211098).
+After separate approval, native publishers pushed those unchanged archives in
+[run 38938335140](https://github.com/joshyorko/josh-all-the-things/actions/runs/38938335140).
+[Run 38938737552](https://github.com/joshyorko/josh-all-the-things/actions/runs/38938737552)
+verified registry layers, uploaded the eight hash-verified assets to the known
+draft ID, and published the immutable prerelease from that exact source. The
+driver commits are publication tooling, not runtime source. Resolved freezes
+were recovered from the qualified archives without rebuilding them.
+
+Room adoption verifies the published source archive, actual release asset
+metadata, original receipts, and RCC provenance before updating the four JAT
+manifest/lock objects. The still-unpublished Room candidate remains 0.1.36;
+published 0.1.35 artifacts are untouched. Final source qualification and a fresh
+stage must follow adoption. Josh still supplies that exact source SHA, stage run
+ID, and `APPROVE` for final Room publication.
+
 ## Resume an interrupted empty draft
 
 The publish workflow retains the release ID returned by the create API and
