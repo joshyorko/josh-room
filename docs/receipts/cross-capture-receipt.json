@@ -1,0 +1,18 @@
+{
+  "jat_source_sha": "1110b5490222ef396d7bf6bf8ef0868625286569",
+  "room_source_sha": "a78414c4162576d0184f052f78ee11f2e48eb14b",
+  "jat_environment_artifact": "sha256:ae6b5802103c780de49b42768885a8c66073747272caf759784e9eb23f44e4f1",
+  "rcc_version": "v18.19.5",
+  "capsule_sha256": "306a9b0a420c212b2d389cc3bd7c4f678765cd6270832f3e6cb1404f55930ac7",
+  "capsule_size": 2162,
+  "selected_files_verified": [
+    "app.py",
+    "data.db",
+    "keep-worktree/draft.txt",
+    "package.json"
+  ],
+  "source_unchanged": true,
+  "original_unavailable_during_restore": true,
+  "excluded_entries_absent": true,
+  "scope": "Room adapter + JAT candidate source overlay on existing managed RCC artifact; not new release runtime or VSIX UI"
+}

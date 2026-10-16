@@ -1,0 +1,14 @@
+{
+  "vsix_sha256": "43c2380fb6ef09b9f9e3fe8fca94917554ee76392b8e10d813431075631323c4",
+  "init_state": "created",
+  "first_scan_codes": [
+    "git-storage",
+    "unsafe-symlink"
+  ],
+  "first_scan_nonzero": true,
+  "approved_policy_only_edit": true,
+  "fresh_scan_complete": true,
+  "capture_mode": "source-only",
+  "original_git_and_link_unchanged": true,
+  "scope": "actual extracted VSIX controller CLI; visible extension UI NOT RUN"
+}
