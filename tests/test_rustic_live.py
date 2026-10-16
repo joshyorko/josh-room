@@ -250,8 +250,7 @@ def test_room_store_operations_real_save_noop_restore(binary, tmp_path):
         )
         assert operations.save().status == "saved"
         seed = state["latest"]
-        assert operations.save().status == ("saved" if os.name == "nt" else "already-saved")
-        seed = state["latest"]
+        assert operations.save().status == "already-saved"
         source = workspace / "file.txt"
         before = source.stat()
         source.write_text("after!\n")

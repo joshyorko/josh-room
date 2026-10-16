@@ -3,6 +3,7 @@ name: Rustic isolated qualification
 on:
   push:
     branches: [qualify/rustic-after-0.1.36-20261016]
+    paths-ignore: ['docs/**']
   workflow_dispatch:
 
 permissions:
