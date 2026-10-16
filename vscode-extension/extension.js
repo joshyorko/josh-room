@@ -4857,6 +4857,7 @@ function activateNative(context) {
     if (workspaceBaseline) markWorkspaceChange(document.uri);
   }));
   register(context, "joshRoom.save", saveRoom);
+  register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.addStorage", addStorage);
   register(context, "joshRoom.connectCloudflare", connectCloudflare);

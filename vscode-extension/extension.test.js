@@ -6219,3 +6219,14 @@ test("incomplete scan never continues even when a malformed result claims ok", a
   assert.equal(await extension.__test__.reviewWorkspaceBeforeSave(root), false);
   assert.equal(spawnHarness.calls.length, 1);
 });
+
+
+test("exported native activation registers the contributed workspace scan", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-scan-registration-"));
+  const { vscode, commandCallbacks } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("activation must stay read-only"); });
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [], secrets: { get: async () => undefined } });
+  assert.ok(extensionPackageJson.contributes.commands.some((command) => command.command === "joshRoom.checkWorkspace"));
+  assert.equal(typeof commandCallbacks.get("joshRoom.checkWorkspace"), "function");
+});
