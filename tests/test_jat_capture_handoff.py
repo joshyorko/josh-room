@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from josh_room import jat
@@ -9,7 +7,7 @@ from josh_room.workspace_policy import load_capture_policy
 def test_room_policy_resolves_literal_roots_without_following_links(tmp_path):
     source = tmp_path / 'source'
     source.mkdir()
-    (source / '.josh-roomignore').write_text('generated/\n')
+    (source / '.josh-roomignore').write_text('generated\n')
     (source / 'generated').mkdir()
     (source / 'generated' / 'python').symlink_to('/unavailable/python')
     (source / 'node_modules').mkdir()
