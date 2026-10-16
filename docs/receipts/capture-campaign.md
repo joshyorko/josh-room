@@ -121,8 +121,9 @@ passed: **1902 Python tests, 28 skipped; 288 Node tests, 2 skipped**; Ruff and d
 Synthetic PR merge `33ff1ce1244622a5c3df9a536050ed126603886d` has tree
 `f35dd326ee9e9d9ac6cd5cc739cf555e27cf5eb0`, exactly equal to `ae4ab43`.
 This replaces the earlier broad-suite uncertainty. [Managed-runtime Linux consumer](https://github.com/joshyorko/josh-room/actions/runs/38893875252/job/116950077813)
-also passed; its [evidence artifact](https://github.com/joshyorko/josh-room/actions/runs/38893875252/artifacts/12043032732) is retained. The Windows managed-runtime consumer is pending
-and is not covered by the passing test-job claim.
+also passed; its [evidence artifact](https://github.com/joshyorko/josh-room/actions/runs/38893875252/artifacts/12043032732) is retained. [Windows managed-runtime consumer](https://github.com/joshyorko/josh-room/actions/runs/38893875252/job/116950078054)
+also passed, with [Windows evidence](https://github.com/joshyorko/josh-room/actions/runs/38893875252/artifacts/12042814550).
+All applicable jobs in this CI run passed; release-candidate was skipped.
 
 [Native Linux and Windows candidate workflow](https://github.com/joshyorko/josh-room/actions/runs/38893868899)
 passed **77 tests on each platform**, with no skips, including actual restic
