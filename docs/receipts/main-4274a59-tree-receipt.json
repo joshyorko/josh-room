@@ -1,0 +1,11 @@
+{
+  "qualified_source_sha": "35341da6378a0af38cf869710f5c6a10913f06c3",
+  "integrated_source_sha": "4274a59fd4a15e97bf51dd2f74aca7ef41bac86e",
+  "qualified_tree": "5cf97e3e52faed022eeec30d558ca88eee7acfd0",
+  "integrated_tree": "5cf97e3e52faed022eeec30d558ca88eee7acfd0",
+  "tree_identical": true,
+  "version": "0.1.36",
+  "template_version": "0.1.6",
+  "jat_release": "v0.1.14-jat-runtime",
+  "scope": "Exact source tree equality; final main CI/stage and package parity verified separately."
+}

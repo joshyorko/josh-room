@@ -1,0 +1,14 @@
+{
+  "source_sha": "35341da6378a0af38cf869710f5c6a10913f06c3",
+  "workflow_run": 38943079440,
+  "platform": "windows-latest",
+  "status": "passed",
+  "artifact_id": 12064218159,
+  "artifact_zip_sha256": "77fcb4d68fff84734579a3974effd155f07b8b108ecaeee65b76d57e459009f2",
+  "actual_probe_receipt": "pr151-windows-restic64-passed.json",
+  "archive_probe_receipt_sha256": "94eed5b81b97dc1378450c04747ab3298160b4da377218395c0b7deec0fa375b",
+  "repository_probe_receipt_sha256": "9659e48de4952d7ce18d8fd8ddb6e6455d5864637da46f3d204c0014a3b2af72",
+  "representation": "JSON field values preserved; canonical UTF8/LF repository representation",
+  "threshold": 0.5,
+  "assertions_removed": false
+}

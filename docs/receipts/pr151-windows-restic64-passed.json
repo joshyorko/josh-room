@@ -1,0 +1,199 @@
+{
+  "backend": "local-filesystem",
+  "engine": "restic",
+  "engine_version": "0.19.1",
+  "host_platform": "win32",
+  "metrics": {
+    "cancel_progress_message_type": "verbose_status",
+    "cancelled_exit_code": 130,
+    "concurrent_snapshot_count": 2,
+    "edit_data_added_packed": 1270413,
+    "edit_data_processed": 67108912,
+    "edit_fraction_limit": 0.5,
+    "initial_data_added_packed": 67116754,
+    "rename_data_added_packed": 2445
+  },
+  "probe_version": 1,
+  "repository_format": 2,
+  "stages": [
+    {
+      "evidence": "0.19.1",
+      "name": "version",
+      "status": "passed"
+    },
+    {
+      "evidence": "0.19.1",
+      "name": "version_pin",
+      "status": "passed"
+    },
+    {
+      "evidence": true,
+      "name": "prepare_synthetic_inputs",
+      "status": "passed"
+    },
+    {
+      "evidence": 0,
+      "name": "repository_init",
+      "status": "passed"
+    },
+    {
+      "evidence": 2,
+      "name": "repository_format",
+      "status": "passed"
+    },
+    {
+      "evidence": {
+        "data_added": 67114433,
+        "data_added_packed": 67116754,
+        "errors": 0,
+        "files_changed": 0,
+        "files_new": 3,
+        "files_unmodified": 0,
+        "snapshot_id": "43f6f6ac645f3361de78674b57b6e68ac2d946c9f6df6212abb529454b0eb768",
+        "summary_count": 1,
+        "total_bytes_processed": 67108912
+      },
+      "name": "initial_backup",
+      "status": "passed"
+    },
+    {
+      "evidence": true,
+      "name": "initial_restore",
+      "status": "passed"
+    },
+    {
+      "evidence": {
+        "after_snapshot_count": 1,
+        "before_snapshot_count": 1,
+        "summary": {
+          "data_added": 0,
+          "data_added_packed": 0,
+          "errors": 0,
+          "files_changed": 0,
+          "files_new": 0,
+          "files_unmodified": 3,
+          "snapshot_id": null,
+          "summary_count": 1,
+          "total_bytes_processed": 67108912
+        }
+      },
+      "name": "explicit_parent_noop",
+      "status": "passed"
+    },
+    {
+      "evidence": true,
+      "name": "apply_small_edit",
+      "status": "passed"
+    },
+    {
+      "evidence": {
+        "data_added": 1272758,
+        "data_added_packed": 1270413,
+        "errors": 0,
+        "files_changed": 1,
+        "files_new": 0,
+        "files_unmodified": 2,
+        "snapshot_id": "6a12f4f72dbf8d9990e5489aa1e31dd8f7571c6fb1bc7a46eb34db0abbd89625",
+        "summary_count": 1,
+        "total_bytes_processed": 67108912
+      },
+      "name": "small_edit",
+      "status": "passed"
+    },
+    {
+      "evidence": true,
+      "name": "apply_rename",
+      "status": "passed"
+    },
+    {
+      "evidence": {
+        "data_added": 4904,
+        "data_added_packed": 2445,
+        "errors": 0,
+        "files_changed": 0,
+        "files_new": 1,
+        "files_unmodified": 2,
+        "snapshot_id": "3958d7625df5ece28fef7285c77928dca9ee8d61b3ea2a2349d95e6adb3c071e",
+        "summary_count": 1,
+        "total_bytes_processed": 67108912
+      },
+      "name": "rename_reuse",
+      "status": "passed"
+    },
+    {
+      "evidence": true,
+      "name": "prepare_cancellation_fixture",
+      "status": "passed"
+    },
+    {
+      "evidence": {
+        "exit_code": 130,
+        "observed_message_type": "verbose_status",
+        "signal_sent": true
+      },
+      "name": "cancelled_backup",
+      "status": "passed"
+    },
+    {
+      "evidence": 0,
+      "name": "check_after_cancel",
+      "status": "passed"
+    },
+    {
+      "evidence": true,
+      "name": "prepare_concurrent_inputs",
+      "status": "passed"
+    },
+    {
+      "evidence": [
+        {
+          "data_added": 6157,
+          "data_added_packed": 3112,
+          "errors": 0,
+          "files_changed": 0,
+          "files_new": 1,
+          "files_unmodified": 3,
+          "snapshot_id": "efa47485e90bb2c545979bebee926264d1a6885a6ee82364897c230086cc6512",
+          "summary_count": 1,
+          "total_bytes_processed": 67108922
+        },
+        {
+          "data_added": 6157,
+          "data_added_packed": 3107,
+          "errors": 0,
+          "files_changed": 0,
+          "files_new": 1,
+          "files_unmodified": 3,
+          "snapshot_id": "a6807b7da1199d7cb986e84ab22c5c782f84c4b10a0a7501b755f5d299b0b0fb",
+          "summary_count": 1,
+          "total_bytes_processed": 67108922
+        }
+      ],
+      "name": "concurrent_backups",
+      "status": "passed"
+    },
+    {
+      "evidence": 0,
+      "name": "final_repository_check",
+      "status": "passed"
+    }
+  ],
+  "status": "passed",
+  "steps": {
+    "cancelled_backup_repository_usable": true,
+    "concurrent_backups_integrity": true,
+    "explicit_parent_fresh_process": true,
+    "initial_backup_restore": true,
+    "initialized": true,
+    "json_summary_contract": true,
+    "rename_reused_data": true,
+    "skip_if_unchanged": true,
+    "small_edit_bounded": true
+  },
+  "unproved": [
+    "minio",
+    "r2",
+    "Linux local runtime",
+    "packaged controller/runtime installation"
+  ]
+}

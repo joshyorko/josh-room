@@ -1,0 +1,14 @@
+{
+  "ui_installed_source": "bdf08abccb186c3dd51877d15816f62869c95387",
+  "probe_fix_source": "35341da6378a0af38cf869710f5c6a10913f06c3",
+  "product_paths_checked": [
+    "vscode-extension",
+    "templates/room",
+    "src",
+    "schemas",
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "changed_product_paths": [],
+  "scope": "Source equality; final staged VSIX byte parity must still be verified separately."
+}
