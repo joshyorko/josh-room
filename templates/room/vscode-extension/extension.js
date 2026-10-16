@@ -1105,7 +1105,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
   try {
     runtime = await runtimeFor(cwd, args, progressReporter, cancellationToken);
     if (cancellationToken?.isCancellationRequested) throw cancellationError();
-    environment = { ...process.env, ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath };
+    environment = managedRuntime.mergeRuntimeEnvironment(process.env, { ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath });
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
       authFree: args[0] === "status",
