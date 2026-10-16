@@ -331,23 +331,46 @@ jobs:
                 '[.[][] | select(.tag_name == $tag)] | if length > 1 then error("duplicate release tag") else .[0] end' \
                 > "$RUNNER_TEMP/standalone-release.json"
           }
-          load_release
-          if [[ $(jq -r 'type' "$RUNNER_TEMP/standalone-release.json") == null ]]; then
-            test -z "$RESUME_EMPTY_DRAFT_ID"
-            if git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG" >/dev/null; then
-              echo "The exact release tag exists without a resumable release; refusing to retarget it." >&2
-              exit 1
-            fi
-            version=${RELEASE_TAG#v}
-            version=${version%-standalone-vsix}
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --target "$SOURCE_SHA" --draft --title "Josh Room $version" \
-              --notes "Exact CI-qualified Josh Room candidate for source $SOURCE_SHA. Published after explicit owner approval."
+          read_release_by_id() {
+            local attempt
+            for attempt in 1 2 3 4 5; do
+              if gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/standalone-release-read.json"; then
+                jq -e --argjson id "$release_id" '.id == $id' "$RUNNER_TEMP/standalone-release-read.json" >/dev/null
+                mv "$RUNNER_TEMP/standalone-release-read.json" "$RUNNER_TEMP/standalone-release.json"
+                return
+              fi
+              if [[ "$attempt" -lt 5 ]]; then sleep "$attempt"; fi
+            done
+            echo "Could not read release ID $release_id after 5 attempts; preserve it and resume by ID." >&2
+            return 1
+          }
+          if [[ -n "$RESUME_EMPTY_DRAFT_ID" ]]; then
+            release_id="$RESUME_EMPTY_DRAFT_ID"
+          else
             load_release
+            if [[ $(jq -r 'type' "$RUNNER_TEMP/standalone-release.json") == null ]]; then
+              if git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG" >/dev/null; then
+                echo "The exact release tag exists without a resumable release; refusing to retarget it." >&2
+                exit 1
+              fi
+              version=${RELEASE_TAG#v}
+              version=${version%-standalone-vsix}
+              # Create once and retain the authoritative response; never rediscover this draft by tag/list.
+              gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+                -f tag_name="$RELEASE_TAG" -f target_commitish="$SOURCE_SHA" \
+                -F draft=true -F prerelease=false -f name="Josh Room $version" \
+                -f body="Exact CI-qualified Josh Room candidate for source $SOURCE_SHA. Published after explicit owner approval." \
+                > "$RUNNER_TEMP/standalone-release.json"
+              release_id=$(jq -er '.id' "$RUNNER_TEMP/standalone-release.json")
+              echo "Created draft release ID $release_id; subsequent reads and uploads use this ID."
+              jq -e --arg tag "$RELEASE_TAG" --arg source "$SOURCE_SHA" \
+                '.tag_name == $tag and .target_commitish == $source and .draft == true and .prerelease == false and .assets == []' \
+                "$RUNNER_TEMP/standalone-release.json" >/dev/null
+            fi
+            release_id=$(jq -er '.id' "$RUNNER_TEMP/standalone-release.json")
           fi
-          release_id=$(jq -er '.id' "$RUNNER_TEMP/standalone-release.json")
           [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/standalone-release.json"
+          read_release_by_id
           tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
           if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
           if [[ -n "$RESUME_EMPTY_DRAFT_ID" ]]; then
@@ -361,7 +384,7 @@ jobs:
               gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
                 -f tag_name="$RELEASE_TAG" -f target_commitish="$SOURCE_SHA" \
                 -f body="Exact CI-qualified Josh Room candidate for source $SOURCE_SHA. Published after explicit owner approval." > /dev/null
-              gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/standalone-release.json"
+              read_release_by_id
               test "$(jq -r .target_commitish "$RUNNER_TEMP/standalone-release.json")" = "$SOURCE_SHA"
               tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
               if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
@@ -376,9 +399,11 @@ jobs:
           while IFS= read -r name; do
             [[ -n "$name" ]] || continue
             test -f "$staged/$name"
-            gh release upload "$RELEASE_TAG" "$staged/$name" --repo "$GITHUB_REPOSITORY"
+            encoded_name=$(jq -rn --arg name "$name" '$name | @uri')
+            gh api --method POST "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name" \
+              -H 'Content-Type: application/octet-stream' --input "$staged/$name" > /dev/null
           done < <(jq -r '.missing_assets[]' "$RUNNER_TEMP/reconcile-report.json")
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/standalone-release.json"
+          read_release_by_id
           python -m scripts.release_staging reconcile \
             --directory "$staged" \
             --release-json "$RUNNER_TEMP/standalone-release.json" \
