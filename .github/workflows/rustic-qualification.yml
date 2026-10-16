@@ -31,8 +31,12 @@ jobs:
         env:
           QUALIFICATION_PLATFORM: ${{ matrix.platform }}
         run: |
-          import os, pathlib, subprocess
+          import os, pathlib, subprocess, sys
+          sys.path.insert(0, 'src')
+          from josh_room.private_paths import protect_private_directory
           runtime = pathlib.Path(os.environ['RUNNER_TEMP']) / 'rustic-qualification-runtime'
+          runtime.mkdir(mode=0o700)
+          protect_private_directory(runtime)
           env = dict(os.environ, PYTHONPATH='src')
           for engine in ('restic', 'rustic'):
               subprocess.run(['uv', 'run', 'python', f'scripts/install_{engine}.py', '--manifest', f'vscode-extension/runtime/{engine}-manifest.json', '--destination', str(runtime), '--platform', os.environ['QUALIFICATION_PLATFORM']], env=env, check=True)
