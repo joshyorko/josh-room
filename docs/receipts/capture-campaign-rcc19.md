@@ -41,7 +41,7 @@ database, upload and retained worktree draft. Ignore-file bytes matched. All
 `.git` entries, `generated-env`, and `worktree-two` were absent. All50 original
 file/link hashes stayed unchanged. Exact inventory and hashes are in
 `rcc19-native-restore-result.json`; the comprehensive UI receipt records scope.
-Prior reviewed-selection/cancellation evidence remains distinct and unchanged.
+Prior [reviewed-selection/cancellation evidence](https://github.com/joshyorko/josh-room/blob/da229c2561b3cc87e6bd0675c2bb2434332f95f4/docs/receipts/native-ui-receipt.json) remains distinct and unchanged.
 
 Two setup failures were retained, not treated as clean upgrade acceptance:
 
@@ -66,8 +66,8 @@ share tree `852030972fc53b8249c3e3da78322990855255ef`.
 [Capture qualification](https://github.com/joshyorko/josh-room/actions/runs/38901495573):
 **77 passed each on Linux and native Windows, no skips**, including actual restic
 Save/restore. [Windows receipt](https://github.com/joshyorko/josh-room/actions/runs/38901495573/artifacts/12047125609).
-The separate managed-runtime Linux consumer passed; Windows consumer was still
-running when this receipt was prepared.
+The separate managed-runtime Linux and Windows consumers both passed. All
+applicable jobs in [the exact-source CI run](https://github.com/joshyorko/josh-room/actions/runs/38901502683) passed; release-candidate was skipped.
 
 Local focused container command passed111tests, skipped1 (restic absent from
 that command's PATH; actual restic is independently covered above). Local native
