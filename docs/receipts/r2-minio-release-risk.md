@@ -1,3 +1,5 @@
+Current completed repair and exact-main stage: [R2 to MinIO staged handoff](r2-minio-staged-handoff.md), main `19723c71d64f81bd664cf34491d13014c213773d`, stage38956687056/artifact12071465063. CI, staged assets and tested-payload parity PASS; publication SKIPPED. Earlier pending/denied/unresolved checkpoints below are historical; merge approval and repair are complete. Live-provider/full Windows GUI checks remain unrun.
+
 Historical source4274a59 checkpoint. [Repair PR #152 is now merged and qualifying on exact main19723c7](r2-minio-repair-handoff.md). The source4274a59 stage and risk assessment below predate the fix. Publication remains prohibited.
 
 # Unresolved R2 OAuth→MinIO release risk

@@ -1,0 +1,170 @@
+{
+  "assets": {
+    "SHA256SUMS": {
+      "sha256": "7c4eb004179642202d4f39f3ffb4b7d6ef6c63e6be653a648d91f3125fe1bfc9",
+      "size": 286
+    },
+    "ci-readiness.json": {
+      "sha256": "86303ea62fdfc6e7334f19d5a02cb6d0c5799a5b855b9bedb79c5496bf7e4af8",
+      "size": 2125
+    },
+    "josh-room-0.1.36.vsix": {
+      "sha256": "0d7a4ea8577aacd7067321f5b364bb811234a3210977e653d9c97078cda46eaa",
+      "size": 509620
+    },
+    "josh_room-0.1.0.dev0-py3-none-any.whl": {
+      "sha256": "8be094c79ee5235382f181f6aac106b12beee356bc601bba1d6e1a60487a7ff8",
+      "size": 419000
+    },
+    "josh_room-0.1.0.dev0.tar.gz": {
+      "sha256": "dacefffb8292f99b314a1430262bb005d33debfdf03ae74d96c8dd2e68aa3538",
+      "size": 1872877
+    },
+    "vsix-candidate.json": {
+      "sha256": "cef7adf5cd21e739717e47dff3b7234419e4de98ff7b2e66b5b188587bce3ab7",
+      "size": 347
+    }
+  },
+  "checks": {
+    "checks": {
+      "managed-runtime-consumer (ubuntu-latest)": {
+        "app_id": 15368,
+        "conclusion": "success",
+        "head_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+        "id": 117154918672,
+        "run_id": 38954825822,
+        "status": "completed"
+      },
+      "managed-runtime-consumer (windows-latest)": {
+        "app_id": 15368,
+        "conclusion": "success",
+        "head_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+        "id": 117154918866,
+        "run_id": 38954825822,
+        "status": "completed"
+      },
+      "release-candidate": {
+        "app_id": 15368,
+        "conclusion": "success",
+        "head_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+        "id": 117161031832,
+        "run_id": 38954825822,
+        "status": "completed"
+      },
+      "test": {
+        "app_id": 15368,
+        "conclusion": "success",
+        "head_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+        "id": 117154918663,
+        "run_id": 38954825822,
+        "status": "completed"
+      },
+      "windows-private-runtime": {
+        "app_id": 15368,
+        "conclusion": "success",
+        "head_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+        "id": 117154918303,
+        "run_id": 38954825822,
+        "status": "completed"
+      }
+    },
+    "controller_release": "rcc-v18.19.7-controller-78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0-7bc855dc8d87f76fbd231242637c1b0c47915d8621db4576e79ff85972851ef6-c9520865e1c14c71a8867c2d455fdaf95c6bde7420851012ebca7e8443244e00",
+    "controller_source_sha": "78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0",
+    "jat_release": "v0.1.14-jat-runtime",
+    "jat_source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "platforms": [
+      "linux-x64",
+      "win32-x64"
+    ],
+    "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+    "rcc_version": "v18.19.7",
+    "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+    "status": "PASS",
+    "workflow": {
+      "branch": "main",
+      "event": "push",
+      "head_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+      "id": 341135066,
+      "path": ".github/workflows/ci.yml",
+      "repository": "joshyorko/josh-room",
+      "run_attempt": 1,
+      "run_id": 38954825822
+    }
+  },
+  "release_tag": "v0.1.36-standalone-vsix",
+  "runtime": {
+    "controller": {
+      "platforms": {
+        "linux-x64": {
+          "archive_sha256": "9a05f6c631686519453b96ef550e62362fc582a6b66b4c57d61e95c7b76a3761",
+          "archive_size": 101002872,
+          "artifact_digest": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+          "input_digest": "sha256:7bc855dc8d87f76fbd231242637c1b0c47915d8621db4576e79ff85972851ef6",
+          "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+          "rcc_version": "v18.19.7",
+          "source_sha": "78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0",
+          "specification_digest": "sha256:1a4fe9fe44adc15cdbff3ee91208fb76237a8a469183173ba5fa8d0a53162cb5"
+        },
+        "win32-x64": {
+          "archive_sha256": "454e544e9d22b405c62900035aa72cfed2e41a2de0d5162070a9af455fdefa11",
+          "archive_size": 77936787,
+          "artifact_digest": "sha256:21083fb6628d37d6042c0879fe92c2b7441a7150b1cb17232c41cdefbf1a2c11",
+          "input_digest": "sha256:c9520865e1c14c71a8867c2d455fdaf95c6bde7420851012ebca7e8443244e00",
+          "rcc_sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+          "rcc_version": "v18.19.7",
+          "source_sha": "78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0",
+          "specification_digest": "sha256:f6fbea8afdeb0d32c8d6d4eb13436916f381689d819c73979d6cd1976cc0e517"
+        }
+      },
+      "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+      "rcc_version": "v18.19.7",
+      "release_tag": "rcc-v18.19.7-controller-78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0-7bc855dc8d87f76fbd231242637c1b0c47915d8621db4576e79ff85972851ef6-c9520865e1c14c71a8867c2d455fdaf95c6bde7420851012ebca7e8443244e00",
+      "source_sha": "78fa48e41ddbad0c159f8f8dfa29f6b120a4f1b0"
+    },
+    "jat": {
+      "platforms": {
+        "linux-x64": {
+          "archive_sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+          "archive_size": 170877798,
+          "artifact_digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+          "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+          "rcc_version": "v18.19.7",
+          "specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431"
+        },
+        "win32-x64": {
+          "archive_sha256": "8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
+          "archive_size": 104094478,
+          "artifact_digest": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+          "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+          "rcc_version": "v18.19.7",
+          "specification_digest": "sha256:716adb4f9b65b98f954ec564000ffb981562748b25a90d9f02947a17e3f7157b"
+        }
+      },
+      "producer_workflow_run": {
+        "id": 38934211098,
+        "url": "https://github.com/joshyorko/josh-all-the-things/actions/runs/38934211098"
+      },
+      "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+      "rcc_version": "v18.19.7",
+      "release_tag": "v0.1.14-jat-runtime",
+      "source_archive": {
+        "asset": "josh-all-the-things-fe43065a654d1649ba9ebe5a6f202eac612e4385.tar.gz",
+        "sha256": "5c1ee4f380df2cd45ff3791156ae79fce5a45cf1092f8746b9fe1e85c6d94f13",
+        "size": 143616,
+        "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/fe43065a654d1649ba9ebe5a6f202eac612e4385"
+      },
+      "source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385"
+    }
+  },
+  "schema_version": 1,
+  "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+  "stage_run": {
+    "event": "workflow_run",
+    "id": 38956687056,
+    "path": ".github/workflows/release.yml",
+    "repository": "joshyorko/josh-room",
+    "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+    "workflow_id": 341135067
+  },
+  "version": "0.1.36"
+}

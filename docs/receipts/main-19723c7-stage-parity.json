@@ -1,0 +1,223 @@
+{
+  "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+  "version": "0.1.36",
+  "ci_run_id": 38954825822,
+  "stage_run_id": 38956687056,
+  "stage_artifact_id": 12071465063,
+  "stage_zip_sha256": "84b19613e6fd7e8d153bb59f9789c2d363b212af4e454f83483c960ec89c278f",
+  "stage_zip_size": 2786611,
+  "assets": {
+    "SHA256SUMS": {
+      "sha256": "7c4eb004179642202d4f39f3ffb4b7d6ef6c63e6be653a648d91f3125fe1bfc9",
+      "size": 286
+    },
+    "ci-readiness.json": {
+      "sha256": "86303ea62fdfc6e7334f19d5a02cb6d0c5799a5b855b9bedb79c5496bf7e4af8",
+      "size": 2125
+    },
+    "josh-room-0.1.36.vsix": {
+      "sha256": "0d7a4ea8577aacd7067321f5b364bb811234a3210977e653d9c97078cda46eaa",
+      "size": 509620
+    },
+    "josh_room-0.1.0.dev0-py3-none-any.whl": {
+      "sha256": "8be094c79ee5235382f181f6aac106b12beee356bc601bba1d6e1a60487a7ff8",
+      "size": 419000
+    },
+    "josh_room-0.1.0.dev0.tar.gz": {
+      "sha256": "dacefffb8292f99b314a1430262bb005d33debfdf03ae74d96c8dd2e68aa3538",
+      "size": 1872877
+    },
+    "vsix-candidate.json": {
+      "sha256": "cef7adf5cd21e739717e47dff3b7234419e4de98ff7b2e66b5b188587bce3ab7",
+      "size": 347
+    }
+  },
+  "all_asset_sizes_and_digests_verified": true,
+  "ui_tested_vsix_sha256": "3e9a616874e43093e1c3fcb77b6c1006da008c61c37574970323a9b735b96f57",
+  "uncompressed_files": 105,
+  "byte_identical_to_ui_candidate": true,
+  "jat_pins": {
+    "git_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "source_archive": {
+      "asset": "josh-all-the-things-fe43065a654d1649ba9ebe5a6f202eac612e4385.tar.gz",
+      "sha256": "5c1ee4f380df2cd45ff3791156ae79fce5a45cf1092f8746b9fe1e85c6d94f13",
+      "size": 143616,
+      "url": "https://api.github.com/repos/joshyorko/josh-all-the-things/tarball/fe43065a654d1649ba9ebe5a6f202eac612e4385"
+    },
+    "environment_artifact": {
+      "archive": {
+        "asset": "jat-runtime-linux-amd64.rcca",
+        "sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+        "size": 170877798,
+        "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-linux-amd64.rcca"
+      },
+      "digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+      "specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431",
+      "rcc_version": "v18.19.7",
+      "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
+    },
+    "environment_artifacts": {
+      "linux-x64": {
+        "archive": {
+          "asset": "jat-runtime-linux-amd64.rcca",
+          "sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
+          "size": 170877798,
+          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-linux-amd64.rcca"
+        },
+        "digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+        "specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431",
+        "rcc_version": "v18.19.7",
+        "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
+      },
+      "win32-x64": {
+        "archive": {
+          "asset": "jat-runtime-windows-amd64.rcca",
+          "sha256": "8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
+          "size": 104094478,
+          "url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-windows-amd64.rcca"
+        },
+        "digest": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+        "specification_digest": "sha256:716adb4f9b65b98f954ec564000ffb981562748b25a90d9f02947a17e3f7157b",
+        "rcc_version": "v18.19.7",
+        "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
+      }
+    },
+    "rcc": {
+      "version": "v18.19.7",
+      "source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+      "platforms": {
+        "linux-x64": {
+          "asset": "rcc-linux64",
+          "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+          "size": 22401186,
+          "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-linux64"
+        },
+        "win32-x64": {
+          "asset": "rcc-windows64.exe",
+          "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+          "size": 20130816,
+          "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-windows64.exe"
+        }
+      }
+    },
+    "release_tag": "v0.1.14-jat-runtime",
+    "producer_workflow_run": {
+      "id": 38934211098,
+      "url": "https://github.com/joshyorko/josh-all-the-things/actions/runs/38934211098"
+    }
+  },
+  "file_sha256": {
+    "extension.vsixmanifest": "d46bea12a470a84d6dfcead6981dc37a303bf9552addaa530dbdc0ab1562b2fe",
+    "[Content_Types].xml": "59564c6ab763c6d0c3fe5004b3f39e75a47b8cdd9a7c8c4149ba90dcee9c4242",
+    "extension/LICENSE.txt": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "extension/readme.md": "bbf3e3c103d1b0f37bf7f7891295d3a63f96e28c0c3a084d04836400ddf3f132",
+    "extension/dirty.js": "2a10007f8a129c806ad902070d93349ccf844fee1eca812fb54dec36e9e66fd7",
+    "extension/extension.js": "50807496c432e37e482c983d4eb86213cee0147e717633cc6452906150961323",
+    "extension/package.json": "59cbacd5c5d89d2ea8a835c5e811acf907a0c0686ce4c81f84aaad3624b91237",
+    "extension/progress.js": "31243f27fb1aa49616954108d65760e8d1a2ccf2ff4b9361f23f899f14c6a4f8",
+    "extension/provider.js": "a1d56b61c34762f3d66306e2beba685425d0758c011670c506c05146ea7d0a52",
+    "extension/registry.js": "8da81f82122c094daa715d9dfb97dbea1f497d492673a31e4d3f1fa7ebb498bf",
+    "extension/runtime.js": "34a0c9daa7d598d29dc33b85c44d388b5f01822046267573ce1ac07fa00163b1",
+    "extension/media/room.svg": "e82e3fed0ec1c0b8c62fab8ecd3cdcbdd6fbd800bf50988d2613fa7b71ac28e3",
+    "extension/runtime/controller-artifact-manifest.json": "045f3f6dd1053919f2e465d11cfa7400d5644e348c6333cffc9d25f9b1ae0c45",
+    "extension/runtime/manifest.json": "6be9ca58e163fbc20e3559b38c8b108e73332996dac0141e9d3b7f5da2f2a313",
+    "extension/runtime/restic-manifest.json": "e18c22184bd284851bc80e0c19c6e2bee14accc2ef01e1b92aac9cdd5d6fc435",
+    "extension/runtime/controller/conda.yaml": "8b48e945d0b4f3f2802ded42ea78a8e308afa6f0111c178817cce7701c3111ae",
+    "extension/runtime/controller/environment_linux_amd64_freeze.yaml": "216c68d8e011e6d3e6d8f8ef03452012e56a253b5517865861db752cecf93221",
+    "extension/runtime/controller/environment_windows_amd64_freeze.yaml": "2cb9ba69bbfe11080242bb9bcb3fb1898f199f2b934d79765441cc6344a5c1c0",
+    "extension/runtime/controller/install_restic.py": "cb7e5055ae1f2eba439d799a0c1058b1d8fbaeb7113d56b5e7338c55d4316581",
+    "extension/runtime/controller/robot.yaml": "f4d7adc2d9537d812392b20ab93abad261fba9b4c08b508d9faa4750cb3e42f9",
+    "extension/runtime/controller/josh_room/__init__.py": "34d7e6e4f4fa9b5bb2319d537edd7f2cfac0a7257dcd488e92ad0354e4853348",
+    "extension/runtime/controller/josh_room/__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+    "extension/runtime/controller/josh_room/_stream_state.py": "38ded60f96907275160c169322e0fc5665a49476f79d670b89fbfbc6e7228503",
+    "extension/runtime/controller/josh_room/adapter_contract.py": "5c66bacbe3023eb6cd6a7a3b04aa6c5476875c5ad1836538cc52a34c90ff45ff",
+    "extension/runtime/controller/josh_room/auth.py": "d2e3bade489e81f14b7bdd63802663b1064c41ec618cbfaaa6457f76c3af36b7",
+    "extension/runtime/controller/josh_room/cancellation.py": "97f3a61c535188cf01180f9013c567230b82ad47cfc9710abfdf66bd8dacf56b",
+    "extension/runtime/controller/josh_room/catalog.py": "e64a3b4f683f5ca47618fc5fc38b9ec3651e08441232c83b07eee3f88f1c827e",
+    "extension/runtime/controller/josh_room/cli.py": "f37d081f4c795614fa7e9fbb82b7e7c6c0261f561a4f6aff139d61a4d18ade78",
+    "extension/runtime/controller/josh_room/codex_adapter.py": "1d2bf5bb09a69cb67ea876ae06464e573d96daf56c8fcab90d5ffb4dfe4d851f",
+    "extension/runtime/controller/josh_room/config.py": "c47c887c74a2d1d690d85beb5726ffdb9b6541588e1c8380474ccdc3177ad8b1",
+    "extension/runtime/controller/josh_room/crypto.py": "0bd0a7d26f46af7653b7393657ae666d7a81a76505c96561e9e28300e06b7e2e",
+    "extension/runtime/controller/josh_room/device.py": "58469be7f229ad5046e2daeeed5bbecad2770882b322e8d67169927673bec31a",
+    "extension/runtime/controller/josh_room/encryption_domain.py": "9ce9b234873cab5d0c1a48e19cbf1e7b501b88e1787df09c0a1913333fd33e79",
+    "extension/runtime/controller/josh_room/envelope.py": "b9dcab622b85beb27dd90e922f2db5caf2c7bb6483155b8f22d805c9a8e8f8f5",
+    "extension/runtime/controller/josh_room/git_workspace.py": "08beeaf786dc3f98ea64905ea47b3d83d0b8586233e24fe1dac5bd0ba2b2b732",
+    "extension/runtime/controller/josh_room/git_worktree_repair.py": "63d8eab5dd6bf42fafb77b2695319df44edf7cc1f2f8cf4310fe26d4c146970c",
+    "extension/runtime/controller/josh_room/harvest.py": "180469c77aebd97814912ebad95b876172abefc1b2d2dedf62ead1849f6eec7e",
+    "extension/runtime/controller/josh_room/harvest_bridge.py": "00c9edfd49606a329e6231a4565a7fa06e57a46ecae48f8f03f721e6abe70a42",
+    "extension/runtime/controller/josh_room/hook_entrypoint.py": "c8d1e77798875778f336e28d71880188d33d7d2c9c08b6df3dbeac75d6c96671",
+    "extension/runtime/controller/josh_room/hook_runtime.py": "bcc96b6dc1083bb64d7d9fc4bb29b96853929d24d47b913b3e1e639de09ffb74",
+    "extension/runtime/controller/josh_room/jat.py": "aa84d3f90a652053f9ea6ef99a1a8ae0ee0d552df336e29b53f03e773259a616",
+    "extension/runtime/controller/josh_room/keyring.py": "9533162212bab6e175717438b8de7d3d8a752458902fb69b4cb3112c47c87b99",
+    "extension/runtime/controller/josh_room/local_save_receipt.py": "a51dad92800f77ebb246a35bdcb47fc2d84e6d1fa200786800731d2282d725f5",
+    "extension/runtime/controller/josh_room/local_store.py": "dc3a1c8207737c9c245cf7f8346cee4271b740023691e0d7bd34eae5de4965bf",
+    "extension/runtime/controller/josh_room/logical_jat.py": "93f95b1213f1bfca3c952938494fdc6e86fccc541eba65f3bac1cad990b71a74",
+    "extension/runtime/controller/josh_room/material_security.py": "c5dff62aca02939c6412a91f7d0ed718294602814f2f6f62f09bf3e4023aed76",
+    "extension/runtime/controller/josh_room/minio.py": "931b3fbe1e0a24a77effdd033b0e2b1251e88a42df6d670e9501f8224ba73aec",
+    "extension/runtime/controller/josh_room/object_store.py": "8ab60a337401ed8d719a724e011eb7bb1c87a59ea06bf08050310d267a1bfa09",
+    "extension/runtime/controller/josh_room/operations.py": "b73ecd7b4431a9790d8704a57883efddedcb06c272431771640013b45036d3b5",
+    "extension/runtime/controller/josh_room/parent_inventory.py": "581e014bf8802967519f3d9e2c9a9430952cf650faecd99e6656c8f70262bed9",
+    "extension/runtime/controller/josh_room/pcc_crypto.py": "66af913e1a4c73ab880fe158806eccb720a3a534ff5ddd1688e1a33221c50fae",
+    "extension/runtime/controller/josh_room/pcc_enqueue.py": "1aa55c57c7f6d82aa5c664815b638928f04325c65a359e4379db730cdbb1f42a",
+    "extension/runtime/controller/josh_room/pcc_hooks.py": "c38605c4e225b4d80ccd73f86b23766c71f73685efea4ba15ce580425048298c",
+    "extension/runtime/controller/josh_room/pcc_outbox.py": "6f110aa01199c6f9c575caa2c3698d7031a4b52863536732826a855f0a53d2e4",
+    "extension/runtime/controller/josh_room/pcc_replay.py": "ea39e47d98f6d82d50af593d7aa26a2e7c58096a543d32806c6449f348aa36e9",
+    "extension/runtime/controller/josh_room/policy.py": "fb825d33cd07b9c9af65de5368d64cee14b8b2530519b29625df41e2e4a59875",
+    "extension/runtime/controller/josh_room/policy_config.py": "4d4dd2124eb110bcf39f002d51b7baa100cb17d516f929f8ed6de1c29357523f",
+    "extension/runtime/controller/josh_room/private_paths.py": "a8122aeee4f9c34a66a8221291e7a0f8a03a9d42758f8737700e167bbbdbeb51",
+    "extension/runtime/controller/josh_room/progress.py": "b7e5a89253ac0ae1772c428ad49214ec3a40c019ab3664a3b0d09d056c4def4b",
+    "extension/runtime/controller/josh_room/r2.py": "3846f3fb0416f3044995084751ed18ca177abc114dcd8fbdc6fcf500aa982c1a",
+    "extension/runtime/controller/josh_room/r2_room_store_material.py": "3eac5b984fe1213c186dfd44ab5419de167002e3489d162054118a9e6657c354",
+    "extension/runtime/controller/josh_room/restic_store.py": "65d076967400e24cb1349c4179bfff4a5c5a2a3148c9cd0f3c64dd8b74c78a83",
+    "extension/runtime/controller/josh_room/room_store_bridge.py": "30cb727f05bf5e8414529b91dce1abfd9584900175c38acd5761f7bf3531d376",
+    "extension/runtime/controller/josh_room/room_store_components.py": "961a52c0f1838e1fa8f540cf2a72672de4a2eb950a3ed7b21d5fc53a100664b4",
+    "extension/runtime/controller/josh_room/room_store_docker_identity.py": "3dff5d17d3191e6e4e0fbe0df87070a698b9534ae5a6ab8bd70f08919f3738eb",
+    "extension/runtime/controller/josh_room/room_store_export.py": "b85b6bbca40e43f04c57dd229b5216a0773b8a98838dcbe9cf42c09852d67475",
+    "extension/runtime/controller/josh_room/room_store_hauler.py": "a8158b11f18fd69cdfbf9f15726117e9ceeea32480880c3fdac8bd9830d4837d",
+    "extension/runtime/controller/josh_room/room_store_hauler_runner.py": "b9b55c0386f53922a43f69d80e9b6858426f0a365b0b8f3f5a8ec6154f58474b",
+    "extension/runtime/controller/josh_room/room_store_homebrew.py": "472425fb0e51841961d78b18bca01b155dfa7a3354e5d84e49bcd0723fcd4d21",
+    "extension/runtime/controller/josh_room/room_store_lifecycle.py": "939ed79dbd26110da171a49d28884df1887a17455af9dc0e118df81da20f83bd",
+    "extension/runtime/controller/josh_room/room_store_manifest_inputs.py": "0210213ce872569829cf7df5d1b4eea534f6ccf8be4171ce7ff25a27fc479db9",
+    "extension/runtime/controller/josh_room/room_store_operations.py": "43159b371ade7ef09bcae239c61e8544689f9f28afc6072b42dcd5841d6c853a",
+    "extension/runtime/controller/josh_room/room_store_references.py": "8f4eb4a1d8a2e1b077e25b07e5d5df21bda8c7d4508c8ae1d6d345d029f4475a",
+    "extension/runtime/controller/josh_room/s3.py": "804271ce05651e6ed55f58f1a7ca01306435e7e75b627f4ea3f7af318c4f187c",
+    "extension/runtime/controller/josh_room/scheduler.py": "6b9b0c78368cf8f8d6651e49cc950c1118488ac8e5fbae44a5b5b026b2afbd74",
+    "extension/runtime/controller/josh_room/session_evidence.py": "43c3045f658bc47800212dbc493bca7906322066892fa2986ec68c4b2ee45545",
+    "extension/runtime/controller/josh_room/session_normalizer.py": "9a8cf7792e33a13aaa20caa712589ef1ef8cd85ba754b995069fb3c0f857ca9b",
+    "extension/runtime/controller/josh_room/synthetic_adapter.py": "27c125b03c4e13dfd80d92054a13cf2d0589a728bf0125cbf4884038a655bf15",
+    "extension/runtime/controller/josh_room/tls.py": "41e49029994056a2cb95548f83243407a9caad80e19241ab5871db4799295bd8",
+    "extension/runtime/controller/josh_room/windows_file_metadata.py": "b066c82df55c84881ece7542391b2095de5f8a90a7d946e9736afa9b4428b81e",
+    "extension/runtime/controller/josh_room/workspace_capture_defaults.json": "9b829fc58f0684288b2a59897ac248d90b9b382aac9539ab497a7c1c74591624",
+    "extension/runtime/controller/josh_room/workspace_init.py": "3932e3958bce879be4a4f8aa7542480b5ff806c588dfb557d4814bd6f35e766c",
+    "extension/runtime/controller/josh_room/workspace_policy.py": "012d9133c5187e181e1cdb919f2905c36907c950c9cb46d65bb5497687e8f1ac",
+    "extension/runtime/controller/josh_room/workspace_report.py": "792efcda391b31d9e5e901d8217207e444e7b2a9620d40b83e4e428b5f040493",
+    "extension/runtime/controller/josh_room/workspace_state.py": "302b369487cdcb7a26d3cce1fd7ddb7e845e2b1fc2c5d466872a44951b3ec12e",
+    "extension/runtime/controller/josh_room/_vendor/__init__.py": "3671c235ab089098154f770d83bd4d1b29bde387644e3ece7af65eb495a7e688",
+    "extension/runtime/controller/josh_room/_vendor/pyyaml-pin.json": "ff7a58717684dae844ee8f5ca6d5889f2d4dfe2445f20362be8c21526848a9ad",
+    "extension/runtime/controller/josh_room/_vendor/yaml/LICENSE": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4",
+    "extension/runtime/controller/josh_room/_vendor/yaml/__init__.py": "b19dfcc333d6a75dfd73073901164507252f271b41d3b5f7d85510033a0547a7",
+    "extension/runtime/controller/josh_room/_vendor/yaml/composer.py": "fcaa37d16afa783594794a5ab94193dcb720f503c19ce3d59539c8311189f453",
+    "extension/runtime/controller/josh_room/_vendor/yaml/constructor.py": "90d8247da78b524c10618fd0e857f54f3d97570fe91b5c5513d024ef3faf88b0",
+    "extension/runtime/controller/josh_room/_vendor/yaml/cyaml.py": "e99ac01bd7c062f7557b614aff0d21997a06ed962ca185306a91bc0a20bbd87d",
+    "extension/runtime/controller/josh_room/_vendor/yaml/dumper.py": "3cb72d66563064ba7b5e679477046ebf89d8399d940670c8532f3e94a7cb17ea",
+    "extension/runtime/controller/josh_room/_vendor/yaml/emitter.py": "8e086d694ede170837d5b1b407b45979aff6f40762f422a65eafd08e04290a44",
+    "extension/runtime/controller/josh_room/_vendor/yaml/error.py": "021f73fada072546c4f63f8cf18a7181244ce4280b09cc15cc980b2d1176171a",
+    "extension/runtime/controller/josh_room/_vendor/yaml/events.py": "e74fd392c810884e2ea7e94aa3f57e9c1cbeb402319083d0c58e6a0e1282787c",
+    "extension/runtime/controller/josh_room/_vendor/yaml/loader.py": "5156becc8aa6905482218abf3e04869b835226db4763645fff3438fdbd5f1cdd",
+    "extension/runtime/controller/josh_room/_vendor/yaml/nodes.py": "80f28d8fca4a09d87677882bde021820d9cf39a3b11a12405226211919cf13ce",
+    "extension/runtime/controller/josh_room/_vendor/yaml/parser.py": "8a55a9e6fbe0a07146cef3990c8b45a068c3e83e369e1959ad9ca30306b4a09a",
+    "extension/runtime/controller/josh_room/_vendor/yaml/reader.py": "d1d9b38ab3a20c6e17a38d519ee412ecaf6b918df18c78956ac7c330d4ea08dc",
+    "extension/runtime/controller/josh_room/_vendor/yaml/representer.py": "22e58ff9c016f6c1ca1274b4802a926bcf78935060e1c813c5a0f021c6d143e6",
+    "extension/runtime/controller/josh_room/_vendor/yaml/resolver.py": "f4bf9561f9b89961f1503d558385fbae30d12bfed565de9bf76c33abb63620a6",
+    "extension/runtime/controller/josh_room/_vendor/yaml/scanner.py": "60433788b652690c17710460da5d91e0c753d3318fd85f5e1e42862a71f25906",
+    "extension/runtime/controller/josh_room/_vendor/yaml/serializer.py": "0a1b85826854d35863e31808f0668abfabdf33606e8f06bd8bb7761401e3edc0",
+    "extension/runtime/controller/josh_room/_vendor/yaml/tokens.py": "953408cd2570f0c83dc2fe39f7e4e388e41eeb05738aa69196a5f6ffcf6ba79e"
+  },
+  "tests": {
+    "python_passed": 1933,
+    "python_skipped": 28,
+    "node_passed": 304,
+    "node_skipped": 2
+  },
+  "scope": "Artifact integrity and payload parity; not new UI execution. No publication performed."
+}

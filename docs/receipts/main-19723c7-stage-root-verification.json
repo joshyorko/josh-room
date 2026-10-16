@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+  "stage_run_id": 38956687056,
+  "artifact_id": 12071465063,
+  "zip_sha256": "84b19613e6fd7e8d153bb59f9789c2d363b212af4e454f83483c960ec89c278f",
+  "zip_size": 2786611,
+  "all_six_asset_hashes_and_sizes_verified": true,
+  "canonical_release_staging_verifier": "PASS",
+  "ui_tested_vsix_sha256": "3e9a616874e43093e1c3fcb77b6c1006da008c61c37574970323a9b735b96f57",
+  "stage_vsix": {
+    "sha256": "0d7a4ea8577aacd7067321f5b364bb811234a3210977e653d9c97078cda46eaa",
+    "size": 509620
+  },
+  "all_105_uncompressed_vsix_files_equal_ui_tested_package": true,
+  "wheel_and_sdist_config_equal_canonical": true,
+  "jat14_source_and_release_pins_verified": true,
+  "scope": "Official guarded stage integrity and tested executable payload equality; not new GUI or live provider execution",
+  "publication": "NOT_PERFORMED"
+}

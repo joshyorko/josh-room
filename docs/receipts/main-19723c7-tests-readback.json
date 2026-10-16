@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+  "run_id": 38954825822,
+  "test_job_id": 117154918663,
+  "python": {
+    "passed": 1933,
+    "skipped": 28,
+    "seconds": 45.66
+  },
+  "node": {
+    "total": 306,
+    "passed": 304,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 2
+  },
+  "ruff": "PASS",
+  "evidence": "Root read completed hosted test job log; raw log retained locally."
+}

@@ -1,0 +1,24 @@
+{
+  "status": "PASS",
+  "publication": "NOT_PERFORMED",
+  "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+  "targets": {
+    "room_release": {
+      "target": "repos/joshyorko/josh-room/releases/tags/v0.1.36-standalone-vsix",
+      "status": "ABSENT",
+      "http": 404
+    },
+    "room_tag": {
+      "target": "repos/joshyorko/josh-room/git/ref/tags/v0.1.36-standalone-vsix",
+      "status": "ABSENT",
+      "http": 404
+    }
+  },
+  "existing_room035": {
+    "release_id": 414956798,
+    "tag": "v0.1.35-standalone-vsix",
+    "source_sha": "e773963106829668c9bca8bf94c045c99f8267f1",
+    "published_at": "2026-10-16T16:25:09Z",
+    "state": "existing release retained"
+  }
+}
