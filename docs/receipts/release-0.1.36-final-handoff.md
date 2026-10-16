@@ -1,4 +1,4 @@
-Repair update: [qualified PR #152 and feature review stage](r2-minio-repair-handoff.md). The repair is unmerged pending specific merge approval; the source4274a59/main-stage evidence below remains historical and unresolved.
+Historical source4274a59 checkpoint. [Repair PR #152 is now merged and qualifying on exact main19723c7](r2-minio-repair-handoff.md). The source4274a59 stage and risk assessment below predate the fix. Publication remains prohibited.
 
 # Room 0.1.36 candidate handoff — publication on hold
 

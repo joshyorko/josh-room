@@ -1,0 +1,9 @@
+{
+  "pr": "https://github.com/joshyorko/josh-room/pull/152",
+  "qualified_head": "b69eaea08b365d48fe8a04b2656d3e3b032efcdb",
+  "merged_main": "19723c71d64f81bd664cf34491d13014c213773d",
+  "tree_sha": "68423d859e09bca1ddd9e45d4ef42a9a70a5bac4",
+  "full_tree_equal_to_qualified_head": true,
+  "prior_denial": "Explicit PR152 merge approval subsequently received; known-unexecuted state/head checked; one retry completed successfully",
+  "publication": "NOT_PERFORMED"
+}

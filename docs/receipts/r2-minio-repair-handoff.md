@@ -1,3 +1,5 @@
+Current integration update: specific merge approval was received and PR #152 merged at `19723c71d64f81bd664cf34491d13014c213773d`. [Full-tree identity](main-19723c7-tree-receipt.json) matches the qualified/native-tested head. [Exact-main CI38954825822](https://github.com/joshyorko/josh-room/actions/runs/38954825822) and fresh guarded staging are qualifying. Publication remains prohibited. The blocked-merge checkpoint below is historical; its denial is resolved.
+
 # R2 to MinIO repair: qualified feature review stage
 
 The stale registry repair is implemented and qualified in [Room PR #152](https://github.com/joshyorko/josh-room/pull/152), branch `fix/r2-minio-session-registry`, exact head `b69eaea08b365d48fe8a04b2656d3e3b032efcdb`, tree `68423d859e09bca1ddd9e45d4ef42a9a70a5bac4`. A feature review stage is built and verified. The guarded exact-main release stage is **pending specific merge approval**. PR #152 remains open and unmerged; main remains `4274a59fd4a15e97bf51dd2f74aca7ef41bac86e`. No release or template publication occurred.
