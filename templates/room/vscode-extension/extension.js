@@ -3590,7 +3590,7 @@ async function connectEncryption(item, options = {}) {
       if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), prepared.value);
       selectedDimensionId = dimensionIdValue;
       roomsProvider && await roomsProvider.reload();
-      await vscode.window.showInformationMessage("MinIO encryption is ready. Cloudflare R2 was not connected.");
+      void vscode.window.showInformationMessage("MinIO encryption is ready.");
       return "initialized";
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

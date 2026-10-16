@@ -1264,11 +1264,19 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
   assert.deepEqual(openExternalCalls, []);
 });
 
-test("Save Room to a fresh MinIO Dimension authorizes encryption once and preserves the target", async () => {
+test("Save Room to a fresh MinIO Dimension continues without dismissing its ready notice", { timeout: 3000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-minio-auth-test-"));
   const source = path.join(root, "source-room");
   fs.mkdirSync(source);
   const { vscode, statusItem, openExternalCalls, infoCalls } = createVscodeMock(root);
+  const showInformationMessage = vscode.window.showInformationMessage;
+  vscode.window.showInformationMessage = (...args) => {
+    if (args[0].includes("MinIO encryption is ready")) {
+      infoCalls.push(args);
+      return new Promise(() => {});
+    }
+    return showInformationMessage(...args);
+  };
   const recovery = path.join(root, "recovery.identity");
   fs.writeFileSync(recovery, "AGE-SECRET-KEY-recovery\n", { mode: 0o600 });
   const spawnHarness = createSpawnHarness(({ args }) => {
@@ -1312,7 +1320,7 @@ test("Save Room to a fresh MinIO Dimension authorizes encryption once and preser
     { label: "Import Existing Recovery Key", action: "import" },
     { label: "Workspace only", allImages: false },
   );
-  vscode.infoResponses.push("Continue", undefined, "Save");
+  vscode.infoResponses.push("Continue", "Save");
 
   assert.equal(await extension.__test__.saveRoom(), "saved");
   assert.deepEqual(openExternalCalls, []);
