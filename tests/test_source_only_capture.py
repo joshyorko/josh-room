@@ -92,7 +92,7 @@ def test_capture_mode_python_js_parity_and_fingerprint(tmp_path):
 def test_source_only_real_restic_save_and_restore(tmp_path):
     from types import SimpleNamespace
 
-    from josh_room.private_paths import secure_private_file, validate_private_directory
+    from josh_room.private_paths import protect_private_directory, secure_private_file, validate_private_directory
     from josh_room.room_store_operations import RoomStoreOperations
     from tests.test_room_store_operations import PASSWORD, _descriptor
 
@@ -107,6 +107,8 @@ def test_source_only_real_restic_save_and_restore(tmp_path):
     private = tmp_path / 'private'
     cache.mkdir(mode=0o700)
     private.mkdir(mode=0o700)
+    protect_private_directory(cache)
+    protect_private_directory(private)
     keyset = SimpleNamespace(room_store=SimpleNamespace(secret=PASSWORD, generation=3, repository_id=None))
     latest = []
     def bind(*args, expected_generation):
