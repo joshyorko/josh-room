@@ -1,0 +1,43 @@
+{
+  "status": "PASS",
+  "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+  "stage_run_id": 38956687056,
+  "evidence_commit": "56889f1e64d1017639511c281ccb020bdd0e43ad",
+  "records": [
+    {
+      "repository": "joshyorko/josh-room",
+      "pr": 152,
+      "body_readback": "PASS",
+      "merged": true,
+      "merge_sha": "19723c71d64f81bd664cf34491d13014c213773d"
+    },
+    {
+      "repository": "joshyorko/josh-room",
+      "issue": 144,
+      "state": "open",
+      "original_specification_preserved": true,
+      "body_readback": "PASS"
+    },
+    {
+      "repository": "joshyorko/josh-room",
+      "issue": 145,
+      "state": "open",
+      "original_specification_preserved": true,
+      "body_readback": "PASS"
+    },
+    {
+      "repository": "joshyorko/josh-room",
+      "issue": 146,
+      "state": "open",
+      "original_specification_preserved": true,
+      "body_readback": "PASS"
+    },
+    {
+      "repository": "joshyorko/josh-all-the-things",
+      "issue": 19,
+      "state": "closed",
+      "original_specification_preserved": true,
+      "body_readback": "PASS"
+    }
+  ]
+}
