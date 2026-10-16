@@ -27,10 +27,18 @@ receipt omits filesystem paths, endpoints, bucket names, and provider credential
 The run exercises initial backup and restore, explicit parent selection from a
 new restic process, unchanged-save skipping, one small in-place edit, rename
 reuse, cancellation followed by repository checks, and two concurrent backup
-writers followed by another repository check. It uses an 8 MiB synthetic file;
+writers followed by another repository check. It uses a 64 MiB synthetic file;
 the cancellation-only pass uses verbose JSON with 2,048 tiny synthetic files.
 Neither pass uses user data. A successful local result says nothing about
 remote storage or the packaged runtime.
+
+The 50% packed-data limit for the small edit is unchanged. The larger fixture
+keeps that check meaningful across random content-defined chunk boundaries:
+[restic 0.19.1](https://github.com/restic/restic/blob/v0.19.1/go.mod) uses
+[chunker 0.4.0](https://github.com/restic/chunker/blob/v0.4.0/chunker.go), whose
+default maximum chunk size is 8 MiB. An 8 MiB file could legitimately add most
+of its bytes after a small edit. The probe still requires a fresh changed
+snapshot, zero-byte unchanged saves, rename reuse and successful restores.
 
 Cancellation uses SIGINT on POSIX. On Windows, the probe creates a new process
 group and sends CTRL_BREAK; if that signal is unavailable or rejected, it calls
