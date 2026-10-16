@@ -90,3 +90,26 @@ The release workflow reports the staged SHA256SUMS in its log and summary for
 owner review. Josh must still supply the exact current source SHA, staging run
 ID, and `APPROVE`; leave both empty-draft recovery fields blank for a new
 release. Staging does not publish the extension or template.
+
+## Resume an interrupted empty draft
+
+The publish workflow retains the release ID returned by the create API and
+uses it for subsequent reads and asset uploads. Reads retry at most five times;
+creation is never retried automatically. If reads remain unavailable, the run
+reports the retained ID and stops without uploading or publishing. This handles
+read-after-create failures without assuming whether their cause is API timing
+or token visibility.
+
+For a known draft, supply `resume_empty_draft_id` and
+`expected_draft_source_sha`. The workflow loads that exact ID directly, without
+requiring tag or listing discovery first. Before retargeting an empty draft to
+a newly qualified main source, it verifies the expected old source, exact tag,
+draft state, non-prerelease state, absence of assets and tag, and original
+source-bound body. Existing matching assets and published retries continue
+through the unchanged reconciliation gates. A failed lookup never authorizes
+creating a replacement draft.
+
+After a workflow repair changes main, wait for that new source's CI and staging
+run, then use the new `source_sha` and `stage_run_id` with the preserved draft ID
+and its original source SHA. Do not reuse the older source's staging input for
+the repaired workflow. Final publication still requires Josh's `APPROVE`.

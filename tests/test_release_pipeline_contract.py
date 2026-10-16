@@ -103,9 +103,10 @@ def test_only_explicit_owner_dispatch_can_create_tag_publish_release_and_templat
     assert "python -m scripts.release_staging reconcile" in steps
     assert "python scripts/release_staging.py" not in steps
     assert "verify_release_candidate.py" in steps
-    assert "gh release create" in steps
-    assert "gh release upload" in steps
-    assert "--target \"$SOURCE_SHA\" --draft" in steps
+    assert 'gh api --method POST "repos/$GITHUB_REPOSITORY/releases"' in steps
+    assert 'uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name' in steps
+    assert '-f target_commitish="$SOURCE_SHA"' in steps
+    assert "-F draft=true -F prerelease=false" in steps
     assert "devcontainer templates publish" in steps
     step_names = [step.get("name") for step in publish["steps"]]
     preflight_index = step_names.index("Install pinned Dev Container CLI and preflight template publication")
