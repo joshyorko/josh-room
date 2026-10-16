@@ -176,6 +176,13 @@ async function main() {
     await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtual, modifiers });
   };
   const text = async () => { await captureNotifications(); return evaluate("document.body.innerText"); };
+  const workspaceText = async () => {
+    const value = await text();
+    if (/RCC did not produce a controller receipt/.test(value)) {
+      throw new Error("Native controller failed: RCC did not produce a controller receipt");
+    }
+    return value;
+  };
   const command = async () => {
     await key("Escape", "Escape", 27);
     await send("Page.bringToFront");
@@ -203,13 +210,13 @@ async function main() {
   };
   stage = "source-only-native-check";
   await command();
-  await until(async () => /Workspace valid [·•] \d+ entries/.test(await text()), 360000, "source-only native workspace check result");
+  await until(async () => /Workspace valid [·•] \d+ entries/.test(await workspaceText()), 360000, "source-only native workspace check result");
   receipt.checks.push("native-command-source-only-valid");
   receipt.source_only_ui_result = (await text()).match(/Workspace valid [·•] \d+ entries/)[0];
   fs.writeFileSync(ignore, "# full-repository is the compatibility default\n");
   stage = "full-repository-native-check";
   await command();
-  const gitResult = await until(async () => (await text()).match(/git-storage[^\n]*|Git storage[^\n]*/), 90000, "fresh full-repository Git blocker");
+  const gitResult = await until(async () => (await workspaceText()).match(/git-storage[^\n]*|Git storage[^\n]*/), 90000, "fresh full-repository Git blocker");
   receipt.full_repository_ui_result = gitResult[0].slice(0, 500);
   receipt.checks.push("native-command-policy-change-rejects-unsupported-git");
   if (fs.readFileSync(path.join(fixture, ".git"), "utf8") !== "gitdir: Z:/synthetic-unavailable-admin\n") throw new Error("Original fixture Git entry changed");
