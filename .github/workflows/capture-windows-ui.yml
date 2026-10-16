@@ -1,0 +1,56 @@
+name: Candidate Windows native UI
+on:
+  push:
+    branches: [feature/capture-campaign]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact candidate source commit to qualify
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: candidate-windows-native-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  packaged-native-ui:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Verify candidate source
+        shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+        run: |
+          if ($env:GITHUB_REF -eq 'refs/heads/main') { throw 'Candidate workflow refuses main' }
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:GITHUB_SHA) { throw 'Source identity mismatch' }
+          if ($env:REQUESTED_SHA -and $actual -ne $env:REQUESTED_SHA) { throw 'Requested source mismatch' }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Package candidate and install official VS Code in disposable profile
+        shell: pwsh
+        run: |
+          $ui = Join-Path $env:RUNNER_TEMP 'capture-native-ui'
+          New-Item -ItemType Directory -Path $ui | Out-Null
+          $zip = Join-Path $ui 'vscode.zip'
+          Invoke-WebRequest 'https://update.code.visualstudio.com/latest/win32-x64-archive/stable' -OutFile $zip
+          $code = Join-Path $ui 'code'
+          Expand-Archive $zip $code
+          $vsix = Join-Path $ui 'candidate.vsix'
+          Push-Location vscode-extension
+          npm run package -- --out $vsix
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate packaging failed' }
+          Pop-Location
+          & (Join-Path $code 'bin/code.cmd') --user-data-dir (Join-Path $ui 'profile') --extensions-dir (Join-Path $ui 'extensions') --install-extension $vsix --force
+          if ($LASTEXITCODE -ne 0) { throw 'Disposable candidate installation failed' }
+          "CAPTURE_UI_ROOT=$ui" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CAPTURE_CODE_ROOT=$code" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "CAPTURE_VSIX=$vsix" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Drive native Windows renderer commands without screenshots
+        run: node scripts/capture_windows_ui.js
