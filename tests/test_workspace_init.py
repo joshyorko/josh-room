@@ -69,7 +69,8 @@ def test_append_is_explicit_exact_idempotent_and_detects_edits(tmp_path):
 
 
 def test_append_rejects_glob_names_and_source_mode_is_explicit(tmp_path):
-    (tmp_path / "work*tree").mkdir()
+    # Rejected before filesystem lookup, including on Windows where '*' is
+    # itself an invalid filename character.
     with pytest.raises(ValueError, match="exact exclusion"):
         append_exclusions(
             tmp_path, ["work*tree"], expected_token=policy_edit_token(tmp_path)

@@ -114,7 +114,8 @@ def _read_ignore(root: Path) -> bytes | None:
     descriptor = None
     try:
         flags = (
-            os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+            os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
         descriptor = os.open(path, flags)
         opened = os.fstat(descriptor)

@@ -226,3 +226,9 @@ def test_python_and_javascript_share_policy_for_nested_virtualenv_symlink(
     assert js_policy["excluded"] == [policy.is_excluded(item) for item in corpus]
     assert js_policy["restic"] == list(policy.restic_excludes())
     assert os.readlink(interpreter) == "/opt/private-runtime/bin/python"
+
+
+def test_ignore_fingerprint_reads_exact_crlf_bytes(tmp_path):
+    raw = b'# retained bytes\r\ngenerated/**\r\n'
+    (tmp_path / '.josh-roomignore').write_bytes(raw)
+    assert workspace_policy._read_ignore(tmp_path) == raw
