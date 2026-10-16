@@ -163,6 +163,8 @@ def test_official_exact_pins_and_shipped_parity():
 
 
 def test_unknown_engine_and_handoff_cannot_use_arbitrary_binary(tmp_path, monkeypatch):
+    import sys
+
     monkeypatch.setenv("JOSH_ROOM_STORE_ENGINE", "other")
     with pytest.raises(RoomStoreBridgeError):
         _store_engine()
@@ -170,7 +172,10 @@ def test_unknown_engine_and_handoff_cannot_use_arbitrary_binary(tmp_path, monkey
     monkeypatch.setenv("JOSH_ROOM_RUSTIC_EXE", str(tmp_path / "unverified-rustic"))
     with pytest.raises(RoomStoreBridgeError) as error:
         _verified_restic_executable(runtime_root=tmp_path / "runtime", install=True)
-    assert error.value.code == "rustic-runtime-invalid"
+    assert error.value.code == (
+        "store-engine-platform-unsupported" if sys.platform.startswith("win")
+        else "rustic-runtime-invalid"
+    )
 
 
 def test_version_probe_never_inherits_host_profile_or_authority(tmp_path, monkeypatch):
@@ -225,3 +230,16 @@ def test_installer_protects_and_verifies_actual_runtime_paths(tmp_path):
         verify_private_path(directory, directory=True)
     installer._regular_file(binary, executable=True)
     verify_private_path(binary.with_name(binary.name + ".sha256"), directory=False)
+
+
+def test_windows_selection_is_blocked_before_runtime_install(monkeypatch, tmp_path):
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("JOSH_ROOM_STORE_ENGINE", "rustic")
+    with pytest.raises(RoomStoreBridgeError) as error:
+        _verified_restic_executable(runtime_root=tmp_path / "runtime", install=True)
+    assert error.value.code == "store-engine-platform-unsupported"
+    assert not (tmp_path / "runtime").exists()
+    monkeypatch.delenv("JOSH_ROOM_STORE_ENGINE")
+    assert _store_engine() == "restic"

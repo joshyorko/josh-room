@@ -240,6 +240,20 @@ async function main() {
     );
     const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
     const qualifyRustic = async () => {
+      if (platform === "win32-x64") {
+        const guard = JSON.parse(runManagedTool([
+          "python", "-c",
+          "import json,os; from josh_room.room_store_bridge import _store_engine,RoomStoreBridgeError; os.environ['JOSH_ROOM_STORE_ENGINE']='rustic'\ntry: _store_engine()\nexcept RoomStoreBridgeError as error: print(json.dumps({'code':error.code}))\nelse: raise RuntimeError('unsupported Windows Rustic was admitted')",
+        ], "rustic-windows-admission").trim());
+        if (guard.code !== "store-engine-platform-unsupported") {
+          throw new Error("Windows Rustic admission did not fail with its platform code");
+        }
+        return {
+          engine: "rustic", version: "0.11.4", platform_support: "blocked", code: guard.code,
+          reason: "pinned Windows Rustic omits mode metadata and restores read-only files writable",
+          save_enter: "NOT RUN", age_catalog_two_recipients: "NOT RUN", portable_jat: "NOT RUN",
+        };
+      }
       const privateRuntime = path.join(root, "rustic-private-runtime");
       runManagedTool([
         "python", "-c",
@@ -330,8 +344,10 @@ async function main() {
     if (process.env.JOSH_ROOM_QUALIFY_RUSTIC_ONLY === "1") {
       const checks = await qualifyRustic();
       const evidence = {
-        result: "rustic-managed-consumer-pass",
-        scope: "installed Rustic Save/restore, two-recipient age catalogs and portable JAT; default Restic gates are separate",
+        result: checks.platform_support === "blocked" ? "rustic-platform-blocked" : "rustic-managed-consumer-pass",
+        scope: checks.platform_support === "blocked"
+          ? "Windows product admission blocked; Rustic JAT/age composition is NOT RUN"
+          : "installed Rustic Save/restore, two-recipient age catalogs and portable JAT; default Restic gates are separate",
         platform,
         source_sha: childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
         vsix: { asset: "candidate.vsix", ...(await fileIdentity(runtime, candidate)), extension_version: manifest.extension_version },

@@ -54,6 +54,18 @@ def test_native_windows_custom_ca_rejected_before_spawn(tmp_path):
     assert error.value.code.value == "invalid-configuration"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="native Windows product admission guard")
+def test_native_windows_product_keeps_restic_as_supported_engine(monkeypatch):
+    from josh_room.room_store_bridge import RoomStoreBridgeError, _store_engine
+
+    monkeypatch.setenv("JOSH_ROOM_STORE_ENGINE", "rustic")
+    with pytest.raises(RoomStoreBridgeError) as error:
+        _store_engine()
+    assert error.value.code == "store-engine-platform-unsupported"
+    monkeypatch.delenv("JOSH_ROOM_STORE_ENGINE")
+    assert _store_engine() == "restic"
+
+
 def test_native_running_process_tree_cancellation(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

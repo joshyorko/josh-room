@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
@@ -421,6 +422,11 @@ def _store_engine() -> str:
     engine = os.environ.get("JOSH_ROOM_STORE_ENGINE", "restic")
     if engine not in {"restic", "rustic"}:
         raise RoomStoreBridgeError("Room Store engine is unsupported", code="store-engine-invalid")
+    if engine == "rustic" and sys.platform.startswith("win"):
+        raise RoomStoreBridgeError(
+            "Rustic on Windows cannot preserve required file metadata; select Restic",
+            code="store-engine-platform-unsupported",
+        )
     return engine
 
 

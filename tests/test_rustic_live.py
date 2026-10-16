@@ -224,6 +224,7 @@ def test_s3_tls_lifecycle(binary, authorities, tmp_path):
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Product Windows Rustic selection is blocked; raw engine contracts are separate")
 def test_room_store_operations_real_save_noop_restore(binary, tmp_path):
     import base64
     from types import SimpleNamespace
