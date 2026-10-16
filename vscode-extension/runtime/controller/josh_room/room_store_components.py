@@ -22,7 +22,7 @@ from typing import Any
 from .cancellation import terminate_owned_process
 from .jat import _diagnostic
 
-RCC_VERSION = "v18.19.6"
+RCC_VERSION = "v18.19.7"
 MAX_SOURCE_FILE = 2 * 1024 * 1024
 MAX_SOURCE_FILES = 64
 MAX_JSON = 1024 * 1024
@@ -335,7 +335,7 @@ def prepare_rcc_component(
     stage = Path(directory)
     stage.mkdir(mode=0o700)
     version_output = _run([executable, "--version"], cwd=root, cancellation=cancellation, timeout=20)
-    if re.search(r"(?<![A-Za-z0-9.+-])v18\.19\.6(?![A-Za-z0-9.+-])", version_output.decode("utf-8", "replace")) is None:
+    if re.search(rf"(?<![A-Za-z0-9.+-]){re.escape(RCC_VERSION)}(?![A-Za-z0-9.+-])", version_output.decode("utf-8", "replace")) is None:
         raise RoomStoreComponentError("selected RCC version is unsupported")
     published = _run([executable, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, cancellation=cancellation)
     native = _publish_metadata(published)

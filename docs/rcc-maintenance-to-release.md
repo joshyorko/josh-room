@@ -65,12 +65,28 @@ The handoff retains the detailed preflight report when the branch already
 contains the generated update, so a retry does not erase source or artifact
 provenance from the PR description.
 
-Compatible immutable JAT runtime `v0.1.12-jat-runtime` is available with RCC
-18.19.6 and original JAT source `dbbf1c8e09d52cc1e01d45259112eb3e9ee3147f`.
-Its Linux and Windows postpublication checks passed in
-[verification run 38631798037](https://github.com/joshyorko/josh-all-the-things/actions/runs/38631798037).
-That read-only run records verifier code `2d1447b827166f488ddb56d90ebfdfbbfcb3b09c`
-separately from the runtime source. Room still adopts these pins only through
-the generated consumer PR and its review and CI gates. No upstream JAT edits,
-release, tag, package, template publication, or deployment are part of local
-validation.
+## 0.1.35 runtime adoption
+
+The 0.1.35 extension candidate and 0.1.5 Dev Container template adopt RCC
+18.19.7 at `758c97808bef8ae8bc5779d82c23ee11abfa47b3`. Native Room Store
+capture requires that version, and encrypted snapshot metadata accepts its
+artifact receipts while retaining support for previously supported versions.
+Both extension copies, bootstrap pins, runtime manifests, and release locks
+advance together. RCC 18.19.7 fixes pip installation targeting the wrong Python
+interpreter during legacy Conda/micromamba environment builds.
+
+Compatible immutable JAT runtime `v0.1.13-jat-runtime` uses source
+`3a3d897c31264308f1c1721d8fc3c9ebca4c8293`. Its Linux and Windows qualification,
+publication, and postpublication checks passed in
+[run 38891273008](https://github.com/joshyorko/josh-all-the-things/actions/runs/38891273008).
+Room controller qualification and JAT compatibility passed in
+[maintenance run 38891973950](https://github.com/joshyorko/josh-room/actions/runs/38891973950).
+The first promotion attempt hit a stale already-merged maintenance branch;
+after resetting only that branch to current main with an exact lease, the
+failed promotion job resumed using the same qualified artifacts and immutable
+controller prerelease. No platform rebuild or artifact replacement was needed.
+
+The release workflow reports the staged SHA256SUMS in its log and summary for
+owner review. Josh must still supply the exact current source SHA, staging run
+ID, and `APPROVE`; leave both empty-draft recovery fields blank for a new
+release. Staging does not publish the extension or template.
