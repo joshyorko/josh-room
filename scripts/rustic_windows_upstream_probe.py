@@ -21,6 +21,11 @@ CORE_SHA256 = "ddab48a7f892b4943d9bffe7be44746c443982ae06ffcc3b2be55b31999b1725"
 CORE_URL = "https://static.crates.io/crates/rustic_core/rustic_core-0.13.0.crate"
 
 
+def prepare_patch(checkout: Path, canonical: Path) -> None:
+    """Apply the canonical LF artifact even when Git checked it out as CRLF."""
+    canonical.write_bytes(checkout.read_bytes().replace(b"\r\n", b"\n"))
+
+
 def run(output: Path) -> None:
     if os.name != "nt":
         raise RuntimeError("this probe requires native Windows")
@@ -30,7 +35,8 @@ def run(output: Path) -> None:
         "scope": "upstream-only core unit proof; official product binary is unchanged",
         "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_root, text=True).strip(),
         "crate_sha256": CORE_SHA256,
-        "patch_sha256": hashlib.sha256(patch.read_bytes()).hexdigest(),
+        "patch_sha256": hashlib.sha256(patch.read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
+        "patch_representation": "canonical Git LF; Windows CRLF checkout normalized before application",
         "platform": "win32-x64",
         "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
         "product_windows_readonly": "FAIL; tested independently with official binary",
@@ -60,8 +66,10 @@ def run(output: Path) -> None:
         baseline = root / "rustic_core-0.13.0"
         patched = root / "patched"
         shutil.copytree(baseline, patched)
-        subprocess.run(["git", "apply", "--check", "--unidiff-zero", str(patch)], cwd=patched, check=True)
-        subprocess.run(["git", "apply", "--unidiff-zero", str(patch)], cwd=patched, check=True)
+        canonical_patch = root / "canonical.patch"
+        prepare_patch(patch, canonical_patch)
+        subprocess.run(["git", "apply", "--check", "--unidiff-zero", str(canonical_patch)], cwd=patched, check=True)
+        subprocess.run(["git", "apply", "--unidiff-zero", str(canonical_patch)], cwd=patched, check=True)
         relative = Path("src/backend/ignore/mapper.rs")
         marker = "#[cfg(all(test, windows))]\nmod windows_readonly_tests"
         patched_text = (patched / relative).read_text(encoding="utf-8")
