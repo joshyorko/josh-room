@@ -159,3 +159,20 @@ def test_candidate_rejects_valid_encrypted_tree_replay(candidate, tmp_path, posi
         assert not (kwargs['cache_dir'] / 'rustic-inventory-v2-nodes').exists()
     finally:
         target_path.write_bytes(original)
+
+
+@pytest.mark.parametrize('label', ['backslash', 'unicode', 'dollar'])
+def test_candidate_s3_profile_preserves_literal_ca_paths(candidate, tmp_path, label):
+    names = {'backslash': r'ca-C:\Users\synthetic.pem' if os.name != 'nt' else 'ca-native-path.pem',
+             'unicode': 'ca-£.pem', 'dollar': 'ca-${HOME}.pem'}
+    ca = tmp_path / names[label]
+    ca.write_text('synthetic unused-by-version CA placeholder')
+    kwargs = authority(tmp_path)
+    kwargs['repository'] = 's3:https://127.0.0.1:9/synthetic-profile/repository'
+    with RusticStore(**kwargs, executable=candidate, ca_bundle=ca, ca_mode='operator',
+                     provider_env={'AWS_ACCESS_KEY_ID': 'synthetic-key', 'AWS_SECRET_ACCESS_KEY': 'synthetic-secret'}) as store:
+        # Native config parsing, without opening a provider or trusting this CA.
+        store._ensure_version()
+        import tomllib
+        _, config = store._capture(["show-config"])
+        assert tomllib.loads(config.decode())["repository"]["options"]["cacert"] == str(ca)

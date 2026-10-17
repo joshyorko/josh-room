@@ -93,6 +93,12 @@ def _invalid_constant(_value: str) -> None:
     raise ValueError("unsupported JSON constant")
 
 
+def _profile_literal(value: str) -> str:
+    # Rustic expands subst templates before TOML parsing. Preserve TOML escapes
+    # through that first pass, and keep literal dollars out of substitution.
+    return json.dumps(value, ensure_ascii=False).replace("\\", "\\\\").replace("$", "\\$")
+
+
 def _valid_id(value: object) -> bool:
     return isinstance(value, str) and _ID.fullmatch(value) is not None
 
@@ -297,7 +303,7 @@ class RusticStore(ResticStore):
                 profile += "[repository.options]\n"
                 profile += (
                     "\n".join(
-                        f"{key} = {value if value.startswith('${') else json.dumps(value)}"
+                        f"{key} = {value if key in {'access_key_id', 'secret_access_key', 'session_token'} else _profile_literal(value)}"
                         for key, value in options.items()
                     )
                     + "\n"
