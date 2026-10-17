@@ -13,7 +13,7 @@
 +        if self.json_nodes {
 +            println!("{}", serde_json::json!({
 +                "struct_type": "snapshot", "schema_version": 1,
-+                "id": snap.id.to_string(), "tree": snap.tree.to_string(),
++                "id": snap.id, "tree": snap.tree,
 +                "paths": &snap.paths,
 +            }));
 +        }
