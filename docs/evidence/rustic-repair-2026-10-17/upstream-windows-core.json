@@ -1,0 +1,38 @@
+{
+  "scope": "upstream-only core unit proof; official product binary is unchanged",
+  "source_sha": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+  "crate_sha256": "ddab48a7f892b4943d9bffe7be44746c443982ae06ffcc3b2be55b31999b1725",
+  "patch_sha256": "ad4a0ac708655b4b34413f19ce175f1064d489c8b5dea661dc834f9d4a43a2d5",
+  "patch_representation": "canonical Git LF; Windows CRLF checkout normalized before application",
+  "platform": "win32-x64",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "product_windows_readonly": "FAIL; tested independently with official binary",
+  "steps": {
+    "baseline": {
+      "exit_code": 101,
+      "summary": [
+        "test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.01s"
+      ],
+      "source_files": {
+        "src/backend/ignore/mapper.rs": "938429ee464af38eb1de1b28d71e33129b72eb7aba91bdb2495dae3ade1a2174",
+        "src/backend/local_destination.rs": "9c300b2ee15f2077115ad497b29f695b56a4920acea38e867f11468596300241"
+      },
+      "target_directory": "isolated per source; incremental compilation disabled"
+    },
+    "patched": {
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.01s"
+      ],
+      "source_files": {
+        "src/backend/ignore/mapper.rs": "aeabf7b207c2488d7edf1c7b99ab3d2d3586f6423486f0757768fe2ec2055d63",
+        "src/backend/local_destination.rs": "f5e1c178a3bfa07d20ecedb60a67d934d0cd346b0a9e35fdd8d181bc9f2fa784"
+      },
+      "target_directory": "isolated per source; incremental compilation disabled"
+    }
+  },
+  "result": "PASS upstream unit RED/GREEN; product still blocked",
+  "workflow_run": 39032863831,
+  "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39032863831/job/117396690324",
+  "artifact_sha256": "482b37c90c8752e3c708b2f72cd7cb444aa8f06befb2030b39d38a04b2a20cf2"
+}

@@ -1,0 +1,67 @@
+{
+  "result": "rustic-windows-recovery-fail",
+  "scope": "unsupported Windows raw-engine diagnostic: writable JAT/age chain passed; strict Git fidelity failed",
+  "platform": "win32-x64",
+  "source_sha": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+  "vsix": {
+    "asset": "candidate.vsix",
+    "sha256": "56490b44453f511570d65c205ed02f647caf08365d5bf08a0ae329a1a89f566e",
+    "size": 527741,
+    "extension_version": "0.1.36"
+  },
+  "rcc": {
+    "version": "v18.19.7",
+    "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
+    "size": 20130816
+  },
+  "controller": {
+    "artifact": "sha256:21083fb6628d37d6042c0879fe92c2b7441a7150b1cb17232c41cdefbf1a2c11",
+    "expected": "sha256:21083fb6628d37d6042c0879fe92c2b7441a7150b1cb17232c41cdefbf1a2c11"
+  },
+  "jat": {
+    "source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "artifact": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
+    "expected": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e"
+  },
+  "private_runtime": {
+    "status": "passed",
+    "platform": "win32",
+    "checks": [
+      "native-directory-owner-dacl-inheritance",
+      "private-directory-owner-and-access",
+      "native-file-owner-dacl",
+      "private-file-owner-and-access",
+      "native-system-clock-advanced-after-baseline",
+      "same-size-edit-restored-mtime-changes-native-changetime",
+      "symlink-rejection",
+      "inherited-acl-rejection",
+      "protected-directory-recheck"
+    ]
+  },
+  "rustic_qualification": {
+    "engine": "rustic",
+    "version": "0.11.4",
+    "platform_support": "blocked",
+    "code": "store-engine-platform-unsupported",
+    "reason": "pinned Windows Rustic omits mode metadata and restores read-only files writable",
+    "save_enter": "NOT RUN",
+    "age_catalog_two_recipients": "NOT RUN",
+    "portable_jat": "NOT RUN",
+    "writable_files": {
+      "age_catalog_two_recipients": "passed",
+      "engine": "rustic",
+      "portable_jat": "passed",
+      "relocated_restore": "passed",
+      "same_size_restored_mtime": "passed",
+      "scope": "writable files only; read-only fidelity is a separate strict gate",
+      "source_unchanged_after_restore": "passed"
+    },
+    "strict_git_recovery": "FAIL",
+    "binary": {
+      "sha256": "3d4bc16c35b9813ff006576dce01e54d947111d16bdfdfe6742d90d0a2fddc5d",
+      "size": 23406080
+    }
+  },
+  "workflow_run": 39032863831,
+  "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39032863831/job/117396690573"
+}

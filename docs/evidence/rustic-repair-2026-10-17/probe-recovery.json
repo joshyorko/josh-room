@@ -1,0 +1,20 @@
+{
+  "attempts": [
+    {
+      "source_sha": "08430b790c312b6613365fa80be98e5fb859ff2c",
+      "result": "FAIL before compilation; CRLF patch checkout did not apply to LF source",
+      "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39031790210/job/117393545985"
+    },
+    {
+      "source_sha": "70c260043fbb38645d545a1af521c8ac049269c7",
+      "result": "FAIL; baseline and purported patched runs both executed original assertions using shared target artifact",
+      "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39031997401/job/117394172094"
+    },
+    {
+      "source_sha": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+      "result": "PASS core-only RED/GREEN; isolated targets and corrected Windows error variant",
+      "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39032863831/job/117396690324"
+    }
+  ],
+  "product_engine": "unchanged official 0.11.4; strict Windows read-only FAIL"
+}

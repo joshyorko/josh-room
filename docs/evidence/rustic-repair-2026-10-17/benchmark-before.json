@@ -1,0 +1,391 @@
+{
+  "cache_contract": "cold application caches; OS caches are not evicted; sequential engine runs",
+  "engines": {
+    "restic": {
+      "binary_sha256": "20d4142678d0d95ec11a4759def1b73fd9190abc9ca19e4b62d067c0b387e639",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "adapter_warm_scan": 1,
+        "changed_save": 5,
+        "changed_warm_unchanged_save": 2,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 7,
+        "inventory_cold": 2,
+        "inventory_warm": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "snapshot_inventory": 1,
+        "staged_restore": 5,
+        "warm_unchanged_save": 2
+      },
+      "command_profiles": {
+        "adapter_warm_scan": {
+          "backup": {
+            "count": 1,
+            "seconds": 5.248621
+          }
+        },
+        "changed_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 5.295621
+          },
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.862039
+          },
+          "other": {
+            "count": 1,
+            "seconds": 6.13593
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.72318
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.020718
+          }
+        },
+        "changed_warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.924713
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.020975
+          }
+        },
+        "complete_restore_comparison": {},
+        "full_data_check": {
+          "check": {
+            "count": 1,
+            "seconds": 3.76445
+          }
+        },
+        "initial_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 5.577499
+          },
+          "cat:config": {
+            "count": 2,
+            "seconds": 0.617505
+          },
+          "init": {
+            "count": 1,
+            "seconds": 2.003717
+          },
+          "other": {
+            "count": 1,
+            "seconds": 4.860454
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.666565
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.010726
+          }
+        },
+        "inventory_cold": {
+          "other": {
+            "count": 1,
+            "seconds": 5.51736
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 1.18987
+          }
+        },
+        "inventory_warm": {},
+        "metadata_scan_first": {},
+        "metadata_scan_repeat": {},
+        "snapshot_inventory": {
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.764554
+          }
+        },
+        "staged_restore": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.752704
+          },
+          "other": {
+            "count": 1,
+            "seconds": 6.365056
+          },
+          "restore": {
+            "count": 1,
+            "seconds": 11.95661
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.716009
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.032512
+          }
+        },
+        "warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.669172
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.031609
+          }
+        }
+      },
+      "corpus_sha256": {
+        "changed": "19b8c5a06b7b92c3dfe70b02ac3fe0ed98c1908d37504dbdf20a705514569403",
+        "initial": "d48df3b06b4750575ccafda1c34f7db00e05f471e33c322dbd307b625180ddcb"
+      },
+      "data_added": {
+        "changed": 36680001,
+        "initial": 138056006
+      },
+      "seconds": {
+        "adapter_warm_scan": 5.249057,
+        "changed_save": 29.01964,
+        "changed_warm_unchanged_save": 5.183954,
+        "complete_restore_comparison": 14.348266,
+        "full_data_check": 3.764586,
+        "initial_save": 24.140935,
+        "inventory_cold": 6.911355,
+        "inventory_warm": 0.344553,
+        "metadata_scan_first": 1.891516,
+        "metadata_scan_repeat": 1.811554,
+        "snapshot_inventory": 0.764806,
+        "staged_restore": 23.298696,
+        "warm_unchanged_save": 3.677318
+      }
+    },
+    "rustic": {
+      "binary_sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "adapter_warm_scan": 1,
+        "changed_save": 256,
+        "changed_warm_unchanged_save": 3,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 257,
+        "inventory_cold": 252,
+        "inventory_warm": 0,
+        "inventory_warm_tree_blobs": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "snapshot_inventory": 1,
+        "staged_restore": 4,
+        "warm_unchanged_save": 3
+      },
+      "command_profiles": {
+        "adapter_warm_scan": {
+          "backup": {
+            "count": 1,
+            "seconds": 8.657811
+          }
+        },
+        "changed_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 6.643056
+          },
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.544045
+          },
+          "cat:tree-blob": {
+            "count": 251,
+            "seconds": 138.395606
+          },
+          "snapshots": {
+            "count": 2,
+            "seconds": 0.91088
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.011059
+          }
+        },
+        "changed_warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.41672
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.672302
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.012296
+          }
+        },
+        "complete_restore_comparison": {},
+        "full_data_check": {
+          "check": {
+            "count": 1,
+            "seconds": 2.021295
+          }
+        },
+        "initial_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 27.324526
+          },
+          "cat:config": {
+            "count": 2,
+            "seconds": 0.429277
+          },
+          "cat:tree-blob": {
+            "count": 251,
+            "seconds": 138.42635
+          },
+          "init": {
+            "count": 1,
+            "seconds": 0.462195
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.454105
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.024774
+          }
+        },
+        "inventory_cold": {
+          "cat:tree-blob": {
+            "count": 251,
+            "seconds": 129.692876
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.415993
+          }
+        },
+        "inventory_warm": {},
+        "inventory_warm_tree_blobs": {},
+        "metadata_scan_first": {},
+        "metadata_scan_repeat": {},
+        "snapshot_inventory": {
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.437943
+          }
+        },
+        "staged_restore": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.682701
+          },
+          "restore": {
+            "count": 1,
+            "seconds": 6.312808
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.491881
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.010619
+          }
+        },
+        "warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.506923
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.487632
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.010869
+          }
+        }
+      },
+      "corpus_sha256": {
+        "changed": "19b8c5a06b7b92c3dfe70b02ac3fe0ed98c1908d37504dbdf20a705514569403",
+        "initial": "d48df3b06b4750575ccafda1c34f7db00e05f471e33c322dbd307b625180ddcb"
+      },
+      "data_added": {
+        "changed": 36680182,
+        "initial": 138056207
+      },
+      "seconds": {
+        "adapter_warm_scan": 8.65848,
+        "changed_save": 165.128965,
+        "changed_warm_unchanged_save": 4.373098,
+        "complete_restore_comparison": 14.776779,
+        "full_data_check": 2.021743,
+        "initial_save": 186.602448,
+        "inventory_cold": 132.072368,
+        "inventory_warm": 0.432461,
+        "inventory_warm_tree_blobs": 1.173427,
+        "metadata_scan_first": 4.359369,
+        "metadata_scan_repeat": 3.644671,
+        "snapshot_inventory": 0.438195,
+        "staged_restore": 12.298109,
+        "warm_unchanged_save": 3.469269
+      }
+    }
+  },
+  "execution_environment": {
+    "caveat": "host/OS cache variation is visible in controls; restore speedup is not attributed to this patch",
+    "fixture_filesystem": "overlayfs",
+    "host_page_cache": "not evicted",
+    "run_order": "before then after; each runs Restic then Rustic",
+    "same_host": true
+  },
+  "fixture": {
+    "bytes_per_file": 1024,
+    "change_distribution": "first one percent of file IDs, distributed across directories",
+    "changed_directories": 250,
+    "changed_files": 1000,
+    "directories": 250,
+    "files": 100000,
+    "same_size_restored_mtime": true
+  },
+  "instrumentation": {
+    "note": "same instrumentation bytes for both runs; baseline imported its own clean production modules and operations helper; the instrument ran from an external copy for the baseline",
+    "operations_function_sha256": "cef5b87302a764d4fd7bf8706036b5deae8deeb4b9b45e00beb28d1cfbf6ad3a",
+    "source_commit": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c"
+  },
+  "platform": "Linux-x86_64",
+  "python": "3.12.14",
+  "source_files": {
+    "scripts/git_recovery_acceptance.py": "856cc1b11fad8a0dda119961dba01677f2e1a3b76afc69ca66b953e8973e3a34",
+    "scripts/rustic_production_benchmark.py": "43e2ca92eb9937f450b523a5ae84ce096474f6d57602f7a19ddbf824e237ac27",
+    "src/josh_room/restic_store.py": "195b2e84f65712a042d3a69d34d1bda95677b28a910e2b1f49d7b27f4c303b61",
+    "src/josh_room/room_store_operations.py": "43159b371ade7ef09bcae239c61e8544689f9f28afc6072b42dcd5841d6c853a",
+    "src/josh_room/rustic_store.py": "56bb3cf11b539d904082d4b377eabd3e802929cf310e3f4c05954efd0ffa51b2"
+  },
+  "source_sha": "cc44dbae84e70fba9f855e75d4f5a83b50fcebf1",
+  "source_tree": "0c8daad5e17af6af662ab1954d066bfd6cc25217",
+  "status": "PASS",
+  "storage": "disposable local format-2 repositories; synthetic catalog/keyset callbacks",
+  "tracked_source_dirty": false
+}

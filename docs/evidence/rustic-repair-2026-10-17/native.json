@@ -1,0 +1,23 @@
+{
+  "source_sha": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+  "workflow_run": 39032863831,
+  "linux": {
+    "passed": 13,
+    "skipped": 5,
+    "failed": 0,
+    "seconds": 27.39,
+    "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39032863831/job/117396690524"
+  },
+  "windows": {
+    "passed": 12,
+    "skipped": 5,
+    "failed": 1,
+    "seconds": 30.68,
+    "failed_test": "tests/test_rustic_live.py::test_real_readonly_file_restore_preserves_mode",
+    "source_mode": "0444",
+    "snapshot_mode": null,
+    "restored_mode": "0666",
+    "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39032863831/job/117396690522"
+  },
+  "limits": "official pinned engine; core patch proof and writable managed fixture are separate evidence"
+}

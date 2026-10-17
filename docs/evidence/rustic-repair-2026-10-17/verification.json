@@ -1,0 +1,75 @@
+{
+  "source_sha": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+  "result": "FAIL",
+  "command": "python -m pytest -q -m \"not r2 and not first_run\" --junitxml=<owned-receipt>",
+  "environment": {
+    "R2_LIVE": "0",
+    "FIRST_RUN_LIVE": "0",
+    "npm_cache": "owned disposable directory",
+    "engines": "explicit official pins",
+    "age": "provided local tool; pinned managed proof is separate"
+  },
+  "passed": 2011,
+  "failed": 16,
+  "skipped": 13,
+  "deselected": 2,
+  "seconds": 217.58,
+  "failed_nodes": [
+    "tests/test_auth.py::test_legacy_handoff_requires_a_private_parent",
+    "tests/test_capture_policy.py::test_private_policy_loader_rejects_shared_config_directory",
+    "tests/test_cli_contract.py::test_mixed_provider_copy_authorizes_only_the_r2_side",
+    "tests/test_jat.py::test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes",
+    "tests/test_minio_encryption_flow.py::test_dimensions_hierarchy_resolves_minio_before_reading_a_legacy_catalog",
+    "tests/test_minio_encryption_flow.py::test_mixed_copy_routes_cloudflare_only_for_the_r2_side",
+    "tests/test_minio_encryption_flow.py::test_configured_minio_command_uses_private_handoff_without_cloudflare_session",
+    "tests/test_pcc_hooks.py::test_remove_without_owned_hooks_is_idempotent",
+    "tests/test_pcc_hooks.py::test_install_receipt_failure_rolls_back_and_no_final_lf_is_exact",
+    "tests/test_pcc_hooks.py::test_install_preserves_unrelated_hooks_and_remove_rolls_back",
+    "tests/test_pcc_hooks.py::test_status_detects_stale_runtime_manifest",
+    "tests/test_pcc_hooks.py::test_stale_repair_and_command_windows_contract",
+    "tests/test_pcc_hooks.py::test_unowned_same_command_conflicts_with_install",
+    "tests/test_pcc_hooks.py::test_remove_refuses_unowned_duplicate_canonical_command",
+    "tests/test_private_runtime_probe.py::test_windows_changetime_probe_closes_writer_before_observing_metadata",
+    "tests/test_provider_connections.py::test_dimension_hierarchy_reads_one_catalog_and_returns_rooms_with_jats"
+  ],
+  "skipped_nodes": [
+    "tests/test_device_authority.py::test_real_native_authority_gate",
+    "tests/test_minio_backend.py::test_minio_integration_is_explicitly_gated",
+    "tests/test_real_vertical.py::test_real_jat_age_dual_recipient_fresh_state_hydration",
+    "tests/test_room_store_bridge.py::test_managed_robot_capture_reaches_local_room_store_and_failure_never_publishes[1]",
+    "tests/test_room_store_bridge.py::test_managed_robot_capture_reaches_local_room_store_and_failure_never_publishes[2048]",
+    "tests/test_rustic_live.py::test_s3_tls_lifecycle",
+    "tests/test_rustic_live.py::test_s3_untrusted_ca_never_initializes",
+    "tests/test_rustic_live.py::test_s3_wrong_credentials_never_initialize",
+    "tests/test_rustic_native.py::test_native_windows_custom_ca_rejected_before_spawn",
+    "tests/test_rustic_native.py::test_native_windows_product_keeps_restic_as_supported_engine",
+    "tests/test_secure_room_acceptance.py::test_exact_secure_room_image_is_non_root_and_bootstrap_capable",
+    "tests/test_streaming_snapshot.py::test_generated_one_gib_envelope_has_bounded_peak_memory",
+    "tests/test_windows_file_metadata.py::test_same_size_edit_with_restored_mtime_changes_native_change_time"
+  ],
+  "baseline_replay": {
+    "source_sha": "19723c71d64f81bd664cf34491d13014c213773d",
+    "failed": 16,
+    "seconds": 1.5,
+    "exact_failed_node_set_equal": true,
+    "result": "FAIL"
+  },
+  "node_extension": {
+    "passed": 304,
+    "skipped": 2,
+    "failed": 0
+  },
+  "review_regressions": {
+    "red": "two primed-key failures observed",
+    "green": "63 passed focused runtime/store/probe tests",
+    "actual_cancellation": "two local cases passed; final native gates cover actual child cancellation"
+  },
+  "other_checks": {
+    "ruff": "PASS",
+    "source_parity": "PASS; zero further sync changes",
+    "compileall": "PASS",
+    "node_check": "PASS",
+    "whitespace": "PASS",
+    "secret_scan": "PASS; Gitleaks 8.30.1"
+  }
+}

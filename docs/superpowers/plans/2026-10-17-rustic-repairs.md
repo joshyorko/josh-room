@@ -28,28 +28,28 @@
 
 ### Task 1: Establish Windows engine boundary
 
-- [ ] Recheck pinned source against Cargo.lock and retain strict real-engine failure.
-- [ ] Produce an upstream-only patch for Windows capture and supported read-only restoration, with native tests and exact application instructions.
-- [ ] Trace scoped CA behavior through the pinned HTTP backend and document a concrete supported change boundary.
+- [x] Recheck pinned source against Cargo.lock and retain strict real-engine failure.
+- [x] Produce an upstream-only patch for Windows capture and supported read-only restoration, with native tests and exact application instructions.
+- [x] Trace scoped CA behavior through the pinned HTTP backend and document a concrete supported change boundary.
 
 ### Task 2: Repair repeated derivation overhead
 
 Files: `src/josh_room/rustic_store.py`, `tests/test_rustic_store.py`, real native tests and synced controller copies.
 
-- [ ] Add failing tests for request-scoped key reuse, strict key schema validation, host isolation and cleanup.
-- [ ] Add bounded in-memory key acquisition through `cat masterkey`; pass only through child environment using supported `RUSTIC_KEY`.
-- [ ] Keep repository identity verification and authenticated tree caches; no fallback after key/auth failures.
-- [ ] Run focused contracts and real-engine lifecycle, cancellation, installer and metadata tests.
+- [x] Add failing tests for request-scoped key reuse, strict key schema validation, host isolation and cleanup.
+- [x] Add bounded in-memory key acquisition through `cat masterkey`; pass only through child environment using supported `RUSTIC_KEY`.
+- [x] Keep repository identity verification and authenticated tree caches; no fallback after key/auth failures.
+- [x] Run focused contracts and real-engine lifecycle, cancellation, installer and metadata tests.
 
 ### Task 3: Reproducible comparison and acceptance
 
 Files: `scripts/rustic_production_benchmark.py`, a rerunnable profiling script, qualification workflow and readiness receipts.
 
-- [ ] Add per-command timings without retaining argv, environments, raw output or private paths.
-- [ ] Rebenchmark baseline and repaired adapters on the same deterministic 100k-file / 250-directory corpus and filesystem with all correctness checks.
-- [ ] Run native Linux/Windows and managed Linux/Windows acceptance with explicit failures and unrun steps retained.
-- [ ] Run broad Python and Node suites, source parity, packaging, lint, whitespace and secret checks.
-- [ ] Push code and evidence with remote-head guards and confirm main, original PR and release pins remain unchanged.
+- [x] Add per-command timings without retaining argv, environments, raw output or private paths.
+- [x] Rebenchmark baseline and repaired adapters on the same deterministic 100k-file / 250-directory corpus and filesystem with all correctness checks.
+- [x] Run native Linux/Windows and managed Linux/Windows acceptance with explicit failures and unrun steps retained.
+- [x] Run broad Python and Node suites, source parity, packaging, lint, whitespace and secret checks.
+- [x] Push code and evidence with remote-head guards and confirm main, original PR and release pins remain unchanged.
 
 ## Review ledger
 
@@ -58,3 +58,5 @@ Files: `scripts/rustic_production_benchmark.py`, a rerunnable profiling script, 
 - Independent review of `cc44dba..6e304f2` found three Important issues. The fix pass adds RED/GREEN tests for primed-key spawn failure and pre-cancel, strengthens actual child cancellation, makes the upstream permission-error variant available on Windows, and isolates native Cargo targets with source hashes.
 - Deferred minor: the existing workflow ignores `docs/**`-only changes, including patch-only edits. Such edits need explicit workflow dispatch; current code/script pushes trigger qualification automatically.
 - Ruling: independent writable-file managed JAT/age recovery is evidence for that fixture only. Complete Git recovery still fails when mode preservation fails. Cost: Windows compatibility remains partial even if the independent fixture passes.
+
+Verification completion records executed checks, including retained failures; it does not mark the official Windows engine or broad release as qualified.

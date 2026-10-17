@@ -70,3 +70,34 @@ Verified source archives, all from Rustic v0.11.4 Cargo.lock:
 | rustic_backend 0.7.0 | `a0a52bffdb1a55a66f08cfc91f87ad928e502444e94ea88fce1c48c58ead909d` |
 | opendal-core 0.58.1 | `ec75551ff4cf3e57da98979f6a937aaa9ddb3915bf68cc17d03df733be6646ed` |
 | opendal-http-transport-reqwest 0.58.1 | `ad4d4f19c3ce01126a30611f8e544eaa217104a278c889ac17c9374fe4f9e4ef` |
+
+## Exact metadata in one CLI process
+
+`rustic-0.11.4-json-nodes.patch` is a separate upstream CLI recommendation.
+It applies to `src/commands/ls.rs` at v0.11.4, whose original file SHA-256 is
+`4ae9f5043b35a0ee6c63e8e76781cea1016945ae61e854a6518d358247b5bf12`.
+Application was checked with `git apply --check --unidiff-zero`. Compilation
+and native CLI execution of this proposal are NOT RUN. No product code selects
+the new flag and no replacement CLI is shipped.
+
+The current `ls --json` serializes only paths; `--long` loses special modes and
+raw link targets. The adapter must use exact tree blobs for fidelity. Removing
+repeated scrypt reduced 100k cold inventory from 132.1s to 31.9s, but 28.9s of
+the repaired run still belongs to 251 separate native tree-read commands. This
+is a remaining production performance blocker.
+
+The proposed `ls --json-nodes` serializes each complete native `(path, Node)` as
+one JSON line while traversing the repository once. The adapter for a future
+approved engine can bind that process to an explicit snapshot/root, validate
+each path, node type, numeric mode and link target, bound each event and total
+entries, reject duplicates/traversal and unexpected diagnostics, and require
+successful process completion before publishing any inventory. This also
+avoids the current aggregate 4-MiB single-tree capture limit without removing
+per-event or total-entry bounds.
+
+Required tests before adoption include exact metadata parity with authenticated
+tree blobs, special mode bits, symlink targets containing newlines, malformed
+and duplicate JSON, snapshot/root mismatch, wide and deep trees, interrupted
+streams and cancellation. Rebenchmark the same 100k corpus with the real
+approved binary. The proposed bulk interface is not present in the pinned
+official binary, so its performance benefit remains unverified.

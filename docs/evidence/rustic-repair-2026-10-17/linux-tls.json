@@ -1,0 +1,31 @@
+{
+  "scope": "native Linux TLS and missing-config read only; synthetic HTTP fixture",
+  "binary_sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+  "cases": {
+    "scoped-ca": {
+      "code": "repository-missing",
+      "http_requests": 1,
+      "native_missing_config": true
+    },
+    "missing-ca": {
+      "code": "timed-out",
+      "http_requests": 0,
+      "native_missing_config": false
+    },
+    "wrong-ca": {
+      "code": "timed-out",
+      "http_requests": 0,
+      "native_missing_config": false
+    },
+    "hostname-mismatch": {
+      "code": "timed-out",
+      "http_requests": 0,
+      "native_missing_config": false
+    }
+  },
+  "result": "PASS",
+  "source_sha": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+  "probe_sha256": "5d36f380bbbcbbba939541d09d88b2a921b28758e02b6c71e3bdcd717897d192",
+  "negative_case_limit": "no HTTP request before the bounded deadline; not an inspected native certificate error",
+  "initial_failure": "fixture lacked HEAD handling; retained separately; corrected fixture reached its expected missing-config result"
+}

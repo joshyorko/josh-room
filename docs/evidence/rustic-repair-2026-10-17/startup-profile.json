@@ -1,0 +1,28 @@
+{
+  "scope": "real native reads of one authenticated tree; no provider or user authority",
+  "binary_sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+  "platform": "Linux-x86_64",
+  "source_sha": "08430b790c312b6613365fa80be98e5fb859ff2c",
+  "samples": {
+    "password": {
+      "seconds": [
+        0.58629,
+        0.593346,
+        0.475463,
+        0.424674,
+        0.482629
+      ],
+      "median_seconds": 0.482629
+    },
+    "operation-scoped-masterkey": {
+      "seconds": [
+        0.008288,
+        0.006619,
+        0.010568,
+        0.005752,
+        0.012876
+      ],
+      "median_seconds": 0.008288
+    }
+  }
+}

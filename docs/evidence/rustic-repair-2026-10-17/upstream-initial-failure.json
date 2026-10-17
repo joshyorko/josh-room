@@ -1,0 +1,28 @@
+{
+  "scope": "upstream-only core unit proof; official product binary is unchanged",
+  "source_sha": "70c260043fbb38645d545a1af521c8ac049269c7",
+  "crate_sha256": "ddab48a7f892b4943d9bffe7be44746c443982ae06ffcc3b2be55b31999b1725",
+  "patch_sha256": "93c34a9bb660ddf1ae912adb067e6e85337d8143c93e29563c678d2e456231ec",
+  "patch_representation": "canonical Git LF; Windows CRLF checkout normalized before application",
+  "platform": "win32-x64",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "product_windows_readonly": "FAIL; tested independently with official binary",
+  "steps": {
+    "baseline": {
+      "exit_code": 101,
+      "summary": [
+        "test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.02s"
+      ]
+    },
+    "patched": {
+      "exit_code": 101,
+      "summary": [
+        "test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.00s"
+      ]
+    }
+  },
+  "result": "FAIL; shared target reused baseline test binary",
+  "workflow_run": 39031997401,
+  "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39031997401/job/117394172094",
+  "recovery": "subsequent proof isolates build targets and corrects Windows-gated permission error variant; original failed outcome retained"
+}

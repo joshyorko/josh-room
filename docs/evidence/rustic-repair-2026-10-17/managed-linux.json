@@ -1,0 +1,66 @@
+{
+  "result": "rustic-managed-consumer-pass",
+  "scope": "installed Rustic Save/restore, two-recipient age catalogs and portable JAT; default Restic gates are separate",
+  "platform": "linux-x64",
+  "source_sha": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+  "vsix": {
+    "asset": "candidate.vsix",
+    "sha256": "88235b6759418a3d3cada0244ac39924c68b8dd39fe5398d460e2e7978e7e280",
+    "size": 524558,
+    "extension_version": "0.1.36"
+  },
+  "rcc": {
+    "version": "v18.19.7",
+    "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+    "size": 22401186
+  },
+  "controller": {
+    "artifact": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b",
+    "expected": "sha256:843f00b3ef7414b669951be90869cbc0c88a71282fa635d7ce558d3530f07b0b"
+  },
+  "jat": {
+    "source_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "artifact": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
+    "expected": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4"
+  },
+  "private_runtime": {
+    "status": "passed",
+    "platform": "linux",
+    "checks": [
+      "private-directory-owner-and-access",
+      "private-file-owner-and-access",
+      "symlink-rejection"
+    ]
+  },
+  "rustic_qualification": {
+    "age_catalog_two_recipients": "passed",
+    "engine": "rustic",
+    "git_metadata_added_bytes": 14019,
+    "git_metadata_incremental": "passed",
+    "git_repositories": 4,
+    "initial_added_bytes": 114838,
+    "noop": "already-saved",
+    "noop_added_bytes": 0,
+    "noop_seconds": 0.5261725679999927,
+    "parent_reuse": "passed",
+    "portable_jat": "passed",
+    "save_enter": "passed",
+    "source_unchanged": "passed",
+    "writable_files": {
+      "age_catalog_two_recipients": "passed",
+      "engine": "rustic",
+      "portable_jat": "passed",
+      "relocated_restore": "passed",
+      "same_size_restored_mtime": "passed",
+      "scope": "writable files only; read-only fidelity is a separate strict gate",
+      "source_unchanged_after_restore": "passed"
+    },
+    "version": "0.11.4",
+    "binary": {
+      "sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+      "size": 28028600
+    }
+  },
+  "workflow_run": 39032863831,
+  "job_url": "https://github.com/joshyorko/josh-room/actions/runs/39032863831/job/117396690563"
+}

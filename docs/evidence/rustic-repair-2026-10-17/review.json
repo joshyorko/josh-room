@@ -1,0 +1,29 @@
+{
+  "range": "cc44dba..6e304f2",
+  "model": "Sol 6.1 extra-high",
+  "scope": "independent static review; reviewer ran no tests",
+  "critical": 0,
+  "important_fixed": [
+    {
+      "finding": "derived key retained on spawn failure and pre-cancel",
+      "verification": "two regressions observed RED, then 63-test GREEN; strengthened actual native cancellation primes key first"
+    },
+    {
+      "finding": "Windows permission-error enum variant was unavailable under cfg(windows)",
+      "verification": "final native patched core compiled and its two strict tests passed"
+    },
+    {
+      "finding": "baseline and patched probes reused one Cargo target",
+      "verification": "targets isolated per source, incremental disabled, exact source hashes retained; final native baseline 2 failed and patch 2 passed"
+    }
+  ],
+  "fix_commit": "820e3b4747a74a1cf7aaec1a3d0c4c8eb45df47c",
+  "deferred_minor": "docs-only patch edits need explicit workflow dispatch because docs/** is ignored",
+  "unverified_boundaries": [
+    "full patched CLI metadata application order",
+    "directory restoration and symlink/reparse behavior",
+    "complete patched Windows Git/JAT/age recovery",
+    "bulk metadata CLI patch compilation and performance",
+    "live-provider behavior"
+  ]
+}

@@ -1,5 +1,9 @@
 # Rustic qualification after 0.1.36
 
+Current repair status and source-bound evidence are in the
+[2026-10-17 repair follow-up](rustic-repair-2026-10-17.md). The original
+qualification below remains historical evidence, including its failures.
+
 Repair work dated 2026-10-17 continues on the same isolated branch. The newer
 implementation reuses the official engine's supported master-key input inside
 one open adapter operation to avoid repeating scrypt for every tree. Derived

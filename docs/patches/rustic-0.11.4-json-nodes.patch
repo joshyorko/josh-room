@@ -1,0 +1,14 @@
+--- a/src/commands/ls.rs
++++ b/src/commands/ls.rs
+@@ -59,0 +60,4 @@
++
++    /// Stream exact repository nodes and their paths as newline-delimited JSON
++    #[clap(long, conflicts_with_all = ["summary", "long", "json"])]
++    pub json_nodes: bool,
+@@ -250 +254,5 @@
+-            if self.json {
++            if self.json_nodes {
++                // Preserve native numeric modes, link targets and node fields.
++                // One node per line avoids an unbounded aggregate JSON array.
++                println!("{}", serde_json::to_string(&(path, node))?);
++            } else if self.json {

@@ -1,0 +1,26 @@
+{
+  "scope": "native Linux TLS and missing-config read only; synthetic HTTP fixture",
+  "binary_sha256": "3cf6e3d3e1e9de1528b07dcaee220d9882c5921f2a01e510360a1c6be8e9fc13",
+  "cases": {
+    "scoped-ca": {
+      "code": "command-failed",
+      "http_requests": 0,
+      "native_missing_config": false
+    },
+    "missing-ca": {
+      "code": "timed-out",
+      "http_requests": 0,
+      "native_missing_config": false
+    },
+    "wrong-ca": {
+      "code": "timed-out",
+      "http_requests": 0,
+      "native_missing_config": false
+    },
+    "hostname-mismatch": {
+      "code": "timed-out",
+      "http_requests": 0,
+      "native_missing_config": false
+    }
+  }
+}
