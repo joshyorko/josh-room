@@ -6,6 +6,7 @@ compatible; Rustic-specific CLI and output handling live here.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -245,6 +246,7 @@ class RusticStore(ResticStore):
         self._profile: Path | None = None
         self._diagnostics: _Diagnostics | None = None
         self._orphan: str | None = None
+        self._masterkey: bytearray | None = None
 
     def __enter__(self) -> Self:
         super().__enter__()
@@ -300,6 +302,7 @@ class RusticStore(ResticStore):
         try:
             super().__exit__(*args)
         finally:
+            self._discard_masterkey()
             self._repository_info = None
             if self._scratch is not None:
                 self._scratch.cleanup()
@@ -338,6 +341,11 @@ class RusticStore(ResticStore):
                 "RUSTIC_LOG_LEVEL_DEPENDENCIES": "error",
             }
         )
+        if self._masterkey is not None:
+            # Supported native credential input. Keep derived authority only
+            # for this open adapter, never in argv, profiles or cache files.
+            env.pop("RUSTIC_PASSWORD_FILE", None)
+            env["RUSTIC_KEY"] = self._masterkey.decode("ascii")
         if self._ca_bundle is not None:
             env["SSL_CERT_FILE"] = str(self._ca_bundle)
             env["SSL_CERT_DIR"] = self._scratch.name
@@ -378,6 +386,9 @@ class RusticStore(ResticStore):
                         "backup-errors" if "backup" in args else "command-failed",
                         orphan_snapshot_id=self._orphan,
                     )
+            except BaseException:
+                self._discard_masterkey()
+                raise
             finally:
                 self._terminate(process)
                 diagnostics.thread.join(timeout=1)
@@ -420,6 +431,7 @@ class RusticStore(ResticStore):
 
     def initialize(self) -> RepositoryInfo:
         self._ensure_open()
+        self._discard_masterkey()
         self._snapshot_info.clear()
         self._repository_info = None
         self._ensure_version()
@@ -437,8 +449,42 @@ class RusticStore(ResticStore):
         return info
 
     def open_existing(self) -> RepositoryInfo:
+        self._discard_masterkey()
         self._repository_info = None
         return super().open_existing()
+
+    def _discard_masterkey(self) -> None:
+        if self._masterkey is not None:
+            self._masterkey[:] = b"\x00" * len(self._masterkey)
+            self._masterkey = None
+
+    def _prime_masterkey(self) -> None:
+        self._require_initialized()
+        if self._masterkey is not None:
+            return
+        # Each CLI invocation otherwise repeats scrypt. On a cold 250-tree
+        # inventory that dominates both inventory and changed Save. Export
+        # once with the caller's password, validate the pinned native schema,
+        # and reuse only in this process's child environments. Python/OS may
+        # retain transient string copies; this is not guaranteed zeroization.
+        _, raw = self._capture(["cat", "masterkey"])
+        if len(raw) > 1024:
+            raise RusticStoreError("invalid-output")
+        value = _json(raw)
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"encrypt", "mac"}
+            or not isinstance(value["mac"], dict)
+            or set(value["mac"]) != {"k", "r"}
+        ):
+            raise RusticStoreError("invalid-output")
+        for field, size in ((value["encrypt"], 32), (value["mac"]["k"], 16), (value["mac"]["r"], 16)):
+            try:
+                if not isinstance(field, str) or len(base64.b64decode(field, validate=True)) != size:
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise RusticStoreError("invalid-output") from None
+        self._masterkey = bytearray(json.dumps(value, separators=(",", ":")).encode("ascii"))
 
     def _exclude_file(self, excludes: Path, root: Path) -> Path:
         try:
@@ -643,6 +689,7 @@ class RusticStore(ResticStore):
                 return raw
         except (OSError, PrivatePathError, ValueError):
             pass  # Uncertain cache evidence is a miss, never repository truth.
+        self._prime_masterkey()
         _, output = self._capture(["cat", "tree-blob", tree_id])
         raw = output[:-1]  # cat adds exactly one newline to the original bytes.
         if not output.endswith(b"\n") or hashlib.sha256(raw).hexdigest() != tree_id:

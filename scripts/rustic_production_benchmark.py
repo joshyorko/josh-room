@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import platform
@@ -20,6 +21,7 @@ from pathlib import Path
 
 from josh_room.private_paths import protect_private_directory
 from josh_room.room_store_operations import _scan_workspace
+from josh_room.rustic_store import RusticStore
 from josh_room.workspace_policy import load_capture_policy
 from scripts.git_recovery_acceptance import operations
 
@@ -37,12 +39,14 @@ def compare(source: Path, restored: Path) -> None:
 
 
 def run(root: Path, binaries: dict[str, Path], count: int, directories: int, output: Path) -> dict:
-    source_root = Path(__file__).resolve().parents[1]
+    # The same instrumentation may benchmark a different clean worktree. Bind
+    # provenance to the imported production adapter, not the instrument's path.
+    source_root = Path(inspect.getfile(RusticStore)).resolve().parents[2]
     result = {
         "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source_root, text=True).strip(),
         "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=source_root, text=True).strip(),
         "tracked_source_dirty": bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=source_root)),
-        "source_files": {name: identity(source_root / name) for name in (
+        "source_files": {name: identity(Path(__file__) if name == "scripts/rustic_production_benchmark.py" else source_root / name) for name in (
             "src/josh_room/rustic_store.py", "src/josh_room/restic_store.py",
             "src/josh_room/room_store_operations.py", "scripts/rustic_production_benchmark.py",
             "scripts/git_recovery_acceptance.py")},
@@ -73,9 +77,19 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
             data = hashlib.sha256(f"synthetic-file-{index:06d}".encode()).digest() * 32
             (workspace / f"d{index % directories:04d}/f{index:06d}.bin").write_bytes(data)
         op = operations(engine_root, workspace, engine=engine, executable=str(binary))
-        metrics = {"binary_sha256": identity(binary), "seconds": {}, "command_counts": {}, "checks": {}}
+        metrics = {"binary_sha256": identity(binary), "seconds": {}, "command_counts": {}, "checks": {},
+                   "command_profiles": {}, "corpus_sha256": {}}
         result["engines"][engine] = metrics
+        def corpus_identity():
+            digest = hashlib.sha256()
+            for file in sorted(workspace.rglob("*.bin")):
+                digest.update(file.relative_to(workspace).as_posix().encode() + b"\x00")
+                digest.update(hashlib.sha256(file.read_bytes()).digest())
+            return digest.hexdigest()
+
+        metrics["corpus_sha256"]["initial"] = corpus_identity()
         command_count = 0
+        command_profiles = []
         original_factory = op.store_factory
 
         def factory(**kwargs):
@@ -84,7 +98,31 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
             def spawn(*args, **kwargs):
                 nonlocal command_count
                 command_count += 1
-                return subprocess.Popen(*args, **kwargs)
+                started = time.perf_counter()
+                process = subprocess.Popen(*args, **kwargs)
+                argv = args[0]
+                label = "other"
+                for verb in ("cat", "version", "init", "backup", "snapshots", "restore", "check"):
+                    if verb in argv[1:]:
+                        label = verb
+                        if verb == "cat":
+                            label += ":" + argv[argv.index(verb) + 1]
+                        break
+                wait = process.wait
+                recorded = False
+
+                def profiled_wait(*a, **k):
+                    nonlocal recorded
+                    try:
+                        return wait(*a, **k)
+                    finally:
+                        if not recorded and process.poll() is not None:
+                            # Never retain argv, environments or native output.
+                            command_profiles.append((label, time.perf_counter() - started))
+                            recorded = True
+
+                process.wait = profiled_wait
+                return process
 
             store._process_factory = spawn
             return store
@@ -94,10 +132,20 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
         def timed(label, action):
             nonlocal command_count
             before_count = command_count
+            before_profile = len(command_profiles)
             started = time.perf_counter()
             value = action()
             metrics["seconds"][label] = round(time.perf_counter() - started, 6)
             metrics["command_counts"][label] = command_count - before_count
+            groups = {}
+            for verb, seconds in command_profiles[before_profile:]:
+                bucket = groups.setdefault(verb, {"count": 0, "seconds": 0.0})
+                bucket["count"] += 1
+                bucket["seconds"] += seconds
+            metrics["command_profiles"][label] = {
+                verb: {"count": values["count"], "seconds": round(values["seconds"], 6)}
+                for verb, values in groups.items()
+            }
             persist()
             print(f"{engine} {label}: {metrics['seconds'][label]:.3f}s", flush=True)
             return value
@@ -126,6 +174,7 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
             before = path.stat()
             path.write_bytes(hashlib.sha256(f"synthetic-edit-{index:06d}".encode()).digest() * 32)
             os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        metrics["corpus_sha256"]["changed"] = corpus_identity()
         changed = timed("changed_save", op.save)
         assert changed.status == "saved" and changed.snapshot_id != initial.snapshot_id
         assert timed("changed_warm_unchanged_save", op.save).status == "already-saved"
@@ -160,6 +209,8 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
         persist()
     for engine, binary in binaries.items():
         run_engine(engine, binary)
+    for state in ("initial", "changed"):
+        assert len({metrics["corpus_sha256"][state] for metrics in result["engines"].values()}) == 1
     result["status"] = "PASS"
     persist()
     return result

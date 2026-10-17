@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import sys
@@ -28,6 +29,86 @@ from josh_room.rustic_store import (
 PARENT = "a" * 64
 TREE = "b" * 64
 CHANGED = "c" * 64
+
+
+def synthetic_masterkey():
+    return {
+        "encrypt": base64.b64encode(b"e" * 32).decode(),
+        "mac": {"k": base64.b64encode(b"k" * 16).decode(),
+                "r": base64.b64encode(b"r" * 16).decode()},
+    }
+
+
+def test_tree_reads_reuse_only_context_owned_native_masterkey(authority, monkeypatch):
+    import hashlib
+
+    raw = b'{"nodes":[]}'
+    tree_id = hashlib.sha256(raw).hexdigest()
+    calls = []
+    monkeypatch.setenv("RUSTIC_KEY", "host-key-must-not-enter")
+
+    def spawn(argv, **kwargs):
+        calls.append(argv)
+        env = kwargs["env"]
+        if argv[-2:] == ["cat", "masterkey"]:
+            assert "RUSTIC_KEY" not in env
+            assert env["RUSTIC_PASSWORD_FILE"] == str(authority["password_file"])
+            return FakeProcess(json.dumps(synthetic_masterkey()).encode() + b"\n")
+        assert json.loads(env["RUSTIC_KEY"]) == synthetic_masterkey()
+        assert "RUSTIC_PASSWORD_FILE" not in env
+        assert not any("encrypt" in arg or "host-key" in arg for arg in argv)
+        return FakeProcess(raw + b"\n")
+
+    with RusticStore(**authority, process_factory=spawn) as store:
+        store._repository_info = RepositoryInfo("e" * 64, 2)
+        assert store._tree_blob(tree_id) == raw
+        cache = store._cache_dir / "rustic-trees-v1" / ("e" * 64) / tree_id
+        cache.unlink()
+        assert store._tree_blob(tree_id) == raw
+        assert sum(argv[-2:] == ["cat", "masterkey"] for argv in calls) == 1
+        assert len(calls) == 3
+        assert not any("encrypt" in p.read_text(errors="replace")
+                       for p in store._cache_dir.rglob("*") if p.is_file())
+        owned_key = store._masterkey
+    assert store._masterkey is None
+    assert not any(owned_key), "mutable owned key buffer must be cleared"
+    with store:
+        assert "RUSTIC_KEY" not in store._environment()
+
+
+@pytest.mark.parametrize("key", [
+    {}, {**synthetic_masterkey(), "extra": "unexpected"},
+    {**synthetic_masterkey(), "encrypt": "secret-invalid-base64"},
+    {**synthetic_masterkey(), "mac": {"k": "aw==", "r": "cg=="}},
+    {**synthetic_masterkey(), "mac": {**synthetic_masterkey()["mac"], "extra": 1}},
+])
+def test_invalid_native_masterkey_fails_closed_without_material(authority, key):
+    calls = []
+
+    def spawn(argv, **_kwargs):
+        calls.append(argv)
+        assert argv[-2:] == ["cat", "masterkey"]
+        return FakeProcess(json.dumps(key).encode() + b"\n")
+
+    with RusticStore(**authority, process_factory=spawn) as store:
+        store._repository_info = RepositoryInfo("e" * 64, 2)
+        with pytest.raises(ResticStoreError) as error:
+            store._tree_blob(TREE)
+        assert "secret" not in str(error.value)
+        assert store._masterkey is None
+    assert len(calls) == 1
+
+
+def test_native_masterkey_diagnostics_cannot_enable_authentication(authority):
+    def spawn(argv, **_kwargs):
+        assert argv[-2:] == ["cat", "masterkey"]
+        return FakeProcess(json.dumps(synthetic_masterkey()).encode(), b"unexpected native warning")
+
+    with RusticStore(**authority, process_factory=spawn) as store:
+        store._repository_info = RepositoryInfo("e" * 64, 2)
+        with pytest.raises(ResticStoreError):
+            store._tree_blob(TREE)
+        assert store._masterkey is None
 
 
 def document(**updates):
@@ -346,21 +427,25 @@ def test_authenticated_tree_cache_reuses_and_rejects_tampering(authority):
 
     def spawn(argv, **_kwargs):
         calls.append(argv)
+        if argv[-2:] == ["cat", "masterkey"]:
+            return FakeProcess(json.dumps(synthetic_masterkey()).encode())
         return FakeProcess(raw + b"\n")
 
     with RusticStore(**authority, process_factory=spawn) as store:
         store._repository_info = RepositoryInfo("e" * 64, 2)
         assert store._tree_blob(tree_id) == raw
         assert store._tree_blob(tree_id) == raw
-        assert len(calls) == 1
+        assert sum("tree-blob" in argv for argv in calls) == 1
         cache = store._cache_dir / "rustic-trees-v1" / ("e" * 64) / tree_id
         cache.write_bytes(b'{"nodes":["forged"]}')
         assert store._tree_blob(tree_id) == raw
-        assert len(calls) == 2
+        assert sum("tree-blob" in argv for argv in calls) == 2
 
 
 def test_unauthenticated_tree_blob_fails_closed(authority):
-    def spawn(*_args, **_kwargs):
+    def spawn(argv, **_kwargs):
+        if argv[-2:] == ["cat", "masterkey"]:
+            return FakeProcess(json.dumps(synthetic_masterkey()).encode())
         return FakeProcess(b'{"nodes":[]}\n')
 
     with RusticStore(**authority, process_factory=spawn) as store:

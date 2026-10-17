@@ -1,5 +1,19 @@
 # Rustic qualification after 0.1.36
 
+Repair work dated 2026-10-17 continues on the same isolated branch. The newer
+implementation reuses the official engine's supported master-key input inside
+one open adapter operation to avoid repeating scrypt for every tree. Derived
+authority lives only in process memory and child environments, never in argv,
+profiles, receipts or cache files. Owned mutable buffers are cleared on close,
+failed commands and explicit reopen; Python/OS string copies are not guaranteed
+to be zeroized. Existing host key variables are excluded. Tree SHA-256 checks,
+output bounds and integrity cache bypass remain unchanged.
+
+The Windows defect is upstream. [The recommended core patch and native probe](patches/README.md)
+are separate from the shipped engine. Windows blocking is mitigation, not a
+completed metadata fix. The original qualification below is retained; new
+source-bound repair results will be recorded separately.
+
 This is an isolated qualification of PR #108 for a release after 0.1.36.
 Inspected main was `19723c71d64f81bd664cf34491d13014c213773d`; PR #108
 was `ce4bca3c4e491fea7247df9572a32966d26f740c`. The original PR branch and

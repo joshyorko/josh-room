@@ -1,0 +1,98 @@
+--- a/src/backend/ignore/mapper.rs
++++ b/src/backend/ignore/mapper.rs
+@@ -266,2 +266,10 @@
+-    fn nix_infos(_m: &std::fs::Metadata) -> (Option<u32>, u64, u64) {
+-        (None, 0, 0)
++    fn nix_infos(m: &std::fs::Metadata) -> (Option<u32>, u64, u64) {
++        // Match Go's supported Windows FileMode representation. This records
++        // the read-only attribute, not NTFS DACLs or Unix permission semantics.
++        let mut mode = if m.permissions().readonly() { 0o444 } else { 0o666 };
++        if m.is_dir() {
++            mode |= (1 << 31) | 0o111;
++        } else if m.is_symlink() {
++            mode |= 1 << 27;
++        }
++        (Some(mode), 0, 0)
+@@ -277,0 +286,58 @@
++
++#[cfg(all(test, windows))]
++mod windows_readonly_tests {
++    use super::LocalSourceSaveOptions;
++    use crate::backend::{
++        local_destination::LocalDestination,
++        node::{Metadata, Node, NodeType},
++    };
++    use std::{ffi::OsStr, fs};
++
++    #[test]
++    fn windows_readonly_capture_and_restore_supported_file_mode() {
++        let root = tempfile::tempdir().unwrap();
++        let destination = LocalDestination::new(root.path().to_str().unwrap(), false, false).unwrap();
++        for readonly in [false, true] {
++            let source = root.path().join("source");
++            let restored = root.path().join("restored");
++            fs::write(&source, b"synthetic readonly source").unwrap();
++            fs::write(&restored, b"synthetic readonly source").unwrap();
++            let mut perms = fs::metadata(&source).unwrap().permissions();
++            perms.set_readonly(readonly);
++            fs::set_permissions(&source, perms).unwrap();
++            let (mode, _, _) = LocalSourceSaveOptions::nix_infos(&fs::metadata(&source).unwrap());
++            let node = Node::new_node(OsStr::new("restored"), NodeType::File,
++                Metadata { mode, ..Metadata::default() });
++            let mut perms = fs::metadata(&restored).unwrap().permissions();
++            perms.set_readonly(!readonly);
++            fs::set_permissions(&restored, perms).unwrap();
++            destination.set_permission("restored", &node).unwrap();
++            let observed = fs::metadata(&restored).unwrap().permissions().readonly();
++            let unchanged = fs::metadata(&source).unwrap().permissions().readonly() == readonly;
++            let equal_bytes = fs::read(&source).unwrap() == fs::read(&restored).unwrap();
++            for path in [&source, &restored] {
++                let mut perms = fs::metadata(path).unwrap().permissions();
++                perms.set_readonly(false);
++                fs::set_permissions(path, perms).unwrap();
++            }
++            assert_eq!(mode, Some(if readonly { 0o444 } else { 0o666 }));
++            assert_eq!(observed, readonly);
++            assert!(unchanged && equal_bytes);
++        }
++    }
++
++    #[test]
++    fn windows_readonly_directory_mode_matches_go() {
++        let root = tempfile::tempdir().unwrap();
++        for readonly in [false, true] {
++            let mut perms = fs::metadata(root.path()).unwrap().permissions();
++            perms.set_readonly(readonly);
++            fs::set_permissions(root.path(), perms).unwrap();
++            let (mode, _, _) = LocalSourceSaveOptions::nix_infos(&fs::metadata(root.path()).unwrap());
++            let mut perms = fs::metadata(root.path()).unwrap().permissions();
++            perms.set_readonly(false);
++            fs::set_permissions(root.path(), perms).unwrap();
++            assert_eq!(mode, Some((1 << 31) | if readonly { 0o555 } else { 0o777 }));
++        }
++    }
++}
+--- a/src/backend/local_destination.rs
++++ b/src/backend/local_destination.rs
+@@ -428,3 +428,18 @@
+-        _item: impl AsRef<Path>,
+-        _node: &Node,
+-    ) -> LocalDestinationResult<()> {
++        item: impl AsRef<Path>,
++        node: &Node,
++    ) -> LocalDestinationResult<()> {
++        // Never follow a restored symlink to change another object's flags.
++        // Old snapshots with no mode provide no read-only evidence to apply.
++        if node.is_symlink() {
++            return Ok(());
++        }
++        if let Some(mode) = node.meta.mode {
++            let filename = self.path(item);
++            let mut permissions = fs::metadata(&filename)
++                .map_err(LocalDestinationErrorKind::SettingFilePermissionsFailed)?
++                .permissions();
++            // Windows Go chmod uses the owner-write bit for FILE_ATTRIBUTE_READONLY.
++            permissions.set_readonly(mode & 0o200 == 0);
++            fs::set_permissions(filename, permissions)
++                .map_err(LocalDestinationErrorKind::SettingFilePermissionsFailed)?;
++        }
