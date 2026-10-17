@@ -1,0 +1,47 @@
+{
+  "upstream_source": "6b96f976ff437a0528a4742358b172b32c3e3932",
+  "patch_sha256": {
+    "rustic-0.11.4-json-nodes.patch": "83d026f81a427af1459cd2568e718a07fb6d5e9baa18520091374eaab93f793c",
+    "rustic_core-0.13.0-windows-readonly.patch": "ad4a0ac708655b4b34413f19ce175f1064d489c8b5dea661dc834f9d4a43a2d5",
+    "rustic_core-0.13.0-verified-restore.patch": "cebf86cab03104b5362dd8b4693c771ffa072c51c1caa57162513008f8440de5",
+    "rustic_backend-0.7.0-scoped-ca.patch": "3d325c82f9db78ed37bcf564670427b0b7b2805a067407de7b4857675f6dfc04"
+  },
+  "scope": "disposable patched source qualification; not a distributed or installed runtime",
+  "josh_room_source": "f15cef1056cc915a86487b6aab91f206360ec836",
+  "josh_room_tracked_source_dirty": true,
+  "compiler": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "platform": "linux-x64",
+  "build": "cargo build --locked --release --features release",
+  "jobs": 2,
+  "project_version": "v0.11.4; matches upstream build.sh git-describe convention",
+  "seconds": 130.431,
+  "binary_sha256": "875328943343d8a14077ca1489a8f8f65b8a771f3dd1625885bc55071b1f0197",
+  "version": "rustic v0.11.4",
+  "original_lock_sha256": "0446331187440b8e5971c1537eabb5eb82e22896e64ee592f2e2db89881aa84a",
+  "candidate_lock_sha256": "73f8184b8192c2b729ad00860ec8648a7223db4ac8a05c7de4ca347bf21b71b4",
+  "dependency_versions_unchanged": true,
+  "prepared_source_manifest_sha256": "dfe4b31cf0f6a4aace46ab08a9b8f7e507b160da3cd0d8882729edee4c9fedd5",
+  "operator_probe": {
+    "source_sha256": "9f65cd246a53bc0b478c9a777ca5a146314d9acead825a4766bd857ff585fd16",
+    "binary_sha256": "021e9c6654359ef6ede32848b2642b1302581d9ea8bf515af25c803423c9cc72",
+    "scope": "actual candidate release libraries; execution belongs to owned TLS fixture",
+    "libraries": {
+      "rustic_core": {
+        "sha256": "7d57a98e49d41538c645a54fca0a84cdd9652cffcc7636b8639c1ab007a1e66d"
+      },
+      "rustic_backend": {
+        "sha256": "8b241ff4e5f8bbb26c7bb2e1d96a76a81261bb4a8f7c4e36a8ca40413e196f9f"
+      }
+    }
+  },
+  "patched_files": {
+    "source/src/commands/ls.rs": "cc71dbb852c96f5d86f5c84a742af653f8de3a765339710c768abd33f6915378",
+    "rustic_core-0.13.0/src/backend/ignore/mapper.rs": "147b9dc7540fd5f056dca5edb08a92ff5c5f61371790aa75a29ed274c84d70ec",
+    "rustic_core-0.13.0/src/backend/local_destination.rs": "7a0b2823855650a1454ac3d12c7d88cc3d2a4bed767a71c9e3c0dbba42287025",
+    "rustic_core-0.13.0/src/blob/tree.rs": "b9bfa067a5afe0bc5735d63e98125df89ce9df599e64dc382d156f85001231db",
+    "rustic_core-0.13.0/src/commands/restore.rs": "abe034ad991cc7c4a99e4cc60576f6dc6dce1f74cf4c2f3ae4e00a3a1b830b85",
+    "rustic_backend-0.7.0/Cargo.toml": "5c854527317c9812b5ae5ec33afb4b516fc044457ab88b8fede718a110b64129",
+    "rustic_backend-0.7.0/src/opendal.rs": "f1ec385945ce28b1fa10270e9442f359833f8607edc81d8bca7b48280c3bb2f2"
+  }
+}

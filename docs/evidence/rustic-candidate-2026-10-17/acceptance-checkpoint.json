@@ -1,0 +1,230 @@
+{
+  "qualified_source": "1a1e9634f61370edd2e1ee1bdb665a3a3edc5c92",
+  "scope": "checkpoint before further performance convergence; no runtime adoption",
+  "linux_native": {
+    "passed": 44,
+    "failed": 0,
+    "skipped": 3,
+    "nodes": [
+      {
+        "name": "tests.test_rustic_live::test_real_local_lifecycle",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_policy_excludes_are_exclusions",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_readonly_file_restore_preserves_mode",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_running_rustic_backup_cancellation",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_writable_managed_fixture_restores_same_size_edits",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_current_resolved_policy_preserves_git_history[full-repository]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_current_resolved_policy_preserves_git_history[source-only]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_restic_rustic_repository_round_trip",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_s3_tls_lifecycle",
+        "result": "SKIPPED"
+      },
+      {
+        "name": "tests.test_rustic_live::test_room_store_operations_real_save_noop_restore",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_source_error_never_returns_success",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_real_progress_cancellation_leaves_checkable_repository",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_live::test_s3_untrusted_ca_never_initializes",
+        "result": "SKIPPED"
+      },
+      {
+        "name": "tests.test_rustic_live::test_s3_wrong_credentials_never_initialize",
+        "result": "SKIPPED"
+      },
+      {
+        "name": "tests.test_rustic_candidate_live::test_candidate_stream_matches_authenticated_blobs_and_restore",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_live::test_candidate_wide_tree_stream_retains_bounds_without_aggregate_capture",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_live::test_candidate_rejects_valid_encrypted_tree_replay[root]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_live::test_candidate_rejects_valid_encrypted_tree_replay[subtree]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_preserves_exact_modes_links_and_snapshot_binding",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[id]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[tree]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[paths]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[schema]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[no-header]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[duplicate-header]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[truncated]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[count]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[extra-after-summary]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[duplicate-path]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[traversal]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[absolute]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[name-mismatch]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[no-parent]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[cycle]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[unknown-mode]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[raw-link]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_fails_closed[too-deep]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_stream_bounds_each_event_and_total_entries",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_process_failure_does_not_publish_cache_or_fall_back[exit]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_process_failure_does_not_publish_cache_or_fall_back[warning]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_node_stream::test_bulk_process_failure_does_not_publish_cache_or_fall_back[truncated]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_build::test_prepared_sources_accept_exact_inputs",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_build::test_prepared_sources_reject_changes[modified]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_build::test_prepared_sources_reject_changes[added]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_build::test_prepared_sources_reject_changes[removed]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_build::test_prepared_sources_reject_changes[symlink]",
+        "result": "PASS"
+      },
+      {
+        "name": "tests.test_rustic_candidate_build::test_prepared_sources_reject_changes[head]",
+        "result": "PASS"
+      }
+    ]
+  },
+  "tree_replay_before_fix": {
+    "passed": 0,
+    "failed": 2,
+    "skipped": 0,
+    "nodes": [
+      {
+        "name": "tests.test_rustic_candidate_live::test_candidate_rejects_valid_encrypted_tree_replay[root]",
+        "result": "FAIL"
+      },
+      {
+        "name": "tests.test_rustic_candidate_live::test_candidate_rejects_valid_encrypted_tree_replay[subtree]",
+        "result": "FAIL"
+      }
+    ]
+  },
+  "windows_candidate": {
+    "workflow_run": 39041714530,
+    "job_id": 117422379817,
+    "binary_sha256": "26873cd643c942c058bf8a8651cc4f8dad6ee1dc27b9dc5605fb70969c580320",
+    "native": {
+      "passed": 42,
+      "skipped": 5,
+      "failed": 0
+    },
+    "tls": "FAIL: initial version command under S3/CA profile exits nonzero before repository initialization; root cause pending",
+    "managed": "NOT RUN after TLS gate failure"
+  },
+  "official_windows": "FAIL expected unchanged read-only permissions gate",
+  "live_providers": "NOT RUN; no production credentials or user storage",
+  "peak_memory": "NOT MEASURED in these first runs",
+  "repeats": "NOT RUN yet; initial paired controls only"
+}

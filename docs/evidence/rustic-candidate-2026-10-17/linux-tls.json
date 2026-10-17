@@ -1,0 +1,52 @@
+{
+  "scope": "actual candidate OpenDAL/crypto/metadata over an owned TLS/S3 fixture; signatures not checked",
+  "platform": "linux-x64",
+  "binary_sha256": "875328943343d8a14077ca1489a8f8f65b8a771f3dd1625885bc55071b1f0197",
+  "cases": {
+    "scoped-ca-save-restore": "PASS",
+    "scoped-ca-cold-reopen": "PASS",
+    "same-process-operator-isolation": "PASS",
+    "strict-invalid-ca-construction": "PASS",
+    "missing": {
+      "result": "PASS rejected",
+      "code": "command-failed",
+      "http_requests": 0
+    },
+    "wrong": {
+      "result": "PASS rejected",
+      "code": "command-failed",
+      "http_requests": 0
+    },
+    "hostname": {
+      "result": "PASS rejected",
+      "code": "command-failed",
+      "http_requests": 0
+    },
+    "empty": {
+      "result": "PASS rejected",
+      "code": "invalid-configuration",
+      "http_requests": 0
+    },
+    "malformed": {
+      "result": "PASS rejected",
+      "code": "command-failed",
+      "http_requests": 0
+    },
+    "invalid-der": {
+      "result": "PASS rejected",
+      "code": "command-failed",
+      "http_requests": 0
+    },
+    "nested-section": {
+      "result": "PASS rejected",
+      "code": "command-failed",
+      "http_requests": 0
+    },
+    "trailing-junk": {
+      "result": "PASS rejected",
+      "code": "command-failed",
+      "http_requests": 0
+    }
+  },
+  "result": "PASS"
+}
