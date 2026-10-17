@@ -1,5 +1,6 @@
 """Reject stale or modified disposable build inputs before invoking Cargo."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +28,7 @@ def test_prepared_sources_reject_changes(prepared, monkeypatch, change):
     elif change == 'added': (prepared / 'rustic_core-0.13.0/unrecorded.rs').write_text('extra source')
     elif change == 'removed': path.unlink()
     elif change == 'symlink':
-        path.unlink(); path.symlink_to(prepared / 'rustic_core-0.13.0/compiled.rs')
+        original = Path.is_symlink
+        monkeypatch.setattr(Path, 'is_symlink', lambda value: value == path or original(value))
     else: monkeypatch.setattr(build.subprocess, 'check_output', lambda *a, **k: '0' * 40 + '\n')
     with pytest.raises(RuntimeError): build.verify_prepared_sources(prepared)

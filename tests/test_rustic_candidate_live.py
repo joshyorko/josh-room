@@ -82,7 +82,7 @@ def test_candidate_wide_tree_stream_retains_bounds_without_aggregate_capture(can
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     for index in range(15000):
-        (workspace / f"synthetic-{index:05d}.txt").write_bytes(b"x")
+        (workspace / (f"synthetic-{index:05d}-" + "x" * 96 + ".txt")).write_bytes(b"x")
     kwargs = authority(tmp_path)
     with RusticStore(**kwargs, executable=candidate) as legacy:
         legacy.initialize()

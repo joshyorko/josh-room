@@ -80,7 +80,8 @@ def test_bulk_process_failure_does_not_publish_cache_or_fall_back(tmp_path, fail
 
     password = tmp_path / "password"
     password.write_text("synthetic-node-stream")
-    password.chmod(0o600)
+    from josh_room.private_paths import protect_private_file
+    protect_private_file(password)
     calls = []
     values = encode(stream()[:-1] if failure == "truncated" else stream())
 

@@ -55,7 +55,7 @@ jobs:
               output.write('JOSH_ROOM_RUSTIC_TEST_NODE_STREAM=1\n')
               output.write(f'JOSH_ROOM_RESTIC_TEST_BINARY={restic}\n')
       - name: Exercise strict native metadata, wide trees and cancellation on candidate
-        run: uv run pytest -q tests/test_rustic_live.py tests/test_rustic_candidate_live.py tests/test_rustic_node_stream.py --junitxml=dist/rustic-candidate/native.xml
+        run: uv run pytest -q tests/test_rustic_live.py tests/test_rustic_candidate_live.py tests/test_rustic_node_stream.py tests/test_rustic_candidate_build.py --junitxml=dist/rustic-candidate/native.xml
       - name: Exercise scoped CA and real encrypted S3 protocol lifecycle
         shell: python
         run: |
