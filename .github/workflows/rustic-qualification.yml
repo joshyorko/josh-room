@@ -35,7 +35,7 @@ jobs:
         run: |
           import json, os, pathlib, shutil, subprocess, sys
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'jr-rustic-candidate'
-          subprocess.run(['uv','run','python','scripts/build_rustic_candidate.py','--destination',str(root),'--jobs','2','--verify-tests'],check=True)
+          subprocess.run(['uv','run','python','scripts/build_rustic_candidate.py','--destination',str(root),'--jobs','2','--build-probe'],check=True)
           evidence = pathlib.Path('dist/rustic-candidate'); evidence.mkdir(parents=True)
           shutil.copy2(root / 'build-receipt.json', evidence / 'build.json')
           receipt = json.loads((root / 'build-receipt.json').read_text())
@@ -77,7 +77,7 @@ jobs:
             dist/rustic-candidate
             dist/managed-runtime-evidence
             ${{ runner.temp }}/jr-rustic-candidate/build.log
-            ${{ runner.temp }}/jr-rustic-candidate/*-tests.log
+            ${{ runner.temp }}/jr-rustic-candidate/operator-probe-build.log
           if-no-files-found: ignore
 
   upstream-windows-proof:

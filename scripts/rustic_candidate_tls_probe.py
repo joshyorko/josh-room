@@ -180,24 +180,24 @@ def run(binary: Path, output: Path, candidate_build_root: Path | None = None) ->
                 result["cases"]["scoped-ca-cold-reopen"] = "PASS"
             finally:
                 reopened.__exit__(None, None, None)
-            if candidate_build_root is not None:
-                env = dict(os.environ, CARGO_TARGET_DIR=str(candidate_build_root / "target"),
-                    CARGO_INCREMENTAL="0", PROJECT_VERSION="v0.11.4",
-                    JOSH_ROOM_CANDIDATE_TLS_ENDPOINT=f"https://localhost:{server.server_port}",
-                    JOSH_ROOM_CANDIDATE_TLS_CA=str(root / "ca.pem"),
-                    JOSH_ROOM_CANDIDATE_TLS_OTHER_CA=str(root / "other.pem"))
-                proof = subprocess.run(["cargo", "test", "--locked", "--release", "--lib", "-p", "rustic_backend", "--jobs", "2",
-                    "operators_do_not_share_scoped_trust", "--", "--ignored", "--nocapture"],
-                    cwd=candidate_build_root / "source", env=env, capture_output=True, text=True, timeout=900, check=False)
-                proof_log = output.with_suffix(".operator-proof.log")
-                proof_log.write_text(proof.stdout + proof.stderr)
-                assert proof.returncode == 0 and "SCOPED_OPERATOR_ISOLATION_PASS" in proof.stdout
-                result["cases"]["same-process-operator-isolation"] = "PASS"
             for label, body in (("empty", ""), ("malformed", "not a certificate"),
                                 ("invalid-der", "-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----"),
                                 ("nested-section", "-----BEGIN CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nYWJj\n-----END PRIVATE KEY-----\n-----END CERTIFICATE-----"),
                                 ("trailing-junk", (root / "ca.pem").read_text() + "junk")):
                 (root / (label + ".pem")).write_text(body)
+            if candidate_build_root is not None:
+                receipt = json.loads((candidate_build_root / "build-receipt.json").read_text())
+                probe = candidate_build_root / ("scoped-ca-operator-probe.exe" if os.name == "nt" else "scoped-ca-operator-probe")
+                assert hashlib.sha256(binary.read_bytes()).hexdigest() == receipt["binary_sha256"]
+                assert hashlib.sha256(probe.read_bytes()).hexdigest() == receipt["operator_probe"]["binary_sha256"]
+                env = dict(os.environ, JOSH_ROOM_CANDIDATE_TLS_ENDPOINT=f"https://localhost:{server.server_port}",
+                    JOSH_ROOM_CANDIDATE_TLS_FIXTURE=str(root))
+                proof = subprocess.run([str(probe)], env=env, capture_output=True, text=True, timeout=60, check=False)
+                proof_log = output.with_suffix(".operator-proof.log")
+                proof_log.write_text(proof.stdout + proof.stderr)
+                assert proof.returncode == 0 and "SCOPED_OPERATOR_ISOLATION_PASS" in proof.stdout
+                result["cases"]["same-process-operator-isolation"] = "PASS"
+                result["cases"]["strict-invalid-ca-construction"] = "PASS"
             for label, ca, host in (("missing", None, "localhost"), ("wrong", root / "other.pem", "localhost"),
                                    ("hostname", root / "ca.pem", "127.0.0.1"),
                                    *((label, root / (label + ".pem"), "localhost") for label in ("empty", "malformed", "invalid-der", "nested-section", "trailing-junk"))):

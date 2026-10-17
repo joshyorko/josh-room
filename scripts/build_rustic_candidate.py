@@ -50,7 +50,7 @@ def verify_prepared_sources(destination: Path) -> None:
         raise RuntimeError("prepared candidate source changed; use a fresh destination")
 
 
-def run(destination: Path, *, jobs: int = 2, verify_tests: bool = False) -> None:
+def run(destination: Path, *, jobs: int = 2, build_probe: bool = False) -> None:
     repository = Path(__file__).resolve().parents[1]
     destination.mkdir(parents=True, exist_ok=True)
     source = destination / "source"
@@ -122,21 +122,37 @@ def run(destination: Path, *, jobs: int = 2, verify_tests: bool = False) -> None
         if fresh:
             (destination / "prepared-source.json").write_text(json.dumps(prepared_sources(destination), indent=2, sort_keys=True) + "\n")
         verify_prepared_sources(destination)
-        command = ["cargo", "build", "--locked", "--release", "--features", "release", "--jobs", str(jobs)]
-        subprocess.run(command, cwd=source, env=env, check=True, stdout=stream, stderr=subprocess.STDOUT)
+        command = ["cargo", "build", "--locked", "--release", "--features", "release", "--jobs", str(jobs), "--message-format=json-render-diagnostics"]
+        artifacts = {}
+        native_paths = set()
+        process = subprocess.Popen(command, cwd=source, env=env, stdout=subprocess.PIPE, stderr=stream, text=True)
+        for line in process.stdout:
+            value = json.loads(line)
+            if value.get("reason") == "compiler-artifact" and value["target"]["name"] in {"rustic_core", "rustic_backend"}:
+                library = next((path for path in value["filenames"] if path.endswith(".rlib")), None)
+                if library: artifacts[value["target"]["name"]] = library
+            if value.get("reason") == "build-script-executed":
+                native_paths.update(value.get("linked_paths", []))
+            if value.get("reason") == "compiler-message" and value["message"].get("rendered"):
+                stream.write(value["message"]["rendered"].encode())
+        process.stdout.close()
+        if process.wait(): raise subprocess.CalledProcessError(process.returncode, command)
     verify_prepared_sources(destination)
-    unit_proofs = []
-    if verify_tests:
-        for package, test, count in (("rustic_core", "candidate_tree_auth", 2), ("rustic_backend", "scoped_ca_rejects", 1)):
-            proof_log = destination / (package + "-tests.log")
-            with proof_log.open("wb") as stream:
-                subprocess.run(["cargo", "test", "--locked", "--release", "--lib", "-p", package,
-                                "--jobs", str(jobs), test, "--", "--nocapture"], cwd=source, env=env,
-                               check=True, stdout=stream, stderr=subprocess.STDOUT)
-            if f"test result: ok. {count} passed; 0 failed" not in proof_log.read_text():
-                raise RuntimeError("native unit proof did not execute the expected assertions")
-            unit_proofs.append({"package": package, "filter": test, "passed": count, "result": "PASS", "log_sha256": digest(proof_log)})
-        verify_prepared_sources(destination)
+    operator_probe = None
+    if build_probe:
+        probe_source = repository / "scripts/rustic_candidate_operator_probe.rs"
+        probe = destination / ("scoped-ca-operator-probe.exe" if os.name == "nt" else "scoped-ca-operator-probe")
+        command = ["rustc", str(probe_source), "--edition=2024", "-C", "opt-level=2", "-C", "panic=abort", "-C", "lto=fat",
+                   "-L", "dependency=" + str(destination / "target/release/deps"), "-o", str(probe)]
+        for name in ("rustic_core", "rustic_backend"):
+            command.extend(["--extern", name + "=" + artifacts[name]])
+        for path in sorted(native_paths): command.extend(["-L", path])
+        with (destination / "operator-probe-build.log").open("wb") as stream:
+            subprocess.run(command, env=env, check=True, stdout=stream, stderr=subprocess.STDOUT)
+        operator_probe = {"source_sha256": digest(probe_source), "binary_sha256": digest(probe),
+                          "scope": "actual candidate release libraries; execution belongs to owned TLS fixture",
+                          "libraries": {name: {"sha256": digest(Path(path))} for name, path in artifacts.items()}}
+    verify_prepared_sources(destination)
     binary = destination / "target/release" / ("rustic.exe" if os.name == "nt" else "rustic")
     result = {**inputs, "scope": "disposable patched source qualification; not a distributed or installed runtime",
         "josh_room_source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip(),
@@ -151,7 +167,7 @@ def run(destination: Path, *, jobs: int = 2, verify_tests: bool = False) -> None
         "original_lock_sha256": digest(destination / "original-Cargo.lock"),
         "candidate_lock_sha256": digest(source / "Cargo.lock"), "dependency_versions_unchanged": True,
         "prepared_source_manifest_sha256": digest(destination / "prepared-source.json"),
-        "native_unit_proofs": unit_proofs,
+        "operator_probe": operator_probe,
         "patched_files": {f"{tree}/{name}": digest(destination / tree / name) for tree, name in (
             ("source", "src/commands/ls.rs"), ("rustic_core-0.13.0", "src/backend/ignore/mapper.rs"),
             ("rustic_core-0.13.0", "src/backend/local_destination.rs"),
@@ -165,6 +181,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=2)
-    parser.add_argument("--verify-tests", action="store_true")
+    parser.add_argument("--build-probe", action="store_true")
     args = parser.parse_args()
-    run(args.destination.resolve(), jobs=args.jobs, verify_tests=args.verify_tests)
+    run(args.destination.resolve(), jobs=args.jobs, build_probe=args.build_probe)

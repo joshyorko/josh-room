@@ -25,7 +25,7 @@ blocked for the official Rustic binary.
   verification and does not modify system trust or a global transport.
 
 ```sh
-uv run python scripts/build_rustic_candidate.py --destination /tmp/owned-rustic-candidate --verify-tests
+uv run python scripts/build_rustic_candidate.py --destination /tmp/owned-rustic-candidate --build-probe
 ```
 
 The builder verifies archive checksums against the upstream lock, preserves

@@ -99,3 +99,63 @@ def test_candidate_wide_tree_stream_retains_bounds_without_aggregate_capture(can
         assert len(list(destination.iterdir())) == 15000
         assert all(path.read_bytes() == b"x" for path in destination.iterdir())
         bulk.check(read_data=True)
+
+
+@pytest.mark.parametrize('position', ['root', 'subtree'])
+def test_candidate_rejects_valid_encrypted_tree_replay(candidate, tmp_path, position):
+    """Replay authentic same-key ciphertext at an indexed tree's old location."""
+    import json
+
+    workspace = tmp_path / 'workspace'
+    folder = workspace / 'folder'
+    folder.mkdir(parents=True)
+    file = folder / 'entry-000'
+    file.write_bytes(b'')
+    kwargs = authority(tmp_path)
+    snapshots = []
+    with RusticStore(**kwargs, executable=candidate) as store:
+        store.initialize()
+        for index in range(32):
+            renamed = folder / f'entry-{index:03d}'
+            if renamed != file: file.rename(renamed)
+            file = renamed
+            summary = store.backup(workspace)
+            snapshot = store.snapshot(summary.snapshot_id)
+            tree_id = snapshot.tree_id
+            if position == 'subtree':
+                raw = store._tree_blob(tree_id)
+                tree_id = json.loads(raw)['nodes'][0]['subtree']
+            snapshots.append((summary.snapshot_id, tree_id))
+        locations = {}
+        for index_file in (tmp_path / 'repo/index').iterdir():
+            _, raw = store._capture(['cat', 'index', index_file.name])
+            for pack in json.loads(raw)['packs']:
+                for blob in pack['blobs']:
+                    if blob['type'] == 'tree': locations[blob['id']] = (pack['id'], blob)
+    groups = {}
+    pair = None
+    for snapshot_id, tree_id in snapshots:
+        pack, blob = locations[tree_id]
+        shape = (blob['length'], blob.get('uncompressed_length'))
+        if shape in groups and groups[shape][1] != tree_id:
+            pair = (groups[shape], (snapshot_id, tree_id, pack, blob)); break
+        groups[shape] = (snapshot_id, tree_id, pack, blob)
+    assert pair is not None, 'owned replay corpus did not produce equal-size tree records'
+    (snapshot_id, expected_tree, target_pack, target), (_, replay_tree, replay_pack, replay) = pair
+    assert expected_tree != replay_tree
+    pack_root = tmp_path / 'repo/data'
+    target_path = pack_root / target_pack[:2] / target_pack
+    replay_path = pack_root / replay_pack[:2] / replay_pack
+    original = target_path.read_bytes()
+    ciphertext = replay_path.read_bytes()[replay['offset']:replay['offset'] + replay['length']]
+    assert len(ciphertext) == target['length']
+    corrupted = original[:target['offset']] + ciphertext + original[target['offset'] + target['length']:]
+    target_path.write_bytes(corrupted)
+    try:
+        kwargs['cache_dir'] = tmp_path / 'fresh-replay-cache'
+        with RusticStore(**kwargs, executable=candidate, metadata_format='nodes-v1') as store:
+            store.open_existing()
+            with pytest.raises(ResticStoreError): list(store.entries(snapshot_id))
+        assert not (kwargs['cache_dir'] / 'rustic-inventory-v2-nodes').exists()
+    finally:
+        target_path.write_bytes(original)

@@ -20,7 +20,7 @@ default; main, PR #108 and staged 0.1.36 remain unchanged.
 ```sh
 uv sync --group dev
 # A disposable Rust 1.99.0 toolchain must be on PATH.
-uv run python scripts/build_rustic_candidate.py --destination /tmp/owned-rustic-candidate --verify-tests
+uv run python scripts/build_rustic_candidate.py --destination /tmp/owned-rustic-candidate --build-probe
 ```
 
 The builder supplies `PROJECT_VERSION=v0.11.4`, matching upstream `build.sh`'s
@@ -72,3 +72,14 @@ same strict live assertions, a 15k-entry wide tree, exact blob/stream metadata
 parity, generated-CA TLS/S3 fixture and installed managed Git/JAT/age recovery.
 The protocol fixture does not verify AWS signatures and does not qualify live
 R2 or production MinIO. A passing candidate does not authorize adoption.
+
+
+The first dependency-unit harness failed because Cargo cannot test a dependency
+with dev-dependencies outside its workspace. It did not alter the locked engine
+graph. The replacement uses actual encrypted same-key pack replay against root
+and child trees, plus a native operator probe linked directly to the candidate's
+recorded release libraries. The source unit cases remain supplemental and NOT
+RUN; they are not reported as passed. Linux scoped CA Save/restore, cold reopen,
+strict malformed-certificate construction and same-process operator isolation
+have now passed with the corrected binary. Final native suites and the 100k
+comparison remain pending at this source checkpoint.
