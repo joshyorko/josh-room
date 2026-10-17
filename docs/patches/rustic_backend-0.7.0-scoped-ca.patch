@@ -1,0 +1,81 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -64,0 +65,2 @@
++    "dep:reqwest",
++    "dep:opendal-http-transport-reqwest",
+@@ -332,0 +335,4 @@
++
++[dependencies.opendal-http-transport-reqwest]
++version = "=0.58.1"
++optional = true
+--- a/src/opendal.rs
++++ b/src/opendal.rs
+@@ -4,0 +5 @@
++    io::Read,
+@@ -115 +116,2 @@
+-    pub fn new(path: impl AsRef<str>, options: BTreeMap<String, String>) -> RusticResult<Self> {
++    pub fn new(path: impl AsRef<str>, mut options: BTreeMap<String, String>) -> RusticResult<Self> {
++        let scoped_ca = options.remove("cacert").map(|path| scoped_tls_client(&path)).transpose()?;
+@@ -162,2 +164,10 @@
+-            })?
+-            .layer(RetryLayer::new().with_max_times(max_retries).with_jitter());
++            })?;
++        if let Some(client) = scoped_ca {
++            let transport = opendal::HttpTransporter::new(
++                opendal_http_transport_reqwest::ReqwestTransport::new(client),
++            );
++            operator = operator.with_context(
++                opendal::OperationContext::new().with_http_transport(transport),
++            );
++        }
++        let mut operator = operator.layer(RetryLayer::new().with_max_times(max_retries).with_jitter());
+@@ -747,0 +758,49 @@
++
++// Scoped roots augment normal platform trust on this operator only. Never
++// replace the process-global transport or bypass chain/hostname verification.
++fn parse_scoped_ca(pem: &[u8]) -> RusticResult<Vec<reqwest::Certificate>> {
++    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
++    const END: &str = "-----END CERTIFICATE-----";
++    let invalid = || RusticError::new(ErrorKind::InvalidInput, "Invalid scoped CA bundle");
++    if pem.len() > 1024 * 1024 {
++        return Err(invalid());
++    }
++    let mut remaining = std::str::from_utf8(pem).map_err(|_| invalid())?.trim();
++    let mut certificates = Vec::new();
++    while !remaining.is_empty() {
++        if !remaining.starts_with(BEGIN) || certificates.len() >= 64 {
++            return Err(invalid());
++        }
++        let end = remaining.find(END).ok_or_else(invalid)? + END.len();
++        let certificate = reqwest::Certificate::from_pem(remaining[..end].as_bytes())
++            .map_err(|_| invalid())?;
++        certificates.push(certificate);
++        remaining = remaining[end..].trim();
++    }
++    if certificates.is_empty() {
++        return Err(invalid());
++    }
++    Ok(certificates)
++}
++
++fn scoped_tls_client(path: &str) -> RusticResult<reqwest::Client> {
++    let invalid = || RusticError::new(ErrorKind::InvalidInput, "Invalid scoped CA bundle");
++    let mut pem = Vec::new();
++    std::fs::File::open(path).map_err(|_| invalid())?
++        .take(1024 * 1024 + 1).read_to_end(&mut pem).map_err(|_| invalid())?;
++    reqwest::Client::builder().tls_certs_merge(parse_scoped_ca(&pem)?)
++        .build().map_err(|_| invalid())
++}
++
++#[cfg(test)]
++mod scoped_ca_tests {
++    use super::parse_scoped_ca;
++
++    #[test]
++    fn scoped_ca_rejects_empty_malformed_and_oversized_bundles() {
++        for input in [b"".as_slice(), b"   ", b"not a certificate", b"-----BEGIN CERTIFICATE-----bad-----END CERTIFICATE-----"] {
++            assert!(parse_scoped_ca(input).is_err());
++        }
++        assert!(parse_scoped_ca(&vec![b'x'; 1024 * 1024 + 1]).is_err());
++    }
++}

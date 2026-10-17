@@ -38,7 +38,7 @@ def compare(source: Path, restored: Path) -> None:
         assert identity(source / relative) == identity(restored / relative), "restored bytes differ"
 
 
-def run(root: Path, binaries: dict[str, Path], count: int, directories: int, output: Path) -> dict:
+def run(root: Path, binaries: dict[str, Path], count: int, directories: int, output: Path, *, node_stream: bool = False) -> dict:
     # The same instrumentation may benchmark a different clean worktree. Bind
     # provenance to the imported production adapter, not the instrument's path.
     source_root = Path(inspect.getfile(RusticStore)).resolve().parents[2]
@@ -60,6 +60,7 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
         "cache_contract": "cold application caches; OS caches are not evicted; sequential engine runs",
         "storage": "disposable local format-2 repositories; synthetic catalog/keyset callbacks",
         "engines": {},
+        "rustic_metadata_format": "nodes-v1" if node_stream else "tree-blobs",
     }
 
     def persist():
@@ -93,6 +94,8 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
         original_factory = op.store_factory
 
         def factory(**kwargs):
+            if engine == "rustic" and node_stream:
+                kwargs["metadata_format"] = "nodes-v1"
             store = original_factory(**kwargs)
 
             def spawn(*args, **kwargs):
@@ -190,7 +193,7 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
                 inventory = timed("inventory_cold", lambda: list(opened.entries(body["snapshot_id"], expected_tree_id=body["tree_id"])))
                 warm = timed("inventory_warm", lambda: list(opened.entries(body["snapshot_id"], expected_tree_id=body["tree_id"])))
                 assert inventory == warm and len(inventory) in (count + directories, count + directories + 1)
-                if engine == "rustic":
+                if engine == "rustic" and not node_stream:
                     shutil.rmtree(cold_cache / "rustic-inventory-v1")
                     trees = timed("inventory_warm_tree_blobs", lambda: list(opened.entries(body["snapshot_id"], expected_tree_id=body["tree_id"])))
                     assert inventory == trees
@@ -223,13 +226,14 @@ def main() -> None:
     parser.add_argument("--files", type=int, default=100000)
     parser.add_argument("--directories", type=int, default=250)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--rustic-node-stream", action="store_true", help="disposable patched engine only")
     args = parser.parse_args()
     if args.files < 1 or not 1 <= args.directories <= args.files:
         parser.error("require files >= directories >= 1")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="rustic-production-benchmark-") as name:
         run(Path(name), {"restic": args.restic.resolve(strict=True), "rustic": args.rustic.resolve(strict=True)},
-            args.files, args.directories, args.output.resolve())
+            args.files, args.directories, args.output.resolve(), node_stream=args.rustic_node_stream)
 
 
 if __name__ == "__main__":

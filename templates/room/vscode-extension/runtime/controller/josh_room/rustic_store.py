@@ -36,6 +36,8 @@ from .private_paths import (
 from .restic_store import (
     _BASE_ENVIRONMENT,
     MAX_CAPTURE_BYTES,
+    MAX_ENTRIES,
+    MAX_JSON_EVENT_BYTES,
     MAX_SNAPSHOT_INVENTORY,
     BackupProgress,
     BackupSummary,
@@ -240,7 +242,12 @@ class RusticStore(ResticStore):
     engine_version = RUSTIC_VERSION
     _stderr = subprocess.PIPE
 
-    def __init__(self, *, executable: str = "rustic", **kwargs: Any) -> None:
+    def __init__(self, *, executable: str = "rustic", metadata_format: str = "tree-blobs",
+                 ca_mode: str = "environment", **kwargs: Any) -> None:
+        if metadata_format not in {"tree-blobs", "nodes-v1"} or ca_mode not in {"environment", "operator"}:
+            raise RusticStoreError("invalid-configuration")
+        self._metadata_format = metadata_format
+        self._ca_mode = ca_mode
         super().__init__(executable=executable, **kwargs)
         self._scratch: tempfile.TemporaryDirectory | None = None
         self._profile: Path | None = None
@@ -255,7 +262,9 @@ class RusticStore(ResticStore):
             self._cache_dir = self._cache_dir.resolve(strict=True)
             # The pinned Windows TLS verifier uses the OS trust store and does
             # not honor SSL_CERT_FILE. Never silently ignore a Dimension CA.
-            if self._ca_bundle is not None and sys.platform.startswith("win"):
+            if self._ca_bundle is not None and sys.platform.startswith("win") and self._ca_mode != "operator":
+                raise RusticStoreError("invalid-configuration")
+            if self._ca_mode == "operator" and self._ca_bundle is not None and not self._repository.startswith("s3:"):
                 raise RusticStoreError("invalid-configuration")
             self._scratch = tempfile.TemporaryDirectory(
                 prefix=".rustic-", dir=self._cache_dir
@@ -283,6 +292,8 @@ class RusticStore(ResticStore):
                 }
                 if "AWS_SESSION_TOKEN" in self._provider_env:
                     options["session_token"] = "${JOSH_ROOM_S3_TOKEN_JSON}"
+                if self._ca_bundle is not None and self._ca_mode == "operator":
+                    options["cacert"] = str(self._ca_bundle)
                 profile += "[repository.options]\n"
                 profile += (
                     "\n".join(
@@ -346,7 +357,7 @@ class RusticStore(ResticStore):
             # for this open adapter, never in argv, profiles or cache files.
             env.pop("RUSTIC_PASSWORD_FILE", None)
             env["RUSTIC_KEY"] = self._masterkey.decode("ascii")
-        if self._ca_bundle is not None:
+        if self._ca_bundle is not None and self._ca_mode == "environment":
             env["SSL_CERT_FILE"] = str(self._ca_bundle)
             env["SSL_CERT_DIR"] = self._scratch.name
         for original, scoped in (
@@ -726,7 +737,7 @@ class RusticStore(ResticStore):
         if expected_tree_id is not None and expected_tree_id != snapshot.tree_id:
             raise RusticStoreError("invalid-output")
         # Separate exact-metadata caches from the experimental long-ls cache.
-        cache = self._cache_dir / "rustic-inventory-v1"
+        cache = self._cache_dir / ("rustic-inventory-v2-nodes" if self._metadata_format == "nodes-v1" else "rustic-inventory-v1")
         if expected_tree_id is not None:
             cached = read_inventory(
                 cache,
@@ -738,6 +749,18 @@ class RusticStore(ResticStore):
             if cached is not None:
                 yield from cached
                 return
+        if self._metadata_format == "nodes-v1":
+            # Explicit qualification option for the disposable patched engine.
+            # Product callers retain tree-blobs and the manifest-pinned binary.
+            with self._process(["ls", "--json-nodes", "--recursive", snapshot_id]) as process:
+                rows = parse_node_stream(self._read_lines(process), snapshot,
+                    max_event_bytes=self._max_json_event_bytes, max_entries=self._max_entries)
+                self._raise_exit(self._wait(process))
+            # No rows or inventory cache escape a failed/incomplete process.
+            write_inventory(cache, self._repository, self.repository_info.repository_id,
+                            snapshot_id, snapshot.tree_id, rows)
+            yield from rows
+            return
         # v0.11.4 ls --json gives names only; ls --long loses special mode bits
         # and raw link targets. Authenticate exact tree blobs instead.
         stack = [(snapshot.tree_id, "", frozenset())]
@@ -799,6 +822,70 @@ class RusticStore(ResticStore):
         if dry_run is False and confirmed is True:
             raise RusticStoreError("maintenance-unsafe")
         return super().prune(dry_run=dry_run, confirmed=confirmed)
+
+
+def parse_node_stream(
+    events: Iterable[bytes | str], snapshot: SnapshotInfo, *,
+    max_event_bytes: int = MAX_JSON_EVENT_BYTES, max_entries: int = MAX_ENTRIES,
+) -> list[SnapshotEntry]:
+    """Accept a complete schema-1 native stream bound to one known snapshot."""
+    rows: list[SnapshotEntry] = []
+    directories = {"": snapshot.tree_id}
+    seen: set[str] = set()
+    header = False
+    complete = False
+    for raw in events:
+        try:
+            encoded = raw.encode("utf-8") if isinstance(raw, str) else raw
+            if not isinstance(encoded, bytes) or len(encoded) > max_event_bytes:
+                raise ValueError
+        except (UnicodeError, ValueError):
+            raise RusticStoreError("invalid-output") from None
+        value = _json(encoded)
+        if not isinstance(value, dict) or complete:
+            raise RusticStoreError("invalid-output")
+        kind = value.get("struct_type")
+        if not header:
+            if (set(value) != {"struct_type", "schema_version", "id", "tree", "paths"}
+                or kind != "snapshot" or type(value["schema_version"]) is not int
+                or value["schema_version"] != 1 or value["id"] != snapshot.snapshot_id
+                or value["tree"] != snapshot.tree_id or value["paths"] != list(snapshot.paths)):
+                raise RusticStoreError("invalid-output")
+            header = True
+            continue
+        if kind == "summary":
+            if set(value) != {"struct_type", "nodes"} or type(value["nodes"]) is not int or value["nodes"] != len(rows):
+                raise RusticStoreError("invalid-output")
+            complete = True
+            continue
+        if kind != "node" or set(value) != {"struct_type", "path", "node"}:
+            raise RusticStoreError("invalid-output")
+        path, node = value["path"], value["node"]
+        if not isinstance(path, str) or not isinstance(node, dict):
+            raise RusticStoreError("invalid-output")
+        parts = path.split("/")
+        if (len(parts) > 257 or any(part in {"", ".", ".."} for part in parts)
+            or node.get("name") != parts[-1] or path in seen or len(rows) >= max_entries):
+            raise RusticStoreError("invalid-output")
+        prefix = "/".join(parts[:-1])
+        if prefix not in directories:
+            raise RusticStoreError("invalid-output")
+        try:
+            row, subtree = parse_tree_node(node, prefix)
+        except UnicodeError:
+            raise RusticStoreError("invalid-output") from None
+        if row.mode is None:
+            raise RusticStoreError("invalid-output")
+        if subtree is not None:
+            ancestor_ids = {directories["/".join(parts[:depth])] for depth in range(len(parts))}
+            if subtree in ancestor_ids:
+                raise RusticStoreError("invalid-output")
+            directories[path] = subtree
+        seen.add(path)
+        rows.append(row)
+    if not header or not complete:
+        raise RusticStoreError("invalid-output")
+    return rows
 
 
 def parse_tree_node(node: Any, prefix: str) -> tuple[SnapshotEntry, str | None]:

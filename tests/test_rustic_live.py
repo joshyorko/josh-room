@@ -12,6 +12,12 @@ from josh_room.restic_store import ResticStore, ResticStoreError
 from josh_room.rustic_store import RusticStore
 
 
+def rustic_test_store(**kwargs):
+    if os.environ.get("JOSH_ROOM_RUSTIC_TEST_NODE_STREAM") == "1":
+        kwargs.setdefault("metadata_format", "nodes-v1")
+    return RusticStore(**kwargs)
+
+
 @pytest.fixture
 def binary():
     value = os.environ.get("JOSH_ROOM_RUSTIC_TEST_BINARY")
@@ -97,7 +103,7 @@ def lifecycle(store, workspace, tmp_path):
 def test_real_local_lifecycle(binary, authorities, tmp_path):
     kwargs, workspace = authorities
     lifecycle(
-        RusticStore(**kwargs, executable=binary, command_timeout=15),
+        rustic_test_store(**kwargs, executable=binary, command_timeout=15),
         workspace,
         tmp_path,
     )
@@ -110,7 +116,7 @@ def test_real_policy_excludes_are_exclusions(binary, authorities, tmp_path):
     (workspace / "private.txt").write_text("synthetic-excluded-data")
     excludes = tmp_path / "policy"
     excludes.write_text("private\nprivate/**\n**/private.txt\n**/private.txt/**\n")
-    with RusticStore(**kwargs, executable=binary) as store:
+    with rustic_test_store(**kwargs, executable=binary) as store:
         store.initialize()
         result = store.backup(workspace, excludes=excludes)
         paths = {row.path for row in store.entries(result.snapshot_id)}
@@ -126,7 +132,7 @@ def test_real_readonly_file_restore_preserves_mode(binary, authorities, tmp_path
     source.write_bytes(b"synthetic read-only Git-object-like payload")
     source.chmod(0o444)
     try:
-        with RusticStore(**kwargs, executable=binary) as store:
+        with rustic_test_store(**kwargs, executable=binary) as store:
             store.initialize()
             summary = store.backup(workspace)
             row = next(row for row in store.entries(summary.snapshot_id) if row.path == "readonly.bin")
@@ -154,7 +160,7 @@ def test_real_running_rustic_backup_cancellation(binary, authorities):
     kwargs, workspace = authorities
     token = CancellationToken()
     processes = []
-    with RusticStore(**kwargs, executable=binary, command_timeout=15) as store:
+    with rustic_test_store(**kwargs, executable=binary, command_timeout=15) as store:
         store.initialize()
         store._prime_masterkey()
         owned = store._masterkey
@@ -204,7 +210,7 @@ def test_real_current_resolved_policy_preserves_git_history(binary, authorities,
     policy = load_capture_policy(workspace)
     excludes = tmp_path / "resolved-policy"
     excludes.write_text("\n".join(policy.resolved_restic_excludes(workspace)) + "\n")
-    with RusticStore(**kwargs, executable=binary) as store:
+    with rustic_test_store(**kwargs, executable=binary) as store:
         store.initialize()
         summary = store.backup(workspace, excludes=excludes)
         paths = {row.path for row in store.entries(summary.snapshot_id)}
@@ -223,7 +229,7 @@ def test_restic_rustic_repository_round_trip(binary, authorities, tmp_path):
     with ResticStore(**kwargs, executable=restic) as store:
         identity = store.initialize().repository_id
         seed = store.backup(workspace)
-    with RusticStore(**kwargs, executable=binary) as store:
+    with rustic_test_store(**kwargs, executable=binary) as store:
         assert store.open_existing().repository_id == identity
         info = store.snapshot(seed.snapshot_id)
         list(store.entries(seed.snapshot_id, expected_tree_id=info.tree_id))
@@ -258,7 +264,7 @@ def test_s3_tls_lifecycle(binary, authorities, tmp_path):
         },
     )
     lifecycle(
-        RusticStore(**kwargs, executable=binary, command_timeout=15),
+        rustic_test_store(**kwargs, executable=binary, command_timeout=15),
         workspace,
         tmp_path,
     )
@@ -379,7 +385,7 @@ def test_real_source_error_never_returns_success(binary, authorities):
     source = workspace / "subdir/file.txt"
     source.chmod(0)
     try:
-        with RusticStore(**kwargs, executable=binary) as store:
+        with rustic_test_store(**kwargs, executable=binary) as store:
             store.initialize()
             with pytest.raises(ResticStoreError) as error:
                 store.backup(workspace)
@@ -396,7 +402,7 @@ def test_real_progress_cancellation_leaves_checkable_repository(binary, authorit
 
     kwargs, workspace = authorities
     token = CancellationToken()
-    with RusticStore(**kwargs, executable=binary) as store:
+    with rustic_test_store(**kwargs, executable=binary) as store:
         store.initialize()
         with pytest.raises(ResticStoreError) as error:
             store.backup(
@@ -419,7 +425,7 @@ def test_s3_untrusted_ca_never_initializes(binary, authorities):
             "AWS_SECRET_ACCESS_KEY": "synthetic-contract-password",
         },
     )
-    with RusticStore(**kwargs, executable=binary, command_timeout=1) as store:
+    with rustic_test_store(**kwargs, executable=binary, command_timeout=1) as store:
         with pytest.raises(ResticStoreError):
             store.initialize()
         assert store._repository_info is None
@@ -439,7 +445,7 @@ def test_s3_wrong_credentials_never_initialize(binary, authorities):
             "AWS_SECRET_ACCESS_KEY": "synthetic-wrong-password",
         },
     )
-    with RusticStore(**kwargs, executable=binary, command_timeout=2) as store:
+    with rustic_test_store(**kwargs, executable=binary, command_timeout=2) as store:
         with pytest.raises(ResticStoreError):
             store.initialize()
         assert store._repository_info is None

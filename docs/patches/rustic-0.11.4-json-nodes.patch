@@ -2,13 +2,41 @@
 +++ b/src/commands/ls.rs
 @@ -59,0 +60,4 @@
 +
-+    /// Stream exact repository nodes and their paths as newline-delimited JSON
++    /// Stream snapshot-bound exact nodes as newline-delimited JSON
 +    #[clap(long, conflicts_with_all = ["summary", "long", "json"])]
 +    pub json_nodes: bool,
-@@ -250 +254,5 @@
+@@ -184,0 +189,3 @@
++        if self.json_nodes && path.is_some() {
++            anyhow::bail!("json-nodes requires a complete snapshot");
++        }
+@@ -210,0 +218,7 @@
++        if self.json_nodes {
++            println!("{}", serde_json::json!({
++                "struct_type": "snapshot", "schema_version": 1,
++                "id": snap.id.to_string(), "tree": snap.tree.to_string(),
++                "paths": &snap.paths,
++            }));
++        }
+@@ -218,0 +233,3 @@
++        }
++        if self.json_nodes {
++            anyhow::bail!("json-nodes requires a complete snapshot");
+@@ -246,0 +264 @@
++        let mut node_count = 0usize;
+@@ -250 +268,9 @@
 -            if self.json {
 +            if self.json_nodes {
-+                // Preserve native numeric modes, link targets and node fields.
-+                // One node per line avoids an unbounded aggregate JSON array.
-+                println!("{}", serde_json::to_string(&(path, node))?);
++                let path = path.to_str()
++                    .ok_or_else(|| anyhow::anyhow!("non-Unicode node path"))?
++                    .replace(std::path::MAIN_SEPARATOR, "/");
++                println!("{}", serde_json::json!({
++                    "struct_type": "node", "path": path, "node": node,
++                }));
++                node_count += 1;
 +            } else if self.json {
+@@ -266,0 +293,5 @@
++        if self.json_nodes {
++            println!("{}", serde_json::json!({
++                "struct_type": "summary", "nodes": node_count,
++            }));
++        }

@@ -85,7 +85,8 @@ def contents(root: Path) -> dict:
             for path in root.rglob("*") if path.is_file()}
 
 
-def operations(root: Path, workspace: Path, *, engine: str = "restic", executable: str | None = None):
+def operations(root: Path, workspace: Path, *, engine: str = "restic", executable: str | None = None,
+               store_options: dict | None = None):
     from josh_room.restic_store import ResticStore
     from josh_room.rustic_store import RusticStore
 
@@ -109,7 +110,7 @@ def operations(root: Path, workspace: Path, *, engine: str = "restic", executabl
     result = RoomStoreOperations(
         workspace=workspace, repository=root / "encrypted-restic", cache_dir=root / "cache",
         password_dir=root / "private", dimension=object(), backend=object(),
-        store_factory=lambda **kwargs: adapter(**kwargs, executable=executable or engine),
+        store_factory=lambda **kwargs: adapter(**kwargs, executable=executable or engine, **(store_options or {})),
         ensure_keyset=lambda *_args: keyset, bind_repository=bind,
         read_latest=lambda: (state["latest"], None), read_catalog_signature=lambda: state["signature"],
         publish_descriptor=publish, write_marker=lambda *_args, **_kwargs: None,
@@ -154,13 +155,13 @@ def _enable_age_catalog(op: RoomStoreOperations, root: Path) -> None:
     op.read_latest = read_encrypted
 
 
-def exercise_files(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None) -> dict:
+def exercise_files(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None, store_options: dict | None = None) -> dict:
     """Independent writable-file chain; never substitutes for strict Git modes."""
     workspace = root / "workspace"
     (workspace / "nested").mkdir(parents=True)
     source = workspace / "nested/file.bin"
     source.write_bytes(b"original")
-    op = operations(root, workspace, engine=engine, executable=executable)
+    op = operations(root, workspace, engine=engine, executable=executable, store_options=store_options)
     if jat_root is not None:
         _enable_age_catalog(op, root)
     first = op.save()
@@ -199,7 +200,7 @@ def exercise_files(root: Path, jat_root: Path | None = None, *, engine: str = "r
             "portable_jat": portable, "source_unchanged_after_restore": "passed"}
 
 
-def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None) -> dict:
+def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None, store_options: dict | None = None) -> dict:
     workspace = root / "workspace"
     repos = [Path("services/one"), Path("services/deep/two"), Path("library")]
     for relative in repos:
@@ -219,7 +220,7 @@ def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic"
     (workspace / ".josh-roomignore").write_text("**/.git\n**/.git/objects\n")
     expected = {str(relative): identity(workspace / relative) for relative in repos}
     before = contents(workspace)
-    op = operations(root, workspace, engine=engine, executable=executable)
+    op = operations(root, workspace, engine=engine, executable=executable, store_options=store_options)
     age_catalog = jat_root is not None and engine == "rustic"
     if age_catalog:
         _enable_age_catalog(op, root)
@@ -313,6 +314,7 @@ def main() -> None:
     parser.add_argument("--engine", choices=("restic", "rustic"), default="restic")
     parser.add_argument("--executable", type=Path)
     parser.add_argument("--fixture", choices=("git", "writable-files"), default="git")
+    parser.add_argument("--node-stream", action="store_true", help="explicit disposable candidate qualification")
     args = parser.parse_args()
     # Git's internal GIT_DIR bound is distinct from core.longpaths. RCC's
     # deeply nested Windows temp root is not a representative restore target.
@@ -324,7 +326,8 @@ def main() -> None:
             temporary_parent = str(Path(os.environ["LOCALAPPDATA"]) / "Temp")
     with tempfile.TemporaryDirectory(prefix="jr-git-", dir=temporary_parent) as name:
         exercise_fixture = exercise if args.fixture == "git" else exercise_files
-        result = exercise_fixture(Path(name), args.jat_root, engine=args.engine, executable=str(args.executable) if args.executable else None)
+        result = exercise_fixture(Path(name), args.jat_root, engine=args.engine, executable=str(args.executable) if args.executable else None,
+                                  store_options={"metadata_format": "nodes-v1"} if args.node_stream else None)
     args.result_file.write_text(json.dumps(result, sort_keys=True) + "\n")
     print(json.dumps(result, sort_keys=True))
 

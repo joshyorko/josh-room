@@ -3,13 +3,79 @@ name: Rustic isolated qualification
 on:
   push:
     branches: [qualify/rustic-after-0.1.36-20261016]
-    paths-ignore: ['docs/**']
+    paths: ['**', '!docs/**', 'docs/patches/*.patch']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  candidate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: uv sync --group dev
+      - name: Install compiler in this disposable runner
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Build verified patched candidate without changing product manifests
+        shell: python
+        run: |
+          import json, os, pathlib, shutil, subprocess, sys
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'jr-rustic-candidate'
+          subprocess.run(['uv','run','python','scripts/build_rustic_candidate.py','--destination',str(root),'--jobs','2'],check=True)
+          evidence = pathlib.Path('dist/rustic-candidate'); evidence.mkdir(parents=True)
+          shutil.copy2(root / 'build-receipt.json', evidence / 'build.json')
+          receipt = json.loads((root / 'build-receipt.json').read_text())
+          binary = root / 'target/release' / ('rustic.exe' if os.name == 'nt' else 'rustic')
+          sys.path.insert(0, 'src')
+          from josh_room.private_paths import protect_private_directory
+          runtime = pathlib.Path(os.environ['RUNNER_TEMP']) / 'jr-candidate-restic'
+          runtime.mkdir(mode=0o700)
+          protect_private_directory(runtime)
+          native = 'win32-x64' if os.name == 'nt' else 'linux-x64'
+          subprocess.run(['uv','run','python','scripts/install_restic.py','--manifest','vscode-extension/runtime/restic-manifest.json','--destination',str(runtime),'--platform',native],check=True,env=dict(os.environ,PYTHONPATH='src'))
+          restic = runtime / 'restic/0.19.1' / native / ('restic.exe' if os.name == 'nt' else 'restic')
+          with open(os.environ['GITHUB_ENV'],'a') as output:
+              output.write(f'JOSH_ROOM_RUSTIC_CANDIDATE_BINARY={binary}\n')
+              output.write(f'JOSH_ROOM_RUSTIC_CANDIDATE_SHA256={receipt["binary_sha256"]}\n')
+              output.write(f'JOSH_ROOM_RUSTIC_TEST_BINARY={binary}\n')
+              output.write('JOSH_ROOM_RUSTIC_TEST_NODE_STREAM=1\n')
+              output.write(f'JOSH_ROOM_RESTIC_TEST_BINARY={restic}\n')
+      - name: Exercise strict native metadata, wide trees and cancellation on candidate
+        run: uv run pytest -q tests/test_rustic_live.py tests/test_rustic_candidate_live.py tests/test_rustic_node_stream.py --junitxml=dist/rustic-candidate/native.xml
+      - name: Exercise scoped CA and real encrypted S3 protocol lifecycle
+        shell: python
+        run: |
+          import os, subprocess
+          subprocess.run(['uv','run','python','scripts/rustic_candidate_tls_probe.py','--rustic',os.environ['JOSH_ROOM_RUSTIC_CANDIDATE_BINARY'],'--output','dist/rustic-candidate/tls.json'],check=True)
+      - name: Exercise installed managed Git and portable JAT with candidate
+        env:
+          JOSH_ROOM_QUALIFY_RUSTIC: '1'
+          JOSH_ROOM_QUALIFY_RUSTIC_ONLY: '1'
+          JOSH_ROOM_RUSTIC_WINDOWS_DIAGNOSTIC: '1'
+        run: node scripts/managed_runtime_acceptance.js
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rustic-candidate-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            dist/rustic-candidate
+            dist/managed-runtime-evidence
+          if-no-files-found: ignore
+
   upstream-windows-proof:
     runs-on: windows-latest
     timeout-minutes: 55
