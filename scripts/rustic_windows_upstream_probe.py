@@ -77,8 +77,11 @@ def run(output: Path) -> None:
         # Exactly the same new assertions against the unmodified implementation.
         with (baseline / relative).open("a", encoding="utf-8", newline="\n") as target:
             target.write("\n" + module)
-        env = dict(os.environ, CARGO_TARGET_DIR=str(root / "target"), CARGO_HOME=str(root / "cargo-home"))
+        env = dict(os.environ, CARGO_HOME=str(root / "cargo-home"), CARGO_INCREMENTAL="0")
         for label, tree in (("baseline", baseline), ("patched", patched)):
+            # Same package name/version can reuse the other tree's unit binary
+            # in a shared target directory. Compile each source independently.
+            env["CARGO_TARGET_DIR"] = str(root / ("target-" + label))
             log = output.with_name(f"windows-upstream-{label}.log")
             command = ["cargo", "test", "--locked", "--manifest-path", str(tree / "Cargo.toml"),
                        "--lib", "windows_readonly", "--", "--nocapture"]
@@ -87,7 +90,10 @@ def run(output: Path) -> None:
                                            timeout=1500, check=False)
             text = log.read_text(encoding="utf-8", errors="replace")
             summaries = [line for line in text.splitlines() if line.startswith("test result:")]
-            result["steps"][label] = {"exit_code": completed.returncode, "summary": summaries}
+            result["steps"][label] = {"exit_code": completed.returncode, "summary": summaries,
+                "source_files": {name: hashlib.sha256((tree / name).read_bytes()).hexdigest()
+                    for name in ("src/backend/ignore/mapper.rs", "src/backend/local_destination.rs")},
+                "target_directory": "isolated per source; incremental compilation disabled"}
             persist()
             expected = "FAILED. 0 passed; 2 failed" if label == "baseline" else "ok. 2 passed; 0 failed"
             if not any(expected in summary for summary in summaries):

@@ -148,37 +148,33 @@ def test_real_readonly_file_restore_preserves_mode(binary, authorities, tmp_path
 
 def test_real_running_rustic_backup_cancellation(binary, authorities):
     import subprocess
-    import threading
 
     from josh_room.adapter_contract import CancellationToken
 
     kwargs, workspace = authorities
     token = CancellationToken()
     processes = []
-    timers = []
     with RusticStore(**kwargs, executable=binary, command_timeout=15) as store:
         store.initialize()
+        store._prime_masterkey()
+        owned = store._masterkey
+        assert owned and any(owned)
 
         def spawn(*args, **kw):
             process = subprocess.Popen(*args, **kw)
             processes.append(process)
-            timer = threading.Timer(0.02, token.cancel)
-            timers.append(timer)
-            timer.start()
+            assert process.poll() is None
+            token.cancel()
             return process
 
         store._process_factory = spawn
-        try:
-            with pytest.raises(ResticStoreError) as error:
-                store.backup(workspace, cancellation=token)
-            assert error.value.code.value == "cancelled"
-            assert store._active_process is None
-            assert store._masterkey is None
-            assert processes and all(process.poll() is not None for process in processes)
-            assert store.data_added_bytes == 0
-        finally:
-            for timer in timers:
-                timer.cancel()
+        with pytest.raises(ResticStoreError) as error:
+            store.backup(workspace, cancellation=token)
+        assert error.value.code.value == "cancelled"
+        assert store._active_process is None
+        assert store._masterkey is None and not any(owned)
+        assert processes and all(process.poll() is not None for process in processes)
+        assert store.data_added_bytes == 0
 
 
 def test_real_writable_managed_fixture_restores_same_size_edits(binary, tmp_path):

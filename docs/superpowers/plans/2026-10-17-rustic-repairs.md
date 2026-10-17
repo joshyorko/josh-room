@@ -50,3 +50,11 @@ Files: `scripts/rustic_production_benchmark.py`, a rerunnable profiling script, 
 - [ ] Run native Linux/Windows and managed Linux/Windows acceptance with explicit failures and unrun steps retained.
 - [ ] Run broad Python and Node suites, source parity, packaging, lint, whitespace and secret checks.
 - [ ] Push code and evidence with remote-head guards and confirm main, original PR and release pins remain unchanged.
+
+## Review ledger
+
+- Ruling: ship no replacement Rustic engine. The Windows repair belongs to the pinned core; a review-only upstream patch is supplied. Cost: Windows remains unavailable until an engine decision and full qualification.
+- Native probe recovery: normalize a Windows CRLF patch checkout to canonical LF before applying it to the verified crate. The initial failed run remains evidence.
+- Independent review of `cc44dba..6e304f2` found three Important issues. The fix pass adds RED/GREEN tests for primed-key spawn failure and pre-cancel, strengthens actual child cancellation, makes the upstream permission-error variant available on Windows, and isolates native Cargo targets with source hashes.
+- Deferred minor: the existing workflow ignores `docs/**`-only changes, including patch-only edits. Such edits need explicit workflow dispatch; current code/script pushes trigger qualification automatically.
+- Ruling: independent writable-file managed JAT/age recovery is evidence for that fixture only. Complete Git recovery still fails when mode preservation fails. Cost: Windows compatibility remains partial even if the independent fixture passes.

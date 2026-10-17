@@ -74,7 +74,9 @@
 +}
 --- a/src/backend/local_destination.rs
 +++ b/src/backend/local_destination.rs
-@@ -428,3 +428,18 @@
+@@ -126 +125,0 @@
+-    #[cfg(not(windows))]
+@@ -428,3 +427,18 @@
 -        _item: impl AsRef<Path>,
 -        _node: &Node,
 -    ) -> LocalDestinationResult<()> {

@@ -111,6 +111,38 @@ def test_native_masterkey_diagnostics_cannot_enable_authentication(authority):
         assert store._masterkey is None
 
 
+@pytest.mark.parametrize("failure", ["spawn", "pre-cancel"])
+def test_primed_key_is_discarded_before_failed_spawn_or_cancel(authority, tmp_path, failure):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def key_process(argv, **_kwargs):
+        assert argv[-2:] == ["cat", "masterkey"]
+        return FakeProcess(json.dumps(synthetic_masterkey()).encode())
+
+    with RusticStore(**authority, process_factory=key_process) as store:
+        store._repository_info = RepositoryInfo("e" * 64, 2)
+        store._prime_masterkey()
+        owned = store._masterkey
+        assert owned and any(owned)
+
+        def failed_spawn(*_args, **_kwargs):
+            if failure == "pre-cancel":
+                pytest.fail("spawned after pre-cancellation")
+            raise OSError("synthetic unavailable executable")
+
+        store._process_factory = failed_spawn
+        with pytest.raises(ResticStoreError):
+            if failure == "spawn":
+                store.check()
+            else:
+                token = CancellationToken()
+                token.cancel()
+                store.backup(workspace, cancellation=token)
+        assert store._masterkey is None
+        assert not any(owned)
+
+
 def document(**updates):
     value = {
         "id": CHANGED,

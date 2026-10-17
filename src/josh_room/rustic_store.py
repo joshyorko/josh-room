@@ -371,29 +371,32 @@ class RusticStore(ResticStore):
         self._orphan = None
         if "--json-progress" not in args:
             args = ["--no-progress", *args]
-        with super()._process(args, cwd=cwd or Path(self._scratch.name)) as process:
-            diagnostics = _Diagnostics(process.stderr)
-            self._diagnostics = diagnostics
-            try:
-                yield process
-                diagnostics.thread.join(timeout=1)
-                if diagnostics.thread.is_alive() or diagnostics.failed:
-                    raise RusticStoreError(
-                        "invalid-output", orphan_snapshot_id=self._orphan
-                    )
-                if process.poll() == 0 and diagnostics.present:
-                    raise RusticStoreError(
-                        "backup-errors" if "backup" in args else "command-failed",
-                        orphan_snapshot_id=self._orphan,
-                    )
-            except BaseException:
-                self._discard_masterkey()
-                raise
-            finally:
-                self._terminate(process)
-                diagnostics.thread.join(timeout=1)
-                process.stderr.close()
-                self._orphan = None
+        try:
+            with super()._process(args, cwd=cwd or Path(self._scratch.name)) as process:
+                diagnostics = _Diagnostics(process.stderr)
+                self._diagnostics = diagnostics
+                try:
+                    yield process
+                    diagnostics.thread.join(timeout=1)
+                    if diagnostics.thread.is_alive() or diagnostics.failed:
+                        raise RusticStoreError(
+                            "invalid-output", orphan_snapshot_id=self._orphan
+                        )
+                    if process.poll() == 0 and diagnostics.present:
+                        raise RusticStoreError(
+                            "backup-errors" if "backup" in args else "command-failed",
+                            orphan_snapshot_id=self._orphan,
+                        )
+                finally:
+                    self._terminate(process)
+                    diagnostics.thread.join(timeout=1)
+                    process.stderr.close()
+                    self._orphan = None
+        except BaseException:
+            # Includes failure to enter the process context, such as a spawn
+            # error, as well as parsing/cancellation failures after spawning.
+            self._discard_masterkey()
+            raise
 
     def _ensure_version(self) -> None:
         _, output = self._capture(["version"])
@@ -556,6 +559,7 @@ class RusticStore(ResticStore):
         if on_progress is not None and not callable(on_progress):
             raise RusticStoreError("invalid-configuration")
         if cancellation is not None and cancellation.cancelled:
+            self._discard_masterkey()
             raise RusticStoreError("cancelled")
         if parent is not None:
             _validate_snapshot_id(parent)
