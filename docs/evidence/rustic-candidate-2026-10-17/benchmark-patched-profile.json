@@ -1,0 +1,2143 @@
+{
+  "cache_contract": "cold application caches; OS caches are not evicted; sequential engine runs",
+  "engines": {
+    "restic": {
+      "binary_sha256": "20d4142678d0d95ec11a4759def1b73fd9190abc9ca19e4b62d067c0b387e639",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "adapter_warm_scan": 1,
+        "changed_save": 5,
+        "changed_warm_unchanged_save": 2,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 7,
+        "inventory_cold": 2,
+        "inventory_warm": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "snapshot_inventory": 1,
+        "staged_restore": 5,
+        "warm_unchanged_save": 2
+      },
+      "command_profiles": {
+        "adapter_warm_scan": {
+          "backup": {
+            "count": 1,
+            "seconds": 3.172854
+          }
+        },
+        "changed_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 3.290044
+          },
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.718302
+          },
+          "ls": {
+            "count": 1,
+            "seconds": 4.381891
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.731188
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.021045
+          }
+        },
+        "changed_warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.718898
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.020853
+          }
+        },
+        "complete_restore_comparison": {},
+        "full_data_check": {
+          "check": {
+            "count": 1,
+            "seconds": 2.458054
+          }
+        },
+        "initial_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 5.036718
+          },
+          "cat:config": {
+            "count": 2,
+            "seconds": 0.776294
+          },
+          "init": {
+            "count": 1,
+            "seconds": 2.718955
+          },
+          "ls": {
+            "count": 1,
+            "seconds": 3.7885
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.901283
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.020956
+          }
+        },
+        "inventory_cold": {
+          "ls": {
+            "count": 1,
+            "seconds": 3.695361
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.762162
+          }
+        },
+        "inventory_warm": {},
+        "metadata_scan_first": {},
+        "metadata_scan_repeat": {},
+        "snapshot_inventory": {
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.724041
+          }
+        },
+        "staged_restore": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.743702
+          },
+          "ls": {
+            "count": 1,
+            "seconds": 4.418643
+          },
+          "restore": {
+            "count": 1,
+            "seconds": 10.507219
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.711542
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.021038
+          }
+        },
+        "warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.749189
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.021061
+          }
+        }
+      },
+      "corpus_sha256": {
+        "changed": "19b8c5a06b7b92c3dfe70b02ac3fe0ed98c1908d37504dbdf20a705514569403",
+        "initial": "d48df3b06b4750575ccafda1c34f7db00e05f471e33c322dbd307b625180ddcb"
+      },
+      "data_added": {
+        "changed": 36654779,
+        "initial": 138030769
+      },
+      "phase_profiles": {
+        "adapter_warm_scan": {
+          "native": {
+            "backup": {
+              "calls": 1,
+              "child_cpu_seconds": 4.091579,
+              "observed_peak_rss_kib": 82560,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 3.172854,
+              "popen_seconds": 0.000344
+            }
+          },
+          "observed_python_peak_rss_kib": 179256,
+          "overlapping_spans": {
+            "adapter.backup": {
+              "calls": 1,
+              "python_cpu_seconds": 0.080538,
+              "wall_seconds": 3.174088
+            },
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 2.5e-05,
+              "wall_seconds": 2.5e-05
+            },
+            "adapter.read_line": {
+              "calls": 6,
+              "python_cpu_seconds": 0.075469,
+              "wall_seconds": 3.168808
+            },
+            "python.json_decode": {
+              "calls": 5,
+              "python_cpu_seconds": 0.001163,
+              "wall_seconds": 0.001163
+            }
+          },
+          "python_cpu_seconds": 0.080574,
+          "wall_outside_observed_native_processes": 0.00129,
+          "wall_seconds": 3.174144
+        },
+        "changed_save": {
+          "native": {
+            "backup": {
+              "calls": 1,
+              "child_cpu_seconds": 4.919653,
+              "observed_peak_rss_kib": 155696,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 3.290044,
+              "popen_seconds": 0.000456
+            },
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.517366,
+              "observed_peak_rss_kib": 60388,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 0.718302,
+              "popen_seconds": 0.000372
+            },
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 3.649282,
+              "observed_peak_rss_kib": 83020,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 4.381891,
+              "popen_seconds": 0.000372
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.528956,
+              "observed_peak_rss_kib": 59740,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 0.731188,
+              "popen_seconds": 0.000296
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.018471,
+              "observed_peak_rss_kib": null,
+              "observed_peak_threads": 1,
+              "observed_process_seconds": 0.021045,
+              "popen_seconds": 0.000733
+            }
+          },
+          "observed_python_peak_rss_kib": 179320,
+          "overlapping_spans": {
+            "adapter.backup": {
+              "calls": 1,
+              "python_cpu_seconds": 0.060317,
+              "wall_seconds": 3.291087
+            },
+            "adapter.environment": {
+              "calls": 5,
+              "python_cpu_seconds": 0.000172,
+              "wall_seconds": 0.000171
+            },
+            "adapter.read_line": {
+              "calls": 100259,
+              "python_cpu_seconds": 0.373256,
+              "wall_seconds": 4.603318
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.000871,
+              "wall_seconds": 0.02116
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.329178,
+              "wall_seconds": 0.328427
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.231049,
+              "wall_seconds": 0.230523
+            },
+            "python.json_decode": {
+              "calls": 100271,
+              "python_cpu_seconds": 0.906967,
+              "wall_seconds": 0.897699
+            },
+            "python.json_encode": {
+              "calls": 6,
+              "python_cpu_seconds": 0.143634,
+              "wall_seconds": 0.143478
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.013506,
+              "wall_seconds": 0.739623
+            },
+            "repository.snapshot": {
+              "calls": 2,
+              "python_cpu_seconds": 0.012168,
+              "wall_seconds": 0.731451
+            },
+            "shared.inventory_validation": {
+              "calls": 2,
+              "python_cpu_seconds": 4.441534,
+              "wall_seconds": 5.502425
+            },
+            "shared.workspace_scan": {
+              "calls": 3,
+              "python_cpu_seconds": 4.811201,
+              "wall_seconds": 4.749119
+            }
+          },
+          "python_cpu_seconds": 13.827975,
+          "wall_outside_observed_native_processes": 10.348796,
+          "wall_seconds": 19.491266
+        },
+        "changed_warm_unchanged_save": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.521706,
+              "observed_peak_rss_kib": 59628,
+              "observed_peak_threads": 9,
+              "observed_process_seconds": 0.718898,
+              "popen_seconds": 0.000383
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.017985,
+              "observed_peak_rss_kib": 23880,
+              "observed_peak_threads": 9,
+              "observed_process_seconds": 0.020853,
+              "popen_seconds": 0.000406
+            }
+          },
+          "observed_python_peak_rss_kib": 199336,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 2,
+              "python_cpu_seconds": 0.000249,
+              "wall_seconds": 0.000248
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.001168,
+              "wall_seconds": 0.021128
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.388785,
+              "wall_seconds": 0.38763
+            },
+            "python.json_decode": {
+              "calls": 10,
+              "python_cpu_seconds": 0.074434,
+              "wall_seconds": 0.074204
+            },
+            "python.json_encode": {
+              "calls": 2,
+              "python_cpu_seconds": 0.034155,
+              "wall_seconds": 0.034043
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.014103,
+              "wall_seconds": 0.740189
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 0.84652,
+              "wall_seconds": 0.84344
+            },
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 1.592999,
+              "wall_seconds": 1.576692
+            }
+          },
+          "python_cpu_seconds": 2.490716,
+          "wall_outside_observed_native_processes": 2.457555,
+          "wall_seconds": 3.197306
+        },
+        "complete_restore_comparison": {
+          "native": {},
+          "observed_python_peak_rss_kib": 198220,
+          "overlapping_spans": {},
+          "python_cpu_seconds": 13.7768,
+          "wall_outside_observed_native_processes": 13.606934,
+          "wall_seconds": 13.606934
+        },
+        "full_data_check": {
+          "native": {
+            "check": {
+              "calls": 1,
+              "child_cpu_seconds": 4.895637,
+              "observed_peak_rss_kib": 96152,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 2.458054,
+              "popen_seconds": 0.000876
+            }
+          },
+          "observed_python_peak_rss_kib": 182840,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 4.4e-05,
+              "wall_seconds": 4.4e-05
+            }
+          },
+          "python_cpu_seconds": 0.046447,
+          "wall_outside_observed_native_processes": 0.00014,
+          "wall_seconds": 2.458194
+        },
+        "initial_save": {
+          "native": {
+            "backup": {
+              "calls": 1,
+              "child_cpu_seconds": 10.003483,
+              "observed_peak_rss_kib": 184872,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 5.036718,
+              "popen_seconds": 0.000386
+            },
+            "cat:config": {
+              "calls": 2,
+              "child_cpu_seconds": 0.580166,
+              "observed_peak_rss_kib": 59944,
+              "observed_peak_threads": 9,
+              "observed_process_seconds": 0.776294,
+              "popen_seconds": 0.000625
+            },
+            "init": {
+              "calls": 1,
+              "child_cpu_seconds": 2.757632,
+              "observed_peak_rss_kib": 92000,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 2.718955,
+              "popen_seconds": 0.000303
+            },
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 3.270625,
+              "observed_peak_rss_kib": 82788,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 3.7885,
+              "popen_seconds": 0.000343
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.702183,
+              "observed_peak_rss_kib": 60256,
+              "observed_peak_threads": 9,
+              "observed_process_seconds": 0.901283,
+              "popen_seconds": 0.00049
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.022147,
+              "observed_peak_rss_kib": null,
+              "observed_peak_threads": 1,
+              "observed_process_seconds": 0.020956,
+              "popen_seconds": 0.000423
+            }
+          },
+          "observed_python_peak_rss_kib": 179244,
+          "overlapping_spans": {
+            "adapter.backup": {
+              "calls": 1,
+              "python_cpu_seconds": 0.101073,
+              "wall_seconds": 5.037419
+            },
+            "adapter.environment": {
+              "calls": 7,
+              "python_cpu_seconds": 0.000518,
+              "wall_seconds": 0.000519
+            },
+            "adapter.read_line": {
+              "calls": 100262,
+              "python_cpu_seconds": 0.386366,
+              "wall_seconds": 6.289632
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.000829,
+              "wall_seconds": 0.021059
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.199306,
+              "wall_seconds": 0.198446
+            },
+            "python.json_decode": {
+              "calls": 100266,
+              "python_cpu_seconds": 0.776109,
+              "wall_seconds": 0.766237
+            },
+            "python.json_encode": {
+              "calls": 4,
+              "python_cpu_seconds": 0.090078,
+              "wall_seconds": 0.0899
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.066559,
+              "wall_seconds": 3.516886
+            },
+            "repository.snapshot": {
+              "calls": 2,
+              "python_cpu_seconds": 0.018069,
+              "wall_seconds": 0.901496
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 3.101583,
+              "wall_seconds": 4.074084
+            },
+            "shared.workspace_scan": {
+              "calls": 3,
+              "python_cpu_seconds": 4.728483,
+              "wall_seconds": 4.669222
+            }
+          },
+          "python_cpu_seconds": 12.335833,
+          "wall_outside_observed_native_processes": 9.256057,
+          "wall_seconds": 22.498763
+        },
+        "inventory_cold": {
+          "native": {
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 3.380648,
+              "observed_peak_rss_kib": 83352,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 3.695361,
+              "popen_seconds": 0.000726
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.557627,
+              "observed_peak_rss_kib": 59536,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 0.762162,
+              "popen_seconds": 0.00048
+            }
+          },
+          "observed_python_peak_rss_kib": 183864,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 2,
+              "python_cpu_seconds": 5.7e-05,
+              "wall_seconds": 5.7e-05
+            },
+            "adapter.read_line": {
+              "calls": 100252,
+              "python_cpu_seconds": 0.317215,
+              "wall_seconds": 1.899311
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.000404,
+              "wall_seconds": 0.000404
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.215092,
+              "wall_seconds": 0.214438
+            },
+            "python.json_decode": {
+              "calls": 100252,
+              "python_cpu_seconds": 0.719994,
+              "wall_seconds": 0.720478
+            },
+            "python.json_encode": {
+              "calls": 4,
+              "python_cpu_seconds": 0.096524,
+              "wall_seconds": 0.096253
+            },
+            "repository.snapshot": {
+              "calls": 1,
+              "python_cpu_seconds": 0.016567,
+              "wall_seconds": 0.762383
+            }
+          },
+          "python_cpu_seconds": 2.328383,
+          "wall_outside_observed_native_processes": 0.216695,
+          "wall_seconds": 4.674218
+        },
+        "inventory_warm": {
+          "native": {},
+          "observed_python_peak_rss_kib": 187052,
+          "overlapping_spans": {
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.3909,
+              "wall_seconds": 0.389909
+            },
+            "python.json_decode": {
+              "calls": 1,
+              "python_cpu_seconds": 0.072082,
+              "wall_seconds": 0.071826
+            },
+            "python.json_encode": {
+              "calls": 2,
+              "python_cpu_seconds": 0.037903,
+              "wall_seconds": 0.037781
+            }
+          },
+          "python_cpu_seconds": 0.39538,
+          "wall_outside_observed_native_processes": 0.394296,
+          "wall_seconds": 0.394296
+        },
+        "metadata_scan_first": {
+          "native": {},
+          "observed_python_peak_rss_kib": 75504,
+          "overlapping_spans": {
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 1.605162,
+              "wall_seconds": 1.583755
+            }
+          },
+          "python_cpu_seconds": 1.605178,
+          "wall_outside_observed_native_processes": 1.583785,
+          "wall_seconds": 1.583785
+        },
+        "metadata_scan_repeat": {
+          "native": {},
+          "observed_python_peak_rss_kib": 109200,
+          "overlapping_spans": {
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 1.597629,
+              "wall_seconds": 1.572065
+            }
+          },
+          "python_cpu_seconds": 1.597643,
+          "wall_outside_observed_native_processes": 1.572086,
+          "wall_seconds": 1.572086
+        },
+        "snapshot_inventory": {
+          "native": {
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.521258,
+              "observed_peak_rss_kib": 60064,
+              "observed_peak_threads": 9,
+              "observed_process_seconds": 0.724041,
+              "popen_seconds": 0.001856
+            }
+          },
+          "observed_python_peak_rss_kib": 182840,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.4e-05,
+              "wall_seconds": 3.4e-05
+            },
+            "python.json_decode": {
+              "calls": 1,
+              "python_cpu_seconds": 5e-05,
+              "wall_seconds": 5.2e-05
+            }
+          },
+          "python_cpu_seconds": 0.014548,
+          "wall_outside_observed_native_processes": 0.000222,
+          "wall_seconds": 0.724263
+        },
+        "staged_restore": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.545044,
+              "observed_peak_rss_kib": 60108,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 0.743702,
+              "popen_seconds": 0.000462
+            },
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 3.877027,
+              "observed_peak_rss_kib": 83240,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 4.418643,
+              "popen_seconds": 0.000522
+            },
+            "restore": {
+              "calls": 1,
+              "child_cpu_seconds": 11.507969,
+              "observed_peak_rss_kib": 174240,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 10.507219,
+              "popen_seconds": 0.000633
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.508427,
+              "observed_peak_rss_kib": 59964,
+              "observed_peak_threads": 9,
+              "observed_process_seconds": 0.711542,
+              "popen_seconds": 0.000377
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.018726,
+              "observed_peak_rss_kib": 18848,
+              "observed_peak_threads": 5,
+              "observed_process_seconds": 0.021038,
+              "popen_seconds": 0.000605
+            }
+          },
+          "observed_python_peak_rss_kib": 193332,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 5,
+              "python_cpu_seconds": 0.000149,
+              "wall_seconds": 0.000148
+            },
+            "adapter.native_restore": {
+              "calls": 1,
+              "python_cpu_seconds": 0.20735,
+              "wall_seconds": 10.507521
+            },
+            "adapter.read_line": {
+              "calls": 100252,
+              "python_cpu_seconds": 0.327969,
+              "wall_seconds": 1.668112
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.00081,
+              "wall_seconds": 0.021124
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.270132,
+              "wall_seconds": 0.269163
+            },
+            "python.json_decode": {
+              "calls": 100254,
+              "python_cpu_seconds": 0.801247,
+              "wall_seconds": 0.790316
+            },
+            "python.json_encode": {
+              "calls": 3,
+              "python_cpu_seconds": 0.095084,
+              "wall_seconds": 0.094713
+            },
+            "repository.open_existing": {
+              "calls": 1,
+              "python_cpu_seconds": 0.013873,
+              "wall_seconds": 0.765007
+            },
+            "repository.snapshot": {
+              "calls": 2,
+              "python_cpu_seconds": 0.016527,
+              "wall_seconds": 0.711821
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 3.445927,
+              "wall_seconds": 4.778016
+            },
+            "shared.workspace_scan": {
+              "calls": 2,
+              "python_cpu_seconds": 2.322139,
+              "wall_seconds": 2.293486
+            }
+          },
+          "python_cpu_seconds": 6.024853,
+          "wall_outside_observed_native_processes": 2.672683,
+          "wall_seconds": 19.074827
+        },
+        "warm_unchanged_save": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.546006,
+              "observed_peak_rss_kib": 59680,
+              "observed_peak_threads": 10,
+              "observed_process_seconds": 0.749189,
+              "popen_seconds": 0.000492
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.022764,
+              "observed_peak_rss_kib": 23804,
+              "observed_peak_threads": 8,
+              "observed_process_seconds": 0.021061,
+              "popen_seconds": 0.000774
+            }
+          },
+          "observed_python_peak_rss_kib": 179268,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 2,
+              "python_cpu_seconds": 7e-05,
+              "wall_seconds": 7e-05
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.001207,
+              "wall_seconds": 0.021255
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.357735,
+              "wall_seconds": 0.356378
+            },
+            "python.json_decode": {
+              "calls": 10,
+              "python_cpu_seconds": 0.074938,
+              "wall_seconds": 0.074778
+            },
+            "python.json_encode": {
+              "calls": 2,
+              "python_cpu_seconds": 0.033582,
+              "wall_seconds": 0.03351
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.01663,
+              "wall_seconds": 0.770989
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 0.852909,
+              "wall_seconds": 0.849651
+            },
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 2.158231,
+              "wall_seconds": 2.130511
+            }
+          },
+          "python_cpu_seconds": 3.075918,
+          "wall_outside_observed_native_processes": 3.029347,
+          "wall_seconds": 3.799597
+        }
+      },
+      "seconds": {
+        "adapter_warm_scan": 3.174144,
+        "changed_save": 19.491266,
+        "changed_warm_unchanged_save": 3.197306,
+        "complete_restore_comparison": 13.606934,
+        "full_data_check": 2.458194,
+        "initial_save": 22.498763,
+        "inventory_cold": 4.674218,
+        "inventory_warm": 0.394296,
+        "metadata_scan_first": 1.583785,
+        "metadata_scan_repeat": 1.572086,
+        "snapshot_inventory": 0.724263,
+        "staged_restore": 19.074827,
+        "warm_unchanged_save": 3.799597
+      }
+    },
+    "rustic": {
+      "binary_sha256": "875328943343d8a14077ca1489a8f8f65b8a771f3dd1625885bc55071b1f0197",
+      "checks": {
+        "all_restored_bytes": "PASS",
+        "full_data_check": "PASS",
+        "inventory_equal": "PASS",
+        "no_op_zero_bytes_and_two_snapshots": "PASS",
+        "same_size_restored_mtime_edit": "PASS"
+      },
+      "command_counts": {
+        "adapter_warm_scan": 1,
+        "changed_save": 6,
+        "changed_warm_unchanged_save": 3,
+        "complete_restore_comparison": 0,
+        "full_data_check": 1,
+        "initial_save": 7,
+        "inventory_cold": 2,
+        "inventory_warm": 0,
+        "metadata_scan_first": 0,
+        "metadata_scan_repeat": 0,
+        "profile_authentication_once": 1,
+        "profile_index_and_root_cold": 1,
+        "profile_index_and_root_warm": 1,
+        "profile_key_config_first": 1,
+        "profile_key_config_repeat": 1,
+        "profile_password_config_first": 1,
+        "profile_password_config_repeat": 1,
+        "profile_repository_open": 2,
+        "snapshot_inventory": 1,
+        "staged_restore": 5,
+        "warm_unchanged_save": 3
+      },
+      "command_profiles": {
+        "adapter_warm_scan": {
+          "backup": {
+            "count": 1,
+            "seconds": 3.980102
+          }
+        },
+        "changed_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 4.066568
+          },
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.830336
+          },
+          "ls": {
+            "count": 1,
+            "seconds": 3.897241
+          },
+          "snapshots": {
+            "count": 2,
+            "seconds": 0.897622
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.021489
+          }
+        },
+        "changed_warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.468176
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.455888
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.010971
+          }
+        },
+        "complete_restore_comparison": {},
+        "full_data_check": {
+          "check": {
+            "count": 1,
+            "seconds": 2.395765
+          }
+        },
+        "initial_save": {
+          "backup": {
+            "count": 1,
+            "seconds": 21.653345
+          },
+          "cat:config": {
+            "count": 2,
+            "seconds": 0.428365
+          },
+          "init": {
+            "count": 1,
+            "seconds": 1.110675
+          },
+          "ls": {
+            "count": 1,
+            "seconds": 4.223678
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.459032
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.012714
+          }
+        },
+        "inventory_cold": {
+          "ls": {
+            "count": 1,
+            "seconds": 3.830861
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.49215
+          }
+        },
+        "inventory_warm": {},
+        "metadata_scan_first": {},
+        "metadata_scan_repeat": {},
+        "profile_authentication_once": {
+          "cat:masterkey": {
+            "count": 1,
+            "seconds": 0.844772
+          }
+        },
+        "profile_index_and_root_cold": {
+          "cat:tree-blob": {
+            "count": 1,
+            "seconds": 0.183954
+          }
+        },
+        "profile_index_and_root_warm": {
+          "cat:tree-blob": {
+            "count": 1,
+            "seconds": 0.105062
+          }
+        },
+        "profile_key_config_first": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.011852
+          }
+        },
+        "profile_key_config_repeat": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.011138
+          }
+        },
+        "profile_password_config_first": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.890768
+          }
+        },
+        "profile_password_config_repeat": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.386375
+          }
+        },
+        "profile_repository_open": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.637255
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.099653
+          }
+        },
+        "snapshot_inventory": {
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.486684
+          }
+        },
+        "staged_restore": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.476511
+          },
+          "ls": {
+            "count": 1,
+            "seconds": 3.753876
+          },
+          "restore": {
+            "count": 1,
+            "seconds": 4.431628
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.477457
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.010969
+          }
+        },
+        "warm_unchanged_save": {
+          "cat:config": {
+            "count": 1,
+            "seconds": 0.496373
+          },
+          "snapshots": {
+            "count": 1,
+            "seconds": 0.55985
+          },
+          "version": {
+            "count": 1,
+            "seconds": 0.011125
+          }
+        }
+      },
+      "corpus_sha256": {
+        "changed": "19b8c5a06b7b92c3dfe70b02ac3fe0ed98c1908d37504dbdf20a705514569403",
+        "initial": "d48df3b06b4750575ccafda1c34f7db00e05f471e33c322dbd307b625180ddcb"
+      },
+      "data_added": {
+        "changed": 36679941,
+        "initial": 138055934
+      },
+      "phase_profiles": {
+        "adapter_warm_scan": {
+          "native": {
+            "backup": {
+              "calls": 1,
+              "child_cpu_seconds": 5.24724,
+              "observed_peak_rss_kib": 141608,
+              "observed_peak_threads": 36,
+              "observed_process_seconds": 3.980102,
+              "popen_seconds": 0.000349
+            }
+          },
+          "observed_python_peak_rss_kib": 196928,
+          "overlapping_spans": {
+            "adapter.backup": {
+              "calls": 1,
+              "python_cpu_seconds": 0.097539,
+              "wall_seconds": 3.981159
+            },
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.1e-05,
+              "wall_seconds": 3.1e-05
+            },
+            "adapter.read_line": {
+              "calls": 10,
+              "python_cpu_seconds": 0.090792,
+              "wall_seconds": 3.973909
+            },
+            "python.json_decode": {
+              "calls": 18,
+              "python_cpu_seconds": 0.002512,
+              "wall_seconds": 0.002489
+            },
+            "python.json_encode": {
+              "calls": 9,
+              "python_cpu_seconds": 0.000604,
+              "wall_seconds": 0.000602
+            },
+            "repository.snapshot": {
+              "calls": 1,
+              "python_cpu_seconds": 7e-06,
+              "wall_seconds": 7e-06
+            }
+          },
+          "python_cpu_seconds": 0.097565,
+          "wall_outside_observed_native_processes": 0.001086,
+          "wall_seconds": 3.981188
+        },
+        "changed_save": {
+          "native": {
+            "backup": {
+              "calls": 1,
+              "child_cpu_seconds": 6.06253,
+              "observed_peak_rss_kib": 141896,
+              "observed_peak_threads": 36,
+              "observed_process_seconds": 4.066568,
+              "popen_seconds": 0.000705
+            },
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.822552,
+              "observed_peak_rss_kib": 142264,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.830336,
+              "popen_seconds": 0.000427
+            },
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 1.776737,
+              "observed_peak_rss_kib": 141468,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 3.897241,
+              "popen_seconds": 0.000386
+            },
+            "snapshots": {
+              "calls": 2,
+              "child_cpu_seconds": 0.889311,
+              "observed_peak_rss_kib": 141924,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.897622,
+              "popen_seconds": 0.001371
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.011193,
+              "observed_peak_rss_kib": 876,
+              "observed_peak_threads": 1,
+              "observed_process_seconds": 0.021489,
+              "popen_seconds": 0.00065
+            }
+          },
+          "observed_python_peak_rss_kib": 200208,
+          "overlapping_spans": {
+            "adapter.backup": {
+              "calls": 1,
+              "python_cpu_seconds": 0.100147,
+              "wall_seconds": 4.554579
+            },
+            "adapter.environment": {
+              "calls": 6,
+              "python_cpu_seconds": 0.000246,
+              "wall_seconds": 0.000244
+            },
+            "adapter.read_line": {
+              "calls": 100262,
+              "python_cpu_seconds": 0.382476,
+              "wall_seconds": 5.123243
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.001392,
+              "wall_seconds": 0.021607
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.415545,
+              "wall_seconds": 0.415915
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.233996,
+              "wall_seconds": 0.233143
+            },
+            "python.json_decode": {
+              "calls": 100284,
+              "python_cpu_seconds": 1.415067,
+              "wall_seconds": 1.320679
+            },
+            "python.json_encode": {
+              "calls": 15,
+              "python_cpu_seconds": 0.138946,
+              "wall_seconds": 0.139248
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.015586,
+              "wall_seconds": 0.852239
+            },
+            "repository.snapshot": {
+              "calls": 5,
+              "python_cpu_seconds": 0.019651,
+              "wall_seconds": 0.898213
+            },
+            "rustic.bulk_parse_validate": {
+              "calls": 1,
+              "python_cpu_seconds": 3.115201,
+              "wall_seconds": 3.896037
+            },
+            "rustic.native_node_validation": {
+              "calls": 100250,
+              "python_cpu_seconds": 0.511944,
+              "wall_seconds": 0.502921
+            },
+            "shared.inventory_validation": {
+              "calls": 2,
+              "python_cpu_seconds": 4.780505,
+              "wall_seconds": 5.960905
+            },
+            "shared.workspace_scan": {
+              "calls": 3,
+              "python_cpu_seconds": 4.70273,
+              "wall_seconds": 4.640408
+            }
+          },
+          "python_cpu_seconds": 13.773558,
+          "wall_outside_observed_native_processes": 10.470423,
+          "wall_seconds": 20.183679
+        },
+        "changed_warm_unchanged_save": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.458323,
+              "observed_peak_rss_kib": 141688,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.468176,
+              "popen_seconds": 0.000522
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.450177,
+              "observed_peak_rss_kib": 142052,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 0.455888,
+              "popen_seconds": 0.000472
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.007287,
+              "observed_peak_rss_kib": null,
+              "observed_peak_threads": null,
+              "observed_process_seconds": 0.010971,
+              "popen_seconds": 0.000558
+            }
+          },
+          "observed_python_peak_rss_kib": 201112,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 3,
+              "python_cpu_seconds": 0.000146,
+              "wall_seconds": 0.000145
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.000794,
+              "wall_seconds": 0.011109
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.480531,
+              "wall_seconds": 0.479361
+            },
+            "python.json_decode": {
+              "calls": 12,
+              "python_cpu_seconds": 0.083405,
+              "wall_seconds": 0.083212
+            },
+            "python.json_encode": {
+              "calls": 3,
+              "python_cpu_seconds": 0.039675,
+              "wall_seconds": 0.039552
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.009582,
+              "wall_seconds": 0.479601
+            },
+            "repository.snapshot": {
+              "calls": 1,
+              "python_cpu_seconds": 0.008203,
+              "wall_seconds": 0.456184
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 0.977191,
+              "wall_seconds": 1.422567
+            },
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 1.696367,
+              "wall_seconds": 1.672581
+            }
+          },
+          "python_cpu_seconds": 2.726157,
+          "wall_outside_observed_native_processes": 2.682636,
+          "wall_seconds": 3.617671
+        },
+        "complete_restore_comparison": {
+          "native": {},
+          "observed_python_peak_rss_kib": 203036,
+          "overlapping_spans": {},
+          "python_cpu_seconds": 15.921176,
+          "wall_outside_observed_native_processes": 15.643206,
+          "wall_seconds": 15.643206
+        },
+        "full_data_check": {
+          "native": {
+            "check": {
+              "calls": 1,
+              "child_cpu_seconds": 7.447453,
+              "observed_peak_rss_kib": 142040,
+              "observed_peak_threads": 11,
+              "observed_process_seconds": 2.395765,
+              "popen_seconds": 0.000586
+            }
+          },
+          "observed_python_peak_rss_kib": 196916,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.9e-05,
+              "wall_seconds": 3.9e-05
+            }
+          },
+          "python_cpu_seconds": 0.059303,
+          "wall_outside_observed_native_processes": 0.000231,
+          "wall_seconds": 2.395996
+        },
+        "initial_save": {
+          "native": {
+            "backup": {
+              "calls": 1,
+              "child_cpu_seconds": 64.451648,
+              "observed_peak_rss_kib": 142052,
+              "observed_peak_threads": 36,
+              "observed_process_seconds": 21.653345,
+              "popen_seconds": 0.003522
+            },
+            "cat:config": {
+              "calls": 2,
+              "child_cpu_seconds": 0.414475,
+              "observed_peak_rss_kib": 142268,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.428365,
+              "popen_seconds": 0.001204
+            },
+            "init": {
+              "calls": 1,
+              "child_cpu_seconds": 1.090354,
+              "observed_peak_rss_kib": 141696,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 1.110675,
+              "popen_seconds": 0.000505
+            },
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 2.382206,
+              "observed_peak_rss_kib": 141792,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 4.223678,
+              "popen_seconds": 0.000412
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.458335,
+              "observed_peak_rss_kib": 142048,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.459032,
+              "popen_seconds": 0.001313
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.008183,
+              "observed_peak_rss_kib": 348,
+              "observed_peak_threads": 1,
+              "observed_process_seconds": 0.012714,
+              "popen_seconds": 0.00126
+            }
+          },
+          "observed_python_peak_rss_kib": 196920,
+          "overlapping_spans": {
+            "adapter.backup": {
+              "calls": 1,
+              "python_cpu_seconds": 0.516403,
+              "wall_seconds": 22.120764
+            },
+            "adapter.environment": {
+              "calls": 7,
+              "python_cpu_seconds": 0.001025,
+              "wall_seconds": 0.001028
+            },
+            "adapter.read_line": {
+              "calls": 100296,
+              "python_cpu_seconds": 0.757565,
+              "wall_seconds": 23.081889
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.00272,
+              "wall_seconds": 0.013126
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.256086,
+              "wall_seconds": 0.25605
+            },
+            "python.json_decode": {
+              "calls": 100343,
+              "python_cpu_seconds": 1.127189,
+              "wall_seconds": 1.111482
+            },
+            "python.json_encode": {
+              "calls": 47,
+              "python_cpu_seconds": 0.117576,
+              "wall_seconds": 0.117054
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.038624,
+              "wall_seconds": 1.552998
+            },
+            "repository.snapshot": {
+              "calls": 3,
+              "python_cpu_seconds": 0.010918,
+              "wall_seconds": 0.460238
+            },
+            "rustic.bulk_parse_validate": {
+              "calls": 1,
+              "python_cpu_seconds": 3.046058,
+              "wall_seconds": 4.223043
+            },
+            "rustic.native_node_validation": {
+              "calls": 100250,
+              "python_cpu_seconds": 0.682132,
+              "wall_seconds": 0.674334
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 3.855471,
+              "wall_seconds": 5.032149
+            },
+            "shared.workspace_scan": {
+              "calls": 3,
+              "python_cpu_seconds": 5.44812,
+              "wall_seconds": 5.368965
+            }
+          },
+          "python_cpu_seconds": 14.529249,
+          "wall_outside_observed_native_processes": 10.848672,
+          "wall_seconds": 38.73648
+        },
+        "inventory_cold": {
+          "native": {
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 1.82832,
+              "observed_peak_rss_kib": 141712,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 3.830861,
+              "popen_seconds": 0.001286
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.491883,
+              "observed_peak_rss_kib": 141968,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.49215,
+              "popen_seconds": 0.000436
+            }
+          },
+          "observed_python_peak_rss_kib": 196904,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 2,
+              "python_cpu_seconds": 0.000309,
+              "wall_seconds": 0.000309
+            },
+            "adapter.read_line": {
+              "calls": 100253,
+              "python_cpu_seconds": 0.299977,
+              "wall_seconds": 0.978679
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.00099,
+              "wall_seconds": 0.00099
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.229688,
+              "wall_seconds": 0.227976
+            },
+            "python.json_decode": {
+              "calls": 100253,
+              "python_cpu_seconds": 1.230727,
+              "wall_seconds": 1.210874
+            },
+            "python.json_encode": {
+              "calls": 4,
+              "python_cpu_seconds": 0.102972,
+              "wall_seconds": 0.102121
+            },
+            "repository.snapshot": {
+              "calls": 1,
+              "python_cpu_seconds": 0.028294,
+              "wall_seconds": 0.49428
+            },
+            "rustic.bulk_parse_validate": {
+              "calls": 1,
+              "python_cpu_seconds": 3.137812,
+              "wall_seconds": 3.828549
+            },
+            "rustic.native_node_validation": {
+              "calls": 100250,
+              "python_cpu_seconds": 0.589581,
+              "wall_seconds": 0.57753
+            }
+          },
+          "python_cpu_seconds": 3.402309,
+          "wall_outside_observed_native_processes": 0.234944,
+          "wall_seconds": 4.557955
+        },
+        "inventory_warm": {
+          "native": {},
+          "observed_python_peak_rss_kib": 201120,
+          "overlapping_spans": {
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.578326,
+              "wall_seconds": 0.575103
+            },
+            "python.json_decode": {
+              "calls": 1,
+              "python_cpu_seconds": 0.066917,
+              "wall_seconds": 0.066719
+            },
+            "python.json_encode": {
+              "calls": 2,
+              "python_cpu_seconds": 0.038623,
+              "wall_seconds": 0.038524
+            },
+            "repository.snapshot": {
+              "calls": 1,
+              "python_cpu_seconds": 1.3e-05,
+              "wall_seconds": 1.2e-05
+            }
+          },
+          "python_cpu_seconds": 0.587531,
+          "wall_outside_observed_native_processes": 0.584318,
+          "wall_seconds": 0.584318
+        },
+        "metadata_scan_first": {
+          "native": {},
+          "observed_python_peak_rss_kib": 195164,
+          "overlapping_spans": {
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 1.749586,
+              "wall_seconds": 1.715016
+            }
+          },
+          "python_cpu_seconds": 1.749614,
+          "wall_outside_observed_native_processes": 1.715053,
+          "wall_seconds": 1.715053
+        },
+        "metadata_scan_repeat": {
+          "native": {},
+          "observed_python_peak_rss_kib": 195164,
+          "overlapping_spans": {
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 1.753046,
+              "wall_seconds": 1.720765
+            }
+          },
+          "python_cpu_seconds": 1.753067,
+          "wall_outside_observed_native_processes": 1.720794,
+          "wall_seconds": 1.720794
+        },
+        "profile_authentication_once": {
+          "native": {
+            "cat:masterkey": {
+              "calls": 1,
+              "child_cpu_seconds": 0.839967,
+              "observed_peak_rss_kib": 142056,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.844772,
+              "popen_seconds": 0.000422
+            }
+          },
+          "observed_python_peak_rss_kib": 196908,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.9e-05,
+              "wall_seconds": 3.9e-05
+            },
+            "authentication.prime_masterkey": {
+              "calls": 1,
+              "python_cpu_seconds": 0.017688,
+              "wall_seconds": 0.845235
+            },
+            "python.json_decode": {
+              "calls": 1,
+              "python_cpu_seconds": 7.7e-05,
+              "wall_seconds": 7.9e-05
+            },
+            "python.json_encode": {
+              "calls": 1,
+              "python_cpu_seconds": 2.6e-05,
+              "wall_seconds": 2.6e-05
+            }
+          },
+          "python_cpu_seconds": 0.017699,
+          "wall_outside_observed_native_processes": 0.000476,
+          "wall_seconds": 0.845248
+        },
+        "profile_index_and_root_cold": {
+          "native": {
+            "cat:tree-blob": {
+              "calls": 1,
+              "child_cpu_seconds": 0.32104,
+              "observed_peak_rss_kib": 40824,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 0.183954,
+              "popen_seconds": 0.001179
+            }
+          },
+          "observed_python_peak_rss_kib": 196916,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.3e-05,
+              "wall_seconds": 3.3e-05
+            }
+          },
+          "python_cpu_seconds": 0.004209,
+          "wall_outside_observed_native_processes": 0.000327,
+          "wall_seconds": 0.184281
+        },
+        "profile_index_and_root_warm": {
+          "native": {
+            "cat:tree-blob": {
+              "calls": 1,
+              "child_cpu_seconds": 0.151838,
+              "observed_peak_rss_kib": 38540,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 0.105062,
+              "popen_seconds": 0.000542
+            }
+          },
+          "observed_python_peak_rss_kib": 196916,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 4.2e-05,
+              "wall_seconds": 4.2e-05
+            }
+          },
+          "python_cpu_seconds": 0.002964,
+          "wall_outside_observed_native_processes": 0.000438,
+          "wall_seconds": 0.1055
+        },
+        "profile_key_config_first": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.010262,
+              "observed_peak_rss_kib": null,
+              "observed_peak_threads": 2,
+              "observed_process_seconds": 0.011852,
+              "popen_seconds": 0.00107
+            }
+          },
+          "observed_python_peak_rss_kib": 196916,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 0.00057,
+              "wall_seconds": 0.000569
+            },
+            "python.json_decode": {
+              "calls": 2,
+              "python_cpu_seconds": 0.000122,
+              "wall_seconds": 0.000122
+            },
+            "python.json_encode": {
+              "calls": 1,
+              "python_cpu_seconds": 2.2e-05,
+              "wall_seconds": 2.2e-05
+            }
+          },
+          "python_cpu_seconds": 0.002176,
+          "wall_outside_observed_native_processes": 0.000845,
+          "wall_seconds": 0.012697
+        },
+        "profile_key_config_repeat": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.006242,
+              "observed_peak_rss_kib": null,
+              "observed_peak_threads": null,
+              "observed_process_seconds": 0.011138,
+              "popen_seconds": 0.000766
+            }
+          },
+          "observed_python_peak_rss_kib": null,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.6e-05,
+              "wall_seconds": 3.6e-05
+            },
+            "python.json_decode": {
+              "calls": 2,
+              "python_cpu_seconds": 3.7e-05,
+              "wall_seconds": 3.7e-05
+            },
+            "python.json_encode": {
+              "calls": 1,
+              "python_cpu_seconds": 1.5e-05,
+              "wall_seconds": 1.5e-05
+            }
+          },
+          "python_cpu_seconds": 0.000785,
+          "wall_outside_observed_native_processes": 0.000188,
+          "wall_seconds": 0.011326
+        },
+        "profile_password_config_first": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.883421,
+              "observed_peak_rss_kib": 142260,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.890768,
+              "popen_seconds": 0.000431
+            }
+          },
+          "observed_python_peak_rss_kib": 196908,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.8e-05,
+              "wall_seconds": 3.8e-05
+            },
+            "python.json_decode": {
+              "calls": 2,
+              "python_cpu_seconds": 0.000266,
+              "wall_seconds": 0.000268
+            },
+            "python.json_encode": {
+              "calls": 1,
+              "python_cpu_seconds": 0.000136,
+              "wall_seconds": 0.000136
+            }
+          },
+          "python_cpu_seconds": 0.062045,
+          "wall_outside_observed_native_processes": 0.001199,
+          "wall_seconds": 0.891967
+        },
+        "profile_password_config_repeat": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.376908,
+              "observed_peak_rss_kib": 142264,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.386375,
+              "popen_seconds": 0.001209
+            }
+          },
+          "observed_python_peak_rss_kib": 196908,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 0.000141,
+              "wall_seconds": 0.000141
+            },
+            "python.json_decode": {
+              "calls": 2,
+              "python_cpu_seconds": 6.1e-05,
+              "wall_seconds": 6.2e-05
+            },
+            "python.json_encode": {
+              "calls": 1,
+              "python_cpu_seconds": 2.1e-05,
+              "wall_seconds": 2e-05
+            }
+          },
+          "python_cpu_seconds": 0.007641,
+          "wall_outside_observed_native_processes": 0.000424,
+          "wall_seconds": 0.386799
+        },
+        "profile_repository_open": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.628196,
+              "observed_peak_rss_kib": 142056,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.637255,
+              "popen_seconds": 0.001215
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.152311,
+              "observed_peak_rss_kib": 9984,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.099653,
+              "popen_seconds": 0.00233
+            }
+          },
+          "observed_python_peak_rss_kib": 196908,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 2,
+              "python_cpu_seconds": 0.000248,
+              "wall_seconds": 0.000249
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.003721,
+              "wall_seconds": 0.100064
+            },
+            "python.json_decode": {
+              "calls": 2,
+              "python_cpu_seconds": 0.000104,
+              "wall_seconds": 0.000105
+            },
+            "python.json_encode": {
+              "calls": 1,
+              "python_cpu_seconds": 2.7e-05,
+              "wall_seconds": 2.7e-05
+            },
+            "repository.open_existing": {
+              "calls": 1,
+              "python_cpu_seconds": 0.097195,
+              "wall_seconds": 0.738055
+            }
+          },
+          "python_cpu_seconds": 0.097209,
+          "wall_outside_observed_native_processes": 0.001164,
+          "wall_seconds": 0.738072
+        },
+        "snapshot_inventory": {
+          "native": {
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.487372,
+              "observed_peak_rss_kib": 142048,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.486684,
+              "popen_seconds": 0.000799
+            }
+          },
+          "observed_python_peak_rss_kib": 196916,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 1,
+              "python_cpu_seconds": 3.6e-05,
+              "wall_seconds": 3.6e-05
+            },
+            "python.json_decode": {
+              "calls": 1,
+              "python_cpu_seconds": 9e-05,
+              "wall_seconds": 9.2e-05
+            }
+          },
+          "python_cpu_seconds": 0.00789,
+          "wall_outside_observed_native_processes": 0.000479,
+          "wall_seconds": 0.487163
+        },
+        "staged_restore": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.468272,
+              "observed_peak_rss_kib": 142076,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.476511,
+              "popen_seconds": 0.000791
+            },
+            "ls": {
+              "calls": 1,
+              "child_cpu_seconds": 1.940501,
+              "observed_peak_rss_kib": 141792,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 3.753876,
+              "popen_seconds": 0.000983
+            },
+            "restore": {
+              "calls": 1,
+              "child_cpu_seconds": 7.932154,
+              "observed_peak_rss_kib": 143568,
+              "observed_peak_threads": 27,
+              "observed_process_seconds": 4.431628,
+              "popen_seconds": 0.001147
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.475574,
+              "observed_peak_rss_kib": 141920,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.477457,
+              "popen_seconds": 0.000589
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.005384,
+              "observed_peak_rss_kib": null,
+              "observed_peak_threads": 2,
+              "observed_process_seconds": 0.010969,
+              "popen_seconds": 0.000576
+            }
+          },
+          "observed_python_peak_rss_kib": 196940,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 5,
+              "python_cpu_seconds": 0.000593,
+              "wall_seconds": 0.000591
+            },
+            "adapter.native_restore": {
+              "calls": 1,
+              "python_cpu_seconds": 0.09991,
+              "wall_seconds": 4.431993
+            },
+            "adapter.read_line": {
+              "calls": 100253,
+              "python_cpu_seconds": 0.27319,
+              "wall_seconds": 1.200034
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.00138,
+              "wall_seconds": 0.011507
+            },
+            "cache.write_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.28131,
+              "wall_seconds": 0.279278
+            },
+            "python.json_decode": {
+              "calls": 100256,
+              "python_cpu_seconds": 1.061543,
+              "wall_seconds": 1.050851
+            },
+            "python.json_encode": {
+              "calls": 4,
+              "python_cpu_seconds": 0.100077,
+              "wall_seconds": 0.098857
+            },
+            "repository.open_existing": {
+              "calls": 1,
+              "python_cpu_seconds": 0.009145,
+              "wall_seconds": 0.488264
+            },
+            "repository.snapshot": {
+              "calls": 2,
+              "python_cpu_seconds": 0.009243,
+              "wall_seconds": 0.477725
+            },
+            "rustic.bulk_parse_validate": {
+              "calls": 1,
+              "python_cpu_seconds": 2.819806,
+              "wall_seconds": 3.75249
+            },
+            "rustic.native_node_validation": {
+              "calls": 100250,
+              "python_cpu_seconds": 0.559752,
+              "wall_seconds": 0.549218
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 3.620908,
+              "wall_seconds": 4.550934
+            },
+            "shared.workspace_scan": {
+              "calls": 2,
+              "python_cpu_seconds": 2.401774,
+              "wall_seconds": 2.370167
+            }
+          },
+          "python_cpu_seconds": 6.165684,
+          "wall_outside_observed_native_processes": 3.193224,
+          "wall_seconds": 12.343665
+        },
+        "warm_unchanged_save": {
+          "native": {
+            "cat:config": {
+              "calls": 1,
+              "child_cpu_seconds": 0.484819,
+              "observed_peak_rss_kib": 142268,
+              "observed_peak_threads": 3,
+              "observed_process_seconds": 0.496373,
+              "popen_seconds": 0.000381
+            },
+            "snapshots": {
+              "calls": 1,
+              "child_cpu_seconds": 0.549943,
+              "observed_peak_rss_kib": 141396,
+              "observed_peak_threads": 7,
+              "observed_process_seconds": 0.55985,
+              "popen_seconds": 0.000414
+            },
+            "version": {
+              "calls": 1,
+              "child_cpu_seconds": 0.008418,
+              "observed_peak_rss_kib": null,
+              "observed_peak_threads": null,
+              "observed_process_seconds": 0.011125,
+              "popen_seconds": 0.000733
+            }
+          },
+          "observed_python_peak_rss_kib": 201232,
+          "overlapping_spans": {
+            "adapter.environment": {
+              "calls": 3,
+              "python_cpu_seconds": 0.000113,
+              "wall_seconds": 0.000112
+            },
+            "adapter.version": {
+              "calls": 1,
+              "python_cpu_seconds": 0.00089,
+              "wall_seconds": 0.011283
+            },
+            "cache.read_inventory": {
+              "calls": 1,
+              "python_cpu_seconds": 0.455859,
+              "wall_seconds": 0.453669
+            },
+            "python.json_decode": {
+              "calls": 12,
+              "python_cpu_seconds": 0.110649,
+              "wall_seconds": 0.110281
+            },
+            "python.json_encode": {
+              "calls": 3,
+              "python_cpu_seconds": 0.031618,
+              "wall_seconds": 0.031174
+            },
+            "repository.initialize": {
+              "calls": 1,
+              "python_cpu_seconds": 0.010665,
+              "wall_seconds": 0.508039
+            },
+            "repository.snapshot": {
+              "calls": 1,
+              "python_cpu_seconds": 0.013778,
+              "wall_seconds": 0.560548
+            },
+            "shared.inventory_validation": {
+              "calls": 1,
+              "python_cpu_seconds": 0.912484,
+              "wall_seconds": 1.456065
+            },
+            "shared.workspace_scan": {
+              "calls": 1,
+              "python_cpu_seconds": 1.548287,
+              "wall_seconds": 1.527275
+            }
+          },
+          "python_cpu_seconds": 2.50786,
+          "wall_outside_observed_native_processes": 2.46025,
+          "wall_seconds": 3.527598
+        }
+      },
+      "seconds": {
+        "adapter_warm_scan": 3.981188,
+        "changed_save": 20.183679,
+        "changed_warm_unchanged_save": 3.617671,
+        "complete_restore_comparison": 15.643206,
+        "full_data_check": 2.395996,
+        "initial_save": 38.73648,
+        "inventory_cold": 4.557955,
+        "inventory_warm": 0.584318,
+        "metadata_scan_first": 1.715053,
+        "metadata_scan_repeat": 1.720794,
+        "profile_authentication_once": 0.845248,
+        "profile_index_and_root_cold": 0.184281,
+        "profile_index_and_root_warm": 0.1055,
+        "profile_key_config_first": 0.012697,
+        "profile_key_config_repeat": 0.011326,
+        "profile_password_config_first": 0.891967,
+        "profile_password_config_repeat": 0.386799,
+        "profile_repository_open": 0.738072,
+        "snapshot_inventory": 0.487163,
+        "staged_restore": 12.343665,
+        "warm_unchanged_save": 3.527598
+      }
+    }
+  },
+  "fixture": {
+    "bytes_per_file": 1024,
+    "change_distribution": "first one percent of file IDs, distributed across directories",
+    "changed_directories": 250,
+    "changed_files": 1000,
+    "directories": 250,
+    "files": 100000,
+    "same_size_restored_mtime": true
+  },
+  "platform": "Linux-x86_64",
+  "profiling_contract": "Flat spans overlap and are not additive. Observed native lifetime includes pipe backpressure and caller parsing before wait; it is not pure engine CPU. Popen time is measured separately. Native CPU uses RUSAGE_CHILDREN differences with sequential owned child commands. Linux RSS/threads are observed every20ms; peaks are lower-bound observations. No argv, environment, key material or native output is retained.",
+  "python": "3.12.14",
+  "rustic_metadata_format": "nodes-v1",
+  "source_files": {
+    "scripts/git_recovery_acceptance.py": "e42ade8f12caad80306cfdcbaae97bcc028fa35f259c8cb35af806db9a11b753",
+    "scripts/rustic_benchmark_profile.py": "8036385d5cac45ba1ab3a69c9310ae6670d1126d436781650dded3df33543985",
+    "scripts/rustic_production_benchmark.py": "65e2cb775d64e456f9a87bee586b5c98d2f3d007fc38a4c821eda366af8d4fd3",
+    "src/josh_room/restic_store.py": "195b2e84f65712a042d3a69d34d1bda95677b28a910e2b1f49d7b27f4c303b61",
+    "src/josh_room/room_store_operations.py": "43159b371ade7ef09bcae239c61e8544689f9f28afc6072b42dcd5841d6c853a",
+    "src/josh_room/rustic_store.py": "2c14723a434c8dcd6b774438206ac7b2daefecc85b1ba952c1350c4cdd330b14"
+  },
+  "source_sha": "c1d666a7c42a40e4c241394c277cb86d8f43b574",
+  "source_tree": "8bf62e0aad823946dd10da9b7cecc2555ca68cd4",
+  "status": "PASS",
+  "storage": "disposable local format-2 repositories; synthetic catalog/keyset callbacks",
+  "tracked_source_dirty": false
+}
