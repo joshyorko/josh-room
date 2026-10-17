@@ -154,6 +154,51 @@ def _enable_age_catalog(op: RoomStoreOperations, root: Path) -> None:
     op.read_latest = read_encrypted
 
 
+def exercise_files(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None) -> dict:
+    """Independent writable-file chain; never substitutes for strict Git modes."""
+    workspace = root / "workspace"
+    (workspace / "nested").mkdir(parents=True)
+    source = workspace / "nested/file.bin"
+    source.write_bytes(b"original")
+    op = operations(root, workspace, engine=engine, executable=executable)
+    if jat_root is not None:
+        _enable_age_catalog(op, root)
+    first = op.save()
+    assert first.status == "saved" and op.save().status == "already-saved"
+    before = source.stat()
+    source.write_bytes(b"replaced")
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    changed = op.save()
+    assert changed.status == "saved" and changed.snapshot_id != first.snapshot_id
+    assert op.save().status == "already-saved"
+    expected = contents(workspace)
+    restored = root / "relocated"
+    op.restore(changed.descriptor, restored, write_restore_marker=lambda *_: None)
+    assert contents(restored) == expected
+    assert (restored / "nested/file.bin").read_bytes() == b"replaced"
+    portable = "not-run"
+    if jat_root is not None:
+        _keyset, password, store = op._open_store()
+        try:
+            with store as opened:
+                opened.open_existing()
+                haul = root / "writable-files.haul.tar.zst"
+                export_portable_jat(descriptor=changed.descriptor, restic=opened,
+                    staging_parent=root / "private", output=haul, jat_root=jat_root,
+                    run_build_fn=jat.run_build)
+            destination = root / "portable-relocated"
+            assert jat.run_restore(jat_root, haul, destination)["success"] is True
+            assert contents(destination / "workspace/workspace") == expected
+            portable = "passed"
+        finally:
+            password.unlink(missing_ok=True)
+    assert contents(workspace) == expected
+    return {"engine": engine, "scope": "writable files only; read-only fidelity is a separate strict gate",
+            "same_size_restored_mtime": "passed", "relocated_restore": "passed",
+            "age_catalog_two_recipients": "passed" if jat_root is not None else "not-run",
+            "portable_jat": portable, "source_unchanged_after_restore": "passed"}
+
+
 def exercise(root: Path, jat_root: Path | None = None, *, engine: str = "restic", executable: str | None = None) -> dict:
     workspace = root / "workspace"
     repos = [Path("services/one"), Path("services/deep/two"), Path("library")]
@@ -267,6 +312,7 @@ def main() -> None:
     parser.add_argument("--result-file", type=Path, required=True)
     parser.add_argument("--engine", choices=("restic", "rustic"), default="restic")
     parser.add_argument("--executable", type=Path)
+    parser.add_argument("--fixture", choices=("git", "writable-files"), default="git")
     args = parser.parse_args()
     # Git's internal GIT_DIR bound is distinct from core.longpaths. RCC's
     # deeply nested Windows temp root is not a representative restore target.
@@ -277,7 +323,8 @@ def main() -> None:
         if not temporary_parent:
             temporary_parent = str(Path(os.environ["LOCALAPPDATA"]) / "Temp")
     with tempfile.TemporaryDirectory(prefix="jr-git-", dir=temporary_parent) as name:
-        result = exercise(Path(name), args.jat_root, engine=args.engine, executable=str(args.executable) if args.executable else None)
+        exercise_fixture = exercise if args.fixture == "git" else exercise_files
+        result = exercise_fixture(Path(name), args.jat_root, engine=args.engine, executable=str(args.executable) if args.executable else None)
     args.result_file.write_text(json.dumps(result, sort_keys=True) + "\n")
     print(json.dumps(result, sort_keys=True))
 

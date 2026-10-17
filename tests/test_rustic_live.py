@@ -181,6 +181,15 @@ def test_real_running_rustic_backup_cancellation(binary, authorities):
                 timer.cancel()
 
 
+def test_real_writable_managed_fixture_restores_same_size_edits(binary, tmp_path):
+    from scripts.git_recovery_acceptance import exercise_files
+
+    result = exercise_files(tmp_path, engine="rustic", executable=binary)
+    assert result["same_size_restored_mtime"] == "passed"
+    assert result["relocated_restore"] == "passed"
+    assert result["scope"] == "writable files only; read-only fidelity is a separate strict gate"
+
+
 @pytest.mark.parametrize("capture_mode", ["full-repository", "source-only"])
 def test_real_current_resolved_policy_preserves_git_history(binary, authorities, tmp_path, capture_mode):
     from josh_room.workspace_policy import load_capture_policy

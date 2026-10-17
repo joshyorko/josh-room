@@ -240,6 +240,7 @@ async function main() {
     );
     const runManagedTool = (args, name) => runManaged(args, "managed-tool", name, root);
     const qualifyRustic = async () => {
+      let windowsGuard = null;
       if (platform === "win32-x64") {
         const guard = JSON.parse(runManagedTool([
           "python", "-c",
@@ -248,11 +249,12 @@ async function main() {
         if (guard.code !== "store-engine-platform-unsupported") {
           throw new Error("Windows Rustic admission did not fail with its platform code");
         }
-        return {
+        windowsGuard = {
           engine: "rustic", version: "0.11.4", platform_support: "blocked", code: guard.code,
           reason: "pinned Windows Rustic omits mode metadata and restores read-only files writable",
           save_enter: "NOT RUN", age_catalog_two_recipients: "NOT RUN", portable_jat: "NOT RUN",
         };
+        if (process.env.JOSH_ROOM_RUSTIC_WINDOWS_DIAGNOSTIC !== "1") return windowsGuard;
       }
       const privateRuntime = path.join(root, "rustic-private-runtime");
       runManagedTool([
@@ -265,18 +267,36 @@ async function main() {
         "--manifest", path.join(extension, "runtime", "rustic-manifest.json"),
         "--destination", privateRuntime, "--platform", platform,
       ], "rustic-install").trim());
-      const resultFile = path.join(evidenceDir, "rustic-managed-git-recovery.json");
+      const fileResult = path.join(evidenceDir, "rustic-managed-writable-files.json");
       runManagedTool([
         "python", path.join(repository, "scripts", "git_recovery_acceptance.py"),
-        "--jat-root", jat.jatRoot, "--result-file", resultFile,
-        "--engine", "rustic", "--executable", installed.executable,
-      ], "rustic-managed-git-recovery");
+        "--jat-root", jat.jatRoot, "--result-file", fileResult,
+        "--engine", "rustic", "--executable", installed.executable, "--fixture", "writable-files",
+      ], "rustic-managed-writable-files");
+      const writableFiles = JSON.parse(await fsp.readFile(fileResult, "utf8"));
+      if (writableFiles.same_size_restored_mtime !== "passed" || writableFiles.portable_jat !== "passed"
+        || writableFiles.age_catalog_two_recipients !== "passed") {
+        throw new Error("managed writable-file Rustic chain failed");
+      }
+      const resultFile = path.join(evidenceDir, "rustic-managed-git-recovery.json");
+      try {
+        runManagedTool([
+          "python", path.join(repository, "scripts", "git_recovery_acceptance.py"),
+          "--jat-root", jat.jatRoot, "--result-file", resultFile,
+          "--engine", "rustic", "--executable", installed.executable,
+        ], "rustic-managed-git-recovery");
+      } catch (error) {
+        if (!windowsGuard) throw error;
+        return { ...windowsGuard, writable_files: writableFiles, strict_git_recovery: "FAIL",
+          binary: await fileIdentity(runtime, installed.executable) };
+      }
       const checks = JSON.parse(await fsp.readFile(resultFile, "utf8"));
       if (checks.engine !== "rustic" || checks.save_enter !== "passed"
         || checks.portable_jat !== "passed" || checks.age_catalog_two_recipients !== "passed") {
         throw new Error("managed Rustic Save/Enter/age/portable JAT acceptance failed");
       }
-      return { ...checks, version: installed.version, binary: await fileIdentity(runtime, installed.executable) };
+      return { ...checks, writable_files: writableFiles, version: installed.version,
+        binary: await fileIdentity(runtime, installed.executable) };
     };
     const runManagedJatServe = async (haul, name) => {
       const port = await reservePort();
@@ -344,8 +364,11 @@ async function main() {
     if (process.env.JOSH_ROOM_QUALIFY_RUSTIC_ONLY === "1") {
       const checks = await qualifyRustic();
       const evidence = {
-        result: checks.platform_support === "blocked" ? "rustic-platform-blocked" : "rustic-managed-consumer-pass",
-        scope: checks.platform_support === "blocked"
+        result: checks.strict_git_recovery === "FAIL" ? "rustic-windows-recovery-fail"
+          : checks.platform_support === "blocked" ? "rustic-platform-blocked" : "rustic-managed-consumer-pass",
+        scope: checks.strict_git_recovery === "FAIL"
+          ? "unsupported Windows raw-engine diagnostic: writable JAT/age chain passed; strict Git fidelity failed"
+          : checks.platform_support === "blocked"
           ? "Windows product admission blocked; Rustic JAT/age composition is NOT RUN"
           : "installed Rustic Save/restore, two-recipient age catalogs and portable JAT; default Restic gates are separate",
         platform,
@@ -359,6 +382,7 @@ async function main() {
       };
       await fsp.writeFile(path.join(evidenceDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 });
       console.log(JSON.stringify(evidence, null, 2));
+      if (checks.strict_git_recovery === "FAIL") throw new Error("strict Windows Rustic Git recovery failed; product remains blocked");
       return;
     }
     const resticInstallation = JSON.parse(runManagedTool([
