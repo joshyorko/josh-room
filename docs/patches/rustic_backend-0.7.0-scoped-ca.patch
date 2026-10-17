@@ -1,12 +1,24 @@
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -64,0 +65,2 @@
+@@ -64,0 +65,4 @@
 +    "dep:reqwest",
 +    "dep:opendal-http-transport-reqwest",
-@@ -332,0 +335,4 @@
++    "dep:rustls-pki-types",
++    "dep:rustls-webpki",
+@@ -332,0 +337,14 @@
 +
 +[dependencies.opendal-http-transport-reqwest]
 +version = "=0.58.1"
++optional = true
++
++[dependencies.rustls-pki-types]
++version = "=1.15.1"
++optional = true
++
++[dependencies.rustls-webpki]
++version = "=0.103.14"
++default-features = false
++features = ["std"]
 +optional = true
 --- a/src/opendal.rs
 +++ b/src/opendal.rs
@@ -29,7 +41,7 @@
 +            );
 +        }
 +        let mut operator = operator.layer(RetryLayer::new().with_max_times(max_retries).with_jitter());
-@@ -747,0 +758,49 @@
+@@ -747,0 +758,90 @@
 +
 +// Scoped roots augment normal platform trust on this operator only. Never
 +// replace the process-global transport or bypass chain/hostname verification.
@@ -47,9 +59,19 @@
 +            return Err(invalid());
 +        }
 +        let end = remaining.find(END).ok_or_else(invalid)? + END.len();
-+        let certificate = reqwest::Certificate::from_pem(remaining[..end].as_bytes())
-+            .map_err(|_| invalid())?;
-+        certificates.push(certificate);
++        let block = &remaining[..end];
++        let body = &block[BEGIN.len()..block.len() - END.len()];
++        if body.contains("-----") {
++            return Err(invalid());
++        }
++        use rustls_pki_types::{CertificateDer, pem::PemObject};
++        let mut decoded = CertificateDer::pem_slice_iter(block.as_bytes());
++        let certificate = decoded.next().ok_or_else(invalid)?.map_err(|_| invalid())?;
++        if decoded.next().is_some() {
++            return Err(invalid());
++        }
++        let _ = webpki::anchor_from_trusted_cert(&certificate).map_err(|_| invalid())?;
++        certificates.push(reqwest::Certificate::from_der(certificate.as_ref()).map_err(|_| invalid())?);
 +        remaining = remaining[end..].trim();
 +    }
 +    if certificates.is_empty() {
@@ -61,7 +83,7 @@
 +fn scoped_tls_client(path: &str) -> RusticResult<reqwest::Client> {
 +    let invalid = || RusticError::new(ErrorKind::InvalidInput, "Invalid scoped CA bundle");
 +    let mut pem = Vec::new();
-+    std::fs::File::open(path).map_err(|_| invalid())?
++    let _ = std::fs::File::open(path).map_err(|_| invalid())?
 +        .take(1024 * 1024 + 1).read_to_end(&mut pem).map_err(|_| invalid())?;
 +    reqwest::Client::builder().tls_certs_merge(parse_scoped_ca(&pem)?)
 +        .build().map_err(|_| invalid())
@@ -73,9 +95,40 @@
 +
 +    #[test]
 +    fn scoped_ca_rejects_empty_malformed_and_oversized_bundles() {
-+        for input in [b"".as_slice(), b"   ", b"not a certificate", b"-----BEGIN CERTIFICATE-----bad-----END CERTIFICATE-----"] {
++        for input in [b"".as_slice(), b"   ", b"not a certificate", b"-----BEGIN CERTIFICATE-----bad-----END CERTIFICATE-----",
++                      b"-----BEGIN CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nYWJj\n-----END PRIVATE KEY-----\n-----END CERTIFICATE-----"] {
 +            assert!(parse_scoped_ca(input).is_err());
 +        }
 +        assert!(parse_scoped_ca(&vec![b'x'; 1024 * 1024 + 1]).is_err());
++    }
++
++    #[test]
++    #[ignore = "requires the owned TLS/S3 fixture"]
++    fn operators_do_not_share_scoped_trust() {
++        use super::{BTreeMap, OpenDALBackend};
++        let endpoint = std::env::var("JOSH_ROOM_CANDIDATE_TLS_ENDPOINT").unwrap();
++        let trusted_ca = std::env::var("JOSH_ROOM_CANDIDATE_TLS_CA").unwrap();
++        let wrong_ca = std::env::var("JOSH_ROOM_CANDIDATE_TLS_OTHER_CA").unwrap();
++        let base = BTreeMap::from([
++            ("endpoint".to_string(), endpoint),
++            ("bucket".to_string(), "synthetic-candidate".to_string()),
++            ("root".to_string(), "repository".to_string()),
++            ("region".to_string(), "us-east-1".to_string()),
++            ("access_key_id".to_string(), "synthetic-key".to_string()),
++            ("secret_access_key".to_string(), "synthetic-secret".to_string()),
++            ("retry".to_string(), "off".to_string()),
++        ]);
++        let mut trusted_options = base.clone();
++        trusted_options.insert("cacert".to_string(), trusted_ca);
++        let trusted = OpenDALBackend::new("s3", trusted_options).unwrap();
++        assert!(trusted.operator.read("config").is_ok());
++        let ordinary = OpenDALBackend::new("s3", base.clone()).unwrap();
++        assert!(ordinary.operator.read("config").is_err());
++        let mut wrong_options = base;
++        wrong_options.insert("cacert".to_string(), wrong_ca);
++        let wrong = OpenDALBackend::new("s3", wrong_options).unwrap();
++        assert!(wrong.operator.read("config").is_err());
++        assert!(trusted.operator.read("config").is_ok());
++        println!("SCOPED_OPERATOR_ISOLATION_PASS");
 +    }
 +}

@@ -105,7 +105,7 @@ def run(root: Path, binaries: dict[str, Path], count: int, directories: int, out
                 process = subprocess.Popen(*args, **kwargs)
                 argv = args[0]
                 label = "other"
-                for verb in ("cat", "version", "init", "backup", "snapshots", "restore", "check"):
+                for verb in ("cat", "version", "init", "backup", "snapshots", "ls", "restore", "check"):
                     if verb in argv[1:]:
                         label = verb
                         if verb == "cat":

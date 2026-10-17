@@ -11,6 +11,7 @@ default; main, PR #108 and staged 0.1.36 remain unchanged.
 - Verified published `rustic_core` 0.13.0 and `rustic_backend` 0.7.0 archives.
 - [Exact-node CLI stream](patches/rustic-0.11.4-json-nodes.patch),
   [Windows read-only correction](patches/rustic_core-0.13.0-windows-readonly.patch)
+  [verified tree/Windows restore order](patches/rustic_core-0.13.0-verified-restore.patch)
   and [scoped operator CA](patches/rustic_backend-0.7.0-scoped-ca.patch).
 - Rust 1.99.0, optimized release profile and upstream `release` feature set.
   Dependency versions and checksums must remain unchanged after local source
@@ -19,7 +20,7 @@ default; main, PR #108 and staged 0.1.36 remain unchanged.
 ```sh
 uv sync --group dev
 # A disposable Rust 1.99.0 toolchain must be on PATH.
-uv run python scripts/build_rustic_candidate.py --destination /tmp/owned-rustic-candidate
+uv run python scripts/build_rustic_candidate.py --destination /tmp/owned-rustic-candidate --verify-tests
 ```
 
 The builder supplies `PROJECT_VERSION=v0.11.4`, matching upstream `build.sh`'s
@@ -51,8 +52,18 @@ chain or hostname verification.
 - Original official CLI: proposed `--json-nodes` flag rejected, exit 2.
 - First Linux optimized build: completed; initial version-string mismatch
   retained and corrected through the upstream build convention.
-- Native candidate recovery, Windows build, managed consumers and full 100k
-  comparison are in progress. Their results must be recorded before claiming
+- The first full-ID candidate at `5eabec5` passed the complete hosted Linux
+  candidate job, including strict/wide-tree tests, TLS/S3 and installed managed
+  Git/JAT/age recovery. This precedes the independent review corrections.
+- Independent review found missing native tree-hash checks, Windows final
+  read-only/timestamp ordering, lazy PEM decoding and incomplete resumed-build
+  provenance. The source corrections and focused regressions are included;
+  corrected native results and full 100k comparisons remain in progress.
+- Broader local tests with available tools: 2021 PASS, 17 FAIL, 29 SKIPPED.
+  All 17 failed nodes reproduce on unchanged main. The Node suite has 304 PASS,
+  2 SKIPPED. Focused candidate tests and source parity/lint also pass.
+- Corrected native candidate recovery, Windows build, managed consumers and full
+  100k comparison are in progress. Their results must be recorded before claiming
   qualification. The official Windows engine remains FAIL in its separate gate.
 
 The candidate workflow builds native Linux and Windows binaries locally in

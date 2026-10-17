@@ -1,0 +1,46 @@
+--- a/src/blob/tree.rs
++++ b/src/blob/tree.rs
+@@ -153 +153,11 @@
+-        let tree = serde_json::from_slice(&data).map_err(|err| {
++        Self::from_verified_data(&data, id)
++    }
++
++    fn from_verified_data(data: &[u8], id: TreeId) -> RusticResult<Self> {
++        if hash(data) != *id {
++            return Err(RusticError::new(
++                ErrorKind::Verification,
++                "Tree bytes do not match the requested tree ID",
++            ));
++        }
++        let tree = serde_json::from_slice(data).map_err(|err| {
+@@ -951,0 +962,21 @@
++
++#[cfg(test)]
++mod candidate_tree_auth {
++    use super::{Tree, TreeId, hash};
++
++    #[test]
++    fn accepts_exact_tree_bytes() {
++        let data = br#"{"nodes":[]}"#;
++        let id: TreeId = hash(data).into();
++        assert!(Tree::from_verified_data(data, id).is_ok());
++    }
++
++    #[test]
++    fn rejects_replayed_valid_tree_under_different_id() {
++        let expected = br#"{"nodes":[]}"#;
++        let replay = br#"{"nodes":null}"#;
++        let id: TreeId = hash(expected).into();
++        assert!(serde_json::from_slice::<Tree>(replay).is_ok());
++        assert!(Tree::from_verified_data(replay, id).is_err());
++    }
++}
+--- a/src/commands/restore.rs
++++ b/src/commands/restore.rs
+@@ -471,0 +472 @@
++    #[cfg(not(windows))]
+@@ -482,0 +484,4 @@
++    // Windows filetime opens with write access; final read-only must be last.
++    #[cfg(windows)]
++    dest.set_permission(path, node)
++        .unwrap_or_else(|_| warn!("restore {}: chmod failed.", path.display()));

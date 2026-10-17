@@ -35,7 +35,7 @@ jobs:
         run: |
           import json, os, pathlib, shutil, subprocess, sys
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'jr-rustic-candidate'
-          subprocess.run(['uv','run','python','scripts/build_rustic_candidate.py','--destination',str(root),'--jobs','2'],check=True)
+          subprocess.run(['uv','run','python','scripts/build_rustic_candidate.py','--destination',str(root),'--jobs','2','--verify-tests'],check=True)
           evidence = pathlib.Path('dist/rustic-candidate'); evidence.mkdir(parents=True)
           shutil.copy2(root / 'build-receipt.json', evidence / 'build.json')
           receipt = json.loads((root / 'build-receipt.json').read_text())
@@ -60,7 +60,9 @@ jobs:
         shell: python
         run: |
           import os, subprocess
-          subprocess.run(['uv','run','python','scripts/rustic_candidate_tls_probe.py','--rustic',os.environ['JOSH_ROOM_RUSTIC_CANDIDATE_BINARY'],'--output','dist/rustic-candidate/tls.json'],check=True)
+          import pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'jr-rustic-candidate'
+          subprocess.run(['uv','run','python','scripts/rustic_candidate_tls_probe.py','--rustic',os.environ['JOSH_ROOM_RUSTIC_CANDIDATE_BINARY'],'--output','dist/rustic-candidate/tls.json','--candidate-build-root',str(root)],check=True)
       - name: Exercise installed managed Git and portable JAT with candidate
         env:
           JOSH_ROOM_QUALIFY_RUSTIC: '1'
@@ -74,6 +76,8 @@ jobs:
           path: |
             dist/rustic-candidate
             dist/managed-runtime-evidence
+            ${{ runner.temp }}/jr-rustic-candidate/build.log
+            ${{ runner.temp }}/jr-rustic-candidate/*-tests.log
           if-no-files-found: ignore
 
   upstream-windows-proof:

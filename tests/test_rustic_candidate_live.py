@@ -35,6 +35,8 @@ def test_candidate_stream_matches_authenticated_blobs_and_restore(candidate, tmp
     (workspace / "folder").mkdir(parents=True)
     file = workspace / "folder/readonly"
     file.write_bytes(b"synthetic readonly bytes")
+    saved_mtime = 1_700_000_000_123456700
+    os.utime(file, ns=(saved_mtime, saved_mtime))
     file.chmod(0o444)
     if os.name == "posix":
         (workspace / "shortcut").symlink_to("folder/readonly\nnonexistent")
@@ -56,10 +58,19 @@ def test_candidate_stream_matches_authenticated_blobs_and_restore(candidate, tmp
             bulk.restore(summary.snapshot_id, destination)
             restored = destination / "folder/readonly"
             assert restored.read_bytes() == file.read_bytes()
+            assert restored.stat().st_mtime_ns == saved_mtime
             assert restored.stat().st_mode & 0o777 == file.stat().st_mode & 0o777
             if os.name == "posix":
                 assert os.readlink(destination / "shortcut") == "folder/readonly\nnonexistent"
                 assert (destination / "setuid-file").stat().st_mode & 0o7777 == 0o4755
+            # A later writable snapshot must remain writable on fresh restore.
+            file.chmod(0o666)
+            file.write_bytes(b"synthetic writable replacement")
+            changed = bulk.backup(workspace, parent=summary.snapshot_id)
+            writable = tmp_path / "writable-relocated"
+            bulk.restore(changed.snapshot_id, writable)
+            assert (writable / "folder/readonly").read_bytes() == file.read_bytes()
+            assert (writable / "folder/readonly").stat().st_mode & 0o777 == file.stat().st_mode & 0o777
             bulk.check(read_data=True)
     finally:
         file.chmod(0o600)

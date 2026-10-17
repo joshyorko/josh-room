@@ -26,7 +26,7 @@ from josh_room.restic_store import ResticStoreError
 from josh_room.rustic_store import RusticStore
 
 
-def run(binary: Path, output: Path) -> None:
+def run(binary: Path, output: Path, candidate_build_root: Path | None = None) -> None:
     result = {"scope": "actual candidate OpenDAL/crypto/metadata over an owned TLS/S3 fixture; signatures not checked",
               "platform": "win32-x64" if os.name == "nt" else "linux-x64",
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "cases": {}}
@@ -172,12 +172,35 @@ def run(binary: Path, output: Path) -> None:
                 opened.__exit__(None, None, None)
                 readonly.chmod(0o600)
                 if (root / "relocated/readonly").exists(): (root / "relocated/readonly").chmod(0o600)
+            reopened = store("positive-reopened", root / "ca.pem")
+            try:
+                reopened.open_existing()
+                assert len(list(reopened.entries(changed.snapshot_id))) == 2
+                reopened.check(read_data=True)
+                result["cases"]["scoped-ca-cold-reopen"] = "PASS"
+            finally:
+                reopened.__exit__(None, None, None)
+            if candidate_build_root is not None:
+                env = dict(os.environ, CARGO_TARGET_DIR=str(candidate_build_root / "target"),
+                    CARGO_INCREMENTAL="0", PROJECT_VERSION="v0.11.4",
+                    JOSH_ROOM_CANDIDATE_TLS_ENDPOINT=f"https://localhost:{server.server_port}",
+                    JOSH_ROOM_CANDIDATE_TLS_CA=str(root / "ca.pem"),
+                    JOSH_ROOM_CANDIDATE_TLS_OTHER_CA=str(root / "other.pem"))
+                proof = subprocess.run(["cargo", "test", "--locked", "--release", "--lib", "-p", "rustic_backend", "--jobs", "2",
+                    "operators_do_not_share_scoped_trust", "--", "--ignored", "--nocapture"],
+                    cwd=candidate_build_root / "source", env=env, capture_output=True, text=True, timeout=900, check=False)
+                proof_log = output.with_suffix(".operator-proof.log")
+                proof_log.write_text(proof.stdout + proof.stderr)
+                assert proof.returncode == 0 and "SCOPED_OPERATOR_ISOLATION_PASS" in proof.stdout
+                result["cases"]["same-process-operator-isolation"] = "PASS"
             for label, body in (("empty", ""), ("malformed", "not a certificate"),
+                                ("invalid-der", "-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----"),
+                                ("nested-section", "-----BEGIN CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nYWJj\n-----END PRIVATE KEY-----\n-----END CERTIFICATE-----"),
                                 ("trailing-junk", (root / "ca.pem").read_text() + "junk")):
                 (root / (label + ".pem")).write_text(body)
             for label, ca, host in (("missing", None, "localhost"), ("wrong", root / "other.pem", "localhost"),
                                    ("hostname", root / "ca.pem", "127.0.0.1"),
-                                   *((label, root / (label + ".pem"), "localhost") for label in ("empty", "malformed", "trailing-junk"))):
+                                   *((label, root / (label + ".pem"), "localhost") for label in ("empty", "malformed", "invalid-der", "nested-section", "trailing-junk"))):
                 count = len(requests); adapter = None
                 try:
                     adapter = store(label, ca, host); adapter.open_existing()
@@ -198,4 +221,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rustic", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args(); run(args.rustic.resolve(strict=True), args.output)
+    parser.add_argument("--candidate-build-root", type=Path)
+    args = parser.parse_args(); run(args.rustic.resolve(strict=True), args.output, args.candidate_build_root)
