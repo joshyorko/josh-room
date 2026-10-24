@@ -116,3 +116,14 @@ runtime. No project dependency was installed from a private source.
 Release controls and the manual owner `APPROVE` gate are unchanged. Staging and
 publishing now also reject candidates without patched project-Node evidence or
 exact setup-node action-runtime evidence.
+
+## Release preparation
+
+The owner requested a new release from this change on 2026-10-24. Since
+`v0.1.36-standalone-vsix` is already published, release preparation advances the
+extension to 0.1.37 and the template patch version using the existing
+`promote_rcc_candidate._version_update` helper. Both package manifests, runtime
+manifests, candidate locks, and bootstrap extension pins move together. Runtime
+dependency pins and existing published artifacts remain unchanged. Publication
+still requires fresh exact-source CI and staging evidence and the existing
+owner-approved release workflow.
