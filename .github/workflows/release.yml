@@ -35,6 +35,9 @@ permissions:
   actions: read
   checks: read
 
+env:
+  NODE_VERSION: "22.23.4"
+
 concurrency:
   group: release-${{ inputs.source_sha || github.event.workflow_run.head_sha }}
   cancel-in-progress: false
@@ -57,7 +60,15 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Verify patched Node 22 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify_node_version.js \
+            --minimum "$NODE_VERSION" \
+            --source-sha "$GITHUB_SHA" \
+            --report "$RUNNER_TEMP/node-runtime.json"
       - name: Validate the exact trusted CI source
         id: source
         env:
@@ -154,6 +165,11 @@ jobs:
           mkdir -p dist
           cp "$RUNNER_TEMP/ci-release-candidate/josh-room-$VERSION.vsix" dist/
           cp "$RUNNER_TEMP/ci-release-candidate/candidate.json" dist/vsix-candidate.json
+          if [[ ! -f "$RUNNER_TEMP/ci-release-candidate/node-runtime.json" ]]; then
+            echo "CI candidate is missing patched-Node runtime evidence" >&2
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/ci-release-candidate/node-runtime.json" dist/node-runtime.json
           cp "$RUNNER_TEMP/release-readiness.json" dist/ci-readiness.json
           uv build --no-create-gitignore
           (cd dist && sha256sum *.vsix *.whl *.tar.gz > SHA256SUMS)
@@ -199,7 +215,15 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Verify patched Node 22 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify_node_version.js \
+            --minimum "$NODE_VERSION" \
+            --source-sha "$GITHUB_SHA" \
+            --report "$RUNNER_TEMP/node-runtime.json"
       - name: Reject stale source and download its staged run artifact
         id: source
         env:

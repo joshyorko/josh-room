@@ -14,6 +14,7 @@ from scripts.verify_release_readiness import CI_REQUIRED_CHECKS
 
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+MINIMUM_NODE_VERSION = "22.23.4"
 RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml"
 REPOSITORY = "joshyorko/josh-room"
 
@@ -98,6 +99,57 @@ def runtime_identity(runtime: dict[str, Any], release_lock: dict[str, Any]) -> d
     }
 
 
+def _node_runtime_receipt(value: Any, *, source_sha: str) -> dict[str, Any]:
+    receipt = _object(value, "Node runtime receipt")
+    if receipt.get("schema_version") != 1:
+        raise ValueError("Node runtime receipt version is unsupported")
+    minimum = receipt.get("minimum")
+    if minimum != MINIMUM_NODE_VERSION:
+        raise ValueError(f"Node runtime receipt minimum must be {MINIMUM_NODE_VERSION}")
+    observed = receipt.get("node_version")
+    if not isinstance(observed, str) or not VERSION.fullmatch(observed):
+        raise ValueError("Node runtime receipt must record a stable observed Node version")
+    if tuple(int(part) for part in observed.split(".")) < tuple(int(part) for part in MINIMUM_NODE_VERSION.split(".")):
+        raise ValueError("Node runtime receipt records an unpatched Node version")
+    if receipt.get("satisfied") is not True:
+        raise ValueError("Node runtime receipt does not record a satisfied minimum")
+    if not isinstance(receipt.get("npm_version"), str) or not receipt["npm_version"].strip():
+        raise ValueError("Node runtime receipt must record the npm version")
+    if receipt.get("source_sha") != source_sha:
+        raise ValueError("Node runtime receipt source SHA differs from the release source SHA")
+    actions = _object(receipt.get("actions"), "Node runtime actions identity")
+    if actions.get("github_actions") is not True:
+        raise ValueError("Node runtime receipt must come from GitHub Actions")
+    for key in ("runner_os", "runner_arch"):
+        if not isinstance(actions.get(key), str) or not actions[key]:
+            raise ValueError(f"Node runtime receipt must record actions {key}")
+    for key in ("image_os", "image_version"):
+        if actions.get(key) is not None and not isinstance(actions[key], str):
+            raise ValueError(f"Node runtime receipt has an invalid actions {key}")
+    return {
+        "schema_version": 1,
+        "node_version": observed,
+        "npm_version": receipt["npm_version"],
+        "minimum": MINIMUM_NODE_VERSION,
+        "satisfied": True,
+        "source_sha": source_sha,
+        "actions": {
+            "github_actions": True,
+            "runner_os": actions["runner_os"],
+            "runner_arch": actions["runner_arch"],
+            "image_os": actions.get("image_os"),
+            "image_version": actions.get("image_version"),
+        },
+    }
+
+
+def node_runtime_identity(directory: Path, *, source_sha: str) -> dict[str, Any]:
+    path = directory / "node-runtime.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"staged release is missing patched-Node runtime evidence: {path}")
+    return _node_runtime_receipt(_load(path), source_sha=source_sha)
+
+
 def build_receipt(
     directory: Path,
     *,
@@ -106,6 +158,7 @@ def build_receipt(
     version: str,
     checks: dict[str, Any],
     runtime: dict[str, Any],
+    node_runtime: dict[str, Any],
     stage_run: dict[str, Any],
 ) -> dict[str, Any]:
     if not SOURCE_SHA.fullmatch(source_sha):
@@ -139,6 +192,7 @@ def build_receipt(
     runtime = _object(runtime, "runtime receipt")
     if _object(runtime.get("controller"), "controller runtime receipt").get("rcc_version") != _object(runtime.get("jat"), "JAT runtime receipt").get("rcc_version"):
         raise ValueError("controller and JAT runtime receipts are not paired")
+    node_runtime = _node_runtime_receipt(node_runtime, source_sha=source_sha)
     stage_run = _object(stage_run, "candidate stage workflow run")
     if (
         type(stage_run.get("id")) is not int
@@ -150,13 +204,14 @@ def build_receipt(
     ):
         raise ValueError("candidate stage receipt is not bound to its exact release workflow run")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "release_tag": release_tag,
         "source_sha": source_sha,
         "version": version,
         "checks": checks,
         "stage_run": stage_run,
         "runtime": runtime,
+        "node_runtime": node_runtime,
         "assets": _file_records(directory),
     }
 
@@ -170,10 +225,11 @@ def validate_staged_files(
     version: str,
     checks: dict[str, Any],
     runtime: dict[str, Any],
+    node_runtime: dict[str, Any],
     stage_run: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
     receipt = _object(receipt, "staged release receipt")
-    if receipt.get("schema_version") != 1:
+    if receipt.get("schema_version") != 2:
         raise ValueError("staged release receipt version is unsupported")
     if receipt.get("source_sha") != source_sha:
         raise ValueError("staged release receipt source SHA differs from the requested source SHA")
@@ -185,6 +241,8 @@ def validate_staged_files(
         raise ValueError("staged release receipt belongs to a different stage workflow run")
     if receipt.get("runtime") != runtime:
         raise ValueError("staged release receipt runtime receipts differ from the current candidate")
+    if _node_runtime_receipt(receipt.get("node_runtime"), source_sha=source_sha) != node_runtime:
+        raise ValueError("staged release receipt Node runtime evidence differs from the current candidate")
     expected = _object(receipt.get("assets"), "staged release assets")
     observed = _file_records(directory)
     if observed != expected:
@@ -323,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
                 version=args.version,
                 checks=_load(args.checks),
                 runtime=runtime_identity(_load(args.runtime), _load(args.release_lock)),
+                node_runtime=node_runtime_identity(args.directory, source_sha=args.source_sha),
                 stage_run={
                     "id": args.stage_run_id,
                     "workflow_id": args.stage_workflow_id,
@@ -350,6 +409,7 @@ def main(argv: list[str] | None = None) -> int:
                 version=args.version,
                 checks=_load(args.checks),
                 runtime=runtime_identity(_load(args.runtime), _load(args.release_lock)),
+                node_runtime=node_runtime_identity(args.directory, source_sha=args.source_sha),
                 stage_run=stage_run,
             )
             result = {"status": "PASS", "verified_asset_count": len(files)}

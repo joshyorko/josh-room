@@ -11,6 +11,38 @@ template version in `devcontainer-template.json` and both release locks in the
 same candidate, and its report includes each qualified JAT platform digest for
 the generated PR description.
 
+## Patched Node 22 qualification
+
+CI, capture, and release workflows select Node through one workflow value,
+`NODE_VERSION: "22.23.4"`. Node 22.23.4 contains the 2026-10-21 Node 22
+high-severity security fixes. Requesting the `22` major alone can accept an
+unpatched runtime on an older run and does not record which runtime produced an
+artifact.
+
+Every `actions/setup-node` step is followed by
+`node scripts/verify_node_version.js --minimum "$NODE_VERSION" --source-sha "$GITHUB_SHA" --report <path>`.
+The verifier compares `process.versions.node` with the pinned minimum, rejects a
+malformed source SHA, and fails the job when the observed runtime is older than
+22.23.4. On success it writes a deterministic JSON receipt containing the
+observed Node and npm versions, the minimum, the exact source SHA, and the
+Actions runner identity (`github_actions`, `runner_os`, `runner_arch`,
+`image_os`, `image_version`). Evidence paths are `$RUNNER_TEMP/node-runtime.json`
+for CI tests and both release jobs, `dist/managed-runtime-evidence/` for the
+managed-runtime consumer matrix, `dist/release-candidate/` for the CI candidate,
+`dist/capture-candidate/` before the capture identity inventory, and
+`$RUNNER_TEMP/capture-native-ui/` for the native Windows UI receipt.
+
+Release staging copies the CI candidate's `node-runtime.json` to
+`dist/node-runtime.json` and fails when it is absent. `scripts/release_staging.py`
+requires that file, checks its schema, pinned minimum, observed version,
+satisfied flag, source SHA, and Actions identity, embeds the normalized identity
+as `node_runtime`, and covers the file with the staged asset digests. A staged or
+published candidate without patched-Node evidence is rejected. Rebuild an older
+staged candidate from a new patched-Node CI run instead of publishing it without
+that evidence. Publishing otherwise keeps the exact-source checks and Josh's
+explicit `APPROVE` gate unchanged. See
+[the 2026-10-24 qualification receipt](receipts/2026-10-24-node-22-qualification.md).
+
 When a verified JAT release advances its producer source, Josh Room records the
 exact release tag, commit, source archive digest, workflow receipt, and platform
 receipts in a draft consumer promotion PR. The PR describes the previous-to-new
