@@ -128,6 +128,41 @@ jobs:
             --minimum "$NODE_VERSION" \
             --source-sha "$GITHUB_SHA" \
             --report dist/release-candidate/node-runtime.json
+      - name: Record the setup-node action runtime
+        shell: bash
+        env:
+          ACTION_REF: v7
+        run: |
+          set -euo pipefail
+          action_sha=$(git ls-remote https://github.com/actions/setup-node.git "refs/tags/${ACTION_REF}^{}" | awk 'NR == 1 {print $1}')
+          if [[ -z "$action_sha" ]]; then
+            action_sha=$(git ls-remote https://github.com/actions/setup-node.git "refs/tags/${ACTION_REF}" | awk 'NR == 1 {print $1}')
+          fi
+          [[ "$action_sha" =~ ^[0-9a-f]{40}$ ]]
+          runtime_source="https://raw.githubusercontent.com/actions/setup-node/$action_sha/action.yml"
+          action_file="$RUNNER_TEMP/setup-node-action.yml"
+          curl --fail --location --proto '=https' --tlsv1.2 "$runtime_source" > "$action_file"
+          declared_runtime=$(awk '
+            /^runs:[[:space:]]*$/ { in_runs = 1; next }
+            in_runs && /^[[:space:]]+using:/ {
+              sub(/^[[:space:]]+using:[[:space:]]*/, "")
+              print
+              exit
+            }
+            in_runs && /^[^[:space:]]/ { exit }
+          ' "$action_file")
+          declared_runtime=$(printf '%s' "$declared_runtime" | tr -d '"' | tr -d "'")
+          declared_runtime=${declared_runtime//[[:space:]]/}
+          [[ "$declared_runtime" =~ ^node[0-9]+$ ]]
+          mkdir -p dist/release-candidate
+          jq -n \
+            --arg action "actions/setup-node" \
+            --arg ref "$ACTION_REF" \
+            --arg commit_sha "$action_sha" \
+            --arg declared_runtime "$declared_runtime" \
+            --arg runtime_source "$runtime_source" \
+            '{schema_version: 1, action: $action, ref: $ref, commit_sha: $commit_sha, declared_runtime: $declared_runtime, runtime_source: $runtime_source}' \
+            > dist/release-candidate/actions-runtime.json
       - name: Confirm this CI run is building the exact source version
         id: version
         shell: bash

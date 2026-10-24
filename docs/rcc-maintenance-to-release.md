@@ -25,22 +25,41 @@ The verifier compares `process.versions.node` with the pinned minimum, rejects a
 malformed source SHA, and fails the job when the observed runtime is older than
 22.23.4. On success it writes a deterministic JSON receipt containing the
 observed Node and npm versions, the minimum, the exact source SHA, and the
-Actions runner identity (`github_actions`, `runner_os`, `runner_arch`,
+Actions runner image labels (`github_actions`, `runner_os`, `runner_arch`,
 `image_os`, `image_version`). Evidence paths are `$RUNNER_TEMP/node-runtime.json`
 for CI tests and both release jobs, `dist/managed-runtime-evidence/` for the
 managed-runtime consumer matrix, `dist/release-candidate/` for the CI candidate,
 `dist/capture-candidate/` before the capture identity inventory, and
 `$RUNNER_TEMP/capture-native-ui/` for the native Windows UI receipt.
 
-Release staging copies the CI candidate's `node-runtime.json` to
-`dist/node-runtime.json` and fails when it is absent. `scripts/release_staging.py`
-requires that file, checks its schema, pinned minimum, observed version,
-satisfied flag, source SHA, and Actions identity, embeds the normalized identity
-as `node_runtime`, and covers the file with the staged asset digests. A staged or
-published candidate without patched-Node evidence is rejected. Rebuild an older
-staged candidate from a new patched-Node CI run instead of publishing it without
-that evidence. Publishing otherwise keeps the exact-source checks and Josh's
-explicit `APPROVE` gate unchanged. See
+Three runtime layers stay distinct:
+
+- **Project Node** (`node_version`, e.g. `22.23.4`) is the interpreter selected
+  by `actions/setup-node` for the job's own commands. The minimum applies here.
+- **JavaScript action runtime** (`actions_runtime.declared_runtime`, e.g.
+  `node24`) is the runtime GitHub uses to execute the action implementation.
+  The runner image is not the action runtime, and a job cannot inspect the
+  executing action runtime directly. The CI `release-candidate` job therefore
+  resolves the exact `actions/setup-node` `v7` tag commit with `git ls-remote`,
+  fetches `action.yml` from that commit, parses its `runs.using` value, and
+  writes `dist/release-candidate/actions-runtime.json` with the action, ref,
+  commit SHA, declared runtime, and commit-bound raw source URL. That commit and
+  its declared runtime are the reproducible action-runtime evidence.
+- **Runner image** (`image_os`, `image_version`) describes the hosted runner
+  image. It is recorded for context and does not identify either Node runtime.
+
+Release staging copies the CI candidate's `node-runtime.json` and
+`actions-runtime.json` to `dist/` and fails when either is absent.
+`scripts/release_staging.py` requires both files, checks the project Node
+schema, pinned minimum, observed version, satisfied flag, source SHA, and Actions
+identity, and checks the action runtime schema, action, ref, exact 40-hex commit,
+`node<N>` declared runtime, and commit-bound source URL. It embeds the normalized
+identities as `node_runtime` and `actions_runtime` and covers both files with the
+staged asset digests. A staged or published candidate without patched-Node or
+action-runtime evidence is rejected. Rebuild an older staged candidate from a
+new patched-Node CI run instead of publishing it without that evidence.
+Publishing otherwise keeps the exact-source checks and Josh's explicit
+`APPROVE` gate unchanged. See
 [the 2026-10-24 qualification receipt](receipts/2026-10-24-node-22-qualification.md).
 
 When a verified JAT release advances its producer source, Josh Room records the

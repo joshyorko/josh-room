@@ -170,6 +170,11 @@ jobs:
             exit 1
           fi
           cp "$RUNNER_TEMP/ci-release-candidate/node-runtime.json" dist/node-runtime.json
+          if [[ ! -f "$RUNNER_TEMP/ci-release-candidate/actions-runtime.json" ]]; then
+            echo "CI candidate is missing JavaScript action runtime evidence" >&2
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/ci-release-candidate/actions-runtime.json" dist/actions-runtime.json
           cp "$RUNNER_TEMP/release-readiness.json" dist/ci-readiness.json
           uv build --no-create-gitignore
           (cd dist && sha256sum *.vsix *.whl *.tar.gz > SHA256SUMS)

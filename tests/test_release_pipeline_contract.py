@@ -59,6 +59,42 @@ def test_every_node_workflow_pins_and_verifies_the_patched_node_22_runtime():
     assert node_workflows == {"ci.yml", "capture-candidate.yml", "capture-windows-ui.yml", "release.yml"}
 
 
+def test_ci_retains_exact_setup_node_action_runtime_evidence():
+    workflow = _workflow("ci.yml")
+    steps = workflow["jobs"]["release-candidate"]["steps"]
+    action_step = next(step for step in steps if step.get("name") == "Record the setup-node action runtime")
+    run = action_step["run"]
+
+    assert action_step["shell"] == "bash"
+    assert action_step["env"]["ACTION_REF"] == "v7"
+    assert "refs/tags/${ACTION_REF}^{}" in run
+    assert "refs/tags/${ACTION_REF}" in run
+    assert "^[0-9a-f]{40}$" in run
+    assert 'https://raw.githubusercontent.com/actions/setup-node/$action_sha/action.yml' in run
+    assert "curl --fail --location --proto '=https' --tlsv1.2" in run
+    assert "/^runs:[[:space:]]*$/" in run
+    assert "/^[[:space:]]+using:/" in run
+    assert "^node[0-9]+$" in run
+    assert '"declared_runtime"' in run or "--arg declared_runtime" in run
+    assert "actions-runtime.json" in run
+
+    release = yaml.load((WORKFLOWS / "release.yml").read_text(), Loader=yaml.BaseLoader)
+    stage = next(
+        step for step in release["jobs"]["stage-candidate"]["steps"]
+        if step.get("name") == "Create exact release stage files and provenance receipt"
+    )
+    assert 'cp "$RUNNER_TEMP/ci-release-candidate/actions-runtime.json" dist/actions-runtime.json' in stage["run"]
+    assert "ci-release-candidate/actions-runtime.json" in stage["run"]
+
+    staging = (ROOT / "scripts/release_staging.py").read_text()
+    assert 'ACTIONS_RUNTIME_FILE = "actions-runtime.json"' in staging
+    assert "def actions_runtime_identity(directory: Path)" in staging
+    assert '"action": "actions/setup-node"' in staging
+    assert 'ACTIONS_RUNTIME_PATTERN = re.compile(r"^node[0-9]+$")' in staging
+    assert "runtime_source" in staging
+    assert "actions_runtime" in staging
+
+
 def test_ci_runs_the_patched_node_version_verifier_tests():
     workflow = _workflow("ci.yml")
 
