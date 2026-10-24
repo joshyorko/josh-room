@@ -10,6 +10,8 @@ on:
         type: string
 permissions:
   contents: read
+env:
+  NODE_VERSION: "22.23.4"
 concurrency:
   group: candidate-windows-native-ui-${{ github.ref }}
   cancel-in-progress: true
@@ -32,12 +34,19 @@ jobs:
           if ($env:REQUESTED_SHA -and $actual -ne $env:REQUESTED_SHA) { throw 'Requested source mismatch' }
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Verify patched Node 22 runtime
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:RUNNER_TEMP 'capture-native-ui'
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          node scripts/verify_node_version.js --minimum $env:NODE_VERSION --source-sha $env:GITHUB_SHA --report (Join-Path $runtime 'node-runtime.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Patched Node verification failed' }
       - name: Package candidate and install official VS Code in disposable profile
         shell: pwsh
         run: |
           $ui = Join-Path $env:RUNNER_TEMP 'capture-native-ui'
-          New-Item -ItemType Directory -Path $ui | Out-Null
+          New-Item -ItemType Directory -Force -Path $ui | Out-Null
           $zip = Join-Path $ui 'vscode.zip'
           Invoke-WebRequest 'https://update.code.visualstudio.com/latest/win32-x64-archive/stable' -OutFile $zip
           $code = Join-Path $ui 'code'
@@ -62,5 +71,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: capture-windows-ui-receipt
-          path: ${{ runner.temp }}/capture-native-ui/receipt.json
+          path: |
+            ${{ runner.temp }}/capture-native-ui/receipt.json
+            ${{ runner.temp }}/capture-native-ui/node-runtime.json
           if-no-files-found: ignore

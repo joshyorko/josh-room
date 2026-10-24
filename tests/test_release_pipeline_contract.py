@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
+from scripts.release_staging import MINIMUM_NODE_VERSION
+
 ROOT = Path(__file__).parents[1]
 WORKFLOWS = ROOT / ".github/workflows"
+MINIMUM_NODE = "22.23.4"
 
 
 def _workflow(name):
@@ -17,6 +21,107 @@ def _workflow(name):
 
 def _steps(job):
     return "\n".join(str(step.get("run", "")) for step in job.get("steps", []))
+
+
+def test_every_node_workflow_pins_and_verifies_the_patched_node_22_runtime():
+    assert MINIMUM_NODE_VERSION == MINIMUM_NODE
+    js = (ROOT / "scripts/verify_node_version.js").read_text()
+    assert re.search(r"const DEFAULT_MINIMUM = '22\.23\.4';", js)
+    assert "module.exports" in js
+    assert "require.main === module" in js
+
+    node_workflows = set()
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        source = path.read_text()
+        if "actions/setup-node@" not in source:
+            continue
+        node_workflows.add(path.name)
+        workflow = yaml.load(source, Loader=yaml.BaseLoader)
+        assert workflow["env"]["NODE_VERSION"] == MINIMUM_NODE, path.name
+        for job_name, job in workflow["jobs"].items():
+            steps = job.get("steps", [])
+            setup_indexes = [index for index, step in enumerate(steps) if str(step.get("uses", "")).startswith("actions/setup-node@")]
+            for index in setup_indexes:
+                setup = steps[index]
+                assert setup["with"]["node-version"] == "${{ env.NODE_VERSION }}", (path.name, job_name)
+                later = steps[index + 1:]
+                verifiers = [
+                    str(step.get("run", ""))
+                    for step in later
+                    if "scripts/verify_node_version.js" in str(step.get("run", ""))
+                ]
+                assert verifiers, (path.name, job_name)
+                assert "--source-sha" in verifiers[0]
+                assert "--report" in verifiers[0]
+                assert "--minimum" in verifiers[0]
+                assert "node-version: \"22\"" not in source
+                assert "node-version: '22'" not in source
+    assert node_workflows == {"ci.yml", "capture-candidate.yml", "capture-windows-ui.yml", "release.yml"}
+
+
+def test_ci_retains_exact_setup_node_action_runtime_evidence():
+    workflow = _workflow("ci.yml")
+    steps = workflow["jobs"]["release-candidate"]["steps"]
+    action_step = next(step for step in steps if step.get("name") == "Record the setup-node action runtime")
+    run = action_step["run"]
+
+    assert action_step["shell"] == "bash"
+    assert action_step["env"]["ACTION_REF"] == "v7"
+    assert "refs/tags/${ACTION_REF}^{}" in run
+    assert "refs/tags/${ACTION_REF}" in run
+    assert "^[0-9a-f]{40}$" in run
+    assert 'https://raw.githubusercontent.com/actions/setup-node/$action_sha/action.yml' in run
+    assert "curl --fail --location --proto '=https' --tlsv1.2" in run
+    assert "/^runs:[[:space:]]*$/" in run
+    assert "/^[[:space:]]+using:/" in run
+    assert "^node[0-9]+$" in run
+    assert '"declared_runtime"' in run or "--arg declared_runtime" in run
+    assert "actions-runtime.json" in run
+
+    release = yaml.load((WORKFLOWS / "release.yml").read_text(), Loader=yaml.BaseLoader)
+    stage = next(
+        step for step in release["jobs"]["stage-candidate"]["steps"]
+        if step.get("name") == "Create exact release stage files and provenance receipt"
+    )
+    assert 'cp "$RUNNER_TEMP/ci-release-candidate/actions-runtime.json" dist/actions-runtime.json' in stage["run"]
+    assert "ci-release-candidate/actions-runtime.json" in stage["run"]
+
+    staging = (ROOT / "scripts/release_staging.py").read_text()
+    assert 'ACTIONS_RUNTIME_FILE = "actions-runtime.json"' in staging
+    assert "def actions_runtime_identity(directory: Path)" in staging
+    assert '"action": "actions/setup-node"' in staging
+    assert 'ACTIONS_RUNTIME_PATTERN = re.compile(r"^node[0-9]+$")' in staging
+    assert "runtime_source" in staging
+    assert "actions_runtime" in staging
+
+
+def test_ci_runs_the_patched_node_version_verifier_tests():
+    workflow = _workflow("ci.yml")
+
+    assert (
+        "node --test vscode-extension/*.test.js scripts/verify_node_version.test.js"
+        in _steps(workflow["jobs"]["test"])
+    )
+    release_candidate = workflow["jobs"]["release-candidate"]
+    upload = next(step for step in release_candidate["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
+    assert upload["with"]["path"] == "dist/release-candidate/"
+    assert "dist/release-candidate/node-runtime.json" in _steps(release_candidate)
+
+
+def test_release_staging_fails_without_a_patched_node_runtime_receipt():
+    source = (ROOT / ".github/workflows/release.yml").read_text()
+    workflow = yaml.load(source, Loader=yaml.BaseLoader)
+    stage = next(
+        step for step in workflow["jobs"]["stage-candidate"]["steps"]
+        if step.get("name") == "Create exact release stage files and provenance receipt"
+    )
+
+    assert 'cp "$RUNNER_TEMP/ci-release-candidate/node-runtime.json" dist/node-runtime.json' in stage["run"]
+    assert "ci-release-candidate/node-runtime.json" in stage["run"]
+    staging = (ROOT / "scripts/release_staging.py").read_text()
+    assert 'MINIMUM_NODE_VERSION = "22.23.4"' in staging
+    assert 'receipt.get("schema_version") != 2' in staging
+    assert "node_runtime_identity" in staging
 
 
 def test_ci_workflow_can_be_dispatched_for_automation_created_prs_at_an_exact_sha():

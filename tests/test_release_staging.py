@@ -12,7 +12,11 @@ import pytest
 import yaml
 
 from scripts.release_staging import (
+    ACTIONS_RUNTIME_FILE,
+    MINIMUM_NODE_VERSION,
+    actions_runtime_identity,
     build_receipt,
+    node_runtime_identity,
     reconcile_release_assets,
     runtime_identity,
     validate_stage_run,
@@ -21,6 +25,30 @@ from scripts.release_staging import (
 from scripts.verify_release_readiness import CI_REQUIRED_CHECKS
 
 SOURCE_SHA = "a" * 40
+ACTION_COMMIT_SHA = "949feb2413d6458794dcd2491c4babbbce0c15c1"
+ACTIONS_RUNTIME = {
+    "schema_version": 1,
+    "action": "actions/setup-node",
+    "ref": "v7",
+    "commit_sha": ACTION_COMMIT_SHA,
+    "declared_runtime": "node24",
+    "runtime_source": f"https://raw.githubusercontent.com/actions/setup-node/{ACTION_COMMIT_SHA}/action.yml",
+}
+NODE_RUNTIME = {
+    "schema_version": 1,
+    "node_version": MINIMUM_NODE_VERSION,
+    "npm_version": "10.9.4",
+    "minimum": MINIMUM_NODE_VERSION,
+    "satisfied": True,
+    "source_sha": SOURCE_SHA,
+    "actions": {
+        "github_actions": True,
+        "runner_os": "Linux",
+        "runner_arch": "X64",
+        "image_os": "ubuntu24",
+        "image_version": "20261020.1.0",
+    },
+}
 RUNTIME = {
     "rcc": {"version": "v18.19.6"},
     "controller": {"environment_artifacts": {
@@ -77,6 +105,8 @@ def _files(directory):
     (directory / "josh_room-0.1.33-py3-none-any.whl").write_bytes(b"synthetic wheel")
     (directory / "josh_room-0.1.33.tar.gz").write_bytes(b"synthetic sdist")
     (directory / "SHA256SUMS").write_text("synthetic checksums\n")
+    (directory / "node-runtime.json").write_text(json.dumps(NODE_RUNTIME))
+    (directory / ACTIONS_RUNTIME_FILE).write_text(json.dumps(ACTIONS_RUNTIME))
 
 
 def _draft(tag, sha, assets):
@@ -97,6 +127,8 @@ def test_candidate_receipt_binds_source_sha_checks_and_exact_assets(tmp_path):
     staged = tmp_path / "staged"
     _files(staged)
     identity = runtime_identity(RUNTIME, LOCK)
+    node_identity = node_runtime_identity(staged, source_sha=SOURCE_SHA)
+    actions_identity = actions_runtime_identity(staged)
     receipt = build_receipt(
         staged,
         source_sha=SOURCE_SHA,
@@ -104,6 +136,8 @@ def test_candidate_receipt_binds_source_sha_checks_and_exact_assets(tmp_path):
         version="0.1.33",
         checks=CHECKS,
         runtime=identity,
+        node_runtime=node_identity,
+        actions_runtime=actions_identity,
         stage_run=STAGE_RUN,
     )
     (staged / "release-candidate.json").write_text(json.dumps(receipt))
@@ -116,10 +150,21 @@ def test_candidate_receipt_binds_source_sha_checks_and_exact_assets(tmp_path):
         version="0.1.33",
         checks=CHECKS,
         runtime=identity,
+        node_runtime=node_identity,
+        actions_runtime=actions_identity,
         stage_run=STAGE_RUN,
     )
 
+    assert receipt["schema_version"] == 2
+    assert receipt["node_runtime"] == node_identity
+    assert receipt["node_runtime"]["node_version"] == MINIMUM_NODE_VERSION
+    assert receipt["node_runtime"]["source_sha"] == SOURCE_SHA
+    assert receipt["actions_runtime"] == actions_identity
+    assert receipt["actions_runtime"]["declared_runtime"] == "node24"
+    assert receipt["actions_runtime"]["commit_sha"] == ACTION_COMMIT_SHA
     assert set(validated) == set(receipt["assets"])
+    assert "node-runtime.json" in receipt["assets"]
+    assert "actions-runtime.json" in receipt["assets"]
     assert receipt["source_sha"] == SOURCE_SHA
     assert receipt["assets"]["josh-room-0.1.33.vsix"]["sha256"] == hashlib.sha256(b"synthetic vsix").hexdigest()
 
@@ -128,19 +173,101 @@ def test_staged_receipt_rejects_changed_source_checks_runtime_or_asset_bytes(tmp
     staged = tmp_path / "staged"
     _files(staged)
     identity = runtime_identity(RUNTIME, LOCK)
-    receipt = build_receipt(staged, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, stage_run=STAGE_RUN)
+    node_identity = node_runtime_identity(staged, source_sha=SOURCE_SHA)
+    actions_identity = actions_runtime_identity(staged)
+    receipt = build_receipt(staged, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, node_runtime=node_identity, actions_runtime=actions_identity, stage_run=STAGE_RUN)
 
     with pytest.raises(ValueError, match="source SHA"):
-        validate_staged_files(staged, receipt, source_sha="d" * 40, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, stage_run=STAGE_RUN)
+        validate_staged_files(staged, receipt, source_sha="d" * 40, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, node_runtime=node_identity, actions_runtime=actions_identity, stage_run=STAGE_RUN)
     with pytest.raises(ValueError, match="check receipts"):
-        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks={"source_sha": "a" * 40, "checks": {"test": {"id": 102}}}, runtime=identity, stage_run=STAGE_RUN)
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks={"source_sha": "a" * 40, "checks": {"test": {"id": 102}}}, runtime=identity, node_runtime=node_identity, actions_runtime=actions_identity, stage_run=STAGE_RUN)
     changed = json.loads(json.dumps(identity))
     changed["jat"]["platforms"]["linux-x64"]["archive_sha256"] = "9" * 64
     with pytest.raises(ValueError, match="runtime receipts"):
-        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=changed, stage_run=STAGE_RUN)
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=changed, node_runtime=node_identity, actions_runtime=actions_identity, stage_run=STAGE_RUN)
+    changed_node = json.loads(json.dumps(node_identity))
+    changed_node["node_version"] = "22.23.5"
+    with pytest.raises(ValueError, match="Node runtime evidence"):
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, node_runtime=changed_node, actions_runtime=actions_identity, stage_run=STAGE_RUN)
+    changed_action = json.loads(json.dumps(actions_identity))
+    changed_action["declared_runtime"] = "node25"
+    with pytest.raises(ValueError, match="action runtime evidence"):
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, node_runtime=node_identity, actions_runtime=changed_action, stage_run=STAGE_RUN)
     (staged / "josh-room-0.1.33.vsix").write_bytes(b"changed")
     with pytest.raises(ValueError, match="asset differs"):
-        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, stage_run=STAGE_RUN)
+        validate_staged_files(staged, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix", version="0.1.33", checks=CHECKS, runtime=identity, node_runtime=node_identity, actions_runtime=actions_identity, stage_run=STAGE_RUN)
+
+
+def test_node_runtime_evidence_is_required_patched_and_source_bound(tmp_path):
+    staged = tmp_path / "staged"
+    _files(staged)
+    node_identity = node_runtime_identity(staged, source_sha=SOURCE_SHA)
+    assert node_identity["minimum"] == MINIMUM_NODE_VERSION
+    assert node_identity["actions"]["github_actions"] is True
+
+    (staged / "node-runtime.json").unlink()
+    with pytest.raises(FileNotFoundError, match="patched-Node runtime evidence"):
+        node_runtime_identity(staged, source_sha=SOURCE_SHA)
+
+    below = {**NODE_RUNTIME, "node_version": "22.23.3"}
+    (staged / "node-runtime.json").write_text(json.dumps(below))
+    with pytest.raises(ValueError, match="unpatched Node version"):
+        node_runtime_identity(staged, source_sha=SOURCE_SHA)
+
+    wrong_minimum = {**NODE_RUNTIME, "minimum": "22.0.0"}
+    (staged / "node-runtime.json").write_text(json.dumps(wrong_minimum))
+    with pytest.raises(ValueError, match="minimum must be 22.23.4"):
+        node_runtime_identity(staged, source_sha=SOURCE_SHA)
+
+    mismatched = {**NODE_RUNTIME, "source_sha": "e" * 40}
+    (staged / "node-runtime.json").write_text(json.dumps(mismatched))
+    with pytest.raises(ValueError, match="source SHA differs"):
+        node_runtime_identity(staged, source_sha=SOURCE_SHA)
+
+    unsatisfied = {**NODE_RUNTIME, "satisfied": False}
+    (staged / "node-runtime.json").write_text(json.dumps(unsatisfied))
+    with pytest.raises(ValueError, match="satisfied minimum"):
+        node_runtime_identity(staged, source_sha=SOURCE_SHA)
+
+    (staged / "node-runtime.json").write_text(json.dumps(NODE_RUNTIME))
+    assert node_runtime_identity(staged, source_sha=SOURCE_SHA) == node_identity
+
+
+def test_actions_runtime_evidence_is_required_and_commit_bound(tmp_path):
+    staged = tmp_path / "staged"
+    _files(staged)
+    identity = actions_runtime_identity(staged)
+    assert identity["action"] == "actions/setup-node"
+    assert identity["commit_sha"] == ACTION_COMMIT_SHA
+    assert identity["declared_runtime"] == "node24"
+
+    path = staged / ACTIONS_RUNTIME_FILE
+    path.unlink()
+    with pytest.raises(FileNotFoundError, match="JavaScript action runtime evidence"):
+        actions_runtime_identity(staged)
+
+    bad_commit = {**ACTIONS_RUNTIME, "commit_sha": "not-a-sha"}
+    path.write_text(json.dumps(bad_commit))
+    with pytest.raises(ValueError, match="action commit SHA"):
+        actions_runtime_identity(staged)
+
+    bad_runtime = {**ACTIONS_RUNTIME, "declared_runtime": "node"}
+    path.write_text(json.dumps(bad_runtime))
+    with pytest.raises(ValueError, match="node<N> declared runtime"):
+        actions_runtime_identity(staged)
+
+    unbound_source = {**ACTIONS_RUNTIME, "runtime_source": "https://raw.githubusercontent.com/actions/setup-node/main/action.yml"}
+    path.write_text(json.dumps(unbound_source))
+    with pytest.raises(ValueError, match="not bound to its exact commit SHA"):
+        actions_runtime_identity(staged)
+
+    wrong_action = {**ACTIONS_RUNTIME, "action": "actions/checkout"}
+    path.write_text(json.dumps(wrong_action))
+    with pytest.raises(ValueError, match="must name actions/setup-node"):
+        actions_runtime_identity(staged)
+
+    path.write_text(json.dumps(ACTIONS_RUNTIME))
+    assert actions_runtime_identity(staged) == identity
 
 
 def test_stage_run_provenance_is_exact_and_rejects_other_workflow_runs():
@@ -202,6 +329,8 @@ def test_workflow_stage_receipt_survives_default_artifact_upload(tmp_path):
     candidate.mkdir()
     (candidate / "josh-room-0.1.33.vsix").write_bytes(b"synthetic vsix")
     (candidate / "candidate.json").write_text("{}")
+    (candidate / "node-runtime.json").write_text(json.dumps(NODE_RUNTIME))
+    (candidate / ACTIONS_RUNTIME_FILE).write_text(json.dumps(ACTIONS_RUNTIME))
     (tmp_path / "release-readiness.json").write_text(json.dumps(CHECKS))
     manifest = tmp_path / "vscode-extension/runtime/manifest.json"
     manifest.parent.mkdir(parents=True)
@@ -234,8 +363,15 @@ if "--no-create-gitignore" not in sys.argv[2:]:
         if not path.name.startswith("."):
             shutil.copyfile(path, downloaded / path.name)
     receipt = json.loads((downloaded / "release-candidate.json").read_text())
+    node_identity = node_runtime_identity(downloaded, source_sha=SOURCE_SHA)
+    actions_identity = actions_runtime_identity(downloaded)
     validated = validate_staged_files(
         downloaded, receipt, source_sha=SOURCE_SHA, release_tag="v0.1.33-standalone-vsix",
-        version="0.1.33", checks=CHECKS, runtime=runtime_identity(RUNTIME, LOCK), stage_run=STAGE_RUN,
+        version="0.1.33", checks=CHECKS, runtime=runtime_identity(RUNTIME, LOCK),
+        node_runtime=node_identity, actions_runtime=actions_identity, stage_run=STAGE_RUN,
     )
+    assert receipt["node_runtime"] == node_identity
+    assert receipt["actions_runtime"] == actions_identity
+    assert "node-runtime.json" in receipt["assets"]
+    assert "actions-runtime.json" in receipt["assets"]
     assert set(validated) == set(receipt["assets"])
