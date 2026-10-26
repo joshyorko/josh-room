@@ -406,3 +406,15 @@ def test_artifact_release_tag_binds_source_sha_even_if_inputs_are_unchanged(tmp_
     assert original["artifact_release_tag"] != updated["artifact_release_tag"]
     assert original["artifact_release_tag"].endswith("-" + "2" * 64 + "-" + "3" * 64)
     assert updated["artifact_release_tag"].endswith("-" + "2" * 64 + "-" + "3" * 64)
+
+
+@pytest.mark.parametrize("rcc_field,stale", [("rcc_version", "v18.19.5"), ("rcc_source_sha", "0" * 40)])
+def test_stale_jat_rcc_combination_cannot_overwrite_current_consumers(tmp_path, rcc_field, stale):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    jat_candidate = _jat_candidate(candidate)
+    jat_candidate[rcc_field] = stale
+    before = {path: path.read_bytes() for path in _inputs(root) if path.exists()}
+    with pytest.raises(ValueError):
+        promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate)
+    assert {path: path.read_bytes() for path in before} == before

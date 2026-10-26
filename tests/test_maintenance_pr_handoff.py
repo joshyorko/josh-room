@@ -167,7 +167,7 @@ pathlib.Path(sys.argv[sys.argv.index("--report") + 1]).write_text(json.dumps({{"
     script = step["run"].replace("${{ github.sha }}", source)
     env = os.environ | {"PATH": str(commands) + os.pathsep + os.environ["PATH"], "RUNNER_TEMP": str(tmp_path), "GITHUB_REPOSITORY": "example/synthetic-room", "GITHUB_REPOSITORY_OWNER": "example", "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123", "GITHUB_STEP_SUMMARY": str(tmp_path / "summary")}
     for _ in range(2):
-        result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True)
+        result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True, check=False)
         assert result.returncode == 0, result.stderr
         tip = git("rev-parse", "HEAD")
         assert git("rev-parse", "HEAD^") == source
