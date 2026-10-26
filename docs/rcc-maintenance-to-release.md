@@ -109,8 +109,15 @@ The repository must allow GitHub Actions to create pull requests. If that
 permission is disabled, maintenance leaves its generated branch and published
 controller evidence intact and reports the PR-creation failure. It does not
 change repository permissions. After the permission is corrected, the PR
-handoff can resume without another promotion commit. A rebased branch is
-pushed with an exact lease, and the full CI dispatch names its resulting SHA.
+handoff regenerates the candidate from the qualified current `main`, without
+rebasing historical maintenance commits or copying their older manifests.
+Missing generated changes come from the verified controller/JAT receipts.
+Before replacing an existing branch, maintenance preserves its tip under
+`maintenance/rcc-runtimes-backup-<sha>` and pushes with an exact lease. Manual
+changes remain recoverable there for separate review. An existing attempt is
+reused only if its complete tree matches fresh generation and it contains the
+qualified main commit. The full CI dispatch names the resulting SHA.
+Branch dispatches run qualification; promotion still requires current `main`.
 An unchanged branch with no diff from `main` does not create an empty PR.
 The handoff retains the detailed preflight report when the branch already
 contains the generated update, so a retry does not erase source or artifact

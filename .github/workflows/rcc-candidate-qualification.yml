@@ -15,6 +15,7 @@ on:
       - "tests/test_controller_artifact.py"
       - "tests/test_rcc_maintenance.py"
       - "tests/test_promote_rcc_candidate.py"
+      - "tests/test_maintenance_pr_handoff.py"
       - "tests/test_jat_runtime_candidate.py"
       - "tests/test_release_readiness.py"
   schedule:
@@ -280,13 +281,11 @@ jobs:
           git fetch origin main
           test "$(git rev-parse origin/main)" = "${{ github.sha }}"
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            git fetch origin "$branch"
-            git switch --track -c "$branch" "origin/$branch"
+            git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
             branch_tip=$(git rev-parse "origin/$branch")
-            git rebase origin/main
-          else
-            git switch -c "$branch"
           fi
+          # Regenerate from the qualified main, never replay stale promotions.
+          git switch -C "$branch" origin/main
           python scripts/promote_rcc_candidate.py \
             --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
             --jat-candidate "$RUNNER_TEMP/jat-candidate/jat-runtime-candidate.json" \
@@ -311,9 +310,17 @@ jobs:
           release_version=$(jq -er '.version' vscode-extension/package.json)
           jq --arg version "$release_version" '.release_version = $version' "$report" > "$report.tmp"
           mv "$report.tmp" "$report"
+          # Reuse a completed attempt only when its entire tree matches this
+          # fresh generation and it contains the qualified main commit.
+          if [[ -n "$branch_tip" ]] && git merge-base --is-ancestor origin/main "$branch_tip" && git diff --quiet "$branch_tip" HEAD; then
+            git reset --hard "$branch_tip"
+          fi
           promotion_sha=$(git rev-parse HEAD)
           if [[ "$promotion_sha" != "$branch_tip" ]]; then
             if [[ -n "$branch_tip" ]]; then
+              # Preserve obsolete/manual changes before replacing their ref.
+              backup="refs/heads/maintenance/rcc-runtimes-backup-$branch_tip"
+              git push origin "$branch_tip:$backup"
               git push --force-with-lease="refs/heads/$branch:$branch_tip" --set-upstream origin "$branch"
             else
               git push --set-upstream origin "$branch"
