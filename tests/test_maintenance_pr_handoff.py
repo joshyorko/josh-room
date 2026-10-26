@@ -35,7 +35,7 @@ if name == "git":
     elif args[:2] == ["diff", "--cached"]:
         sys.exit(0)
     elif args[:2] == ["diff", "--quiet"]:
-        sys.exit(int(os.environ["AHEAD"]))
+        sys.exit(int(os.environ["AHEAD"]) if args[2] == "origin/main" else int(os.environ["BRANCH_TIP"] != os.environ["BRANCH_SHA"]))
 elif name == "python":
     report = pathlib.Path(args[args.index("--report") + 1])
     report.write_text(json.dumps({"status": "PASS", "no_change": True, "changed_files": [], "candidate": "v18.19.6"}))
@@ -95,9 +95,13 @@ def test_unchanged_branch_without_unmerged_commits_does_not_create_empty_pr(tmp_
 
 
 @pytest.mark.skipif(not shutil.which("bash") or not shutil.which("jq"), reason="Bash and jq are required for the Actions shell contract")
-def test_rebased_unchanged_candidate_is_pushed_with_exact_lease_before_ci(tmp_path):
+def test_regenerated_candidate_is_backed_up_and_pushed_with_exact_lease_before_ci(tmp_path):
     calls, _, _ = _handoff(tmp_path, rebased=True)
     push = ["git", "push", "--force-with-lease=refs/heads/maintenance/rcc-runtimes:" + "f" * 40, "--set-upstream", "origin", "maintenance/rcc-runtimes"]
+    backup = ["git", "push", "origin", "f" * 40 + ":refs/heads/maintenance/rcc-runtimes-backup-" + "f" * 40]
+    assert calls.index(backup) < calls.index(push)
+    assert ["git", "switch", "-C", "maintenance/rcc-runtimes", "origin/main"] in calls
+    assert not any(call[:2] == ["git", "rebase"] for call in calls)
     assert push in calls
     assert not any(call[:2] == ["git", "commit"] for call in calls)
     assert calls.index(push) < next(index for index, call in enumerate(calls) if call[:3] == ["gh", "workflow", "run"])
@@ -110,3 +114,71 @@ def test_unchanged_retry_reports_existing_candidate_version_without_bumping_it(t
     assert json.loads(report_path.read_text()) == expected
     assert "Next standalone VSIX version: 0.1.34" in (tmp_path / "controller-promotion-pr.md").read_text()
     assert json.loads((tmp_path / "vscode-extension/package.json").read_text())["version"] == "0.1.34"
+
+
+@pytest.mark.skipif(not shutil.which("bash") or not shutil.which("jq"), reason="Bash and jq required")
+def test_diverged_branch_regenerates_missing_update_without_replaying_old_pins(tmp_path):
+    """Exercise real Git history, backup push, exact lease, and retry reuse."""
+    remote = tmp_path / "remote.git"
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", str(remote), str(repo)], check=True, capture_output=True)
+
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+
+    git("config", "user.name", "Synthetic Test")
+    git("config", "user.email", "test@example.test")
+    git("switch", "-c", "main")
+    package = repo / "vscode-extension/package.json"
+    package.parent.mkdir()
+    package.write_text('{"version":"0.1.33"}\n')
+    (repo / "pins.json").write_text('{"jat":"old","controller":"old"}\n')
+    git("add", ".")
+    git("commit", "-m", "base")
+    git("switch", "-c", "maintenance/rcc-runtimes")
+    (repo / "pins.json").write_text('{"jat":"obsolete","controller":"obsolete"}\n')
+    (repo / "manual.txt").write_text("recover me\n")
+    git("add", ".")
+    git("commit", "-m", "obsolete promotion plus manual change")
+    old_tip = git("rev-parse", "HEAD")
+    git("push", "origin", "HEAD")
+    git("switch", "main")
+    (repo / "pins.json").write_text('{"jat":"current","controller":"old"}\n')
+    (repo / "new-main.txt").write_text("keep me\n")
+    git("add", ".")
+    git("commit", "-m", "newer JAT and unrelated main change")
+    source = git("rev-parse", "HEAD")
+    git("push", "origin", "main")
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    generator = commands / "python"
+    generator.write_text(f'''#!{sys.executable}
+import json, pathlib, sys
+pathlib.Path("pins.json").write_text('{{"jat":"current","controller":"qualified"}}\\n')
+pathlib.Path(sys.argv[sys.argv.index("--report") + 1]).write_text(json.dumps({{"changed_files":["pins.json"],"candidate":"qualified","platforms":{{"linux-x64":{{}},"win32-x64":{{}}}}}}))
+''')
+    generator.chmod(0o755)
+    gh = commands / "gh"
+    gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$RUNNER_TEMP/gh-calls"\n')
+    gh.chmod(0o755)
+    workflow = yaml.safe_load((ROOT / ".github/workflows/rcc-candidate-qualification.yml").read_text())
+    step = next(item for item in workflow["jobs"]["promote"]["steps"] if item.get("name") == "Open or update coherent consumer promotion PR")
+    script = step["run"].replace("${{ github.sha }}", source)
+    env = os.environ | {"PATH": str(commands) + os.pathsep + os.environ["PATH"], "RUNNER_TEMP": str(tmp_path), "GITHUB_REPOSITORY": "example/synthetic-room", "GITHUB_REPOSITORY_OWNER": "example", "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123", "GITHUB_STEP_SUMMARY": str(tmp_path / "summary")}
+    for _ in range(2):
+        result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+        tip = git("rev-parse", "HEAD")
+        assert git("rev-parse", "HEAD^") == source
+        assert json.loads((repo / "pins.json").read_text()) == {"jat": "current", "controller": "qualified"}
+        assert (repo / "new-main.txt").read_text() == "keep me\n"
+        assert not (repo / "manual.txt").exists()
+        assert git("show", f"{old_tip}:manual.txt") == "recover me"
+        assert git("ls-remote", "origin", f"refs/heads/maintenance/rcc-runtimes-backup-{old_tip}").split()[0] == old_tip
+        assert git("ls-remote", "origin", "refs/heads/maintenance/rcc-runtimes").split()[0] == tip
+        if _ == 0:
+            first_tip = tip
+        else:
+            assert tip == first_tip
+    assert f"source_sha={tip}" in (tmp_path / "gh-calls").read_text()
