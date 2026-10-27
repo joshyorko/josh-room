@@ -249,13 +249,20 @@ function buildProviderTree(catalog = {}) {
     const roomNodes = projects.map((project) => ({
       kind: "room",
       id: project.id || project.project_id,
-      label: `${project.display_name || project.name || project.id || project.project_id} · ${displayName}`,
+      label: project.display_name || project.name || project.id || project.project_id,
       project,
       dimension,
-      children: snapshotRecords(project).map((snapshot) => ({
+      children: snapshotRecords(project).sort((left, right) => {
+        if (left.id === project.latest) return right.id === project.latest ? 0 : -1;
+        if (right.id === project.latest) return 1;
+        const leftDate = Date.parse(left.created_at) || 0;
+        const rightDate = Date.parse(right.created_at) || 0;
+        return rightDate - leftDate || String(left.id).localeCompare(String(right.id));
+      }).map((snapshot) => ({
         kind: "jat",
         id: snapshot.id,
-        label: snapshot.display_name,
+        label: snapshot.created_at && !Number.isNaN(Date.parse(snapshot.created_at))
+          ? new Date(snapshot.created_at).toLocaleString() : snapshot.display_name && snapshot.display_name !== snapshot.id ? snapshot.display_name : "Recovery point",
         snapshot,
         project,
         dimension,
@@ -301,11 +308,7 @@ function buildProviderTree(catalog = {}) {
       connectionNode = {
         kind: "connection",
         id: connectionId,
-        label: providerId === "r2"
-          ? connectionLabel(connectionState)
-          : connectionState === "connected"
-            ? connection.display_name || connection.name || connection.label || connection.endpoint || connectionId
-            : connectionLabel(connectionState),
+        label: connection.display_name || connection.name || connection.label || connection.endpoint || (providerId === "r2" ? "Cloudflare" : connectionId),
         description: providerId === "r2"
           ? connectionState === "expired" ? "Reconnect Cloudflare" : connectionState === "connected" ? "Connected" : "Connect Cloudflare"
           : connectionState === "expired" || connectionState === "disconnected" ? "Reconnect" : connectionState === "connected" ? "Connected" : "Connect",
@@ -338,9 +341,7 @@ function buildProviderTree(catalog = {}) {
     grouped.get(providerId).children.push({
       kind: "connection",
       id: connectionId,
-      label: connectionState === "connected"
-        ? connection.display_name || connection.name || connection.label || connection.endpoint || connectionId
-        : connectionLabel(connectionState),
+      label: connection.display_name || connection.name || connection.label || connection.endpoint || (providerId === "r2" ? "Cloudflare" : connectionId),
       description: connectionState === "expired" || connectionState === "disconnected"
         ? "Reconnect" : connectionState === "connected" ? "Connected" : "Connect",
       state: connectionState,

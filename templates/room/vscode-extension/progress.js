@@ -85,7 +85,6 @@ function createProgressTracker(kind) {
   return {
     update(event) {
       let rule = profile[event.stage];
-      if (event.stage === "jat" && /completed/i.test(event.message)) rule = 100;
       if (rule === "indeterminate" || rule === undefined) {
         return {
           bar: renderProgressBar(lastPercent),

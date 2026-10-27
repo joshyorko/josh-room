@@ -104,3 +104,10 @@ test("progress display formatting is compact and deterministic", () => {
   assert.equal(renderStatusBar(68, 0), "███████◆░░");
   assert.equal(renderStatusBar(68, 1), "███████░◆░");
 });
+
+test("a completed JAT phase does not finish a composite Save", () => {
+  const tracker = createProgressTracker("save");
+  const state = tracker.update({ stage: "jat", message: "JAT completed" });
+  assert.notEqual(state.percent, 100);
+  assert.equal(tracker.update({ stage: "complete", message: "Complete" }).percent, 100);
+});
