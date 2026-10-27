@@ -28,6 +28,12 @@ The public repository contains code, schemas, synthetic fixtures, tests, ADRs,
 and the thin consumer template. Real credentials, age identities, catalogs,
 snapshot objects, private paths, and employer/customer data stay outside Git.
 
+The OMP extension under `omp-extension/` is a second, terminal-native surface.
+OMP is the agent harness; Josh Room contributes a plugin to it that calls only the
+JSON CLI (`context`, `status`, `snapshots list`, `projects list`, `snapshot create`,
+`jat inspect`, `doctor`). It adds no agent loop, daemon, MCP server, or second
+domain implementation. See [ADR 0010](adr/0010-omp-extension-surface.md).
+
 The standalone VSIX owns acquisition of the pinned RCC binary and keeps its
 private `ROBOCORP_HOME` under VS Code global storage. It consumes the immutable JAT RCC v18.19.7 Environment Artifact; JAT remains a separate source and
 runtime substrate, and Hauler remains JAT-owned through its `rccPostInstall`

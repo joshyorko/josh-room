@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { registerRoomLifecycle, readProvenance } from "../src/lifecycle.ts";
+import { registerRoomLifecycle } from "../src/lifecycle.ts";
+import { readProvenance, RoomSessionState } from "../src/state.ts";
 
 test("outside-Room session startup is silent and only probes cheap context", async () => {
 	const handlers = new Map();
@@ -8,7 +9,7 @@ test("outside-Room session startup is silent and only probes cheap context", asy
 	let probeCalls = 0;
 	const pi = { on(name, handler) { handlers.set(name, handler); } };
 	const controller = { async context() { probeCalls += 1; return { kind: "unlinked" }; } };
-	registerRoomLifecycle(pi, controller);
+	registerRoomLifecycle(pi, controller, new RoomSessionState(), async () => true);
 	const context = {
 		cwd: "/workspace",
 		sessionManager: { getBranch: () => [] },

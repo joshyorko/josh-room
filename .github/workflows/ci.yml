@@ -57,6 +57,7 @@ jobs:
       - run: uv run ruff check src tests
       - run: uv run pytest -q
       - run: node --test vscode-extension/*.test.js scripts/verify_node_version.test.js
+      - run: node --experimental-strip-types --test omp-extension/tests/*.test.mjs
       - run: git diff --check
 
   windows-private-runtime:
