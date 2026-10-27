@@ -1236,7 +1236,6 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
       saved = true;
       return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "test-room", snapshot_id: "new-jat", data_added_bytes: 5, scanned_bytes: 10 }) };
     }
-    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
     if (args[0] === "workspace" && args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created" }) };
     if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
     throw new Error(`Unexpected controller operation: ${args[0]} ${args[1]}`);
