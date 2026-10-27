@@ -2021,8 +2021,14 @@ async function saveRoom(options = {}) {
     await vscode.window.showInformationMessage("Open a Room first, or use Save Folder As Room.");
     return "cancelled";
   }
-  if (currentMarker && currentMarker.workspace_path_sha256 !== crypto.createHash("sha256").update(path.resolve(cwd)).digest("hex")) {
-    throw new Error("The current Room is not bound to this folder. Link or Repair it before saving.");
+  if (currentMarker) {
+    // The controller binds markers to Path(workspace).resolve(), which follows
+    // symlinks; compare against the same real path.
+    let canonicalCwd;
+    try { canonicalCwd = fs.realpathSync(cwd); } catch (_error) { canonicalCwd = undefined; }
+    if (!canonicalCwd || currentMarker.workspace_path_sha256 !== crypto.createHash("sha256").update(canonicalCwd).digest("hex")) {
+      throw new Error("The current Room is not bound to this folder. Link or Repair it before saving.");
+    }
   }
   const folders = currentMarker ? [{ fsPath: cwd }] : await vscode.window.showOpenDialog({
     title: "Josh: Save Room",
@@ -2194,6 +2200,13 @@ async function saveRoom(options = {}) {
     deletionConfirmationToken = await approveRoomStorePreview(preview, { name, source, allImages: imageChoice.allImages, dimension: targetDimension?.display_name || targetDimensionId });
     if (deletionConfirmationToken === undefined) return "cancelled";
     if (deletionConfirmationToken) buildArgs.push("--confirm-deletion", deletionConfirmationToken);
+  }
+  if (nativeSave && extensionContext) {
+    // Native Save establishes the baseline but not the watchers. Install them
+    // before Save so later terminal or external edits leave the Saved state.
+    let savesActiveFolder = false;
+    try { savesActiveFolder = fs.realpathSync(source) === fs.realpathSync(cwd); } catch (_error) { savesActiveFolder = false; }
+    if (savesActiveFolder) ensureWorkspaceWatched(extensionContext, cwd);
   }
   const saveEventGeneration = workspaceEventGeneration;
   const result = nativeSave
@@ -4412,6 +4425,44 @@ currentRoom = function nativeCurrentRoom(cwd) {
 };
 
 let workspaceBindingTrusted = false;
+let workspaceRenameSubscription;
+let watchedWorkspaceRoot;
+
+// Install the filesystem and capture-policy watchers that feed Room change
+// state. Baselines and Room state are owned by the caller.
+function watchWorkspace(context, root) {
+  workspaceWatcher?.dispose();
+  capturePolicyWatcher?.dispose();
+  workspaceRenameSubscription?.dispose();
+  const compare = (uri) => {
+    if (isCapturePolicyUri(root, uri)) handleCapturePolicyChange(root);
+    else markWorkspaceChange(uri);
+  };
+  workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
+  workspaceWatcher.onDidChange(compare);
+  workspaceWatcher.onDidCreate(compare);
+  workspaceWatcher.onDidDelete(compare);
+  context.subscriptions.push(workspaceWatcher);
+  capturePolicyWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, ".josh-roomignore"));
+  capturePolicyWatcher.onDidChange(compare);
+  capturePolicyWatcher.onDidCreate(compare);
+  capturePolicyWatcher.onDidDelete(compare);
+  context.subscriptions.push(capturePolicyWatcher);
+  workspaceRenameSubscription = vscode.workspace.onDidRenameFiles((event) => {
+    for (const file of event.files || []) {
+      compare(file.oldUri);
+      compare(file.newUri);
+    }
+  });
+  context.subscriptions.push(workspaceRenameSubscription);
+  watchedWorkspaceRoot = root;
+}
+
+function ensureWorkspaceWatched(context, root) {
+  if (workspaceWatcher && capturePolicyWatcher && watchedWorkspaceRoot === root) return;
+  watchWorkspace(context, root);
+}
+
 const legacyStartDirtyTracking = startDirtyTracking;
 startDirtyTracking = async function nativeStartDirtyTracking(context) {
   const root = activeWorkspace();
@@ -4419,8 +4470,7 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
   selectedDimensionId = marker && marker.dimension_id;
   if (!marker) return legacyStartDirtyTracking(context);
   const generation = ++dirtyTrackingGeneration;
-  workspaceWatcher && workspaceWatcher.dispose();
-  capturePolicyWatcher && capturePolicyWatcher.dispose();
+  watchWorkspace(context, root);
   const eventGenerationAtStart = workspaceEventGeneration;
   const savedFingerprint = marker.format_version === 3
     ? marker.workspace_signature
@@ -4442,26 +4492,6 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     const relative = relativeWorkspacePath(document.uri);
     if (relative && document.isDirty) dirtyBuffers.add(relative);
   }
-  const compare = (uri) => {
-    if (isCapturePolicyUri(root, uri)) handleCapturePolicyChange(root);
-    else markWorkspaceChange(uri);
-  };
-  workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
-  workspaceWatcher.onDidChange(compare);
-  workspaceWatcher.onDidCreate(compare);
-  workspaceWatcher.onDidDelete(compare);
-  context.subscriptions.push(workspaceWatcher);
-  capturePolicyWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, ".josh-roomignore"));
-  capturePolicyWatcher.onDidChange(compare);
-  capturePolicyWatcher.onDidCreate(compare);
-  capturePolicyWatcher.onDidDelete(compare);
-  context.subscriptions.push(capturePolicyWatcher);
-  context.subscriptions.push(vscode.workspace.onDidRenameFiles((event) => {
-    for (const file of event.files || []) {
-      compare(file.oldUri);
-      compare(file.newUri);
-    }
-  }));
   if (!workspaceBaseline) {
     setRoomState("unknown", { bindingTrusted: false });
     return;

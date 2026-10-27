@@ -6418,3 +6418,40 @@ test("Save Current Room rejects a marker bound to a different folder", async () 
   await assert.rejects(fixture.extension.__test__.saveRoom({ current: true }), /not bound to this folder/);
   assert.equal(fixture.spawnHarness.calls.some((call) => call.args[0] === "snapshot"), false);
 });
+
+test("Save Current Room accepts a marker bound to the real path of a symlinked folder", async () => {
+  const real = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-symlink-real-")));
+  const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-symlink-")), "room");
+  fs.symlinkSync(real, link, "junction");
+  const fixture = createNativeSaveFixture(link, { preview: nativePreview(), saveResult: { ok: true, status: "already-saved" } });
+  writeStatMarker(real, { project_id: "demo-room", display_name: "Demo Room" });
+  fixture.vscode.openDialogResponses.length = 0;
+  fixture.vscode.quickPickResponses.splice(0, 1);
+  fixture.vscode.infoResponses.push("Save");
+  assert.equal(await fixture.extension.__test__.saveRoom({ current: true }), "already-saved");
+  assert.ok(fixture.spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"));
+});
+
+test("R2 native Save of the open folder keeps tracking later filesystem changes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-save-tracking-"));
+  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  const fixture = createNativeSaveFixture(root, {
+    provider: "r2",
+    preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
+    saveResult: {
+      ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2", dimension_id: "backup",
+      encryption_domain_id: "domain-a", workspace_signature: "c".repeat(64),
+      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha,
+    },
+    onSave: (_args, { root: saveRoot }) => writeStatMarker(saveRoot, {
+      snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha,
+    }),
+  });
+  fixture.vscode.infoResponses.push("Save", undefined);
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "clean");
+  const watcher = fixture.watcherCallbacks.find((item) => item.pattern.pattern === "**/*");
+  assert.ok(watcher);
+  await watcher.didCreate({ fsPath: path.join(root, "src", "from-terminal.py") });
+  assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "dirty");
+});
