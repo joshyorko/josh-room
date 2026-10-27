@@ -134,8 +134,11 @@ current Room quietly changes to `Needs save` after workspace edits and returns
 to `Saved` when those contents are reverted to the captured baseline. Clicking
 its status-bar Save indicator opens the existing Save flow.
 Repositories do not need a Josh Room `.vscode/tasks.json`.
-`Josh: Save Room` first opens a native folder picker, then
-a Quick Pick of saved Rooms plus “Create a new Room”. The selected folder is
+`Josh: Save Current Room` saves the open Room using its existing binding. The
+first Save in a session asks whether to include local OCI images; later Saves of
+that Room reuse the choice and show it in the preview. To choose another scope,
+use `Josh: Save Folder As Room`. That command opens a folder picker and a Quick
+Pick of saved Rooms plus “Create a new Room”. The selected folder is
 the snapshot source and receives only the non-secret `.josh-room.json` identity
 marker after a successful save. Selecting an existing Room appends an immutable
 snapshot and advances its `latest` pointer; it does not create another logical
@@ -157,7 +160,16 @@ images for containerd, or seed a registry or directory. New operations invoke th
 canonical JAT CLI contract inside the acquired JAT Environment Artifact; Hauler
 behavior stays owned by JAT. These commands require no Room, catalog, OAuth, or
 R2 operation.
-The single trash action lists the selected Room's snapshots and requires exact
+Room rows show Current and the known save state. Recovery points show their date,
+Latest and Open status, and logical or portable kind. Their full ID is available
+in the tooltip. Room context menus contain Link, Repair, Serve and Delete; ready
+Dimensions expose settings and maintenance, with MinIO recovery actions where
+applicable. The Save preview identifies the destination and capture scope and
+lists any deletions that need confirmation. Choose Show Details on a Save receipt
+to inspect sanitized evidence in the Josh Room output. Unsaved editor buffers are
+not captured until their files are saved.
+
+The Delete Snapshot action lists the selected Room's snapshots and requires exact
 modal confirmation before deleting one. Removing Latest safely promotes the
 newest remaining snapshot; deleting the final snapshot removes the now-empty
 Room. Objects remain protected whenever another snapshot references them.

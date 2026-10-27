@@ -21,6 +21,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:joshRoom.save",
+    "onCommand:joshRoom.saveFolderAs",
     "onCommand:joshRoom.checkWorkspace",
     "onCommand:joshRoom.new",
     "onCommand:joshRoom.addStorage",
@@ -154,7 +155,12 @@
       },
       {
         "command": "joshRoom.save",
-        "title": "Josh: Save Room",
+        "title": "Josh: Save Current Room",
+        "icon": "$(save-as)"
+      },
+      {
+        "command": "joshRoom.saveFolderAs",
+        "title": "Josh: Save Folder As Room",
         "icon": "$(save-as)"
       },
       {
@@ -290,7 +296,7 @@
     "viewsWelcome": [
       {
         "view": "joshRoom.rooms",
-        "contents": "Connect storage to begin.\n[Add Storage](command:joshRoom.addStorage)",
+        "contents": "Connect storage to begin.\n[Connect Storage](command:joshRoom.addStorage)\n[Load Existing Storage](command:joshRoom.prepare)",
         "when": "joshRoom.roomsEmpty"
       }
     ],
@@ -345,8 +351,8 @@
         },
         {
           "command": "joshRoom.editStorageSettings",
-          "when": "view == joshRoom.rooms && viewItem == dimension",
-          "group": "inline@2"
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-minio-ready|-uninitialized|-insecure|-legacy|-resumable|-failed)?$/",
+          "group": "settings@2"
         },
         {
           "command": "joshRoom.initializeEncryption",
@@ -369,9 +375,14 @@
           "group": "inline@1"
         },
         {
+          "command": "joshRoom.importRecovery",
+          "when": "view == joshRoom.rooms && (viewItem == dimension-uninitialized || viewItem == dimension-insecure)",
+          "group": "recovery@2"
+        },
+        {
           "command": "joshRoom.exportRecovery",
-          "when": "view == joshRoom.rooms && viewItem == dimension",
-          "group": "inline@3"
+          "when": "view == joshRoom.rooms && viewItem == dimension-minio-ready",
+          "group": "recovery@3"
         },
         {
           "command": "joshRoom.enter",
@@ -379,19 +390,24 @@
           "group": "inline@1"
         },
         {
+          "command": "joshRoom.save",
+          "when": "view == joshRoom.rooms && viewItem == current-room",
+          "group": "inline@1"
+        },
+        {
           "command": "joshRoom.link",
-          "when": "view == joshRoom.rooms && viewItem == room",
-          "group": "inline@2"
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "group": "room@2"
         },
         {
           "command": "joshRoom.repair",
-          "when": "view == joshRoom.rooms && viewItem == room",
-          "group": "inline@3"
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "group": "room@3"
         },
         {
           "command": "joshRoom.serve",
-          "when": "view == joshRoom.rooms && viewItem == room",
-          "group": "inline@2"
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "group": "room@2"
         },
         {
           "command": "joshRoom.serve",
@@ -420,23 +436,23 @@
         },
         {
           "command": "joshRoom.verifyRoomStore",
-          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/",
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-minio-ready)?$/",
           "group": "room-store@1"
         },
         {
           "command": "joshRoom.optimizeRoomStore",
-          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/",
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-minio-ready)?$/",
           "group": "room-store@2"
         },
         {
           "command": "joshRoom.reconcileRoomStore",
-          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-uninitialized|-legacy|-resumable|-insecure|-failed)?$/",
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-minio-ready)?$/",
           "group": "room-store@3"
         },
         {
           "command": "joshRoom.remove",
-          "when": "view == joshRoom.rooms && viewItem == room",
-          "group": "inline@3"
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "group": "room@3"
         }
       ]
     }

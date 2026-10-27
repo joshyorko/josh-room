@@ -1402,7 +1402,7 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
     outputChannel?.info(display.logLine);
   };
   return {
-    event: publish,
+    event: (event) => publish(event.stage === "complete" ? { ...event, stage: "subtask-complete" } : event),
     finish: () => {
       publish({ stage: "complete", message: "Complete" });
       stopAnimation();
@@ -1415,6 +1415,10 @@ function createVisualReporter(title, kind, progress, operationId = ++activeOpera
     },
     fail: (error) => {
       stopAnimation();
+      if (isCancellationError(error)) {
+        if (activeOperationId === operationId) setStatus("$(archive) Josh Room", `${title} cancelled`);
+        return;
+      }
       const rawMessage = sanitizeControllerText(error?.message || String(error));
       const message = userFacingError(error);
       outputChannel?.error(`FAILED · ${title} · ${rawMessage}`);
@@ -1588,6 +1592,7 @@ function setRoomState(kind, { bindingTrusted } = {}) {
   if (kind !== "clean") trustedSaveReceipt = undefined;
   if (bindingTrusted !== undefined) workspaceBindingTrusted = bindingTrusted;
   if (roomStatus.kind === kind) {
+    roomsProvider?.emitter.fire(undefined);
     refreshRoomStatus();
     return;
   }
@@ -1734,11 +1739,12 @@ function assertValidRoomStorePreview(preview) {
   }
 }
 
-async function approveRoomStorePreview(preview) {
-  const message = roomStorePreviewText(preview);
+async function approveRoomStorePreview(preview, { name, source, allImages, dimension } = {}) {
+  const target = name ? `Room: ${name}\nDimension: ${dimension || "selected storage"}\nFolder: ${source}\nCapture: ${allImages ? "Workspace and all tagged local OCI images" : "Workspace only"}\n\n` : "";
+  const message = target + roomStorePreviewText(preview);
   if (preview.deletion_confirmation_token) {
     const action = await vscode.window.showWarningMessage(
-      `${message}\n\nThis deletion plan needs confirmation before Save.`,
+      `${message}\n\nDeleted paths:\n${preview.deleted_paths.map((item) => JSON.stringify(item)).join("\n")}\n\nThis deletion plan needs confirmation before Save.`,
       { modal: true },
       "Confirm Save",
       "Cancel",
@@ -1861,7 +1867,7 @@ function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
   }
   const marker = currentRoom(source);
   const bindingMatches = nativeSaveBindingMatches(result, marker, source, policy);
-  if (result.status === "saved-but-dirty" || saveEventGeneration !== workspaceEventGeneration) {
+  if (result.status === "saved-but-dirty" || dirtyBuffers.size > 0 || saveEventGeneration !== workspaceEventGeneration) {
     setRoomState("saved-but-still-dirty", { bindingTrusted: bindingMatches });
     return;
   }
@@ -2001,10 +2007,24 @@ async function checkWorkspace() {
   else await vscode.window.showErrorMessage(message);
   return result;
 }
+const sessionCaptureChoices = new Map();
+
+function captureChoiceKey(source, dimension, project) {
+  return JSON.stringify([path.resolve(source), dimension, project]);
+}
+
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
-  const folders = await vscode.window.showOpenDialog({
+  const currentMarker = options.current ? currentRoom(cwd) : undefined;
+  if (options.current && !currentMarker) {
+    await vscode.window.showInformationMessage("Open a Room first, or use Save Folder As Room.");
+    return "cancelled";
+  }
+  if (currentMarker && currentMarker.workspace_path_sha256 !== crypto.createHash("sha256").update(path.resolve(cwd)).digest("hex")) {
+    throw new Error("The current Room is not bound to this folder. Link or Repair it before saving.");
+  }
+  const folders = currentMarker ? [{ fsPath: cwd }] : await vscode.window.showOpenDialog({
     title: "Josh: Save Room",
     defaultUri: vscode.Uri.file(cwd),
     canSelectFiles: false,
@@ -2018,10 +2038,10 @@ async function saveRoom(options = {}) {
     { label: "Workspace only", allImages: false },
     { label: "Workspace + all tagged local OCI images", allImages: true },
   ];
-  let imageChoice;
+  let imageChoice = currentMarker && sessionCaptureChoices.get(captureChoiceKey(source, currentMarker.dimension_id, currentMarker.project_id));
   const cachedReceipt = options.forceCreate ? undefined : trustedLocalSaveReceipt(source, cwd);
   if (cachedReceipt) {
-    imageChoice = await vscode.window.showQuickPick(imageChoices, {
+    if (!imageChoice) imageChoice = await vscode.window.showQuickPick(imageChoices, {
       title: "Include local OCI images?",
       ignoreFocusOut: true,
     });
@@ -2034,7 +2054,7 @@ async function saveRoom(options = {}) {
       const action = await vscode.window.showInformationMessage(
         "Already saved — 0 bytes uploaded",
         "Done",
-        "Choose another Room",
+        ...(currentMarker ? [] : ["Choose another Room"]),
       );
       if (action !== "Choose another Room"
         && await nativeSaveReceiptStillMatches(source, cachedReceipt)
@@ -2050,7 +2070,11 @@ async function saveRoom(options = {}) {
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const marker = currentRoom(source);
-  const selected = options.forceCreate
+  const boundProject = currentMarker && projects.find((project) => sameRoomBinding(currentMarker, project));
+  if (currentMarker && !boundProject) {
+    throw new Error("The current Room was not found in its Dimension. Refresh storage or repair its binding before saving.");
+  }
+  const selected = currentMarker ? { project: boundProject } : options.forceCreate
     ? { create: true }
     : await vscode.window.showQuickPick([
       { label: "$(add) Create a new Room…", create: true },
@@ -2153,11 +2177,13 @@ async function saveRoom(options = {}) {
   }
   let preview;
   let deletionConfirmationToken;
-  if (targetProvider === "minio") {
+  const nativeSave = targetProvider === "minio" || (targetProvider === "r2" && targetDimension && !targetDimension.synthetic);
+  if (nativeSave) {
     const previewArgs = nativeRegistry.dimensionArgs(
       ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
       targetDimensionId || selectedDimensionId,
     );
+    if (imageChoice.allImages) previewArgs.push("--all-images");
     preview = await runSelectedEncryption(
       previewArgs,
       source,
@@ -2165,41 +2191,40 @@ async function saveRoom(options = {}) {
       { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
     );
     assertValidRoomStorePreview(preview);
-    deletionConfirmationToken = await approveRoomStorePreview(preview);
+    deletionConfirmationToken = await approveRoomStorePreview(preview, { name, source, allImages: imageChoice.allImages, dimension: targetDimension?.display_name || targetDimensionId });
     if (deletionConfirmationToken === undefined) return "cancelled";
     if (deletionConfirmationToken) buildArgs.push("--confirm-deletion", deletionConfirmationToken);
   }
   const saveEventGeneration = workspaceEventGeneration;
-  const result = targetProvider === "minio"
+  const result = nativeSave
     ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
       title: `Saving ${name}…`,
       action: "save a Room",
       encryptionMaterial,
     })
     : await runOperation(`Saving ${name}…`, buildArgs, source);
-  if (targetProvider === "minio") {
+  if (nativeSave) {
     if (!["saved", "saved-but-dirty", "already-saved"].includes(result.status)) {
       throw new Error("Room Store Save returned an unsupported receipt.");
     }
-    if (result.status === "already-saved") {
-      await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded");
-    } else if (result.status === "saved-but-dirty") {
-      const logicalEntries = Number.isSafeInteger(preview?.current_entry_count)
-        ? preview.current_entry_count : "unknown";
-      const scanned = formatHaulerSize(result.scanned_bytes ?? preview?.scanned_bytes) || "unknown";
-      const added = formatHaulerSize(result.data_added_bytes) || "unknown";
-      await vscode.window.showWarningMessage(
-        `Saved “${name}”, but workspace changes remain · Logical entries: ${logicalEntries} · Workspace scan: ${scanned} · Restic data added: ${added}`,
-      );
-    } else {
-      const logicalEntries = Number.isSafeInteger(preview?.current_entry_count)
-        ? preview.current_entry_count : "unknown";
-      const scanned = formatHaulerSize(result.scanned_bytes ?? preview?.scanned_bytes) || "unknown";
-      const added = formatHaulerSize(result.data_added_bytes) || "unknown";
-      await vscode.window.showInformationMessage(
-        `Saved “${name}” · Logical entries: ${logicalEntries} · Workspace scan: ${scanned} · Restic data added: ${added}`,
-      );
+    const logicalEntries = Number.isSafeInteger(preview?.current_entry_count) ? preview.current_entry_count : "unknown";
+    const scanned = formatHaulerSize(result.scanned_bytes ?? preview?.scanned_bytes) || "unknown";
+    const added = formatHaulerSize(result.data_added_bytes) || "unknown";
+    outputChannel?.appendLine(`Save receipt · Logical entries: ${logicalEntries} · Workspace scan: ${scanned} · Restic data added: ${added}`);
+    for (const key of ["status", "dimension_id", "encryption_domain_id", "project_id", "snapshot_id", "workspace_snapshot_id", "workspace_parent_snapshot_id", "workspace_signature", "signature_algorithm", "capture_policy_sha256", "ciphertext_sha256", "ciphertext_size", "has_external_components"]) {
+      if (result[key] !== undefined && result[key] !== null) outputChannel?.appendLine(`${key}: ${sanitizeControllerText(result[key])}`);
     }
+    let action;
+    if (dirtyBuffers.size > 0) {
+      action = await vscode.window.showWarningMessage("The Room was saved from disk, but unsaved editor changes remain. Save the files and save the Room again.", "Show Details");
+    } else if (result.status === "already-saved") {
+      action = await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded", "Show Details");
+    } else if (result.status === "saved-but-dirty" || saveEventGeneration !== workspaceEventGeneration) {
+      action = await vscode.window.showWarningMessage(`Saved “${name}”, but workspace changes remain.`, "Show Details");
+    } else {
+      action = await vscode.window.showInformationMessage(`Saved “${name}”.`, "Show Details");
+    }
+    if (action === "Show Details") outputChannel?.show(true);
     finishRoomStoreSave(result, source, saveEventGeneration, imageChoice.allImages);
   } else {
     const size = Number.isFinite(result.ciphertext_size)
@@ -2207,7 +2232,11 @@ async function saveRoom(options = {}) {
       : "unknown size";
     await vscode.window.showInformationMessage(`Saved “${name}” (encrypted snapshot object: ${size}).`);
   }
-  if (targetProvider !== "minio" && path.resolve(source) === path.resolve(cwd)) {
+  const savedMarker = currentRoom(source);
+  if (savedMarker && savedMarker.dimension_id === targetDimensionId && savedMarker.project_id === (selected.project?.id || result.project_id)) {
+    sessionCaptureChoices.set(captureChoiceKey(source, savedMarker.dimension_id, savedMarker.project_id), imageChoice);
+  }
+  if (!nativeSave && path.resolve(source) === path.resolve(cwd)) {
     await startDirtyTracking(extensionContext);
   }
   try {
@@ -2215,7 +2244,8 @@ async function saveRoom(options = {}) {
   } catch (_error) {
     await vscode.window.showWarningMessage("Room saved, but storage refresh did not finish. Use Refresh to reload the list; you do not need to save again.");
   }
-  return targetProvider === "minio" ? result.status : "saved";
+  return dirtyBuffers.size > 0 || saveEventGeneration !== workspaceEventGeneration || result.status === "saved-but-dirty"
+    ? "saved-but-dirty" : nativeSave ? result.status : "saved";
 }
 
 async function enterRoom(preferredProject) {
@@ -2707,10 +2737,11 @@ async function showJatInventory(haul, cwd) {
     : [];
   const items = inventoryQuickPickItems(result.inventory);
   if (!items.length) {
-    await vscode.window.showInformationMessage(
+    const action = await vscode.window.showInformationMessage(
       `JAT inspect found no content references in ${path.basename(haul)}.`,
       "Show Logs",
     );
+    if (action === "Show Logs") outputChannel?.show(true);
     return "empty";
   }
   const selected = await vscode.window.showQuickPick(items, {
@@ -2785,10 +2816,11 @@ async function jatExtract(preselection) {
     cwd,
   );
   const payloads = resultPayloads(result, destination);
-  await vscode.window.showInformationMessage(
+  const action = await vscode.window.showInformationMessage(
     `Extracted ${reference} to ${payloadReceipt(payloads) || destination}.`,
     "Show Logs",
   );
+  if (action === "Show Logs") outputChannel?.show(true);
   return "extracted";
 }
 
@@ -2929,10 +2961,11 @@ async function jatCopy() {
     cwd,
   );
   const transfer = result.transfer && typeof result.transfer === "object" ? result.transfer : {};
-  await vscode.window.showInformationMessage(
+  const action = await vscode.window.showInformationMessage(
     `Seeded ${transfer.destination || target}${transfer.transport ? ` (${transfer.transport})` : ""}.`,
     "Show Logs",
   );
+  if (action === "Show Logs") outputChannel?.show(true);
   return "copied";
 }
 
@@ -3197,7 +3230,8 @@ function activate(context) {
     dirtyBuffers.delete(relative);
     markWorkspaceChange(document.uri);
   }));
-  register(context, "joshRoom.save", saveRoom);
+  register(context, "joshRoom.save", () => saveRoom({ current: true }));
+  register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
@@ -3350,6 +3384,28 @@ async function chooseDimension(catalog, title) {
   if (!choice) return undefined;
   selectedDimensionId = choice.dimension.id || choice.dimension.dimension_id;
   return choice.dimension;
+}
+
+async function chooseExplicitDimension(title) {
+  const catalog = await loadCatalog(activeWorkspace(), "Loading storage…");
+  const dimensions = dimensionList(catalog);
+  if (!dimensions.length) throw new Error("No storage is configured. Add Storage first.");
+  const choice = await vscode.window.showQuickPick(dimensions.map((dimension) => ({
+    label: dimension.display_name || dimension.name || dimension.id || dimension.dimension_id,
+    description: `${nativeRegistry.providerLabel(dimension.provider)} · ${dimension.id || dimension.dimension_id}`,
+    dimension,
+  })), { title, placeHolder: "Choose a Dimension", ignoreFocusOut: true });
+  return choice?.dimension;
+}
+
+async function chooseExplicitConnection(title) {
+  const catalog = await loadCatalog(activeWorkspace(), "Loading storage…");
+  const connections = nativeRegistry.buildProviderTree(catalog).flatMap((provider) => provider.children || []);
+  if (!connections.length) throw new Error("No storage connection is configured. Add Storage first.");
+  const choice = await vscode.window.showQuickPick(connections.map((connection) => ({
+    label: connection.label, description: nativeRegistry.providerLabel(connection.provider), connection,
+  })), { title, placeHolder: "Choose a storage connection", ignoreFocusOut: true });
+  return choice?.connection;
 }
 
 async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
@@ -3555,6 +3611,8 @@ async function prepareRecoveryHandoff(cwd) {
 
 async function connectEncryption(item, options = {}) {
   assertWorkspaceTrusted("initialize MinIO encryption");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for encryption");
+  if (!item) return "cancelled";
   const cwd = activeWorkspace();
   const dimension = item?.dimension || item;
   const dimensionIdValue = dimension?.id || dimension?.dimension_id || selectedDimensionId;
@@ -3658,6 +3716,8 @@ async function prepareLegacySourceHandoff(cwd) {
 
 async function migrateEncryption(item, { resume = false } = {}) {
   assertWorkspaceTrusted("migrate encryption");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for migration");
+  if (!item) return "cancelled";
   const cwd = activeWorkspace();
   const dimension = selectedDimension(item);
   const id = dimension?.id || dimension?.dimension_id;
@@ -3745,6 +3805,8 @@ async function resumeEncryption(item) {
 
 async function exportRecovery(item) {
   assertWorkspaceTrusted("export recovery material");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for recovery export");
+  if (!item) return "cancelled";
   const dimension = selectedDimension(item);
   const domain = dimension?.encryption_domain_id || dimension?.encryptionDomainId;
   if (!domain || nativeRegistry.providerKey(dimension.provider) !== "minio") {
@@ -3765,6 +3827,8 @@ async function exportRecovery(item) {
 
 async function importRecovery(item) {
   assertWorkspaceTrusted("import recovery material");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for recovery import");
+  if (!item) return "cancelled";
   const dimension = selectedDimension(item);
   const recovery = (await vscode.window.showOpenDialog({
     title: "Choose MinIO recovery identity",
@@ -3794,6 +3858,8 @@ async function runDimensionRoomStoreOperation(action, item, extraArgs, title) {
 
 async function verifyRoomStore(item) {
   assertWorkspaceTrusted("verify a Room Store");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension to verify");
+  if (!item) return "cancelled";
   const scope = await vscode.window.showQuickPick([
     { label: "Repository metadata", description: "Check repository structure and indexes without reading every stored pack.", scope: "metadata" },
     { label: "Read a sample", description: "Read a chosen percentage of stored data.", scope: "subset" },
@@ -3831,6 +3897,8 @@ async function verifyRoomStore(item) {
 
 async function optimizeRoomStore(item) {
   assertWorkspaceTrusted("optimize a Room Store");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension to optimize");
+  if (!item) return "cancelled";
   const dimension = selectedDimension(item);
   const label = dimension?.display_name || dimension?.name || dimension?.id || "selected Dimension";
   const plan = await runDimensionRoomStoreOperation("optimize", item, [], `Planning Room Store optimization for ${label}…`);
@@ -3856,6 +3924,8 @@ async function optimizeRoomStore(item) {
 
 async function reconcileRoomStore(item) {
   assertWorkspaceTrusted("reconcile a Room Store");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension to reconcile");
+  if (!item) return "cancelled";
   const dimension = selectedDimension(item);
   const label = dimension?.display_name || dimension?.name || dimension?.id || "selected Dimension";
   const result = await runDimensionRoomStoreOperation("reconcile", item, [], `Reconciling Room Store in ${label}…`);
@@ -3977,7 +4047,8 @@ async function addStorage() {
       existingConnections = providerTools.connectionRecords(
       await runOperation("Loading storage connections...", providerTools.connectionCommand("list"), cwd),
     ).filter((connection) => nativeRegistry.providerKey(connection.provider) === "minio");
-  } catch (_error) {
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
     existingConnections = [];
   }
   const reuseChoice = existingConnections.length > 0
@@ -4039,6 +4110,8 @@ async function addStorage() {
 }
 
 async function connectStorage(item) {
+  if (!item) item = await chooseExplicitConnection("Choose a connection to connect");
+  if (!item) return "cancelled";
   assertWorkspaceTrusted("connect storage");
   const connection = item?.connection || item;
   if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
@@ -4049,6 +4122,8 @@ async function connectStorage(item) {
 }
 
 async function editConnection(item, { reconnect = false } = {}) {
+  if (!item) item = await chooseExplicitConnection("Choose a connection to edit");
+  if (!item) return "cancelled";
   assertWorkspaceTrusted("edit storage connection");
   const connection = item?.connection || item;
   if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
@@ -4081,6 +4156,9 @@ async function editConnection(item, { reconnect = false } = {}) {
 }
 
 async function disconnectStorage(item) {
+  assertWorkspaceTrusted("disconnect storage");
+  if (!item) item = await chooseExplicitConnection("Choose a connection to disconnect");
+  if (!item) return "cancelled";
   const connection = item?.connection || item;
   const provider = nativeRegistry.providerKey(item?.provider || connection?.provider);
   const connectionId = connection?.id || connection?.connection_id;
@@ -4090,7 +4168,7 @@ async function disconnectStorage(item) {
   } else if (connectionId) {
     await runOperation("Disconnecting locally...", providerTools.connectionCommand("disconnect", { connectionId }), activeWorkspace());
   }
-  if (roomsProvider) await roomsProvider.refresh();
+  if (roomsProvider) await roomsProvider.reload();
   await vscode.window.showInformationMessage("Disconnected locally. Remote buckets and JAT history were not changed.");
   return "disconnected";
 }
@@ -4194,7 +4272,8 @@ class HierarchyRoomsProvider {
         : item.state === "connected" ? "provider-connection-connected" : "provider-connection"
       : item.kind === "jat" ? item.snapshot?.payload_kind === "room-store-v1" ? "logical-jat" : "jat"
       : syntheticDimension ? "dimension-synthetic"
-        : item.kind === "dimension" && item.encryption_state ? `dimension-${item.encryption_state}` : item.kind;
+        : item.kind === "dimension" && item.encryption_state === "ready" && item.provider === "minio" ? "dimension-minio-ready"
+          : item.kind === "dimension" && item.encryption_state ? `dimension-${item.encryption_state}` : item.kind;
     treeItem.description = item.description || "";
     treeItem.iconPath = new vscode.ThemeIcon(
       item.kind === "provider" ? "cloud"
@@ -4207,7 +4286,7 @@ class HierarchyRoomsProvider {
         ? { ...item.action, arguments: [item] }
         : { command: "joshRoom.selectDimension", title: "Select Storage", arguments: [item] };
     }
-    if (item.kind === "connection") {
+    if (item.kind === "connection" && item.state !== "connected") {
       const command = item.state === "expired" || item.state === "disconnected"
         ? "joshRoom.reconnectStorage"
         : "joshRoom.connectStorage";
@@ -4217,11 +4296,26 @@ class HierarchyRoomsProvider {
     if (item.kind === "room") {
       let current;
       try { current = currentRoom(activeWorkspace()); } catch (_error) {}
-      if (!sameRoomBinding(current, item)) {
+      if (sameRoomBinding(current, item)) {
+        treeItem.contextValue = "current-room";
+        const state = roomStatus.kind === "clean" && workspaceBindingTrusted ? "Saved"
+          : roomStatus.kind === "saved-but-still-dirty" ? "Saved, changes remain"
+            : dirtyBuffers.size ? "Unsaved editor changes"
+              : roomStatus.kind === "dirty" ? "Changes on disk" : "Status unknown";
+        treeItem.description = `Current · ${state}`;
+      } else {
         treeItem.command = { command: "joshRoom.enter", title: "Enter Room", arguments: [item] };
       }
     }
     if (item.kind === "jat") {
+      let current;
+      try { current = currentRoom(activeWorkspace()); } catch (_error) {}
+      const states = [];
+      if (item.id === item.project?.latest) states.push("Latest");
+      if (sameRoomBinding(current, item)) states.push("Open");
+      states.push(item.snapshot?.payload_kind === "room-store-v1" ? "Logical" : "Portable");
+      treeItem.description = states.join(" · ");
+      treeItem.tooltip = item.id;
       treeItem.command = { command: "joshRoom.enter", title: "Enter JAT", arguments: [item] };
     }
     return treeItem;
@@ -4231,6 +4325,7 @@ class HierarchyRoomsProvider {
     if (item) return item.children || [];
     if (runtimeLifecycle.state !== "RUNTIME_READY") {
       const idle = runtimeLifecycle.state === "UNINITIALIZED";
+      if (idle) return [];
       const cancelled = runtimeLifecycle.state === "CANCELLED";
       const failed = runtimeLifecycle.state === "FAILED";
       return [{
@@ -4246,7 +4341,7 @@ class HierarchyRoomsProvider {
     if (this.state === "error") return [{ kind: "error" }];
     if (this.state === "cancelled") return [{ kind: "cancelled" }];
     if (this.state === "initial") return [{ kind: "load" }];
-    return this.roots && this.roots.length ? this.roots : [{ kind: "empty" }];
+    return this.roots || [];
   }
 
   async setCatalog(catalog) {
@@ -4561,7 +4656,8 @@ async function inspectLogicalSnapshot(preselected) {
   const result = await runLogicalSnapshotAction(
     "inspect", context, [], `Inspecting ${context.display_name || context.project_id}…`,
   );
-  await vscode.window.showInformationMessage(logicalSnapshotSummary(result), "Show Logs");
+  const action = await vscode.window.showInformationMessage(logicalSnapshotSummary(result), "Show Logs");
+  if (action === "Show Logs") outputChannel?.show(true);
   return "inspected";
 }
 
@@ -4696,6 +4792,7 @@ async function verifyLegacyLink(cwd, context) {
     }
     return { ok: true, fingerprint: trustedFingerprint };
   } catch (error) {
+    if (isCancellationError(error)) throw error;
     outputChannel?.warn("Legacy Link verification failed: " + error.message);
     await vscode.window.showErrorMessage(
       "Josh Room could not verify that saved JAT. Enter the Room instead, or save this folder as a new Room.",
@@ -4822,6 +4919,7 @@ function activateNative(context) {
   setStatus("$(archive) Josh Room");
   statusItem.show();
   roomsProvider = new HierarchyRoomsProvider();
+  void vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", true);
   const roomsView = vscode.window.createTreeView("joshRoom.rooms", {
     treeDataProvider: roomsProvider,
     dragAndDropController: new RoomDragAndDropController(),
@@ -4859,7 +4957,8 @@ function activateNative(context) {
     dirtyBuffers.delete(relative);
     if (workspaceBaseline) markWorkspaceChange(document.uri);
   }));
-  register(context, "joshRoom.save", saveRoom);
+  register(context, "joshRoom.save", () => saveRoom({ current: true }));
+  register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.addStorage", addStorage);

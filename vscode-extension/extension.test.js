@@ -1236,6 +1236,7 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
       saved = true;
       return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "test-room", snapshot_id: "new-jat", data_added_bytes: 5, scanned_bytes: 10 }) };
     }
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
     if (args[0] === "workspace" && args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created" }) };
     if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
     throw new Error(`Unexpected controller operation: ${args[0]} ${args[1]}`);
@@ -1495,11 +1496,11 @@ test("dirty tracking marks watcher changes immediately without rescanning each e
   assert.equal(statusCalls(), startupStatusCalls);
 });
 
-function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult } = {}) {
+function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult, provider = "minio" } = {}) {
   const dimension = {
     id: "backup",
     display_name: "Backup",
-    provider: "minio",
+    provider,
     encryption_domain_id: "domain-a",
     key_generation: 1,
     encryption_state: "ready",
@@ -1507,7 +1508,7 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
   const project = {
     id: "demo-room",
     display_name: "Demo Room",
-    provider: "minio",
+    provider,
     dimension: { ...dimension, rooms: undefined },
     latest: "jat-1",
     snapshots: [{ snapshot_id: "jat-1" }],
@@ -1516,6 +1517,7 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
   const { vscode, statusItem, infoCalls, warningCalls, watcherCallbacks } = createVscodeMock(root);
   let secretReads = 0;
   const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
     if (args[0] === "workspace" && args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created" }) };
     if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
     if (args[0] === "dimensions" && args[1] === "list") {
@@ -1586,16 +1588,21 @@ test("native Save previews the Room Store and reports logical, scanned, and Rest
       capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256,
     },
   });
-  fixture.vscode.infoResponses.push("Save", undefined);
+  const details = [];
+  let shown = false;
+  fixture.extension.__test__.setOutputChannelForTests({ appendLine: (line) => details.push(line), info() {}, warn() {}, error() {}, show() { shown = true; } });
+  fixture.vscode.infoResponses.push("Save", "Show Details");
 
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
 
   const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot");
   assert.deepEqual(snapshotCalls.map((call) => call.args[1]), ["preview", "create"]);
   assert.ok(fixture.infoCalls.some(([message]) => /Initial full capture/.test(message)));
-  assert.ok(fixture.infoCalls.some(([message]) => /Logical entries: 3/.test(message)));
-  assert.ok(fixture.infoCalls.some(([message]) => /Workspace scan: 12\.1 KB/.test(message)));
-  assert.ok(fixture.infoCalls.some(([message]) => /Restic data added: 4\.0 KB/.test(message)));
+  assert.ok(fixture.infoCalls.some(([message]) => message === "Saved “Demo Room”."));
+  assert.match(details.join("\n"), /Logical entries: 3/);
+  assert.match(details.join("\n"), /Workspace scan: 12\.1 KB/);
+  assert.match(details.join("\n"), /Restic data added: 4\.0 KB/);
+  assert.equal(shown, true);
   assert.ok(fixture.infoCalls.some(([message]) => /RCC environment capture runs during Save/.test(message)));
   assert.ok(fixture.infoCalls.every(([message]) => !/ciphertext|Encrypted snapshot/.test(message)));
 });
@@ -1654,6 +1661,9 @@ test("native Save confirms suspicious deletions with the exact preview token", a
   assert.equal(create.args[create.args.indexOf("--confirm-deletion") + 1], "synthetic-deletion-plan");
   assert.equal(fixture.warningCalls[0][1].modal, true);
   assert.match(fixture.warningCalls[0][0], /25 deleted entries/);
+  assert.match(fixture.warningCalls[0][0], /deleted-0\.txt/);
+  assert.match(fixture.warningCalls[0][0], /deleted-24\.txt/);
+  assert.match(fixture.warningCalls[0][0], /Demo Room/);
 });
 
 for (const externalComponents of [false, true]) test(`trusted no-event Save ${externalComponents ? "rechecks external components" : "checks native metadata without secret work"}`, async () => {
@@ -2010,7 +2020,7 @@ test("workspace events during native Save keep the new Room marked dirty", async
   fixture.vscode.infoResponses.push("Save", undefined);
   await fixture.extension.__test__.startDirtyTracking({ subscriptions: [] });
 
-  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved-but-dirty");
 
   assert.match(fixture.statusItem.text, /Saved, changes remain/);
   assert.match(fixture.statusItem.text, /Save/);
@@ -3008,7 +3018,7 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
 
   assert.equal(tree[0].label, "Cloudflare R2");
   assert.equal(dimension.label, "Default");
-  assert.equal(connection.label, "⚠ Not connected");
+  assert.equal(connection.label, "Provider Connection");
   assert.equal(connection.description, "Connect Cloudflare");
   assert.equal(connectionItem.command.command, "joshRoom.connectStorage");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
@@ -3109,7 +3119,7 @@ test("encryption-only authorization does not mark a configured R2 Dimension conn
   const connection = r2.children[0];
 
   assert.equal(connection.state, "missing");
-  assert.equal(connection.label, "⚠ Not connected");
+  assert.equal(connection.label, "Provider Connection");
   assert.equal(connection.description, "Connect Cloudflare");
   assert.equal(connection.children.length, 1);
   assert.deepEqual(connection.children[0].children, []);
@@ -3165,7 +3175,7 @@ test("disconnected MinIO storage stays disconnected and does not load hierarchy 
   const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(connection);
 
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "dimensions" && entry.args.includes("--with-hierarchy")), false);
-  assert.equal(connection.label, "⚠ Disconnected");
+  assert.equal(connection.label, "Home MinIO");
   assert.equal(connection.description, "Reconnect");
   assert.equal(connection.state, "disconnected");
   assert.equal(treeItem.command.command, "joshRoom.reconnectStorage");
@@ -3282,9 +3292,10 @@ test("Cloudflare authorization refreshes the hierarchy and loads Rooms and JATs"
   ), "connected");
   const connection = provider.roots[0].children[0];
 
-  assert.equal(connection.label, "✓ Connected");
+  assert.equal(connection.label, "Provider Connection");
+  assert.equal(provider.getTreeItem(connection).command, undefined);
   assert.equal(connection.children[0].label, "Default");
-  assert.equal(connection.children[0].children[0].label, "Room A · Default");
+  assert.equal(connection.children[0].children[0].label, "Room A");
   assert.equal(openExternalCalls[0].value, "https://dash.cloudflare.example/oauth-2");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
@@ -3306,7 +3317,7 @@ test("expired Cloudflare authority offers Reconnect Cloudflare instead of an emp
   const connection = buildProviderTree(catalog)[0].children[0];
   const treeItem = new extension.__test__.HierarchyRoomsProvider().getTreeItem(connection);
 
-  assert.equal(connection.label, "⚠ Session expired");
+  assert.equal(connection.label, "Provider Connection");
   assert.equal(connection.description, "Reconnect Cloudflare");
   assert.equal(treeItem.command.command, "joshRoom.reconnectStorage");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
@@ -3332,7 +3343,7 @@ test("unavailable Cloudflare authority status fails closed without probing R2", 
   const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
   const connection = buildProviderTree(catalog)[0].children[0];
 
-  assert.equal(connection.label, "⚠ Not connected");
+  assert.equal(connection.label, "Provider Connection");
   assert.equal(connection.description, "Connect Cloudflare");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
@@ -3347,7 +3358,7 @@ test("R2 disconnect logs out the local OAuth session instead of treating the end
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
   let refreshes = 0;
-  extension.__test__.setRoomsProvider({ refresh: async () => { refreshes += 1; } });
+  extension.__test__.setRoomsProvider({ reload: async () => { refreshes += 1; } });
 
   assert.equal(await extension.__test__.disconnectStorage({
     id: "https://r2.example.invalid",
@@ -3411,8 +3422,7 @@ test("fresh activation gates all storage calls behind runtime readiness", async 
   await new Promise((resolve) => setImmediate(resolve));
   const roomsView = treeViewCalls.find((view) => view.id === "joshRoom.rooms").options.treeDataProvider;
   const pending = roomsView.getChildren();
-  assert.equal(pending[0].kind, "runtime");
-  assert.equal(roomsView.getTreeItem(pending[0]).command.command, "joshRoom.prepare");
+  assert.deepEqual(pending, []);
   assert.deepEqual(spawnHarness.calls, []);
   release({});
   await new Promise((resolve) => setImmediate(resolve));
@@ -3438,16 +3448,7 @@ test("fresh activation exposes an actionable idle runtime load without starting 
   assert.equal(spawnHarness.calls.length, 0);
   assert.equal(secretReads, 0);
   const provider = treeViewCalls.find((view) => view.id === "joshRoom.rooms").options.treeDataProvider;
-  const row = provider.getChildren()[0];
-  assert.equal(row.kind, "runtime");
-  assert.equal(row.label, "Load Storage / Prepare Runtime");
-  assert.equal(row.failed, false);
-  const treeItem = provider.getTreeItem(row);
-  assert.equal(treeItem.iconPath.id, "cloud-download");
-  assert.deepEqual(treeItem.command, {
-    command: "joshRoom.prepare",
-    title: "Load Storage / Prepare Runtime",
-  });
+  assert.deepEqual(provider.getChildren(), []);
   assert.equal(typeof commandCallbacks.get("joshRoom.prepare"), "function");
 });
 
@@ -3467,8 +3468,8 @@ test("registered prepare action starts once, reports sanitized runtime progress 
   activateTestExtension(extension, root, vscode);
   const provider = treeViewCalls[0].options.treeDataProvider;
   assert.equal(acquisition.starts, 0);
-  const command = provider.getTreeItem(provider.getChildren()[0]).command.command;
-  assert.equal(command, "joshRoom.prepare");
+  assert.deepEqual(provider.getChildren(), []);
+  const command = "joshRoom.prepare";
   const first = commandCallbacks.get(command)();
   const second = commandCallbacks.get(command)();
   await new Promise((resolve) => setImmediate(resolve));
@@ -4288,7 +4289,7 @@ test("cancelling Cloudflare OAuth stops its child and a later Connect starts cle
   ), "connected");
   assert.equal(authStarts, 2);
   assert.equal(authPolls, 2);
-  assert.equal(relaunchedProvider.roots[0].children[0].children[0].children[0].label, "Room A · Default");
+  assert.equal(relaunchedProvider.roots[0].children[0].children[0].children[0].label, "Room A");
   assert.equal(spawnHarness.calls.filter((entry) => entry.args[0] === "dimensions").length > 0, true);
 });
 
@@ -4386,7 +4387,7 @@ test("native loading keeps a failed Dimension visibly failed instead of empty", 
   const healthy = dimensions.find((item) => item.id === "healthy");
   assert.equal(broken.state, "error");
   assert.match(broken.children[0].label, /Bucket access denied|Could not load/);
-  assert.equal(healthy.children[0].label, "Healthy Room · Healthy bucket");
+  assert.equal(healthy.children[0].label, "Healthy Room");
 });
 
 // ---------------------------------------------------------------------------
@@ -6288,4 +6289,133 @@ test("GUI controller spawn merges Windows Path into one canonical PATH", async (
     Object.defineProperty(process, "platform", platformDescriptor);
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("current Room and recovery points expose current, latest and open state", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-tree-state-"));
+  writeMarker(root, { snapshot_id: "old" });
+  const { vscode, statusItem } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  extension.__test__.setStatusItem(statusItem);
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const tree = buildProviderTree({ dimensions: [{ id: "archive", provider: "r2", projects: [{
+    id: "demo-room", display_name: "Demo Room", latest: "new", snapshots: [
+      { snapshot_id: "new", created_at: "2026-10-01T12:00:00Z", payload_kind: "room-store-v1" },
+      { snapshot_id: "old", created_at: "2026-09-01T12:00:00Z" },
+    ],
+  }] }] });
+  const room = tree[0].children[0].children[0].children[0];
+  const roomItem = provider.getTreeItem(room);
+  assert.match(roomItem.description, /Current/);
+  assert.match(roomItem.description, /unknown/i);
+  assert.equal(roomItem.contextValue, "current-room");
+  const newest = provider.getTreeItem(room.children[0]);
+  const open = provider.getTreeItem(room.children[1]);
+  assert.match(newest.description, /Latest/);
+  assert.match(open.description, /Open/);
+  assert.match(newest.label, /2026/);
+  assert.equal(open.tooltip, "old");
+});
+
+test("Room actions keep Save and Enter inline and recovery actions contextual", () => {
+  const manifest = require("./package.json");
+  const menus = manifest.contributes.menus["view/item/context"];
+  assert.ok(menus.some((item) => item.command === "joshRoom.save" && item.when.includes("current-room") && item.group.startsWith("inline")));
+  for (const command of ["joshRoom.link", "joshRoom.repair", "joshRoom.serve", "joshRoom.remove"]) {
+    assert.ok(menus.filter((item) => item.command === command && item.when.includes("viewItem == room")).every((item) => !item.group.startsWith("inline")), command);
+  }
+  assert.ok(manifest.contributes.commands.some((item) => item.command === "joshRoom.saveFolderAs"));
+});
+
+test("Save Current Room resolves the bound Room without folder or Room pickers", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-current-"));
+  const fixture = createNativeSaveFixture(root, { preview: nativePreview(), saveResult: { ok: true, status: "already-saved" } });
+  fixture.vscode.openDialogResponses.length = 0;
+  fixture.vscode.quickPickResponses.splice(0, 1);
+  fixture.vscode.infoResponses.push("Save");
+  assert.equal(await fixture.extension.__test__.saveRoom({ current: true }), "already-saved");
+  const preview = fixture.spawnHarness.calls.find((call) => call.args[0] === "snapshot" && call.args[1] === "preview");
+  assert.ok(preview);
+  assert.equal(preview.args[2], "Demo Room");
+  assert.equal(preview.args[preview.args.indexOf("--dimension") + 1], "backup");
+});
+
+test("Save does not report a clean Room when an editor buffer is still dirty", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-dirty-buffer-save-"));
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview(),
+    saveResult: { ok: true, status: "already-saved", project_id: "demo-room", snapshot_id: "jat-1" },
+  });
+  fixture.vscode.workspace.textDocuments.push({ uri: { fsPath: path.join(root, "draft.txt"), scheme: "file" }, isDirty: true });
+  await fixture.extension.__test__.startDirtyTracking({ subscriptions: [] });
+  fixture.vscode.infoResponses.push("Save");
+  await fixture.extension.__test__.saveRoom();
+  assert.notEqual(fixture.extension.__test__.getRoomStatusForTests().kind, "clean");
+  assert.ok(fixture.warningCalls.some(([message]) => /editor/i.test(message)));
+});
+
+test("R2 native Save previews the selected capture scope and respects a no-op receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-native-save-"));
+  const fixture = createNativeSaveFixture(root, { provider: "r2", preview: nativePreview(), saveResult: { ok: true, status: "already-saved" } });
+  fixture.vscode.quickPickResponses[1] = { label: "Workspace and images", allImages: true };
+  fixture.vscode.infoResponses.push("Save");
+  assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
+  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot");
+  assert.deepEqual(calls.map((call) => call.args[1]), ["preview", "create"]);
+  assert.ok(calls.every((call) => call.args.includes("--all-images")));
+});
+
+test("logical JAT inspection opens logs when requested", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-inspect-logs-"));
+  const fixture = createLogicalSnapshotFixture(root);
+  let shown = false;
+  fixture.extension.__test__.setOutputChannelForTests({ appendLine() {}, info() {}, warn() {}, error() {}, show() { shown = true; } });
+  fixture.vscode.infoResponses.push("Show Logs");
+  await fixture.extension.__test__.inspectLogicalSnapshot(fixture.jat);
+  assert.equal(shown, true);
+});
+
+test("contextless disconnect asks for a connection and cancellation does not log out", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-disconnect-pick-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{ id: "backup", provider: "minio", connection_id: "home", projects: [] }], connections: [{ id: "home", display_name: "Home", provider: "minio" }] }) };
+    throw new Error(`unexpected operation ${args[0]}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  assert.equal(await extension.__test__.disconnectStorage(), "cancelled");
+  assert.equal(spawnHarness.calls.some((call) => call.args[0] === "auth" && call.args[1] === "logout"), false);
+});
+
+test("ready MinIO recovery actions do not appear on R2 Dimensions", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-menu-"));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+  const provider = new extension.__test__.HierarchyRoomsProvider();
+  const minio = provider.getTreeItem({ kind: "dimension", id: "a", provider: "minio", encryption_state: "ready", dimension: { id: "a", provider: "minio" } });
+  const r2 = provider.getTreeItem({ kind: "dimension", id: "b", provider: "r2", encryption_state: "ready", dimension: { id: "b", provider: "r2" } });
+  const action = require("./package.json").contributes.menus["view/item/context"].find((item) => item.command === "joshRoom.exportRecovery");
+  assert.equal(minio.contextValue, "dimension-minio-ready");
+  assert.equal(r2.contextValue, "dimension-ready");
+  assert.match(action.when, /dimension-minio-ready/);
+});
+
+test("Save Current Room reuses the capture choice made for that Room in this session", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-scope-"));
+  const fixture = createNativeSaveFixture(root, { preview: nativePreview(), saveResult: { ok: true, status: "saved" } });
+  fixture.vscode.infoResponses.push("Save", undefined, "Save", undefined);
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  assert.equal(await fixture.extension.__test__.saveRoom({ current: true }), "saved");
+  const creates = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "create");
+  assert.equal(creates.length, 2);
+  assert.ok(creates.every((call) => !call.args.includes("--all-images")));
+});
+
+test("Save Current Room rejects a marker bound to a different folder", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-wrong-binding-"));
+  const fixture = createNativeSaveFixture(root, { preview: nativePreview(), saveResult: { ok: true, status: "saved" } });
+  writeMarker(root, { dimension_id: "backup", workspace_path_sha256: "a".repeat(64) });
+  await assert.rejects(fixture.extension.__test__.saveRoom({ current: true }), /not bound to this folder/);
+  assert.equal(fixture.spawnHarness.calls.some((call) => call.args[0] === "snapshot"), false);
 });

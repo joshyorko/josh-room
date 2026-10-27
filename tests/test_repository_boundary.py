@@ -98,7 +98,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.editStorageSettings",
         "joshRoom.link",
         "joshRoom.repair",
-        "joshRoom.new", "joshRoom.save", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
+        "joshRoom.new", "joshRoom.save", "joshRoom.saveFolderAs", "joshRoom.enter", "joshRoom.remove", "joshRoom.serve", "joshRoom.refresh",
         "joshRoom.prepare",
         "joshRoom.jatBuild", "joshRoom.jatInspect", "joshRoom.jatExtract", "joshRoom.jatRestore",
         "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
@@ -207,7 +207,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
     assert "shell: python -m josh_room\n" in recipe
     assert "python -m josh_room.cli" not in recipe
     remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
-    assert remove_menu["group"].startswith("inline")
+    assert not remove_menu["group"].startswith("inline")
     assert (ROOT / "vscode-extension/media/room.svg").is_file()
     bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
     assert f"joshyorko.josh-room-{package['version']}" in bootstrap

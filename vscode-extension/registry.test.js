@@ -102,7 +102,7 @@ test("buildProviderTree renders Provider to Dimension to Room to JAT", () => {
   assert.equal(tree[0].children[0].children[0].kind, "dimension");
   assert.equal(tree[0].children[0].children[0].label, "Archive");
   assert.equal(tree[0].children[0].children[0].children[0].kind, "room");
-  assert.equal(tree[0].children[0].children[0].children[0].label, "Demo Room · Archive");
+  assert.equal(tree[0].children[0].children[0].children[0].label, "Demo Room");
   assert.deepEqual(
     tree[0].children[0].children[0].children[0].children.map((item) => [item.kind, item.id]),
     [["jat", "jat-002"], ["jat", "jat-001"]],
@@ -188,7 +188,7 @@ test("flattenDimensionRooms decorates command-palette Rooms with their Dimension
   }]);
 });
 
-test("duplicate Room IDs and names remain Dimension-qualified in the hierarchy", () => {
+test("duplicate Room IDs and names retain their Dimension in the hierarchy", () => {
   const tree = buildProviderTree({
     dimensions: [
       { id: "archive", display_name: "Archive", provider: "r2", projects: [{ id: "same-room", display_name: "Same Room" }] },
@@ -196,7 +196,7 @@ test("duplicate Room IDs and names remain Dimension-qualified in the hierarchy",
     ],
   });
   const rooms = tree.flatMap((provider) => provider.children.flatMap((connection) => connection.children.flatMap((dimension) => dimension.children)));
-  assert.deepEqual(rooms.map((room) => room.label), ["Same Room · Archive", "Same Room · Backup"]);
+  assert.deepEqual(rooms.map((room) => room.label), ["Same Room", "Same Room"]);
   assert.deepEqual(rooms.map((room) => room.dimension.id), ["archive", "backup"]);
 });
 
@@ -238,7 +238,7 @@ test("buildProviderTree renders a disconnected connection as unavailable", () =>
 
   const connection = tree[0].children[0];
   assert.equal(connection.state, "disconnected");
-  assert.equal(connection.label, "⚠ Disconnected");
+  assert.equal(connection.label, "Home MinIO");
   assert.equal(connection.description, "Reconnect");
   assert.deepEqual(connection.children[0].children, []);
 });
@@ -312,4 +312,17 @@ test("buildProviderTree accepts worker connection and bucket records without exp
   assert.equal(connection.children[0].kind, "dimension");
   assert.equal(connection.children[0].children.length, 0);
   assert.doesNotMatch(JSON.stringify(tree), /access.key|secret.key|session.token/i);
+});
+
+test("recovery points sort Latest first and show a readable fallback when dates are missing", () => {
+  const tree = buildProviderTree({ dimensions: [{ id: "archive", provider: "r2", projects: [{
+    id: "room", latest: "latest", snapshots: [
+      { snapshot_id: "older", created_at: "2026-01-01T00:00:00Z" },
+      { snapshot_id: "latest" },
+      { snapshot_id: "newer", created_at: "2026-03-01T00:00:00Z" },
+    ],
+  }] }] });
+  const history = tree[0].children[0].children[0].children[0].children;
+  assert.deepEqual(history.map((item) => item.id), ["latest", "newer", "older"]);
+  assert.equal(history[0].label, "Recovery point");
 });
