@@ -4999,6 +4999,10 @@ function activateNative(context) {
     dirtyBuffers.delete(relative);
     if (workspaceBaseline) markWorkspaceChange(document.uri);
   }));
+  for (const document of vscode.workspace.textDocuments || []) {
+    const relative = relativeWorkspacePath(document.uri);
+    if (relative && document.isDirty) dirtyBuffers.add(relative);
+  }
   register(context, "joshRoom.save", () => saveRoom({ current: true }));
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.checkWorkspace", checkWorkspace);

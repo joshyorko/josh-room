@@ -20,3 +20,8 @@ material tests remain regression gates; this document does not assert live
 provider or installed-host acceptance. Manual theme, accessibility, remote-host
 and screenshot checks require a graphical VS Code host and remain separate from
 fixture and source verification.
+
+Release 0.1.39 also initializes editor dirty state from documents already open
+when the extension activates. A native R2 or MinIO Save cannot report a clean
+Room while a restored unsaved editor buffer remains outside the disk snapshot.
+Activation still performs no runtime acquisition or storage access.

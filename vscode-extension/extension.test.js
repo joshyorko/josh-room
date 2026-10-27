@@ -6353,6 +6353,38 @@ test("Save does not report a clean Room when an editor buffer is still dirty", a
   assert.ok(fixture.warningCalls.some(([message]) => /editor/i.test(message)));
 });
 
+for (const provider of ["r2", "minio"]) {
+  test(`${provider} native Save preserves dirty buffers restored before activation`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-restored-buffer-"));
+    const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+    const fixture = createNativeSaveFixture(root, {
+      provider,
+      preview: nativePreview(),
+      saveResult: {
+        ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2", dimension_id: "backup",
+        encryption_domain_id: "domain-a", workspace_signature: "c".repeat(64),
+        signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha,
+      },
+      onSave: () => writeStatMarker(root, {
+        snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha,
+      }),
+    });
+    fixture.vscode.workspace.textDocuments.push({
+      uri: { fsPath: path.join(root, "draft.txt"), scheme: "file" }, isDirty: true,
+    });
+    fixture.extension.activate({
+      extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+      secrets: { get: async (key) => key.startsWith("josh-room.encryption.v1:")
+        ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic" }) : undefined },
+    });
+    assert.equal(fixture.spawnHarness.calls.length, 0);
+    fixture.vscode.infoResponses.push("Save");
+    assert.equal(await fixture.extension.__test__.saveRoom(), "saved-but-dirty");
+    assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "saved-but-still-dirty");
+    assert.ok(fixture.warningCalls.some(([message]) => /unsaved editor changes remain/i.test(message)));
+  });
+}
+
 test("R2 native Save previews the selected capture scope and respects a no-op receipt", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-native-save-"));
   const fixture = createNativeSaveFixture(root, { provider: "r2", preview: nativePreview(), saveResult: { ok: true, status: "already-saved" } });
