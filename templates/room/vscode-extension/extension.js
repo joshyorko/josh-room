@@ -126,6 +126,16 @@ function canonicalWorkspacePathSha256(workspace) {
   return crypto.createHash("sha256").update(path.resolve(workspace)).digest("hex");
 }
 
+// Room Store markers are bound by the controller to Path(workspace).resolve(),
+// which follows symlinks. Undefined when the real path cannot be resolved.
+function realWorkspacePathSha256(workspace) {
+  try {
+    return crypto.createHash("sha256").update(fs.realpathSync(workspace)).digest("hex");
+  } catch (_error) {
+    return undefined;
+  }
+}
+
 function corroboratedMaterialization(candidate, dimensionIdValue, projectId) {
   try {
     const stat = fs.lstatSync(candidate);
@@ -2022,11 +2032,8 @@ async function saveRoom(options = {}) {
     return "cancelled";
   }
   if (currentMarker) {
-    // The controller binds markers to Path(workspace).resolve(), which follows
-    // symlinks; compare against the same real path.
-    let canonicalCwd;
-    try { canonicalCwd = fs.realpathSync(cwd); } catch (_error) { canonicalCwd = undefined; }
-    if (!canonicalCwd || currentMarker.workspace_path_sha256 !== crypto.createHash("sha256").update(canonicalCwd).digest("hex")) {
+    const pathSha = realWorkspacePathSha256(cwd);
+    if (!pathSha || currentMarker.workspace_path_sha256 !== pathSha) {
       throw new Error("The current Room is not bound to this folder. Link or Repair it before saving.");
     }
   }
@@ -4507,8 +4514,8 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     status.workspace_signature || status.current_workspace_signature
     || status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
   );
-  const localPathSha = crypto.createHash("sha256").update(path.resolve(root)).digest("hex");
-  const v3BindingMatches = marker.format_version === 3
+  const localPathSha = realWorkspacePathSha256(root);
+  const v3BindingMatches = marker.format_version === 3 && Boolean(localPathSha)
     && Boolean(status?.path_matches)
     && status?.workspace_path_sha256 === marker.workspace_path_sha256
     && marker.workspace_path_sha256 === localPathSha
@@ -4544,8 +4551,8 @@ async function resetNativeBaseline(result) {
   const marker = currentRoom(activeWorkspace());
   if (marker?.format_version === 3) {
     const policy = workspaceCapturePolicy;
-    const pathSha = crypto.createHash("sha256").update(path.resolve(activeWorkspace())).digest("hex");
-    const bindingTrusted = Boolean(policy
+    const pathSha = realWorkspacePathSha256(activeWorkspace());
+    const bindingTrusted = Boolean(policy && pathSha
       && marker.workspace_path_sha256 === pathSha
       && marker.capture_policy_sha256 === policy.sha256
       && marker.signature_algorithm === "josh-room-stat-v1"

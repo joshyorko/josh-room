@@ -6419,12 +6419,24 @@ test("Save Current Room rejects a marker bound to a different folder", async () 
   assert.equal(fixture.spawnHarness.calls.some((call) => call.args[0] === "snapshot"), false);
 });
 
-test("Save Current Room accepts a marker bound to the real path of a symlinked folder", async () => {
+test("a symlinked Room keeps a trusted binding through activation tracking and Save Current Room", async () => {
   const real = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-symlink-real-")));
   const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-symlink-")), "room");
   fs.symlinkSync(real, link, "junction");
-  const fixture = createNativeSaveFixture(link, { preview: nativePreview(), saveResult: { ok: true, status: "already-saved" } });
+  const policySha = require("./dirty").loadCapturePolicy(real).sha256;
+  const fixture = createNativeSaveFixture(link, {
+    preview: nativePreview(),
+    saveResult: { ok: true, status: "already-saved" },
+    // The controller reports the Path.resolve() hash of the real folder.
+    statusResult: { ok: true, state: "changed", path_matches: true, signature_matches: false, policy_matches: true,
+      workspace_path_sha256: sha256Hex(real), workspace_signature: "c".repeat(64),
+      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha },
+  });
   writeStatMarker(real, { project_id: "demo-room", display_name: "Demo Room" });
+  await fixture.extension.__test__.startDirtyTracking({ subscriptions: [] });
+  // A trusted binding reports the change; an untrusted one would fall back to unknown.
+  assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "dirty");
+  assert.doesNotMatch(String(fixture.statusItem.tooltip), /not trusted/);
   fixture.vscode.openDialogResponses.length = 0;
   fixture.vscode.quickPickResponses.splice(0, 1);
   fixture.vscode.infoResponses.push("Save");
