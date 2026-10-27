@@ -163,7 +163,23 @@ newest remaining snapshot; deleting the final snapshot removes the now-empty
 Room. Objects remain protected whenever another snapshot references them.
 Storage, encryption, and hydration remain owned by the CLI.
 
-## Commands
+## Extension surfaces
+
+Josh Room has two native extension surfaces over the same CLI/controller
+authority:
+
+- The **VS Code extension** (`vscode-extension/`) owns the graphical Dimension,
+  Room, Save/Enter, storage, and JAT tools UX.
+- The **Oh My Pi (OMP) extension** (`omp-extension/`) owns agent-native Room
+  context: a compact Room status indicator, the `/room` action hub and direct
+  subcommands, read-only snapshot and Room browsing, explicit checkpoints, and
+  bounded model tools with native OMP approval tiers. See
+  [omp-extension/README.md](omp-extension/README.md) and
+  [ADR 0010](docs/adr/0010-omp-extension-surface.md).
+
+Neither surface reimplements provider, encryption, marker, storage, RCC, or JAT
+logic.
+
 
 ```text
 josh-room workspace-check [--workspace <path>] [--json]

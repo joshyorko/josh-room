@@ -69,11 +69,13 @@ function record(value: unknown): Record<string, unknown> | undefined {
 	return isRecord(value) ? value : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** The package's single JSON-object guard; controller payloads are parsed field-by-field after it. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function id(value: unknown): value is string {
+/** Opaque Josh Room identifier (Dimension, Room, snapshot). */
+export function id(value: unknown): value is string {
 	return typeof value === "string" && ID.test(value);
 }
 
@@ -237,18 +239,62 @@ export function parseDoctorResult(value: unknown): DoctorResult | undefined {
 	return { kind: "doctor", ok: body.ok, checks };
 }
 
-export function roomStatusText(context: RoomContext, status: RoomStatus | undefined): string | undefined {
-	if (context.kind !== "linked") return undefined;
-	const glyph = status?.kind !== "known" ? "?" : status.state === "clean" ? "✓" : "●";
-	return `room:${context.displayName} ${glyph}`;
+export type RoomIndicator = "clean" | "changed" | "unknown" | "blocked";
+
+/** Theme colors used for the Room indicator; the host theme owns the actual palette. */
+export type RoomStatusColor = "success" | "warning" | "muted" | "error" | "accent" | "dim";
+
+export interface RoomStatusTheme {
+	fg(color: RoomStatusColor, text: string): string;
 }
 
-export function snapshotOptions(result: SnapshotList): Array<{ label: string; description: string; value: string }> {
-	return [...result.snapshots].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 100).map((snapshot) => ({
-		label: snapshot.snapshotId === result.latestSnapshotId ? `✓ ${snapshot.snapshotId}` : snapshot.snapshotId,
-		description: `${snapshot.createdAt} · ${formatBytes(snapshot.ciphertextSize)}${snapshot.snapshotId === result.latestSnapshotId ? " · latest" : ""}`,
-		value: snapshot.snapshotId,
-	}));
+const INDICATOR_GLYPHS: Record<RoomIndicator, string> = { clean: "✓", changed: "●", unknown: "?", blocked: "!" };
+const INDICATOR_COLORS: Record<RoomIndicator, RoomStatusColor> = { clean: "success", changed: "warning", unknown: "muted", blocked: "error" };
+
+export function roomIndicator(status: RoomStatus | undefined): RoomIndicator {
+	if (status?.kind !== "known") return "unknown";
+	return status.state === "clean" ? "clean" : "changed";
+}
+
+/** Compact status-bar text. With a theme it is styled through the host palette; without one it stays plain. */
+export function formatRoomStatus(displayName: string, indicator: RoomIndicator, theme?: RoomStatusTheme): string {
+	const glyph = INDICATOR_GLYPHS[indicator];
+	if (!theme) return `room:${displayName} ${glyph}`;
+	return `${theme.fg("dim", "room:")}${theme.fg("accent", displayName)} ${theme.fg(INDICATOR_COLORS[indicator], glyph)}`;
+}
+
+export interface SnapshotRow {
+	label: string;
+	description: string;
+	value: string;
+	detail: string;
+}
+
+export function snapshotOptions(result: SnapshotList, now: number = Date.now()): SnapshotRow[] {
+	return [...result.snapshots].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, 100).map((snapshot) => {
+		const latest = snapshot.snapshotId === result.latestSnapshotId;
+		const age = formatAge(snapshot.createdAt, now);
+		const size = `${formatBytes(snapshot.ciphertextSize)} encrypted`;
+		return {
+			label: latest ? `✓ ${snapshot.snapshotId}` : `  ${snapshot.snapshotId}`,
+			description: `${latest ? "latest · " : ""}${age} · ${size}`,
+			value: snapshot.snapshotId,
+			detail: `Snapshot ${snapshot.snapshotId}${latest ? " (latest)" : ""} · created ${snapshot.createdAt} (${age}) · ${size} · read-only`,
+		};
+	});
+}
+
+export function formatAge(createdAt: string, now: number): string {
+	const elapsed = Math.max(0, Math.floor((now - Date.parse(createdAt)) / 1000));
+	if (!Number.isFinite(elapsed)) return "unknown age";
+	if (elapsed < 60) return "just now";
+	const minutes = Math.floor(elapsed / 60);
+	if (minutes < 60) return `${minutes}m ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 48) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	if (days < 60) return `${days}d ago`;
+	return createdAt.slice(0, 10);
 }
 
 export function checkpointEntry(context: Extract<RoomContext, { kind: "linked" }>, receipt: SavedReceipt): Record<string, unknown> {
@@ -263,7 +309,9 @@ export function checkpointEntry(context: Extract<RoomContext, { kind: "linked" }
 
 export interface SaveOutcomePresentation {
 	message: string;
-	statusText: string;
+	/** Room identity after the receipt; presentation state only. */
+	room: Extract<RoomContext, { kind: "linked" }>;
+	indicator: RoomIndicator;
 	details: Record<string, unknown>;
 	checkpointEntry?: Record<string, unknown>;
 }
@@ -274,8 +322,8 @@ export function presentSaveOutcome(
 ): SaveOutcomePresentation {
 	const alreadySaved = receipt.kind === "already-saved";
 	const savedSnapshotId = receipt.snapshotId;
-	const statusState = receipt.kind === "saved" && receipt.status === "saved-but-dirty" ? "changed" : "clean";
-	const statusContext = alreadySaved ? context : { ...context, snapshotId: savedSnapshotId };
+	const indicator: RoomIndicator = receipt.kind === "saved" && receipt.status === "saved-but-dirty" ? "changed" : "clean";
+	const room = alreadySaved ? context : { ...context, snapshotId: savedSnapshotId };
 	const message = alreadySaved
 		? `Already saved Room ${context.displayName}; 0 bytes added.`
 		: receipt.status === "saved-but-dirty"
@@ -292,16 +340,10 @@ export function presentSaveOutcome(
 		if (receipt.previousSnapshotId) details.previous_snapshot_id = receipt.previousSnapshotId;
 		if (receipt.ciphertextSize !== undefined) details.ciphertext_size = receipt.ciphertextSize;
 	}
-	const statusText = roomStatusText(statusContext, {
-		kind: "known",
-		state: statusState,
-		dimensionId: context.dimensionId,
-		projectId: receipt.projectId,
-		snapshotId: savedSnapshotId,
-	}) ?? `room:${context.displayName} ?`;
 	return {
 		message,
-		statusText,
+		room,
+		indicator,
 		details,
 		...(receipt.kind === "saved" ? { checkpointEntry: checkpointEntry(context, receipt) } : {}),
 	};

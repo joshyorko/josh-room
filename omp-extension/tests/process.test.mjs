@@ -99,10 +99,15 @@ test("abort terminates the CLI process group, including inherited descendants", 
 });
 
 test("a completed success receipt wins a late abort", async () => {
-	const runner = createRoomProcessRunner((_command, _args, options) => spawn(process.execPath, ["-e", "process.stdout.write(JSON.stringify({ok:true,snapshot_id:'jat-committed'})+'\\n');setInterval(()=>{},1000)"], options));
+	let child;
+	const runner = createRoomProcessRunner((_command, _args, options) => {
+		child = spawn(process.execPath, ["-e", "process.stdout.write(JSON.stringify({ok:true,snapshot_id:'jat-committed'})+'\\n');setInterval(()=>{},1000)"], options);
+		return child;
+	});
 	const abort = new AbortController();
 	const operation = runner(["snapshot", "create"], { cwd: process.cwd(), signal: abort.signal, timeoutMs: 5_000 });
-	await new Promise((resolve) => setTimeout(resolve, 80));
+	// Abort only after the receipt was written, independent of host load.
+	await new Promise((resolve) => child.stdout.once("data", resolve));
 	abort.abort();
 	assert.deepEqual(await operation, { ok: true, snapshot_id: "jat-committed" });
 });

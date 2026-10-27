@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseRoomCommand, registerRoomCommand } from "../src/commands.ts";
+import { RoomSessionState } from "../src/state.ts";
 
 test("direct Room command routing is bounded and completion exposes supported actions", () => {
 	assert.deepEqual(parseRoomCommand("status"), { kind: "action", action: "status", rest: [] });
@@ -18,7 +19,7 @@ test("cancelling the native action selector performs no controller call or notif
 		appendEntry() {},
 	};
 	const controller = new Proxy({}, { get() { return async () => { status += 1; throw new Error("must remain unused"); }; } });
-	registerRoomCommand(api, controller);
+	registerRoomCommand(api, controller, new RoomSessionState());
 	await handler("", {
 		cwd: "/workspace", hasUI: true,
 		ui: {
@@ -43,7 +44,7 @@ test("explicit no-op Save reports Already saved without appending new checkpoint
 	};
 	const context = { kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "logical-current" };
 	const controller = { async save() { return { context, receipt: { kind: "already-saved", status: "already-saved", projectId: "demo-room", snapshotId: "logical-current", dataAddedBytes: 0 } }; } };
-	registerRoomCommand(api, controller);
+	registerRoomCommand(api, controller, new RoomSessionState());
 	await handler("save", { cwd: "/workspace", hasUI: true, ui: { async select() {}, async confirm() { return true; }, notify(...args) { notifications.push(args); }, setStatus(...args) { statuses.push(args); }, setWorkingMessage() {} } });
 	assert.equal(appended.length, 0);
 	assert.match(notifications[0][0], /^Already saved/);
@@ -62,7 +63,7 @@ test("explicit saved-but-dirty Save appends its checkpoint and does not show cle
 	};
 	const context = { kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "logical-old" };
 	const controller = { async save() { return { context, receipt: { kind: "saved", status: "saved-but-dirty", projectId: "demo-room", snapshotId: "logical-new", previousSnapshotId: "logical-old", dataAddedBytes: 7 } }; } };
-	registerRoomCommand(api, controller);
+	registerRoomCommand(api, controller, new RoomSessionState());
 	await handler("save", { cwd: "/workspace", hasUI: true, ui: { async select() {}, async confirm() { return true; }, notify(...args) { notifications.push(args); }, setStatus(...args) { statuses.push(args); }, setWorkingMessage() {} } });
 	assert.equal(appended.length, 1);
 	assert.match(notifications[0][0], /workspace changed during Save/);

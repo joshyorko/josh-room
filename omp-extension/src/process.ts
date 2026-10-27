@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { parseStatusResult } from "./contracts.ts";
+import { isRecord, parseStatusResult } from "./contracts.ts";
 
 const OUTPUT_LIMIT = 256 * 1024;
 const UNSUPPORTED_OPTION_STDERR_LIMIT = 4 * 1024;
@@ -18,11 +18,12 @@ const SAFE_ENVIRONMENT = [
 ] as const;
 
 export class RoomCliError extends Error {
-	readonly kind: "missing-runtime" | "cancelled" | "timeout" | "output-limit" | "invalid-result" | "unsupported-option" | "failed";
+	readonly kind: "missing-runtime" | "not-linked" | "cancelled" | "timeout" | "output-limit" | "invalid-result" | "unsupported-option" | "failed";
 
 	constructor(kind: RoomCliError["kind"], diagnostic?: string) {
 		const messages = {
 			"missing-runtime": "Josh Room CLI is unavailable. Install the Josh Room runtime to use this command.",
+			"not-linked": "This workspace is not a validated Josh Room; Room operations are blocked here.",
 			cancelled: "Josh Room operation cancelled.",
 		timeout: "Josh Room operation timed out.",
 		"output-limit": "Josh Room returned more data than the extension accepts.",
@@ -174,10 +175,6 @@ export function createRoomProcessRunner(
 			options.signal?.removeEventListener("abort", onAbort);
 		}
 	};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function safeDiagnostic(value: unknown): string | undefined {

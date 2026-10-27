@@ -8,7 +8,8 @@ import {
 	parseInspectResult,
 	parseRoomsResult,
 	parseDoctorResult,
-	roomStatusText,
+	formatRoomStatus,
+	roomIndicator,
 	snapshotOptions,
 	checkpointEntry,
 	presentSaveOutcome,
@@ -168,24 +169,33 @@ test("Save outcome does not create provenance for already-saved and stays dirty 
 	const already = presentSaveOutcome(context, { kind: "already-saved", status: "already-saved", projectId: "demo-room", snapshotId: "logical-old", dataAddedBytes: 0 });
 	assert.match(already.message, /^Already saved/);
 	assert.match(already.message, /0 bytes added/);
-	assert.equal(already.statusText, "room:Demo Room ✓");
+	assert.equal(already.indicator, "clean");
+	assert.equal(already.room.snapshotId, "logical-old");
 	assert.equal(already.checkpointEntry, undefined);
 	assert.equal(already.details.status, "already-saved");
 	assert.equal(already.details.data_added_bytes, 0);
 
 	const dirty = presentSaveOutcome(context, { kind: "saved", status: "saved-but-dirty", projectId: "demo-room", snapshotId: "logical-new", previousSnapshotId: "logical-old", dataAddedBytes: 12 });
 	assert.match(dirty.message, /workspace changed during Save/);
-	assert.equal(dirty.statusText, "room:Demo Room ●");
+	assert.equal(dirty.indicator, "changed");
+	assert.equal(dirty.room.snapshotId, "logical-new");
 	assert.equal(dirty.details.status, "saved-but-dirty");
 	assert.equal(dirty.details.data_added_bytes, 12);
 	assert.equal(dirty.checkpointEntry.snapshot_id, "logical-new");
 });
 
 test("status glyph and theme stay presentation-only", () => {
-	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, { kind: "known", state: "clean", dimensionId: "local", projectId: "demo-room", snapshotId: "jat-x" }), "room:Demo Room ✓");
-	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, { kind: "known", state: "changed", dimensionId: "local", projectId: "demo-room", snapshotId: "jat-x" }), "room:Demo Room ●");
-	assert.equal(roomStatusText({ kind: "linked", dimensionId: "local", projectId: "demo-room", displayName: "Demo Room", snapshotId: "jat-x" }, undefined), "room:Demo Room ?");
-	assert.equal(roomStatusText({ kind: "invalid" }, undefined), undefined);
+	const known = (state) => ({ kind: "known", state, dimensionId: "local", projectId: "demo-room", snapshotId: "jat-x" });
+	assert.equal(formatRoomStatus("Demo Room", roomIndicator(known("clean"))), "room:Demo Room ✓");
+	assert.equal(formatRoomStatus("Demo Room", roomIndicator(known("changed"))), "room:Demo Room ●");
+	assert.equal(formatRoomStatus("Demo Room", roomIndicator(undefined)), "room:Demo Room ?");
+	assert.equal(formatRoomStatus("Demo Room", "blocked"), "room:Demo Room !");
+	const theme = { fg: (color, text) => `<${color}>${text}</${color}>` };
+	assert.equal(formatRoomStatus("Demo Room", "clean", theme), "<dim>room:</dim><accent>Demo Room</accent> <success>✓</success>");
+	assert.match(formatRoomStatus("Demo Room", "changed", theme), /<warning>●<\/warning>$/);
+	assert.match(formatRoomStatus("Demo Room", "unknown", theme), /<muted>\?<\/muted>$/);
+	assert.match(formatRoomStatus("Demo Room", "blocked", theme), /<error>!<\/error>$/);
+	assert.doesNotMatch(formatRoomStatus("Demo Room", "clean", theme), /\u001b/);
 });
 
 test("snapshot rows sort newest first and use only validated fields", () => {
@@ -198,6 +208,11 @@ test("snapshot rows sort newest first and use only validated fields", () => {
 	});
 	assert.equal(rows[0].value, "jat-new");
 	assert.match(rows[0].description, /latest/);
+	assert.equal(rows[1].value, "jat-old");
+	const aged = snapshotOptions({ kind: "snapshots", projectId: "demo-room", latestSnapshotId: "jat-new", snapshots: [{ snapshotId: "jat-new", createdAt: "2026-02-01T00:00:00Z", ciphertextSize: 8598323 }] }, Date.parse("2026-02-01T00:04:10Z"));
+	assert.equal(aged[0].label, "✓ jat-new");
+	assert.equal(aged[0].description, "latest · 4m ago · 8.2 MiB encrypted");
+	assert.match(aged[0].detail, /read-only$/);
 });
 
 test("tool definitions use additive native approval tiers", () => {

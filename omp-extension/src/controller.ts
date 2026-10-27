@@ -23,14 +23,14 @@ export interface RoomController {
 	context(cwd: string, signal?: AbortSignal, options?: { silent?: boolean }): Promise<RoomContext | undefined>;
 	status(cwd: string, signal?: AbortSignal): Promise<{ context: Extract<RoomContext, { kind: "linked" }>; status: RoomStatus }>;
 	snapshots(cwd: string, signal?: AbortSignal): Promise<{ context: Extract<RoomContext, { kind: "linked" }>; snapshots: SnapshotList }>;
-	rooms(cwd: string, signal?: AbortSignal): Promise<RoomList>;
+	rooms(cwd: string, signal?: AbortSignal): Promise<{ context: Extract<RoomContext, { kind: "linked" }>; rooms: RoomList }>;
 	doctor(cwd: string, signal?: AbortSignal): Promise<DoctorResult>;
 	save(cwd: string, signal?: AbortSignal, onProgress?: (message: string) => void): Promise<{ context: Extract<RoomContext, { kind: "linked" }>; receipt: SaveReceipt }>;
 	inspectJat(cwd: string, haul: string, signal?: AbortSignal): Promise<JatInspection>;
 }
 
 function requireLinked(context: RoomContext | undefined): Extract<RoomContext, { kind: "linked" }> {
-	if (!context || context.kind !== "linked") throw new RoomCliError("invalid-result");
+	if (!context || context.kind !== "linked") throw new RoomCliError("not-linked");
 	return context;
 }
 
@@ -94,10 +94,11 @@ export function createRoomController(run: CliRunner = runRoomCli): RoomControlle
 		},
 		async rooms(cwd, signal) {
 			const context = requireLinked(await this.context(cwd, signal));
-			return requireResult(
+			const rooms = requireResult(
 				await run(["projects", "list", "--dimension", context.dimensionId, "--json"], { cwd, signal, timeoutMs: 60_000 }),
 				parseRoomsResult,
 			);
+			return { context, rooms };
 		},
 		async doctor(cwd, signal) {
 			return requireResult(
@@ -125,7 +126,7 @@ export function createRoomController(run: CliRunner = runRoomCli): RoomControlle
 			};
 		},
 		async inspectJat(cwd, haul, signal) {
-			if (!haul || haul.length > 4096 || haul.includes("\0") || !isAbsoluteLocalPath(haul)) throw new RoomCliError("invalid-result");
+			if (!haul || haul.length > 4096 || haul.includes("\0") || !isAbsoluteLocalPath(haul)) throw new RoomCliError("failed", "JAT inspection needs an absolute local haul path.");
 			const raw = await run(["jat", "inspect", "--haul", haul, "--json"], { cwd, signal, timeoutMs: 10 * 60_000 });
 			return requireResult(raw, parseInspectResult);
 		},
