@@ -1619,6 +1619,10 @@ function setRoomDirty(dirty) {
   else setRoomState("unknown");
 }
 
+// The controller writes .josh-room.json through a root-level mkstemp file
+// (prefix ".josh-room.", 8 random characters) and renames it into place.
+const CONTROLLER_MARKER_TEMP = /^\.josh-room\.[a-z0-9_]{8}$/;
+
 function relativeWorkspacePath(uri) {
   let root;
   try {
@@ -1628,6 +1632,7 @@ function relativeWorkspacePath(uri) {
   }
   const relative = path.relative(root, uri.fsPath);
   if (path.resolve(uri.fsPath) === path.join(root, ".josh-roomignore")) return ".josh-roomignore";
+  if (CONTROLLER_MARKER_TEMP.test(relative)) return undefined;
   return shouldMarkDirty(relative, workspaceCapturePolicy) ? relative : undefined;
 }
 

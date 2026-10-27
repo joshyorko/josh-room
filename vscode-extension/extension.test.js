@@ -6444,9 +6444,11 @@ test("a symlinked Room keeps a trusted binding through activation tracking and S
   assert.ok(fixture.spawnHarness.calls.some((call) => call.args[0] === "snapshot" && call.args[1] === "create"));
 });
 
-test("R2 native Save of the open folder keeps tracking later filesystem changes", async () => {
+test("R2 native Save of the open folder ignores controller marker writes and tracks later changes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-save-tracking-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+  const markerTemp = { fsPath: path.join(root, ".josh-room.kqo_fyrj") };
+  const workspaceWatcher = () => fixture.watcherCallbacks.find((item) => item.pattern.pattern === "**/*");
   const fixture = createNativeSaveFixture(root, {
     provider: "r2",
     preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
@@ -6455,15 +6457,19 @@ test("R2 native Save of the open folder keeps tracking later filesystem changes"
       encryption_domain_id: "domain-a", workspace_signature: "c".repeat(64),
       signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha,
     },
-    onSave: (_args, { root: saveRoot }) => writeStatMarker(saveRoot, {
-      snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha,
-    }),
+    onSave: (_args, { root: saveRoot }) => {
+      // The controller writes the marker through a root-level mkstemp file.
+      workspaceWatcher().didCreate(markerTemp);
+      writeStatMarker(saveRoot, { snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha });
+      workspaceWatcher().didDelete(markerTemp);
+    },
   });
   fixture.vscode.infoResponses.push("Save", undefined);
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  // VS Code may deliver the same events after Save returns.
+  await workspaceWatcher().didCreate(markerTemp);
+  await workspaceWatcher().didDelete(markerTemp);
   assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "clean");
-  const watcher = fixture.watcherCallbacks.find((item) => item.pattern.pattern === "**/*");
-  assert.ok(watcher);
-  await watcher.didCreate({ fsPath: path.join(root, "src", "from-terminal.py") });
+  await workspaceWatcher().didCreate({ fsPath: path.join(root, "src", "from-terminal.py") });
   assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "dirty");
 });
