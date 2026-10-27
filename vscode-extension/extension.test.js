@@ -6353,6 +6353,44 @@ test("Save does not report a clean Room when an editor buffer is still dirty", a
   assert.ok(fixture.warningCalls.some(([message]) => /editor/i.test(message)));
 });
 
+for (const provider of ["r2", "minio"]) {
+  for (const scenario of [
+    { excluded: false, result: "saved-but-dirty", state: "saved-but-still-dirty" },
+    { excluded: true, result: "saved", state: "clean" },
+  ]) {
+    test(`${provider} native Save respects capture exclusions for restored dirty buffers: ${scenario.excluded}`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-restored-buffer-"));
+      if (scenario.excluded) fs.writeFileSync(path.join(root, ".josh-roomignore"), "draft.txt\n");
+      const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+      const fixture = createNativeSaveFixture(root, {
+        provider,
+        preview: nativePreview({ capture_policy_sha256: policySha }),
+        saveResult: {
+          ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2", dimension_id: "backup",
+          encryption_domain_id: "domain-a", workspace_signature: "c".repeat(64),
+          signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha,
+        },
+        onSave: () => writeStatMarker(root, {
+          snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha,
+        }),
+      });
+      fixture.vscode.workspace.textDocuments.push({
+        uri: { fsPath: path.join(root, "draft.txt"), scheme: "file" }, isDirty: true,
+      });
+      fixture.extension.activate({
+        extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+        secrets: { get: async (key) => key.startsWith("josh-room.encryption.v1:")
+          ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic" }) : undefined },
+      });
+      assert.equal(fixture.spawnHarness.calls.length, 0);
+      fixture.vscode.infoResponses.push("Save");
+      assert.equal(await fixture.extension.__test__.saveRoom(), scenario.result);
+      assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, scenario.state);
+      assert.equal(fixture.warningCalls.some(([message]) => /unsaved editor changes remain/i.test(message)), !scenario.excluded);
+    });
+  }
+}
+
 test("R2 native Save previews the selected capture scope and respects a no-op receipt", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-native-save-"));
   const fixture = createNativeSaveFixture(root, { provider: "r2", preview: nativePreview(), saveResult: { ok: true, status: "already-saved" } });

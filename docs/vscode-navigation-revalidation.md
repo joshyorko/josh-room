@@ -20,3 +20,8 @@ material tests remain regression gates; this document does not assert live
 provider or installed-host acceptance. Manual theme, accessibility, remote-host
 and screenshot checks require a graphical VS Code host and remain separate from
 fixture and source verification.
+
+Release 0.1.39 also reconciles already-open dirty editor buffers with the current
+capture policy before a native R2 or MinIO Save. Included unsaved buffers keep
+the Room dirty; deliberately excluded files do not prevent a clean Save.
+Activation still performs no runtime acquisition or storage access.

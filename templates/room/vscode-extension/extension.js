@@ -2218,7 +2218,15 @@ async function saveRoom(options = {}) {
     // before Save so later terminal or external edits leave the Saved state.
     let savesActiveFolder = false;
     try { savesActiveFolder = fs.realpathSync(source) === fs.realpathSync(cwd); } catch (_error) { savesActiveFolder = false; }
-    if (savesActiveFolder) ensureWorkspaceWatched(extensionContext, cwd);
+    if (savesActiveFolder) {
+      workspaceCapturePolicy = loadCapturePolicy(cwd);
+      dirtyBuffers.clear();
+      for (const document of vscode.workspace.textDocuments || []) {
+        const relative = relativeWorkspacePath(document.uri);
+        if (relative && document.isDirty) dirtyBuffers.add(relative);
+      }
+      ensureWorkspaceWatched(extensionContext, cwd);
+    }
   }
   const saveEventGeneration = workspaceEventGeneration;
   const result = nativeSave
