@@ -6,8 +6,8 @@ import type { RoomController } from "./controller.ts";
 import type { RoomSessionState } from "./state.ts";
 
 const MARKER_NAME = ".josh-room.json";
-/** Built-in tools whose success may change workspace files: `changed` for edits, `unknown` for execution. */
-const WORKSPACE_EFFECT: Record<string, "changed" | "unknown"> = { edit: "changed", write: "changed", ast_edit: "changed", bash: "unknown", eval: "unknown" };
+/** Built-in tools that may change workspace files: `changed` for edits, `unknown` for execution. */
+const WORKSPACE_EFFECT: Record<string, "changed" | "unknown"> = { edit: "changed", write: "changed", apply_patch: "changed", ast_edit: "changed", bash: "unknown", eval: "unknown" };
 
 /** Existence check only; marker validation stays with `josh-room context`. */
 export async function markerPresent(cwd: string): Promise<boolean> {
@@ -45,8 +45,10 @@ export function registerRoomLifecycle(pi: ExtensionAPI, controller: RoomControll
 	pi.on("session_branch", refresh);
 	pi.on("session_tree", refresh);
 	pi.on("tool_execution_end", async (event, ctx) => {
-		if (event.isError || !state.room || Object.hasOwn(ROOM_TOOL_APPROVALS, event.toolName) || !Object.hasOwn(WORKSPACE_EFFECT, event.toolName)) return;
-		const effect = WORKSPACE_EFFECT[event.toolName];
+		// Subagent events must not touch the parent's Room state, matching the refresh path.
+		if (ctx.agent?.kind === "sub" || !state.room || Object.hasOwn(ROOM_TOOL_APPROVALS, event.toolName) || !Object.hasOwn(WORKSPACE_EFFECT, event.toolName)) return;
+		// A failed tool may still have written before erroring, so failure demotes `✓` to unknown.
+		const effect = event.isError ? "unknown" : WORKSPACE_EFFECT[event.toolName];
 		// Pessimistic hints only; no re-hash. A known-dirty Room stays dirty after arbitrary execution.
 		if (effect === "changed" || state.indicator === "clean") state.mark(ctx, effect);
 	});

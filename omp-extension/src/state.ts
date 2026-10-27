@@ -9,6 +9,7 @@ import {
 	type SaveOutcomePresentation,
 	type SaveReceipt,
 } from "./contracts.ts";
+import { RoomCliError, SaveOutcomeUnknownError } from "./process.ts";
 
 export const STATUS_KEY = "josh-room";
 export const PROVENANCE_TYPE = "com.joshyorko.josh-room.checkpoint.v1";
@@ -125,9 +126,28 @@ export function applySaveOutcome(
 ): SaveOutcomePresentation {
 	const outcome = presentSaveOutcome(context, receipt);
 	if (outcome.checkpointEntry) {
-		api.appendEntry(PROVENANCE_TYPE, outcome.checkpointEntry);
+		try {
+			api.appendEntry(PROVENANCE_TYPE, outcome.checkpointEntry);
+		} catch (error) {
+			throw new SaveOutcomeUnknownError(error);
+		}
 		state.recordCheckpoint(outcome.checkpointEntry);
 	}
 	state.show(ctx, outcome.room, outcome.indicator);
 	return outcome;
+}
+
+/** Settle the indicator after a failed Room operation; never claims a state Josh Room did not report. */
+export function settleFailure(state: RoomSessionState, ctx: StatusHost, error: unknown): void {
+	if (!(error instanceof RoomCliError)) return;
+	if (error.kind === "not-linked") state.clear(ctx);
+	else if (error.kind === "invalid-result") state.mark(ctx, "blocked");
+	else if (error instanceof SaveOutcomeUnknownError) state.mark(ctx, "unknown");
+}
+
+/** Shared `/room save` and `room_save` failure wording; `detail` is the bounded, path-free error message. */
+export function saveFailureMessage(error: unknown, detail: string): string {
+	if (error instanceof SaveOutcomeUnknownError) return `Room save outcome unknown — a checkpoint may have been created; run /room status (or room_status) before relying on the previous snapshot. ${detail}`;
+	if (error instanceof RoomCliError && error.kind === "cancelled") return "Room save cancelled — previous snapshot remains authoritative.";
+	return `Room save failed — previous snapshot remains authoritative. ${detail}`;
 }

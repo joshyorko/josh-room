@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { jatArgumentCompletions, registerRoomCommand, roomArgumentCompletions } from "../src/commands.ts";
+import { createRoomController } from "../src/controller.ts";
 import { registerRoomLifecycle } from "../src/lifecycle.ts";
 import { RoomCliError } from "../src/process.ts";
 import { PROVENANCE_TYPE, RoomSessionState } from "../src/state.ts";
@@ -130,6 +131,16 @@ test("RPC/ACP fall back to the host select dialog and map labels back to values"
 	assert.match(h.notifications[0][0], /^Snapshot jat-old · created 2026-01-01T00:00:00Z .* read-only$/);
 });
 
+test("RPC/ACP fallback keeps same-named Rooms distinct and returns the chosen project", async () => {
+	const seen = [];
+	const h = harness({ mode: "rpc", select: async (_title, options) => { seen.push(options); return options[1].label; } });
+	const rooms = { kind: "rooms", rooms: [{ projectId: "app-a", displayName: "App" }, { projectId: "app-b", displayName: "App" }] };
+	registerRoomCommand(h.api, { async rooms() { return { context: linked, rooms }; } }, new RoomSessionState(), kit);
+	await h.commands.get("room").handler("rooms", h.ctx);
+	assert.equal(new Set(seen[0].map((option) => option.label)).size, 2, "host dialog labels are unique");
+	assert.match(h.notifications[0][0], /^Room App · app-b · read-only$/);
+});
+
 test("explicit Save shows native progress, updates status from the receipt, and records provenance", async () => {
 	const ui = scriptedCustom([]);
 	const h = harness({ custom: ui.custom });
@@ -161,6 +172,60 @@ test("failed or cancelled Save keeps the previous snapshot authoritative", async
 		assert.match(h.notifications[0][0], pattern);
 		assert.deepEqual(h.working, [["Saving Room Demo Room…"], []], "working message is restored");
 	}
+});
+
+const linkedContextJson = { format_version: 1, ok: true, state: "linked", linked: true, path_matches: true, dimension_id: "local", project_id: "demo-room", display_name: "Demo Room", snapshot_id: "jat-old" };
+
+test("Save failures after snapshot create started report an unknown outcome and demand a refresh", async () => {
+	for (const [kind, indicator] of [["timeout", "unknown"], ["cancelled", "unknown"], ["output-limit", "unknown"], ["invalid-result", "blocked"]]) {
+		const h = harness({ mode: "rpc" });
+		const state = new RoomSessionState();
+		state.show(h.ctx, linked, "clean");
+		const controller = createRoomController(async (args) => {
+			if (args[0] === "context") return linkedContextJson;
+			throw new RoomCliError(kind);
+		});
+		registerRoomCommand(h.api, controller, state, kit);
+		await h.commands.get("room").handler("save", h.ctx);
+		assert.equal(h.appended.length, 0);
+		assert.equal(state.indicator, indicator, kind);
+		assert.doesNotMatch(h.notifications[0][0], /previous snapshot remains authoritative/, kind);
+		assert.match(h.notifications[0][0], /\/room status/, kind);
+	}
+	const h = harness({ mode: "rpc" });
+	const state = new RoomSessionState();
+	state.show(h.ctx, linked, "clean");
+	registerRoomCommand(h.api, createRoomController(async (args) => {
+		if (args[0] === "context") return linkedContextJson;
+		throw new RoomCliError("failed", "workspace changed during capture");
+	}), state, kit);
+	await h.commands.get("room").handler("save", h.ctx);
+	assert.equal(state.indicator, "clean", "a failure Josh Room reported leaves the indicator alone");
+	assert.match(h.notifications[0][0], /previous snapshot remains authoritative/);
+});
+
+test("a provenance write failure after a real receipt is an unknown Save outcome", async () => {
+	const h = harness();
+	h.api.appendEntry = () => { throw new Error("session store unavailable"); };
+	const state = new RoomSessionState();
+	state.show(h.ctx, linked, "clean");
+	const controller = { async save() { return { context: linked, receipt: { kind: "saved", status: "saved", projectId: "demo-room", snapshotId: "jat-new", previousSnapshotId: "jat-old", dataAddedBytes: 1 } }; } };
+	registerRoomTools(h.api, controller, state, kit);
+	const result = await h.tools.get("room_save").execute("id", {}, undefined, undefined, h.ctx);
+	assert.equal(result.isError, true);
+	assert.equal(result.details.save_outcome, "unknown");
+	assert.equal(state.indicator, "unknown");
+	assert.doesNotMatch(result.content[0].text, /previous snapshot remains authoritative/);
+});
+
+test("an action that finds no linked Room clears the stale indicator", async () => {
+	const h = harness({ mode: "rpc" });
+	const state = new RoomSessionState();
+	state.show(h.ctx, linked, "clean");
+	registerRoomCommand(h.api, { async snapshots() { throw new RoomCliError("not-linked"); } }, state, kit);
+	await h.commands.get("room").handler("snapshots", h.ctx);
+	assert.equal(state.room, undefined);
+	assert.deepEqual(h.statuses.at(-1), ["josh-room", undefined]);
 });
 
 test("Escape on the Save loader aborts the owned operation and reports cancellation after it settles", async () => {
@@ -252,9 +317,14 @@ test("valid Room shows themed status; edits mark dirty, execution marks unknown,
 	await handlers.get("tool_execution_end")({ toolName: "bash", isError: false }, ctx);
 	assert.equal(state.indicator, "changed", "known-dirty stays dirty");
 	state.mark(ctx, "clean");
-	await handlers.get("tool_execution_end")({ toolName: "edit", isError: true }, ctx);
 	await handlers.get("tool_execution_end")({ toolName: "room_status", isError: false }, ctx);
-	assert.equal(state.indicator, "clean");
+	await handlers.get("tool_execution_end")({ toolName: "write", isError: false }, { ...ctx, agent: { kind: "sub" } });
+	assert.equal(state.indicator, "clean", "Room tools and subagent events leave the parent indicator alone");
+	await handlers.get("tool_execution_end")({ toolName: "apply_patch", isError: false }, ctx);
+	assert.equal(state.indicator, "changed");
+	state.mark(ctx, "clean");
+	await handlers.get("tool_execution_end")({ toolName: "edit", isError: true }, ctx);
+	assert.equal(state.indicator, "unknown", "a failed mutating tool may have partially written");
 });
 
 test("invalid or stale binding clears status; missing runtime is silent at startup", async () => {

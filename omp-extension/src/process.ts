@@ -37,6 +37,17 @@ export class RoomCliError extends Error {
 	}
 }
 
+/**
+ * Save failed after `snapshot create` started without Josh Room reporting the failure itself, so a
+ * snapshot may have been committed. Keeps the underlying kind and message; only `/room status` settles it.
+ */
+export class SaveOutcomeUnknownError extends RoomCliError {
+	constructor(cause: unknown) {
+		super(cause instanceof RoomCliError ? cause.kind : "failed", cause instanceof RoomCliError ? cause.message : undefined);
+		this.name = "SaveOutcomeUnknownError";
+	}
+}
+
 interface SpawnOptions {
 	cwd: string;
 	env: Record<string, string>;

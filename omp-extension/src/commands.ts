@@ -1,8 +1,8 @@
 import { roomIndicator, snapshotOptions } from "./contracts.ts";
 import type { RoomController } from "./controller.ts";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { RoomCliError } from "./process.ts";
-import { applySaveOutcome, type RoomSessionState, type StatusHost } from "./state.ts";
+import { RoomCliError, SaveOutcomeUnknownError } from "./process.ts";
+import { applySaveOutcome, saveFailureMessage, settleFailure, type RoomSessionState, type StatusHost } from "./state.ts";
 import { pick, withProgress, type PickerItem, type TuiKit, type UiHost } from "./ui.ts";
 
 type CommandContext = UiHost & StatusHost & {
@@ -112,12 +112,9 @@ async function runRoomAction(action: RoomAction, rest: string[], api: ExtensionA
 				const { context, receipt } = await withProgress(ctx, kit, name ? `Saving Room ${name}…` : "Saving Josh Room checkpoint…", (signal) => controller.save(ctx.cwd, signal));
 				ctx.ui.notify(applySaveOutcome(api, state, ctx, context, receipt).message, "info");
 			} catch (error) {
-				if (error instanceof RoomCliError && error.kind === "cancelled") {
-					ctx.ui.notify("Room save cancelled — previous snapshot remains authoritative.", "warning");
-					return;
-				}
-				if (error instanceof RoomCliError && error.kind === "invalid-result") state.mark(ctx, "blocked");
-				ctx.ui.notify(`Room save failed — previous snapshot remains authoritative. ${errorMessage(error)}`, "error");
+				settleFailure(state, ctx, error);
+				const warning = error instanceof SaveOutcomeUnknownError || (error instanceof RoomCliError && error.kind === "cancelled");
+				ctx.ui.notify(saveFailureMessage(error, errorMessage(error)), warning ? "warning" : "error");
 			}
 			return;
 		}
@@ -153,7 +150,7 @@ export function registerRoomCommand(api: ExtensionAPI, controller: RoomControlle
 			try {
 				await runRoomAction(action, parsed.kind === "action" ? parsed.rest : [], api, controller, state, kit, ctx);
 			} catch (error) {
-				if (error instanceof RoomCliError && error.kind === "invalid-result") state.mark(ctx, "blocked");
+				settleFailure(state, ctx, error);
 				ctx.ui.notify(errorMessage(error), "error");
 			}
 		},

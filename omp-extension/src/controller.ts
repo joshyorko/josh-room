@@ -15,7 +15,7 @@ import {
 	type DoctorResult,
 	type JatInspection,
 } from "./contracts.ts";
-import { runRoomCli, RoomCliError } from "./process.ts";
+import { runRoomCli, RoomCliError, SaveOutcomeUnknownError } from "./process.ts";
 
 export type CliRunner = (args: readonly string[], options: { cwd: string; signal?: AbortSignal; timeoutMs?: number; allowFailure?: boolean }) => Promise<unknown>;
 
@@ -108,22 +108,29 @@ export function createRoomController(run: CliRunner = runRoomCli): RoomControlle
 		},
 		async save(cwd, signal, onProgress) {
 			const context = requireLinked(await this.context(cwd, signal));
+			if (signal?.aborted) throw new RoomCliError("cancelled");
 			onProgress?.("Saving Josh Room checkpoint…");
-			const raw = await run(
-				["snapshot", "create", context.projectId, "--source", cwd, "--dimension", context.dimensionId, "--json"],
-				{ cwd, signal, timeoutMs: 30 * 60_000 },
-			);
-			const parsed = requireResult(raw, parseSaveResult);
-			if (parsed.projectId !== context.projectId) throw new RoomCliError("invalid-result");
-			if (parsed.kind === "already-saved") {
-				if (parsed.snapshotId !== context.snapshotId) throw new RoomCliError("invalid-result");
-				return { context, receipt: parsed };
+			try {
+				const raw = await run(
+					["snapshot", "create", context.projectId, "--source", cwd, "--dimension", context.dimensionId, "--json"],
+					{ cwd, signal, timeoutMs: 30 * 60_000 },
+				);
+				const parsed = requireResult(raw, parseSaveResult);
+				if (parsed.projectId !== context.projectId) throw new RoomCliError("invalid-result");
+				if (parsed.kind === "already-saved") {
+					if (parsed.snapshotId !== context.snapshotId) throw new RoomCliError("invalid-result");
+					return { context, receipt: parsed };
+				}
+				if (parsed.snapshotId === context.snapshotId) throw new RoomCliError("invalid-result");
+				return {
+					context,
+					receipt: { ...parsed, previousSnapshotId: parsed.previousSnapshotId ?? context.snapshotId },
+				};
+			} catch (error) {
+				// Only a failure Josh Room reported, or a CLI that never started, proves nothing was committed.
+				if (error instanceof RoomCliError && (error.kind === "failed" || error.kind === "missing-runtime")) throw error;
+				throw new SaveOutcomeUnknownError(error);
 			}
-			if (parsed.snapshotId === context.snapshotId) throw new RoomCliError("invalid-result");
-			return {
-				context,
-				receipt: { ...parsed, previousSnapshotId: parsed.previousSnapshotId ?? context.snapshotId },
-			};
 		},
 		async inspectJat(cwd, haul, signal) {
 			if (!haul || haul.length > 4096 || haul.includes("\0") || !isAbsoluteLocalPath(haul)) throw new RoomCliError("failed", "JAT inspection needs an absolute local haul path.");

@@ -2,8 +2,8 @@ import { ROOM_TOOL_APPROVALS, roomIndicator } from "./contracts.ts";
 import type { RoomController } from "./controller.ts";
 import type { ExtensionAPI, ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import type { TSchema } from "@oh-my-pi/pi-ai";
-import { RoomCliError } from "./process.ts";
-import { applySaveOutcome, type RoomSessionState } from "./state.ts";
+import { RoomCliError, SaveOutcomeUnknownError } from "./process.ts";
+import { applySaveOutcome, saveFailureMessage, settleFailure, type RoomSessionState } from "./state.ts";
 import type { TuiKit, TuiTheme } from "./ui.ts";
 
 interface ToolResult {
@@ -98,7 +98,7 @@ export function registerRoomTools(api: ExtensionAPI, controller: RoomController,
 			const stateName = status.kind === "known" ? status.state : "unknown";
 			return output(`Room ${context.displayName} · ${stateName} · ${status.kind === "known" ? status.snapshotId : context.snapshotId}`, { ok: true, state: stateName, project_id: context.projectId, snapshot_id: status.kind === "known" ? status.snapshotId : context.snapshotId });
 		} catch (error) {
-			if (error instanceof RoomCliError && error.kind === "invalid-result") state.mark(ctx, "blocked");
+			settleFailure(state, ctx, error);
 			return errorResult(error);
 		}
 	}));
@@ -121,9 +121,10 @@ export function registerRoomTools(api: ExtensionAPI, controller: RoomController,
 			const outcome = applySaveOutcome(api, state, ctx, context, receipt);
 			return output(outcome.message, outcome.details);
 		} catch (error) {
-			if (error instanceof RoomCliError && error.kind === "invalid-result") state.mark(ctx, "blocked");
+			settleFailure(state, ctx, error);
 			const result = errorResult(error);
-			if (!(error instanceof RoomCliError && error.kind === "cancelled")) result.content[0].text = `Room save failed — previous snapshot remains authoritative. ${result.content[0].text}`;
+			result.content[0].text = saveFailureMessage(error, result.content[0].text);
+			if (error instanceof SaveOutcomeUnknownError) result.details.save_outcome = "unknown";
 			return result;
 		}
 	}));

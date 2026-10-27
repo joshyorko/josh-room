@@ -105,8 +105,17 @@ export async function pick(ctx: UiHost, kit: TuiKit | undefined, title: string, 
 	if (kit && supportsRichUi(ctx) && ctx.ui.custom) {
 		return ctx.ui.custom<string | undefined>((_tui, theme, keybindings, done) => createPicker(kit, theme, keybindings, title, items, done));
 	}
-	const selected = await ctx.ui.select(title, items.map(({ label, description }) => (description ? { label, description } : { label })));
-	return items.find((item) => item.label === selected)?.value;
+	// Host dialogs return the chosen label, so duplicate labels (e.g. same-named Rooms) are made unique.
+	const used = new Set<string>();
+	const labels = items.map(({ label }) => {
+		let unique = label;
+		for (let n = 2; used.has(unique); n++) unique = `${label} (${n})`;
+		used.add(unique);
+		return unique;
+	});
+	const selected = await ctx.ui.select(title, items.map(({ description }, index) => (description ? { label: labels[index], description } : { label: labels[index] })));
+	const index = selected === undefined ? -1 : labels.indexOf(selected);
+	return index < 0 ? undefined : items[index].value;
 }
 
 /**
