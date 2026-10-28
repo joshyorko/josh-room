@@ -44,7 +44,7 @@ async function injectIssue165UiCatalog() {
   }
   loadCatalog = async () => issue165UiCatalog;
   runSelectedEncryption = async (args) => args.includes("list")
-    ? { ok: true, revision: 17, latest: "fixture-jat-new", snapshots: issue165UiCatalog.dimensions[0].projects[0].snapshots }
+    ? { ok: true, revision: 17, latest: issue165UiCatalog.dimensions[0].projects[0].latest, snapshots: issue165UiCatalog.dimensions[0].projects[0].snapshots }
     : { ok: true };
   destructiveOperation = async (args) => {
     if (args.includes("list")) return { ok: true, revision: 17, latest: issue165UiCatalog.dimensions[0].projects[0].latest, snapshots: issue165UiCatalog.dimensions[0].projects[0].snapshots };

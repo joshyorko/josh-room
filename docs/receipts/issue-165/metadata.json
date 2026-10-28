@@ -1,6 +1,6 @@
 {
   "issue": 165,
-  "source_sha": "380fb38d3a4f4f681bd516045cf8023b776d6ebf",
+  "source_sha": "68f387f9fb5c09c111a059d1336724900567067d",
   "candidate_vsix": "vscode-extension/josh-room-0.1.40.vsix",
   "candidate_vsix_sha256": "72847ff47b9344d915d763bbe35b0b299badacd296da6e994d7f2cc97917bd6a",
   "capture_date": "2026-10-28",
@@ -9,9 +9,9 @@
   "capture": "CDP Page.captureScreenshot via loopback 127.0.0.1; 1440x900; only uniquely identified disposable Insiders renderer",
   "fixture": "Disposable copy of candidate VSIX with test-only in-memory synthetic MinIO Dimension, Room, and two portable JAT rows. The test-only copy injects catalog/lifecycle state and stubs controller calls. Screenshot 05 removes the synthetic Latest row in memory and invokes the real TreeView provider reload override. No provider/controller writes, credentials, or real storage operations. This is native UI presentation evidence, not installed-package or storage integration evidence.",
   "fixture_harness": "scripts/prepare_issue165_ui_fixture.js",
-  "fixture_harness_sha256": "a7c1596e7cb5297f44cc2922287793d38c53e276c7438ef5618a7c583b7a3ba3",
+  "fixture_harness_sha256": "e2117ea7145e10a2dbb04c00526a7858f4ee7c51d2c715c19e61f9eb87385000",
   "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
-  "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, recovery-point count, and irreversible warning. The CDP renderer had no dialog DOM. Focused X11 window ownership could not be verified safely, so no native-window capture was attempted and no confirmation was accepted.",
+  "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, one recovery point, and irreversible warning. CDP showed no dialog DOM. A forced-X11 attempt queried only numeric _NET_WM_PID and transient properties for the isolated process tree; no distinct modal window was found. The focused X11 window was not owned by the isolated profile, so it was not captured. No confirmation was accepted.",
   "screenshots": [
     {
       "path": "01-room-inline-trash.png",

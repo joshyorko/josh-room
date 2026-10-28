@@ -60,7 +60,7 @@ def main() -> None:
         "fixture_harness": str(fixture_harness.relative_to(ROOT)),
         "fixture_harness_sha256": sha256(fixture_harness),
         "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
-        "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, recovery-point count, and irreversible warning. The CDP renderer had no dialog DOM. Focused X11 window ownership could not be verified safely, so no native-window capture was attempted and no confirmation was accepted.",
+        "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, one recovery point, and irreversible warning. CDP showed no dialog DOM. A forced-X11 attempt queried only numeric _NET_WM_PID and transient properties for the isolated process tree; no distinct modal window was found. The focused X11 window was not owned by the isolated profile, so it was not captured. No confirmation was accepted.",
         "screenshots": entries,
     }
     (OUTPUT / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
