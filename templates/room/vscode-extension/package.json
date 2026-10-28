@@ -41,6 +41,8 @@
     "onCommand:joshRoom.repair",
     "onCommand:joshRoom.enter",
     "onCommand:joshRoom.remove",
+    "onCommand:joshRoom.deleteRecoveryPoint",
+    "onCommand:joshRoom.deleteRoom",
     "onCommand:joshRoom.serve",
     "onCommand:joshRoom.inspectLogicalSnapshot",
     "onCommand:joshRoom.exportPortableJat",
@@ -178,6 +180,8 @@
         "title": "Josh: Delete Snapshot",
         "icon": "$(trash)"
       },
+      { "command": "joshRoom.deleteRecoveryPoint", "title": "Josh: Delete Recovery Point", "icon": "$(trash)" },
+      { "command": "joshRoom.deleteRoom", "title": "Josh: Delete Room", "icon": "$(trash)" },
       {
         "command": "joshRoom.serve",
         "title": "Josh: Serve Room Images",
@@ -452,8 +456,10 @@
         {
           "command": "joshRoom.remove",
           "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
-          "group": "room@3"
-        }
+          "group": "inline@3"
+        },
+        { "command": "joshRoom.deleteRoom", "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)", "group": "room@4" },
+        { "command": "joshRoom.deleteRecoveryPoint", "when": "view == joshRoom.rooms && (viewItem == jat || viewItem == logical-jat)", "group": "recovery@9" }
       ]
     }
   }

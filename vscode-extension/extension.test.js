@@ -6320,9 +6320,10 @@ test("Room actions keep Save and Enter inline and recovery actions contextual", 
   const manifest = require("./package.json");
   const menus = manifest.contributes.menus["view/item/context"];
   assert.ok(menus.some((item) => item.command === "joshRoom.save" && item.when.includes("current-room") && item.group.startsWith("inline")));
-  for (const command of ["joshRoom.link", "joshRoom.repair", "joshRoom.serve", "joshRoom.remove"]) {
+  for (const command of ["joshRoom.link", "joshRoom.repair", "joshRoom.serve"]) {
     assert.ok(menus.filter((item) => item.command === command && item.when.includes("viewItem == room")).every((item) => !item.group.startsWith("inline")), command);
   }
+  assert.ok(menus.some((item) => item.command === "joshRoom.remove" && item.when.includes("viewItem == room") && item.group.startsWith("inline")));
   assert.ok(manifest.contributes.commands.some((item) => item.command === "joshRoom.saveFolderAs"));
 });
 

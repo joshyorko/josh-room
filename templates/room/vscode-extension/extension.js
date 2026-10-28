@@ -2385,6 +2385,39 @@ async function removeRoom(preferredProject) {
   return removeSnapshot(preferredProject);
 }
 
+async function deleteRoom(preferredProject) {
+  const cwd = activeWorkspace();
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const preferred = roomProject(preferredProject);
+  const candidates = nativeRegistry.flattenDimensionRooms(catalog);
+  const selected = preferred
+    ? candidates.find((room) => room.id === preferred.id && dimensionId(room) === dimensionId(preferred))
+    : await vscode.window.showQuickPick(candidates.map((project) => ({ label: roomLabel(project), project })), { title: "Josh: Delete Room", ignoreFocusOut: true });
+  const project = roomProject(selected?.project || selected);
+  if (!project || !project.id || !explicitDimensionId(project)) return "cancelled";
+  if (sameRoomBinding(currentRoom(cwd), project)) {
+    await vscode.window.showWarningMessage("Cannot delete the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  const history = await runOperation(`Loading ${roomLabel(project)} recovery points…`, nativeRegistry.dimensionArgs(["snapshots", "list", project.id], dimensionId(project)), cwd);
+  const count = Array.isArray(history.snapshots) ? history.snapshots.length : 0;
+  const answer = await vscode.window.showWarningMessage(`Permanently delete Room “${project.display_name || project.id}” (${project.id}) in Dimension “${dimensionId(project)}” and all ${count} recovery point${count === 1 ? "" : "s"}? This action is irreversible.`, { modal: true }, "Delete Room");
+  if (answer !== "Delete Room") return "cancelled";
+  await runOperation(`Deleting Room ${project.id}…`, nativeRegistry.dimensionArgs(["rooms", "remove", project.id], dimensionId(project)), cwd);
+  try { await roomsProvider?.reload(); }
+  catch (error) {
+    await vscode.window.showErrorMessage(`Room deleted, but the catalog could not be refreshed: ${userFacingError(error)}`, "Refresh").then((choice) => choice === "Refresh" && roomsProvider?.reload());
+  }
+  return "removed";
+}
+
+async function deleteRecoveryPoint(item) {
+  const project = roomProject(item);
+  const snapshotId = snapshotIdentity(item);
+  if (!project?.id || !explicitDimensionId(item) || !snapshotId) return "blocked";
+  return removeSnapshot({ ...project, snapshot_id: snapshotId, snapshot: { snapshot_id: snapshotId } });
+}
+
 async function removeSnapshot(preferredProject) {
   const cwd = activeWorkspace();
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
@@ -2457,7 +2490,10 @@ async function removeSnapshot(preferredProject) {
         ? `Snapshot deleted. Latest is now ${result.latest}.`
         : "Snapshot deleted.",
   );
-  await roomsProvider?.refresh();
+  try { await roomsProvider?.reload(); }
+  catch (error) {
+    await vscode.window.showErrorMessage(`Snapshot deleted, but the catalog could not be refreshed: ${userFacingError(error)}`, "Refresh").then((choice) => choice === "Refresh" && roomsProvider?.reload());
+  }
   return "removed";
 }
 
@@ -3269,6 +3305,8 @@ function activate(context) {
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
+  register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
   register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
@@ -5030,6 +5068,8 @@ function activateNative(context) {
   register(context, "joshRoom.link", linkRoom);
   register(context, "joshRoom.repair", repairRoom);
   register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
+  register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.exportPortableJat", exportPortableJat);
@@ -5312,6 +5352,8 @@ Object.assign(module.exports.__test__, {
   loadCatalog,
   repairRoom,
   removeSnapshot,
+  deleteRecoveryPoint,
+  deleteRoom,
   RoomDragAndDropController,
   roomLabel,
   runJoshRoom,
