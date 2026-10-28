@@ -5,6 +5,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  NODE_VERSION: "22.23.4"
 concurrency:
   group: issue-165-installed-ui-${{ github.ref }}
   cancel-in-progress: true
@@ -16,10 +18,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "22.23.4"
+          node-version: ${{ env.NODE_VERSION }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Verify patched Node 22 runtime
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:RUNNER_TEMP 'issue-165-ui'
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          node scripts/verify_node_version.js --minimum $env:NODE_VERSION --source-sha $env:GITHUB_SHA --report (Join-Path $runtime 'node-runtime.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Patched Node verification failed' }
       - name: Install official VS Code and exact candidate VSIX in a disposable profile
         shell: pwsh
         run: |
