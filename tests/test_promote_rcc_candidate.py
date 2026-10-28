@@ -390,6 +390,47 @@ def test_artifact_release_tag_binds_complete_input_digests(tmp_path: Path):
     assert first["artifact_release_tag"] != second["artifact_release_tag"]
 
 
+@pytest.mark.parametrize("platform", PLATFORM_ASSETS)
+def test_artifact_release_tag_changes_when_rebuild_bytes_change(tmp_path: Path, platform: str):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    jat_candidate = _jat_candidate(candidate)
+    first = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, prepare=False)
+    archive = artifacts / f"rcc-controller-candidate-{platform}" / PLATFORM_ASSETS[platform]
+    archive.write_bytes(archive.read_bytes() + b"fresh qualified build")
+    receipt_path = archive.with_suffix(".json")
+    receipt = json.loads(receipt_path.read_text())
+    receipt["archive"] = {"sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "size": archive.stat().st_size}
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    second = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, prepare=False)
+
+    assert first["artifact_release_tag"] != second["artifact_release_tag"]
+
+
+@pytest.mark.parametrize("platform", PLATFORM_ASSETS)
+def test_artifact_release_tag_binds_exact_receipt_bytes(tmp_path: Path, platform: str):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    jat_candidate = _jat_candidate(candidate)
+    first = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, prepare=False)
+    receipt_path = (artifacts / f"rcc-controller-candidate-{platform}" / PLATFORM_ASSETS[platform]).with_suffix(".json")
+    receipt_path.write_text(receipt_path.read_text() + "\n", encoding="utf-8")
+    second = promote_candidate(root, candidate, artifacts, "a" * 40, jat_candidate=jat_candidate, prepare=False)
+
+    assert first["artifact_release_tag"] != second["artifact_release_tag"]
+
+
+def test_identical_qualified_outputs_reuse_a_bounded_release_tag(tmp_path: Path):
+    root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
+    candidate = _write_fixture(root, artifacts)
+    options = {"jat_candidate": _jat_candidate(candidate), "prepare": False}
+    first = promote_candidate(root, candidate, artifacts, "a" * 40, **options)
+    second = promote_candidate(root, candidate, artifacts, "a" * 40, **options)
+
+    assert first["artifact_release_tag"] == second["artifact_release_tag"]
+    assert len(first["artifact_release_tag"].encode("utf-8")) <= 255
+
+
 def test_artifact_release_tag_binds_source_sha_even_if_inputs_are_unchanged(tmp_path: Path):
     root, artifacts = tmp_path / "repo", tmp_path / "artifacts"
     candidate = _write_fixture(root, artifacts)
@@ -404,8 +445,8 @@ def test_artifact_release_tag_binds_source_sha_even_if_inputs_are_unchanged(tmp_
     updated = promote_candidate(root, candidate, artifacts, "9" * 40, jat_candidate=jat_candidate, prepare=False)
 
     assert original["artifact_release_tag"] != updated["artifact_release_tag"]
-    assert original["artifact_release_tag"].endswith("-" + "2" * 64 + "-" + "3" * 64)
-    assert updated["artifact_release_tag"].endswith("-" + "2" * 64 + "-" + "3" * 64)
+    assert original["artifact_release_tag"].startswith(f"rcc-v18.19.6-controller-{'a' * 40}-")
+    assert updated["artifact_release_tag"].startswith(f"rcc-v18.19.6-controller-{'9' * 40}-")
 
 
 @pytest.mark.parametrize("rcc_field,stale", [("rcc_version", "v18.19.5"), ("rcc_source_sha", "0" * 40)])
