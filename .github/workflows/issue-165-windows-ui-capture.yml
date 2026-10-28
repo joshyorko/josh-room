@@ -1,0 +1,54 @@
+name: Issue 165 installed VS Code UI capture
+on:
+  push:
+    branches: [fix/165-restore-delete-ux-20261028]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: issue-165-installed-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  installed-ui:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.23.4"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install official VS Code and exact candidate VSIX in a disposable profile
+        shell: pwsh
+        run: |
+          $ui = Join-Path $env:RUNNER_TEMP 'issue-165-ui'
+          New-Item -ItemType Directory -Force -Path $ui | Out-Null
+          $zip = Join-Path $ui 'vscode.zip'
+          Invoke-WebRequest 'https://update.code.visualstudio.com/latest/win32-x64-archive/stable' -OutFile $zip
+          $code = Join-Path $ui 'code'
+          Expand-Archive $zip $code
+          $vsix = Join-Path $ui 'candidate.vsix'
+          Push-Location vscode-extension
+          npm run package -- --out $vsix
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate packaging failed' }
+          Pop-Location
+          $profile = Join-Path $ui 'profile'
+          $extensions = Join-Path $ui 'extensions'
+          & (Join-Path $code 'bin/code.cmd') --user-data-dir $profile --extensions-dir $extensions --install-extension $vsix --force
+          if ($LASTEXITCODE -ne 0) { throw 'VSIX installation failed' }
+          $version = (& (Join-Path $code 'bin/code.cmd') --version | Select-Object -First 1)
+          "ISSUE165_UI_ROOT=$ui" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "ISSUE165_CODE_ROOT=$code" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "ISSUE165_VSIX=$vsix" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "ISSUE165_VSCODE_VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Require genuine installed deletion UI before capturing
+        run: node scripts/capture_issue165_windows_ui.js
+      - name: Retain bounded runner diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: issue-165-windows-ui-attempt-${{ github.sha }}
+          path: ${{ runner.temp }}/issue-165-ui/receipt.json
+          if-no-files-found: ignore
