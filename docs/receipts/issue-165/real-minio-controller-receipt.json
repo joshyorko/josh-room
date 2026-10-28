@@ -1,6 +1,6 @@
 {
   "issue": 165,
-  "status": "synthetic-controller-delete-verified",
+  "status": "real-controller-snapshot-delete-and-room-confirmation-captured",
   "minio": {
     "release": "RELEASE.2025-09-07T16-13-09Z",
     "official_asset": "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-amd64.RELEASE.2025-09-07T16-13-09Z",
@@ -33,22 +33,47 @@
       "operation": "snapshot create",
       "command": "josh-room snapshot create issue165-room --dimension issue165-dimension --backend minio --source <temporary synthetic workspace> --json",
       "results": [
-        { "snapshot_id": "d3e5f40003574f5c966f570a54bb0d75", "object_key": "objects/sha256/7cab85256b16b4cc05c8a19988efef83b4387871a51eca46ce632f10d3763b80" },
-        { "snapshot_id": "d91c258a7d74418db67c597d16a042bb", "object_key": "objects/sha256/a9f93025902f0db331ea868e0fcd6163af2c598395f361c302a2ed708cc40143" }
+        {
+          "snapshot_id": "d3e5f40003574f5c966f570a54bb0d75",
+          "object_key": "objects/sha256/7cab85256b16b4cc05c8a19988efef83b4387871a51eca46ce632f10d3763b80"
+        },
+        {
+          "snapshot_id": "d91c258a7d74418db67c597d16a042bb",
+          "object_key": "objects/sha256/a9f93025902f0db331ea868e0fcd6163af2c598395f361c302a2ed708cc40143"
+        }
       ]
     },
     {
       "operation": "snapshots list before delete",
-      "result": { "catalog_revision": 2, "latest": "d91c258a7d74418db67c597d16a042bb", "snapshot_ids": ["d3e5f40003574f5c966f570a54bb0d75", "d91c258a7d74418db67c597d16a042bb"] }
+      "result": {
+        "catalog_revision": 2,
+        "latest": "d91c258a7d74418db67c597d16a042bb",
+        "snapshot_ids": [
+          "d3e5f40003574f5c966f570a54bb0d75",
+          "d91c258a7d74418db67c597d16a042bb"
+        ]
+      }
     },
     {
       "operation": "snapshots remove",
       "command": "josh-room snapshots remove issue165-room d91c258a7d74418db67c597d16a042bb --dimension issue165-dimension --backend minio --expected-revision 2 --expected-snapshots d3e5f40003574f5c966f570a54bb0d75,d91c258a7d74418db67c597d16a042bb --json",
-      "result": { "status": "removed", "restic_snapshots_forgotten": ["ba21e5210a9f5b6ad8a04e7923bbeef5d35b3a2da65a30f5ee6eee389599f251"], "still_referenced_snapshot_ids": [] }
+      "result": {
+        "status": "removed",
+        "restic_snapshots_forgotten": [
+          "ba21e5210a9f5b6ad8a04e7923bbeef5d35b3a2da65a30f5ee6eee389599f251"
+        ],
+        "still_referenced_snapshot_ids": []
+      }
     },
     {
       "operation": "fresh snapshots list after delete",
-      "result": { "catalog_revision": 3, "latest": "d3e5f40003574f5c966f570a54bb0d75", "snapshot_ids": ["d3e5f40003574f5c966f570a54bb0d75"] }
+      "result": {
+        "catalog_revision": 3,
+        "latest": "d3e5f40003574f5c966f570a54bb0d75",
+        "snapshot_ids": [
+          "d3e5f40003574f5c966f570a54bb0d75"
+        ]
+      }
     }
   ],
   "vs_code": {
@@ -64,6 +89,28 @@
     "real_provider_or_user_storage_touched": false,
     "real_user_credentials_used": false,
     "deletion_scope": "one recovery point in the disposable MinIO bucket only",
-    "confirmation_modal_capture": "not obtained; see PR body for bounded diagnostic"
+    "confirmation_modal_capture": "captured actual warning, dismissed with Escape; Delete Room not confirmed"
+  },
+  "confirmation_fixture": {
+    "dimension_id": "issue165-local-dimension",
+    "bucket": "issue165-final-bucket",
+    "room_id": "issue165-real-room",
+    "display_name": "Issue165 Real Room",
+    "controller_catalog_revision": 2,
+    "snapshot_ids": [
+      "c325d453313d44a2a490a53d0af124ce",
+      "b02459b59fd342ae9c8188e522509b2a"
+    ],
+    "latest": "b02459b59fd342ae9c8188e522509b2a",
+    "ui": "unmodified VSIX Delete Room context command opened the genuine native warning in Xvfb :187",
+    "warning": "Permanently delete Room \u201cIssue165 Real Room\u201d (issue165-real-room) in Dimension \u201cissue165-local-dimension\u201d and all 2 recovery points? This action is irreversible.",
+    "capture": "04-delete-room-confirmation.png; ffmpeg x11grab of the private 1440x900 Xvfb display containing only disposable Code Insiders",
+    "dismissal": "Escape; no confirmation accepted",
+    "fresh_list_after_dismissal": {
+      "catalog_revision": 2,
+      "snapshot_count": 2,
+      "latest": "b02459b59fd342ae9c8188e522509b2a"
+    },
+    "storage_effect": "none"
   }
 }

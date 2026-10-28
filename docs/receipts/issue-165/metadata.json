@@ -1,18 +1,18 @@
 {
   "issue": 165,
-  "source_sha": "1e40f8f673768fb1dabf6c2a97c4614e0c71528b",
+  "source_sha": "0911111b51337622e949d4b8b689564546a4f1a2",
   "candidate_vsix": "vscode-extension/josh-room-0.1.40.vsix",
   "candidate_vsix_sha256": "72847ff47b9344d915d763bbe35b0b299badacd296da6e994d7f2cc97917bd6a",
   "capture_date": "2026-10-28",
   "host": "Dakota-NVIDIA; active kdlocpanda Wayland session",
   "application": "VS Code Insiders 1.145.0",
-  "capture": "CDP Page.captureScreenshot via loopback 127.0.0.1; 1440x900; only uniquely identified disposable Insiders renderer",
-  "fixture": "Screenshots 01-03 and 05 use a disposable modified candidate copy with test-only in-memory state and stubbed controller calls. Screenshot 06 uses the original unmodified 0.1.40 VSIX with a disposable local MinIO server, generated credentials, a CLI-created Room/two logical recovery points, and a controller-enforced deletion of one recovery point; the real VSIX TreeView was refreshed from the controller catalog.",
+  "capture": "CDP Page.captureScreenshot for 01-03 and 05-06; ffmpeg x11grab of private Xvfb :187 for 04; all captures 1440x900 and limited to isolated VS Code windows",
+  "fixture": "Screenshots 01-03 and 05 use a disposable modified candidate copy with test-only in-memory state and stubbed controller calls. Screenshots 04 and 06 use the original unmodified 0.1.40 VSIX against a disposable loopback MinIO server with generated credentials and CLI-created Rooms/two logical recovery points. #04 is the actual Delete Room confirmation for Issue165 Real Room (two recovery points), dismissed with Escape. #06 follows an actual controller deletion of one recovery point and a fresh TreeView catalog refresh.",
   "fixture_harness": "scripts/prepare_issue165_ui_fixture.js",
   "fixture_harness_sha256": "e2117ea7145e10a2dbb04c00526a7858f4ee7c51d2c715c19e61f9eb87385000",
   "real_minio_controller_receipt": "real-minio-controller-receipt.json",
   "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
-  "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, one recovery point, and irreversible warning. The CDP renderer had no dialog DOM. GNOME ScreenshotWindow was introspected and is available, but the focused target remained the workbench rather than a verified modal; it was not called to avoid a generic-window capture. A forced-X11 scan of numeric PID/transient properties for the isolated process tree found no distinct modal window. No confirmation was accepted.",
+  "modal_capture": "Captured as screenshot 04 from the actual unmodified VSIX modal on private Xvfb :187 using ffmpeg x11grab; red boxes identify irreversible warning and Delete Room button. Room was Issue165 Real Room in issue165-local-dimension with two controller-listed recovery points. Modal dismissed with Escape; fresh controller list verified revision 2 and both snapshots unchanged. No Room deletion was confirmed.",
   "screenshots": [
     {
       "path": "01-room-inline-trash.png",
@@ -52,6 +52,28 @@
         280
       ],
       "evidence_level": "test-only in-memory fixture; UI presentation only"
+    },
+    {
+      "path": "04-delete-room-confirmation.png",
+      "sha256": "9df250203e054e4c6e8f5bc2c2a2c051f5c2c820fb998439358223a935a45cb1",
+      "bytes": 73395,
+      "boxed_control": "4  Real MinIO Delete Room warning; cancel only",
+      "rectangle": [
+        0,
+        0,
+        548,
+        76
+      ],
+      "additional_rectangles": [
+        [
+          274,
+          82,
+          548,
+          115
+        ]
+      ],
+      "evidence_level": "test-only in-memory fixture; UI presentation only",
+      "capture_method": "ffmpeg x11grab of Xvfb :187 private 1440x900 display containing only isolated VS Code Insiders"
     },
     {
       "path": "05-post-synthetic-tree.png",
