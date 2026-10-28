@@ -461,7 +461,7 @@ function activateTestExtension(extension, root, vscode, values = new Map()) {
 
 test("extension backend commands use the managed RCC controller boundary", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-command-test-"));
-  const { vscode, statusItem } = createVscodeMock(root);
+  const { vscode, statusItem, errorCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
@@ -2990,6 +2990,24 @@ test("deleting the active JAT is blocked so its marker cannot remain Saved", asy
   assert.equal(result, "blocked");
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "snapshots" && entry.args[1] === "remove"), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".josh-room.json"))).snapshot_id, "active");
+});
+
+test("recovery-point handler rejects a stale cross-Dimension row before any mutation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-stale-delete-target-"));
+  const { vscode, statusItem, errorCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{ id: "archive-a", provider: "r2", projects: [{ id: "same-room", display_name: "Room A", snapshots: [] }] }] }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const result = await extension.__test__.deleteRecoveryPoint({
+    project: { id: "same-room", display_name: "Room B", dimension_id: "archive-b", provider: "r2" },
+    snapshot_id: "stale-snapshot",
+  });
+  assert.equal(result, "stale-target");
+  assert.equal(spawnHarness.calls.some((entry) => ["rooms", "snapshots"].includes(entry.args[0]) && ["remove"].includes(entry.args[1])), false);
+  assert.match(errorCalls[0][0], /no longer present in that Dimension/);
 });
 
 test("fresh configured R2 shows Connect Cloudflare without probing an empty catalog", async () => {

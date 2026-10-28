@@ -410,7 +410,7 @@ def hydrate(instance: Path, project_id: str, destination: Path, identity: Path, 
             shutil.rmtree(stage)
 
 
-def remove_room(instance: Path, project_id: str, identity: Path, recipients: list[str], backend=None, *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None) -> dict:
+def remove_room(instance: Path, project_id: str, identity: Path, recipients: list[str], backend=None, *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None, expected_revision: int | None = None, expected_snapshots: list[str] | None = None) -> dict:
     identity = _selected_identity(identity, selected_material)
     recipients = _selected_recipients(recipients, selected_material)
     operation_id = uuid.uuid4().hex
@@ -426,6 +426,7 @@ def remove_room(instance: Path, project_id: str, identity: Path, recipients: lis
         catalog_file = CatalogFile(instance / "catalog.jroom.age", identity)
         catalog = catalog_file.read()
         etag = None
+    _assert_expected_delete_state(catalog, project_id, expected_revision, expected_snapshots)
     updated, removable, snapshot_count = catalog.remove_project(project_id)
     report_progress("catalog", "Removing Room from the encrypted catalog")
     if backend:
@@ -464,6 +465,8 @@ def remove_snapshot(
     *,
     selected_material: EncryptionMaterial | None = None,
     selected_domain: EncryptionKeyset | None = None,
+    expected_revision: int | None = None,
+    expected_snapshots: list[str] | None = None,
 ) -> dict:
     identity = _selected_identity(identity, selected_material)
     recipients = _selected_recipients(recipients, selected_material)
@@ -480,6 +483,7 @@ def remove_snapshot(
         catalog_file = CatalogFile(instance / "catalog.jroom.age", identity)
         catalog = catalog_file.read()
         etag = None
+    _assert_expected_delete_state(catalog, project_id, expected_revision, expected_snapshots)
     latest_promoted = catalog.body["projects"][project_id]["latest"] == snapshot_id
     updated, removable, room_removed = catalog.remove_snapshot(project_id, snapshot_id)
     report_progress("catalog", "Removing selected recovery point")
@@ -509,6 +513,16 @@ def remove_snapshot(
     _write_receipt(receipt, {"operation": "remove-snapshot", "operation_id": operation_id, "status": "success", **result})
     report_progress("complete", "Recovery point removed")
     return result
+
+
+def _assert_expected_delete_state(catalog, project_id, expected_revision, expected_snapshots):
+    if expected_revision is not None and catalog.body.get("revision") != expected_revision:
+        raise ValueError("catalog changed after deletion confirmation; reload and confirm again")
+    project = catalog.body.get("projects", {}).get(project_id)
+    if project is None:
+        raise ValueError("room is not present in the encrypted catalog")
+    if expected_snapshots is not None and list(project.get("snapshots", {})) != expected_snapshots:
+        raise ValueError("recovery point inventory changed after deletion confirmation; reload and confirm again")
 
 
 def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: Path, jat_root: Path, backend=None, *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None) -> dict:

@@ -864,6 +864,8 @@ def remove_logical_catalog_records(
     identities,
     *,
     descriptors=None,
+    expected_revision=None,
+    expected_snapshots=None,
 ) -> LogicalCatalogRemoval:
     """CAS-remove logical/legacy catalog references before any Restic forget."""
     selected = frozenset(
@@ -877,6 +879,13 @@ def remove_logical_catalog_records(
             "catalog revision is unavailable for safe deletion",
             code="catalog-revision-unavailable",
         )
+    if expected_revision is not None and context.catalog.body.get("revision") != expected_revision:
+        raise RoomStoreLifecycleError("catalog changed after deletion confirmation; reload and confirm again", code="delete-inventory-changed")
+    if expected_snapshots is not None:
+        project_id = next(iter(selected)).room_id
+        current = list(context.catalog.body.get("projects", {}).get(project_id, {}).get("snapshots", {}))
+        if current != expected_snapshots:
+            raise RoomStoreLifecycleError("recovery point inventory changed after deletion confirmation; reload and confirm again", code="delete-inventory-changed")
     if descriptors is None:
         from .room_store_bridge import load_logical_descriptors
 
