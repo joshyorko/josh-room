@@ -213,3 +213,18 @@ After a workflow repair changes main, wait for that new source's CI and staging
 run, then use the new `source_sha` and `stage_run_id` with the preserved draft ID
 and its original source SHA. Do not reuse the older source's staging input for
 the repaired workflow. Final publication still requires Josh's `APPROVE`.
+
+## 0.1.40 runtime adoption
+
+The 0.1.40 extension candidate and 0.1.10 Dev Container template adopt
+[JAT v0.1.15-jat-runtime](https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.15-jat-runtime)
+from source `aa8d5ec7d628d44baed838f5e39983badcc99fe3`. Both controller
+platforms retain RCC 18.19.7 at `758c97808bef8ae8bc5779d82c23ee11abfa47b3`.
+The controller artifacts were produced from
+`d90860fc8352a86ec26b6b3253d5e4a5d617f5d8`; native qualification, JAT
+compatibility, publication and downloaded-asset verification passed in
+[maintenance run 40719166972](https://github.com/joshyorko/josh-room/actions/runs/40719166972).
+The consumer manifests, freezes, source/template pins and release locks advance
+together. Installed users receive these pins through the published VSIX and
+template. Exact-head consumer CI and merged-main release staging remain
+separate publication gates.
