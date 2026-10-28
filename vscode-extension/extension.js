@@ -2403,7 +2403,12 @@ async function deleteRoom(preferredProject) {
   const count = Array.isArray(history.snapshots) ? history.snapshots.length : 0;
   const answer = await vscode.window.showWarningMessage(`Permanently delete Room “${project.display_name || project.id}” (${project.id}) in Dimension “${dimensionId(project)}” and all ${count} recovery point${count === 1 ? "" : "s"}? This action is irreversible.`, { modal: true }, "Delete Room");
   if (answer !== "Delete Room") return "cancelled";
-  await runOperation(`Deleting Room ${project.id}…`, nativeRegistry.dimensionArgs(["rooms", "remove", project.id], dimensionId(project)), cwd);
+  const provider = nativeRegistry.providerKey(project.provider || project.dimension?.provider || "r2");
+  const args = nativeRegistry.dimensionArgs(["rooms", "remove", project.id, "--backend", provider], dimensionId(project));
+  const operation = provider === "minio"
+    ? runSelectedEncryption(args, cwd, project.dimension || { id: dimensionId(project), provider }, { title: `Deleting Room ${project.id}…`, action: "delete a Room" })
+    : runOperation(`Deleting Room ${project.id}…`, args, cwd);
+  await operation;
   try { await roomsProvider?.reload(); }
   catch (error) {
     await vscode.window.showErrorMessage(`Room deleted, but the catalog could not be refreshed: ${userFacingError(error)}`, "Refresh").then((choice) => choice === "Refresh" && roomsProvider?.reload());
@@ -2432,6 +2437,10 @@ async function removeSnapshot(preferredProject) {
   if (!selectedRoom) return "cancelled";
   const preferredSnapshotId = snapshotIdentity(preferredProject);
   const marker = currentRoom(cwd);
+  if (marker && marker.project_id === selectedRoom.project.id && marker.dimension_id === explicitDimensionId(selectedRoom.project)) {
+    await vscode.window.showWarningMessage("Cannot delete a recovery point from the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
   if (preferredSnapshotId && activeSnapshot(marker, selectedRoom.project, preferredSnapshotId)) {
     await vscode.window.showWarningMessage(
       "Cannot delete the active JAT while this workspace is linked to it. Enter another recovery point first.",
@@ -2444,7 +2453,9 @@ async function removeSnapshot(preferredProject) {
     cwd,
   );
   const selectedSnapshot = preferredSnapshotId
-    ? { label: "Selected snapshot", snapshot: { snapshot_id: preferredSnapshotId } }
+    ? history.snapshots.find((snapshot) => snapshot.snapshot_id === preferredSnapshotId)
+      ? { label: "Selected recovery point", snapshot: history.snapshots.find((snapshot) => snapshot.snapshot_id === preferredSnapshotId) }
+      : undefined
     : await vscode.window.showQuickPick(
       history.snapshots
       .map((snapshot) => ({
@@ -2473,16 +2484,16 @@ async function removeSnapshot(preferredProject) {
     ? " The newest remaining snapshot will become Latest."
     : "";
   const confirmed = await vscode.window.showWarningMessage(
-    `Permanently delete the ${selectedSnapshot.label.replace(/^\$\([^)]*\) /, "").toLowerCase()} from ${selectedRoom.label}?${consequence}`,
+    `Permanently delete recovery point “${selectedSnapshot.snapshot.snapshot_id}” from Room “${selectedRoom.project.display_name || selectedRoom.project.id}” in Dimension “${dimensionId(selectedRoom.project)}”?${consequence}`,
     { modal: true },
     "Delete Snapshot",
   );
   if (confirmed !== "Delete Snapshot") return "cancelled";
-  const result = await runOperation(
-    `Removing ${selectedRoom.label} recovery point…`,
-    nativeRegistry.dimensionArgs(["snapshots", "remove", selectedRoom.project.id, selectedSnapshot.snapshot.snapshot_id, "--backend", "r2"], dimensionId(selectedRoom.project)),
-    cwd,
-  );
+  const provider = nativeRegistry.providerKey(selectedRoom.project.provider || selectedRoom.project.dimension?.provider || "r2");
+  const args = nativeRegistry.dimensionArgs(["snapshots", "remove", selectedRoom.project.id, selectedSnapshot.snapshot.snapshot_id, "--backend", provider], dimensionId(selectedRoom.project));
+  const result = provider === "minio"
+    ? await runSelectedEncryption(args, cwd, selectedRoom.project.dimension || { id: dimensionId(selectedRoom.project), provider }, { title: `Removing ${selectedRoom.label} recovery point…`, action: "delete a recovery point" })
+    : await runOperation(`Removing ${selectedRoom.label} recovery point…`, args, cwd);
   await vscode.window.showInformationMessage(
     result.room_removed
       ? `Final snapshot deleted. “${selectedRoom.label}” is gone.`
