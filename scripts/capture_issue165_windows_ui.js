@@ -83,8 +83,15 @@ async function main() {
   if (!commandRow) throw new Error("Installed VS Code command palette did not expose Josh: Refresh; extension activation could not be confirmed");
   await send("Input.dispatchMouseEvent", { type: "mousePressed", x: commandRow.x + commandRow.width / 2, y: commandRow.y + commandRow.height / 2, button: "left", clickCount: 1 });
   await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: commandRow.x + commandRow.width / 2, y: commandRow.y + commandRow.height / 2, button: "left", clickCount: 1 });
-  await delay(30000);
-  receipt.workbench = await evaluate(`(() => ({ ready: document.readyState, treeRows: Array.from(document.querySelectorAll('.monaco-list-row')).filter(e=>e.getBoundingClientRect().width>0).map(e=>e.innerText.trim().replace(/[A-Za-z]:\\\\[^\\s]*/g,'<path>').slice(0,120)).filter(Boolean).slice(0,40) }))()`);
+  const observeTree = () => evaluate(`(() => ({ ready: document.readyState, treeRows: Array.from(document.querySelectorAll('.monaco-list-row')).filter(e=>e.getBoundingClientRect().width>0).map(e=>e.innerText.trim().replace(/[A-Za-z]:\\\\[^\\s]*/g,'<path>').slice(0,120)).filter(Boolean).slice(0,40) }))()`);
+  const controllerDeadline = Date.now() + 120000;
+  do {
+    receipt.workbench = await observeTree();
+    const hasRoom = receipt.workbench.treeRows.some((text) => /synthetic.*room|issue.?165.*room/i.test(text));
+    const controllerBusy = receipt.workbench.treeRows.some((text) => /Loading Josh Room storage|Starting Josh Room controller/i.test(text));
+    if (hasRoom || !controllerBusy) break;
+    await delay(2000);
+  } while (Date.now() < controllerDeadline);
   const roomRows = receipt.workbench.treeRows.filter((text) => /synthetic.*room|issue.?165.*room/i.test(text));
   if (!roomRows.length) throw new Error("Real VS Code and the installed extension launched, but no synthetic Room/catalog fixture is available to render deletion controls; refusing to capture unrelated or empty UI.");
   receipt.screenshots.push(await screenshot("room-tree"));
