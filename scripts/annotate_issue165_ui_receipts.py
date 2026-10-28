@@ -16,6 +16,7 @@ CAPTURES = (
     (Path("/tmp/issue165-02-recovery-context.png"), "02-recovery-point-context.png", (128, 198, 422, 230), "2  Delete Recovery Point on selected JAT"),
     (Path("/tmp/issue165-03-room-context.png"), "03-delete-room-context.png", (128, 248, 412, 280), "3  Separate Delete Room action"),
     (Path("/tmp/issue165-05-post-synthetic-tree.png"), "05-post-synthetic-tree.png", (48, 179, 462, 210), "5  Fixture-only state change + TreeView reload"),
+    (Path("/tmp/issue165-06-real-minio-post-delete-tree.png"), "06-real-minio-post-delete-tree.png", (48, 181, 462, 212), "6  Real MinIO delete; one Latest JAT remains"),
 )
 
 
@@ -42,7 +43,14 @@ def main() -> None:
         draw.text((x + pad, y + pad), label, font=font, fill=(255, 255, 255, 255), stroke_width=1, stroke_fill=(0, 0, 0, 255))
         destination = OUTPUT / name
         image.save(destination, optimize=True)
-        entries.append({"path": name, "sha256": sha256(destination), "bytes": destination.stat().st_size, "boxed_control": label, "rectangle": list(box)})
+        entry = {"path": name, "sha256": sha256(destination), "bytes": destination.stat().st_size, "boxed_control": label, "rectangle": list(box)}
+        if name.startswith("06-"):
+            entry["evidence_level"] = "unmodified VSIX with local disposable MinIO controller integration"
+        elif name.startswith("05-"):
+            entry["evidence_level"] = "test-only in-memory fixture; TreeView refresh only"
+        else:
+            entry["evidence_level"] = "test-only in-memory fixture; UI presentation only"
+        entries.append(entry)
 
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     vsix = ROOT / "vscode-extension/josh-room-0.1.40.vsix"
@@ -56,9 +64,10 @@ def main() -> None:
         "host": "Dakota-NVIDIA; active kdlocpanda Wayland session",
         "application": "VS Code Insiders 1.145.0",
         "capture": "CDP Page.captureScreenshot via loopback 127.0.0.1; 1440x900; only uniquely identified disposable Insiders renderer",
-        "fixture": "Disposable copy of candidate VSIX with test-only in-memory synthetic MinIO Dimension, Room, and two portable JAT rows. The test-only copy injects catalog/lifecycle state and stubs controller calls. Screenshot 05 removes the synthetic Latest row in memory and invokes the real TreeView provider reload override. No provider/controller writes, credentials, or real storage operations. This is native UI presentation evidence, not installed-package or storage integration evidence.",
+        "fixture": "Screenshots 01-03 and 05 use a disposable modified candidate copy with test-only in-memory state and stubbed controller calls. Screenshot 06 uses the original unmodified 0.1.40 VSIX with a disposable local MinIO server, generated credentials, a CLI-created Room/two logical recovery points, and a controller-enforced deletion of one recovery point; the real VSIX TreeView was refreshed from the controller catalog.",
         "fixture_harness": str(fixture_harness.relative_to(ROOT)),
         "fixture_harness_sha256": sha256(fixture_harness),
+        "real_minio_controller_receipt": "real-minio-controller-receipt.json",
         "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
         "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, one recovery point, and irreversible warning. The CDP renderer had no dialog DOM. GNOME ScreenshotWindow was introspected and is available, but the focused target remained the workbench rather than a verified modal; it was not called to avoid a generic-window capture. A forced-X11 scan of numeric PID/transient properties for the isolated process tree found no distinct modal window. No confirmation was accepted.",
         "screenshots": entries,
