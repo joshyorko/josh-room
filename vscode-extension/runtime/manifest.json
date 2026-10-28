@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "extension_version": "0.1.39",
+  "extension_version": "0.1.40",
   "rcc": {
     "version": "v18.19.7",
     "platforms": {
@@ -22,63 +22,63 @@
     "robot": "runtime/controller/robot.yaml",
     "environment_artifacts": {
       "linux-x64": {
-        "digest": "sha256:0fafb566593f389ddb90d0ea7e11456e0a9d4e77f631bebb290a59082d78889b",
-        "specification_digest": "sha256:547205599234e5d10efbf524bc52629ce028d9e893b8ea4f0a09e6b02a59c11e",
+        "digest": "sha256:910a906ea993baf46bc4d9d057668e9d27804dcb83d588fe2ac705c00100dbe0",
+        "specification_digest": "sha256:ba79b397cc6b7681272c0d5dcaaf0586f7412ec6e488d2743797b4b339ec4ecc",
         "platform": "linux-x64",
         "archive": {
           "asset": "josh-room-controller-linux-amd64.rcca",
-          "url": "https://github.com/joshyorko/josh-room/releases/download/rcc-v18.19.7-controller-2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea-c6f2728961fb98ba1bdcd29c3698ad7508e659049e38d01a7e50471f327065d9-52f8532bebc0ea5880227910214e5e8f3308acae722ed3c826b21848ad06e9aa/josh-room-controller-linux-amd64.rcca",
-          "sha256": "03ac6689ce33acbc436640888bf0228e93f026a02994ab9b53120c93db3310a0",
-          "size": 101067486
+          "url": "https://github.com/joshyorko/josh-room/releases/download/rcc-v18.19.7-controller-89d8e384b56c81036511b5fe4df08ad0fd74ca61-77f63028cccbb5dbf96572c4c4c7f463f1aa083703a9e157f28eae44c9fbc550-37863dff4e16236637ad0db0ab3cb281f7ab6eef65bbb4825d9339e8576b98fe/josh-room-controller-linux-amd64.rcca",
+          "sha256": "03b62422368096e48afddfdb81401d84e3546100286126fc75defda39ff5fd4c",
+          "size": 101107808
         },
-        "source_sha": "2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea",
+        "source_sha": "89d8e384b56c81036511b5fe4df08ad0fd74ca61",
         "rcc_version": "v18.19.7",
         "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
-        "input_digest": "sha256:c6f2728961fb98ba1bdcd29c3698ad7508e659049e38d01a7e50471f327065d9",
+        "input_digest": "sha256:77f63028cccbb5dbf96572c4c4c7f463f1aa083703a9e157f28eae44c9fbc550",
         "freeze": {
           "asset": "environment_linux_amd64_freeze.yaml",
-          "sha256": "7cf0e6d01139557d0133bfb1c71e339a8a3b17c93003d4dbe797489f202543b6",
+          "sha256": "198b80999afab6a3665c2739a17c4748f3de3b5de4271af8299a9093dc4d8954",
           "size": 677
         }
       },
       "win32-x64": {
-        "digest": "sha256:9174aee783d4ad25792276ca1e3be76c16228db469b45b74d8e8d3596e9c463d",
-        "specification_digest": "sha256:49f33fa67ad3fb6b9ba4c643d1213b46ea01eb96849c920abc3d84426a81e6db",
+        "digest": "sha256:588c1928b895e42454a8905687ff10b6fa9a8edfa38b537a72e4db4ea82ec1cf",
+        "specification_digest": "sha256:c3be6c23817035a349fa2cd67f1eda9fad84cfabc61e05d75a4ea2af96f4a20b",
         "platform": "win32-x64",
         "archive": {
           "asset": "josh-room-controller-windows-amd64.rcca",
-          "url": "https://github.com/joshyorko/josh-room/releases/download/rcc-v18.19.7-controller-2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea-c6f2728961fb98ba1bdcd29c3698ad7508e659049e38d01a7e50471f327065d9-52f8532bebc0ea5880227910214e5e8f3308acae722ed3c826b21848ad06e9aa/josh-room-controller-windows-amd64.rcca",
-          "sha256": "f164941760b356d41b074c0652af6759801506faec94c28ed39275686cfec9b9",
-          "size": 78003273
+          "url": "https://github.com/joshyorko/josh-room/releases/download/rcc-v18.19.7-controller-89d8e384b56c81036511b5fe4df08ad0fd74ca61-77f63028cccbb5dbf96572c4c4c7f463f1aa083703a9e157f28eae44c9fbc550-37863dff4e16236637ad0db0ab3cb281f7ab6eef65bbb4825d9339e8576b98fe/josh-room-controller-windows-amd64.rcca",
+          "sha256": "af7f4768f098de384a2d516f4f7c3fd398502ee9866fa1dfbb01467be97a7acf",
+          "size": 78043669
         },
-        "source_sha": "2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea",
+        "source_sha": "89d8e384b56c81036511b5fe4df08ad0fd74ca61",
         "rcc_version": "v18.19.7",
         "rcc_sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
-        "input_digest": "sha256:52f8532bebc0ea5880227910214e5e8f3308acae722ed3c826b21848ad06e9aa",
+        "input_digest": "sha256:37863dff4e16236637ad0db0ab3cb281f7ab6eef65bbb4825d9339e8576b98fe",
         "freeze": {
           "asset": "environment_windows_amd64_freeze.yaml",
-          "sha256": "c3ba0323ce62643ddd3373295cc3c077eeaf99f7bc28933c057cddff6da330a9",
+          "sha256": "3723f87dd8461e6f95c76635f032355edf9a10af9aeb984c23403b73941c9981",
           "size": 618
         }
       }
     },
     "environment_artifact": {
-      "digest": "sha256:0fafb566593f389ddb90d0ea7e11456e0a9d4e77f631bebb290a59082d78889b",
-      "specification_digest": "sha256:547205599234e5d10efbf524bc52629ce028d9e893b8ea4f0a09e6b02a59c11e",
+      "digest": "sha256:910a906ea993baf46bc4d9d057668e9d27804dcb83d588fe2ac705c00100dbe0",
+      "specification_digest": "sha256:ba79b397cc6b7681272c0d5dcaaf0586f7412ec6e488d2743797b4b339ec4ecc",
       "platform": "linux-x64",
       "archive": {
         "asset": "josh-room-controller-linux-amd64.rcca",
-        "url": "https://github.com/joshyorko/josh-room/releases/download/rcc-v18.19.7-controller-2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea-c6f2728961fb98ba1bdcd29c3698ad7508e659049e38d01a7e50471f327065d9-52f8532bebc0ea5880227910214e5e8f3308acae722ed3c826b21848ad06e9aa/josh-room-controller-linux-amd64.rcca",
-        "sha256": "03ac6689ce33acbc436640888bf0228e93f026a02994ab9b53120c93db3310a0",
-        "size": 101067486
+        "url": "https://github.com/joshyorko/josh-room/releases/download/rcc-v18.19.7-controller-89d8e384b56c81036511b5fe4df08ad0fd74ca61-77f63028cccbb5dbf96572c4c4c7f463f1aa083703a9e157f28eae44c9fbc550-37863dff4e16236637ad0db0ab3cb281f7ab6eef65bbb4825d9339e8576b98fe/josh-room-controller-linux-amd64.rcca",
+        "sha256": "03b62422368096e48afddfdb81401d84e3546100286126fc75defda39ff5fd4c",
+        "size": 101107808
       },
-      "source_sha": "2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea",
+      "source_sha": "89d8e384b56c81036511b5fe4df08ad0fd74ca61",
       "rcc_version": "v18.19.7",
       "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
-      "input_digest": "sha256:c6f2728961fb98ba1bdcd29c3698ad7508e659049e38d01a7e50471f327065d9",
+      "input_digest": "sha256:77f63028cccbb5dbf96572c4c4c7f463f1aa083703a9e157f28eae44c9fbc550",
       "freeze": {
         "asset": "environment_linux_amd64_freeze.yaml",
-        "sha256": "7cf0e6d01139557d0133bfb1c71e339a8a3b17c93003d4dbe797489f202543b6",
+        "sha256": "198b80999afab6a3665c2739a17c4748f3de3b5de4271af8299a9093dc4d8954",
         "size": 677
       }
     }
