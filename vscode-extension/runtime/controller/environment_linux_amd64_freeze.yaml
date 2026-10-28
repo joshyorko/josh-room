@@ -6,7 +6,7 @@ dependencies:
 - bzip2=1.0.8
 - ca-certificates=2026.10.23
 - ld_impl_linux-64=2.46.1
-- libexpat=2.8.5
+- libexpat=2.9.0
 - libffi=3.5.2
 - libgcc=16.2.0
 - libgomp=16.2.0
@@ -26,7 +26,7 @@ dependencies:
 - zstd=1.5.7
 - pip:
   - boto3==1.43.82
-  - botocore==1.43.118
+  - botocore==1.43.120
   - jmespath==1.1.0
   - psutil==7.2.2
   - python-dateutil==2.9.0.post0
