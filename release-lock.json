@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.39",
+  "candidate_version": "0.1.40",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -15,33 +15,33 @@
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
-    "version": "git-fe43065a",
-    "git_sha": "fe43065a654d1649ba9ebe5a6f202eac612e4385",
+    "version": "git-aa8d5ec7",
+    "git_sha": "aa8d5ec7d628d44baed838f5e39983badcc99fe3",
     "environment_artifact": {
-      "release_tag": "v0.1.14-jat-runtime",
-      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.14-jat-runtime/jat-runtime-linux-amd64.rcca",
-      "archive_sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
-      "archive_size": 170877798,
-      "rcc_artifact_digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
-      "rcc_specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431",
+      "release_tag": "v0.1.15-jat-runtime",
+      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.15-jat-runtime/jat-runtime-linux-amd64.rcca",
+      "archive_sha256": "80307a0ae2d220261279bde052e62bf09707105bcc55e71fec5b1223c29be422",
+      "archive_size": 170816020,
+      "rcc_artifact_digest": "sha256:ec468d4308533d82fc6c49d24d58f7ec3d11009a3c651889799b0573cae1bc09",
+      "rcc_specification_digest": "sha256:27563fe651856e129971a920cba5fd887fcb406ae7b9853a02ef273484699c5c",
       "rcc_version": "v18.19.7",
       "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
       "platform": "linux_amd64"
     },
     "environment_artifacts": {
       "linux_amd64": {
-        "rcc_artifact_digest": "sha256:ce8617814b77a9080f0efc8247029b00da03b10a68cef329693d4037365ea5e4",
-        "rcc_specification_digest": "sha256:b4193059c5e1d4823c4d8c60e8520802145513cd1cb6a4f207466fd098e60431",
-        "archive_sha256": "de39c0f9374dfae541ee8688b643ed53e950331ee4efe9ca498c6b28b89cdf09",
-        "archive_size": 170877798,
+        "rcc_artifact_digest": "sha256:ec468d4308533d82fc6c49d24d58f7ec3d11009a3c651889799b0573cae1bc09",
+        "rcc_specification_digest": "sha256:27563fe651856e129971a920cba5fd887fcb406ae7b9853a02ef273484699c5c",
+        "archive_sha256": "80307a0ae2d220261279bde052e62bf09707105bcc55e71fec5b1223c29be422",
+        "archive_size": 170816020,
         "rcc_version": "v18.19.7",
         "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
       },
       "windows_amd64": {
-        "rcc_artifact_digest": "sha256:65e87f6a17a8d92185d5b99aa4928517dc0bbdf61cabeaf1670f74bf17881f7e",
-        "rcc_specification_digest": "sha256:716adb4f9b65b98f954ec564000ffb981562748b25a90d9f02947a17e3f7157b",
-        "archive_sha256": "8bbf7aa8925b5a517164e7e6ea00b735394cc1eac026ba34404e729d89e441b1",
-        "archive_size": 104094478,
+        "rcc_artifact_digest": "sha256:52a7586701ff0ba83240290f8ebc835785e2802858525695823753f2e4faa540",
+        "rcc_specification_digest": "sha256:5879cdb629df2a80bcbc8d86d0193b73402618e221aab9457bddf4b3a4de9667",
+        "archive_sha256": "4fd1cc53e843ddab731341bb08962c21ac9e37352f5541a7ba677ee8afb9f68c",
+        "archive_size": 104060173,
         "rcc_version": "v18.19.7",
         "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
       }
@@ -64,37 +64,37 @@
         }
       }
     },
-    "release_tag": "v0.1.14-jat-runtime",
+    "release_tag": "v0.1.15-jat-runtime",
     "producer_workflow_run": {
-      "id": 38934211098,
-      "url": "https://github.com/joshyorko/josh-all-the-things/actions/runs/38934211098"
+      "id": 40708003375,
+      "url": "https://github.com/joshyorko/josh-all-the-things/actions/runs/40708003375"
     }
   },
   "controller": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "release_tag": "rcc-v18.19.7-controller-2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea-c6f2728961fb98ba1bdcd29c3698ad7508e659049e38d01a7e50471f327065d9-52f8532bebc0ea5880227910214e5e8f3308acae722ed3c826b21848ad06e9aa",
-    "source_sha": "2846627ba06a7b9e13b2c1f16b7e83226d8ad9ea",
+    "release_tag": "rcc-v18.19.7-controller-d90860fc8352a86ec26b6b3253d5e4a5d617f5d8-5d5f8a035f34bc1dadf395dc8dbc48b4994009918bfa792f695a779fc397253a",
+    "source_sha": "d90860fc8352a86ec26b6b3253d5e4a5d617f5d8",
     "rcc_version": "v18.19.7",
     "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
     "platforms": {
       "linux-x64": {
-        "artifact_digest": "sha256:0fafb566593f389ddb90d0ea7e11456e0a9d4e77f631bebb290a59082d78889b",
-        "specification_digest": "sha256:547205599234e5d10efbf524bc52629ce028d9e893b8ea4f0a09e6b02a59c11e",
-        "archive_sha256": "03ac6689ce33acbc436640888bf0228e93f026a02994ab9b53120c93db3310a0",
-        "archive_size": 101067486,
+        "artifact_digest": "sha256:6d0f270e4be23b175b8de306c12a8b2a4bd7140dff532bcd63203abca479bbb6",
+        "specification_digest": "sha256:ba79b397cc6b7681272c0d5dcaaf0586f7412ec6e488d2743797b4b339ec4ecc",
+        "archive_sha256": "18afb5b5a998ebaefa2d9501815a3c0b310b33be25ca868ed3b4dd561ac701fa",
+        "archive_size": 101107243,
         "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
-        "input_digest": "sha256:c6f2728961fb98ba1bdcd29c3698ad7508e659049e38d01a7e50471f327065d9",
-        "freeze_sha256": "7cf0e6d01139557d0133bfb1c71e339a8a3b17c93003d4dbe797489f202543b6",
+        "input_digest": "sha256:77f63028cccbb5dbf96572c4c4c7f463f1aa083703a9e157f28eae44c9fbc550",
+        "freeze_sha256": "198b80999afab6a3665c2739a17c4748f3de3b5de4271af8299a9093dc4d8954",
         "freeze_size": 677
       },
       "win32-x64": {
-        "artifact_digest": "sha256:9174aee783d4ad25792276ca1e3be76c16228db469b45b74d8e8d3596e9c463d",
-        "specification_digest": "sha256:49f33fa67ad3fb6b9ba4c643d1213b46ea01eb96849c920abc3d84426a81e6db",
-        "archive_sha256": "f164941760b356d41b074c0652af6759801506faec94c28ed39275686cfec9b9",
-        "archive_size": 78003273,
+        "artifact_digest": "sha256:409db7df061376e64847a2109c73fa43964f79cd3adc8d1e08e2041d9f751ccf",
+        "specification_digest": "sha256:c3be6c23817035a349fa2cd67f1eda9fad84cfabc61e05d75a4ea2af96f4a20b",
+        "archive_sha256": "98f72290555c4def9b57c63bf0ffd8f2df34206ad71714d57c9149f19561504c",
+        "archive_size": 78043649,
         "rcc_sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
-        "input_digest": "sha256:52f8532bebc0ea5880227910214e5e8f3308acae722ed3c826b21848ad06e9aa",
-        "freeze_sha256": "c3ba0323ce62643ddd3373295cc3c077eeaf99f7bc28933c057cddff6da330a9",
+        "input_digest": "sha256:37863dff4e16236637ad0db0ab3cb281f7ab6eef65bbb4825d9339e8576b98fe",
+        "freeze_sha256": "3723f87dd8461e6f95c76635f032355edf9a10af9aeb984c23403b73941c9981",
         "freeze_size": 618
       }
     }
@@ -122,6 +122,6 @@
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",
-    "version": "0.1.9"
+    "version": "0.1.10"
   }
 }
