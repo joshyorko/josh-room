@@ -118,6 +118,13 @@ changes remain recoverable there for separate review. An existing attempt is
 reused only if its complete tree matches fresh generation and it contains the
 qualified main commit. The full CI dispatch names the resulting SHA.
 Branch dispatches run qualification; promotion still requires current `main`.
+Controller artifact release tags bind the complete source SHA and a SHA-256
+identity over the exact Linux/Windows archive and receipt bytes. Matching build
+inputs alone do not establish identical outputs. A fresh rebuild whose bytes
+change receives a different release tag; identical qualified outputs reuse the
+same tag. Existing releases retain their original assets and integrity checks.
+If an existing-release verification fails, maintenance prints its JSON failure
+report in the job log before stopping promotion.
 An unchanged branch with no diff from `main` does not create an empty PR.
 The handoff retains the detailed preflight report when the branch already
 contains the generated update, so a retry does not erase source or artifact

@@ -504,8 +504,9 @@ def promote_candidate(
         )):
             raise ValueError("JAT runtime candidate was superseded before promotion")
     receipts = _load_receipts(artifacts_root, candidate, source_sha)
-    input_identity = "-".join(receipts[platform]["receipt"]["input_digest"].split(":", 1)[1] for platform in PLATFORM_ASSETS)
-    release_tag = f"rcc-{candidate['version']}-controller-{source_sha}-{input_identity}"
+    outputs = {name: _digest(path) for name, path in _expected_assets(receipts).items()}
+    output_identity = hashlib.sha256(json.dumps(outputs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    release_tag = f"rcc-{candidate['version']}-controller-{source_sha}-{output_identity}"
     changes = _build_update(root, candidate, receipts, source_sha, release_tag, verified_jat)
     if not changes:
         return {"status": "PASS", "no_change": True, "changed_files": [], "candidate": candidate["version"]}

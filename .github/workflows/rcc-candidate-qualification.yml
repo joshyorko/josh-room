@@ -230,10 +230,13 @@ jobs:
             tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG^{}" | awk 'NR == 1 {print $1}')
             if [[ -z "$tag_sha" ]]; then tag_sha=$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk 'NR == 1 {print $1}'); fi
             test "$tag_sha" = "$SOURCE_SHA"
-            python scripts/promote_rcc_candidate.py \
+            if ! python scripts/promote_rcc_candidate.py \
               --candidate "$RUNNER_TEMP/rcc-candidates/rcc-controller-candidate-linux-x64/rcc-candidate-report.json" \
               --artifacts "$RUNNER_TEMP/rcc-candidates" --source-sha "$SOURCE_SHA" \
-              --existing-release-json "$existing" --release-tag "$RELEASE_TAG" --tag-target-sha "$tag_sha" > "$gaps"
+              --existing-release-json "$existing" --release-tag "$RELEASE_TAG" --tag-target-sha "$tag_sha" > "$gaps"; then
+              cat "$gaps"
+              exit 1
+            fi
             mapfile -t missing < <(jq -r '.missing_assets[]' "$gaps")
             for name in "${missing[@]}"; do
               case "$name" in
