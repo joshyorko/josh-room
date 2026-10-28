@@ -1,0 +1,53 @@
+{
+  "issue": 165,
+  "source_sha": "7daac923cae2d3ba99cafa364a508e8c0e09e435",
+  "candidate_vsix": "vscode-extension/josh-room-0.1.40.vsix",
+  "candidate_vsix_sha256": "72847ff47b9344d915d763bbe35b0b299badacd296da6e994d7f2cc97917bd6a",
+  "capture_date": "2026-10-28",
+  "host": "Dakota-NVIDIA; active kdlocpanda Wayland session",
+  "application": "VS Code Insiders 1.145.0",
+  "capture": "CDP Page.captureScreenshot via loopback 127.0.0.1; 1440x900; only uniquely identified disposable Insiders renderer",
+  "fixture": "Disposable copy of candidate VSIX with test-only in-memory synthetic MinIO Dimension, Room, and two portable JAT rows. The test-only copy injects catalog/lifecycle state and stubs controller calls. No provider/controller writes, credentials, or real storage operations. This is native UI presentation evidence, not installed-package or storage integration evidence.",
+  "fixture_harness": "scripts/prepare_issue165_ui_fixture.js",
+  "fixture_harness_sha256": "50872ed0b33eebb0f398817df74fc5145211545b8cd6b6dbdf5d6eadd0487a85",
+  "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
+  "modal_capture": "Not captured. The test-only delete-room handler did not expose its warning modal in the bounded attempt; no delete action was confirmed.",
+  "screenshots": [
+    {
+      "path": "01-room-inline-trash.png",
+      "sha256": "ea05a2f95ecbb05d10a447164797d4be090991a7b6a5624bd88a6c3479f903a3",
+      "bytes": 65517,
+      "boxed_control": "1  Delete Snapshot on Room hover",
+      "rectangle": [
+        177,
+        160,
+        204,
+        185
+      ]
+    },
+    {
+      "path": "02-recovery-point-context.png",
+      "sha256": "06f52edb41010e7bca03ea96bb08e28f80895441557d6c6aa9be0165332ca1eb",
+      "bytes": 64540,
+      "boxed_control": "2  Delete Recovery Point on selected JAT",
+      "rectangle": [
+        128,
+        198,
+        422,
+        230
+      ]
+    },
+    {
+      "path": "03-delete-room-context.png",
+      "sha256": "b5217ce1c67ad2e14a6109ec7df9e567820abb8d7d1162c6a4cf694a05a08ce2",
+      "bytes": 68973,
+      "boxed_control": "3  Separate Delete Room action",
+      "rectangle": [
+        128,
+        248,
+        412,
+        280
+      ]
+    }
+  ]
+}
