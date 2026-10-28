@@ -15,6 +15,7 @@ CAPTURES = (
     (Path("/tmp/issue165-01-room-inline-trash.png"), "01-room-inline-trash.png", (177, 160, 204, 185), "1  Delete Snapshot on Room hover"),
     (Path("/tmp/issue165-02-recovery-context.png"), "02-recovery-point-context.png", (128, 198, 422, 230), "2  Delete Recovery Point on selected JAT"),
     (Path("/tmp/issue165-03-room-context.png"), "03-delete-room-context.png", (128, 248, 412, 280), "3  Separate Delete Room action"),
+    (Path("/tmp/issue165-05-post-synthetic-tree.png"), "05-post-synthetic-tree.png", (48, 179, 462, 210), "5  Fixture-only state change + TreeView reload"),
 )
 
 
@@ -55,11 +56,11 @@ def main() -> None:
         "host": "Dakota-NVIDIA; active kdlocpanda Wayland session",
         "application": "VS Code Insiders 1.145.0",
         "capture": "CDP Page.captureScreenshot via loopback 127.0.0.1; 1440x900; only uniquely identified disposable Insiders renderer",
-        "fixture": "Disposable copy of candidate VSIX with test-only in-memory synthetic MinIO Dimension, Room, and two portable JAT rows. The test-only copy injects catalog/lifecycle state and stubs controller calls. No provider/controller writes, credentials, or real storage operations. This is native UI presentation evidence, not installed-package or storage integration evidence.",
+        "fixture": "Disposable copy of candidate VSIX with test-only in-memory synthetic MinIO Dimension, Room, and two portable JAT rows. The test-only copy injects catalog/lifecycle state and stubs controller calls. Screenshot 05 removes the synthetic Latest row in memory and invokes the real TreeView provider reload override. No provider/controller writes, credentials, or real storage operations. This is native UI presentation evidence, not installed-package or storage integration evidence.",
         "fixture_harness": str(fixture_harness.relative_to(ROOT)),
         "fixture_harness_sha256": sha256(fixture_harness),
         "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
-        "modal_capture": "Not captured. The test-only delete-room handler did not expose its warning modal in the bounded attempt; no delete action was confirmed.",
+        "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, recovery-point count, and irreversible warning. The CDP renderer had no dialog DOM. Focused X11 window ownership could not be verified safely, so no native-window capture was attempted and no confirmation was accepted.",
         "screenshots": entries,
     }
     (OUTPUT / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

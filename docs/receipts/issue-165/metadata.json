@@ -1,17 +1,17 @@
 {
   "issue": 165,
-  "source_sha": "7daac923cae2d3ba99cafa364a508e8c0e09e435",
+  "source_sha": "380fb38d3a4f4f681bd516045cf8023b776d6ebf",
   "candidate_vsix": "vscode-extension/josh-room-0.1.40.vsix",
   "candidate_vsix_sha256": "72847ff47b9344d915d763bbe35b0b299badacd296da6e994d7f2cc97917bd6a",
   "capture_date": "2026-10-28",
   "host": "Dakota-NVIDIA; active kdlocpanda Wayland session",
   "application": "VS Code Insiders 1.145.0",
   "capture": "CDP Page.captureScreenshot via loopback 127.0.0.1; 1440x900; only uniquely identified disposable Insiders renderer",
-  "fixture": "Disposable copy of candidate VSIX with test-only in-memory synthetic MinIO Dimension, Room, and two portable JAT rows. The test-only copy injects catalog/lifecycle state and stubs controller calls. No provider/controller writes, credentials, or real storage operations. This is native UI presentation evidence, not installed-package or storage integration evidence.",
+  "fixture": "Disposable copy of candidate VSIX with test-only in-memory synthetic MinIO Dimension, Room, and two portable JAT rows. The test-only copy injects catalog/lifecycle state and stubs controller calls. Screenshot 05 removes the synthetic Latest row in memory and invokes the real TreeView provider reload override. No provider/controller writes, credentials, or real storage operations. This is native UI presentation evidence, not installed-package or storage integration evidence.",
   "fixture_harness": "scripts/prepare_issue165_ui_fixture.js",
-  "fixture_harness_sha256": "50872ed0b33eebb0f398817df74fc5145211545b8cd6b6dbdf5d6eadd0487a85",
+  "fixture_harness_sha256": "a7c1596e7cb5297f44cc2922287793d38c53e276c7438ef5618a7c583b7a3ba3",
   "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
-  "modal_capture": "Not captured. The test-only delete-room handler did not expose its warning modal in the bounded attempt; no delete action was confirmed.",
+  "modal_capture": "Not captured. Trace confirms the real deleteRoom handler called showWarningMessage with the synthetic Room, Dimension, recovery-point count, and irreversible warning. The CDP renderer had no dialog DOM. Focused X11 window ownership could not be verified safely, so no native-window capture was attempted and no confirmation was accepted.",
   "screenshots": [
     {
       "path": "01-room-inline-trash.png",
@@ -47,6 +47,18 @@
         248,
         412,
         280
+      ]
+    },
+    {
+      "path": "05-post-synthetic-tree.png",
+      "sha256": "1fe194d47eb13bf00dd74ee3d547e1a200a8a15440c6acca3db852555d920cf8",
+      "bytes": 70105,
+      "boxed_control": "5  Fixture-only state change + TreeView reload",
+      "rectangle": [
+        48,
+        179,
+        462,
+        210
       ]
     }
   ]
