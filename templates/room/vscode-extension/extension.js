@@ -3793,7 +3793,7 @@ async function destructiveOperation(args, cwd, dimension, title, action) {
 
 function deletionCommitted(result) {
   return Boolean(result && result.ok !== false
-    && (result.status === "success" || result.status === "cleanup-pending"
+    && (result.status === "success" || result.status === "removed" || result.status === "complete" || result.status === "cleanup-pending"
       || result.status === "restic-cleanup-pending"
       || result.cleanup_pending || result.reconciliation_required || result.room_removed !== undefined
       || result.project_id !== undefined && result.snapshot_count !== undefined));
