@@ -63,6 +63,10 @@ async function main() {
     if (result.exceptionDetails) throw new Error("Workbench DOM inspection failed");
     return result.result.value;
   };
+  const key = async (keyName, code, virtual, modifiers = 0) => {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key: keyName, code, windowsVirtualKeyCode: virtual, modifiers });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key: keyName, code, windowsVirtualKeyCode: virtual, modifiers });
+  };
   const screenshot = async (name) => {
     const result = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
     const destination = path.join(ui, `${name}.png`);
@@ -72,6 +76,14 @@ async function main() {
   await send("Page.enable");
   await send("Runtime.enable");
   await delay(12000);
+  await key("F1", "F1", 112);
+  await delay(1000);
+  await send("Input.insertText", { text: ">Josh: Refresh" });
+  const commandRow = await evaluate(`(() => Array.from(document.querySelectorAll('.quick-input-widget .monaco-list-row')).find(e=>e.getBoundingClientRect().width>0&&e.innerText.includes('Josh: Refresh'))?.getBoundingClientRect().toJSON()||null)()`);
+  if (!commandRow) throw new Error("Installed VS Code command palette did not expose Josh: Refresh; extension activation could not be confirmed");
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: commandRow.x + commandRow.width / 2, y: commandRow.y + commandRow.height / 2, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: commandRow.x + commandRow.width / 2, y: commandRow.y + commandRow.height / 2, button: "left", clickCount: 1 });
+  await delay(30000);
   receipt.workbench = await evaluate(`(() => ({ ready: document.readyState, treeRows: Array.from(document.querySelectorAll('.monaco-list-row')).filter(e=>e.getBoundingClientRect().width>0).map(e=>e.innerText.trim().replace(/[A-Za-z]:\\\\[^\\s]*/g,'<path>').slice(0,120)).filter(Boolean).slice(0,40) }))()`);
   const roomRows = receipt.workbench.treeRows.filter((text) => /synthetic.*room|issue.?165.*room/i.test(text));
   if (!roomRows.length) throw new Error("Real VS Code and the installed extension launched, but no synthetic Room/catalog fixture is available to render deletion controls; refusing to capture unrelated or empty UI.");
