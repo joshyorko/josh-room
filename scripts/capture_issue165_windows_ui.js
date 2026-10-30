@@ -21,6 +21,7 @@ const receipt = { gate: "issue-165-installed-vscode-delete-ui", status: "failed"
 let child;
 let socket;
 let stage = "preflight";
+let captureFailure;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(fn, timeout, label) {
   const deadline = Date.now() + timeout;
@@ -106,6 +107,7 @@ async function main() {
   };
   const click = async (box, button = "left") => {
     const point = { x: box.x + box.width / 2, y: box.y + box.height / 2, button, clickCount: 1 };
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
     await send("Input.dispatchMouseEvent", { type: "mousePressed", ...point });
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...point });
   };
@@ -119,8 +121,25 @@ async function main() {
   };
   const menuItem = async (label) => until(() => evaluate(`(() => {
     const e = Array.from(document.querySelectorAll('.monaco-menu .action-label')).find(e => e.getBoundingClientRect().width > 0 && e.textContent.trim().replace(/^Josh: /, '') === ${JSON.stringify(label)});
-    return e ? e.getBoundingClientRect().toJSON() : null;
-  })()`), 15000, label + " menu action");
+    if (!e || e.closest('[aria-disabled="true"], .disabled')) return null;
+    // Context menus animate when opening. A transient rectangle can point at
+    // dead space by the time the mouse arrives; wait for the real hit target.
+    for (let parent = e; parent; parent = parent.parentElement) {
+      if (parent.getAnimations().some(animation => animation.playState === 'running')) return null;
+    }
+    const box = e.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+    return hit && (e.contains(hit) || hit.contains(e)) ? box.toJSON() : null;
+  })()`), 15000, label + " settled menu action");
+  captureFailure = async () => {
+    receipt.renderer_failure = await evaluate(`(() => ({
+      dialogs: Array.from(document.querySelectorAll('.monaco-dialog-box')).map(e=>e.innerText.slice(0,1000)),
+      notifications: Array.from(document.querySelectorAll('.notification-list-item-message')).map(e=>e.innerText.slice(0,1000)),
+      menus: Array.from(document.querySelectorAll('.monaco-menu .action-label')).map(e=>({text:e.textContent,disabled:!!e.closest('[aria-disabled="true"], .disabled')})),
+      quick_input: Array.from(document.querySelectorAll('.quick-input-widget')).filter(e=>e.getBoundingClientRect().width>0).map(e=>e.innerText.slice(0,1000))
+    }))()`);
+    await screenshot("failure-" + stage, [], "Failed synthetic presentation stage; no acceptance claim");
+  };
   const openRoomMenu = async () => { await click(await until(row, 15000, "Room row"), "right"); };
   const dialog = () => evaluate(`(() => { const e = Array.from(document.querySelectorAll('.monaco-dialog-box')).find(e => e.getBoundingClientRect().width > 0); return e ? {box:e.getBoundingClientRect().toJSON(),text:e.innerText} : null; })()`);
   const dialogButton = async (label) => until(() => evaluate(`(() => {
@@ -210,7 +229,8 @@ async function main() {
   receipt.checks.push("whole-room-operation-distinct", "room-row-disappears", "pristine-vsix-unchanged");
   receipt.status = "passed";
 }
-if (require.main === module) main().catch(error => {
+if (require.main === module) main().catch(async error => {
+  if (captureFailure) { try { await captureFailure(); } catch {} }
   receipt.error = String(error.message).replace(/[A-Za-z]:[\\/][^\s"'<>]*/g, "<disposable-path>").slice(0, 500);
   process.exitCode = 1;
 }).finally(() => {
