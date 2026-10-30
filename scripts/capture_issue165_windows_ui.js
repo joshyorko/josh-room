@@ -7,6 +7,7 @@ const path = require("node:path");
 const cp = require("node:child_process");
 const net = require("node:net");
 const crypto = require("node:crypto");
+const { isDeepStrictEqual } = require("node:util");
 const root = path.resolve(__dirname, "..");
 const ui = process.env.ISSUE165_UI_ROOT;
 const codeRoot = process.env.ISSUE165_CODE_ROOT;
@@ -31,6 +32,18 @@ async function until(fn, timeout, label) {
   }
   throw new Error("Timed out waiting for " + label);
 }
+function verifyInstalledManifests(installedPath, fixturePath, sourcePath) {
+  const installed = JSON.parse(fs.readFileSync(installedPath, "utf8"));
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+  const expected = JSON.parse(fs.readFileSync(sourcePath, "utf8"));
+  // VS Code's extensionsScannerService.updateMetadata adds __metadata and
+  // rewrites JSON formatting. All public fields must still match exactly.
+  const { __metadata, ...publicManifest } = installed;
+  if (!isDeepStrictEqual(publicManifest, expected)) throw new Error("Installed public manifest differs from exact source");
+  if (!isDeepStrictEqual(fixture, expected)) throw new Error("Fixture public manifest differs from exact source");
+  return Object.keys(__metadata || {}).sort();
+}
+
 async function main() {
   if (process.platform !== "win32" || !ui || !codeRoot || !vsix || !fixtureRoot) throw new Error("Missing isolated Windows fixture inputs");
   const identity = JSON.parse(fs.readFileSync(path.join(ui, "fixture-identity.json"), "utf8"));
@@ -38,11 +51,12 @@ async function main() {
   receipt.vsix_sha256 = sha(vsix);
   receipt.extension_version = identity.extension_version;
   const installed = path.join(ui, "extensions", `joshyorko.josh-room-${identity.extension_version}`);
-  for (const file of ["extension.js", "package.json", "runtime/manifest.json"]) {
+  for (const file of ["extension.js", "runtime/manifest.json"]) {
     if (sha(path.join(installed, file)) !== sha(path.join(root, "vscode-extension", file))) throw new Error("Pristine installed payload mismatch: " + file);
   }
   const fixtureExtension = path.join(fixtureRoot, identity.candidate_extension);
-  if (sha(path.join(installed, "package.json")) !== sha(path.join(fixtureExtension, "package.json"))) throw new Error("Fixture public command manifest differs from candidate");
+  receipt.installer_metadata_fields = verifyInstalledManifests(path.join(installed, "package.json"),
+    path.join(fixtureExtension, "package.json"), path.join(root, "vscode-extension/package.json"));
   receipt.checks.push("pristine-installed-payload-matches-source", "fixture-keeps-public-command-manifest");
   const workspace = path.join(ui, "synthetic-workspace");
   const profile = path.join(ui, "fixture-profile");
@@ -196,7 +210,7 @@ async function main() {
   receipt.checks.push("whole-room-operation-distinct", "room-row-disappears", "pristine-vsix-unchanged");
   receipt.status = "passed";
 }
-main().catch(error => {
+if (require.main === module) main().catch(error => {
   receipt.error = String(error.message).replace(/[A-Za-z]:[\\/][^\s"'<>]*/g, "<disposable-path>").slice(0, 500);
   process.exitCode = 1;
 }).finally(() => {
@@ -208,3 +222,5 @@ main().catch(error => {
   if (ui) fs.writeFileSync(path.join(ui, "receipt.json"), body + "\n");
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n### Issue165 synthetic presentation qualification\n\n```json\n" + body + "\n```\n");
 });
+
+module.exports = { verifyInstalledManifests };

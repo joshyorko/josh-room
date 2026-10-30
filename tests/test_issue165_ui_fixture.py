@@ -54,3 +54,31 @@ context.exports.activate().then(() => console.log(JSON.stringify(commands)));
     result = subprocess.run(["node", "-e", probe, str(driver), str(tmp_path)],
                             check=True, capture_output=True, text=True)
     assert json.loads(result.stdout) == ["workbench.view.extension.josh-room", "joshRoom.testInjectSyntheticCatalog"]
+
+
+def test_installer_metadata_does_not_change_the_public_manifest_contract(prepared_ui_fixture, tmp_path):
+    _vsix, _digest, output, receipt = prepared_ui_fixture
+    source = ROOT / "vscode-extension/package.json"
+    manifest = json.loads(source.read_text())
+    installed = tmp_path / "installed-package.json"
+    installed.write_text(json.dumps({**manifest, "__metadata": {"source": "vsix", "installedTimestamp": 1}}, indent="\t"))
+    fixture = output / receipt["candidate_extension"] / "package.json"
+    code = "require(process.argv[1]).verifyInstalledManifests(process.argv[2], process.argv[3], process.argv[4])"
+    result = subprocess.run(["node", "-e", code, str(ROOT / "scripts/capture_issue165_windows_ui.js"),
+                             str(installed), str(fixture), str(source)], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_installer_metadata_exception_never_accepts_changed_commands(prepared_ui_fixture, tmp_path):
+    _vsix, _digest, output, receipt = prepared_ui_fixture
+    source = ROOT / "vscode-extension/package.json"
+    manifest = json.loads(source.read_text())
+    manifest["contributes"]["commands"] = []
+    installed = tmp_path / "installed-package.json"
+    installed.write_text(json.dumps({**manifest, "__metadata": {"source": "vsix"}}, indent="\t"))
+    fixture = output / receipt["candidate_extension"] / "package.json"
+    code = "require(process.argv[1]).verifyInstalledManifests(process.argv[2], process.argv[3], process.argv[4])"
+    result = subprocess.run(["node", "-e", code, str(ROOT / "scripts/capture_issue165_windows_ui.js"),
+                             str(installed), str(fixture), str(source)], check=False, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "Installed public manifest differs" in result.stderr
