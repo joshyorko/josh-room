@@ -3831,19 +3831,21 @@ function deletionCommitted(result) {
 }
 
 async function reportDeleteOutcome(result, target) {
+  // Informational notifications resolve on dismissal. They must never hold
+  // the authoritative catalog reload after an already-committed mutation.
   if (result?.status === "catalog-reference-remains") {
-    await vscode.window.showWarningMessage(`The ${target} catalog update did not remove every reference. No success is reported; inspect the Room Store and retry after reconciliation.`);
+    void vscode.window.showWarningMessage(`The ${target} catalog update did not remove every reference. No success is reported; inspect the Room Store and retry after reconciliation.`);
     return "incomplete";
   }
   if (!deletionCommitted(result)) {
-    await vscode.window.showWarningMessage(`The controller did not confirm ${target} deletion. Refresh and inspect the operation receipt before retrying.`);
+    void vscode.window.showWarningMessage(`The controller did not confirm ${target} deletion. Refresh and inspect the operation receipt before retrying.`);
     return "incomplete";
   }
   if (result?.status === "cleanup-pending" || result?.status === "restic-cleanup-pending" || result?.cleanup_pending || result?.reconciliation_required) {
-    await vscode.window.showWarningMessage(`The ${target} deletion was committed, but cleanup remains pending. The catalog changed; review the operation receipt and reconcile storage before retrying.`);
+    void vscode.window.showWarningMessage(`The ${target} deletion was committed, but cleanup remains pending. The catalog changed; review the operation receipt and reconcile storage before retrying.`);
     return "cleanup-pending";
   }
-  await vscode.window.showInformationMessage(result?.room_removed
+  void vscode.window.showInformationMessage(result?.room_removed
     ? `Final recovery point deleted. “${target}” Room is gone.`
     : result?.latest_promoted
       ? `Recovery point deleted. Latest is now ${result.latest}.`

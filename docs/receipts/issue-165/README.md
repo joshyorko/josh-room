@@ -50,3 +50,10 @@ control rectangles, and copies annotated after capture with bounding boxes.
 The earlier hosted attempts failed because they did not seed the required
 catalog and still contained an unconditional unfinished-path exception. Those
 failed runs remain part of the record; they are not successful acceptance.
+
+The hosted deletion journey also reproduced a notification-ordering bug: the
+controller committed removal, but awaiting a non-modal success/cleanup message
+held the catalog reload until that message resolved. Outcome notifications are
+now non-blocking. Four regression cases keep those notification promises open
+and require a fresh catalog for both deletion commands and both outcomes. The
+hosted fixture wraps the real provider reload rather than replacing it.

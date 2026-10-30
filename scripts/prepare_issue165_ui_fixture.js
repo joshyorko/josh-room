@@ -86,10 +86,12 @@ async function injectIssue165UiCatalog() {
     }
     throw new Error("Unexpected fixture operation");
   };
+  const issue165Reload = roomsProvider.reload.bind(roomsProvider);
   roomsProvider.reload = async () => {
+    const result = await issue165Reload();
     issue165State.reloads++;
-    await roomsProvider.setCatalog(structuredClone(issue165Catalog));
     issue165WriteState();
+    return result;
   };
   await roomsProvider.setCatalog(structuredClone(issue165Catalog));
   issue165State.initialized = true;

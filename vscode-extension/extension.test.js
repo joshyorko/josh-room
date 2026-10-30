@@ -3184,6 +3184,36 @@ test("committed cleanup-pending receipt stays distinct and reloads the changed c
   assert.match(f.warningCalls.at(-1)[0], /committed.*cleanup remains pending/);
 });
 
+for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
+  for (const cleanupPending of [false, true]) {
+    test(`${action} reloads while its ${cleanupPending ? "cleanup warning" : "success notification"} is unresolved`, async () => {
+      const f = createDeletionFixture({ outcome: cleanupPending
+        ? { ok: true, status: "cleanup-pending", reconciliation_required: true } : undefined });
+      let dismissNotification;
+      const notification = new Promise(resolve => { dismissNotification = resolve; });
+      let shown = false;
+      f.vscode.window.showInformationMessage = () => { shown = true; return notification; };
+      f.vscode.window.showWarningMessage = (...args) => {
+        if (args[1]?.modal) return Promise.resolve(action === "deleteRoom" ? "Delete Room" : "Delete Snapshot");
+        shown = true;
+        return notification;
+      };
+      const operation = f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" });
+      try {
+        for (let attempt = 0; attempt < 100 && f.catalogReads < 2; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.equal(shown, true);
+        assert.equal(f.mutations.length, 1);
+        assert.ok(f.catalogReads >= 2, "catalog reload must not wait for notification dismissal");
+      } finally {
+        dismissNotification();
+        await operation;
+      }
+    });
+  }
+}
+
 test("fresh configured R2 shows Connect Cloudflare without probing an empty catalog", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-connect-state-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
