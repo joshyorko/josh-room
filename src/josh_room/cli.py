@@ -152,6 +152,20 @@ def _json_option(parser):
     parser.add_argument("--json", action="store_true")
 
 
+def _assert_delete_inventory(catalog, project, args):
+    expected_revision = getattr(args, "expected_revision", None)
+    expected_snapshots = getattr(args, "expected_snapshots", None)
+    if expected_revision is not None and catalog.body.get("revision") != expected_revision:
+        raise ValueError("catalog changed after deletion confirmation; reload and confirm again")
+    if project is None:
+        raise ValueError("room is not present in the encrypted catalog")
+    if expected_snapshots is not None:
+        expected = [value for value in expected_snapshots.split(",") if value]
+        current = list(project.get("snapshots", {}))
+        if current != expected:
+            raise ValueError("recovery point inventory changed after deletion confirmation; reload and confirm again")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="josh-room")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -450,6 +464,8 @@ def build_parser() -> argparse.ArgumentParser:
     room_remove.add_argument("project")
     room_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     room_remove.add_argument("--dimension")
+    room_remove.add_argument("--expected-revision", type=int)
+    room_remove.add_argument("--expected-snapshots", help="comma-separated snapshot IDs from the confirmed inventory")
     _json_option(room_remove)
     snapshots = commands.add_parser("snapshots")
     snapshot_commands = snapshots.add_subparsers(dest="snapshots_command", required=True)
@@ -463,6 +479,8 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_remove.add_argument("snapshot")
     snapshot_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
     snapshot_remove.add_argument("--dimension")
+    snapshot_remove.add_argument("--expected-revision", type=int)
+    snapshot_remove.add_argument("--expected-snapshots", help="comma-separated snapshot IDs from the confirmed inventory")
     _json_option(snapshot_remove)
     snapshot = commands.add_parser("snapshot")
     snapshot_commands = snapshot.add_subparsers(dest="snapshot_command", required=True)
@@ -2025,6 +2043,7 @@ def dispatch(args, instance: Path) -> dict:
             backend = _backend_for_args(args, instance)
             catalog = load_catalog(instance, backend)
             project = catalog.body["projects"].get(args.project)
+            _assert_delete_inventory(catalog, project, args)
             if project and any(
                 snapshot_payload_kind(record) == "room-store-v1"
                 for record in project.get("snapshots", {}).values()
@@ -2033,7 +2052,7 @@ def dispatch(args, instance: Path) -> dict:
                 with _open_room_store_context(
                     args, instance, project_id=args.project, writable=True
                 ) as context:
-                    pending = remove_logical_catalog_records(context, identities)
+                    pending = remove_logical_catalog_records(context, identities, expected_revision=args.expected_revision, expected_snapshots=[value for value in args.expected_snapshots.split(",") if value] if args.expected_snapshots is not None else None)
                 with _open_room_store_context(args, instance) as fresh:
                     return complete_logical_catalog_removal(fresh, pending)
         recipients = _recipients()
@@ -2044,7 +2063,7 @@ def dispatch(args, instance: Path) -> dict:
             raise ValueError("room removal requires an age identity")
         return {
             "ok": True,
-            **remove_room(instance, args.project, Path(identity), recipients, _backend_for_args(args, instance)),
+            **remove_room(instance, args.project, Path(identity), recipients, _backend_for_args(args, instance), expected_revision=args.expected_revision, expected_snapshots=[value for value in args.expected_snapshots.split(",") if value] if args.expected_snapshots is not None else None),
         }
     if args.command == "snapshots":
         if args.snapshots_command == "remove":
@@ -2052,6 +2071,7 @@ def dispatch(args, instance: Path) -> dict:
             if dimension is not None and dimension.provider in {"minio", "r2"}:
                 backend = _backend_for_args(args, instance)
                 catalog = load_catalog(instance, backend)
+                _assert_delete_inventory(catalog, catalog.body["projects"].get(args.project), args)
                 record = catalog.resolve_snapshot(args.project, args.snapshot)
                 if snapshot_payload_kind(record) == "room-store-v1":
                     identity = (args.project, record["snapshot_id"])
@@ -2062,7 +2082,7 @@ def dispatch(args, instance: Path) -> dict:
                         snapshot_id=args.snapshot,
                         writable=True,
                     ) as context:
-                        pending = remove_logical_catalog_records(context, [identity])
+                        pending = remove_logical_catalog_records(context, [identity], expected_revision=args.expected_revision, expected_snapshots=[value for value in args.expected_snapshots.split(",") if value] if args.expected_snapshots is not None else None)
                     with _open_room_store_context(args, instance) as fresh:
                         return complete_logical_catalog_removal(fresh, pending)
             recipients = _recipients()
@@ -2078,6 +2098,8 @@ def dispatch(args, instance: Path) -> dict:
                     Path(identity),
                     recipients,
                     _backend_for_args(args, instance),
+                    expected_revision=args.expected_revision,
+                    expected_snapshots=[value for value in args.expected_snapshots.split(",") if value] if args.expected_snapshots is not None else None,
                 ),
             }
         backend = _backend_for_args(args, instance)
@@ -2086,7 +2108,7 @@ def dispatch(args, instance: Path) -> dict:
         if not project:
             raise ValueError("project is not present in the encrypted catalog")
         dimension_id = catalog.dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
-        return {"ok": True, "dimension_id": dimension_id, "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
+        return {"ok": True, "dimension_id": dimension_id, "revision": catalog.body["revision"], "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
         if args.snapshot_command in {"inspect", "export", "serve", "extract"}:
             jat_root = _jat_root()

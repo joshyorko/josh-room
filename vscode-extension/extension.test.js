@@ -461,7 +461,7 @@ function activateTestExtension(extension, root, vscode, values = new Map()) {
 
 test("extension backend commands use the managed RCC controller boundary", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-command-test-"));
-  const { vscode, statusItem } = createVscodeMock(root);
+  const { vscode, statusItem, errorCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true }) }));
   const extension = loadExtension(vscode, spawnHarness.spawn);
   extension.__test__.setStatusItem(statusItem);
@@ -2991,6 +2991,228 @@ test("deleting the active JAT is blocked so its marker cannot remain Saved", asy
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "snapshots" && entry.args[1] === "remove"), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".josh-room.json"))).snapshot_id, "active");
 });
+
+test("recovery-point handler rejects a stale cross-Dimension row before any mutation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-stale-delete-target-"));
+  const { vscode, statusItem, errorCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({ ok: true, dimensions: [{ id: "archive-a", provider: "r2", projects: [{ id: "same-room", display_name: "Room A", snapshots: [] }] }] }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const result = await extension.__test__.deleteRecoveryPoint({
+    project: { id: "same-room", display_name: "Room B", dimension_id: "archive-b", provider: "r2" },
+    snapshot_id: "stale-snapshot",
+  });
+  assert.equal(result, "stale-target");
+  assert.equal(spawnHarness.calls.some((entry) => ["rooms", "snapshots"].includes(entry.args[0]) && ["remove"].includes(entry.args[1])), false);
+  assert.match(errorCalls[0][0], /no longer present in that Dimension/);
+});
+
+function createDeletionFixture({ provider = "minio", ids = ["old", "latest"], outcome, reloadFailure = false, material = true } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-delete-flow-"));
+  const mock = createVscodeMock(root);
+  const dimension = { id: "delete-dimension", display_name: "Delete Dimension", provider,
+    encryption_domain_id: "delete-domain", key_generation: 1 };
+  const project = { id: "delete-room", display_name: "Delete Room", latest: ids.at(-1),
+    snapshots: ids.map((snapshot_id, i) => ({ snapshot_id, created_at: `2026-10-${20 + i}T00:00:00Z` })) };
+  dimension.projects = [project];
+  let catalogReads = 0;
+  const mutations = [];
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    if (args[0] === "auth") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
+    if (args[0] === "dimensions") {
+      if (++catalogReads > 1 && reloadFailure) return { stdout: JSON.stringify({ ok: false, error: "synthetic reload failure" }), code: 1 };
+      return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
+    }
+    if (args[0] === "encryption") return { stdout: JSON.stringify({ ok: true, encryption_domain_id: "delete-domain", key_generation: 1 }) };
+    if (args[0] === "snapshots" && args[1] === "list") return { stdout: JSON.stringify({ ok: true, dimension_id: dimension.id,
+      project: project.id, revision: 7, latest: project.latest, snapshots: project.snapshots }) };
+    if (["snapshots", "rooms"].includes(args[0]) && args[1] === "remove") {
+      mutations.push({ args, hasMaterial: Boolean(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL), recipients: options.env.JOSH_ROOM_SELECTED_RECIPIENTS });
+      if (outcome) return { stdout: JSON.stringify(outcome) };
+      if (args[0] === "rooms") {
+        dimension.projects = [];
+        return { stdout: JSON.stringify({ ok: true, project_id: project.id, snapshot_count: ids.length }) };
+      }
+      const removed = args[3];
+      const wasLatest = project.latest === removed;
+      project.snapshots = project.snapshots.filter((item) => item.snapshot_id !== removed);
+      project.latest = project.snapshots.at(-1)?.snapshot_id || null;
+      if (!project.snapshots.length) dimension.projects = [];
+      return { stdout: JSON.stringify({ ok: true, status: "removed", project_id: project.id, snapshot_id: removed,
+        room_removed: project.snapshots.length === 0, latest_promoted: wasLatest, latest: project.latest }) };
+    }
+    throw new Error(`unexpected deletion fixture command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(mock.vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(mock.statusItem);
+  extension.__test__.setExtensionContextForTests({ subscriptions: [], secrets: { get: async (key) => material && key.startsWith("josh-room.encryption.v1:")
+    ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic", recipients: ["age1synthetic-operational", "age1synthetic-recovery"] }) : undefined } });
+  const tree = new extension.__test__.HierarchyRoomsProvider();
+  extension.__test__.setRoomsProvider(tree);
+  const row = { project, dimension };
+  return { ...mock, root, extension, row, tree, mutations, get catalogReads() { return catalogReads; } };
+}
+
+for (const provider of ["r2", "minio"]) {
+  test(`${provider} Delete Room sends one revision-bound controller operation and reloads authoritatively`, async () => {
+    const f = createDeletionFixture({ provider });
+    f.warningResponses.push("Delete Room");
+    assert.equal(await f.extension.__test__.deleteRoom(f.row), "removed");
+    assert.equal(f.mutations.length, 1);
+    const { args, hasMaterial, recipients } = f.mutations[0];
+    assert.deepEqual(args.slice(0, 3), ["rooms", "remove", "delete-room"]);
+    assert.equal(args[args.indexOf("--dimension") + 1], "delete-dimension");
+    assert.equal(args[args.indexOf("--expected-revision") + 1], "7");
+    assert.equal(args[args.indexOf("--expected-snapshots") + 1], "old,latest");
+    assert.ok(hasMaterial);
+    if (provider === "r2") assert.equal(recipients, "age1synthetic-operational,age1synthetic-recovery");
+    assert.match(f.warningCalls[0][0], /delete-room.*delete-dimension.*2 recovery points.*irreversible/);
+    assert.ok(f.catalogReads >= 2);
+    assert.doesNotMatch(JSON.stringify(f.tree.roots), /delete-room/);
+  });
+}
+
+for (const [ids, selected, expectedMessage] of [
+  [["old", "latest"], "latest", /Latest is now old/],
+  [["old", "latest"], "old", /recovery point deleted/i],
+  [["only"], "only", /Final recovery point deleted/],
+]) {
+  test(`scoped recovery-point deletion reloads after deleting ${selected} from ${ids.length} points`, async () => {
+    const f = createDeletionFixture({ ids });
+    f.warningResponses.push("Delete Snapshot");
+    assert.equal(await f.extension.__test__.deleteRecoveryPoint({ ...f.row, snapshot_id: selected }), "removed");
+    assert.equal(f.quickPickCalls.length, 0);
+    assert.equal(f.mutations.length, 1);
+    assert.deepEqual(f.mutations[0].args.slice(0, 4), ["snapshots", "remove", "delete-room", selected]);
+    assert.ok(f.catalogReads >= 2);
+    assert.ok(f.infoCalls.some(([message]) => expectedMessage.test(message)));
+    assert.doesNotMatch(JSON.stringify(f.tree.roots), new RegExp(`"snapshot_id":"${selected}"`));
+  });
+}
+
+for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
+  test(`${action} cancellation and active Room binding perform zero mutation`, async () => {
+    const f = createDeletionFixture();
+    const target = { ...f.row, snapshot_id: action === "deleteRecoveryPoint" ? "latest" : undefined };
+    assert.equal(await f.extension.__test__[action](target), "cancelled");
+    assert.equal(f.mutations.length, 0);
+    writeMarker(f.root, { dimension_id: "delete-dimension", project_id: "delete-room", snapshot_id: "latest" });
+    f.warningResponses.push("Delete Room", "Delete Snapshot");
+    assert.equal(await f.extension.__test__[action](target), "blocked");
+    assert.equal(f.mutations.length, 0);
+  });
+  test(`${action} blocks an existing malformed workspace binding`, async () => {
+    const f = createDeletionFixture();
+    fs.writeFileSync(path.join(f.root, ".josh-room.json"), "{broken");
+    f.warningResponses.push("Delete Room", "Delete Snapshot");
+    await assert.rejects(f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), /workspace binding.*invalid/i);
+    assert.equal(f.mutations.length, 0);
+  });
+}
+
+for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
+  test(`${action} rechecks an active binding created while confirmation is open`, async () => {
+    const f = createDeletionFixture();
+    f.vscode.window.showWarningMessage = async () => {
+      writeMarker(f.root, { dimension_id: "delete-dimension", project_id: "delete-room", snapshot_id: "latest" });
+      return action === "deleteRoom" ? "Delete Room" : "Delete Snapshot";
+    };
+    assert.equal(await f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), "blocked");
+    assert.equal(f.mutations.length, 0);
+  });
+}
+
+test("portable R2 deletion without age identity and recovery recipients fails before mutation", async () => {
+  const f = createDeletionFixture({ provider: "r2", material: false });
+  f.warningResponses.push("Delete Room");
+  await assert.rejects(f.extension.__test__.deleteRoom(f.row), /identity and recovery recipients are unavailable/);
+  assert.equal(f.mutations.length, 0);
+});
+
+test("an explicit recovery point missing from the fresh inventory never mutates", async () => {
+  const f = createDeletionFixture();
+  f.warningResponses.push("Delete Snapshot");
+  assert.equal(await f.extension.__test__.deleteRecoveryPoint({ ...f.row, snapshot_id: "stale" }), "stale-target");
+  assert.equal(f.mutations.length, 0);
+});
+
+for (const provider of ["r2", "minio"]) {
+  test(`${provider} deletion rechecks the active binding after asynchronous material lookup`, async () => {
+    const f = createDeletionFixture({ provider });
+    let confirmed = false;
+    f.vscode.window.showWarningMessage = async () => { confirmed = true; return "Delete Room"; };
+    f.extension.__test__.setExtensionContextForTests({ subscriptions: [], secrets: { get: async (key) => {
+      if (confirmed) writeMarker(f.root, { dimension_id: "delete-dimension", project_id: "delete-room", snapshot_id: "latest" });
+      return key.startsWith("josh-room.encryption.v1:")
+        ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic", recipients: ["age1synthetic-operational", "age1synthetic-recovery"] }) : undefined;
+    } } });
+    await assert.rejects(f.extension.__test__.deleteRoom(f.row), /active Room/);
+    assert.equal(f.mutations.length, 0);
+  });
+}
+
+test("committed deletion reload failure never repeats or reports the mutation as failed", async () => {
+  const f = createDeletionFixture({ reloadFailure: true });
+  f.warningResponses.push("Delete Room");
+  assert.equal(await f.extension.__test__.deleteRoom(f.row), "removed");
+  assert.equal(f.mutations.length, 1);
+  assert.ok(f.errorCalls.some(([message]) => /deletion committed.*refresh failed.*Refresh/.test(message)));
+});
+
+for (const receipt of [
+  { ok: true, status: "catalog-reference-remains", reconciliation_required: true },
+  { ok: true, status: "unexpected-controller-status" },
+]) {
+  test(`deletion does not report success for ${receipt.status}`, async () => {
+    const f = createDeletionFixture({ outcome: receipt });
+    f.warningResponses.push("Delete Room");
+    assert.equal(await f.extension.__test__.deleteRoom(f.row), "incomplete");
+    assert.equal(f.infoCalls.length, 0);
+    assert.equal(f.mutations.length, 1);
+  });
+}
+
+test("committed cleanup-pending receipt stays distinct and reloads the changed catalog", async () => {
+  const f = createDeletionFixture({ outcome: { ok: true, status: "cleanup-pending", reconciliation_required: true } });
+  f.warningResponses.push("Delete Room");
+  assert.equal(await f.extension.__test__.deleteRoom(f.row), "cleanup-pending");
+  assert.ok(f.catalogReads >= 2);
+  assert.equal(f.infoCalls.length, 0);
+  assert.match(f.warningCalls.at(-1)[0], /committed.*cleanup remains pending/);
+});
+
+for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
+  for (const cleanupPending of [false, true]) {
+    test(`${action} reloads while its ${cleanupPending ? "cleanup warning" : "success notification"} is unresolved`, async () => {
+      const f = createDeletionFixture({ outcome: cleanupPending
+        ? { ok: true, status: "cleanup-pending", reconciliation_required: true } : undefined });
+      let dismissNotification;
+      const notification = new Promise(resolve => { dismissNotification = resolve; });
+      let shown = false;
+      f.vscode.window.showInformationMessage = () => { shown = true; return notification; };
+      f.vscode.window.showWarningMessage = (...args) => {
+        if (args[1]?.modal) return Promise.resolve(action === "deleteRoom" ? "Delete Room" : "Delete Snapshot");
+        shown = true;
+        return notification;
+      };
+      const operation = f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" });
+      try {
+        for (let attempt = 0; attempt < 100 && f.catalogReads < 2; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.equal(shown, true);
+        assert.equal(f.mutations.length, 1);
+        assert.ok(f.catalogReads >= 2, "catalog reload must not wait for notification dismissal");
+      } finally {
+        dismissNotification();
+        await operation;
+      }
+    });
+  }
+}
 
 test("fresh configured R2 shows Connect Cloudflare without probing an empty catalog", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-connect-state-test-"));
@@ -6320,9 +6542,10 @@ test("Room actions keep Save and Enter inline and recovery actions contextual", 
   const manifest = require("./package.json");
   const menus = manifest.contributes.menus["view/item/context"];
   assert.ok(menus.some((item) => item.command === "joshRoom.save" && item.when.includes("current-room") && item.group.startsWith("inline")));
-  for (const command of ["joshRoom.link", "joshRoom.repair", "joshRoom.serve", "joshRoom.remove"]) {
+  for (const command of ["joshRoom.link", "joshRoom.repair", "joshRoom.serve"]) {
     assert.ok(menus.filter((item) => item.command === command && item.when.includes("viewItem == room")).every((item) => !item.group.startsWith("inline")), command);
   }
+  assert.ok(menus.some((item) => item.command === "joshRoom.remove" && item.when.includes("viewItem == room") && item.group.startsWith("inline")));
   assert.ok(manifest.contributes.commands.some((item) => item.command === "joshRoom.saveFolderAs"));
 });
 

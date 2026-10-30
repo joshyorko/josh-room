@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.40",
+  "candidate_version": "0.1.41",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -122,6 +122,6 @@
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",
-    "version": "0.1.10"
+    "version": "0.1.11"
   }
 }

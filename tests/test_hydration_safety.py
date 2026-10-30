@@ -101,6 +101,32 @@ def test_remove_room_updates_catalog_before_deleting_unreferenced_objects(tmp_pa
     assert result == {"deleted_objects": 1, "project_id": "demo", "snapshot_count": 1}
 
 
+def test_remove_room_fails_closed_when_confirmed_inventory_changed(tmp_path, monkeypatch):
+    snapshot = {"snapshot_id": "one", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
+    catalog = Catalog.empty().add_snapshot("demo", "Demo", snapshot)
+    calls = []
+    class Backend:
+        def conditional_catalog_put(self, *_args): calls.append("catalog")
+        def delete_object(self, *_args): calls.append("delete")
+    monkeypatch.setattr("josh_room.operations._read_remote_catalog", lambda *_args: (catalog, '"etag"'))
+    with pytest.raises(ValueError, match="inventory changed"):
+        remove_room(tmp_path / "instance", "demo", tmp_path / "identity", ["age1one", "age1two"], Backend(), expected_revision=catalog.body["revision"], expected_snapshots=["different"])
+    assert calls == []
+
+
+def test_remove_snapshot_fails_closed_when_confirmed_catalog_revision_changed(tmp_path, monkeypatch):
+    snapshot = {"snapshot_id": "one", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
+    catalog = Catalog.empty().add_snapshot("demo", "Demo", snapshot)
+    calls = []
+    class Backend:
+        def conditional_catalog_put(self, *_args): calls.append("catalog")
+        def delete_object(self, *_args): calls.append("delete")
+    monkeypatch.setattr("josh_room.operations._read_remote_catalog", lambda *_args: (catalog, '"etag"'))
+    with pytest.raises(ValueError, match="catalog changed"):
+        remove_snapshot(tmp_path / "instance", "demo", "one", tmp_path / "identity", ["age1one", "age1two"], Backend(), expected_revision=catalog.body["revision"] + 1, expected_snapshots=["one"])
+    assert calls == []
+
+
 def test_remove_snapshot_publishes_promoted_latest_before_object_cleanup(tmp_path, monkeypatch):
     first = {"snapshot_id": "one", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
     second = {"snapshot_id": "two", "object_key": "objects/sha256/" + "b" * 64, "ciphertext_sha256": "b" * 64, "ciphertext_size": 2}

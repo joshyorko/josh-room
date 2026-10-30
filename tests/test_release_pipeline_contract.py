@@ -56,7 +56,7 @@ def test_every_node_workflow_pins_and_verifies_the_patched_node_22_runtime():
                 assert "--minimum" in verifiers[0]
                 assert "node-version: \"22\"" not in source
                 assert "node-version: '22'" not in source
-    assert node_workflows == {"ci.yml", "capture-candidate.yml", "capture-windows-ui.yml", "release.yml"}
+    assert node_workflows == {"ci.yml", "capture-candidate.yml", "capture-windows-ui.yml", "issue-165-windows-ui-capture.yml", "release.yml"}
 
 
 def test_ci_retains_exact_setup_node_action_runtime_evidence():

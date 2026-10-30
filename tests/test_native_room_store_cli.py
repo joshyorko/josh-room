@@ -286,7 +286,7 @@ def test_native_room_removal_publishes_catalog_cas_before_fresh_reachability_che
         events.append(("context", project_id, snapshot_id, writable))
         yield object()
 
-    def remove_records(_context, identities):
+    def remove_records(_context, identities, **_expected):
         events.append(("cas", identities))
         del catalog.body["projects"]["demo"]
         return "pending"

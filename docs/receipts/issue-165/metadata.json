@@ -1,0 +1,106 @@
+{
+  "issue": 165,
+  "source_sha": "0911111b51337622e949d4b8b689564546a4f1a2",
+  "candidate_vsix": "vscode-extension/josh-room-0.1.40.vsix",
+  "candidate_vsix_sha256": "72847ff47b9344d915d763bbe35b0b299badacd296da6e994d7f2cc97917bd6a",
+  "capture_date": "2026-10-28",
+  "host": "Dakota-NVIDIA; active kdlocpanda Wayland session",
+  "application": "VS Code Insiders 1.145.0",
+  "capture": "CDP Page.captureScreenshot for 01-03 and 05-06; ffmpeg x11grab of private Xvfb :187 for 04; all captures 1440x900 and limited to isolated VS Code windows",
+  "fixture": "Screenshots 01-03 and 05 use a disposable modified candidate copy with test-only in-memory state and stubbed controller calls. Screenshots 04 and 06 use the original unmodified 0.1.40 VSIX against a disposable loopback MinIO server with generated credentials and CLI-created Rooms/two logical recovery points. #04 is the actual Delete Room confirmation for Issue165 Real Room (two recovery points), dismissed with Escape. #06 follows an actual controller deletion of one recovery point and a fresh TreeView catalog refresh.",
+  "fixture_harness": "scripts/prepare_issue165_ui_fixture.js",
+  "fixture_harness_sha256": "e2117ea7145e10a2dbb04c00526a7858f4ee7c51d2c715c19e61f9eb87385000",
+  "real_minio_controller_receipt": "real-minio-controller-receipt.json",
+  "annotations": "Pillow overlays added after capture: red bounding rectangles and numbered captions; original renderer pixels retained beneath overlays.",
+  "modal_capture": "Captured as screenshot 04 from the actual unmodified VSIX modal on private Xvfb :187 using ffmpeg x11grab; red boxes identify irreversible warning and Delete Room button. Room was Issue165 Real Room in issue165-local-dimension with two controller-listed recovery points. Modal dismissed with Escape; fresh controller list verified revision 2 and both snapshots unchanged. No Room deletion was confirmed.",
+  "screenshots": [
+    {
+      "path": "01-room-inline-trash.png",
+      "sha256": "ea05a2f95ecbb05d10a447164797d4be090991a7b6a5624bd88a6c3479f903a3",
+      "bytes": 65517,
+      "boxed_control": "1  Delete Snapshot on Room hover",
+      "rectangle": [
+        177,
+        160,
+        204,
+        185
+      ],
+      "evidence_level": "test-only in-memory fixture; UI presentation only"
+    },
+    {
+      "path": "02-recovery-point-context.png",
+      "sha256": "06f52edb41010e7bca03ea96bb08e28f80895441557d6c6aa9be0165332ca1eb",
+      "bytes": 64540,
+      "boxed_control": "2  Delete Recovery Point on selected JAT",
+      "rectangle": [
+        128,
+        198,
+        422,
+        230
+      ],
+      "evidence_level": "test-only in-memory fixture; UI presentation only"
+    },
+    {
+      "path": "03-delete-room-context.png",
+      "sha256": "b5217ce1c67ad2e14a6109ec7df9e567820abb8d7d1162c6a4cf694a05a08ce2",
+      "bytes": 68973,
+      "boxed_control": "3  Separate Delete Room action",
+      "rectangle": [
+        128,
+        248,
+        412,
+        280
+      ],
+      "evidence_level": "test-only in-memory fixture; UI presentation only"
+    },
+    {
+      "path": "04-delete-room-confirmation.png",
+      "sha256": "9df250203e054e4c6e8f5bc2c2a2c051f5c2c820fb998439358223a935a45cb1",
+      "bytes": 73395,
+      "boxed_control": "4  Real MinIO Delete Room warning; cancel only",
+      "rectangle": [
+        0,
+        0,
+        548,
+        76
+      ],
+      "additional_rectangles": [
+        [
+          274,
+          82,
+          548,
+          115
+        ]
+      ],
+      "evidence_level": "unmodified VSIX; actual controller warning for disposable MinIO; dismissed with Escape",
+      "capture_method": "ffmpeg x11grab of Xvfb :187 private 1440x900 display containing only isolated VS Code Insiders"
+    },
+    {
+      "path": "05-post-synthetic-tree.png",
+      "sha256": "1fe194d47eb13bf00dd74ee3d547e1a200a8a15440c6acca3db852555d920cf8",
+      "bytes": 70105,
+      "boxed_control": "5  Fixture-only state change + TreeView reload",
+      "rectangle": [
+        48,
+        179,
+        462,
+        210
+      ],
+      "evidence_level": "test-only in-memory fixture; TreeView refresh only"
+    },
+    {
+      "path": "06-real-minio-post-delete-tree.png",
+      "sha256": "9a99ed49751a214a0b67b8e1a7a1dd31a94737963d3d5747ac16b0c659df9180",
+      "bytes": 70815,
+      "boxed_control": "6  Real MinIO delete; one Latest JAT remains",
+      "rectangle": [
+        48,
+        181,
+        462,
+        212
+      ],
+      "evidence_level": "unmodified VSIX with local disposable MinIO controller integration"
+    }
+  ],
+  "fixture_harness_source_sha": "0911111b51337622e949d4b8b689564546a4f1a2"
+}

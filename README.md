@@ -169,11 +169,19 @@ lists any deletions that need confirmation. Choose Show Details on a Save receip
 to inspect sanitized evidence in the Josh Room output. Unsaved editor buffers are
 not captured until their files are saved.
 
-The Delete Snapshot action lists the selected Room's snapshots and requires exact
-modal confirmation before deleting one. Removing Latest safely promotes the
-newest remaining snapshot; deleting the final snapshot removes the now-empty
-Room. Objects remain protected whenever another snapshot references them.
-Storage, encryption, and hydration remain owned by the CLI.
+Delete Snapshot is available from the Room row and lists that Room's recovery
+points. Individual recovery-point rows also offer a scoped Delete Recovery Point
+action. Both require modal confirmation; deleting Latest promotes the newest
+remaining recovery point, while deleting the final one removes the now-empty
+Room. Delete Room is a separate irreversible action that names the Room,
+Dimension, and affected recovery-point count. Active Rooms and recovery points
+cannot be deleted. Objects remain protected whenever another snapshot
+references them. An invalid workspace binding blocks deletion until it is linked
+or repaired. Completed deletion reloads the authoritative catalog; a refresh
+failure does not repeat the mutation. Cleanup-pending or incomplete controller
+receipts are shown separately from completed removal. Storage, encryption, and
+hydration remain owned by the CLI. See the [deletion evidence and regression
+account](docs/receipts/issue-165/README.md).
 
 ## Extension surfaces
 

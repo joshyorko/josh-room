@@ -955,8 +955,9 @@ async function writeEncryptionHandoff(environment, material) {
   if (material.domain || material.encryption_domain_id) {
     environment.JOSH_ROOM_SELECTED_DOMAIN = material.domain || material.encryption_domain_id;
   }
-  if (material.recipients || material.recipient) {
-    environment.JOSH_ROOM_SELECTED_RECIPIENTS = (material.recipients || [material.recipient]).join(",");
+  const recipients = material.recipients || material.recovery_recipients || material.recipient;
+  if (recipients) {
+    environment.JOSH_ROOM_SELECTED_RECIPIENTS = (Array.isArray(recipients) ? recipients : [recipients]).join(",");
   }
   return () => fs.rmSync(directory, { recursive: true, force: true });
 }
@@ -1155,6 +1156,14 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     };
     let child;
     try {
+      if (["rooms", "snapshots"].includes(args[0]) && args[1] === "remove") {
+        const dimensionIndex = args.indexOf("--dimension");
+        if (dimensionIndex < 0 || !args[dimensionIndex + 1]) throw new Error("Deletion requires an explicit Dimension.");
+        const marker = deletionWorkspaceMarker(cwd);
+        if (sameRoomBinding(marker, { id: args[2], dimension_id: args[dimensionIndex + 1] })) {
+          throw new Error("Cannot delete from the active Room. Switch or unlink this workspace first.");
+        }
+      }
       child = childProcess.spawn(runtime.command, runtime.args(args, receiptPath), {
         cwd,
         env: environment,
@@ -2385,33 +2394,107 @@ async function removeRoom(preferredProject) {
   return removeSnapshot(preferredProject);
 }
 
+function deletionWorkspaceMarker(cwd) {
+  assertWorkspaceTrusted("delete a Room or recovery point");
+  try {
+    const stat = fs.lstatSync(path.join(cwd, ".josh-room.json"));
+    const marker = stat.isFile() && !stat.isSymbolicLink() ? currentRoom(cwd) : undefined;
+    if (marker && marker.workspace_path_sha256 === realWorkspacePathSha256(cwd)) return marker;
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+  }
+  throw new Error("The workspace binding is invalid. Link or Repair this workspace before deleting Rooms or recovery points.");
+}
+
+async function deleteRoom(preferredProject) {
+  const cwd = activeWorkspace();
+  const marker = deletionWorkspaceMarker(cwd);
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const preferred = roomProject(preferredProject);
+  const candidates = nativeRegistry.flattenDimensionRooms(catalog);
+  const selected = preferred
+    ? candidates.find((room) => room.id === preferred.id && explicitDimensionId(room) === explicitDimensionId(preferredProject))
+    : await vscode.window.showQuickPick(candidates.map((project) => ({ label: roomLabel(project), project })), { title: "Josh: Delete Room", ignoreFocusOut: true });
+  if (preferred && !selected) {
+    await vscode.window.showErrorMessage("The selected Room is stale or belongs to another Dimension. Refresh and select it again.");
+    return "stale-target";
+  }
+  const project = roomProject(selected?.project || selected);
+  if (!project || !project.id || !explicitDimensionId(project)) return "cancelled";
+  if (sameRoomBinding(marker, project)) {
+    await vscode.window.showWarningMessage("Cannot delete the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  const provider = nativeRegistry.providerKey(project.provider || project.dimension?.provider || "r2");
+  const dimension = project.dimension || { id: dimensionId(project), provider };
+  const historyArgs = nativeRegistry.dimensionArgs(["snapshots", "list", project.id, "--backend", provider], dimensionId(project));
+  const history = await runSelectedEncryption(historyArgs, cwd, dimension, { title: `Loading ${roomLabel(project)} recovery points…`, action: "delete a Room" });
+  if (!Number.isInteger(history.revision) || !Array.isArray(history.snapshots)) throw new Error("The controller did not provide a revision-bound Room inventory; deletion is blocked.");
+  const count = Array.isArray(history.snapshots) ? history.snapshots.length : 0;
+  const answer = await vscode.window.showWarningMessage(`Permanently delete Room “${project.display_name || project.id}” (${project.id}) in Dimension “${dimensionId(project)}” and all ${count} recovery point${count === 1 ? "" : "s"}? This action is irreversible.`, { modal: true }, "Delete Room");
+  if (answer !== "Delete Room") return "cancelled";
+  if (sameRoomBinding(deletionWorkspaceMarker(cwd), project)) {
+    await vscode.window.showWarningMessage("Cannot delete the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  const args = nativeRegistry.dimensionArgs(["rooms", "remove", project.id, "--backend", provider, "--expected-revision", String(history.revision), "--expected-snapshots", history.snapshots.map((snapshot) => snapshot.snapshot_id).join(",")], dimensionId(project));
+  const operation = await destructiveOperation(args, cwd, dimension, `Deleting Room ${project.id}…`, "delete a Room");
+  if (!deletionCommitted(operation)) return reportDeleteOutcome(operation, "Room");
+  const outcome = await reportDeleteOutcome(operation, "Room");
+  try { await roomsProvider?.reload(); }
+  catch (error) {
+    await vscode.window.showErrorMessage(`Room deletion committed, but catalog refresh failed (${userFacingError(error)}). Use Josh Room: Refresh to reload the catalog.`);
+  }
+  return outcome;
+}
+
+async function deleteRecoveryPoint(item) {
+  const project = roomProject(item);
+  const snapshotId = snapshotIdentity(item);
+  if (!project?.id || !explicitDimensionId(item) || !snapshotId) return "blocked";
+  return removeSnapshot({ ...project, snapshot_id: snapshotId, snapshot: { snapshot_id: snapshotId } });
+}
+
 async function removeSnapshot(preferredProject) {
   const cwd = activeWorkspace();
+  const marker = deletionWorkspaceMarker(cwd);
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const preferred = roomProject(preferredProject);
-  const selectedRoom = preferred
-    ? { label: roomLabel(preferred), project: preferred }
+  const freshPreferred = preferred && explicitDimensionId(preferredProject)
+    ? projects.find((project) => project.id === preferred.id && explicitDimensionId(project) === explicitDimensionId(preferredProject))
+    : undefined;
+  if (preferred && !freshPreferred) {
+    await vscode.window.showErrorMessage("The selected Room is no longer present in that Dimension. Refresh Rooms and choose again.");
+    return "stale-target";
+  }
+  const selectedRoom = freshPreferred
+    ? { label: roomLabel(freshPreferred), project: freshPreferred }
     : await vscode.window.showQuickPick(
       projects.map((project) => ({ label: roomLabel(project), project })),
       { title: "Josh: Delete Snapshot", placeHolder: "Choose a Room", ignoreFocusOut: true },
     );
   if (!selectedRoom) return "cancelled";
   const preferredSnapshotId = snapshotIdentity(preferredProject);
-  const marker = currentRoom(cwd);
+  if (marker && marker.project_id === selectedRoom.project.id && marker.dimension_id === explicitDimensionId(selectedRoom.project)) {
+    await vscode.window.showWarningMessage("Cannot delete a recovery point from the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
   if (preferredSnapshotId && activeSnapshot(marker, selectedRoom.project, preferredSnapshotId)) {
     await vscode.window.showWarningMessage(
       "Cannot delete the active JAT while this workspace is linked to it. Enter another recovery point first.",
     );
     return "blocked";
   }
-  const history = await runOperation(
-    `Loading ${selectedRoom.label} recovery points…`,
-    nativeRegistry.dimensionArgs(["snapshots", "list", selectedRoom.project.id, "--backend", "r2"], dimensionId(selectedRoom.project)),
-    cwd,
-  );
+  const provider = nativeRegistry.providerKey(selectedRoom.project.provider || selectedRoom.project.dimension?.provider || "r2");
+  const dimension = selectedRoom.project.dimension || { id: dimensionId(selectedRoom.project), provider };
+  const historyArgs = nativeRegistry.dimensionArgs(["snapshots", "list", selectedRoom.project.id, "--backend", provider], dimensionId(selectedRoom.project));
+  const history = await runSelectedEncryption(historyArgs, cwd, dimension, { title: `Loading ${selectedRoom.label} recovery points…`, action: "delete a recovery point" });
+  if (!Number.isInteger(history.revision) || !Array.isArray(history.snapshots)) throw new Error("The controller did not provide a revision-bound recovery-point inventory; deletion is blocked.");
   const selectedSnapshot = preferredSnapshotId
-    ? { label: "Selected snapshot", snapshot: { snapshot_id: preferredSnapshotId } }
+    ? history.snapshots.find((snapshot) => snapshot.snapshot_id === preferredSnapshotId)
+      ? { label: "Selected recovery point", snapshot: history.snapshots.find((snapshot) => snapshot.snapshot_id === preferredSnapshotId) }
+      : undefined
     : await vscode.window.showQuickPick(
       history.snapshots
       .map((snapshot) => ({
@@ -2427,7 +2510,13 @@ async function removeSnapshot(preferredProject) {
         ignoreFocusOut: true,
       },
     );
-  if (!selectedSnapshot) return "cancelled";
+  if (!selectedSnapshot) {
+    if (preferredSnapshotId) {
+      await vscode.window.showErrorMessage(`The selected recovery point “${preferredSnapshotId}” is stale or belongs to another Dimension. Refresh and select it again.`);
+      return "stale-target";
+    }
+    return "cancelled";
+  }
   if (activeSnapshot(marker, selectedRoom.project, selectedSnapshot.snapshot.snapshot_id)) {
     await vscode.window.showWarningMessage(
       "Cannot delete the active JAT while this workspace is linked to it. Enter another recovery point first.",
@@ -2440,25 +2529,24 @@ async function removeSnapshot(preferredProject) {
     ? " The newest remaining snapshot will become Latest."
     : "";
   const confirmed = await vscode.window.showWarningMessage(
-    `Permanently delete the ${selectedSnapshot.label.replace(/^\$\([^)]*\) /, "").toLowerCase()} from ${selectedRoom.label}?${consequence}`,
+    `Permanently delete recovery point “${selectedSnapshot.snapshot.snapshot_id}” from Room “${selectedRoom.project.display_name || selectedRoom.project.id}” in Dimension “${dimensionId(selectedRoom.project)}”?${consequence}`,
     { modal: true },
     "Delete Snapshot",
   );
   if (confirmed !== "Delete Snapshot") return "cancelled";
-  const result = await runOperation(
-    `Removing ${selectedRoom.label} recovery point…`,
-    nativeRegistry.dimensionArgs(["snapshots", "remove", selectedRoom.project.id, selectedSnapshot.snapshot.snapshot_id, "--backend", "r2"], dimensionId(selectedRoom.project)),
-    cwd,
-  );
-  await vscode.window.showInformationMessage(
-    result.room_removed
-      ? `Final snapshot deleted. “${selectedRoom.label}” is gone.`
-      : result.latest_promoted
-        ? `Snapshot deleted. Latest is now ${result.latest}.`
-        : "Snapshot deleted.",
-  );
-  await roomsProvider?.refresh();
-  return "removed";
+  if (sameRoomBinding(deletionWorkspaceMarker(cwd), selectedRoom.project)) {
+    await vscode.window.showWarningMessage("Cannot delete a recovery point from the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  const args = nativeRegistry.dimensionArgs(["snapshots", "remove", selectedRoom.project.id, selectedSnapshot.snapshot.snapshot_id, "--backend", provider, "--expected-revision", String(history.revision), "--expected-snapshots", history.snapshots.map((snapshot) => snapshot.snapshot_id).join(",")], dimensionId(selectedRoom.project));
+  const result = await destructiveOperation(args, cwd, dimension, `Removing ${selectedRoom.label} recovery point…`, "delete a recovery point");
+  if (!deletionCommitted(result)) return reportDeleteOutcome(result, "recovery point");
+  const outcome = await reportDeleteOutcome(result, "recovery point");
+  try { await roomsProvider?.reload(); }
+  catch (error) {
+    await vscode.window.showErrorMessage(`Recovery point deletion committed, but catalog refresh failed (${userFacingError(error)}). Use Josh Room: Refresh to reload the catalog.`);
+  }
+  return outcome;
 }
 
 async function serveRoom(preferredProject, { startRegistry = startRegistryTerminal } = {}) {
@@ -3269,6 +3357,8 @@ function activate(context) {
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
+  register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
   register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
@@ -3712,6 +3802,55 @@ async function runSelectedEncryption(args, cwd, dimension, options = {}) {
 
 function selectedDimension(item) {
   return item?.dimension || item;
+}
+
+async function destructiveOperation(args, cwd, dimension, title, action) {
+  const selected = dimension?.dimension || dimension;
+  const provider = nativeRegistry.providerKey(selected?.provider);
+  if (provider === "minio") return runSelectedEncryption(args, cwd, selected, { title, action });
+  let material = await readEncryptionMaterial(selected);
+  if (!material && selected?.id) {
+    const status = await runJoshRoom(["encryption", "status", "--dimension", selected.id], cwd);
+    material = await readEncryptionMaterial({ ...selected, ...status });
+  }
+  const recipients = material?.recipients || material?.recovery_recipients;
+  if (!material?.identity || !Array.isArray(recipients) || recipients.length < 2) {
+    throw new Error("Age deletion identity and recovery recipients are unavailable for this Dimension. Restore its encryption material before deleting.");
+  }
+  return runOperation(title, args, cwd, { encryptionMaterial: { ...material, recipients } });
+}
+
+function deletionCommitted(result) {
+  if (!result || result.ok === false) return false;
+  if (result.status !== undefined) {
+    return ["success", "removed", "complete", "cleanup-pending", "restic-cleanup-pending"].includes(result.status);
+  }
+  return typeof result.project_id === "string"
+    && (Number.isSafeInteger(result.snapshot_count) && result.snapshot_count >= 0
+      || typeof result.room_removed === "boolean" && typeof result.snapshot_id === "string");
+}
+
+async function reportDeleteOutcome(result, target) {
+  // Informational notifications resolve on dismissal. They must never hold
+  // the authoritative catalog reload after an already-committed mutation.
+  if (result?.status === "catalog-reference-remains") {
+    void vscode.window.showWarningMessage(`The ${target} catalog update did not remove every reference. No success is reported; inspect the Room Store and retry after reconciliation.`);
+    return "incomplete";
+  }
+  if (!deletionCommitted(result)) {
+    void vscode.window.showWarningMessage(`The controller did not confirm ${target} deletion. Refresh and inspect the operation receipt before retrying.`);
+    return "incomplete";
+  }
+  if (result?.status === "cleanup-pending" || result?.status === "restic-cleanup-pending" || result?.cleanup_pending || result?.reconciliation_required) {
+    void vscode.window.showWarningMessage(`The ${target} deletion was committed, but cleanup remains pending. The catalog changed; review the operation receipt and reconcile storage before retrying.`);
+    return "cleanup-pending";
+  }
+  void vscode.window.showInformationMessage(result?.room_removed
+    ? `Final recovery point deleted. “${target}” Room is gone.`
+    : result?.latest_promoted
+      ? `Recovery point deleted. Latest is now ${result.latest}.`
+      : `${target} deleted.`);
+  return "removed";
 }
 
 async function prepareLegacySourceHandoff(cwd) {
@@ -5030,6 +5169,8 @@ function activateNative(context) {
   register(context, "joshRoom.link", linkRoom);
   register(context, "joshRoom.repair", repairRoom);
   register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
+  register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.exportPortableJat", exportPortableJat);
@@ -5312,6 +5453,8 @@ Object.assign(module.exports.__test__, {
   loadCatalog,
   repairRoom,
   removeSnapshot,
+  deleteRecoveryPoint,
+  deleteRoom,
   RoomDragAndDropController,
   roomLabel,
   runJoshRoom,
