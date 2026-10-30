@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -180,8 +180,16 @@
         "title": "Josh: Delete Snapshot",
         "icon": "$(trash)"
       },
-      { "command": "joshRoom.deleteRecoveryPoint", "title": "Josh: Delete Recovery Point", "icon": "$(trash)" },
-      { "command": "joshRoom.deleteRoom", "title": "Josh: Delete Room", "icon": "$(trash)" },
+      {
+        "command": "joshRoom.deleteRecoveryPoint",
+        "title": "Josh: Delete Recovery Point",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "joshRoom.deleteRoom",
+        "title": "Josh: Delete Room",
+        "icon": "$(trash)"
+      },
       {
         "command": "joshRoom.serve",
         "title": "Josh: Serve Room Images",
@@ -458,8 +466,16 @@
           "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
           "group": "inline@3"
         },
-        { "command": "joshRoom.deleteRoom", "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)", "group": "room@4" },
-        { "command": "joshRoom.deleteRecoveryPoint", "when": "view == joshRoom.rooms && (viewItem == jat || viewItem == logical-jat)", "group": "recovery@9" }
+        {
+          "command": "joshRoom.deleteRoom",
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "group": "room@4"
+        },
+        {
+          "command": "joshRoom.deleteRecoveryPoint",
+          "when": "view == joshRoom.rooms && (viewItem == jat || viewItem == logical-jat)",
+          "group": "recovery@9"
+        }
       ]
     }
   }

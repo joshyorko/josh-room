@@ -3,6 +3,11 @@ on:
   push:
     branches: [fix/165-restore-delete-ux-20261028]
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact source commit to qualify
+        required: true
+        type: string
 permissions:
   contents: read
 env:
@@ -16,6 +21,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Verify requested source
+        shell: pwsh
+        env:
+          REQUESTED_SHA: ${{ inputs.source_sha }}
+        run: |
+          if ((git rev-parse HEAD) -ne $env:GITHUB_SHA) { throw 'Source identity mismatch' }
+          if ($env:REQUESTED_SHA -and $env:REQUESTED_SHA -ne $env:GITHUB_SHA) { throw 'Requested source mismatch' }
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -52,12 +66,42 @@ jobs:
           "ISSUE165_CODE_ROOT=$code" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "ISSUE165_VSIX=$vsix" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "ISSUE165_VSCODE_VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Require genuine installed deletion UI before capturing
+      - name: Qualify the unmodified installed VSIX separately
+        shell: pwsh
+        run: |
+          $env:CAPTURE_UI_ROOT = $env:ISSUE165_UI_ROOT
+          $env:CAPTURE_CODE_ROOT = $env:ISSUE165_CODE_ROOT
+          $env:CAPTURE_VSIX = $env:ISSUE165_VSIX
+          $env:CAPTURE_VSCODE_VERSION = $env:ISSUE165_VSCODE_VERSION
+          node scripts/capture_windows_ui.js
+          if ($LASTEXITCODE -ne 0) { throw 'Unmodified installed VSIX qualification failed' }
+          Copy-Item (Join-Path $env:ISSUE165_UI_ROOT 'receipt.json') (Join-Path $env:ISSUE165_UI_ROOT 'pristine-installed-receipt.json')
+      - name: Prepare explicitly synthetic presentation copy without changing the VSIX
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:ISSUE165_UI_ROOT 'fixture'
+          node scripts/prepare_issue165_ui_fixture.js $env:ISSUE165_VSIX $fixture | Out-File (Join-Path $env:ISSUE165_UI_ROOT 'fixture-identity.json') -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic fixture preparation failed' }
+          "ISSUE165_FIXTURE_ROOT=$fixture" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Verify genuine deletion controls, confirmation, cancellation and fixture reload
         run: node scripts/capture_issue165_windows_ui.js
+      - name: Add measured bounding boxes after capture
+        shell: pwsh
+        run: |
+          python -m pip install Pillow
+          if ($LASTEXITCODE -ne 0) { throw 'Screenshot annotation dependency unavailable' }
+          python scripts/annotate_issue165_ui_receipts.py --receipt (Join-Path $env:ISSUE165_UI_ROOT 'receipt.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Screenshot bounding-box validation failed' }
       - name: Retain bounded runner diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: issue-165-windows-ui-attempt-${{ github.sha }}
-          path: ${{ runner.temp }}/issue-165-ui/receipt.json
+          path: |
+            ${{ runner.temp }}/issue-165-ui/receipt.json
+            ${{ runner.temp }}/issue-165-ui/pristine-installed-receipt.json
+            ${{ runner.temp }}/issue-165-ui/node-runtime.json
+            ${{ runner.temp }}/issue-165-ui/fixture-identity.json
+            ${{ runner.temp }}/issue-165-ui/fixture/state.json
+            ${{ runner.temp }}/issue-165-ui/*.png
           if-no-files-found: ignore

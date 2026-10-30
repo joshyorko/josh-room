@@ -72,7 +72,7 @@
           115
         ]
       ],
-      "evidence_level": "test-only in-memory fixture; UI presentation only",
+      "evidence_level": "unmodified VSIX; actual controller warning for disposable MinIO; dismissed with Escape",
       "capture_method": "ffmpeg x11grab of Xvfb :187 private 1440x900 display containing only isolated VS Code Insiders"
     },
     {
@@ -101,5 +101,6 @@
       ],
       "evidence_level": "unmodified VSIX with local disposable MinIO controller integration"
     }
-  ]
+  ],
+  "fixture_harness_source_sha": "0911111b51337622e949d4b8b689564546a4f1a2"
 }

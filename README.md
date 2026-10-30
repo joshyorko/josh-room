@@ -176,7 +176,12 @@ remaining recovery point, while deleting the final one removes the now-empty
 Room. Delete Room is a separate irreversible action that names the Room,
 Dimension, and affected recovery-point count. Active Rooms and recovery points
 cannot be deleted. Objects remain protected whenever another snapshot
-references them. Storage, encryption, and hydration remain owned by the CLI.
+references them. An invalid workspace binding blocks deletion until it is linked
+or repaired. Completed deletion reloads the authoritative catalog; a refresh
+failure does not repeat the mutation. Cleanup-pending or incomplete controller
+receipts are shown separately from completed removal. Storage, encryption, and
+hydration remain owned by the CLI. See the [deletion evidence and regression
+account](docs/receipts/issue-165/README.md).
 
 ## Extension surfaces
 

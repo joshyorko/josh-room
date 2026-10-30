@@ -2,6 +2,7 @@
 """Annotate genuine issue-165 VS Code CDP captures without changing captured UI pixels."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import subprocess
@@ -23,6 +24,33 @@ CAPTURES = (
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def annotate_hosted_receipt(receipt_path: Path) -> None:
+    """Box only controls whose actual DOM rectangles were captured by the driver."""
+    receipt = json.loads(receipt_path.read_text())
+    directory = receipt_path.parent
+    for capture in receipt.get("screenshots", []):
+        raw = directory / capture["raw"]
+        destination = directory / capture["path"]
+        if raw.parent != directory or destination.parent != directory:
+            raise ValueError("capture filenames must stay in their receipt directory")
+        image = Image.open(raw).convert("RGB")
+        if image.size != (1440, 900):
+            raise ValueError("unexpected hosted capture size")
+        draw = ImageDraw.Draw(image)
+        for box in capture["boxes"]:
+            x, y, width, height = (box[key] for key in ("x", "y", "width", "height"))
+            if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1441 or y + height > 901:
+                raise ValueError("capture bounding box is outside the viewport")
+            draw.rectangle((x, y, x + width, y + height), outline="red", width=4)
+        draw.rectangle((12, 868, 1428, 894), fill="black")
+        draw.text((20, 874), capture["label"], fill="white")
+        image.save(destination, optimize=True)
+        capture["raw_sha256"] = sha256(raw)
+        capture["sha256"] = sha256(destination)
+        capture["annotation"] = "post-capture boxes from measured workbench DOM rectangles"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
 
 
 def main() -> None:
@@ -60,7 +88,7 @@ def main() -> None:
         if name.startswith("04-"):
             entry["evidence_level"] = "unmodified VSIX; actual controller warning for disposable MinIO; dismissed with Escape"
             entry["capture_method"] = "ffmpeg x11grab of Xvfb :187 private 1440x900 display containing only isolated VS Code Insiders"
-        if name.startswith("06-"):
+        elif name.startswith("06-"):
             entry["evidence_level"] = "unmodified VSIX with local disposable MinIO controller integration"
         elif name.startswith("05-"):
             entry["evidence_level"] = "test-only in-memory fixture; TreeView refresh only"
@@ -93,4 +121,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--receipt", type=Path)
+    args = parser.parse_args()
+    if args.receipt:
+        annotate_hosted_receipt(args.receipt)
+    else:
+        main()
