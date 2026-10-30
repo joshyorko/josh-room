@@ -57,3 +57,9 @@ held the catalog reload until that message resolved. Outcome notifications are
 now non-blocking. Four regression cases keep those notification promises open
 and require a fresh catalog for both deletion commands and both outcomes. The
 hosted fixture wraps the real provider reload rather than replacing it.
+
+R2 deletion uses the controller’s existing Cloudflare/device authority and age
+material; it does not require the MinIO-only extension encryption cache. MinIO
+keeps its selected-keyset path. Controller authorization still fails before
+dispatch when its R2 session is unavailable. Public receipt metadata omits
+workstation/account identifiers and profile filesystem paths.

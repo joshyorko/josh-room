@@ -80,7 +80,7 @@
     "version": "VS Code Insiders 1.145.0",
     "extension": "unmodified candidate VSIX 0.1.40",
     "vsix_sha256": "72847ff47b9344d915d763bbe35b0b299badacd296da6e994d7f2cc97917bd6a",
-    "profile": "fresh disposable profile under /tmp/josh-room-issue165-minio-v1/vscode-profile",
+    "profile": "fresh disposable VS Code profile in a temporary fixture directory",
     "tree_receipt": "06-real-minio-post-delete-tree.png",
     "tree_state": "one controller-backed logical JAT remains and is Latest after Josh: Refresh Rooms"
   },

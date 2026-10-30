@@ -3058,7 +3058,7 @@ function createDeletionFixture({ provider = "minio", ids = ["old", "latest"], ou
 
 for (const provider of ["r2", "minio"]) {
   test(`${provider} Delete Room sends one revision-bound controller operation and reloads authoritatively`, async () => {
-    const f = createDeletionFixture({ provider });
+    const f = createDeletionFixture({ provider, material: provider === "minio" });
     f.warningResponses.push("Delete Room");
     assert.equal(await f.extension.__test__.deleteRoom(f.row), "removed");
     assert.equal(f.mutations.length, 1);
@@ -3067,8 +3067,8 @@ for (const provider of ["r2", "minio"]) {
     assert.equal(args[args.indexOf("--dimension") + 1], "delete-dimension");
     assert.equal(args[args.indexOf("--expected-revision") + 1], "7");
     assert.equal(args[args.indexOf("--expected-snapshots") + 1], "old,latest");
-    assert.ok(hasMaterial);
-    if (provider === "r2") assert.equal(recipients, "age1synthetic-operational,age1synthetic-recovery");
+    assert.equal(hasMaterial, provider === "minio");
+    if (provider === "r2") assert.equal(recipients, undefined);
     assert.match(f.warningCalls[0][0], /delete-room.*delete-dimension.*2 recovery points.*irreversible/);
     assert.ok(f.catalogReads >= 2);
     assert.doesNotMatch(JSON.stringify(f.tree.roots), /delete-room/);
@@ -3125,12 +3125,27 @@ for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
   });
 }
 
-test("portable R2 deletion without age identity and recovery recipients fails before mutation", async () => {
-  const f = createDeletionFixture({ provider: "r2", material: false });
-  f.warningResponses.push("Delete Room");
-  await assert.rejects(f.extension.__test__.deleteRoom(f.row), /identity and recovery recipients are unavailable/);
-  assert.equal(f.mutations.length, 0);
-});
+for (const action of ["deleteRoom", "deleteRecoveryPoint"]) {
+  test(`${action} lets the controller resolve R2 authority without a MinIO SecretStorage cache`, async () => {
+    const f = createDeletionFixture({ provider: "r2", material: false });
+    f.warningResponses.push(action === "deleteRoom" ? "Delete Room" : "Delete Snapshot");
+    assert.equal(await f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), "removed");
+    assert.equal(f.mutations.length, 1);
+    assert.equal(f.mutations[0].hasMaterial, false);
+    assert.equal(f.mutations[0].recipients, undefined);
+    assert.equal(f.mutations[0].args[f.mutations[0].args.indexOf("--dimension") + 1], "delete-dimension");
+    assert.ok(f.catalogReads >= 2);
+  });
+  test(`${action} propagates controller R2 authorization rejection without changing inventory`, async () => {
+    const f = createDeletionFixture({ provider: "r2", material: false,
+      outcome: { ok: false, error: "R2 authorization required", error_code: "r2-authorization-required" } });
+    f.warningResponses.push(action === "deleteRoom" ? "Delete Room" : "Delete Snapshot");
+    await assert.rejects(f.extension.__test__[action]({ ...f.row, snapshot_id: "latest" }), /R2 authorization required/);
+    assert.equal(f.row.project.snapshots.length, 2);
+    assert.equal(f.catalogReads, 1);
+    assert.equal(f.infoCalls.length, 0);
+  });
+}
 
 test("an explicit recovery point missing from the fresh inventory never mutates", async () => {
   const f = createDeletionFixture();
@@ -3140,7 +3155,7 @@ test("an explicit recovery point missing from the fresh inventory never mutates"
 });
 
 for (const provider of ["r2", "minio"]) {
-  test(`${provider} deletion rechecks the active binding after asynchronous material lookup`, async () => {
+  test(`${provider} deletion rechecks the active binding after asynchronous credential or material handoff`, async () => {
     const f = createDeletionFixture({ provider });
     let confirmed = false;
     f.vscode.window.showWarningMessage = async () => { confirmed = true; return "Delete Room"; };
