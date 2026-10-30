@@ -179,8 +179,10 @@ cannot be deleted. Objects remain protected whenever another snapshot
 references them. An invalid workspace binding blocks deletion until it is linked
 or repaired. Completed deletion reloads the authoritative catalog; a refresh
 failure does not repeat the mutation. Cleanup-pending or incomplete controller
-receipts are shown separately from completed removal. Storage, encryption, and
-hydration remain owned by the CLI. See the [deletion evidence and regression
+receipts are shown separately from completed removal. R2 deletion uses the
+controller’s existing Cloudflare/device authorization and age material. MinIO
+deletion uses the selected Dimension’s encryption keyset. Storage, encryption,
+and hydration remain owned by the CLI. See the [deletion evidence and regression
 account](docs/receipts/issue-165/README.md).
 
 ## Extension surfaces
