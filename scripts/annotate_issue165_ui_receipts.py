@@ -105,7 +105,6 @@ def main() -> None:
         "candidate_vsix": "vscode-extension/josh-room-0.1.40.vsix",
         "candidate_vsix_sha256": sha256(vsix),
         "capture_date": "2026-10-28",
-        "host": "Dakota-NVIDIA; active kdlocpanda Wayland session",
         "application": "VS Code Insiders 1.145.0",
         "capture": "CDP Page.captureScreenshot for 01-03 and 05-06; ffmpeg x11grab of private Xvfb :187 for 04; all captures 1440x900 and limited to isolated VS Code windows",
         "fixture": "Screenshots 01-03 and 05 use a disposable modified candidate copy with test-only in-memory state and stubbed controller calls. Screenshots 04 and 06 use the original unmodified 0.1.40 VSIX against a disposable loopback MinIO server with generated credentials and CLI-created Rooms/two logical recovery points. #04 is the actual Delete Room confirmation for Issue165 Real Room (two recovery points), dismissed with Escape. #06 follows an actual controller deletion of one recovery point and a fresh TreeView catalog refresh.",

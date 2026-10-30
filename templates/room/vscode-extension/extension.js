@@ -3808,16 +3808,9 @@ async function destructiveOperation(args, cwd, dimension, title, action) {
   const selected = dimension?.dimension || dimension;
   const provider = nativeRegistry.providerKey(selected?.provider);
   if (provider === "minio") return runSelectedEncryption(args, cwd, selected, { title, action });
-  let material = await readEncryptionMaterial(selected);
-  if (!material && selected?.id) {
-    const status = await runJoshRoom(["encryption", "status", "--dimension", selected.id], cwd);
-    material = await readEncryptionMaterial({ ...selected, ...status });
-  }
-  const recipients = material?.recipients || material?.recovery_recipients;
-  if (!material?.identity || !Array.isArray(recipients) || recipients.length < 2) {
-    throw new Error("Age deletion identity and recovery recipients are unavailable for this Dimension. Restore its encryption material before deleting.");
-  }
-  return runOperation(title, args, cwd, { encryptionMaterial: { ...material, recipients } });
+  // R2 authority and age material belong to the controller's existing
+  // Cloudflare/device session. The extension's encryption cache is MinIO-only.
+  return runOperation(title, args, cwd);
 }
 
 function deletionCommitted(result) {

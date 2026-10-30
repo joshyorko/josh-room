@@ -140,6 +140,31 @@ def test_r2_command_uses_cached_session_after_system_trust_before_dispatch(monke
     assert json.loads(capsys.readouterr().out)["projects"] == []
 
 
+@pytest.mark.parametrize("operation", [["rooms", "remove", "demo"], ["snapshots", "remove", "demo", "one"]])
+@pytest.mark.parametrize("authorized", [False, True])
+def test_r2_deletion_resolves_controller_authority_before_dispatch(tmp_path, monkeypatch, capsys, operation, authorized):
+    events = []
+    argv = [*operation, "--backend", "r2", "--dimension", "r2", "--json"]
+    monkeypatch.setattr(cli, "private_config", dict)
+    assert cli._requires_oauth(build_parser().parse_args(argv))
+    monkeypatch.setattr(cli, "initialize_system_trust", lambda: None)
+    monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_identity_environment", lambda: cli.nullcontext())
+    monkeypatch.setattr(cli, "_uses_minio_encryption", lambda _args: False)
+    monkeypatch.setattr(cli, "load_runtime_session", lambda *, require_r2=False: events.append(require_r2) or authorized)
+    monkeypatch.setattr(cli, "ensure_runtime_session", lambda **_kwargs: pytest.fail("deletion must not initiate OAuth"))
+    monkeypatch.setattr(cli, "dispatch", lambda *_args: events.append("dispatch") or {"ok": True})
+    monkeypatch.delenv("JOSH_ROOM_RESULT_FILE", raising=False)
+    for name in ("JOSH_ROOM_IDENTITY", "JOSH_ROOM_ENCRYPTION_MATERIAL", "JOSH_ROOM_SELECTED_RECIPIENTS"):
+        monkeypatch.delenv(name, raising=False)
+    assert main(argv) == (0 if authorized else 2)
+    result = json.loads(capsys.readouterr().out)
+    assert events == ([False, True, "dispatch"] if authorized else [False, True])
+    assert result["ok"] is authorized
+    if not authorized:
+        assert result["error_code"] == "r2-authorization-required"
+
+
 def test_human_snapshot_receipt_is_concise_while_json_stays_complete(capsys):
     result = {
         "ok": True,
