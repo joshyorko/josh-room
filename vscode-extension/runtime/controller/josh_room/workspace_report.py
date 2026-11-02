@@ -98,7 +98,7 @@ def _linked_worktree_status(root: Path, relative: str) -> dict | None:
         git_dir = git_dir.resolve(strict=True)
         workdir = git_dir.parent
         linked_gitfile = workdir / ".git"
-        if not git_dir.is_dir() or not linked_gitfile.is_file() or linked_gitfile.is_symlink():
+        if not git_dir.is_file() or git_dir.is_symlink() or not linked_gitfile.is_file() or linked_gitfile.is_symlink():
             return None
         linked_pointer = linked_gitfile.read_text(encoding="utf-8").strip()
         if not linked_pointer.startswith("gitdir: "):
@@ -106,7 +106,7 @@ def _linked_worktree_status(root: Path, relative: str) -> dict | None:
         linked_target = Path(linked_pointer[8:])
         if not linked_target.is_absolute():
             linked_target = workdir / linked_target
-        if linked_target.resolve(strict=True) != record.resolve(strict=True):
+        if linked_target.resolve(strict=True) != record.parent.resolve(strict=True):
             return None
         environment = os.environ.copy()
         for key in tuple(environment):
