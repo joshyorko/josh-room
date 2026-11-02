@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shlex
+import subprocess
 import time
 from pathlib import Path
 
@@ -54,6 +56,13 @@ class Diagnostics:
 
     def git_error(self, message, relative):
         finding = {"code": "git-storage", "paths": [relative], "message": message}
+        linked_worktree = _linked_worktree_status(self.root, relative)
+        if linked_worktree:
+            finding["linked_worktree"] = linked_worktree
+            finding["message"] = (
+                "Linked worktree Git administrative record blocks saving; inspect its safety "
+                "before removing it with `git worktree remove <workdir>`."
+            )
         if (
             relative.endswith("/.git")
             and (self.root / relative).is_file()
@@ -64,10 +73,73 @@ class Diagnostics:
             finding["code"],
             finding["paths"],
             finding["message"],
-            incomplete="cannot be read safely" in message,
+            incomplete="cannot be read safely" in finding["message"],
         )
-        if "exclusion_candidate" in finding:
-            self.findings[-1]["exclusion_candidate"] = finding["exclusion_candidate"]
+        for key in ("exclusion_candidate", "linked_worktree"):
+            if key in finding:
+                self.findings[-1][key] = finding[key]
+
+
+def _linked_worktree_status(root: Path, relative: str) -> dict | None:
+    record = root / relative
+    parts = Path(relative).parts
+    if len(parts) < 4 or parts[-3] != "worktrees" or parts[-1] != "gitdir":
+        return None
+    workdir = None
+    try:
+        if record.is_symlink() or not record.is_file():
+            return None
+        pointer = record.read_text(encoding="utf-8").strip()
+        if not pointer:
+            return None
+        git_dir = Path(pointer)
+        if not git_dir.is_absolute():
+            git_dir = record.parent / git_dir
+        git_dir = git_dir.resolve(strict=True)
+        workdir = git_dir.parent
+        linked_gitfile = workdir / ".git"
+        if not git_dir.is_dir() or not linked_gitfile.is_file() or linked_gitfile.is_symlink():
+            return None
+        linked_pointer = linked_gitfile.read_text(encoding="utf-8").strip()
+        if not linked_pointer.startswith("gitdir: "):
+            return None
+        linked_target = Path(linked_pointer[8:])
+        if not linked_target.is_absolute():
+            linked_target = workdir / linked_target
+        if linked_target.resolve(strict=True) != record.resolve(strict=True):
+            return None
+        environment = os.environ.copy()
+        for key in tuple(environment):
+            if key.startswith("GIT_"):
+                environment.pop(key, None)
+        environment.update(
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_OPTIONAL_LOCKS="0",
+        )
+
+        def git(*args):
+            return subprocess.run(
+                ["git", "-c", "core.fsmonitor=false", "-C", str(workdir), *args],
+                capture_output=True,
+                timeout=5,
+                check=False,
+                env=environment,
+            )
+
+        status = git("status", "--porcelain=v1", "--untracked-files=all")
+        if status.returncode:
+            return {"workdir": str(workdir), "safety": "unknown"}
+        if status.stdout:
+            return {"workdir": str(workdir), "safety": "unique-local-work"}
+        ahead = git("rev-list", "--count", "@{upstream}..HEAD")
+        if ahead.returncode:
+            return {"workdir": str(workdir), "safety": "unknown"}
+        if ahead.stdout.strip() == b"0":
+            return {"workdir": str(workdir), "safety": "safe-to-remove"}
+        return {"workdir": str(workdir), "safety": "unique-local-work"}
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return {"workdir": str(workdir) if workdir else None, "safety": "unknown"}
 
 
 def workspace_report(workspace: Path, **limits) -> dict:
@@ -125,8 +197,28 @@ def workspace_report(workspace: Path, **limits) -> dict:
             else "Workspace scan did not complete.",
             remediation="Fix the reported workspace validation issue and run the check again.",
         )
-        if any("linked worktrees" in row["message"] for row in findings):
+        linked = [row["linked_worktree"] for row in findings if row.get("linked_worktree")]
+        if linked:
+            guidance = []
+            for worktree in linked:
+                path = worktree.get("workdir")
+                safety = worktree["safety"]
+                command = (
+                    f"`git worktree remove -- {shlex.quote(path)}`"
+                    if path
+                    else "`git worktree remove <workdir>`"
+                )
+                if safety == "safe-to-remove":
+                    note = "clean with no commits ahead of its configured upstream"
+                elif safety == "unique-local-work":
+                    note = "contains uncommitted or unpushed work; preserve it before removal"
+                else:
+                    note = "safety could not be determined; inspect it before removal"
+                guidance.append(f"{path or '<workdir>'}: {note}; remove with {command}")
+            result["remediation"] = "Linked worktrees block Save. " + " ".join(guidance)
+        elif any("linked worktrees" in row["message"] for row in findings):
             result["remediation"] = (
-                "Inspect linked worktrees with `git worktree prune --dry-run --verbose`; choose source-only explicitly or repair Git storage manually before saving."
+                "Inspect linked worktrees with `git worktree list`; remove a worktree with "
+                "`git worktree remove <workdir>` only after preserving any local work."
             )
     return result

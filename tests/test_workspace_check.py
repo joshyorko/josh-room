@@ -88,11 +88,61 @@ def test_stale_linked_worktree_reports_sanitized_action_and_never_prunes(tmp_pat
     assert payload["ok"] is False
     assert payload["code"] == "workspace-invalid"
     assert "linked worktrees are unsupported" in payload["error"]
-    assert "git worktree prune --dry-run --verbose" in payload["remediation"]
+    assert "git worktree remove <workdir>" in payload["remediation"]
     assert str(external) not in json.dumps(payload)
     assert _tree_digest(workspace) == before
     records = subprocess.run(["git", "-C", str(repository), "worktree", "list", "--porcelain"], check=True, capture_output=True, text=True, timeout=30).stdout
     assert "check-fixture" in records
+
+
+def test_live_linked_worktree_reports_removal_safety_and_exact_remedy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    repository = workspace / "repo"
+    repository.mkdir(parents=True)
+    upstream = tmp_path / "upstream.git"
+    subprocess.run(["git", "init", "-b", "main", str(repository)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "init", "--bare", str(upstream)], check=True, capture_output=True, timeout=30)
+    (repository / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "fixture.txt"], check=True, capture_output=True, timeout=30)
+    subprocess.run([
+        "git", "-C", str(repository), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "-m", "fixture",
+    ], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "remote", "add", "origin", str(upstream)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "push", "-u", "origin", "main"], check=True, capture_output=True, timeout=30)
+    worktree = tmp_path / "live-worktree"
+    subprocess.run([
+        "git", "-C", str(repository), "worktree", "add", "-b", "live-review", str(worktree), "origin/main",
+    ], check=True, capture_output=True, timeout=30)
+
+    result = _cli(workspace, tmp_path / "state")
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    linked = next(row["linked_worktree"] for row in payload["findings"] if row.get("linked_worktree"))
+    assert linked == {"workdir": str(worktree), "safety": "safe-to-remove"}
+    assert "git worktree remove" in payload["findings"][0]["message"]
+    assert str(worktree) in payload["remediation"]
+    assert "clean with no commits ahead" in payload["remediation"]
+
+    (worktree / "ahead.txt").write_text("unpushed commit\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(worktree), "add", "ahead.txt"], check=True, capture_output=True, timeout=30)
+    subprocess.run([
+        "git", "-C", str(worktree), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "-m", "unpushed",
+    ], check=True, capture_output=True, timeout=30)
+    ahead = _cli(workspace, tmp_path / "state-ahead")
+    ahead_payload = json.loads(ahead.stdout)
+    ahead_linked = next(row["linked_worktree"] for row in ahead_payload["findings"] if row.get("linked_worktree"))
+    assert ahead_linked == {"workdir": str(worktree), "safety": "unique-local-work"}
+    assert "contains uncommitted or unpushed work" in ahead_payload["remediation"]
+
+    (worktree / "local.txt").write_text("keep me\n", encoding="utf-8")
+    dirty = _cli(workspace, tmp_path / "state-dirty")
+    dirty_payload = json.loads(dirty.stdout)
+    dirty_linked = next(row["linked_worktree"] for row in dirty_payload["findings"] if row.get("linked_worktree"))
+    assert dirty_linked == {"workdir": str(worktree), "safety": "unique-local-work"}
+    assert "contains uncommitted or unpushed work" in dirty_payload["remediation"]
 
 
 def test_workspace_check_uses_shared_scanner_for_non_git_failures(tmp_path: Path) -> None:

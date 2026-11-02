@@ -1969,6 +1969,16 @@ function displayWorkspaceReport(result) {
   outputChannel?.appendLine(`Workspace scan: ${result.ok ? "valid" : "blocked"}; coverage ${result.complete === false ? "incomplete" : "complete"}`);
   for (const finding of result.findings || []) {
     outputChannel?.appendLine(`${finding.code}: ${(finding.paths || []).join(", ")} — ${sanitizeControllerText(finding.message)}`);
+    if (finding.linked_worktree) {
+      const worktree = finding.linked_worktree;
+      const state = worktree.safety === "safe-to-remove"
+        ? "clean; no commits ahead of its configured upstream"
+        : worktree.safety === "unique-local-work"
+          ? "contains uncommitted or unpushed work"
+          : "safety could not be determined";
+      outputChannel?.appendLine(`Linked worktree ${worktree.workdir || "<workdir>"}: ${state}`);
+      outputChannel?.appendLine(`Remedy: git worktree remove -- ${worktree.workdir || "<workdir>"}`);
+    }
   }
   if (result.stop_reason) outputChannel?.appendLine(`Scan stopped: ${result.stop_reason}`);
 }
