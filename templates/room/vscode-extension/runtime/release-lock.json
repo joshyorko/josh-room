@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.43",
+  "candidate_version": "0.1.44",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -72,26 +72,26 @@
   },
   "controller": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "release_tag": "rcc-v18.19.7-controller-cdf1e2171e229952b38be72f0576fb2985574ba2-dd57125560beb42f31fea41cb2e2eb136f4f012b2b0169cc2327c4aabbfc23e5",
-    "source_sha": "cdf1e2171e229952b38be72f0576fb2985574ba2",
+    "release_tag": "rcc-v18.19.7-controller-ecc1f81ee3b19f111939a0532c882b09de9fb01a-8722f0f075d9ba8dc65577f48413579188b10c8b0b5702534a7123b2e136d4ae",
+    "source_sha": "ecc1f81ee3b19f111939a0532c882b09de9fb01a",
     "rcc_version": "v18.19.7",
     "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
     "platforms": {
       "linux-x64": {
-        "artifact_digest": "sha256:65ce772b702a6f88fb6562a8a39ea16ea243d6704dff0d64b01b167db6c57714",
+        "artifact_digest": "sha256:19ccf21aa0868f9f6a3940b8c350d052455c8332744c00a08539961ddaca2793",
         "specification_digest": "sha256:7993d09126d1a322d4111c538a57a35ecc0c8beb6b7bc254e391967e05f94d01",
-        "archive_sha256": "85f06b2598422fca0932e8f2e0060b9484afb0f9f1576c5bdd7e2c0484e0e6cc",
-        "archive_size": 101136072,
+        "archive_sha256": "ebed9b570ffda57a66098d586b0358493871903e451245bcc977cf7e01e12a28",
+        "archive_size": 101135597,
         "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
         "input_digest": "sha256:9ebfa4fe49205121720b0531bf35ad43aef7fd14258c5cc3249f73414c5c3dfe",
         "freeze_sha256": "b7090fcd4b4c7bc8748103808d6b0bda65a576292a0523682e58a142bb678985",
         "freeze_size": 677
       },
       "win32-x64": {
-        "artifact_digest": "sha256:068cd0fb934fb46a652b62867682dd9f6cc83e502f6e6765f5223a54f8ef17f9",
+        "artifact_digest": "sha256:b799a3715d73c5f9a3a5fc4f54a756048a80178973278273b897e7bb8f4a104d",
         "specification_digest": "sha256:aab98c57c83b4429c089f07cf41ae9ba43a5e8295a0d574fb57ae7ee11435918",
-        "archive_sha256": "a4565b0fcad16a514eddb4fd1ac30e8d5891350884b9ee74ccd65abc25324b81",
-        "archive_size": 78072368,
+        "archive_sha256": "8f77a8cb828de8b47e53c2f4c98c207beaa8ccdce7c5196ffae901b6f40074ce",
+        "archive_size": 78072344,
         "rcc_sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
         "input_digest": "sha256:10ddb94a225ed81a7912a27d170965d8fba3f56f9aa400f39d9c5a2db18a472a",
         "freeze_sha256": "cf1a3c133b5cda25e7821efc6778b5f55994562e1add1abc62356fff53af23f5",
@@ -122,6 +122,6 @@
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",
-    "version": "0.1.13"
+    "version": "0.1.14"
   }
 }
