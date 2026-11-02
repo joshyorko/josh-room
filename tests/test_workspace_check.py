@@ -145,6 +145,38 @@ def test_live_linked_worktree_reports_removal_safety_and_exact_remedy(tmp_path: 
     assert "contains uncommitted or unpushed work" in dirty_payload["remediation"]
 
 
+def test_linked_worktree_filter_configuration_skips_status_probe(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    repository = workspace / "repo"
+    repository.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main", str(repository)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "commit", "--allow-empty", "-m", "initial"], check=True, capture_output=True, timeout=30)
+    worktree = tmp_path / "filter-worktree"
+    subprocess.run(["git", "-C", str(repository), "worktree", "add", "-b", "filter-check", str(worktree), "HEAD"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "filter.probe.clean", "touch must-not-run; cat"], check=True, capture_output=True, timeout=30)
+    record = next((repository / ".git" / "worktrees").glob("*/gitdir"))
+    relative = record.relative_to(workspace).as_posix()
+    monkeypatch.syspath_prepend(str(ROOT / "src"))
+    from josh_room import workspace_report
+
+    real_run = subprocess.run
+    calls = []
+
+    def guarded_run(args, **kwargs):
+        calls.append(args)
+        assert "config" in args
+        assert "status" not in args
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(workspace_report.subprocess, "run", guarded_run)
+    result = workspace_report._linked_worktree_status(workspace, relative)
+
+    assert result == {"workdir": str(worktree), "safety": "unknown"}
+    assert len(calls) == 1
+
+
 def test_workspace_check_uses_shared_scanner_for_non_git_failures(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

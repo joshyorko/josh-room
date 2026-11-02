@@ -1008,6 +1008,9 @@ function sanitizeControllerText(value) {
     .join(" ")
     .slice(-CONTROLLER_DIAGNOSTIC_LIMIT);
 }
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
 
 function sanitizeControllerArgv(argv) {
   const sanitized = [];
@@ -1059,7 +1062,7 @@ function controllerErrorText(value, depth = 0) {
 
 function redactResultDiagnostics(value, key = "", inDiagnostic = false) {
   if (/^argv$/i.test(key) && Array.isArray(value)) return sanitizeControllerArgv(value);
-  const diagnosticContext = inDiagnostic || /error|message|diagnostic|stdout|stderr/i.test(key);
+  const diagnosticContext = inDiagnostic || /error|message|diagnostic|stdout|stderr|workdir/i.test(key);
   if (typeof value === "string") return diagnosticContext ? sanitizeControllerText(value) : value;
   if (Array.isArray(value)) return value.map((entry) => redactResultDiagnostics(entry, key, diagnosticContext));
   if (!value || typeof value !== "object") return value;
@@ -1976,8 +1979,13 @@ function displayWorkspaceReport(result) {
         : worktree.safety === "unique-local-work"
           ? "contains uncommitted or unpushed work"
           : "safety could not be determined";
-      outputChannel?.appendLine(`Linked worktree ${worktree.workdir || "<workdir>"}: ${state}`);
-      outputChannel?.appendLine(`Remedy: git worktree remove -- ${worktree.workdir || "<workdir>"}`);
+      const workdir = sanitizeControllerText(worktree.workdir || "");
+      const location = workdir || "<workdir>";
+      outputChannel?.appendLine(`Linked worktree ${location}: ${state}`);
+      const command = workdir
+        ? `git worktree remove -- ${shellQuote(workdir)}`
+        : "git worktree remove <workdir>";
+      outputChannel?.appendLine(`Remedy: ${command}`);
     }
   }
   if (result.stop_reason) outputChannel?.appendLine(`Scan stopped: ${result.stop_reason}`);

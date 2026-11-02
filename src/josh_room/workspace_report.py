@@ -8,6 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from .git_workspace import _text as _git_text
 from .workspace_init import policy_edit_token
 from .workspace_policy import load_capture_policy
 
@@ -73,7 +74,7 @@ class Diagnostics:
             finding["code"],
             finding["paths"],
             finding["message"],
-            incomplete="cannot be read safely" in finding["message"],
+            incomplete="cannot be read safely" in message,
         )
         for key in ("exclusion_candidate", "linked_worktree"):
             if key in finding:
@@ -89,18 +90,21 @@ def _linked_worktree_status(root: Path, relative: str) -> dict | None:
     try:
         if record.is_symlink() or not record.is_file():
             return None
-        pointer = record.read_text(encoding="utf-8").strip()
+        pointer = _git_text(record, 64 * 1024).strip()
         if not pointer:
             return None
-        git_dir = Path(pointer)
-        if not git_dir.is_absolute():
-            git_dir = record.parent / git_dir
-        git_dir = git_dir.resolve(strict=True)
-        workdir = git_dir.parent
-        linked_gitfile = workdir / ".git"
-        if not git_dir.is_file() or git_dir.is_symlink() or not linked_gitfile.is_file() or linked_gitfile.is_symlink():
+        linked_gitfile = Path(pointer)
+        if not linked_gitfile.is_absolute():
+            linked_gitfile = record.parent / linked_gitfile
+        if linked_gitfile.is_symlink() or not linked_gitfile.is_file():
             return None
-        linked_pointer = linked_gitfile.read_text(encoding="utf-8").strip()
+        linked_pointer = _git_text(linked_gitfile, 64 * 1024).strip()
+        linked_gitfile = linked_gitfile.resolve(strict=True)
+        if linked_gitfile.name != ".git":
+            return None
+        workdir = linked_gitfile.parent
+        if linked_gitfile != workdir / ".git":
+            return None
         if not linked_pointer.startswith("gitdir: "):
             return None
         linked_target = Path(linked_pointer[8:])
@@ -127,6 +131,9 @@ def _linked_worktree_status(root: Path, relative: str) -> dict | None:
                 env=environment,
             )
 
+        filters = git("config", "--null", "--get-regexp", r"^filter\.")
+        if filters.returncode not in {0, 1} or filters.stdout:
+            return {"workdir": str(workdir), "safety": "unknown"}
         status = git("status", "--porcelain=v1", "--untracked-files=all")
         if status.returncode:
             return {"workdir": str(workdir), "safety": "unknown"}
@@ -139,7 +146,9 @@ def _linked_worktree_status(root: Path, relative: str) -> dict | None:
             return {"workdir": str(workdir), "safety": "safe-to-remove"}
         return {"workdir": str(workdir), "safety": "unique-local-work"}
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
-        return {"workdir": str(workdir) if workdir else None, "safety": "unknown"}
+        if workdir is None:
+            return None
+        return {"workdir": str(workdir), "safety": "unknown"}
 
 
 
