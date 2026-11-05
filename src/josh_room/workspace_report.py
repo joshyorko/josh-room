@@ -134,7 +134,18 @@ def _linked_worktree_status(root: Path, relative: str) -> dict | None:
         filters = git("config", "--null", "--get-regexp", r"^filter\.")
         if filters.returncode not in {0, 1} or filters.stdout:
             return {"workdir": str(workdir), "safety": "unknown"}
-        status = git("status", "--porcelain=v1", "--untracked-files=all")
+        submodules = git("ls-files", "--stage")
+        if submodules.returncode or any(
+            line.startswith(b"160000 ") for line in submodules.stdout.splitlines()
+        ):
+            return {"workdir": str(workdir), "safety": "unknown"}
+        status = git(
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored=matching",
+            "--ignore-submodules=all",
+        )
         if status.returncode:
             return {"workdir": str(workdir), "safety": "unknown"}
         if status.stdout:
