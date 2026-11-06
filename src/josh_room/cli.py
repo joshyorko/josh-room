@@ -3177,9 +3177,8 @@ def _human_failure_message(result: dict) -> str:
         safety = _sanitize_human_diagnostic(item.get("safety"))
         if workdir and safety:
             guidance.append(f"Linked worktree {workdir}: {safety}.")
-    remediation = result.get("remediation")
-    if isinstance(remediation, str):
-        guidance.append(_sanitize_human_diagnostic(remediation))
+    if linked:
+        guidance.append("Review the linked-worktree safety assessment before removing it.")
     if guidance:
         diagnostic = _sanitize_human_diagnostic(" ".join([diagnostic, *guidance]).strip())
     if diagnostic and diagnostic in base:
