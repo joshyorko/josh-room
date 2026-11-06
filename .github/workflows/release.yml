@@ -7,13 +7,21 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      source_sha:
-        description: Exact staged main commit whose CI candidate is to be published
+      owner_approval:
+        description: REJECT previews the verified candidate; APPROVE publishes it
         required: true
+        type: choice
+        default: REJECT
+        options: [REJECT, APPROVE]
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Advanced recovery source; must match the dispatch main SHA
+        required: false
         type: string
       stage_run_id:
         description: Workflow run ID that staged this exact source candidate
-        required: true
+        required: false
         type: string
       resume_empty_draft_id:
         description: Optional existing empty draft ID to resume after requalifying main
@@ -24,11 +32,8 @@ on:
         required: false
         type: string
       owner_approval:
-        description: Josh must select APPROVE to create the tag and publish
         required: true
-        type: choice
-        default: REJECT
-        options: [REJECT, APPROVE]
+        type: string
 
 permissions:
   contents: read
@@ -38,14 +43,13 @@ permissions:
 env:
   NODE_VERSION: "22.23.4"
 
-concurrency:
-  group: release-${{ inputs.source_sha || github.event.workflow_run.head_sha }}
-  cancel-in-progress: false
-
 jobs:
   stage-candidate:
     if: github.event_name == 'workflow_run' && github.repository == 'joshyorko/josh-room' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    concurrency:
+      group: josh-room-stage-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: read
@@ -206,11 +210,74 @@ jobs:
           echo 'Staged release SHA256SUMS:' | tee -a "$GITHUB_STEP_SUMMARY"
           cat dist/SHA256SUMS | tee -a "$GITHUB_STEP_SUMMARY"
           echo "Josh owner review is required. Confirm main is still at this staged source before dispatching publication." >> "$GITHUB_STEP_SUMMARY"
-          printf 'Run: `gh workflow run release.yml --repo joshyorko/josh-room --ref main --field source_sha=%s --field stage_run_id=%s --field owner_approval=APPROVE`\n' "$SOURCE_SHA" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Open [Stage and publish release artifacts](%s/%s/actions/workflows/release.yml), select main, and run with REJECT to preview or APPROVE to publish. Internal IDs are resolved automatically.\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" >> "$GITHUB_STEP_SUMMARY"
+
+  resolve-candidate:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      source_sha: ${{ steps.candidate.outputs.source_sha }}
+      stage_run_id: ${{ steps.candidate.outputs.stage_run_id }}
+      artifact_id: ${{ steps.candidate.outputs.artifact_id }}
+      version: ${{ steps.candidate.outputs.version }}
+    steps:
+      - name: Validate recovery overrides
+        env:
+          SOURCE_SHA_OVERRIDE: ${{ inputs.source_sha }}
+          STAGE_RUN_ID_OVERRIDE: ${{ inputs.stage_run_id }}
+          RESUME_EMPTY_DRAFT_ID: ${{ inputs.resume_empty_draft_id }}
+          EXPECTED_DRAFT_SOURCE_SHA: ${{ inputs.expected_draft_source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$SOURCE_SHA_OVERRIDE$STAGE_RUN_ID_OVERRIDE" ]]; then
+            [[ "$SOURCE_SHA_OVERRIDE" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$STAGE_RUN_ID_OVERRIDE" =~ ^[1-9][0-9]*$ ]]
+            test "$SOURCE_SHA_OVERRIDE" = "$GITHUB_SHA"
+          fi
+          if [[ -n "$RESUME_EMPTY_DRAFT_ID$EXPECTED_DRAFT_SOURCE_SHA" ]]; then
+            [[ "$RESUME_EMPTY_DRAFT_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$EXPECTED_DRAFT_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve and verify the current main candidate
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+          STAGE_RUN_ID_OVERRIDE: ${{ inputs.stage_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "$STAGE_RUN_ID_OVERRIDE" ]]; then args+=(--stage-run-id "$STAGE_RUN_ID_OVERRIDE"); fi
+          python scripts/resolve_release_candidate.py \
+            --root . --source-sha "$SOURCE_SHA" "${args[@]}" \
+            --directory "$RUNNER_TEMP/preview-release-stage" \
+            --output "$RUNNER_TEMP/resolved-release.json"
+          jq -r '"source_sha=\(.source_sha)\nstage_run_id=\(.stage_run_id)\nartifact_id=\(.artifact_id)\nversion=\(.version)"' \
+            "$RUNNER_TEMP/resolved-release.json" >> "$GITHUB_OUTPUT"
+          {
+            printf '## Verified release candidate\n\n'
+            jq -r '"- Version: **\(.version)**\n- Main source: `\(.source_sha)`\n- [Qualified CI run](\(.ci_url))\n- [Staging evidence](\(.stage_url))\n- Immutable artifact ID: `\(.artifact_id)`"' "$RUNNER_TEMP/resolved-release.json"
+            printf '\nREJECT is a read-only preview. To publish this current-main candidate, rerun this workflow on main and intentionally select APPROVE. Main must still match, and publication repeats every verification.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko' && inputs.owner_approval == 'APPROVE'
+    needs: resolve-candidate
     runs-on: ubuntu-latest
+    concurrency:
+      group: josh-room-publication
+      cancel-in-progress: false
     permissions:
       contents: write
       actions: read
@@ -219,7 +286,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ needs.resolve-candidate.outputs.source_sha }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.0.1
       - name: Validate approved source changelog
@@ -239,8 +306,8 @@ jobs:
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          STAGE_RUN_ID: ${{ inputs.stage_run_id }}
+          SOURCE_SHA: ${{ needs.resolve-candidate.outputs.source_sha }}
+          STAGE_RUN_ID: ${{ needs.resolve-candidate.outputs.stage_run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -259,16 +326,16 @@ jobs:
           echo "stage_workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml" --jq .id)" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
         with:
-          name: release-stage-files
-          run-id: ${{ inputs.stage_run_id }}
+          artifact-ids: ${{ needs.resolve-candidate.outputs.artifact_id }}
+          run-id: ${{ needs.resolve-candidate.outputs.stage_run_id }}
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           path: ${{ runner.temp }}/release-stage-files
       - name: Verify stage run, trusted CI provenance, runtime pins, and every staged digest
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          STAGE_RUN_ID: ${{ inputs.stage_run_id }}
+          SOURCE_SHA: ${{ needs.resolve-candidate.outputs.source_sha }}
+          STAGE_RUN_ID: ${{ needs.resolve-candidate.outputs.stage_run_id }}
           STAGE_WORKFLOW_ID: ${{ steps.source.outputs.stage_workflow_id }}
           VERSION: ${{ steps.source.outputs.version }}
         shell: bash
@@ -345,7 +412,7 @@ jobs:
         id: draft
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ needs.resolve-candidate.outputs.source_sha }}
           RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
           RESUME_EMPTY_DRAFT_ID: ${{ inputs.resume_empty_draft_id }}
           EXPECTED_DRAFT_SOURCE_SHA: ${{ inputs.expected_draft_source_sha }}
@@ -449,7 +516,7 @@ jobs:
       - name: Publish the verified release and approved template
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ needs.resolve-candidate.outputs.source_sha }}
           RELEASE_TAG: ${{ steps.source.outputs.release_tag }}
           RELEASE_ID: ${{ steps.draft.outputs.release_id }}
         shell: bash
