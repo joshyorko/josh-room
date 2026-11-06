@@ -531,7 +531,8 @@ class ReplayReader:
             ):
                 raise ReplayError("segment-too-large")
         elif evidence_document.get("kind") == "session-asset" and (
-            evidence_document.get("sha256") != hashlib.sha256(evidence_payload).hexdigest()
+            evidence_document.get("sha256")
+            != hashlib.sha256(evidence_payload).hexdigest()
             or evidence_document.get("size") != len(evidence_payload)
         ):
             raise ReplayError("digest-mismatch")

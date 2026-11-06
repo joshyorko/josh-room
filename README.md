@@ -23,6 +23,21 @@ is an optional golden host; it is not part of the Josh Room runtime contract.
 
 ## Standalone VSIX
 
+Maintainers can request a release from an existing branch with the trusted
+main-branch workflow:
+
+```bash
+gh workflow run request-release.yml --repo joshyorko/josh-room --ref main \
+  --field source_branch=chosen-branch --field bump=patch
+```
+
+The workflow opens a draft release PR and dispatches full CI for its exact
+generated commit. Review and merge only after Linux, Windows, and managed
+runtime qualification pass. Main then stages the exact merged source; Josh
+must explicitly approve publication for that source and stage run. See the
+[release maintenance and staging guide](docs/rcc-maintenance-to-release.md)
+for exact gates and limits.
+
 On a plain supported Linux amd64 VS Code or VS Code Insiders host, install the
 released VSIX directly:
 
