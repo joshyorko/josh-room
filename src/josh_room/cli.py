@@ -3167,6 +3167,21 @@ def _human_failure_message(result: dict) -> str:
         if diagnostic and diagnostic not in diagnostics:
             diagnostics.append(diagnostic)
     diagnostic = _sanitize_human_diagnostic(" ".join(diagnostics))
+    linked = [
+        row.get("linked_worktree") for row in result.get("findings", [])
+        if isinstance(row, dict) and isinstance(row.get("linked_worktree"), dict)
+    ]
+    guidance = []
+    for item in linked:
+        workdir = _sanitize_human_diagnostic(item.get("workdir"))
+        safety = _sanitize_human_diagnostic(item.get("safety"))
+        if workdir and safety:
+            guidance.append(f"Linked worktree {workdir}: {safety}.")
+    remediation = result.get("remediation")
+    if isinstance(remediation, str):
+        guidance.append(_sanitize_human_diagnostic(remediation))
+    if guidance:
+        diagnostic = _sanitize_human_diagnostic(" ".join([diagnostic, *guidance]).strip())
     if diagnostic and diagnostic in base:
         parts = base.split(diagnostic)
         base = f"{parts[0]}{diagnostic}{''.join(parts[1:])}".strip()

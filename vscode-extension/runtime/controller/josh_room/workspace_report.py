@@ -139,6 +139,12 @@ def _linked_worktree_status(root: Path, relative: str) -> dict | None:
             line.startswith(b"160000 ") for line in submodules.stdout.splitlines()
         ):
             return {"workdir": str(workdir), "safety": "unknown"}
+        index_flags = git("ls-files", "-v")
+        if index_flags.returncode or any(
+            line[:1].islower() or line.startswith(b"S")
+            for line in index_flags.stdout.splitlines()
+        ):
+            return {"workdir": str(workdir), "safety": "unknown"}
         status = git(
             "status",
             "--porcelain=v1",
