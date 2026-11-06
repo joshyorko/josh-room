@@ -1,0 +1,46 @@
+name: Advanced release recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact current main SHA to reverify
+        required: true
+        type: string
+      stage_run_id:
+        description: Exact successful staging run to reverify
+        required: true
+        type: string
+      resume_empty_draft_id:
+        description: Optional exact empty draft ID to resume
+        required: false
+        type: string
+      expected_draft_source_sha:
+        description: Required with draft ID; exact previous source SHA of that empty draft
+        required: false
+        type: string
+      owner_approval:
+        description: REJECT previews recovery; APPROVE permits guarded publication
+        required: true
+        type: choice
+        default: REJECT
+        options: [REJECT, APPROVE]
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko'
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+      checks: read
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      stage_run_id: ${{ inputs.stage_run_id }}
+      resume_empty_draft_id: ${{ inputs.resume_empty_draft_id }}
+      expected_draft_source_sha: ${{ inputs.expected_draft_source_sha }}
+      owner_approval: ${{ inputs.owner_approval }}

@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts.release_staging import MINIMUM_NODE_VERSION
@@ -170,9 +171,11 @@ def test_release_stages_from_trusted_green_ci_without_preexisting_release_tag_or
     assert trigger["workflows"] == ["CI"]
     assert trigger["types"] == ["completed"]
     assert trigger["branches"] == ["main"]
-    assert set(dispatch) == {"source_sha", "stage_run_id", "owner_approval", "resume_empty_draft_id", "expected_draft_source_sha"}
-    assert dispatch["resume_empty_draft_id"]["required"] == "false"
-    assert dispatch["expected_draft_source_sha"]["required"] == "false"
+    assert set(dispatch) == {"owner_approval"}
+    recovery = workflow["on"]["workflow_call"]["inputs"]
+    assert set(recovery) == {"source_sha", "stage_run_id", "owner_approval", "resume_empty_draft_id", "expected_draft_source_sha"}
+    assert recovery["resume_empty_draft_id"]["required"] == "false"
+    assert recovery["expected_draft_source_sha"]["required"] == "false"
     assert dispatch["owner_approval"]["default"] == "REJECT"
     assert "gh release create" not in _steps(stage)
     assert "gh release upload" not in _steps(stage)
@@ -189,6 +192,76 @@ def test_release_stages_from_trusted_green_ci_without_preexisting_release_tag_or
     assert upload["with"]["name"] == "release-stage-files"
     assert upload["with"]["retention-days"] == "90"
     assert stage["permissions"]["contents"] == "read"
+
+
+def test_publish_form_has_readonly_preview_and_derived_exact_inputs():
+    workflow = _workflow("release.yml")
+    preview = workflow["jobs"]["resolve-candidate"]
+    publish = workflow["jobs"]["publish"]
+    assert "owner_approval" not in preview["if"]
+    assert preview["permissions"] == {"contents": "read", "actions": "read", "checks": "read"}
+    assert publish["needs"] == "resolve-candidate"
+    assert publish["concurrency"] == {"group": "josh-room-publication", "cancel-in-progress": "false"}
+    assert workflow["jobs"]["stage-candidate"]["concurrency"]["group"] != publish["concurrency"]["group"]
+    assert "concurrency" not in workflow
+    assert set(preview["outputs"]) >= {"source_sha", "stage_run_id", "artifact_id", "version"}
+    steps = _steps(preview)
+    assert "scripts/resolve_release_candidate.py" in steps
+    assert "GITHUB_STEP_SUMMARY" in steps
+    checkout = publish["steps"][0]
+    assert checkout["with"]["ref"] == "${{ needs.resolve-candidate.outputs.source_sha }}"
+    download = next(step for step in publish["steps"] if step.get("uses", "").startswith("actions/download-artifact"))
+    assert download["with"]["artifact-ids"] == "${{ needs.resolve-candidate.outputs.artifact_id }}"
+    assert download["with"]["run-id"] == "${{ needs.resolve-candidate.outputs.stage_run_id }}"
+    assert "name" not in download["with"]
+    for step in publish["steps"]:
+        env = step.get("env", {})
+        if "SOURCE_SHA" in env:
+            assert env["SOURCE_SHA"] == "${{ needs.resolve-candidate.outputs.source_sha }}"
+        if "STAGE_RUN_ID" in env:
+            assert env["STAGE_RUN_ID"] == "${{ needs.resolve-candidate.outputs.stage_run_id }}"
+
+
+def test_advanced_recovery_reuses_guarded_publish_with_owner_context_and_permissions():
+    recovery = _workflow("advanced-release-recovery.yml")
+    inputs = recovery["on"]["workflow_dispatch"]["inputs"]
+    assert inputs["owner_approval"]["default"] == "REJECT"
+    job = recovery["jobs"]["recover"]
+    assert job["uses"] == "./.github/workflows/release.yml"
+    assert "github.actor == 'joshyorko'" in job["if"]
+    assert "github.triggering_actor == 'joshyorko'" in job["if"]
+    assert "refs/heads/main" in job["if"]
+    assert "concurrency" not in recovery and "concurrency" not in job
+    assert job["permissions"] == {"contents": "write", "packages": "write", "actions": "read", "checks": "read"}
+    assert set(job["with"]) == set(inputs)
+    for name in inputs:
+        assert job["with"][name] == "${{ inputs." + name + " }}"
+
+
+@pytest.mark.parametrize("source,stage,draft,previous,valid", [
+    ("", "", "", "", True),
+    ("a" * 40, "123", "", "", True),
+    ("a" * 40, "123", "91", "b" * 40, True),
+    ("a" * 40, "", "", "", False),
+    ("", "123", "", "", False),
+    ("b" * 40, "123", "", "", False),
+    ("a" * 40, "0", "", "", False),
+    ("", "", "91", "", False),
+    ("", "", "", "b" * 40, False),
+    ("", "", "91;exit 0", "b" * 40, False),
+])
+def test_recovery_override_pairs_fail_closed_before_checkout(source, stage, draft, previous, valid):
+    step = _workflow("release.yml")["jobs"]["resolve-candidate"]["steps"][0]
+    assert step["name"] == "Validate recovery overrides"
+    environment = os.environ.copy()
+    environment.update(
+        SOURCE_SHA_OVERRIDE=source, STAGE_RUN_ID_OVERRIDE=stage,
+        RESUME_EMPTY_DRAFT_ID=draft, EXPECTED_DRAFT_SOURCE_SHA=previous,
+        GITHUB_SHA="a" * 40,
+    )
+    result = subprocess.run(["bash", "-euo", "pipefail", "-c", step["run"]],
+                            env=environment, text=True, capture_output=True, check=False)
+    assert (result.returncode == 0) is valid, result.stdout + result.stderr
 
 
 def test_only_explicit_owner_dispatch_can_create_tag_publish_release_and_template():

@@ -33,8 +33,10 @@ gh workflow run request-release.yml --repo joshyorko/josh-room --ref main \
 
 The workflow opens a draft release PR and dispatches full CI for its exact
 generated commit. Review and merge only after Linux, Windows, and managed
-runtime qualification pass. Main then stages the exact merged source; Josh
-must explicitly approve publication for that source and stage run. See the
+runtime qualification pass. Main then stages the exact merged source. In
+**Stage and publish release artifacts**, select `main` and leave the single
+approval field at `REJECT` to preview the verified version, SHA, and evidence.
+Rerun with `APPROVE` to publish; no internal IDs are needed. See the
 [release maintenance and staging guide](docs/rcc-maintenance-to-release.md)
 for exact gates and limits.
 

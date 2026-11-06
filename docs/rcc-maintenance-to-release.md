@@ -23,9 +23,9 @@ summary; inspect the existing branch before retrying.
 
 Review the draft and require the full Linux/Windows and managed-runtime checks
 before merging. Merging to `main` starts the existing exact-source staging
-workflow. Staging only creates workflow artifacts; its summary prints the
-ready-to-run publish command. Josh must inspect the staged evidence and
-explicitly approve the exact current main SHA and stage run. Provider/platform
+workflow. Staging only creates workflow artifacts; its summary links to the
+publish workflow. Josh previews the verified candidate and explicitly approves
+publication through the single approval field; no source or run IDs are needed. Provider/platform
 limits and the existing exact-source publication checks remain in force.
 
 The RCC maintenance workflow qualifies controller runtime artifacts on Linux
@@ -120,8 +120,27 @@ source bytes and receipt, builds the Python distributions, and uploads a
 identities, and provenance receipt. Staging does not create a Git tag or
 release.
 
-To publish, Josh dispatches the release workflow with the exact current source
-SHA and staging run ID, then selects `APPROVE`. The workflow revalidates the
+## Previewing and publishing
+
+Open **Stage and publish release artifacts**, choose `main`, and run with the
+single approval field left at `REJECT`. This is a read-only preview: its summary
+shows the verified release version, exact main SHA, CI and staging evidence, and
+immutable artifact ID. No GitHub release, tag, or template is published.
+
+To publish, rerun that workflow on `main` and intentionally select `APPROVE`.
+The workflow resolves the dispatch's exact main commit and the newest successful
+trusted staging run for that SHA, then requires its unique unexpired artifact.
+Both workflow runs and artifact inventories are paginated. Discovery never falls
+back to a stage for another commit or an older run with more convenient evidence.
+If CI or staging is incomplete, missing, expired, or ambiguous, the run stops
+with an explanation. Wait for qualification or produce fresh staging evidence
+before retrying. Publication remains supported only from current `main`; other
+source branches go through the release-request PR first.
+
+The preview verifies the immutable receipts and fresh CI evidence. Approval
+repeats discovery and verification; if main changes, an old preview or queued
+publication cannot authorize a stale source. Publication and recovery share one
+repository-wide lock, separate from staging. The workflow revalidates the
 trusted CI run, stage run, candidate bytes, controller/JAT release assets and
 digests, and current `main`. Only after that gate does it create or safely
 resume the exact versioned draft release/tag, reconcile the staged assets, and
@@ -132,6 +151,13 @@ CLI options. Template publication passes `ghcr.io` as the registry and
 `$GITHUB_REPOSITORY/templates` as the namespace. Retries reject changed
 sources, candidate bytes, runtime pins, tag targets, or unexpected release
 assets. The template validation workflow remains validation-only.
+
+The separate **Advanced release recovery** workflow retains explicit source and
+staging-run overrides and the paired empty-draft recovery fields. Use it only
+when intentionally recovering an identified draft. It calls the same guarded
+publish implementation under the owner's identity; it cannot bypass current-main,
+CI, provenance, digest, tag, or draft protections. Its approval also defaults to
+`REJECT`. Ordinary publication does not require this recovery workflow.
 
 The repository must allow GitHub Actions to create pull requests. If that
 permission is disabled, maintenance leaves its generated branch and published
