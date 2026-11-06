@@ -1164,8 +1164,22 @@ test("Check Workspace accepts the CLI's nonzero validation receipt and shows san
   const payload = {
     ok: false,
     code: "workspace-invalid",
-    error: "Git storage is not self-contained and portable; linked worktrees are unsupported",
-    remediation: "Inspect linked worktrees with `git worktree prune --dry-run --verbose`; repair Git storage manually before saving.",
+    error: "Linked worktree Git administrative record blocks saving",
+    remediation: "Linked worktrees block Save. /tmp/synthetic worktree: clean with no commits ahead; remove with `git worktree remove -- '/tmp/synthetic worktree'`",
+    findings: [
+      {
+        code: "git-storage",
+        paths: ["repo/.git/worktrees/live/gitdir"],
+        message: "Linked worktree Git administrative record blocks saving",
+        linked_worktree: { workdir: "/tmp/synthetic worktree", safety: "safe-to-remove" },
+      },
+      {
+        code: "git-storage",
+        paths: ["repo/.git/worktrees/private/gitdir"],
+        message: "Linked worktree Git administrative record blocks saving",
+        linked_worktree: { workdir: "/home/synthetic/private/worktree", safety: "unique-local-work" },
+      },
+    ],
     diagnostic: "Rejected private path /home/synthetic/host/worktree and AGE-SECRET-KEY-PRIVATE",
   };
   const { vscode, statusItem, errorCalls, outputChannel, logLines } = createVscodeMock(root);
@@ -1182,10 +1196,15 @@ test("Check Workspace accepts the CLI's nonzero validation receipt and shows san
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "workspace-invalid");
-  assert.ok(errorCalls[0][0].includes("git worktree prune --dry-run --verbose"));
+  assert.ok(errorCalls[0][0].includes("git worktree remove -- '/tmp/synthetic worktree'"));
   assert.equal(errorCalls[0][0].includes("/home/synthetic/host"), false);
   assert.equal(errorCalls[0][0].includes("AGE-SECRET-KEY-PRIVATE"), false);
   assert.ok(logLines.some((line) => line.includes("workspace-invalid")));
+  assert.ok(logLines.some((line) => line.includes("clean; no commits ahead")));
+  assert.ok(logLines.some((line) => line.includes("git worktree remove -- '/tmp/synthetic worktree'")));
+  assert.ok(logLines.some((line) => line.includes("Linked worktree [REDACTED PATH]: contains uncommitted or unpushed work")));
+  assert.equal(JSON.stringify(result).includes("/home/synthetic/private/worktree"), false);
+  assert.equal(logLines.some((line) => line.includes("/home/synthetic/private/worktree")), false);
   assert.equal(spawnHarness.calls.length, 1);
   assert.equal(spawnHarness.calls[0].args.includes("--workspace"), true);
   assert.deepEqual(fs.readFileSync(path.join(root, "notes.txt")), before);

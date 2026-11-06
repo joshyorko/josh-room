@@ -88,11 +88,146 @@ def test_stale_linked_worktree_reports_sanitized_action_and_never_prunes(tmp_pat
     assert payload["ok"] is False
     assert payload["code"] == "workspace-invalid"
     assert "linked worktrees are unsupported" in payload["error"]
-    assert "git worktree prune --dry-run --verbose" in payload["remediation"]
+    assert "git worktree remove <workdir>" in payload["remediation"]
     assert str(external) not in json.dumps(payload)
     assert _tree_digest(workspace) == before
     records = subprocess.run(["git", "-C", str(repository), "worktree", "list", "--porcelain"], check=True, capture_output=True, text=True, timeout=30).stdout
     assert "check-fixture" in records
+
+
+def test_live_linked_worktree_reports_removal_safety_and_exact_remedy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    repository = workspace / "repo"
+    repository.mkdir(parents=True)
+    upstream = tmp_path / "upstream.git"
+    subprocess.run(["git", "init", "-b", "main", str(repository)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "init", "--bare", str(upstream)], check=True, capture_output=True, timeout=30)
+    (repository / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+    (repository / ".gitignore").write_text("local-notes.txt\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "fixture.txt", ".gitignore"], check=True, capture_output=True, timeout=30)
+    subprocess.run([
+        "git", "-C", str(repository), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "-m", "fixture",
+    ], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "remote", "add", "origin", str(upstream)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "push", "-u", "origin", "main"], check=True, capture_output=True, timeout=30)
+    worktree = tmp_path / "live-worktree"
+    subprocess.run([
+        "git", "-C", str(repository), "worktree", "add", "-b", "live-review", str(worktree), "origin/main",
+    ], check=True, capture_output=True, timeout=30)
+
+    result = _cli(workspace, tmp_path / "state")
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    linked = next(row["linked_worktree"] for row in payload["findings"] if row.get("linked_worktree"))
+    assert linked == {"workdir": str(worktree), "safety": "safe-to-remove"}
+    assert "git worktree remove" in payload["findings"][0]["message"]
+    assert str(worktree) in payload["remediation"]
+    assert "clean with no commits ahead" in payload["remediation"]
+
+    (worktree / "local-notes.txt").write_text("ignored but unique\n", encoding="utf-8")
+    ignored = _cli(workspace, tmp_path / "state-ignored")
+    ignored_payload = json.loads(ignored.stdout)
+    ignored_linked = next(row["linked_worktree"] for row in ignored_payload["findings"] if row.get("linked_worktree"))
+    assert ignored_linked == {"workdir": str(worktree), "safety": "unique-local-work"}
+    assert "contains uncommitted or unpushed work" in ignored_payload["remediation"]
+    (worktree / "local-notes.txt").unlink()
+
+    (worktree / "ahead.txt").write_text("unpushed commit\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(worktree), "add", "ahead.txt"], check=True, capture_output=True, timeout=30)
+    subprocess.run([
+        "git", "-C", str(worktree), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "-m", "unpushed",
+    ], check=True, capture_output=True, timeout=30)
+    ahead = _cli(workspace, tmp_path / "state-ahead")
+    ahead_payload = json.loads(ahead.stdout)
+    ahead_linked = next(row["linked_worktree"] for row in ahead_payload["findings"] if row.get("linked_worktree"))
+    assert ahead_linked == {"workdir": str(worktree), "safety": "unique-local-work"}
+    assert "contains uncommitted or unpushed work" in ahead_payload["remediation"]
+
+    (worktree / "local.txt").write_text("keep me\n", encoding="utf-8")
+    dirty = _cli(workspace, tmp_path / "state-dirty")
+    dirty_payload = json.loads(dirty.stdout)
+    dirty_linked = next(row["linked_worktree"] for row in dirty_payload["findings"] if row.get("linked_worktree"))
+    assert dirty_linked == {"workdir": str(worktree), "safety": "unique-local-work"}
+    assert "contains uncommitted or unpushed work" in dirty_payload["remediation"]
+
+
+def test_linked_worktree_filter_configuration_skips_status_probe(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    repository = workspace / "repo"
+    repository.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main", str(repository)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "commit", "--allow-empty", "-m", "initial"], check=True, capture_output=True, timeout=30)
+    worktree = tmp_path / "filter-worktree"
+    subprocess.run(["git", "-C", str(repository), "worktree", "add", "-b", "filter-check", str(worktree), "HEAD"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "filter.probe.clean", "touch must-not-run; cat"], check=True, capture_output=True, timeout=30)
+    record = next((repository / ".git" / "worktrees").glob("*/gitdir"))
+    relative = record.relative_to(workspace).as_posix()
+    monkeypatch.syspath_prepend(str(ROOT / "src"))
+    from josh_room import workspace_report
+
+    real_run = subprocess.run
+    calls = []
+
+    def guarded_run(args, **kwargs):
+        calls.append(args)
+        assert "config" in args
+        assert "status" not in args
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(workspace_report.subprocess, "run", guarded_run)
+    result = workspace_report._linked_worktree_status(workspace, relative)
+
+    assert result == {"workdir": str(worktree), "safety": "unknown"}
+    assert len(calls) == 1
+
+
+def test_linked_worktree_with_submodule_does_not_run_submodule_filters(tmp_path: Path, monkeypatch) -> None:
+    submodule = tmp_path / "submodule"
+    subprocess.run(["git", "init", "-b", "main", str(submodule)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(submodule), "config", "user.name", "Test"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(submodule), "config", "user.email", "test@example.invalid"], check=True, capture_output=True, timeout=30)
+    (submodule / "tracked.txt").write_text("original\n", encoding="utf-8")
+    (submodule / ".gitattributes").write_text("tracked.txt filter=probe\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(submodule), "add", "tracked.txt", ".gitattributes"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(submodule), "commit", "-m", "submodule fixture"], check=True, capture_output=True, timeout=30)
+
+    workspace = tmp_path / "workspace"
+    repository = workspace / "repo"
+    repository.mkdir(parents=True)
+    subprocess.run(["git", "init", "-b", "main", str(repository)], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "user.name", "Test"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "config", "user.email", "test@example.invalid"], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "commit", "--allow-empty", "-m", "initial"], check=True, capture_output=True, timeout=30)
+    subprocess.run([
+        "git", "-C", str(repository), "-c", "protocol.file.allow=always",
+        "submodule", "add", str(submodule), "nested",
+    ], check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(repository), "commit", "-m", "add submodule"], check=True, capture_output=True, timeout=30)
+    worktree = tmp_path / "submodule-worktree"
+    subprocess.run(["git", "-C", str(repository), "worktree", "add", "-b", "submodule-check", str(worktree), "HEAD"], check=True, capture_output=True, timeout=30)
+    subprocess.run([
+        "git", "-C", str(worktree), "-c", "protocol.file.allow=always",
+        "submodule", "update", "--init", "--recursive",
+    ], check=True, capture_output=True, timeout=30)
+    subprocess.run([
+        "git", "-C", str(worktree / "nested"), "config", "filter.probe.clean", "touch must-not-run; cat",
+    ], check=True, capture_output=True, timeout=30)
+    (worktree / "nested" / "tracked.txt").write_text("modified\n", encoding="utf-8")
+    record = next((repository / ".git" / "worktrees").glob("*/gitdir"))
+    relative = record.relative_to(workspace).as_posix()
+    monkeypatch.syspath_prepend(str(ROOT / "src"))
+    from josh_room import workspace_report
+
+    result = workspace_report._linked_worktree_status(workspace, relative)
+
+    assert result == {"workdir": str(worktree), "safety": "unknown"}
+    assert not (worktree / "must-not-run").exists()
+    assert not (worktree / "nested" / "must-not-run").exists()
 
 
 def test_workspace_check_uses_shared_scanner_for_non_git_failures(tmp_path: Path) -> None:

@@ -1008,6 +1008,9 @@ function sanitizeControllerText(value) {
     .join(" ")
     .slice(-CONTROLLER_DIAGNOSTIC_LIMIT);
 }
+function shellQuote(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
 
 function sanitizeControllerArgv(argv) {
   const sanitized = [];
@@ -1059,7 +1062,7 @@ function controllerErrorText(value, depth = 0) {
 
 function redactResultDiagnostics(value, key = "", inDiagnostic = false) {
   if (/^argv$/i.test(key) && Array.isArray(value)) return sanitizeControllerArgv(value);
-  const diagnosticContext = inDiagnostic || /error|message|diagnostic|stdout|stderr/i.test(key);
+  const diagnosticContext = inDiagnostic || /error|message|diagnostic|stdout|stderr|workdir/i.test(key);
   if (typeof value === "string") return diagnosticContext ? sanitizeControllerText(value) : value;
   if (Array.isArray(value)) return value.map((entry) => redactResultDiagnostics(entry, key, diagnosticContext));
   if (!value || typeof value !== "object") return value;
@@ -1969,6 +1972,21 @@ function displayWorkspaceReport(result) {
   outputChannel?.appendLine(`Workspace scan: ${result.ok ? "valid" : "blocked"}; coverage ${result.complete === false ? "incomplete" : "complete"}`);
   for (const finding of result.findings || []) {
     outputChannel?.appendLine(`${finding.code}: ${(finding.paths || []).join(", ")} — ${sanitizeControllerText(finding.message)}`);
+    if (finding.linked_worktree) {
+      const worktree = finding.linked_worktree;
+      const state = worktree.safety === "safe-to-remove"
+        ? "clean; no commits ahead of its configured upstream"
+        : worktree.safety === "unique-local-work"
+          ? "contains uncommitted or unpushed work"
+          : "safety could not be determined";
+      const workdir = sanitizeControllerText(worktree.workdir || "");
+      const location = workdir || "<workdir>";
+      outputChannel?.appendLine(`Linked worktree ${location}: ${state}`);
+      const command = workdir
+        ? `git worktree remove -- ${shellQuote(workdir)}`
+        : "git worktree remove <workdir>";
+      outputChannel?.appendLine(`Remedy: ${command}`);
+    }
   }
   if (result.stop_reason) outputChannel?.appendLine(`Scan stopped: ${result.stop_reason}`);
 }
