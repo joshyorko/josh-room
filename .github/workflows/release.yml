@@ -58,6 +58,8 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.0.1
+      - name: Validate staged source changelog
+        run: python scripts/request_release.py validate --root . --branch main
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -203,6 +205,8 @@ jobs:
           echo "Staged v$VERSION for exact main source $SOURCE_SHA as a workflow artifact. No Git tag, release, or template was published." >> "$GITHUB_STEP_SUMMARY"
           echo 'Staged release SHA256SUMS:' | tee -a "$GITHUB_STEP_SUMMARY"
           cat dist/SHA256SUMS | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Josh owner review is required. Confirm main is still at this staged source before dispatching publication." >> "$GITHUB_STEP_SUMMARY"
+          printf 'Run: `gh workflow run release.yml --repo joshyorko/josh-room --ref main --field source_sha=%s --field stage_run_id=%s --field owner_approval=APPROVE`\n' "$SOURCE_SHA" "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko' && inputs.owner_approval == 'APPROVE'
@@ -218,6 +222,8 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.0.1
+      - name: Validate approved source changelog
+        run: python scripts/request_release.py validate --root . --branch main
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
