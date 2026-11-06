@@ -28,6 +28,9 @@ from josh_room.room_store_operations import (
 )
 
 FIXTURE_STORE_KIND = "in-memory-fixture"
+EDITABLE_PAYLOAD_BYTES = 2 * 1024 * 1024
+UNCHANGED_BALLAST_BYTES = 1 * 1024 * 1024
+UNCHANGED_BALLAST_FILES = 6
 
 
 class AcceptanceFailure(RuntimeError):
@@ -236,6 +239,21 @@ def _source_inventory(root: Path) -> dict[str, tuple[bytes, str]]:
     return inventory
 
 
+def _write_incremental_payload(workspace: Path) -> tuple[Path, bytes]:
+    """Create 8 MiB of random data with a bounded file for the edit probe."""
+    # Restic 0.19.1 permits 8 MiB chunks, larger than the 4 MiB edit gate.
+    # Keep 8 MiB of incompressible input, but cap the edited file at 2 MiB so
+    # even rechunking all of it stays under the existing gate; reuploading the
+    # unchanged 6 MiB ballast still exceeds that gate.
+    payload = workspace / "payload.bin"
+    original_payload = secrets.token_bytes(EDITABLE_PAYLOAD_BYTES)
+    payload.write_bytes(original_payload)
+    for index in range(UNCHANGED_BALLAST_FILES):
+        ballast = workspace / f"ballast-{index + 1}.bin"
+        ballast.write_bytes(secrets.token_bytes(UNCHANGED_BALLAST_BYTES))
+    return payload, original_payload
+
+
 def _portable_inventory_mismatch_counts(
     expected: Mapping[str, tuple[bytes, str]],
     restored: Mapping[str, tuple[bytes, str]],
@@ -382,9 +400,7 @@ def run_acceptance(
             protect_private_directory(directory)
 
         (workspace / "source.txt").write_bytes(b"synthetic Windows Room Store source\n")
-        payload = workspace / "payload.bin"
-        original_payload = secrets.token_bytes(8 * 1024 * 1024)
-        payload.write_bytes(original_payload)
+        payload, original_payload = _write_incremental_payload(workspace)
         delete_target = workspace / "delete-me.txt"
         delete_target.write_bytes(b"synthetic deletion fixture\n")
         readonly = workspace / "readonly.txt"

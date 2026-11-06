@@ -1,5 +1,33 @@
 # RCC maintenance and release staging
 
+## Requesting a Josh Room release
+
+From a same-repository branch that includes current `main`, request a draft
+release PR with:
+
+```bash
+gh workflow run request-release.yml --repo joshyorko/josh-room --ref main \
+  --field source_branch=chosen-branch --field bump=patch
+```
+
+Use `bump=minor`, `bump=major`, or a canonical higher `MAJOR.MINOR.PATCH` to
+choose another version. The trusted workflow is restricted to Josh dispatching
+from `main`. It rejects stale branches and existing branch, tag, or release
+collisions, records every non-merge commit since the highest published
+standalone-VSIX ancestor in `CHANGELOG.md`, and synchronizes the extension,
+runtime, candidate-lock, template, and bootstrap versions without changing
+dependency pins or historical promotion receipts. It opens a draft PR and
+dispatches existing full CI for the exact generated commit. If PR creation or
+CI dispatch fails after the branch push, use the recovery command in the run
+summary; inspect the existing branch before retrying.
+
+Review the draft and require the full Linux/Windows and managed-runtime checks
+before merging. Merging to `main` starts the existing exact-source staging
+workflow. Staging only creates workflow artifacts; its summary prints the
+ready-to-run publish command. Josh must inspect the staged evidence and
+explicitly approve the exact current main SHA and stage run. Provider/platform
+limits and the existing exact-source publication checks remain in force.
+
 The RCC maintenance workflow qualifies controller runtime artifacts on Linux
 and Windows and checks the latest published JAT runtime receipts against the
 same RCC version and source. If JAT has not published a compatible artifact,

@@ -1,0 +1,156 @@
+name: Request Josh Room release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Existing same-repository branch that includes current main
+        required: true
+        default: main
+        type: string
+      bump:
+        description: Version change, or canonical MAJOR.MINOR.PATCH
+        required: true
+        default: patch
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: request-release
+  cancel-in-progress: false
+
+jobs:
+  request:
+    if: github.repository == 'joshyorko/josh-room' && github.ref == 'refs/heads/main' && github.actor == 'joshyorko' && github.triggering_actor == 'joshyorko'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: automation
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate selected same-repository branch
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "joshyorko/josh-room"
+          [[ -n "$SOURCE_BRANCH" && "$SOURCE_BRANCH" != *$'\n'* && "$SOURCE_BRANCH" != *$'\r'* ]]
+          git -C automation check-ref-format "refs/heads/$SOURCE_BRANCH"
+          branch_path=$(jq -rn --arg branch "$SOURCE_BRANCH" '$branch | @uri')
+          gh api "repos/$GITHUB_REPOSITORY/branches/$branch_path" > "$RUNNER_TEMP/source-branch.json"
+          source_sha=$(jq -er '.commit.sha' "$RUNNER_TEMP/source-branch.json")
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          git -C automation fetch --no-tags origin "$source_sha"
+          git -C automation fetch --no-tags origin main
+          main_sha=$(git -C automation rev-parse FETCH_HEAD)
+          (cd automation && git merge-base --is-ancestor "$main_sha" "$source_sha") || {
+            echo "Selected branch is stale; update it with current main, then rerun this workflow." >&2
+            exit 1
+          }
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+      - name: Check out selected source as data
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare version and changelog
+        id: prepared
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          MAIN_SHA: ${{ steps.source.outputs.main_sha }}
+          BUMP: ${{ inputs.bump }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C candidate fetch --no-tags origin main
+          test "$(git -C candidate rev-parse FETCH_HEAD)" = "$MAIN_SHA"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" | jq 'add' > "$RUNNER_TEMP/releases.json"
+          python automation/scripts/request_release.py prepare \
+            --root "$GITHUB_WORKSPACE/candidate" \
+            --releases "$RUNNER_TEMP/releases.json" \
+            --version "$BUMP" > "$RUNNER_TEMP/request.json"
+          release_branch=$(jq -er '.branch' "$RUNNER_TEMP/request.json")
+          release_version=$(jq -er '.version' "$RUNNER_TEMP/request.json")
+          printf 'branch=%s\nversion=%s\n' "$release_branch" "$release_version" >> "$GITHUB_OUTPUT"
+      - name: Commit generated release request and open draft PR
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAIN_SHA: ${{ steps.source.outputs.main_sha }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          RELEASE_BRANCH: ${{ steps.prepared.outputs.branch }}
+          RELEASE_VERSION: ${{ steps.prepared.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd candidate
+          git fetch --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$MAIN_SHA"
+          branch_sha=$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | awk 'NR == 1 {print $1}')
+          test "$branch_sha" = "$SOURCE_SHA"
+          git fetch --no-tags origin "$SOURCE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          if git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "Release branch already exists; inspect it and use the recovery guidance in the run summary." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "v$RELEASE_VERSION-standalone-vsix" >/dev/null 2>&1; then
+            echo "Release tag already exists; refusing collision." >&2
+            exit 1
+          fi
+          git switch -c "$RELEASE_BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mapfile -t changed_files < <(jq -er '.changed_files[]' "$RUNNER_TEMP/request.json")
+          git add -- "${changed_files[@]}"
+          git -c core.hooksPath=/dev/null commit -m "chore(release): prepare v$RELEASE_VERSION"
+          release_sha=$(git rev-parse HEAD)
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          git config --unset-all http.https://github.com/.extraheader || true
+          gh auth setup-git
+          git fetch --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$MAIN_SHA"
+          branch_sha=$(git ls-remote origin "refs/heads/$SOURCE_BRANCH" | awk 'NR == 1 {print $1}')
+          test "$branch_sha" = "$SOURCE_SHA"
+          git push origin "HEAD:refs/heads/$RELEASE_BRANCH"
+          jq -er '.body' "$RUNNER_TEMP/request.json" > "$RUNNER_TEMP/pr-body.md"
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$RELEASE_BRANCH" \
+            --title "chore(release): prepare v$RELEASE_VERSION" --body-file "$RUNNER_TEMP/pr-body.md" --draft
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$RELEASE_BRANCH" --field source_sha="$release_sha"
+      - name: Report release request
+        if: always()
+        env:
+          RELEASE_SHA: ${{ steps.publish.outputs.release_sha }}
+          RELEASE_BRANCH: ${{ steps.prepared.outputs.branch }}
+          RELEASE_VERSION: ${{ steps.prepared.outputs.version }}
+          REQUEST_STATUS: ${{ job.status }}
+        run: |
+          {
+            printf 'Release request status: %s; version %s, branch `%s`.\n' "$REQUEST_STATUS" "$RELEASE_VERSION" "$RELEASE_BRANCH"
+            printf 'Exact full-CI source: `%s`. Review the PR and its Linux/Windows qualification before merging.\n' "$RELEASE_SHA"
+            if [[ -n "$RELEASE_SHA" ]]; then
+              printf 'If PR creation or CI dispatch failed after push, inspect this branch and recover with: `gh pr create --repo %s --base main --head %s --draft`, then dispatch `ci.yml` with `source_sha=%s`.\n' "$GITHUB_REPOSITORY" "$RELEASE_BRANCH" "$RELEASE_SHA"
+            fi
+            printf 'No merge, staging, tag, or publication was performed.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

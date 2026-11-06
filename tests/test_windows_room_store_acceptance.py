@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -11,13 +12,17 @@ from josh_room.room_store_operations import (
     _validate_snapshot_entries,
 )
 from scripts.windows_room_store_acceptance import (
+    EDITABLE_PAYLOAD_BYTES,
     FIXTURE_STORE_KIND,
+    UNCHANGED_BALLAST_BYTES,
+    UNCHANGED_BALLAST_FILES,
     AcceptanceFailure,
     FixtureObjectStore,
     _failure_receipt,
     _portable_inventory_mismatch_counts,
     _portable_jat_workspace,
     _portable_mode,
+    _write_incremental_payload,
     run_acceptance,
     verify_hostile_inventory_entries,
 )
@@ -146,3 +151,15 @@ def test_portable_jat_workspace_resolver_uses_exact_source_basename(tmp_path):
 
     (workspace_container / "unexpected").mkdir()
     assert _portable_jat_workspace(payload) is None
+
+
+def test_incremental_edit_fixture_keeps_volume_and_bounds_changed_file(tmp_path: Path):
+    payload, original = _write_incremental_payload(tmp_path)
+    ballast = sorted(tmp_path.glob("ballast-*.bin"))
+
+    assert len(original) == payload.stat().st_size == EDITABLE_PAYLOAD_BYTES
+    assert EDITABLE_PAYLOAD_BYTES < 4 * 1024 * 1024
+    assert len(ballast) == UNCHANGED_BALLAST_FILES
+    assert all(path.stat().st_size == UNCHANGED_BALLAST_BYTES for path in ballast)
+    assert sum(path.stat().st_size for path in ballast) > 4 * 1024 * 1024
+    assert sum(path.stat().st_size for path in tmp_path.glob("*.bin")) >= 8 * 1024 * 1024
