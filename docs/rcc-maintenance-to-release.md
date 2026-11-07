@@ -39,6 +39,14 @@ template version in `devcontainer-template.json` and both release locks in the
 same candidate, and its report includes each qualified JAT platform digest for
 the generated PR description.
 
+## RCC v18.19.9 adoption
+
+The next runtime promotion uses RCC v18.19.9 and JAT v0.1.16. Native Room Store
+capture requires the promoted RCC version; encrypted snapshot envelopes accept
+v18.19.9 receipts while retaining the previously supported versions. Both
+shipped controller source copies, consumer manifests, freezes, and release locks
+advance together before standalone publication.
+
 ## Patched Node 22 qualification
 
 CI, capture, and release workflows select Node through one workflow value,

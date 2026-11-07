@@ -35,7 +35,7 @@ JSON CLI (`context`, `status`, `snapshots list`, `projects list`, `snapshot crea
 domain implementation. See [ADR 0010](adr/0010-omp-extension-surface.md).
 
 The standalone VSIX owns acquisition of the pinned RCC binary and keeps its
-private `ROBOCORP_HOME` under VS Code global storage. It consumes the immutable JAT RCC v18.19.7 Environment Artifact; JAT remains a separate source and
+private `ROBOCORP_HOME` under VS Code global storage. It consumes the immutable JAT RCC v18.19.9 Environment Artifact; JAT remains a separate source and
 runtime substrate, and Hauler remains JAT-owned through its `rccPostInstall`
 contract. RCC owns environment specifications, artifact verification, and
 materialization. Save asks JAT for `rcc_environment=auto` and may carry typed
