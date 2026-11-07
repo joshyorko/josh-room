@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.44",
+  "candidate_version": "0.1.45",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -15,113 +15,113 @@
   },
   "jat": {
     "repository": "https://github.com/joshyorko/josh-all-the-things",
-    "version": "git-aa8d5ec7",
-    "git_sha": "aa8d5ec7d628d44baed838f5e39983badcc99fe3",
+    "version": "git-6340284f",
+    "git_sha": "6340284fd7f0a25510ee60f16668ae89a5ef9772",
     "environment_artifact": {
-      "release_tag": "v0.1.15-jat-runtime",
-      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.15-jat-runtime/jat-runtime-linux-amd64.rcca",
-      "archive_sha256": "80307a0ae2d220261279bde052e62bf09707105bcc55e71fec5b1223c29be422",
-      "archive_size": 170816020,
-      "rcc_artifact_digest": "sha256:ec468d4308533d82fc6c49d24d58f7ec3d11009a3c651889799b0573cae1bc09",
-      "rcc_specification_digest": "sha256:27563fe651856e129971a920cba5fd887fcb406ae7b9853a02ef273484699c5c",
-      "rcc_version": "v18.19.7",
-      "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+      "release_tag": "v0.1.16-jat-runtime",
+      "archive_url": "https://github.com/joshyorko/josh-all-the-things/releases/download/v0.1.16-jat-runtime/jat-runtime-linux-amd64.rcca",
+      "archive_sha256": "b3d0d71a0b32f4ada09efa1ec4933787c9e16477e02b6afcbe4dfcec7ad785be",
+      "archive_size": 170816620,
+      "rcc_artifact_digest": "sha256:6e613eaf7ceeb481d1b5912b267f60eaee6dae3e32700348e9e306864704832b",
+      "rcc_specification_digest": "sha256:46cfd34b8396d6c326d71a944caaca771fe373b813c572f96396407e3506cd0f",
+      "rcc_version": "v18.19.9",
+      "rcc_source_sha": "1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674",
       "platform": "linux_amd64"
     },
     "environment_artifacts": {
       "linux_amd64": {
-        "rcc_artifact_digest": "sha256:ec468d4308533d82fc6c49d24d58f7ec3d11009a3c651889799b0573cae1bc09",
-        "rcc_specification_digest": "sha256:27563fe651856e129971a920cba5fd887fcb406ae7b9853a02ef273484699c5c",
-        "archive_sha256": "80307a0ae2d220261279bde052e62bf09707105bcc55e71fec5b1223c29be422",
-        "archive_size": 170816020,
-        "rcc_version": "v18.19.7",
-        "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
+        "rcc_artifact_digest": "sha256:6e613eaf7ceeb481d1b5912b267f60eaee6dae3e32700348e9e306864704832b",
+        "rcc_specification_digest": "sha256:46cfd34b8396d6c326d71a944caaca771fe373b813c572f96396407e3506cd0f",
+        "archive_sha256": "b3d0d71a0b32f4ada09efa1ec4933787c9e16477e02b6afcbe4dfcec7ad785be",
+        "archive_size": 170816620,
+        "rcc_version": "v18.19.9",
+        "rcc_source_sha": "1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674"
       },
       "windows_amd64": {
-        "rcc_artifact_digest": "sha256:52a7586701ff0ba83240290f8ebc835785e2802858525695823753f2e4faa540",
-        "rcc_specification_digest": "sha256:5879cdb629df2a80bcbc8d86d0193b73402618e221aab9457bddf4b3a4de9667",
-        "archive_sha256": "4fd1cc53e843ddab731341bb08962c21ac9e37352f5541a7ba677ee8afb9f68c",
-        "archive_size": 104060173,
-        "rcc_version": "v18.19.7",
-        "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3"
+        "rcc_artifact_digest": "sha256:495613b2475050491e9762d06bd886a382de9b5e191d25e20a83a84d54ebc26f",
+        "rcc_specification_digest": "sha256:b3359e142f5caeac6342f0f40a070eb0e6e18f59018c4d9adaf8fd7668e1efa9",
+        "archive_sha256": "0be7694d4e2e467e1aa0c8ddb3ce5d9498b146f8230fa628f089d1c865e3837b",
+        "archive_size": 103919731,
+        "rcc_version": "v18.19.9",
+        "rcc_source_sha": "1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674"
       }
     },
     "rcc": {
-      "version": "v18.19.7",
-      "source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+      "version": "v18.19.9",
+      "source_sha": "1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674",
       "platforms": {
         "linux-x64": {
           "asset": "rcc-linux64",
-          "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
-          "size": 22401186,
-          "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-linux64"
+          "sha256": "e1b20ca222708981e2e18b81ae6ca1e9d9c17abc2b837779c5fc0d6bd53798b8",
+          "size": 22507682,
+          "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-linux64"
         },
         "win32-x64": {
           "asset": "rcc-windows64.exe",
-          "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
-          "size": 20130816,
-          "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-windows64.exe"
+          "sha256": "0a74ffaf2f7c34be139cdf87101574a1048eb872bc0096510a4f7cce2eef7efc",
+          "size": 20236800,
+          "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-windows64.exe"
         }
       }
     },
-    "release_tag": "v0.1.15-jat-runtime",
+    "release_tag": "v0.1.16-jat-runtime",
     "producer_workflow_run": {
-      "id": 40708003375,
-      "url": "https://github.com/joshyorko/josh-all-the-things/actions/runs/40708003375"
+      "id": 42406198843,
+      "url": "https://github.com/joshyorko/josh-all-the-things/actions/runs/42406198843"
     }
   },
   "controller": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "release_tag": "rcc-v18.19.7-controller-cdf1e2171e229952b38be72f0576fb2985574ba2-dd57125560beb42f31fea41cb2e2eb136f4f012b2b0169cc2327c4aabbfc23e5",
-    "source_sha": "cdf1e2171e229952b38be72f0576fb2985574ba2",
-    "rcc_version": "v18.19.7",
-    "rcc_source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+    "release_tag": "rcc-v18.19.9-controller-99d957a3fd159475a17061a877a1ac6c10eec5af-63e157b69d0c7d1929e7ef928239e408be3099403c6ec22ab3d970787f6f1a3a",
+    "source_sha": "99d957a3fd159475a17061a877a1ac6c10eec5af",
+    "rcc_version": "v18.19.9",
+    "rcc_source_sha": "1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674",
     "platforms": {
       "linux-x64": {
-        "artifact_digest": "sha256:65ce772b702a6f88fb6562a8a39ea16ea243d6704dff0d64b01b167db6c57714",
-        "specification_digest": "sha256:7993d09126d1a322d4111c538a57a35ecc0c8beb6b7bc254e391967e05f94d01",
-        "archive_sha256": "85f06b2598422fca0932e8f2e0060b9484afb0f9f1576c5bdd7e2c0484e0e6cc",
-        "archive_size": 101136072,
-        "rcc_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
-        "input_digest": "sha256:9ebfa4fe49205121720b0531bf35ad43aef7fd14258c5cc3249f73414c5c3dfe",
-        "freeze_sha256": "b7090fcd4b4c7bc8748103808d6b0bda65a576292a0523682e58a142bb678985",
+        "artifact_digest": "sha256:50253644b3945dbb3bbec1f2cca97c465c7965fae9d5537999732be1d97eb0af",
+        "specification_digest": "sha256:01c2d0deff6eca4e200e203d7d5c3047af99bc03aaa5e4a24db75a4cba0181d0",
+        "archive_sha256": "a3d0a4d28589915a2e145dbacfe03c44aa183a644cf70364792630e0e6a6febb",
+        "archive_size": 101039277,
+        "rcc_sha256": "e1b20ca222708981e2e18b81ae6ca1e9d9c17abc2b837779c5fc0d6bd53798b8",
+        "input_digest": "sha256:4f236220001a94257eb88b1a4b5397b2290e6280a7347d62a3b69241b22c0c95",
+        "freeze_sha256": "ff552f276a76e573ac09cd1db78a98c6f2bdd5bf0454dd82342e6858c6d9b305",
         "freeze_size": 677
       },
       "win32-x64": {
-        "artifact_digest": "sha256:068cd0fb934fb46a652b62867682dd9f6cc83e502f6e6765f5223a54f8ef17f9",
-        "specification_digest": "sha256:aab98c57c83b4429c089f07cf41ae9ba43a5e8295a0d574fb57ae7ee11435918",
-        "archive_sha256": "a4565b0fcad16a514eddb4fd1ac30e8d5891350884b9ee74ccd65abc25324b81",
-        "archive_size": 78072368,
-        "rcc_sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
-        "input_digest": "sha256:10ddb94a225ed81a7912a27d170965d8fba3f56f9aa400f39d9c5a2db18a472a",
-        "freeze_sha256": "cf1a3c133b5cda25e7821efc6778b5f55994562e1add1abc62356fff53af23f5",
+        "artifact_digest": "sha256:0df34b05d0b8fa5fd91e896216ec44839458fe1c6b5e9bdc7a5f8f669056fb4f",
+        "specification_digest": "sha256:c1daf5ee0bf4c4caf5447057cfb1ae0fe742131b0e0ca742c1b62d5ce4007798",
+        "archive_sha256": "32176f6dac45db41cbbc96008da0cda05f433d82dd3d3d5898ad5a915ed5d331",
+        "archive_size": 77975887,
+        "rcc_sha256": "0a74ffaf2f7c34be139cdf87101574a1048eb872bc0096510a4f7cce2eef7efc",
+        "input_digest": "sha256:efa6331d3bd365201e5b3fd5f0d155194bc6a4437c879d19e24f8283d54fbf6d",
+        "freeze_sha256": "d5b087e0c803873f75157fd95fbb6669264900af390fce530301df5c42238066",
         "freeze_size": 618
       }
     }
   },
   "rcc": {
     "repository": "https://github.com/joshyorko/rcc",
-    "version": "v18.19.7",
-    "source_sha": "758c97808bef8ae8bc5779d82c23ee11abfa47b3",
+    "version": "v18.19.9",
+    "source_sha": "1eef8de8bd4b2b01c2f99a5fdfab95ec98f89674",
     "managed_asset": "rcc-linux64",
-    "managed_asset_sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
+    "managed_asset_sha256": "e1b20ca222708981e2e18b81ae6ca1e9d9c17abc2b837779c5fc0d6bd53798b8",
     "platforms": {
       "linux-x64": {
         "asset": "rcc-linux64",
-        "sha256": "f8e0394be7f47ee84d6f4cd734822b87b492a4d6102f977f6a18f29453703d48",
-        "size": 22401186,
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-linux64"
+        "sha256": "e1b20ca222708981e2e18b81ae6ca1e9d9c17abc2b837779c5fc0d6bd53798b8",
+        "size": 22507682,
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-linux64"
       },
       "win32-x64": {
         "asset": "rcc-windows64.exe",
-        "sha256": "d3338be49ef22bbd9f3e42b606e01231cb5c5d86716b18d24fadf85e7630e0be",
-        "size": 20130816,
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.7/rcc-windows64.exe"
+        "sha256": "0a74ffaf2f7c34be139cdf87101574a1048eb872bc0096510a4f7cce2eef7efc",
+        "size": 20236800,
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-windows64.exe"
       }
     }
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",
-    "version": "0.1.14"
+    "version": "0.1.15"
   }
 }

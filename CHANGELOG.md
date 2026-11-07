@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.45]
+
+- Update managed RCC to v18.19.9, JAT to verified runtime v0.1.16, and Linux/Windows controller artifacts.
+- Align native Room Store capture with RCC v18.19.9 and accept its encrypted snapshot receipts while retaining older supported receipt versions.
+
 ## [0.1.44]
 
 - fix: sync bundled CLI worktree guidance
