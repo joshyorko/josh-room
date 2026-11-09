@@ -4448,7 +4448,9 @@ class HierarchyRoomsProvider {
         : vscode.TreeItemCollapsibleState.Collapsed
       : vscode.TreeItemCollapsibleState.None;
     const treeItem = new vscode.TreeItem(item.label || item.id, state);
-    treeItem.id = [item.kind, dimensionId(item), item.id].filter(Boolean).join(":");
+    treeItem.id = item.kind === "jat"
+      ? JSON.stringify([item.kind, dimensionId(item), item.project?.id || item.project?.project_id, item.id])
+      : [item.kind, dimensionId(item), item.id].filter(Boolean).join(":");
     const syntheticDimension = item.kind === "dimension" && item.dimension?.synthetic;
     treeItem.contextValue = item.kind === "connection"
       ? item.state === "expired" ? "provider-connection-expired"
@@ -4498,9 +4500,14 @@ class HierarchyRoomsProvider {
       if (sameRoomBinding(current, item)) states.push("Open");
       states.push(item.snapshot?.payload_kind === "room-store-v1" ? "Logical" : "Portable");
       treeItem.description = states.join(" · ");
-      treeItem.tooltip = item.id;
       treeItem.command = { command: "joshRoom.enter", title: "Enter JAT", arguments: [item] };
     }
+    const resource = item.kind === "jat"
+      ? [item.dimension?.display_name || item.dimension?.id, item.project?.display_name || item.project?.name,
+        item.project?.id || item.project?.project_id, treeItem.label]
+      : [treeItem.label];
+    treeItem.tooltip = [...resource, treeItem.description, item.id].filter(Boolean).join(" · ");
+    treeItem.accessibilityInformation = { label: [treeItem.label, treeItem.description].filter(Boolean).join(" · ") };
     return treeItem;
   }
 
