@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "rcc": {
-    "version": "v18.19.9",
+    "version": "v18.19.10",
     "platforms": {
       "linux-x64": {
         "asset": "rcc-linux64",
-        "sha256": "e1b20ca222708981e2e18b81ae6ca1e9d9c17abc2b837779c5fc0d6bd53798b8",
-        "size": 22507682,
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-linux64"
+        "sha256": "6fcbaca47eabd90855a3a7ea733dc30df60f6f5067f99b77d87949035072921c",
+        "size": 22589602,
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.10/rcc-linux64"
       },
       "win32-x64": {
         "asset": "rcc-windows64.exe",
-        "sha256": "0a74ffaf2f7c34be139cdf87101574a1048eb872bc0096510a4f7cce2eef7efc",
-        "size": 20236800,
-        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.9/rcc-windows64.exe"
+        "sha256": "02ab15e529fffa506a1aaf32957c3546b8645fbe1391154d32b6058a3f8c11c5",
+        "size": 20322304,
+        "url": "https://github.com/joshyorko/rcc/releases/download/v18.19.10/rcc-windows64.exe"
       }
     }
   },

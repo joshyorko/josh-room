@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.46]
+
+- Promote published RCC v18.19.10, JAT v0.1.17 runtime, and separately qualified Linux/Windows controller artifacts.
+- Require RCC v18.19.10 for native Room Store capture and accept its encrypted snapshot receipts while retaining older supported versions.
+
 ## [0.1.45]
 
 - Update managed RCC to v18.19.9, JAT to verified runtime v0.1.16, and Linux/Windows controller artifacts.
