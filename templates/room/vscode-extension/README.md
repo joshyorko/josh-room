@@ -10,7 +10,13 @@ Homebrew, host Hauler, Action Server, or Room of Requirement.
 In the Rooms view, choose Connect Storage or Load Existing Storage to begin.
 The current Room displays its save state. Use Save Current Room to save its
 bound folder, or Save Folder As Room to choose a folder and destination. The
-preview shows the capture scope and any deletions requiring confirmation. Save
+New Room flow creates missing onboarding files in the selected source before
+preview. It creates a root `AGENTS.md` by default and can create the selected
+VS Code files based on local architecture evidence. Configure
+`joshRoom.onboarding.editor` (`vscode` or `none`) and
+`joshRoom.onboarding.files` in VS Code Settings; the guide is still generated
+when editor mode is `none`. Initialization does not install extensions or run
+tasks. The preview shows the capture scope and any deletions requiring confirmation. Save
 open editor buffers first; otherwise the Room remains marked as having changes.
 Recovery points show Latest and Open separately; the tooltip contains the full
 ID. Settings, recovery and maintenance are available from the relevant

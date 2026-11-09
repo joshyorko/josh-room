@@ -1947,11 +1947,35 @@ async function editWorkspaceExclusions(source) {
 }
 
 async function initializeRoomExclusions(source) {
-  const initialized = await runOperation("Initializing Room exclusions…", ["workspace", "init", "--workspace", source], source,
-    { action: "initialize Room exclusions" });
+  const onboarding = vscode.workspace.getConfiguration?.("joshRoom.onboarding");
+  const editor = onboarding?.get?.("editor", "vscode") || "vscode";
+  const configuredFiles = onboarding?.get?.("files", ["tasks.json", "launch.json", "extensions.json", "settings.json"]);
+  const editorFiles = Array.isArray(configuredFiles) ? configuredFiles : [];
+  const initArgs = ["workspace", "init", "--workspace", source, "--editor", editor];
+  if (!editorFiles.length) initArgs.push("--no-editor-files");
+  else for (const file of editorFiles) initArgs.push("--editor-file", file);
+  const initialized = await runOperation("Initializing Room onboarding…", initArgs, source,
+    { action: "initialize Room onboarding" });
   trustedSaveReceipt = undefined;
+  workspaceEventGeneration += 1;
+  cleanEventGeneration = -1;
+  if (workspaceBaseline && path.resolve(source) === path.resolve(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "")) {
+    workspaceBaseline = undefined;
+    setRoomState("dirty");
+  }
+  const onboardingSummary = initialized.onboarding;
+  const created = onboardingSummary?.artifacts
+    ? Object.entries(onboardingSummary.artifacts).filter(([, state]) => state === "created").map(([name]) => name)
+    : [];
+  const omissions = onboardingSummary?.omitted
+    ? Object.entries(onboardingSummary.omitted).map(([name, reason]) => `${name}: ${reason}`) : [];
+  const conflicts = Object.entries(onboardingSummary?.artifacts || {})
+    .filter(([, state]) => state !== "created" && state !== "already-present")
+    .map(([name, state]) => `${name}: ${state}`);
+  const description = created.length ? `Created: ${created.join(", ")}. ` : "";
+  const skipped = omissions.length ? `Skipped: ${omissions.join(", ")}. ` : "";
   const action = await vscode.window.showInformationMessage(
-    "Room exclusions are in .josh-roomignore. Excluded files stay local but are not included in future snapshots.",
+    `${description}${skipped}${conflicts.length ? `Conflicts: ${conflicts.join(", ")}. ` : ""}Room onboarding is in the selected source. Existing files are preserved; recommendations do not install extensions or run tasks.`,
     "Continue", "Edit exclusions", ...(initialized.capture_mode !== "source-only" ? ["Use source-only"] : []), "Cancel",
   );
   if (action === "Use source-only") {
@@ -2009,8 +2033,8 @@ async function reviewWorkspaceBeforeSave(source) {
     if (!action || action === "Cancel") return false;
     if (action === "Open report") { outputChannel?.show(true); continue; }
     if (action === "Edit exclusions") {
-      await runOperation("Initializing Room exclusions…", ["workspace", "init", "--workspace", source], source,
-        { action: "initialize Room exclusions" });
+    await runOperation("Initializing Room exclusions…", ["workspace", "init", "--policy-only", "--workspace", source], source,
+      { action: "initialize Room exclusions" });
       if (!await editWorkspaceExclusions(source)) return false;
       continue;
     }

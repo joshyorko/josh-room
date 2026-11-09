@@ -48,18 +48,43 @@ snapshot, refusing retained bare Git stores, and retaining filesystem link, spec
 Portable source-only exports use the filtered JAT capability and fail if that
 capability is unavailable. Source-only is not relocatable Git-worktree recovery.
 
-## Initialize, inspect and approve exclusions
+## Initialize Room onboarding, inspect and approve exclusions
 
 New Room creation initializes the selected source folder (which can differ from
-VS Code's workspace) after its name and destination have been confirmed. The
-comments-first `.josh-roomignore` starter adds no active exclusions. Existing
-files retain their bytes and timestamps; invalid, symlink and nonregular files
-fail safely. Initialization is also available explicitly:
+VS Code's workspace) after its name and destination have been confirmed. It
+creates a missing root `AGENTS.md` and, in the default `vscode` editor mode,
+creates selected missing `.vscode` files before preview. Discovery is bounded
+and reads repository manifests and documentation without running project
+commands, tasks, hooks, or installers. The guide links its evidence, preserves
+nested guide scopes, and records unknowns. Unsupported or conflicting editor
+files are omitted with a reason. Existing files, including JSONC, are never
+rewritten. Editor recommendations do not install extensions or run tasks.
+
+The `joshRoom.onboarding.editor` VS Code setting selects `vscode` or `none`;
+`joshRoom.onboarding.files` selects any subset of `tasks.json`, `launch.json`,
+`extensions.json`, and `settings.json` (an empty list disables editor files).
+The missing `AGENTS.md` is still generated in `none` mode. These preferences
+are VS Code settings and are not stored in `.josh-room.json`.
+
+Initialization also creates the comments-first `.josh-roomignore` starter,
+which adds no active exclusions. Existing files retain their bytes and
+timestamps; invalid, symlink and nonregular policy files fail safely. The full
+initialization command is available explicitly:
 
 ```sh
 josh-room workspace init --workspace ./selected-project --json
+josh-room workspace init --workspace ./selected-project --editor none --json
+josh-room workspace init --workspace ./selected-project --editor-file tasks.json --editor-file extensions.json --json
+josh-room workspace init --workspace ./selected-project --no-editor-files --json
 josh-room workspace-check --workspace ./selected-project --json
 ```
+
+The JSON result reports onboarding artifact statuses and omissions. `--editor
+none` and `--no-editor-files` both retain missing-guide generation; the latter
+selects an empty editor-file set. Repeated initialization preserves existing
+file bytes and timestamps. Ordinary Enter, status, hydration, and background
+activation do not initialize onboarding. Exclusion editing uses policy-only
+initialization and never generates a guide or editor files.
 
 Status and scanning never initialize or edit the file. **Edit exclusions** opens
 the selected folder's file; save those edits before choosing **Continue**. The

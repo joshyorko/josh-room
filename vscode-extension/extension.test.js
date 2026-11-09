@@ -173,7 +173,7 @@ async function createLocalFallbackFixture(t) {
   return { root, context, controllerRoot, jatRoot, manifest, rcc, jat, error, state, artifact, spawnHarness, extension };
 }
 
-function createVscodeMock(workspaceFolder, textDocuments = []) {
+function createVscodeMock(workspaceFolder, textDocuments = [], settings = {}) {
   const quickPickCalls = [];
   const openDialogCalls = [];
   const inputBoxCalls = [];
@@ -268,6 +268,9 @@ function createVscodeMock(workspaceFolder, textDocuments = []) {
       workspace: {
         workspaceFolders: workspaceFolder ? [{ uri: { fsPath: workspaceFolder } }] : [],
         textDocuments,
+        getConfiguration(section) {
+          return { get(key, fallback) { return settings[`${section}.${key}`] ?? fallback; } };
+        },
         createFileSystemWatcher(pattern) {
           const watcher = {
             pattern,
@@ -6453,7 +6456,11 @@ test("new Room initialization targets selected source and offers explicit source
   const spawnHarness = createSpawnHarness(({ args, options }) => {
     assert.equal(options.cwd, source);
     assert.equal(args[args.indexOf("--workspace") + 1], source);
-    if (args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created", capture_mode: "full-repository", policy_edit_sha256: "a".repeat(64) }) };
+    if (args[1] === "init") {
+      assert.equal(args[args.indexOf("--editor") + 1], "vscode");
+      assert.deepEqual(args.filter((arg, index) => args[index - 1] === "--editor-file"), ["tasks.json", "launch.json", "extensions.json", "settings.json"]);
+      return { stdout: JSON.stringify({ ok: true, state: "created", capture_mode: "full-repository", policy_edit_sha256: "a".repeat(64), onboarding: { artifacts: { "AGENTS.md": "created" }, omitted: {} } }) };
+    }
     assert.equal(args[1], "exclude");
     assert.ok(args.includes("--source-only"));
     assert.equal(args[args.indexOf("--expected-token") + 1], "a".repeat(64));
@@ -6465,6 +6472,28 @@ test("new Room initialization targets selected source and offers explicit source
   assert.ok(infoCalls[0].includes("Edit exclusions"));
   assert.match(warningCalls[0][0], /Git history and staging state will not be backed up/);
   assert.equal(spawnHarness.calls.length, 2);
+});
+
+test("New Room settings can disable editor files while keeping onboarding enabled", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-init-none-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const source = path.join(root, "selected"); fs.mkdirSync(source);
+  const { vscode, statusItem } = createVscodeMock(root, [], {
+    "joshRoom.onboarding.editor": "none",
+    "joshRoom.onboarding.files": [],
+  });
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    assert.equal(options.cwd, source);
+    assert.equal(args[1], "init");
+    assert.equal(args[args.indexOf("--workspace") + 1], source);
+    assert.equal(args[args.indexOf("--editor") + 1], "none");
+    assert.ok(args.includes("--no-editor-files"));
+    return { stdout: JSON.stringify({ ok: true, state: "created", onboarding: { artifacts: { "AGENTS.md": "created" }, omitted: {} } }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn); extension.__test__.setStatusItem(statusItem);
+  vscode.infoResponses.push("Continue");
+  assert.equal(await extension.__test__.initializeRoomExclusions(source), true);
+  assert.equal(spawnHarness.calls.length, 1);
 });
 
 for (const decision of ["Apply and rescan", "Cancel"]) test(`worktree exclusion review is explicit and ${decision}`, async (t) => {

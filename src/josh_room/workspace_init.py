@@ -25,7 +25,18 @@ STARTER = b"""# Josh Room exclusions: excluded files stay local but are not back
 """
 
 
-def initialize_workspace(workspace: Path) -> dict:
+def initialize_workspace(workspace: Path, *, editor: str = "vscode", files=None) -> dict:
+    from .workspace_onboarding import EDITOR_FILES, initialize_onboarding
+
+    selected = tuple(EDITOR_FILES if files is None else files)
+    if editor not in {"vscode", "none"} or not set(selected) <= set(EDITOR_FILES):
+        raise ValueError("unsupported onboarding editor or file selection")
+    result = initialize_capture_policy(workspace)
+    result["onboarding"] = initialize_onboarding(Path(workspace).resolve(strict=True), editor, selected)
+    return result
+
+
+def initialize_capture_policy(workspace: Path) -> dict:
     root = Path(workspace).resolve(strict=True)
     load_capture_policy(root)
     _user_patterns(STARTER)
@@ -96,7 +107,7 @@ def append_exclusions(
     if policy_edit_token(root) != expected_token:
         raise ValueError("Exclusions changed; review again")
     if before is None:
-        initialized = initialize_workspace(root)
+        initialized = initialize_capture_policy(root)
         if initialized["state"] != "created":
             raise ValueError("Exclusions changed; review again")
         before = STARTER
