@@ -11,20 +11,39 @@ from .keyring import available
 
 _IDENTIFIER_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
 _IDENTIFIER = re.compile(_IDENTIFIER_PATTERN)
+_REGION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
 _COMMON_CONNECTION_FIELDS = {
     "auth_state", "credential_profile", "display_name", "endpoint", "expires_at",
     "provider", "region", "session_id",
 }
 _PROVIDER_CONNECTION_OPTIONS = {
+    "s3": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds"},
     "r2": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "temporary_credentials", "timeout_seconds"},
     "minio": {"ca_bundle", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds", "verify_tls"},
 }
 _COMMON_DIMENSION_FIELDS = {"auth_state", "bucket", "catalog_key", "connection", "connection_id", "credential_profile", "display_name", "encryption_domain_id", "endpoint", "provider", "region"}
 _PROVIDER_DIMENSION_OPTIONS = _PROVIDER_CONNECTION_OPTIONS
-_LEGACY_DIMENSION_NAMES = {"r2": "Cloudflare R2", "minio": "MinIO"}
+_LEGACY_DIMENSION_NAMES = {"r2": "Cloudflare R2", "minio": "MinIO", "s3": "Amazon S3"}
 _BOOLEAN_DIMENSION_OPTIONS = {"path_style", "temporary_credentials", "verify_tls"}
 _POSITIVE_INTEGER_DIMENSION_OPTIONS = {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "timeout_seconds"}
 _STRING_DIMENSION_OPTIONS = {"ca_bundle"}
+
+
+def default_s3_endpoint(region: str) -> str:
+    if not isinstance(region, str) or not _REGION.fullmatch(region) or region.lower() == "auto":
+        raise ValueError("S3 region must be an explicit safe region identifier")
+    from botocore.exceptions import UnknownRegionError
+    from botocore.session import Session
+
+    session = Session()
+    try:
+        partition = session.get_partition_for_region(region)
+    except UnknownRegionError:
+        raise ValueError("S3 region is not supported by the AWS endpoint resolver") from None
+    if partition not in {"aws", "aws-us-gov", "aws-cn"} or region not in session.get_available_regions("s3", partition_name=partition):
+        raise ValueError("S3 region is not supported by the AWS endpoint resolver")
+    suffix = "amazonaws.com.cn" if partition == "aws-cn" else "amazonaws.com"
+    return f"https://s3.{region}.{suffix}"
 
 
 def _validate_identifier(name: str, value: object) -> None:
@@ -75,10 +94,14 @@ class ConnectionConfig:
                 raise ValueError(f"connection {name} must be a non-empty string")
         _validate_identifier("connection id", self.connection_id)
         _validate_endpoint(self.endpoint)
+        if self.provider == "s3" and (urlsplit(self.endpoint).scheme != "https" or urlsplit(self.endpoint).query or urlsplit(self.endpoint).fragment):
+            raise ValueError("S3 endpoint must use HTTPS without a query or fragment")
         if self.provider != "r2" and self.credential_profile == "oauth-runtime":
             raise ValueError("credential profile oauth-runtime is reserved for R2")
         if not isinstance(self.region, str):
             raise TypeError("connection region must be a string")
+        if self.provider == "s3" and (not _REGION.fullmatch(self.region) or self.region.lower() == "auto"):
+            raise ValueError("S3 region must be an explicit safe region identifier")
         if not isinstance(self.auth_state, str) or not self.auth_state:
             raise ValueError("connection auth state must be a non-empty string")
         for name in ("session_id", "expires_at"):
@@ -100,18 +123,19 @@ class ConnectionConfig:
         unsupported = sorted(set(body) - allowed)
         if unsupported:
             raise ValueError(f"unsupported connection setting: {unsupported[0]}")
-        missing = sorted({"provider", "endpoint", "credential_profile"} - set(body))
+        missing = sorted(({"provider", "credential_profile"} | ({"endpoint"} if provider != "s3" else {"region"})) - set(body))
         if missing:
             raise ValueError(f"missing connection setting: {missing[0]}")
         default_region = "auto" if provider == "r2" else "us-east-1"
+        region = body.get("region", default_region)
         option_names = _PROVIDER_CONNECTION_OPTIONS.get(provider, set())
         return cls(
             connection_id=connection_id,
             display_name=body.get("display_name", provider.title()),
             provider=provider,
-            endpoint=body["endpoint"],
+            endpoint=(body["endpoint"] if "endpoint" in body else default_s3_endpoint(region) if provider == "s3" else ""),
             credential_profile=body["credential_profile"],
-            region=body.get("region", default_region),
+            region=region,
             options=tuple(sorted((name, body[name]) for name in option_names if name in body)),
             auth_state=body.get("auth_state", "configured"),
             session_id=body.get("session_id"),
@@ -170,6 +194,8 @@ class DimensionConfig:
             _validate_identifier("connection id", self.connection_id)
         if not isinstance(self.region, str):
             raise TypeError("Dimension region must be a string")
+        if self.provider == "s3" and (not _REGION.fullmatch(self.region) or self.region.lower() == "auto"):
+            raise ValueError("S3 region must be an explicit safe region identifier")
         if not isinstance(self.auth_state, str) or not self.auth_state:
             raise ValueError("Dimension auth state must be a non-empty string")
         if any(character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F for character in self.endpoint):
@@ -180,6 +206,10 @@ class DimensionConfig:
             raise ValueError("Dimension endpoint is invalid") from error
         if endpoint.scheme not in {"http", "https"} or not endpoint.hostname:
             raise ValueError("Dimension endpoint must use http/https with a hostname")
+        if self.provider == "s3" and endpoint.scheme != "https":
+            raise ValueError("S3 endpoint must use HTTPS")
+        if self.provider == "s3" and (endpoint.query or endpoint.fragment):
+            raise ValueError("S3 endpoint must not contain a query or fragment")
         if endpoint.username is not None or endpoint.password is not None or "@" in endpoint.netloc:
             raise ValueError("Dimension endpoint must not contain userinfo")
         unsupported = sorted(name for name, _value in self.options if name not in _PROVIDER_DIMENSION_OPTIONS[self.provider])
@@ -208,7 +238,7 @@ class DimensionConfig:
         unsupported = sorted(set(body) - allowed)
         if unsupported:
             raise ValueError(f"unsupported Dimension setting: {unsupported[0]}")
-        required = {"display_name", "bucket"} if connection else {"display_name", "provider", "endpoint", "bucket", "credential_profile"}
+        required = {"display_name", "bucket"} if connection else {"display_name", "provider", "bucket", "credential_profile"} | ({"region"} if provider == "s3" else {"endpoint"})
         missing = sorted(required - set(body))
         if missing:
             raise ValueError(f"missing Dimension setting: {missing[0]}")
@@ -223,9 +253,9 @@ class DimensionConfig:
             region = connection.region
             options = connection.options
         else:
-            endpoint = body["endpoint"]
             credential_profile = body["credential_profile"]
             region = body.get("region", "auto" if provider == "r2" else "us-east-1")
+            endpoint = (body["endpoint"] if "endpoint" in body else default_s3_endpoint(region) if provider == "s3" else "")
             option_names = _PROVIDER_DIMENSION_OPTIONS.get(provider, set())
             options = tuple(sorted((name, body[name]) for name in option_names if name in body))
         return cls(
@@ -390,22 +420,25 @@ def _current_minio_config(snapshot: dict, persisted: dict) -> dict:
             if previous[record_id].provider != current[record_id].provider:
                 raise ValueError(f"{registry_name} provider changed for {record_id}; reconnect storage")
         if registry_name == "dimensions":
-            snapshot_minio_dimensions = {key for key, value in previous.items() if value.provider == "minio"}
+            snapshot_minio_dimensions = {key for key, value in previous.items() if value.provider in {"minio", "s3"}}
         if registry_name in snapshot or registry_name in persisted:
             merged[registry_name] = {
                 key: value for key, value in snapshot.get(registry_name, {}).items()
-                if previous[key].provider != "minio"
+                if previous[key].provider not in {"minio", "s3"}
             } | {
                 key: value for key, value in persisted.get(registry_name, {}).items()
-                if current[key].provider == "minio"
+                if current[key].provider in {"minio", "s3"}
             }
     merged.pop("minio", None)
+    merged.pop("s3", None)
     if "minio" in persisted:
         merged["minio"] = persisted["minio"]
+    if "s3" in persisted:
+        merged["s3"] = persisted["s3"]
     for setting in ("default_backend", "default_dimension"):
         if setting in persisted:
             merged[setting] = persisted[setting]
-        elif snapshot.get(setting) in snapshot_minio_dimensions or snapshot.get(setting) == "minio":
+        elif snapshot.get(setting) in snapshot_minio_dimensions or snapshot.get(setting) in {"minio", "s3"}:
             merged.pop(setting, None)
     return merged
 

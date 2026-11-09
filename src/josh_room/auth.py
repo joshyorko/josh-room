@@ -925,7 +925,7 @@ def _read_keyset_record_from_backend(dimension, backend):
 
 
 def _validate_minio_backend_transport(dimension, backend):
-    if dimension.provider != "minio":
+    if dimension.provider not in {"minio", "s3"}:
         return
     config = getattr(backend, "config", None)
     option = getattr(dimension, "option", None)
@@ -947,7 +947,7 @@ def _assert_keyset_matches_dimension(dimension, keyset):
 
 
 def _require_minio_room_store(dimension):
-    if dimension.provider != "minio":
+    if dimension.provider not in {"minio", "s3"}:
         raise EncryptionStateError(
             "Room Store keyset is unsupported for this provider",
             error_code="room-store-keyset-unsupported",
@@ -1181,7 +1181,7 @@ def resolve_encryption_material(
     """
     if dimension.provider == "r2":
         return None
-    if dimension.provider != "minio":
+    if dimension.provider not in {"minio", "s3"}:
         raise ValueError("unsupported encryption provider")
     keyset = _keyset_from_backend(dimension, backend)
     if keyset is not None:
@@ -1226,8 +1226,8 @@ def ensure_minio_domain(
     allow_legacy_migration: bool = False,
 ) -> EncryptionMaterial:
     """Enroll or reconcile the keyset for one empty MinIO bucket."""
-    if dimension.provider != "minio":
-        raise ValueError("MinIO encryption initialization requires a MinIO Dimension")
+    if dimension.provider not in {"minio", "s3"}:
+        raise ValueError("encryption initialization requires a MinIO or S3 Dimension")
     existing = _keyset_from_backend(dimension, backend)
     if existing is not None:
         _assert_keyset_matches_dimension(dimension, existing)

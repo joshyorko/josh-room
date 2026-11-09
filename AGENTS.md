@@ -4,7 +4,7 @@ Josh Room is a public-first, one-owner CLI for encrypted workspace snapshots.
 
 - Room of Requirement owns the base image and template.
 - Josh All The Things owns capture/restore and Hauler details.
-- age owns encryption. R2 and MinIO are concrete provider backends; the physical bucket/Dimension is the encryption boundary.
+- age owns encryption. R2, MinIO, and S3 are concrete provider backends; the physical bucket/Dimension is the encryption boundary.
 - RCC owns runtime environments; Actions owns runtime execution; Hive owns
   agents, models, tools, and task orchestration.
 - Do not add web UI, webview, daemon, watcher, generic provider framework,

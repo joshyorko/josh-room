@@ -296,6 +296,7 @@ class R2Backend(ObjectStore):
                 ca_bundle=getattr(config, "ca_bundle", None),
             )
         self.config = config
+        self._provider_label = "S3" if getattr(config, "provider", None) == "s3" else "MinIO" if self.__class__.__module__.endswith("minio") else "R2"
         self.client = client or self._client_from_keyring()
         self.receipt_dir = Path(receipt_dir) if receipt_dir else None
         if "/" in config.catalog_key or config.catalog_key.startswith("."):
@@ -327,7 +328,7 @@ class R2Backend(ObjectStore):
             except ClientError as error:
                 if not _is_precondition(error):
                     raise
-                report_progress("verify", "Encrypted Room already exists; verifying R2 object")
+                report_progress("verify", f"Encrypted Room already exists; verifying {self._provider_label} object")
                 self._verify_remote(key, digest, size)
                 return ObjectRef(key, digest, size)
         else:
@@ -348,7 +349,7 @@ class R2Backend(ObjectStore):
                 except ClientError as error:
                     if not _is_precondition(error):
                         raise
-                    report_progress("verify", "Encrypted Room already exists; verifying R2 object")
+                    report_progress("verify", f"Encrypted Room already exists; verifying {self._provider_label} object")
                     self._verify_remote(key, digest, size)
                     return ObjectRef(key, digest, size)
             except BaseException:  # noqa: BLE001 - abort multipart on cancellation as well as SDK errors
@@ -357,7 +358,7 @@ class R2Backend(ObjectStore):
                 finally:
                     raise
         report_progress("upload", "Encrypted Room uploaded • 100%", current=size, total=size)
-        report_progress("verify", "Verifying encrypted R2 object")
+        report_progress("verify", f"Verifying encrypted {self._provider_label} object")
         self._verify_remote(key, digest, size)
         return ObjectRef(key, digest, size)
     def put_evidence_file(self, path: Path) -> R2EvidenceReceipt:
@@ -1554,7 +1555,9 @@ class R2Backend(ObjectStore):
             return None
         self.receipt_dir.mkdir(parents=True, exist_ok=True)
         path = self.receipt_dir / f"orphan-{uuid.uuid4().hex}.json"
-        provider = "minio" if self.__class__.__module__.endswith("minio") else "r2"
+        provider = getattr(self.config, "provider", None)
+        if provider is None:
+            provider = "minio" if self.__class__.__module__.endswith("minio") else "r2"
         destination = {"provider": provider}
         for name in ("dimension_id", "endpoint", "bucket"):
             value = getattr(self.config, name, None)

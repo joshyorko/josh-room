@@ -70,14 +70,27 @@ function bucketCommand(action, { provider, connectionId, dimensionId, bucket } =
   return args;
 }
 
-function connectionCommand(action, { provider, endpoint, connectionId, bucket } = {}) {
-  if (action === "create") return ["provider", "connection", "create", "--provider", provider, "--endpoint", endpoint];
+function connectionCommand(action, { provider, endpoint, region, pathStyle, connectionId, bucket } = {}) {
+  if (action === "create") {
+    const args = ["provider", "connection", "create", "--provider", provider];
+    if (provider === "s3" && region) args.push("--region", region);
+    if (endpoint) args.push("--endpoint", endpoint);
+    if (provider === "s3" && pathStyle) args.push("--path-style");
+    return args;
+  }
   if (action === "list") return ["provider", "connection", "list"];
   if (action === "list-buckets") return ["provider", "bucket", "list", "--connection", connectionId];
   if (action === "create-bucket") return ["provider", "bucket", "create", "--connection", connectionId, "--bucket", bucket];
   if (action === "check-bucket") return ["provider", "bucket", "check", "--connection", connectionId, "--bucket", bucket];
   if (action === "disconnect") return ["provider", "connection", "disconnect", "--connection", connectionId];
-  if (action === "reconnect") return ["provider", "connection", "reconnect", "--connection", connectionId, "--endpoint", endpoint];
+  if (["reconnect", "update"].includes(action)) {
+    const args = ["provider", "connection", action, "--connection", connectionId];
+    if (provider === "s3" && region) args.push("--region", region);
+    if (endpoint) args.push("--endpoint", endpoint);
+    if (provider === "s3" && pathStyle) args.push("--path-style");
+    else if (provider === "s3" && pathStyle === false) args.push("--virtual-host-style");
+    return args;
+  }
   return ["provider", "connection", action, "--connection", connectionId];
 }
 

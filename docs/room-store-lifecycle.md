@@ -4,6 +4,10 @@ Native logical JAT operations select a Room Store recovery point with
 `--snapshot` (default: `latest`) and a configured `--dimension`. The commands
 accept `--json` for machine-readable results.
 
+Configured MinIO, R2, and S3 Dimensions share these lifecycle operations. S3
+uses its own provider identity, HTTPS transport, and private credential profile;
+it does not invoke Cloudflare authorization. See [S3 setup and acceptance](S3-SETUP.md).
+
 ```sh
 josh-room snapshot inspect ROOM --snapshot SNAPSHOT --dimension DIMENSION
 josh-room snapshot export ROOM --snapshot SNAPSHOT --dimension DIMENSION --output FILE.haul

@@ -8,7 +8,7 @@
       "properties": {
         "format_version": { "const": 1 },
         "encryption_domain_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
-        "provider": { "enum": ["r2", "minio"] },
+        "provider": { "enum": ["r2", "minio", "s3"] },
         "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" },
         "bucket": { "type": "string", "minLength": 3, "maxLength": 63 },
         "key_generation": { "type": "integer", "minimum": 1 },
@@ -20,10 +20,10 @@
     "connection": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "endpoint", "credential_profile"],
+      "required": ["provider", "credential_profile"],
       "properties": {
         "display_name": { "type": "string", "minLength": 1 },
-        "provider": { "enum": ["r2", "minio"] },
+        "provider": { "enum": ["r2", "minio", "s3"] },
         "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" },
         "region": { "type": "string" },
         "credential_profile": { "type": "string", "minLength": 1 },
@@ -41,6 +41,12 @@
         "path_style": { "type": "boolean", "default": true }
       },
       "allOf": [
+        { "if": { "properties": { "provider": { "const": "s3" } } },
+          "then": { "required": ["region"], "properties": {
+            "endpoint": { "pattern": "^https://[^?#]+$" },
+            "region": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$", "not": { "pattern": "^[Aa][Uu][Tt][Oo]$" } }
+          }, "not": { "anyOf": [{ "required": ["verify_tls"] }, { "required": ["ca_bundle"] }, { "required": ["temporary_credentials"] }] } },
+          "else": { "required": ["endpoint"] } },
         { "if": { "properties": { "provider": { "const": "r2" } } }, "then": { "not": { "anyOf": [
           { "required": ["verify_tls"] }, { "required": ["ca_bundle"] }, { "required": ["path_style"] }
         ] } } },
@@ -50,12 +56,12 @@
     "dimension": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["display_name", "provider", "endpoint", "bucket", "credential_profile"],
+      "required": ["display_name", "provider", "bucket", "credential_profile"],
       "properties": {
         "auth_state": { "type": "string", "minLength": 1 },
         "encryption_domain_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
         "display_name": { "type": "string", "minLength": 1 },
-        "provider": { "enum": ["r2", "minio"] },
+        "provider": { "enum": ["r2", "minio", "s3"] },
         "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://[^:/@?#][^/@?#]*(?:[/?#].*)?$" },
         "bucket": { "type": "string", "minLength": 1 },
         "region": { "type": "string" },
@@ -72,6 +78,12 @@
         "path_style": { "type": "boolean", "default": true }
       },
       "allOf": [
+        { "if": { "properties": { "provider": { "const": "s3" } } },
+          "then": { "required": ["region"], "properties": {
+            "endpoint": { "pattern": "^https://[^?#]+$" },
+            "region": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$", "not": { "pattern": "^[Aa][Uu][Tt][Oo]$" } }
+          }, "not": { "anyOf": [{ "required": ["verify_tls"] }, { "required": ["ca_bundle"] }, { "required": ["temporary_credentials"] }] } },
+          "else": { "required": ["endpoint"] } },
         {
           "if": { "properties": { "provider": { "const": "r2" } } },
           "then": {
@@ -105,7 +117,7 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "default_backend": { "enum": ["r2", "minio", "local"] },
+    "default_backend": { "enum": ["r2", "minio", "s3", "local"] },
     "default_dimension": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
     "dimensions": {
       "type": "object",
@@ -141,6 +153,23 @@
         "credential_profile": { "type": "string", "minLength": 1 },
         "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
         "temporary_credentials": { "type": "boolean", "default": true }
+      }
+    },
+    "s3": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bucket", "credential_profile", "region"],
+      "properties": {
+        "endpoint": { "type": "string", "format": "uri", "pattern": "^https://[^:/@?#][^/@?#]*(?:/[^?#]*)?$" },
+        "bucket": { "type": "string", "minLength": 3, "maxLength": 63 },
+        "credential_profile": { "type": "string", "minLength": 1 },
+        "region": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$", "not": { "pattern": "^[Aa][Uu][Tt][Oo]$" } },
+        "catalog_key": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "path_style": { "type": "boolean", "default": false },
+        "max_bytes": { "type": "integer", "minimum": 1 },
+        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "multipart_threshold": { "type": "integer", "minimum": 1 },
+        "multipart_chunk_size": { "type": "integer", "minimum": 1 }
       }
     },
     "minio": {

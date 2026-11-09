@@ -1,8 +1,8 @@
 # Native Room Store CLI behavior
 
-## Save a MinIO Room
+## Save an object-storage Room
 
-`snapshot create` uses the native Room Store for a selected MinIO Dimension when the CLI has that Dimension's encryption material. The CLI keeps the Python `operations.create_snapshot()` API on the portable JAT path.
+`snapshot create` uses the native Room Store for a selected MinIO, R2, or S3 Dimension when the CLI has that Dimension's encryption material. The CLI keeps the Python `operations.create_snapshot()` API on the portable JAT path.
 
 Run `snapshot preview` to scan the workspace before saving:
 
@@ -46,7 +46,7 @@ For example:
 josh-room enter my-room --dimension archive --snapshot latest --ide vscode
 ```
 
-The Room Store adapter currently supports MinIO Dimensions. R2, local storage, and explicit portable JAT creation keep their existing paths.
+The Room Store adapter supports MinIO, R2, and explicit S3 Dimensions. Local storage and explicit portable JAT creation keep their existing paths. S3 uses the existing Restic engine and Dimension encryption boundary; see [S3 setup and acceptance](S3-SETUP.md) for credential handling and the separate real-provider qualification gates.
 
 ## Connecting storage
 

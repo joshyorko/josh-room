@@ -97,12 +97,12 @@
       },
       {
         "command": "joshRoom.initializeEncryption",
-        "title": "Josh: Initialize MinIO Encryption",
+        "title": "Josh: Initialize Storage Encryption",
         "icon": "$(key)"
       },
       {
         "command": "joshRoom.migrateEncryption",
-        "title": "Josh: Migrate MinIO Encryption",
+        "title": "Josh: Migrate Storage Encryption",
         "icon": "$(key)"
       },
       {
@@ -384,7 +384,7 @@
         },
         {
           "command": "joshRoom.editStorageSettings",
-          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-minio-ready|-uninitialized|-insecure|-legacy|-resumable|-failed)?$/",
+          "when": "view == joshRoom.rooms && viewItem =~ /^dimension(-ready|-minio-ready|-s3-ready|-uninitialized|-insecure|-legacy|-resumable|-failed)?$/",
           "group": "settings@2"
         },
         {
@@ -414,7 +414,7 @@
         },
         {
           "command": "joshRoom.exportRecovery",
-          "when": "view == joshRoom.rooms && viewItem == dimension-minio-ready",
+          "when": "view == joshRoom.rooms && (viewItem == dimension-minio-ready || viewItem == dimension-s3-ready)",
           "group": "recovery@3"
         },
         {

@@ -326,3 +326,11 @@ test("recovery points sort Latest first and show a readable fallback when dates 
   assert.deepEqual(history.map((item) => item.id), ["latest", "newer", "older"]);
   assert.equal(history[0].label, "Recovery point");
 });
+
+test("S3 retains explicit provider identity rather than Cloudflare authority", () => {
+  const { providerKey, providerLabel, buildProviderTree } = require("./registry");
+  assert.equal(providerKey("s3"), "s3");
+  assert.equal(providerLabel("s3"), "Amazon S3 / S3-compatible");
+  const tree = buildProviderTree({ dimensions: [{ id: "synthetic-s3", provider: "s3", bucket: "synthetic-room", projects: [] }] });
+  assert.equal(tree[0].provider, "s3");
+});

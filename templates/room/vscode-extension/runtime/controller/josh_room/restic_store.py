@@ -552,6 +552,7 @@ class ResticStore:
         password_file: Path,
         ca_bundle: Path | None = None,
         provider_env: Mapping[str, str] | None = None,
+        s3_bucket_lookup: str | None = None,
         executable: str = "restic",
         process_factory: Callable[..., Any] = subprocess.Popen,
         terminate_process: Callable[[Any], None] = terminate_owned_process,
@@ -603,6 +604,9 @@ class ResticStore:
         self._password_file = Path(password_file)
         self._ca_bundle = Path(ca_bundle) if ca_bundle is not None else None
         self._provider_env = self._validate_provider_env(provider_env or {})
+        if s3_bucket_lookup not in {None, "dns", "path"}:
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        self._s3_bucket_lookup = s3_bucket_lookup
         self._executable = executable
         self._process_factory = process_factory
         self._terminate_process = terminate_process
@@ -707,6 +711,8 @@ class ResticStore:
         return env
 
     def _spawn(self, args: list[str], *, cwd: Path | None = None) -> Any:
+        if self._s3_bucket_lookup is not None:
+            args = ["-o", f"s3.bucket-lookup={self._s3_bucket_lookup}", *args]
         kwargs: dict[str, Any] = {
             "cwd": cwd,
             "env": self._environment(),

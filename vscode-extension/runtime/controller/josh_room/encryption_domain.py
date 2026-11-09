@@ -173,7 +173,7 @@ def validate_encryption_domain_id(value: object) -> str:
 
 def physical_bucket_identity(provider: str, endpoint: str, bucket: str) -> str:
     """Return the stable non-secret identity used to compare physical aliases."""
-    if provider not in {"r2", "minio"}:
+    if provider not in {"r2", "minio", "s3"}:
         raise ValueError("unsupported encryption provider")
     validate_endpoint(endpoint)
     if not isinstance(bucket, str) or not bucket or not _IDENTIFIER.fullmatch(bucket):
@@ -295,7 +295,7 @@ class EncryptionKeyset:
             if self.room_store.physical_binding != self.binding:
                 raise ValueError("Room Store physical binding mismatch")
         validate_encryption_domain_id(self.encryption_domain_id)
-        if self.provider not in {"r2", "minio"}:
+        if self.provider not in {"r2", "minio", "s3"}:
             raise ValueError("keyset provider is invalid")
         validate_endpoint(self.endpoint)
         if not isinstance(self.bucket, str) or not self.bucket or len(self.bucket) > 63:

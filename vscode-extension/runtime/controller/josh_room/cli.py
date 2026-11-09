@@ -35,9 +35,11 @@ from .auth import (
 from .cancellation import CLICancelled, sigterm_cancellation
 from .catalog import Catalog
 from .config import (
+    ConnectionConfig,
     DimensionRegistry,
     auth_status,
     connection_configs,
+    default_s3_endpoint,
     persisted_config,
     private_config,
     save_private_config,
@@ -193,7 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(worktree)
 
     doctor = commands.add_parser("doctor")
-    doctor.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    doctor.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     doctor.add_argument("--dimension")
     doctor.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
     _json_option(doctor)
@@ -202,11 +204,15 @@ def build_parser() -> argparse.ArgumentParser:
     connection_list = connection_commands.add_parser("list")
     _json_option(connection_list)
     connection_setup = connection_commands.add_parser("setup")
-    connection_setup.add_argument("provider", nargs="?", choices=("minio", "r2"))
-    connection_setup.add_argument("--provider", dest="provider_option", choices=("minio", "r2"))
+    connection_setup.add_argument("provider", nargs="?", choices=("minio", "s3", "r2"))
+    connection_setup.add_argument("--provider", dest="provider_option", choices=("minio", "s3", "r2"))
     connection_setup.add_argument("--connection", "--id", dest="connection_id")
     connection_setup.add_argument("--display-name")
     connection_setup.add_argument("--credential-profile", "--profile", dest="credential_profile")
+    connection_setup.add_argument("--endpoint")
+    connection_setup.add_argument("--region")
+    connection_setup.add_argument("--path-style", action="store_true")
+    connection_setup.add_argument("--virtual-host-style", action="store_true")
     _json_option(connection_setup)
     buckets = commands.add_parser("buckets", help="legacy compatibility alias for provider bucket")
     bucket_commands = buckets.add_subparsers(dest="bucket_command", required=True)
@@ -226,8 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
     provider_connection = provider_commands.add_parser("connection")
     provider_connection_commands = provider_connection.add_subparsers(dest="provider_connection_command", required=True)
     provider_connection_create = provider_connection_commands.add_parser("create")
-    provider_connection_create.add_argument("--provider", required=True, choices=("minio", "r2"))
-    provider_connection_create.add_argument("--endpoint", required=True)
+    provider_connection_create.add_argument("--provider", required=True, choices=("minio", "s3", "r2"))
+    provider_connection_create.add_argument("--endpoint")
+    provider_connection_create.add_argument("--region")
+    provider_connection_create.add_argument("--path-style", action="store_true")
+    provider_connection_create.add_argument("--virtual-host-style", action="store_true")
     provider_connection_create.add_argument("--connection", "--id", dest="connection_id")
     provider_connection_create.add_argument("--credential-profile", "--profile", dest="credential_profile")
     _json_option(provider_connection_create)
@@ -237,24 +246,27 @@ def build_parser() -> argparse.ArgumentParser:
         provider_connection_edit = provider_connection_commands.add_parser(action, help="stdin carries credentials; legacy alias is also supported")
         provider_connection_edit.add_argument("--connection", required=True)
         provider_connection_edit.add_argument("--endpoint")
+        provider_connection_edit.add_argument("--region")
+        provider_connection_edit.add_argument("--path-style", action="store_true")
+        provider_connection_edit.add_argument("--virtual-host-style", action="store_true")
         provider_connection_edit.add_argument("--credential-profile", "--profile", dest="credential_profile")
         _json_option(provider_connection_edit)
     provider_bucket = provider_commands.add_parser("bucket")
     provider_bucket_commands = provider_bucket.add_subparsers(dest="provider_bucket_command", required=True)
     provider_bucket_list = provider_bucket_commands.add_parser("list")
     provider_bucket_list.add_argument("--connection")
-    provider_bucket_list.add_argument("--provider", choices=("r2", "minio"))
+    provider_bucket_list.add_argument("--provider", choices=("r2", "minio", "s3"))
     provider_bucket_list.add_argument("--dimension")
     _json_option(provider_bucket_list)
     provider_bucket_create = provider_bucket_commands.add_parser("create")
     provider_bucket_create.add_argument("--connection")
-    provider_bucket_create.add_argument("--provider", choices=("r2", "minio"))
+    provider_bucket_create.add_argument("--provider", choices=("r2", "minio", "s3"))
     provider_bucket_create.add_argument("--dimension")
     provider_bucket_create.add_argument("--bucket", required=True)
     _json_option(provider_bucket_create)
     provider_bucket_check = provider_bucket_commands.add_parser("check")
     provider_bucket_check.add_argument("--connection")
-    provider_bucket_check.add_argument("--provider", choices=("r2", "minio"))
+    provider_bucket_check.add_argument("--provider", choices=("r2", "minio", "s3"))
     provider_bucket_check.add_argument("--dimension")
     provider_bucket_check.add_argument("--bucket", required=True)
     _json_option(provider_bucket_check)
@@ -262,14 +274,14 @@ def build_parser() -> argparse.ArgumentParser:
     dimension_commands = dimensions.add_subparsers(dest="dimension_command", required=True)
     dimension_list = dimension_commands.add_parser("list")
     dimension_list.add_argument("--dimension")
-    dimension_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    dimension_list.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     dimension_list.add_argument("--with-hierarchy", action="store_true", help="read Rooms and JATs from each selected Dimension catalog")
     _json_option(dimension_list)
     for action in ("add", "update"):
         dimension_edit = dimension_commands.add_parser(action)
         dimension_edit.add_argument("dimension")
         dimension_edit.add_argument("--display-name")
-        dimension_edit.add_argument("--provider", choices=("r2", "minio"))
+        dimension_edit.add_argument("--provider", choices=("r2", "minio", "s3"))
         dimension_edit.add_argument("--connection", "--connection-id", dest="connection_id")
         dimension_edit.add_argument("--endpoint")
         dimension_edit.add_argument("--bucket")
@@ -457,19 +469,19 @@ def build_parser() -> argparse.ArgumentParser:
         state_command.add_argument("--project")
         state_command.add_argument("--snapshot")
         state_command.add_argument("--workspace-fingerprint")
-        state_command.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+        state_command.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
         _json_option(state_command)
     projects = commands.add_parser("projects")
     project_commands = projects.add_subparsers(dest="project_command", required=True)
     project_list = project_commands.add_parser("list")
-    project_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    project_list.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     project_list.add_argument("--dimension")
     _json_option(project_list)
     rooms = commands.add_parser("rooms")
     room_commands = rooms.add_subparsers(dest="room_command", required=True)
     room_remove = room_commands.add_parser("remove")
     room_remove.add_argument("project")
-    room_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    room_remove.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     room_remove.add_argument("--dimension")
     room_remove.add_argument("--expected-revision", type=int)
     room_remove.add_argument("--expected-snapshots", help="comma-separated snapshot IDs from the confirmed inventory")
@@ -478,13 +490,13 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_commands = snapshots.add_subparsers(dest="snapshots_command", required=True)
     snapshot_list = snapshot_commands.add_parser("list")
     snapshot_list.add_argument("project")
-    snapshot_list.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_list.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     snapshot_list.add_argument("--dimension")
     _json_option(snapshot_list)
     snapshot_remove = snapshot_commands.add_parser("remove")
     snapshot_remove.add_argument("project")
     snapshot_remove.add_argument("snapshot")
-    snapshot_remove.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_remove.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     snapshot_remove.add_argument("--dimension")
     snapshot_remove.add_argument("--expected-revision", type=int)
     snapshot_remove.add_argument("--expected-snapshots", help="comma-separated snapshot IDs from the confirmed inventory")
@@ -496,7 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_create.add_argument("--source", type=Path)
     snapshot_create.add_argument("--image", dest="images", action="append", default=[])
     snapshot_create.add_argument("--all-images", action="store_true")
-    snapshot_create.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_create.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     snapshot_create.add_argument("--dimension")
     snapshot_create.add_argument("--editor-dirty", action="store_true", help=argparse.SUPPRESS)
     snapshot_create.add_argument(
@@ -509,7 +521,7 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_preview.add_argument("--source", type=Path)
     snapshot_preview.add_argument("--image", dest="images", action="append", default=[])
     snapshot_preview.add_argument("--all-images", action="store_true")
-    snapshot_preview.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    snapshot_preview.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     snapshot_preview.add_argument("--dimension")
     _json_option(snapshot_preview)
     for command in (snapshot_create, snapshot_preview):
@@ -520,7 +532,7 @@ def build_parser() -> argparse.ArgumentParser:
         snapshot_action = snapshot_commands.add_parser(action)
         snapshot_action.add_argument("project")
         snapshot_action.add_argument("--snapshot", default="latest")
-        snapshot_action.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+        snapshot_action.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
         snapshot_action.add_argument("--dimension")
         if action == "export":
             snapshot_action.add_argument("--output", type=Path, required=True)
@@ -543,20 +555,20 @@ def build_parser() -> argparse.ArgumentParser:
     hydration.add_argument("--snapshot", default="latest")
     hydration.add_argument("--destination", type=Path, required=True)
     hydration.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="terminal")
-    hydration.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    hydration.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     hydration.add_argument("--dimension")
     _json_option(hydration)
     enter = commands.add_parser("enter")
     enter.add_argument("project", nargs="?")
     enter.add_argument("--snapshot", default="latest")
     enter.add_argument("--ide", choices=("vscode-insiders", "vscode", "terminal"), default="vscode-insiders")
-    enter.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    enter.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     enter.add_argument("--dimension")
     _json_option(enter)
     serve = commands.add_parser("serve")
     serve.add_argument("project")
     serve.add_argument("--snapshot", default="latest")
-    serve.add_argument("--backend", choices=("local", "r2", "minio"), default="r2")
+    serve.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     serve.add_argument("--dimension")
     _json_option(serve)
     room_store = commands.add_parser("room-store")
@@ -810,7 +822,7 @@ def _requires_oauth(args) -> bool:
 
 def _requires_encryption(args) -> bool:
     if args.command == "dimensions":
-        return getattr(args, "with_hierarchy", False) and _dimensions_have_provider(args, "minio")
+        return getattr(args, "with_hierarchy", False) and (_dimensions_have_provider(args, "minio") or _dimensions_have_provider(args, "s3"))
     if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
@@ -820,23 +832,23 @@ def _requires_encryption(args) -> bool:
     dimension = getattr(args, "dimension", None)
     if dimension:
         try:
-            return DimensionRegistry(private_config() or {}).select(dimension).provider == "minio"
+            return DimensionRegistry(private_config() or {}).select(dimension).provider in {"minio", "s3"}
         except ValueError:
-            return dimension == "minio"
+            return dimension in {"minio", "s3"}
     if getattr(args, "snapshot_command", None) == "copy":
         dimensions = [_copy_source_dimension(args), getattr(args, "destination_dimension", None)]
         try:
             registry = DimensionRegistry(private_config() or {})
-            return any(value and registry.select(value).provider == "minio" for value in dimensions)
+            return any(value and registry.select(value).provider in {"minio", "s3"} for value in dimensions)
         except ValueError:
-            return "minio" in dimensions
+            return "minio" in dimensions or "s3" in dimensions
     try:
         selected = _effective_dimension(args)
     except ValueError:
         selected = None
     if selected is not None:
-        return selected.provider == "minio"
-    return getattr(args, "backend", "r2") == "minio"
+        return selected.provider in {"minio", "s3"}
+    return getattr(args, "backend", "r2") in {"minio", "s3"}
 
 
 def _uses_minio_encryption(args) -> bool:
@@ -852,7 +864,7 @@ def _uses_minio_encryption(args) -> bool:
         selected = _effective_dimension(args)
     except ValueError:
         return False
-    return selected is not None and selected.provider == "minio"
+    return selected is not None and selected.provider in {"minio", "s3"}
 
 
 @contextmanager
@@ -924,8 +936,8 @@ def _open_room_store_context(
         if dimension_id is not None
         else _effective_dimension(args)
     )
-    if dimension is None or dimension.provider not in {"minio", "r2"}:
-        raise ValueError("Room Store operations require a configured MinIO or R2 Dimension")
+    if dimension is None or dimension.provider not in {"minio", "s3", "r2"}:
+        raise ValueError("Room Store operations require a configured object-store Dimension")
     if material is None:
         material = getattr(args, "_selected_encryption_material", None)
     opener = open_writable_room_store if writable else open_existing_room_store
@@ -971,9 +983,9 @@ def _copy_has_minio_dimension(args) -> bool:
     dimensions = _copy_dimension_ids(args)
     try:
         registry = DimensionRegistry(private_config() or {})
-        return any(registry.select(value).provider == "minio" for value in dimensions)
+        return any(registry.select(value).provider in {"minio", "s3"} for value in dimensions)
     except ValueError:
-        return "minio" in dimensions
+        return "minio" in dimensions or "s3" in dimensions
 
 
 def _reject_minio_copy(args):
@@ -985,7 +997,7 @@ def _reject_minio_copy(args):
         selected = [registry.select(value) for value in dimensions]
     except ValueError:
         selected = []
-    if any(dimension.provider == "minio" for dimension in selected) or "minio" in dimensions:
+    if any(dimension.provider in {"minio", "s3"} for dimension in selected) or "minio" in dimensions or "s3" in dimensions:
         raise EncryptionStateError(
             "copy across encryption domains is not supported yet",
             error_code="unsupported-mixed-domain",
@@ -1025,7 +1037,7 @@ def _bucket_target(args, config):
         return "r2", DimensionRegistry(config).select("r2"), None
     connection_id = getattr(args, "connection", None)
     if not connection_id:
-        raise ValueError("bucket operations require --connection or an R2 --dimension")
+        raise ValueError("bucket operations require --connection or a Dimension")
     connection = connection_configs(config).get(connection_id)
     if connection is None:
         raise ValueError(f"connection {connection_id} is missing")
@@ -1046,13 +1058,36 @@ def _bucket_operation(args, config):
         else:
             buckets = _r2.check_bucket_access(target, args.bucket)
     else:
-        connection_id = connection.connection_id
-        if args.provider_bucket_command == "list":
-            buckets = list_minio_buckets(connection)
-        elif args.provider_bucket_command == "create":
-            buckets = create_minio_bucket(connection, args.bucket)
+        target = connection
+        if dimension is not None:
+            connection_id = dimension.dimension_id
+            target = ConnectionConfig(
+                connection_id=dimension.dimension_id,
+                display_name=dimension.display_name,
+                provider=dimension.provider,
+                endpoint=dimension.endpoint,
+                credential_profile=dimension.credential_profile,
+                region=dimension.region,
+                options=dimension.options,
+                auth_state=dimension.auth_state,
+            )
         else:
-            buckets = check_minio_bucket(connection, args.bucket)
+            connection_id = connection.connection_id
+        if provider == "s3":
+            from . import s3_backend
+            list_buckets, create_bucket, check_bucket_access = (
+                s3_backend.list_buckets, s3_backend.create_bucket, s3_backend.check_bucket_access
+            )
+        else:
+            list_buckets, create_bucket, check_bucket_access = (
+                list_minio_buckets, create_minio_bucket, check_minio_bucket
+            )
+        if args.provider_bucket_command == "list":
+            buckets = list_buckets(target)
+        elif args.provider_bucket_command == "create":
+            buckets = create_bucket(target, args.bucket)
+        else:
+            buckets = check_bucket_access(target, args.bucket)
     if args.provider_bucket_command == "list":
         result = {"ok": True, "connection_id": connection_id, "provider": provider, "buckets": buckets}
         if dimension is not None:
@@ -1568,7 +1603,7 @@ def dispatch(args, instance: Path) -> dict:
 
             return {"ok": True, **encryption_status(dimension, backend)}
         if args.encryption_command == "initialize":
-            if dimension.provider != "minio":
+            if dimension.provider not in {"minio", "s3"}:
                 raise ValueError("encryption initialization is only available for MinIO Dimensions")
             recipients = args.recovery_recipients or []
             material = ensure_minio_domain(
@@ -1592,7 +1627,7 @@ def dispatch(args, instance: Path) -> dict:
                 if args.material_handoff is None:
                     Path(material.identity).unlink(missing_ok=True)
         if args.encryption_command in {"migrate", "resume"}:
-            if dimension.provider != "minio":
+            if dimension.provider not in {"minio", "s3"}:
                 raise ValueError("encryption migration is only available for MinIO Dimensions")
             if args.expected_catalog_etag is not None:
                 _body, observed_etag = backend.read_catalog()
@@ -1833,20 +1868,27 @@ def dispatch(args, instance: Path) -> dict:
             config = persisted_config() or {}
             if action == "create":
                 payload = json.load(sys.stdin)
-                if not isinstance(payload, dict) or args.provider != "minio":
-                    raise ValueError("provider connection create supports MinIO JSON credentials only")
-                endpoint = args.endpoint
-                connection_id = args.connection_id or _minio_connection_id(endpoint)
+                if args.path_style and args.virtual_host_style:
+                    raise ValueError("choose one S3 addressing style")
+                if not isinstance(payload, dict) or args.provider not in {"minio", "s3"}:
+                    raise ValueError("provider connection create supports MinIO and S3 JSON credentials")
+                endpoint = args.endpoint or payload.get("endpoint") or (default_s3_endpoint(args.region or payload.get("region")) if args.provider == "s3" else None)
+                if not endpoint:
+                    raise ValueError("MinIO connection requires an HTTPS endpoint")
+                connection_id = args.connection_id or _minio_connection_id(endpoint, args.provider)
                 profile = args.credential_profile or f"josh-room-{connection_id}"
                 credentials = _connection_credentials(payload)
                 records = dict(config.get("connections", {}))
                 connection = {
-                    "display_name": payload.get("display_name", "MinIO"),
-                    "provider": "minio",
+                    "display_name": payload.get("display_name", "Amazon S3" if args.provider == "s3" else "MinIO"),
+                    "provider": args.provider,
                     "endpoint": endpoint,
                     "credential_profile": profile,
-                    "region": payload.get("region", "us-east-1"),
+                    **({"region": args.region or payload.get("region")} if args.provider == "s3" else {"region": args.region or payload.get("region", "us-east-1")}),
+                    **({"path_style": True} if args.path_style else {}),
                 }
+                if args.provider == "s3" and not connection["region"]:
+                    raise ValueError("S3 connection setup requires an explicit region")
                 connection_configs({"connections": {connection_id: connection}})
                 _store_credentials(profile, credentials)
                 config["connections"] = {**records, connection_id: connection}
@@ -1862,6 +1904,8 @@ def dispatch(args, instance: Path) -> dict:
                 save_private_config(config)
                 return {"ok": True, "connection": connection.connection_id, "disconnected": True}
             payload = json.load(sys.stdin)
+            if args.path_style and args.virtual_host_style:
+                raise ValueError("choose one S3 addressing style")
             credentials = _connection_credentials(payload)
             endpoint = args.endpoint or connection.endpoint
             profile = args.credential_profile or connection.credential_profile
@@ -1870,6 +1914,8 @@ def dispatch(args, instance: Path) -> dict:
                 "endpoint": endpoint,
                 "credential_profile": profile,
                 "auth_state": "configured",
+                **({"region": args.region} if args.region else {}),
+                **({"path_style": args.path_style} if args.path_style or args.virtual_host_style else {}),
             }
             connection_configs({"connections": {connection.connection_id: updated}})
             _store_credentials(profile, credentials)
@@ -1903,27 +1949,35 @@ def dispatch(args, instance: Path) -> dict:
         if not isinstance(payload, dict):
             raise ValueError("connection setup input must be an object")
         provider = args.provider_option or args.provider or payload.get("provider")
-        if provider != "minio":
-            raise ValueError("connections setup currently supports MinIO only")
+        if args.path_style and args.virtual_host_style:
+            raise ValueError("choose one S3 addressing style")
+        if provider not in {"minio", "s3"}:
+            raise ValueError("connections setup currently supports MinIO and S3")
         connection_id = args.connection_id or payload.get("connection_id") or payload.get("id")
         profile = args.credential_profile or payload.get("credential_profile") or payload.get("profile")
-        endpoint = payload.get("endpoint")
+        endpoint = args.endpoint or payload.get("endpoint") or (default_s3_endpoint(args.region or payload.get("region")) if provider == "s3" else None)
+        region = args.region or payload.get("region")
         access_key = payload.get("access-key-id", payload.get("access_key_id"))
         secret_key = payload.get("secret-access-key", payload.get("secret_access_key"))
-        if not all(isinstance(value, str) and value for value in (connection_id, profile, endpoint, access_key, secret_key)):
-            raise ValueError("MinIO connection setup requires id, credential profile, endpoint, access key, and secret key")
+        if not all(isinstance(value, str) and value for value in (connection_id, profile, endpoint, access_key, secret_key)) or (provider == "s3" and not region):
+            raise ValueError("connection setup requires id, credential profile, endpoint, S3 region, access key, and secret key")
         records = dict(config.get("connections", {}))
         if connection_id in records:
             raise ValueError(f"connection {connection_id} already exists")
         connection = {
-            "display_name": args.display_name or payload.get("display_name") or "MinIO",
-            "provider": "minio",
+            "display_name": args.display_name or payload.get("display_name") or ("Amazon S3" if provider == "s3" else "MinIO"),
+            "provider": provider,
             "endpoint": endpoint,
             "credential_profile": profile,
-            "region": payload.get("region", "us-east-1"),
+            "region": region or "us-east-1",
+            **({"path_style": args.path_style} if args.path_style or args.virtual_host_style else {}),
         }
         connection_configs({"connections": {connection_id: connection}})
-        _store_credentials(profile, {"access-key-id": access_key, "secret-access-key": secret_key})
+        credential_values = {"access-key-id": access_key, "secret-access-key": secret_key}
+        session_token = payload.get("session-token", payload.get("session_token"))
+        if session_token:
+            credential_values["session-token"] = session_token
+        _store_credentials(profile, credential_values)
         config["connections"] = {**records, connection_id: connection}
         save_private_config(config)
         return {"ok": True, "connection": connection_id, "stored": True}
@@ -1931,21 +1985,28 @@ def dispatch(args, instance: Path) -> dict:
         connection = connection_configs(private_config() or {}).get(args.connection)
         if connection is None:
             raise ValueError(f"connection {args.connection} is missing")
-        if connection.provider != "minio":
-            raise ValueError("bucket operations currently support MinIO connections only")
+        if connection.provider not in {"minio", "s3"}:
+            raise ValueError("bucket operations currently support MinIO and S3 connections only")
+        if connection.provider == "s3":
+            from . import s3_backend as provider_backend
+        else:
+            provider_backend = None
+        list_buckets = provider_backend.list_buckets if provider_backend else list_minio_buckets
+        create_bucket = provider_backend.create_bucket if provider_backend else create_minio_bucket
+        check_access = provider_backend.check_bucket_access if provider_backend else check_minio_bucket
         if args.bucket_command == "list":
-            return {"ok": True, "connection_id": connection.connection_id, "buckets": list_minio_buckets(connection)}
+            return {"ok": True, "connection_id": connection.connection_id, "buckets": list_buckets(connection)}
         if args.bucket_command == "check":
             return {
                 "ok": True,
                 "connection_id": connection.connection_id,
-                "bucket": check_minio_bucket(connection, args.bucket),
+                "bucket": check_access(connection, args.bucket),
                 "accessible": True,
             }
         return {
             "ok": True,
             "connection_id": connection.connection_id,
-            "bucket": create_minio_bucket(connection, args.bucket),
+            "bucket": create_bucket(connection, args.bucket),
             "created": True,
         }
     if args.command == "dimensions":
@@ -2049,7 +2110,7 @@ def dispatch(args, instance: Path) -> dict:
         return {"ok": True, "dimension_id": dimension_id, "projects": [{"id": project_id, "display_name": name} for project_id, name in projects]}
     if args.command == "rooms":
         dimension = _effective_dimension(args)
-        if dimension is not None and dimension.provider in {"minio", "r2"}:
+        if dimension is not None and dimension.provider in {"minio", "s3", "r2"}:
             backend = _backend_for_args(args, instance)
             catalog = load_catalog(instance, backend)
             project = catalog.body["projects"].get(args.project)
@@ -2078,7 +2139,7 @@ def dispatch(args, instance: Path) -> dict:
     if args.command == "snapshots":
         if args.snapshots_command == "remove":
             dimension = _effective_dimension(args)
-            if dimension is not None and dimension.provider in {"minio", "r2"}:
+            if dimension is not None and dimension.provider in {"minio", "s3", "r2"}:
                 backend = _backend_for_args(args, instance)
                 catalog = load_catalog(instance, backend)
                 _assert_delete_inventory(catalog, catalog.body["projects"].get(args.project), args)
@@ -2172,7 +2233,7 @@ def dispatch(args, instance: Path) -> dict:
             with ExitStack() as stack:
                 source_material = None
                 destination_material = None
-                if source_dimension_config.provider == "minio":
+                if source_dimension_config.provider in {"minio", "s3"}:
                     source_material = stack.enter_context(_scoped_encryption_material(
                         instance,
                         lambda identity_path: resolve_encryption_material(
@@ -2183,7 +2244,7 @@ def dispatch(args, instance: Path) -> dict:
                             preserve_identity_path=True,
                         ),
                     ))
-                if destination_dimension_config.provider == "minio":
+                if destination_dimension_config.provider in {"minio", "s3"}:
                     destination_material = stack.enter_context(_scoped_encryption_material(
                         instance,
                         lambda identity_path: resolve_encryption_material(
@@ -2261,8 +2322,8 @@ def dispatch(args, instance: Path) -> dict:
         source = args.source or Path.cwd()
         dimension = _effective_dimension(args)
         selected_material = getattr(args, "_selected_encryption_material", None)
-        if dimension is not None and dimension.provider in {"minio", "r2"}:
-            if dimension.provider == "minio" and selected_material is None:
+        if dimension is not None and dimension.provider in {"minio", "s3", "r2"}:
+            if dimension.provider in {"minio", "s3"} and selected_material is None:
                 raise ValueError("selected MinIO encryption material is required for native Save")
             components = _native_component_inputs(args, source)
             capture_options = _native_capture_options(args)
@@ -2502,6 +2563,8 @@ def _connection_metadata(connection_id, connection):
         "provider": connection.provider,
         "endpoint": connection.endpoint,
         "credential_profile": connection.credential_profile,
+        "region": connection.region,
+        "path_style": connection.option("path_style", False),
         "auth_state": connection.auth_state,
     }
 
@@ -2537,7 +2600,7 @@ def _dimension_hierarchy(instance, dimension, backend):
 
 def _dimension_hierarchy_with_encryption(instance, dimension):
     backend = _backend(dimension.provider, instance, dimension.dimension_id)
-    if dimension.provider != "minio":
+    if dimension.provider not in {"minio", "s3"}:
         return _dimension_hierarchy(instance, dimension, backend)
     def resolve_selected(identity_path):
         return resolve_encryption_material(
@@ -2569,12 +2632,18 @@ def _connection_credentials(payload):
     secret_key = payload.get("secret-access-key", payload.get("secret_access_key"))
     if not all(isinstance(value, str) and value for value in (access_key, secret_key)):
         raise ValueError("connection input requires access key and secret key")
-    return {"access-key-id": access_key, "secret-access-key": secret_key}
+    credentials = {"access-key-id": access_key, "secret-access-key": secret_key}
+    session_token = payload.get("session-token", payload.get("session_token"))
+    if session_token is not None:
+        if not isinstance(session_token, str) or not session_token:
+            raise ValueError("connection session token must be a non-empty string")
+        credentials["session-token"] = session_token
+    return credentials
 
 
-def _minio_connection_id(endpoint):
+def _minio_connection_id(endpoint, provider="minio"):
     slug = re.sub(r"[^a-z0-9]+", "-", re.sub(r"^https?://", "", endpoint.lower())).strip("-")
-    return f"minio-{slug or 'connection'}"
+    return f"{provider}-{slug or 'connection'}"
 
 
 def hydrate_command(args, instance: Path, backend=None) -> dict:
@@ -2583,8 +2652,8 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
         backend = _backend_for_args(args, instance)
     selected_material = getattr(args, "_selected_encryption_material", None)
     dimension = _effective_dimension(args)
-    if dimension is not None and dimension.provider in {"minio", "r2"}:
-        if dimension.provider == "minio" and selected_material is None:
+    if dimension is not None and dimension.provider in {"minio", "s3", "r2"}:
+        if dimension.provider in {"minio", "s3"} and selected_material is None:
             raise ValueError("selected MinIO encryption material is required to Enter this Dimension")
         catalog = load_catalog(instance, backend)
         record = catalog.resolve_snapshot(args.project, args.snapshot)
@@ -2631,7 +2700,7 @@ def _local_save_preflight(args, instance: Path) -> dict | None:
         return None
     try:
         dimension = _effective_dimension(args)
-        if dimension is None or dimension.provider != "minio":
+        if dimension is None or dimension.provider not in {"minio", "s3"}:
             return None
         if _native_capture_options(args) or getattr(args, "confirm_deletion", None):
             invalidate(instance, source)
@@ -2709,7 +2778,10 @@ def _backend(name: str, instance: Path, dimension: str | None = None):
         name = selected.provider
     if name == "local":
         return None
-    if name == "minio":
+    if name in {"minio", "s3"}:
+        if name == "s3":
+            from .s3_backend import S3Backend, S3Config
+            return S3Backend(S3Config.from_private(config, dimension), receipt_dir=instance / "receipts")
         return MinioBackend(MinioConfig.from_private(config, dimension), receipt_dir=instance / "receipts")
     return R2Backend(R2Config.from_private(config, dimension), receipt_dir=instance / "receipts")
 
@@ -2944,7 +3016,7 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
     encryption_error_code = None
     selected_dimension = None
     selected_backend = backend_name
-    if backend_name in {"r2", "minio"}:
+    if backend_name in {"r2", "minio", "s3"}:
         r2_ok = False
         try:
             selected = _effective_dimension(argparse.Namespace(backend=backend_name, dimension=dimension))
@@ -2957,7 +3029,7 @@ def _doctor(instance: Path, backend_name: str, ide: str, dimension: str | None =
                 backend = _backend(selected.provider, instance, selected_dimension)
             else:
                 backend = _backend(backend_name, instance)
-            if selected and selected.provider == "minio":
+            if selected and selected.provider in {"minio", "s3"}:
                 state = encryption_status(selected, backend)
                 encryption_state = state["state"]
                 encryption_error_code = state.get("error_code")
