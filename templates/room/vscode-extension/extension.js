@@ -3690,7 +3690,7 @@ async function authorizeCloudflareBroker(cwd, { timeoutMs = 600000, targetDimens
               readPrivateRecoveryFile(legacySourceHandoff, "legacy source identity");
             } else {
               if (roomsProvider) await roomsProvider.setCatalog(await loadCatalog(cwd, "Refreshing Dimensions and Rooms..."));
-              await vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
+              void vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
             }
             reporter.finish();
             return "connected";
@@ -5644,7 +5644,7 @@ async function loadNativeCatalogWithSnapshots(cwd, title, options = {}) {
     dimensions: loaded,
     ...(connections ? { connections } : {}),
     offer_synthetic_r2: offerSyntheticR2,
-    auth_state: r2State,
+    auth_state: authState.r2_room_store_state || r2State,
     encryption_state: encryptionState,
     projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions: loaded }),
   });

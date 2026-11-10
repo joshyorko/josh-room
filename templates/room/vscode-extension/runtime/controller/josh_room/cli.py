@@ -26,6 +26,7 @@ from .auth import (
     load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
+    r2_room_store_session_state,
     r2_session_state,
     resolve_encryption_material,
     runtime_capabilities,
@@ -1877,6 +1878,7 @@ def dispatch(args, instance: Path) -> dict:
             "state": state,
             "encryption_state": state,
             "r2_state": r2_session_state(),
+            "r2_room_store_state": r2_room_store_session_state(),
             "capabilities": capabilities,
             "dimension_id": args.dimension,
         }

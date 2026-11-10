@@ -23,9 +23,12 @@ identities separate: the physical SHA-256 comes from OAuth scope, while the
 UUID4 comes only from the age-encrypted winner.
 
 The returned `RoomStoreKeyset` carries the winning password, physical binding,
-outer metadata generation, and optional repository ID. The password is cached
-only in the native OS keyring under its encryption-domain and metadata
-generation scope. `bind_repository(repository_id)` performs the broker's
+outer metadata generation, and optional repository ID. The standalone client
+caches the password only in the native OS keyring under its encryption-domain
+and metadata generation scope. When no native backend is available, the OAuth
+runtime holds decrypted material only in memory for the operation. Its durable source remains
+the encrypted broker record, so disposable containers need no plaintext
+password cache or host keyring. `bind_repository(repository_id)` performs the broker's
 one-time CAS binding after Restic initialization and caches the unchanged
 password under the winning generation.
 
@@ -35,8 +38,8 @@ may obtain a fresh OAuth session through its existing authorized renewal flow;
 the client never starts interactive Cloudflare login. The legacy KV backend
 returns `room_store_durable_authority_unavailable` and is unsupported.
 
-The client does not wire CLI flows, configure arbitrary buckets, deploy the
-worker, or claim live R2 acceptance.
+HTTP requests identify Josh Room with its application User-Agent so Cloudflare
+does not reject Python's default browser signature before reaching the broker.
 
 `auth.create_r2_room_store_authority(dimension)` is the private-session factory.
 It requires an existing connected R2 session with a valid capability, confirms
@@ -48,3 +51,20 @@ read path. Only an explicit true value allows create-once material writes. The
 capability is stored only in the private runtime session metadata; when its
 separate 10-minute expiry passes, it is removed while still-valid R2 credentials
 remain connected.
+
+`auth status` reports `r2_room_store_state` separately from `r2_state`. The
+extension can keep displaying readable Rooms while requesting a fresh
+authorization before Save when its broker capability has expired. A successful
+connection finishes its progress notification without waiting for the user to
+dismiss the success message.
+
+After an R2 OAuth handoff is persisted, `poll_oauth_session()` initializes or
+recovers encrypted broker material before reporting authorization complete.
+This permits the first Save preview without adding remote writes to preview.
+Legacy handoffs without a Room Store capability retain catalog access but do
+not establish native Save readiness.
+
+If initialization fails, the incomplete runtime session is removed so a retry
+cannot mistake it for a ready connection. Save verifies the local storage
+binding against the selected Dimension and the broker binding against its
+authenticated authority. These bindings use different hash schemes.
