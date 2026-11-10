@@ -88,8 +88,11 @@ class R2RoomStoreAuthority:
     identity_path: Path = field(default=Path(), repr=False)
     recipients: tuple[str, ...] = ()
     timeout: float = 10.0
+    cache_in_native_keyring: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.cache_in_native_keyring) is not bool:
+            raise TypeError("native keyring cache setting must be boolean")
         if not isinstance(self.session_id, str) or not re.fullmatch(
             r"[0-9a-f]{64}", self.session_id
         ):
@@ -255,6 +258,7 @@ class R2RoomStoreAuthority:
             else json.dumps(payload, separators=(",", ":")).encode()
         )
         headers = {
+            "User-Agent": "Josh-Room/0.1 (+https://github.com/joshyorko/josh-room)",
             "Authorization": f"Bearer {self.capability}",
             "Accept": "application/json",
         }
@@ -455,6 +459,8 @@ class R2RoomStoreAuthority:
         return inner
 
     def _cache(self, encryption_domain_id: str, generation: int, secret: str) -> None:
+        if not self.cache_in_native_keyring:
+            return
         try:
             keyring.store_room_store_secret(encryption_domain_id, generation, secret)
         except (RuntimeError, OSError, ValueError):

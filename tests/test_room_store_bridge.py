@@ -1575,10 +1575,14 @@ def test_r2_existing_authority_requests_read_only_material(monkeypatch):
     material = Material()
     room_store = SimpleNamespace(
         secret="s" * 43,
-        physical_binding=material.keyset.binding,
+        physical_binding="d" * 64,
         encryption_domain_id=domain_id,
     )
-    session = SimpleNamespace(encryption_material=material, room_store=room_store)
+    session = SimpleNamespace(
+        encryption_material=material,
+        room_store=room_store,
+        authority=SimpleNamespace(physical_binding="d" * 64),
+    )
     observed = []
     monkeypatch.setattr(bridge, "EncryptionMaterial", Material)
     monkeypatch.setattr(
@@ -1596,6 +1600,12 @@ def test_r2_existing_authority_requests_read_only_material(monkeypatch):
     assert resolved is session
     assert selected is material
     assert observed == [False]
+
+    room_store.physical_binding = "e" * 64
+    with pytest.raises(bridge.RoomStoreBridgeError, match="authority is unavailable"):
+        bridge._r2_authority_session(
+            dimension, material, session, allow_initialize=False
+        )
 
 
 def test_restic_runtime_handoff_rejects_arbitrary_path_and_noninstall_lookup_stays_cold(
@@ -1807,12 +1817,11 @@ def test_native_room_store_cache_mismatch_remains_fatal(monkeypatch, provider):
         bridge._verify_native_room_store_cache(SimpleNamespace(provider=provider), "domain", 1, "secret")
 
 
-def test_r2_native_room_store_cache_unavailability_remains_fatal(monkeypatch):
+def test_r2_authenticated_material_needs_no_unavailable_native_cache(monkeypatch):
     monkeypatch.setattr(keyring, "available", lambda: False)
-    with pytest.raises(keyring.NativeSecretBackendUnavailable):
-        bridge._verify_native_room_store_cache(
-            SimpleNamespace(provider="r2"), "00000000-0000-4000-8000-000000000001", 1, "secret"
-        )
+    bridge._verify_native_room_store_cache(
+        SimpleNamespace(provider="r2"), "00000000-0000-4000-8000-000000000001", 1, "secret"
+    )
 
 
 @pytest.mark.parametrize("provider", ["minio", "r2"])

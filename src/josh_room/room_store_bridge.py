@@ -232,7 +232,7 @@ def _r2_authority_session(
             not isinstance(material, EncryptionMaterial)
             or not isinstance(room_store.secret, str)
             or material.keyset.binding != binding
-            or room_store.physical_binding != binding
+            or room_store.physical_binding != session.authority.physical_binding
             or room_store.encryption_domain_id != material.encryption_domain_id
             or (
                 selected_material is not None
@@ -1350,13 +1350,12 @@ def _read_only_snapshot_entries(
 
 
 def _verify_native_room_store_cache(dimension, domain_id, generation, secret):
-    """Check an available native cache without making it MinIO's authority."""
+    """Check an available native cache against authenticated remote material."""
     try:
         cached_secret = keyring.lookup_room_store_secret(domain_id, generation)
     except keyring.NativeSecretBackendUnavailable:
-        if dimension.provider not in {"minio", "s3"}:
+        if dimension.provider not in {"minio", "s3", "r2"}:
             raise
-        # MinIO's validated remote keyset supplies durable custody on headless hosts.
         return
     if not hmac.compare_digest(cached_secret, secret):
         raise RoomStoreBridgeError(
