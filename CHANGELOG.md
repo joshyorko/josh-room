@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.48]
+
+- fix: restore R2 Save and editor connection behavior (#186)
+
 ## [0.1.47]
 
 - Add explicit Amazon S3 and HTTPS S3-compatible storage connections.
