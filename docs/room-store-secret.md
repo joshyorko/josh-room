@@ -74,3 +74,12 @@ does not satisfy a design that requires secrecy from bucket readers.
 Changing or removing the Restic password does not revoke a leaked password
 from existing repository data. True revocation can require repository
 re-encryption.
+
+## Experimental encrypted custody
+
+An explicitly migrated MinIO Dimension can keep its Room Store secret in the
+same portable DO class as R2, hosted on celld. The current format-2 reader/writer
+remains available only during the migration compatibility window. See the
+[opt-in migration and permanent-seal rollback procedure](portable-room-store.md).
+The migration preserves the password and existing snapshot formats. It does not
+revoke passwords previously read from a format-2 keyset or its historical versions.
