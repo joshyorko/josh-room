@@ -3282,6 +3282,27 @@ test("fresh configured R2 shows Connect Cloudflare without probing an empty cata
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "projects"), false);
 });
 
+test("expired R2 Save authorization retains readable rooms but requires reconnect", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-expiry-test-"));
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "dimensions") return { stdout: JSON.stringify({
+      ok: true, dimensions: [{ id: "r2", display_name: "Default", provider: "r2",
+        rooms: [{ id: "synthetic-room", display_name: "Synthetic Room", jats: [] }] }],
+    }) };
+    if (args[0] === "auth") return { stdout: JSON.stringify({
+      ok: true, r2_state: "connected", r2_room_store_state: "expired",
+    }) };
+    throw new Error(`unexpected command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  const catalog = await extension.__test__.loadCatalog(root, "Loading storage");
+  assert.equal(catalog.auth_state, "expired");
+  assert.equal(catalog.dimensions[0].connection_state, "connected");
+  assert.equal(catalog.projects[0].id, "synthetic-room");
+});
+
 test("MinIO-only storage does not probe or synthesize Cloudflare R2", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-minio-only-catalog-test-"));
   const { vscode, statusItem } = createVscodeMock(root);
@@ -3544,10 +3565,23 @@ test("Cloudflare authorization refreshes the hierarchy and loads Rooms and JATs"
   const provider = new extension.__test__.HierarchyRoomsProvider();
   extension.__test__.setRoomsProvider(provider);
 
-  assert.equal(await extension.__test__.connectCloudflare(
+  let dismissSuccess;
+  vscode.window.showInformationMessage = () => new Promise(resolve => { dismissSuccess = resolve; });
+  const connecting = extension.__test__.connectCloudflare(
     { kind: "connection", state: "missing", dimension: { id: "r2", provider: "r2" } },
     { pollIntervalMs: 0 },
-  ), "connected");
+  );
+  let timeout;
+  try {
+    assert.equal(await Promise.race([
+      connecting,
+      new Promise(resolve => { timeout = setTimeout(() => resolve("still-connecting"), 1000); }),
+    ]), "connected");
+  } finally {
+    clearTimeout(timeout);
+    dismissSuccess?.();
+    await connecting;
+  }
   const connection = provider.roots[0].children[0];
 
   assert.equal(connection.label, "Provider Connection");

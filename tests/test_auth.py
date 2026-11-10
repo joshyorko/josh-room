@@ -321,7 +321,16 @@ def test_r2_room_store_handoff_is_private_and_kept_out_of_config_and_environment
     monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr("josh_room.auth._request", lambda *_args, **_kwargs: session)
 
+    prepared = []
+
+    def prepare(dimension, *, allow_initialize):
+        assert auth._valid_room_store_handoff(json.loads(auth._runtime_paths()[3].read_text()))
+        prepared.append((dimension.provider, dimension.endpoint, dimension.bucket, allow_initialize))
+
+    monkeypatch.setattr(auth, "create_r2_room_store_authority", prepare)
+
     assert poll_oauth_session(session_id) == {"status": "authorized"}
+    assert prepared == [("r2", session["endpoint"], session["bucket"], True)]
     runtime = tmp_path / "runtime" / "josh-room" / "session"
     metadata_path = runtime / "session.json"
     metadata = json.loads(metadata_path.read_text())
@@ -333,6 +342,15 @@ def test_r2_room_store_handoff_is_private_and_kept_out_of_config_and_environment
     assert capability not in (runtime / "config.json").read_text()
     assert capability not in (runtime / "r2.json").read_text()
     assert capability not in os.environ.values()
+
+    def fail_prepare(*_args, **_kwargs):
+        raise auth.R2RoomStoreError("room_store_transport_failed")
+
+    monkeypatch.setattr(auth, "create_r2_room_store_authority", fail_prepare)
+    with pytest.raises(auth.R2RoomStoreError, match="room_store_transport_failed"):
+        poll_oauth_session(session_id)
+    assert auth.runtime_session_state() == "missing"
+    assert auth.r2_session_state() == "missing"
 
 
 def test_runtime_read_unlinks_symlink_without_following_handoff_target(tmp_path, monkeypatch):
@@ -408,6 +426,7 @@ def test_expired_room_store_capability_is_cleared_without_expiring_r2_session(tm
         "roomStoreCapabilityExpiresIn": 300,
     }, session_id="a" * 64)
     now = time.time()
+    assert auth.r2_room_store_session_state() == "connected"
     monkeypatch.setattr(auth.time, "time", lambda: now + 400)
 
     assert auth.runtime_session_state() == "connected"
@@ -415,6 +434,7 @@ def test_expired_room_store_capability_is_cleared_without_expiring_r2_session(tm
     assert not any(name.startswith("room_store_") for name in metadata)
     assert (runtime / "r2.json").is_file()
     assert auth.r2_session_state() == "connected"
+    assert auth.r2_room_store_session_state() == "expired"
 
 
 def test_r2_logout_removes_room_store_capability(tmp_path, monkeypatch):
@@ -437,9 +457,12 @@ def test_r2_logout_removes_room_store_capability(tmp_path, monkeypatch):
     assert not (runtime / "r2.json").exists()
 
 
-def test_r2_room_store_factory_uses_same_broker_uuid_for_encryption_material(tmp_path, monkeypatch):
+@pytest.mark.parametrize("native_cache", [False, True])
+def test_r2_room_store_factory_uses_same_broker_uuid_for_encryption_material(tmp_path, monkeypatch, native_cache):
     import base64
     import uuid
+
+    monkeypatch.setattr(auth.keyring, "available", lambda: native_cache)
     from types import SimpleNamespace
 
     from josh_room import crypto
@@ -504,6 +527,7 @@ def test_r2_room_store_factory_uses_same_broker_uuid_for_encryption_material(tmp
     assert selected.room_store.physical_binding == physical_binding
     assert selected.room_store.encryption_domain_id != physical_binding
     assert selected.authority.kwargs["session_id"] == "a" * 64
+    assert selected.authority.kwargs["cache_in_native_keyring"] is native_cache
     assert FakeAuthority.read_calls == 1
     assert FakeAuthority.ensure_calls == 0
     assert "b" * 43 not in repr(selected)

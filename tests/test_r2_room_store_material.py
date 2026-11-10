@@ -1,6 +1,7 @@
 import base64
 import json
 import uuid
+from io import BytesIO
 
 import pytest
 
@@ -14,6 +15,33 @@ RECIPIENTS = (
     "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq",
     "age1qgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpquuzgag",
 )
+
+
+def test_http_material_request_identifies_josh_room(monkeypatch, tmp_path):
+    class Response(BytesIO):
+        status = 404
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    def open_request(request, **_kwargs):
+        assert request.get_header("User-agent").startswith("Josh-Room/")
+        return Response(b'{"error":"room_store_material_missing"}')
+
+    monkeypatch.setattr(client, "urlopen", open_request)
+    identity_path = tmp_path / IDENTITY
+    identity_path.write_text("synthetic-identity")
+    identity_path.chmod(0o600)
+    value = client.R2RoomStoreAuthority(
+        session_id=SESSION, capability=CAPABILITY, physical_binding=PHYSICAL,
+        endpoint_transport="https://authority.example.invalid",
+        identity_path=identity_path, recipients=RECIPIENTS,
+    )
+    with pytest.raises(client.R2RoomStoreError, match="room_store_material_missing"):
+        value.read_material_details()
 
 
 class Broker:
@@ -268,3 +296,15 @@ def test_r2_still_requires_native_secret_custody(authority, monkeypatch):
     ))
     with pytest.raises(client.R2RoomStoreError, match="room_store_native_keyring_unavailable"):
         value.ensure_material()
+
+
+def test_oauth_runtime_can_use_broker_material_without_persisting_secret(authority, monkeypatch):
+    from dataclasses import replace
+
+    value, broker = authority
+    value = replace(value, cache_in_native_keyring=False)
+    monkeypatch.setattr(client.keyring, "store_room_store_secret", lambda *_args: pytest.fail("transient material must not be cached"))
+    created = value.ensure_material_details()
+    recovered = value.read_material_details()
+    assert recovered.secret == created.secret
+    assert created.secret not in json.dumps(broker.record)

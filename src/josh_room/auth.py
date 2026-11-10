@@ -15,7 +15,8 @@ from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError
 
-from .config import config_dir
+from . import keyring
+from .config import DimensionConfig, config_dir
 from .encryption_domain import (
     KEYSET_CONTROL_KEY,
     ROOM_STORE_KEYSET_FORMAT_VERSION,
@@ -235,6 +236,20 @@ def poll_oauth_session(
         _write_runtime(session, dimension_id=dimension_id, session_id=session_id)
     else:
         _write_runtime(session, dimension_id=dimension_id, purpose=purpose, session_id=session_id)
+    if "roomStoreCapability" in session:
+        dimension = DimensionConfig(
+            dimension_id=dimension_id or "r2",
+            display_name="Cloudflare R2",
+            provider="r2",
+            endpoint=session["endpoint"],
+            bucket=session["bucket"],
+            credential_profile="oauth-runtime",
+        )
+        try:
+            create_r2_room_store_authority(dimension, allow_initialize=True)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            _clear_runtime_session()
+            raise
     return {"status": "authorized"}
 
 
@@ -470,6 +485,17 @@ def r2_session_state() -> str:
     if state != "connected":
         return state
     return "connected" if "r2" in capabilities else "missing"
+
+
+def r2_room_store_session_state() -> str:
+    state = r2_session_state()
+    if state != "connected":
+        return state
+    try:
+        metadata = json.loads(_runtime_paths()[3].read_text())
+    except (OSError, ValueError):
+        return "missing"
+    return "connected" if _valid_room_store_handoff(metadata) else "expired"
 
 
 def _set_runtime_environment(capabilities: tuple[str, ...]) -> None:
@@ -794,6 +820,7 @@ def create_r2_room_store_authority(
         endpoint_transport=_worker_url() if endpoint_transport is None else endpoint_transport,
         identity_path=identity_path,
         recipients=recipients,
+        cache_in_native_keyring=keyring.available(),
     )
     room_store = (
         authority.ensure_material_details()

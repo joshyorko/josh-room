@@ -47,8 +47,8 @@ test("bucketChoices includes a recommended dedicated bucket plus accessible buck
   ]);
 });
 
-test("R2 and MinIO singleton bucket choices keep creation explicit and recommend a dedicated Josh Room bucket", () => {
-  for (const provider of ["r2", "minio"]) {
+test("MinIO singleton bucket choices keep creation explicit and recommend a dedicated Josh Room bucket", () => {
+  for (const provider of ["minio"]) {
     const choices = bucketChoices({ provider, buckets: [{ name: "existing-app-bucket" }] });
     assert.deepEqual(choices[0], {
       label: "$(add) Create new bucket… (recommended: josh-room)",
@@ -61,6 +61,12 @@ test("R2 and MinIO singleton bucket choices keep creation explicit and recommend
       { label: "Enter Bucket Manually…", manual: true },
     ]);
   }
+});
+
+test("R2 sign-in offers only its authorized existing buckets", () => {
+  assert.deepEqual(bucketChoices({ provider: "r2", buckets: ["existing-r2"] }), [
+    { label: "existing-r2", bucket: "existing-r2" },
+  ]);
 });
 
 test("connectionCommand keeps MinIO credentials in the JSON handoff, never argv", () => {

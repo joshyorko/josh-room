@@ -26,6 +26,7 @@ from .auth import (
     load_runtime_session,
     logout_runtime_session,
     poll_oauth_session,
+    r2_room_store_session_state,
     r2_session_state,
     resolve_encryption_material,
     runtime_capabilities,
@@ -1073,8 +1074,10 @@ def _bucket_operation(args, config):
         target = _r2.R2Config.from_dimension(dimension)
         connection_id = dimension.dimension_id
         if args.provider_bucket_command == "list":
-            buckets = _r2.list_buckets(target)
+            buckets = [target.bucket] if dimension.credential_profile == "oauth-runtime" else _r2.list_buckets(target)
         elif args.provider_bucket_command == "create":
+            if dimension.credential_profile == "oauth-runtime":
+                raise ValueError("Cloudflare sign-in authorizes an existing bucket; create a Room in that storage instead")
             buckets = _r2.create_bucket(target, args.bucket)
         else:
             buckets = _r2.check_bucket_access(target, args.bucket)
@@ -1877,6 +1880,7 @@ def dispatch(args, instance: Path) -> dict:
             "state": state,
             "encryption_state": state,
             "r2_state": r2_session_state(),
+            "r2_room_store_state": r2_room_store_session_state(),
             "capabilities": capabilities,
             "dimension_id": args.dimension,
         }
