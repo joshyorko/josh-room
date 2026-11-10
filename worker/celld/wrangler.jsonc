@@ -1,0 +1,8 @@
+{
+  "name": "josh-room-store-experimental",
+  "main": "index.js",
+  "compatibility_date": "2026-07-01",
+  "durable_objects": { "bindings": [{ "name": "ROOM_STORE", "class_name": "RoomStore" }] },
+  "migrations": [{ "tag": "v1-room-store", "new_sqlite_classes": ["RoomStore"] }],
+  "vars": { "ROOM_STORE_EXPERIMENTAL": "disabled" }
+}
