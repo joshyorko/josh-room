@@ -4184,7 +4184,7 @@ async function configureStorageBucket({ provider, connectionId, dimensionId, con
       throw error;
     }
   }
-  const bucketChoice = await vscode.window.showQuickPick(providerTools.bucketChoices(bucketResult || {}), {
+  const bucketChoice = await vscode.window.showQuickPick(providerTools.bucketChoices({ ...bucketResult, provider }), {
     title: `Josh: Choose a ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Bucket`,
     placeHolder: "Create a dedicated Josh Room bucket or choose an existing bucket",
     ignoreFocusOut: true,

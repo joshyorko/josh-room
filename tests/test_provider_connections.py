@@ -285,8 +285,8 @@ def test_r2_bucket_cli_routes_shared_bucket_commands_to_the_r2_adapter(tmp_path,
         }},
     }
     monkeypatch.setattr(cli, "private_config", lambda: config)
-    monkeypatch.setattr(cli._r2, "list_buckets", lambda _config: ["existing-r2"])
-    monkeypatch.setattr(cli._r2, "create_bucket", lambda _config, bucket: bucket)
+    monkeypatch.setattr(cli._r2, "list_buckets", lambda _config: pytest.fail("bucket-scoped sign-in must not list account buckets"))
+    monkeypatch.setattr(cli._r2, "create_bucket", lambda _config, bucket: pytest.fail("bucket-scoped sign-in must not administer buckets"))
     monkeypatch.setattr(cli._r2, "check_bucket_access", lambda _config, bucket: bucket)
 
     list_args = cli.build_parser().parse_args(["provider", "bucket", "list", "--provider", "r2", "--dimension", "r2"])
@@ -294,7 +294,8 @@ def test_r2_bucket_cli_routes_shared_bucket_commands_to_the_r2_adapter(tmp_path,
     check_args = cli.build_parser().parse_args(["provider", "bucket", "check", "--provider", "r2", "--dimension", "r2", "--bucket", "josh-room"])
     assert cli._requires_oauth(list_args) is True
     assert cli._bucket_operation(list_args, config)["buckets"] == ["existing-r2"]
-    assert cli._bucket_operation(create_args, config)["created"] is True
+    with pytest.raises(ValueError, match="existing bucket"):
+        cli._bucket_operation(create_args, config)
     assert cli._bucket_operation(check_args, config)["accessible"] is True
 
 
