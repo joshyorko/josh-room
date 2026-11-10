@@ -60,6 +60,23 @@ nested guide scopes, and records unknowns. Unsupported or conflicting editor
 files are omitted with a reason. Existing files, including JSONC, are never
 rewritten. Editor recommendations do not install extensions or run tasks.
 
+Documentation excerpts retain their heading ancestry, including **Current**
+and **Proposed**, so a future design is not presented as implemented behavior.
+Discovery follows up to eight local Markdown documents per component, starting
+from the recognized README and architecture files. Links outside the selected
+source, external URLs, and symlinked documents are not read. Git repository
+boundaries remain in the guide even when their manifests are unsupported; their
+purpose and commands are reported as unknown.
+
+Package-script tasks use the declared `packageManager` (`npm`, `pnpm`, `yarn`,
+or `bun`), inherited from enclosing manifests without crossing an independent
+repository boundary. Without a declaration, they retain the npm default.
+Documented shell blocks can establish a working directory with a standalone
+`cd` into an existing directory inside the selected source. Unsupported or
+external directory transitions stop command extraction from that block rather
+than assigning commands to the wrong directory. Discovery never runs a task
+to establish whether its command succeeds.
+
 The `joshRoom.onboarding.editor` VS Code setting selects `vscode` or `none`;
 `joshRoom.onboarding.files` selects any subset of `tasks.json`, `launch.json`,
 `extensions.json`, and `settings.json` (an empty list disables editor files).

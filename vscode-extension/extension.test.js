@@ -6474,6 +6474,66 @@ test("new Room initialization targets selected source and offers explicit source
   assert.equal(spawnHarness.calls.length, 2);
 });
 
+for (const { forceCreate, decision } of [
+  { forceCreate: true, decision: "Save" },
+  { forceCreate: false, decision: "Cancel" },
+]) test(`New Room onboarding runs the real CLI before preview (${forceCreate ? "forceCreate" : "picker"}, ${decision})`, async (t) => {
+  const python = process.env.JOSH_ROOM_TEST_PYTHON || path.join(__dirname, "..", ".venv",
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  if (!fs.existsSync(python)) return t.skip("Python project runtime unavailable; set JOSH_ROOM_TEST_PYTHON");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-onboarding-flow-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const active = path.join(root, "active"), source = path.join(root, "selected");
+  fs.mkdirSync(active); fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, "package.json"), JSON.stringify({ scripts: { test: "never-execute-this" } }));
+  const dimension = { id: "backup", display_name: "Synthetic Backup", provider: "minio", rooms: [] };
+  const { vscode, statusItem, quickPickCalls } = createVscodeMock(active);
+  let guideAtPreview;
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    if (args[0] === "dimensions" || args[0] === "projects") return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
+    if (args[0] === "auth" || args[0] === "encryption") return { stdout: JSON.stringify({ ok: true, state: "ready" }) };
+    if (args[0] === "status") return { stdout: JSON.stringify({ ok: false, state: "unknown" }) };
+    assert.equal(options.cwd, source);
+    if (args[0] === "workspace" && args[1] === "init") {
+      const initialized = spawnSync(python, ["-m", "josh_room", ...args], {
+        cwd: path.join(__dirname, ".."), encoding: "utf8",
+        env: { ...process.env, JOSH_ROOM_CONFIG_DIR: path.join(root, "private-config") },
+      });
+      assert.equal(initialized.status, 0, initialized.stderr);
+      return { stdout: initialized.stdout };
+    }
+    assert.ok(fs.existsSync(path.join(source, "AGENTS.md")));
+    assert.ok(fs.existsSync(path.join(source, ".vscode", "tasks.json")));
+    if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
+    if (args[0] === "snapshot" && args[1] === "preview") {
+      fs.appendFileSync(path.join(source, "AGENTS.md"), "\nUser edit retained after preview.\n");
+      guideAtPreview = fs.readFileSync(path.join(source, "AGENTS.md"), "utf8");
+      return { stdout: JSON.stringify(nativePreview()) };
+    }
+    assert.equal(args[0], "snapshot"); assert.equal(args[1], "create");
+    return { stdout: JSON.stringify({ ok: true, status: "saved", project_id: "synthetic-room",
+      snapshot_id: "synthetic-1", data_added_bytes: 42, scanned_bytes: 12345 }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setSelectedDimensionId(undefined);
+  vscode.openDialogResponses.push([{ fsPath: source }]);
+  vscode.inputBoxResponses.push("Synthetic Room");
+  if (!forceCreate) vscode.quickPickResponses.push({ create: true });
+  vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+  vscode.infoResponses.push("Continue", decision);
+  assert.equal(await extension.__test__.saveRoom({ forceCreate }), decision === "Save" ? "saved" : "cancelled");
+  const operations = spawnHarness.calls.map(({ args }) => args.slice(0, 2).join(" "));
+  assert.ok(operations.indexOf("workspace init") < operations.indexOf("workspace-check --workspace"));
+  assert.ok(operations.indexOf("workspace-check --workspace") < operations.indexOf("snapshot preview"));
+  if (decision === "Save") assert.ok(operations.indexOf("snapshot preview") < operations.indexOf("snapshot create"));
+  else assert.ok(!operations.includes("snapshot create"));
+  assert.equal(fs.readFileSync(path.join(source, "AGENTS.md"), "utf8"), guideAtPreview);
+  assert.ok(!fs.existsSync(path.join(active, "AGENTS.md")));
+  assert.ok(!fs.existsSync(path.join(active, ".vscode")));
+  if (forceCreate) assert.ok(quickPickCalls.every(({ options }) => options.title !== "Josh: Save Room"));
+});
+
 test("New Room settings can disable editor files while keeping onboarding enabled", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-init-none-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

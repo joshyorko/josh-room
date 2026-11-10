@@ -5,9 +5,11 @@ import itertools
 import json
 import os
 import re
+import shlex
 import stat
 import tomllib
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 EDITOR_FILES = ("tasks.json", "launch.json", "extensions.json", "settings.json")
 _MANIFESTS = ("package.json", "pyproject.toml", "Cargo.toml", "go.mod")
@@ -67,10 +69,36 @@ def discover(root: Path) -> dict:
             content = _read(directory / name)
             if content is not None:
                 evidence[name] = content
-        if evidence:
-            marker = directory / ".git"
-            boundary = not marker.is_symlink() and (marker.is_file() or marker.is_dir())
-            projects.append({"directory": relative, "evidence": evidence, "repository": boundary})
+        documents = [name for name in _DOCS if name in evidence]
+        for filename in documents:
+            for target in re.findall(r"(?<!!)\[[^\]]+\]\(([^\s)]+)\)", evidence[filename]):
+                if len(documents) >= 8:
+                    warnings.append(f"Linked documentation budget reached at {relative}")
+                    break
+                try:
+                    parsed = urlsplit(target)
+                except ValueError:
+                    continue
+                if parsed.scheme or parsed.netloc or parsed.query or not parsed.path:
+                    continue
+                decoded = unquote(parsed.path)
+                if any(ord(character) < 0x20 or ord(character) == 0x7f for character in decoded):
+                    continue
+                linked = Path(os.path.abspath(directory / Path(filename).parent / decoded))
+                if not linked.is_relative_to(root) or linked.suffix.lower() != ".md":
+                    continue
+                name = os.path.relpath(linked, directory)
+                if name in evidence:
+                    continue
+                content = _read(linked)
+                if content is not None:
+                    evidence[name] = content
+                    documents.append(name)
+        marker = directory / ".git"
+        boundary = not marker.is_symlink() and (marker.is_file() or marker.is_dir())
+        if evidence or boundary:
+            projects.append({"directory": relative, "evidence": evidence,
+                             "repository": boundary, "documents": documents, "root": root})
         if directory != root and _read(directory / "AGENTS.md") is not None:
             instructions.append((directory.relative_to(root) / "AGENTS.md").as_posix())
         if len(directory.relative_to(root).parts) >= 3:
@@ -93,6 +121,31 @@ def discover(root: Path) -> dict:
             warnings.append("Directory budget reached")
     if directories:
         warnings.append("Discovery budget reached; discovery incomplete")
+    for project in projects:
+        project["command_documents"] = []
+        for filename in project["documents"]:
+            document = Path(os.path.abspath(root / project["directory"] / filename))
+            owners = [candidate for candidate in projects
+                      if document.is_relative_to(root / candidate["directory"])
+                      and (candidate["repository"] or any(name in candidate["evidence"] for name in _MANIFESTS))]
+            owner = max(owners, key=lambda candidate: len(Path(candidate["directory"]).parts), default=project)
+            if owner is project:
+                project["command_documents"].append(filename)
+        ancestors = sorted((candidate for candidate in projects
+                            if (root / project["directory"]).is_relative_to(root / candidate["directory"])),
+                           key=lambda candidate: len(Path(candidate["directory"]).parts), reverse=True)
+        for ancestor in ancestors:
+            try:
+                package = json.loads(ancestor["evidence"].get("package.json", "{}"))
+                declared = package.get("packageManager", "")
+                match = re.fullmatch(r"(npm|pnpm|yarn|bun)@\S+", declared)
+                if match:
+                    project["package_manager"] = match[1]
+                    break
+            except (ValueError, TypeError, AttributeError):
+                pass
+            if ancestor["repository"]:
+                break
     return {"projects": projects, "instructions": instructions, "warnings": warnings}
 
 
@@ -110,22 +163,80 @@ def _commands(project: dict) -> list[dict]:
         if isinstance(scripts, dict):
             for name, command in list(scripts.items())[:20]:
                 if isinstance(command, str) and re.fullmatch(r"[A-Za-z0-9_][\w:-]*", name):
-                    commands.append({"command": f"npm run {name}", "directory": directory,
+                    commands.append({"command": f"{project.get('package_manager', 'npm')} run {name}", "directory": directory,
                                      "evidence": "package.json", "detail": command})
     except (ValueError, AttributeError):
         pass
     # Only self-contained commands explicitly documented in a shell code fence.
-    for filename in _DOCS:
+    for filename in project["command_documents"]:
         text = evidence.get(filename, "")
         for block in re.findall(r"```(?:sh|shell|bash|zsh|console)\n(.*?)```", text, re.DOTALL):
-            if re.search(r"(?m)^\s*(?:\$ )?cd\s", block):
-                continue  # CWD transitions require interpretation; do not guess.
+            working_directory = directory
             for line in block.splitlines():
                 command = line.strip().removeprefix("$ ")
-                if command in {"pytest", "make", "just", "npm test", "npm start"} or re.fullmatch(r"(?:uv run|python3? -m|pytest|npm (?:run|test|start)|pnpm|cargo|go (?:test|run|build)|make|just) [\w ./:=,@+-]+", command):
-                    commands.append({"command": command, "directory": directory,
+                if re.match(r"(?:cd|pushd|popd)(?:\s|$)", command):
+                    try:
+                        parts = shlex.split(command)
+                        if len(parts) != 2 or parts[0] != "cd" or any(c in parts[1] for c in "$`~;&|<>"):
+                            break
+                        root = project["root"]
+                        target = Path(os.path.abspath(root / working_directory / parts[1]))
+                        if not target.is_relative_to(root):
+                            break
+                        descriptor = _directory(target)
+                        os.close(descriptor)
+                        working_directory = target.relative_to(root).as_posix()
+                    except (OSError, ValueError):
+                        break
+                    continue
+                if command in {"pytest", "make", "just", "npm test", "npm start"} or re.fullmatch(r"(?:uv run|python3? -m|pytest|npm (?:run|test|start)|pnpm|yarn|bun|cargo|go (?:test|run|build)|make|just) [\w ./:=,@+-]+", command):
+                    commands.append({"command": command, "directory": working_directory,
                                      "evidence": filename, "detail": "documented command"})
-    return commands[:30]
+    unique = {(item["command"], item["directory"]): item for item in commands}
+    return list(unique.values())[:30]
+
+
+def _documentation_excerpt(text: str) -> list[str]:
+    # Keep heading ancestry: dropping a "Proposed" parent changes the meaning.
+    headings, excerpts, paragraph = [], [], []
+    fenced = False
+
+    def flush():
+        if paragraph and len(excerpts) < 12:
+            context = " / ".join(title for _, title in headings)
+            excerpts.append((context, "\n".join(paragraph)[:900]))
+        paragraph.clear()
+
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            flush()
+            fenced = not fenced
+        elif not fenced:
+            heading = re.match(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$", line)
+            setext = re.fullmatch(r" {0,3}(=+|-+)\s*", line) if paragraph else None
+            if heading:
+                flush()
+                level = len(heading[1])
+                headings[:] = [(depth, title) for depth, title in headings if depth < level]
+                headings.append((level, heading[2]))
+            elif setext:
+                level = 1 if setext[1].startswith("=") else 2
+                headings[:] = [(depth, title) for depth, title in headings if depth < level]
+                headings.append((level, " ".join(paragraph).strip()))
+                paragraph.clear()
+            elif not line.strip():
+                flush()
+            elif not line.lstrip().startswith(("<", "[!")):
+                paragraph.append(line)
+    flush()
+    lines = []
+    for context, paragraph in excerpts:
+        if context:
+            lines.append(f"Source section: **{context}**")
+        lines.extend(["> " + paragraph.replace("\n", "\n> "), ""])
+    if len(excerpts) == 12:
+        lines.append("Excerpt limit reached; consult the linked document for further sections.")
+    return lines
 
 
 def _guide(discovery: dict) -> bytes:
@@ -139,15 +250,13 @@ def _guide(discovery: dict) -> bytes:
                   "Evidence: " + ", ".join(_link(directory, name) for name in evidence) + "."]
         lines.append("Repository boundary: local .git marker present (including linked-worktree markers)." if project["repository"]
                      else "No local repository boundary established here; this may be a component of an enclosing repository.")
-        for name in _DOCS:
+        for name in project["documents"]:
             text = evidence.get(name)
             if not text:
                 continue
-            paragraphs = re.split(r"\n\s*\n", text)
-            excerpts = [p.strip() for p in paragraphs if p.strip() and not p.lstrip().startswith(("#", "```", "<", "[!"))][:2]
+            excerpts = _documentation_excerpt(text)
             if excerpts:
-                lines += [f"Documentation excerpt ({_link(directory, name)}; current/proposed status follows that source):", ""]
-                lines += ["> " + p[:900].replace("\n", "\n> ") for p in excerpts]
+                lines += [f"Documentation excerpt ({_link(directory, name)}):", "", *excerpts]
         try:
             metadata = tomllib.loads(evidence.get("pyproject.toml", "")).get("project", {})
             if metadata.get("name"):
@@ -186,7 +295,7 @@ def _guide(discovery: dict) -> bytes:
         except (ValueError, TypeError, AttributeError):
             pass
         commands = _commands(project)
-        lines += [f"- `{item['command']}` in `{directory}` from {_link(directory, item['evidence'])}." for item in commands]
+        lines += [f"- `{item['command']}` in `{item['directory']}` from {_link(directory, item['evidence'])}." for item in commands]
         if not commands:
             lines.append("Development commands: unknown; consult the linked documentation.")
         lines.append("Dependencies and cross-component relationships are established only by the linked evidence; undocumented relationships remain unknown.")
@@ -203,8 +312,9 @@ def _editor(root: Path, discovery: dict, selected: tuple[str, ...]) -> tuple[dic
     for project in discovery["projects"]:
         directory = project["directory"]
         for item in _commands(project):
-            tasks.append({"label": f"{directory}: {item['command']}", "type": "shell", "command": item["command"],
-                          "options": {"cwd": "${workspaceFolder}" + ("/" + directory if directory != "." else "")}, "problemMatcher": []})
+            working_directory = item["directory"]
+            tasks.append({"label": f"{working_directory}: {item['command']}", "type": "shell", "command": item["command"],
+                          "options": {"cwd": "${workspaceFolder}" + ("/" + working_directory if working_directory != "." else "")}, "problemMatcher": []})
         evidence = project["evidence"]
         try:
             package = json.loads(evidence.get("package.json", "{}"))

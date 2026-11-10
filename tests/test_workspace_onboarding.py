@@ -29,6 +29,165 @@ def test_multi_project_evidence_commands_and_scopes(tmp_path):
     assert '.vscode/launch.json' in result['onboarding']['omitted']
 
 
+def test_architecture_retains_section_context_and_later_relationships(tmp_path):
+    (tmp_path / 'ARCHITECTURE.md').write_text(
+        '# Architecture\n\n'
+        '## Current\n\nRequests are served directly by the API.\n\n'
+        '## Proposed\n\nRequests will be delegated to a queue worker.\n\n'
+        '## Components\n\nThe browser client calls the API over HTTP.\n'
+    )
+    initialize_workspace(tmp_path, editor='none')
+    guide = (tmp_path / 'AGENTS.md').read_text()
+    current = guide.index('Current')
+    proposed = guide.index('Proposed')
+    assert current < guide.index('Requests are served directly') < proposed
+    assert proposed < guide.index('Requests will be delegated')
+    assert 'The browser client calls the API over HTTP.' in guide
+
+
+def test_architecture_retains_indented_and_setext_heading_context(tmp_path):
+    (tmp_path / 'ARCHITECTURE.md').write_text(
+        '# Architecture\n\n## Current\n\nThe API serves requests directly.\n\n'
+        '  ## Proposed\n\nA worker may serve requests later.\n\n'
+        'Future deployment\n-----------------\n\nA second region is planned.\n'
+    )
+    initialize_workspace(tmp_path, editor='none')
+    guide = (tmp_path / 'AGENTS.md').read_text()
+    assert 'Source section: **Architecture / Proposed**\n> A worker' in guide
+    assert 'Source section: **Architecture / Future deployment**\n> A second region' in guide
+
+
+def test_declared_package_manager_applies_to_nested_workspace_tasks(tmp_path):
+    (tmp_path / 'package.json').write_text(json.dumps({
+        'name': 'synthetic-suite', 'private': True, 'packageManager': 'pnpm@10.0.0',
+        'workspaces': ['apps/*'],
+    }))
+    app = tmp_path / 'apps' / 'client'
+    app.mkdir(parents=True)
+    (app / 'package.json').write_text(json.dumps({
+        'name': 'synthetic-client', 'scripts': {'dev': 'vite', 'test': 'vitest run'},
+    }))
+    initialize_workspace(tmp_path, files=['tasks.json'])
+    tasks = json.loads((tmp_path / '.vscode/tasks.json').read_text())['tasks']
+    assert any(t['command'] == 'pnpm run dev'
+               and t['options']['cwd'] == '${workspaceFolder}/apps/client' for t in tasks)
+    assert not any(t['command'].startswith('npm ') for t in tasks)
+
+
+def test_documented_working_directory_is_used_for_tasks(tmp_path):
+    (tmp_path / 'README.md').write_text(
+        '# Synthetic Room\n\nThe API serves the client.\n\n'
+        '```sh\ncd services/api\nuv run pytest\n```\n'
+    )
+    (tmp_path / 'services' / 'api').mkdir(parents=True)
+    initialize_workspace(tmp_path, files=['tasks.json'])
+    tasks_path = tmp_path / '.vscode/tasks.json'
+    assert tasks_path.exists(), 'A documented command with a local cwd must be usable'
+    tasks = json.loads(tasks_path.read_text())['tasks']
+    assert any(t['command'] == 'uv run pytest'
+               and t['options']['cwd'] == '${workspaceFolder}/services/api' for t in tasks)
+    guide = (tmp_path / 'AGENTS.md').read_text()
+    assert '`uv run pytest` in `services/api`' in guide
+
+
+def test_documented_external_working_directory_is_not_scaffolded(tmp_path):
+    (tmp_path / 'README.md').write_text(
+        '# Synthetic Room\n\n```sh\ncd ../outside\nuv run pytest\n```\n'
+    )
+    initialize_workspace(tmp_path, files=['tasks.json'])
+    assert not (tmp_path / '.vscode/tasks.json').exists()
+
+
+def test_linked_local_architecture_is_used_without_following_external_links(tmp_path):
+    (tmp_path / 'README.md').write_text(
+        '# Synthetic Suite\n\nSee [system design](docs/system-design.md).\n'
+        'See [external](https://example.invalid/private.md).\n'
+    )
+    docs = tmp_path / 'docs'
+    docs.mkdir()
+    (docs / 'system-design.md').write_text(
+        '# Current architecture\n\nThe browser calls the API over HTTP.\n\n'
+        '```sh\npnpm run test\n```\n'
+    )
+    initialize_workspace(tmp_path, files=['tasks.json'])
+    guide = (tmp_path / 'AGENTS.md').read_text()
+    assert 'The browser calls the API over HTTP.' in guide
+    assert '[docs/system-design.md](docs/system-design.md)' in guide
+    tasks = json.loads((tmp_path / '.vscode/tasks.json').read_text())['tasks']
+    assert any(t['command'] == 'pnpm run test' for t in tasks)
+
+
+def test_repository_boundary_without_supported_manifest_is_retained(tmp_path):
+    service = tmp_path / 'service'
+    service.mkdir()
+    (service / '.git').mkdir()
+    (service / 'AGENTS.md').write_text('Service instructions.\n')
+    initialize_workspace(tmp_path, editor='none')
+    guide = (tmp_path / 'AGENTS.md').read_text()
+    assert 'Working directory: `service`' in guide
+    assert 'Repository boundary: local .git marker present' in guide
+    assert 'Development commands: unknown' in guide
+
+
+def test_linked_documentation_does_not_read_escaped_or_symlinked_files(tmp_path):
+    root = tmp_path / 'room'
+    root.mkdir()
+    outside = tmp_path / 'outside.md'
+    outside.write_text('OUTSIDE SYNTHETIC PAYLOAD')
+    (root / 'linked.md').symlink_to(outside)
+    (root / 'README.md').write_text(
+        '# Synthetic Room\n\n[escape](../outside.md)\n'
+        '[symlink](linked.md)\n[malformed](https://[broken)\n[nul](bad%00.md)\n'
+    )
+    initialize_workspace(root, editor='none')
+    assert 'OUTSIDE SYNTHETIC PAYLOAD' not in (root / 'AGENTS.md').read_text()
+
+
+def test_linked_repository_readme_keeps_commands_in_its_own_scope(tmp_path):
+    (tmp_path / 'README.md').write_text('# Suite\n\nSee [service](service/README.md).\n')
+    service = tmp_path / 'service'
+    service.mkdir()
+    (service / '.git').mkdir()
+    (service / 'README.md').write_text('# Service\n\n```sh\nnpm test\n```\n')
+    initialize_workspace(tmp_path, files=['tasks.json'])
+    tasks = json.loads((tmp_path / '.vscode/tasks.json').read_text())['tasks']
+    assert len(tasks) == 1
+    assert tasks[0]['command'] == 'npm test'
+    assert tasks[0]['options']['cwd'] == '${workspaceFolder}/service'
+
+
+def test_actual_cli_initializes_selected_source_without_executing_project_code(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    root = tmp_path / 'selected'
+    root.mkdir()
+    (root / 'package.json').write_text(json.dumps({
+        'packageManager': 'pnpm@10.0.0', 'scripts': {'test': 'touch SHOULD-NOT-RUN'},
+    }))
+    (root / 'ARCHITECTURE.md').write_text(
+        '# Architecture\n\n## Current\n\nThe client calls the API.\n\n'
+        '## Proposed\n\nA queue may replace synchronous requests.\n'
+    )
+    env = {**os.environ, 'JOSH_ROOM_CONFIG_DIR': str(tmp_path / 'private-config')}
+    command = [sys.executable, '-m', 'josh_room', 'workspace', 'init',
+               '--workspace', str(root), '--json']
+    first = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+    assert json.loads(first.stdout)['onboarding']['artifacts']['AGENTS.md'] == 'created'
+    guide = (root / 'AGENTS.md').read_text()
+    assert 'Current' in guide and 'Proposed' in guide and 'The client calls the API.' in guide
+    tasks = json.loads((root / '.vscode/tasks.json').read_text())['tasks']
+    assert tasks[0]['command'] == 'pnpm run test'
+    assert tasks[0]['options']['cwd'] == '${workspaceFolder}'
+    files = [root / 'AGENTS.md', root / '.vscode/tasks.json', root / '.josh-roomignore']
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
+    second = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+    assert json.loads(second.stdout)['onboarding']['artifacts']['AGENTS.md'] == 'already-present'
+    assert before == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
+    assert not (root / 'SHOULD-NOT-RUN').exists()
+
+
 def test_none_still_creates_guide_and_preserves_existing_bytes_and_mtime(tmp_path):
     result = initialize_workspace(tmp_path, editor='none')
     assert result['onboarding']['artifacts'] == {'AGENTS.md': 'created'}
