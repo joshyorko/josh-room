@@ -33,6 +33,23 @@ assert ssl.SSLContext is original
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(("options", "editor", "files"), [
+    ([], "vscode", None),
+    (["--editor", "none"], "none", None),
+    (["--editor-file", "tasks.json", "--editor-file", "settings.json"], "vscode", ["tasks.json", "settings.json"]),
+    (["--no-editor-files"], "vscode", []),
+])
+def test_workspace_init_cli_forwards_onboarding_choices(tmp_path, monkeypatch, options, editor, files):
+    captured = {}
+    monkeypatch.setattr(
+        "josh_room.workspace_init.initialize_workspace",
+        lambda workspace, *, editor, files: captured.update(workspace=workspace, editor=editor, files=files) or {"ok": True},
+    )
+    args = build_parser().parse_args(["workspace", "init", "--workspace", str(tmp_path), *options])
+    assert cli.dispatch(args, tmp_path) == {"ok": True}
+    assert captured == {"workspace": tmp_path, "editor": editor, "files": files}
+
+
 def test_extension_controller_writes_a_private_result_receipt(tmp_path, monkeypatch, capsys):
     receipt = tmp_path / "controller-result.json"
     monkeypatch.setenv("JOSH_ROOM_RESULT_FILE", str(receipt))

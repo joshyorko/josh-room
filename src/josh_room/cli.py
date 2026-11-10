@@ -174,6 +174,13 @@ def build_parser() -> argparse.ArgumentParser:
     for action in ("init", "exclude"):
         operation = workspace_commands.add_parser(action)
         operation.add_argument("--workspace", type=Path, required=True)
+        if action == "init":
+            operation.add_argument("--editor", choices=("vscode", "none"), default="vscode")
+            operation.add_argument("--policy-only", action="store_true", help=argparse.SUPPRESS)
+            files = operation.add_mutually_exclusive_group()
+            files.add_argument("--editor-file", dest="editor_files", action="append",
+                               choices=("tasks.json", "launch.json", "extensions.json", "settings.json"))
+            files.add_argument("--no-editor-files", action="store_true")
         if action == "exclude":
             operation.add_argument("--rule", action="append", default=[])
             operation.add_argument("--expected-token", required=True)
@@ -1513,8 +1520,11 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 def dispatch(args, instance: Path) -> dict:
     if args.command == "workspace":
         if args.workspace_command == "init":
-            from .workspace_init import initialize_workspace
-            return initialize_workspace(args.workspace)
+            from .workspace_init import initialize_capture_policy, initialize_workspace
+            if args.policy_only:
+                return initialize_capture_policy(args.workspace)
+            files = [] if args.no_editor_files else args.editor_files
+            return initialize_workspace(args.workspace, editor=args.editor, files=files)
         if args.workspace_command == "exclude":
             from .workspace_init import append_exclusions
             return append_exclusions(args.workspace, args.rule, expected_token=args.expected_token, source_only=args.source_only)

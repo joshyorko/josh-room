@@ -156,8 +156,10 @@ first Save in a session asks whether to include local OCI images; later Saves of
 that Room reuse the choice and show it in the preview. To choose another scope,
 use `Josh: Save Folder As Room`. That command opens a folder picker and a Quick
 Pick of saved Rooms plus “Create a new Room”. The selected folder is
-the snapshot source and receives only the non-secret `.josh-room.json` identity
-marker after a successful save. Selecting an existing Room appends an immutable
+the snapshot source. Creating a new Room initializes its missing root
+`AGENTS.md` and configured VS Code files before preview; existing files remain
+unchanged. See [workspace onboarding and capture policy](docs/workspace-capture-policy.md)
+for editor settings and CLI options. Selecting an existing Room appends an immutable
 snapshot and advances its `latest` pointer; it does not create another logical
 Room. `Josh: Enter Room` reopens an already materialized `(Dimension, Room)` on
 the device without downloading it again. A missing Room is restored beneath

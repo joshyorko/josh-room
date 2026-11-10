@@ -28,6 +28,7 @@ from josh_room.local_store import ObjectRef
 from josh_room.private_paths import protect_private_directory
 from josh_room.restic_store import RepositoryInfo, ResticStore
 from josh_room.room_store_operations import WorkspaceValidationError
+from josh_room.workspace_init import initialize_workspace
 
 
 def _load_copied_room_store_bridge():
@@ -535,7 +536,7 @@ def test_rcc_preparation_failure_never_opens_restic_or_mutates_provider(
 
     def rcc(argv, **_kwargs):
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.9\n"
+            return f"RCC version: {room_store_components.RCC_VERSION}\n".encode()
         if argv[2] == failed_command:
             raise room_store_components.RoomStoreComponentError(
                 "synthetic RCC preparation failed",
@@ -702,9 +703,18 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    (workspace / "package.json").write_text(
+        json.dumps({"scripts": {"test": "node -e 'process.exit(0)'"}}) + "\n",
+        encoding="utf-8",
+    )
     source = workspace / "notes.txt"
     source.write_text("first small capture\n", encoding="utf-8")
     (workspace / "robot.yaml").write_text("tasks: []\n", encoding="utf-8")
+    initialize_workspace(workspace)
+    onboarding_files = {
+        name: (workspace / name).read_bytes()
+        for name in ("AGENTS.md", ".vscode/tasks.json")
+    }
     rcc_captures = []
     rcc_acquisitions = []
     synthetic_archive = b"synthetic rcca archive"
@@ -886,6 +896,7 @@ def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     assert (destination / "notes.txt").read_text(
         encoding="utf-8"
     ) == "first small capture\n"
+    assert {name: (destination / name).read_bytes() for name in onboarding_files} == onboarding_files
     assert all(
         environment["AWS_SESSION_TOKEN"] == "synthetic-temporary-token"
         for environment in backend.provider_environments

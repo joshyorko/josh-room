@@ -312,6 +312,27 @@
         "when": "joshRoom.roomsEmpty"
       }
     ],
+    "configuration": {
+      "title": "Josh Room",
+      "properties": {
+        "joshRoom.onboarding.editor": {
+          "type": "string",
+          "enum": ["vscode", "none"],
+          "default": "vscode",
+          "description": "Editor configuration mode used when creating a New Room. A missing AGENTS.md is generated in either mode."
+        },
+        "joshRoom.onboarding.files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["tasks.json", "launch.json", "extensions.json", "settings.json"]
+          },
+          "default": ["tasks.json", "launch.json", "extensions.json", "settings.json"],
+          "uniqueItems": true,
+          "description": "VS Code files New Room may create when editor mode is vscode. Existing files are preserved. Use an empty array to disable editor files."
+        }
+      }
+    },
     "menus": {
       "view/title": [
         {
