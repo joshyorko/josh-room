@@ -2,7 +2,7 @@
   "name": "josh-room",
   "displayName": "Josh Room",
   "description": "Native Save, Enter, Serve, and snapshot controls for Josh's disposable Rooms.",
-  "version": "0.1.46",
+  "version": "0.1.47",
   "publisher": "joshyorko",
   "repository": {
     "type": "git",
@@ -317,7 +317,10 @@
       "properties": {
         "joshRoom.onboarding.editor": {
           "type": "string",
-          "enum": ["vscode", "none"],
+          "enum": [
+            "vscode",
+            "none"
+          ],
           "default": "vscode",
           "description": "Editor configuration mode used when creating a New Room. A missing AGENTS.md is generated in either mode."
         },
@@ -325,9 +328,19 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["tasks.json", "launch.json", "extensions.json", "settings.json"]
+            "enum": [
+              "tasks.json",
+              "launch.json",
+              "extensions.json",
+              "settings.json"
+            ]
           },
-          "default": ["tasks.json", "launch.json", "extensions.json", "settings.json"],
+          "default": [
+            "tasks.json",
+            "launch.json",
+            "extensions.json",
+            "settings.json"
+          ],
           "uniqueItems": true,
           "description": "VS Code files New Room may create when editor mode is vscode. Existing files are preserved. Use an empty array to disable editor files."
         }
