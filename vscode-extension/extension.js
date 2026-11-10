@@ -4347,6 +4347,14 @@ async function addStorage() {
       return configureS3Bucket({ connectionId, cwd });
     }
 
+    const connectionName = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage",
+      prompt: "Connection name",
+      placeHolder: "Personal backups",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Name this account connection.",
+    });
+    if (!connectionName) return "cancelled";
     const region = await vscode.window.showInputBox({
       title: "Josh: Add Amazon S3 / S3-compatible Storage",
       prompt: "Region",
@@ -4390,7 +4398,7 @@ async function addStorage() {
     };
     const created = await runOperation("Connecting Amazon S3 / S3-compatible Storage...", providerTools.connectionCommand("create", {
       provider: "s3", region: region.trim(), endpoint, pathStyle,
-    }), cwd, { stdin: JSON.stringify(credentials) });
+    }), cwd, { stdin: JSON.stringify({ display_name: connectionName.trim(), ...credentials }) });
     const connection = created.connection || created;
     const connectionId = typeof connection === "string" ? connection : connection.id || connection.connection_id;
     if (!connectionId) throw new Error("S3 connection did not return a connection id.");

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 
@@ -105,6 +106,7 @@ from .pcc_outbox import PccOutbox
 from .pcc_replay import ReplayLimits, ReplayReader
 from .policy import CaptureRequest, PolicyContext, decide
 from .progress import report_progress
+from .s3_backend import sdk_error_boundary
 from .tls import initialize_system_trust
 from .workspace_state import context_status, local_status
 
@@ -677,7 +679,7 @@ def main(argv=None):
                 scoped_minio = _uses_minio_encryption(args)
                 identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook"}
                 identity_context = nullcontext() if args.command in identity_free_commands or scoped_minio else _identity_environment()
-                with identity_context:
+                with _provider_error_boundary(args), identity_context:
                     if args.command not in identity_free_commands and not scoped_minio:
                         runtime_loaded = load_runtime_session()
                     with _selected_encryption_environment(args, instance) if scoped_minio else nullcontext() as selected_material:
@@ -820,6 +822,25 @@ def _requires_oauth(args) -> bool:
     return getattr(args, "backend", "r2") == "r2"
 
 
+def _provider_error_boundary(args):
+    try:
+        if args.command == "provider" and args.provider_command == "bucket":
+            _provider, dimension, connection = _bucket_target(args, private_config() or {})
+            selected = dimension or connection
+        elif args.command == "buckets":
+            selected = connection_configs(private_config() or {}).get(args.connection)
+        elif args.command in {
+            "encryption", "doctor", "projects", "rooms", "snapshots", "snapshot",
+            "hydrate", "enter", "serve", "link", "repair", "room-store",
+        }:
+            selected = _effective_dimension(args)
+        else:
+            return nullcontext()
+    except ValueError:
+        return nullcontext()
+    return sdk_error_boundary(selected)
+
+
 def _requires_encryption(args) -> bool:
     if args.command == "dimensions":
         return getattr(args, "with_hierarchy", False) and (_dimensions_have_provider(args, "minio") or _dimensions_have_provider(args, "s3"))
@@ -941,7 +962,7 @@ def _open_room_store_context(
     if material is None:
         material = getattr(args, "_selected_encryption_material", None)
     opener = open_writable_room_store if writable else open_existing_room_store
-    with opener(
+    with sdk_error_boundary(dimension), opener(
         instance,
         dimension,
         material,
@@ -1875,10 +1896,14 @@ def dispatch(args, instance: Path) -> dict:
                 endpoint = args.endpoint or payload.get("endpoint") or (default_s3_endpoint(args.region or payload.get("region")) if args.provider == "s3" else None)
                 if not endpoint:
                     raise ValueError("MinIO connection requires an HTTPS endpoint")
-                connection_id = args.connection_id or _minio_connection_id(endpoint, args.provider)
+                connection_id = args.connection_id or (
+                    f"s3-{uuid.uuid4().hex}" if args.provider == "s3" else _minio_connection_id(endpoint)
+                )
                 profile = args.credential_profile or f"josh-room-{connection_id}"
                 credentials = _connection_credentials(payload)
                 records = dict(config.get("connections", {}))
+                if args.provider == "s3" and connection_id in records:
+                    raise ValueError("S3 connection already exists; choose update or reconnect")
                 connection = {
                     "display_name": payload.get("display_name", "Amazon S3" if args.provider == "s3" else "MinIO"),
                     "provider": args.provider,
@@ -2599,30 +2624,31 @@ def _dimension_hierarchy(instance, dimension, backend):
 
 
 def _dimension_hierarchy_with_encryption(instance, dimension):
-    backend = _backend(dimension.provider, instance, dimension.dimension_id)
-    if dimension.provider not in {"minio", "s3"}:
-        return _dimension_hierarchy(instance, dimension, backend)
-    def resolve_selected(identity_path):
-        return resolve_encryption_material(
-            dimension,
-            backend,
-            allow_initialize=False,
-            identity_path=identity_path,
-            preserve_identity_path=True,
-        )
-
-    with _scoped_encryption_material(instance, resolve_selected) as material:
-        if material is None or not hasattr(backend, "read_catalog"):
+    with sdk_error_boundary(dimension):
+        backend = _backend(dimension.provider, instance, dimension.dimension_id)
+        if dimension.provider not in {"minio", "s3"}:
             return _dimension_hierarchy(instance, dimension, backend)
-        state = encryption_status(dimension, backend)
-        with _encryption_material_environment(material):
-            result = _dimension_hierarchy(instance, dimension, backend)
-        result.update({
-            "encryption_state": state["state"],
-            "encryption_domain_id": material.encryption_domain_id,
-            "key_generation": material.key_generation,
-        })
-        return result
+        def resolve_selected(identity_path):
+            return resolve_encryption_material(
+                dimension,
+                backend,
+                allow_initialize=False,
+                identity_path=identity_path,
+                preserve_identity_path=True,
+            )
+
+        with _scoped_encryption_material(instance, resolve_selected) as material:
+            if material is None or not hasattr(backend, "read_catalog"):
+                return _dimension_hierarchy(instance, dimension, backend)
+            state = encryption_status(dimension, backend)
+            with _encryption_material_environment(material):
+                result = _dimension_hierarchy(instance, dimension, backend)
+            result.update({
+                "encryption_state": state["state"],
+                "encryption_domain_id": material.encryption_domain_id,
+                "key_generation": material.key_generation,
+            })
+            return result
 
 
 def _connection_credentials(payload):

@@ -1,8 +1,11 @@
+import pytest
+
 from josh_room.config import DimensionConfig
 from josh_room.room_store_bridge import (
     _create_backend,
     _provider_environment,
     _repository_locator,
+    _s3_lookup_option,
 )
 from josh_room.s3_backend import S3Backend, S3Config
 
@@ -47,6 +50,53 @@ def test_s3_dimension_builds_provider_specific_reusable_backend(monkeypatch):
 def test_s3_restic_locator_keeps_s3_identity():
     selected = dimension()
     assert _repository_locator(selected).startswith("s3:https://s3.us-west-2.amazonaws.com/")
+
+
+@pytest.mark.parametrize("region", ["us-west-2", "us-gov-west-1", "cn-north-1"])
+def test_s3_dotted_aws_bucket_restic_addressing_matches_sdk_tls_fallback(region, monkeypatch):
+    from urllib.parse import urlsplit
+
+    from josh_room import minio
+    from josh_room.config import default_s3_endpoint
+
+    selected = dimension(region=region, endpoint=default_s3_endpoint(region), bucket="synthetic.rooms")
+    monkeypatch.setattr(minio, "lookup", lambda *_args, **_kwargs: {
+        "access-key-id": "synthetic", "secret-access-key": "synthetic",
+    })
+    backend = S3Backend(S3Config.from_dimension(selected))
+    request = backend.client.generate_presigned_url(
+        "get_object", Params={"Bucket": selected.bucket, "Key": "synthetic"}, ExpiresIn=60
+    )
+    assert urlsplit(request).hostname == urlsplit(selected.endpoint).hostname
+    assert _s3_lookup_option(selected) == {"s3_bucket_lookup": "path"}
+
+
+@pytest.mark.parametrize("endpoint,region", [
+    ("https://objects.example.invalid", "custom-1"),
+    ("https://s3.us-west-2.amazonaws.com.example.invalid", "us-west-2"),
+])
+def test_s3_dotted_custom_bucket_restic_addressing_matches_sdk_tls_fallback(endpoint, region, monkeypatch):
+    from urllib.parse import urlsplit
+
+    from josh_room import minio
+
+    selected = dimension(endpoint=endpoint, region=region, bucket="synthetic.rooms")
+    monkeypatch.setattr(minio, "lookup", lambda *_args, **_kwargs: {
+        "access-key-id": "synthetic", "secret-access-key": "synthetic",
+    })
+    backend = S3Backend(S3Config.from_dimension(selected))
+    request = backend.client.generate_presigned_url(
+        "get_object", Params={"Bucket": selected.bucket, "Key": "synthetic"}, ExpiresIn=60
+    )
+    assert urlsplit(request).hostname == urlsplit(endpoint).hostname
+    assert _s3_lookup_option(selected) == {"s3_bucket_lookup": "path"}
+    selected = dimension(endpoint=endpoint, region=region, bucket="synthetic.rooms", options=(("path_style", True),))
+    assert _s3_lookup_option(selected) == {"s3_bucket_lookup": "path"}
+
+
+def test_s3_addressing_fallback_does_not_change_ordinary_aws_or_minio():
+    assert _s3_lookup_option(dimension()) == {"s3_bucket_lookup": "dns"}
+    assert _s3_lookup_option(dimension(provider="minio", bucket="synthetic.rooms")) == {}
 
 
 def test_s3_requires_https_even_for_loopback():
@@ -147,6 +197,115 @@ def test_s3_access_errors_are_sanitized():
         )
     assert "SECRET" not in str(caught.value)
     assert caught.value.result["provider"] == "s3"
+
+
+@pytest.mark.parametrize("code,status,label", [
+    ("ExpiredToken", 403, "credentials-invalid"),
+    ("SignatureDoesNotMatch", 403, "signature-failure"),
+    ("NoSuchBucket", 404, "bucket-unavailable"),
+    ("AccessDenied", 403, "access-denied"),
+    ("SyntheticUnknown", 500, "request-failed"),
+])
+@pytest.mark.parametrize("operation", ["check", "list"])
+def test_s3_bucket_check_preserves_provider_failure_category(code, status, label, operation):
+    from types import SimpleNamespace
+
+    from botocore.exceptions import ClientError
+
+    from josh_room.s3_backend import S3ProviderError, check_bucket_access, list_buckets
+
+    class Client:
+        def head_bucket(self, **_kwargs):
+            raise ClientError({
+                "Error": {"Code": code, "Message": "synthetic-private-provider-message"},
+                "ResponseMetadata": {"HTTPStatusCode": status},
+            }, "HeadBucket")
+
+        def list_buckets(self):
+            return self.head_bucket()
+
+    connection = SimpleNamespace(provider="s3", connection_id="synthetic", region="us-west-2")
+    with pytest.raises(S3ProviderError) as caught:
+        if operation == "check":
+            check_bucket_access(connection, "synthetic-private-bucket", Client())
+        else:
+            list_buckets(connection, Client())
+    assert caught.value.result["error_code"] == label
+    assert caught.value.result["provider"] == "s3"
+    assert "synthetic-private" not in str(caught.value)
+
+
+@pytest.mark.parametrize("command", [
+    ["encryption", "status", "--dimension", "synthetic"],
+    ["dimensions", "list", "--dimension", "synthetic", "--with-hierarchy"],
+    ["dimensions", "list", "--with-hierarchy"],
+])
+@pytest.mark.parametrize("failure,label", [
+    ("ExpiredToken", "credentials-invalid"),
+    ("AuthorizationHeaderMalformed", "region-or-endpoint-mismatch"),
+    ("AccessDenied", "access-denied"),
+    ("NoSuchBucket", "bucket-unavailable"),
+    ("SyntheticUnknown", "request-failed"),
+    (None, "request-failed"),
+    ("transport", "transport-unavailable"),
+])
+def test_s3_actual_cli_keyset_failure_emits_bounded_json(
+    command, failure, label, tmp_path, monkeypatch, capsys
+):
+    from botocore.exceptions import ClientError, EndpointConnectionError
+
+    from josh_room import cli
+
+    class Client:
+        def head_object(self, **_kwargs):
+            if failure == "transport":
+                raise EndpointConnectionError(endpoint_url="https://synthetic-private-endpoint.invalid")
+            response = {} if failure is None else {
+                "Error": {"Code": failure, "Message": "synthetic-private-provider-message"},
+            }
+            raise ClientError(response, "HeadObject")
+
+    selected = dimension(dimension_id="synthetic", bucket="synthetic-private-bucket")
+    config = {"dimensions": {"synthetic": selected.to_private()}}
+    backend = S3Backend(S3Config.from_dimension(selected), client=Client())
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("JOSH_ROOM_INSTANCE", str(tmp_path / "instance"))
+    monkeypatch.setattr(cli, "private_config", lambda: config)
+    monkeypatch.setattr(cli, "_backend", lambda *_args: backend)
+
+    assert cli.main([*command, "--json"]) == 2
+    captured = capsys.readouterr()
+    import json
+
+    result = json.loads(captured.out)
+    assert result["ok"] is False
+    assert result["provider"] == "s3"
+    assert result["error_code"] == label
+    assert result["dimension_id"] == "synthetic"
+    assert "synthetic-private" not in captured.out + captured.err
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_s3_error_boundary_preserves_missing_control_and_conditional_conflicts():
+    from botocore.exceptions import ClientError
+
+    from josh_room.auth import KEYSET_CONTROL_KEY
+    from josh_room.r2 import R2Conflict
+    from josh_room.s3_backend import sdk_error_boundary
+
+    class Client:
+        def head_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "NoSuchKey"}}, "HeadObject")
+
+        def put_object(self, **_kwargs):
+            raise ClientError({"Error": {"Code": "PreconditionFailed"}}, "PutObject")
+
+    selected = dimension()
+    backend = S3Backend(S3Config.from_dimension(selected), client=Client())
+    with sdk_error_boundary(selected):
+        assert backend.read_control(KEYSET_CONTROL_KEY, 1024) == (None, None)
+        with pytest.raises(R2Conflict):
+            backend.create_control(KEYSET_CONTROL_KEY, b"synthetic-keyset")
 
 
 def test_s3_orphan_receipt_keeps_s3_provider_identity(tmp_path):

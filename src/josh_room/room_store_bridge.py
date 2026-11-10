@@ -426,7 +426,11 @@ def _provider_environment(dimension: DimensionConfig) -> dict[str, str]:
 def _s3_lookup_option(dimension: DimensionConfig) -> dict[str, str]:
     if dimension.provider != "s3":
         return {}
-    return {"s3_bucket_lookup": "path" if dimension.option("path_style", False) else "dns"}
+    path_style = dimension.option("path_style", False)
+    if "." in dimension.bucket and dimension.endpoint.startswith("https://"):
+        # Match the SDK: wildcard TLS certificates cannot cover dotted buckets.
+        path_style = True
+    return {"s3_bucket_lookup": "path" if path_style else "dns"}
 
 
 def _restic_store_factory(

@@ -464,6 +464,68 @@ def test_room_catalogs_are_independent_and_jat_history_is_immutable():
     assert backup.resolve_snapshot("room", "jat-2")["snapshot_id"] == "jat-2"
 
 
+def test_s3_new_connections_keep_same_region_account_authorities_separate(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
+    stored = {}
+    monkeypatch.setattr(cli, "store_keyring", lambda profile, values: stored.update({profile: values}))
+    created = []
+    for account in ("synthetic-a", "synthetic-b"):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+            "display_name": account,
+            "access-key-id": account,
+            "secret-access-key": "synthetic-secret",
+        })))
+        assert cli.main([
+            "provider", "connection", "create", "--provider", "s3",
+            "--region", "eu-west-1", "--json",
+        ]) == 0
+        created.append(json.loads(capsys.readouterr().out)["connection"])
+
+    assert created[0]["id"] != created[1]["id"]
+    assert created[0]["credential_profile"] != created[1]["credential_profile"]
+    saved = json.loads((tmp_path / "config.json").read_text())
+    assert set(saved["connections"]) == {item["id"] for item in created}
+    for item in created:
+        assert stored[item["credential_profile"]]["access-key-id"] == item["display_name"]
+    for action in ("update", "reconnect"):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+            "access-key-id": f"synthetic-a-{action}", "secret-access-key": "synthetic-secret",
+        })))
+        assert cli.main([
+            "provider", "connection", action, "--connection", created[0]["id"], "--json",
+        ]) == 0
+        capsys.readouterr()
+        assert stored[created[0]["credential_profile"]]["access-key-id"] == f"synthetic-a-{action}"
+        assert stored[created[1]["credential_profile"]]["access-key-id"] == "synthetic-b"
+        assert set(json.loads((tmp_path / "config.json").read_text())["connections"]) == set(saved["connections"])
+
+
+def test_s3_create_rejects_occupied_explicit_connection_before_credentials_change(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("JOSH_ROOM_CONFIG_DIR", str(tmp_path))
+    original = {"connections": {"synthetic-account": {
+        "provider": "s3", "region": "eu-west-1", "credential_profile": "synthetic-profile",
+    }}}
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(original))
+    stored = []
+    monkeypatch.setattr(cli, "store_keyring", lambda *args: stored.append(args))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({
+        "access-key-id": "synthetic-replacement", "secret-access-key": "synthetic-secret",
+    })))
+
+    assert cli.main([
+        "provider", "connection", "create", "--provider", "s3", "--region", "eu-west-1",
+        "--connection", "synthetic-account", "--json",
+    ]) == 2
+    assert "already exists" in json.loads(capsys.readouterr().out)["error"]
+    assert stored == []
+    assert json.loads(config_path.read_text()) == original
+
+
 def test_native_provider_cli_boundary_connects_minio_buckets_dimension_and_routes_r2_explicitly(
     tmp_path, monkeypatch, capsys
 ):

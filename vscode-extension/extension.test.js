@@ -4173,19 +4173,20 @@ test("S3 Add Storage requires an explicit bucket and keeps credentials in the pr
     store: async (key, value) => values.set(key, value),
   } });
   vscode.quickPickResponses.push({ label: "Amazon S3 / S3-compatible", provider: "s3" }, { label: "Path-style", pathStyle: true });
-  vscode.inputBoxResponses.push("eu-west-1", "https://objects.example.invalid", "synthetic-room", "synthetic-access", "synthetic-secret", "synthetic-session");
+  vscode.inputBoxResponses.push("Synthetic account", "eu-west-1", "https://objects.example.invalid", "synthetic-room", "synthetic-access", "synthetic-secret", "synthetic-session");
 
   assert.equal(await extension.__test__.addStorage(), "added");
   assert.deepEqual(inputBoxCalls.map((options) => options.prompt), [
-    "Region", "Custom HTTPS endpoint (leave blank for Amazon S3)", "Existing bucket name", "Access key", "Secret key", "Session token (optional)",
+    "Connection name", "Region", "Custom HTTPS endpoint (leave blank for Amazon S3)", "Existing bucket name", "Access key", "Secret key", "Session token (optional)",
   ]);
-  assert.equal(inputBoxCalls[1].validateInput("http://127.0.0.1:9000"), "Use an HTTPS endpoint. S3 endpoints do not allow HTTP, including loopback.");
+  assert.equal(inputBoxCalls[2].validateInput("http://127.0.0.1:9000"), "Use an HTTPS endpoint. S3 endpoints do not allow HTTP, including loopback.");
   const create = spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[1] === "connection" && entry.args[2] === "create");
   assert.ok(create.args.includes("--region"));
   assert.equal(create.args[create.args.indexOf("--region") + 1], "eu-west-1");
   assert.equal(create.args[create.args.indexOf("--endpoint") + 1], "https://objects.example.invalid");
   assert.ok(create.args.includes("--path-style"));
   assert.match(String(create.child.stdinPayload), /synthetic-session/);
+  assert.equal(JSON.parse(create.child.stdinPayload).display_name, "Synthetic account");
   assert.doesNotMatch(create.args.join(" "), /synthetic-access|synthetic-secret|synthetic-session/);
   assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "provider" && entry.args[1] === "bucket" && entry.args[2] === "list"), false);
   const check = spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[1] === "bucket" && entry.args[2] === "check");

@@ -11,7 +11,9 @@ the installed AWS SDK's local endpoint metadata for commercial AWS, GovCloud,
 and China regions. Unknown regions require an explicit HTTPS endpoint. Custom
 S3-compatible regions need not appear in the AWS region list. Endpoint URLs
 cannot contain userinfo, queries, or fragments, and TLS verification cannot be
-disabled. Path-style selection applies to both the SDK and Restic.
+disabled. Path-style selection applies to both the SDK and Restic. Dotted bucket
+names use path-style HTTPS addressing in both transports to avoid a wildcard
+certificate mismatch, including with custom endpoints.
 
 ## Credentials and selection
 
@@ -23,6 +25,19 @@ private credentials. The native extension passes credentials through its existin
 private handoff and stores them in SecretStorage and the controller keyring.
 Do not put them in a Room, command arguments, catalog, screenshot, or issue.
 Expired temporary credentials must be replaced through reconnect.
+
+Give each connection a recognizable label. **New S3 Connection** creates a
+separate opaque connection and keyring profile even when another account uses
+the same regional endpoint. Reuse an existing connection only when its bucket
+authority is the one you intend. CLI creation with an occupied explicit
+connection ID is rejected; use update or reconnect to change that connection.
+Connection labels and regions are not proof of AWS account identity.
+
+SDK failures returned by S3 operations use bounded error codes such as
+`credentials-invalid`, `region-or-endpoint-mismatch`, `access-denied`, and
+`bucket-unavailable`. Raw provider messages are not included. A missing object
+or a conditional publication conflict still follows the existing Room Store
+recovery behavior.
 
 Provider credentials and encryption recovery material remain separate. An S3
 bucket credential is an enrollment-capable trust decision for a fixed Dimension

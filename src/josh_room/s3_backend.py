@@ -1,6 +1,7 @@
 """AWS and HTTPS S3-compatible adapter over the existing object-store engine."""
 
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import ClassVar
 from urllib.parse import urlsplit
@@ -72,6 +73,17 @@ def _sanitized_error(error, context):
     return S3ProviderError(label, dimension_id=getattr(context, "dimension_id", None))
 
 
+@contextmanager
+def sdk_error_boundary(context):
+    """Keep SDK control flow intact until an S3 operation reaches the caller."""
+    try:
+        yield
+    except (ClientError, BotoCoreError) as error:
+        if getattr(context, "provider", None) != "s3":
+            raise
+        raise _sanitized_error(error, context) from None
+
+
 def client_for_connection(connection):
     if connection.provider != "s3":
         raise ValueError("bucket operations require an S3 connection")
@@ -116,8 +128,8 @@ def list_buckets(connection, client=None):
             error_type=BucketListForbidden,
             context=connection.connection_id,
         )
-    except BucketListForbidden:
-        raise
+    except BucketListForbidden as error:
+        raise _sanitized_error(error.__cause__, connection) from None
     except (ClientError, BotoCoreError) as error:
         raise _sanitized_error(error, connection) from None
 
@@ -142,8 +154,8 @@ def check_bucket_access(connection, bucket, client=None):
             error_type=BucketAccessDenied,
             context=connection.connection_id,
         )
-    except BucketAccessDenied:
-        raise
+    except BucketAccessDenied as error:
+        raise _sanitized_error(error.__cause__, connection) from None
     except (ClientError, BotoCoreError) as error:
         raise _sanitized_error(error, connection) from None
 
