@@ -908,6 +908,12 @@ def _read_keyset_record_from_backend(dimension, backend):
     if body is None:
         return None, etag
     try:
+        from .portable_room_store import MARKER_FORMAT, marker_keyset
+
+        parsed = json.loads(body)
+        if isinstance(parsed, dict) and parsed.get("format") == MARKER_FORMAT:
+            keyset = marker_keyset(parsed, dimension, material_factory=_material_for_keyset)
+            return keyset, etag
         keyset = EncryptionKeyset.from_json(
             body,
             provider=dimension.provider,
@@ -1003,6 +1009,12 @@ def _same_room_store_secret(first, second):
 def ensure_room_store_keyset(dimension, backend) -> EncryptionKeyset:
     """Explicitly upgrade a MinIO keyset and cache only its durable winner."""
     _require_minio_room_store(dimension)
+    from .portable_room_store import selected_keyset
+
+    selected = selected_keyset(dimension, backend)
+    if selected is not None:
+        _cache_room_store_secret(selected)
+        return selected
     keyset, etag = _read_keyset_record_from_backend(dimension, backend)
     if keyset is None:
         _room_store_keyset_error(
@@ -1073,6 +1085,15 @@ def bind_room_store_repository(
 ) -> EncryptionKeyset:
     """Conditionally bind the initialized repository to the winning Room Store keyset."""
     _require_minio_room_store(dimension)
+    from .portable_room_store import selected_keyset
+
+    selected = selected_keyset(
+        dimension, backend, repository_id=repository_id,
+        expected_generation=expected_generation,
+    )
+    if selected is not None:
+        _cache_room_store_secret(selected)
+        return selected
     keyset, etag = _read_keyset_record_from_backend(dimension, backend)
     if keyset is None:
         _room_store_keyset_error(

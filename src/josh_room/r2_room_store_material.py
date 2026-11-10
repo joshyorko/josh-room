@@ -310,6 +310,8 @@ class R2RoomStoreAuthority:
                 "room_store_material_missing",
                 "room_store_durable_authority_unavailable",
                 "room_store_not_found",
+                "room_store_material_corrupt",
+                "room_store_authority_sealed",
                 "room_store_method_not_allowed",
             }:
                 raise R2RoomStoreError("room_store_request_rejected")
