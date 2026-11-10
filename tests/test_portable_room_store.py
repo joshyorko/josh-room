@@ -57,6 +57,15 @@ def test_migration_encrypts_only_password_preserves_domain_and_fences_legacy(mig
     assert resolved.room_store.secret == material.keyset.room_store.secret
 
 
+def test_unmigrated_store_keeps_legacy_authority_without_writes(migration, monkeypatch):
+    selected, backend, _material, broker, _transport = migration
+    before = backend.control
+    monkeypatch.setattr(portable, "authority", lambda *_args, **_kwargs: pytest.fail("unmigrated store contacted DO authority"))
+    assert portable.selected_keyset(selected, backend) is None
+    assert backend.control == before
+    assert broker.record is None
+
+
 def test_rollback_seals_before_restoring_legacy_and_keeps_password(migration):
     selected, backend, material, broker, transport = migration
     portable.migrate(selected, backend, material, transport=transport)
