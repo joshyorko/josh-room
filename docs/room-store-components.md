@@ -1,5 +1,10 @@
 # Room Store native RCC environment component
 
+Save reports runtime capture, archive packaging, and archive verification as
+separate progress stages. A first capture can take several minutes before file
+backup begins. Cancel stops the operation; a cancelled attempt is not a
+successful Save.
+
 Room Store Save captures the root workspace `robot.yaml` environment through
 the selected RCC runtime. RCC publishes the native Environment Artifact with
 `rcc env publish --robot robot.yaml --json`, then exports that exact artifact
