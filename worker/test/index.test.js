@@ -494,7 +494,7 @@ test("R2 Room Store keeps only a short-lived capability and immutable ciphertext
   assert.deepEqual(await conflictingBind.json(), { error: "room_store_repository_conflict" });
 
   const wrongCapability = await worker.fetch(roomStoreRequest(
-    started.sessionId, "material", "GET", `${authorized.roomStoreCapability.slice(0, -1)}A`,
+    started.sessionId, "material", "GET", `${authorized.roomStoreCapability.slice(0, -1)}${authorized.roomStoreCapability.endsWith("A") ? "B" : "A"}`,
   ), env);
   assert.equal(wrongCapability.status, 403);
   assert.deepEqual(await wrongCapability.json(), { error: "room_store_capability_invalid" });

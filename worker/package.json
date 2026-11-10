@@ -1,4 +1,18 @@
 {
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:workerd": "node ../scripts/portable-room-store/workerd.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "miniflare": "4.20260730.0"
+  },
+  "overrides": {
+    "miniflare": {
+      "undici": "7.30.2",
+      "sharp": "0.35.5"
+    }
+  }
 }

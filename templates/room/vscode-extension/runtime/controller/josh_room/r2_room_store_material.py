@@ -88,8 +88,11 @@ class R2RoomStoreAuthority:
     identity_path: Path = field(default=Path(), repr=False)
     recipients: tuple[str, ...] = ()
     timeout: float = 10.0
+    cache_in_native_keyring: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.cache_in_native_keyring) is not bool:
+            raise TypeError("native keyring cache setting must be boolean")
         if not isinstance(self.session_id, str) or not re.fullmatch(
             r"[0-9a-f]{64}", self.session_id
         ):
@@ -212,9 +215,19 @@ class R2RoomStoreAuthority:
             if generation not in {expected, expected + 1}:
                 raise R2RoomStoreError("room_store_generation_conflict")
         except R2RoomStoreError as error:
+            if str(error) not in {
+                "room_store_transport_failed",
+                "room_store_repository_write_unverified",
+                "room_store_repository_response_invalid",
+                "room_store_response_invalid",
+            }:
+                raise
             # A lost response can only be accepted after a fresh material readback.
             winner = self._read_material()
-            if winner["repositoryId"] != repository_id:
+            if (
+                winner["repositoryId"] != repository_id
+                or winner["keysetGeneration"] not in {expected, expected + 1}
+            ):
                 raise error from None
             generation = winner["keysetGeneration"]
         bound_record = self._read_material()
@@ -245,6 +258,7 @@ class R2RoomStoreAuthority:
             else json.dumps(payload, separators=(",", ":")).encode()
         )
         headers = {
+            "User-Agent": "Josh-Room/0.1 (+https://github.com/joshyorko/josh-room)",
             "Authorization": f"Bearer {self.capability}",
             "Accept": "application/json",
         }
@@ -300,6 +314,8 @@ class R2RoomStoreAuthority:
                 "room_store_material_missing",
                 "room_store_durable_authority_unavailable",
                 "room_store_not_found",
+                "room_store_material_corrupt",
+                "room_store_authority_sealed",
                 "room_store_method_not_allowed",
             }:
                 raise R2RoomStoreError("room_store_request_rejected")
@@ -443,6 +459,8 @@ class R2RoomStoreAuthority:
         return inner
 
     def _cache(self, encryption_domain_id: str, generation: int, secret: str) -> None:
+        if not self.cache_in_native_keyring:
+            return
         try:
             keyring.store_room_store_secret(encryption_domain_id, generation, secret)
         except (RuntimeError, OSError, ValueError):

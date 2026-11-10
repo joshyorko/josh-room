@@ -21,6 +21,7 @@ from typing import Any
 
 from .cancellation import terminate_owned_process
 from .jat import _diagnostic
+from .progress import report_progress
 
 RCC_VERSION = "v18.19.10"
 MAX_SOURCE_FILE = 2 * 1024 * 1024
@@ -337,13 +338,16 @@ def prepare_rcc_component(
     version_output = _run([executable, "--version"], cwd=root, cancellation=cancellation, timeout=20)
     if re.search(rf"(?<![A-Za-z0-9.+-]){re.escape(RCC_VERSION)}(?![A-Za-z0-9.+-])", version_output.decode("utf-8", "replace")) is None:
         raise RoomStoreComponentError("selected RCC version is unsupported")
+    report_progress("rcc-publish", "Capturing project runtime environment; first capture can take several minutes")
     published = _run([executable, "env", "publish", "--robot", str(robot), "--provider", "local", "--json"], cwd=root, cancellation=cancellation)
     native = _publish_metadata(published)
     if native["platform"] is not None and native["platform"] != _host_platform():
         raise RoomStoreComponentError("RCC returned a mismatched environment platform")
     archive = stage / "rcc-environment.rcca"
+    report_progress("rcc-export", "Packaging project runtime environment")
     _run([executable, "env", "export", "--artifact", native["artifact_digest"], "--provider", "local", "--output", str(archive)], cwd=root, cancellation=cancellation)
     if native["platform"] is None:
+        report_progress("rcc-verify", "Verifying project runtime environment archive")
         acquired = _run([executable, "env", "acquire", "--artifact", native["artifact_digest"], "--archive", str(archive),
                          "--no-build", "--permissive-local", "--json"], cwd=root, cancellation=cancellation)
         try:

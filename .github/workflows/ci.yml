@@ -60,6 +60,12 @@ jobs:
         run: uv run python scripts/request_release.py validate --root . --branch "$SOURCE_BRANCH"
       - run: uv run ruff check src tests
       - run: uv run pytest -q
+      - run: node --test worker/test/*.test.js
+      - run: npm ci --prefix worker --ignore-scripts
+      - name: Verify shared Room Store authority on workerd
+        env:
+          ROOM_STORE_TEST_TOOLS: ${{ github.workspace }}/worker
+        run: node scripts/portable-room-store/workerd.mjs
       - run: node --test vscode-extension/*.test.js scripts/verify_node_version.test.js
       - run: node --experimental-strip-types --test omp-extension/tests/*.test.mjs
       - run: git diff --check

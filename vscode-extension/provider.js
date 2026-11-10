@@ -49,6 +49,7 @@ function bucketChoices(payload = {}, { recommendedBucket = "josh-room" } = {}) {
     : records(payload.buckets || payload.bucket_list, "name").map((bucket) => bucket.name || bucket.bucket))
     .filter(Boolean)
     .map((bucket) => ({ label: bucket, bucket }));
+  if (payload.provider === "r2") return buckets;
   return [
     {
       label: `$(add) Create new bucket… (recommended: ${recommendedBucket})`,

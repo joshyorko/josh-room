@@ -15,7 +15,8 @@ from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError
 
-from .config import config_dir
+from . import keyring
+from .config import DimensionConfig, config_dir
 from .encryption_domain import (
     KEYSET_CONTROL_KEY,
     ROOM_STORE_KEYSET_FORMAT_VERSION,
@@ -235,6 +236,20 @@ def poll_oauth_session(
         _write_runtime(session, dimension_id=dimension_id, session_id=session_id)
     else:
         _write_runtime(session, dimension_id=dimension_id, purpose=purpose, session_id=session_id)
+    if "roomStoreCapability" in session:
+        dimension = DimensionConfig(
+            dimension_id=dimension_id or "r2",
+            display_name="Cloudflare R2",
+            provider="r2",
+            endpoint=session["endpoint"],
+            bucket=session["bucket"],
+            credential_profile="oauth-runtime",
+        )
+        try:
+            create_r2_room_store_authority(dimension, allow_initialize=True)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            _clear_runtime_session()
+            raise
     return {"status": "authorized"}
 
 
@@ -470,6 +485,17 @@ def r2_session_state() -> str:
     if state != "connected":
         return state
     return "connected" if "r2" in capabilities else "missing"
+
+
+def r2_room_store_session_state() -> str:
+    state = r2_session_state()
+    if state != "connected":
+        return state
+    try:
+        metadata = json.loads(_runtime_paths()[3].read_text())
+    except (OSError, ValueError):
+        return "missing"
+    return "connected" if _valid_room_store_handoff(metadata) else "expired"
 
 
 def _set_runtime_environment(capabilities: tuple[str, ...]) -> None:
@@ -794,6 +820,7 @@ def create_r2_room_store_authority(
         endpoint_transport=_worker_url() if endpoint_transport is None else endpoint_transport,
         identity_path=identity_path,
         recipients=recipients,
+        cache_in_native_keyring=keyring.available(),
     )
     room_store = (
         authority.ensure_material_details()
@@ -908,6 +935,12 @@ def _read_keyset_record_from_backend(dimension, backend):
     if body is None:
         return None, etag
     try:
+        from .portable_room_store import MARKER_FORMAT, marker_keyset
+
+        parsed = json.loads(body)
+        if isinstance(parsed, dict) and parsed.get("format") == MARKER_FORMAT:
+            keyset = marker_keyset(parsed, dimension, material_factory=_material_for_keyset)
+            return keyset, etag
         keyset = EncryptionKeyset.from_json(
             body,
             provider=dimension.provider,
@@ -1003,6 +1036,12 @@ def _same_room_store_secret(first, second):
 def ensure_room_store_keyset(dimension, backend) -> EncryptionKeyset:
     """Explicitly upgrade a MinIO keyset and cache only its durable winner."""
     _require_minio_room_store(dimension)
+    from .portable_room_store import selected_keyset
+
+    selected = selected_keyset(dimension, backend, initialize=True)
+    if selected is not None:
+        _cache_room_store_secret(selected)
+        return selected
     keyset, etag = _read_keyset_record_from_backend(dimension, backend)
     if keyset is None:
         _room_store_keyset_error(
@@ -1073,6 +1112,15 @@ def bind_room_store_repository(
 ) -> EncryptionKeyset:
     """Conditionally bind the initialized repository to the winning Room Store keyset."""
     _require_minio_room_store(dimension)
+    from .portable_room_store import selected_keyset
+
+    selected = selected_keyset(
+        dimension, backend, repository_id=repository_id,
+        expected_generation=expected_generation,
+    )
+    if selected is not None:
+        _cache_room_store_secret(selected)
+        return selected
     keyset, etag = _read_keyset_record_from_backend(dimension, backend)
     if keyset is None:
         _room_store_keyset_error(

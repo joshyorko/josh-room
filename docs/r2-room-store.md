@@ -106,3 +106,11 @@ This contract does not enable arbitrary R2 buckets, R2 deployment, Cloudflare
 configuration, or live R2 acceptance. A live R2 gate remains skipped until the
 required external authority is available and deployment is separately
 authorized.
+
+## Portable authority implementation
+
+The deployed `OAuthSession` identity and namespace stay unchanged. Its bucket
+Room Store calls delegate to the shared `RoomStore` class, also used by the
+[experimental self-hosted MinIO route](portable-room-store.md). OAuth session
+records and capability lifetimes are unchanged. No Cloudflare DO migration
+is required for this refactor.

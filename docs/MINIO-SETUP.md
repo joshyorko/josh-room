@@ -82,3 +82,12 @@ Secret Service/keyring profile. For ephemeral automation,
 Never use raw MinIO root or Kamal credentials. The test never creates users,
 policies, or buckets; write/delete remains skipped until explicit authority is
 approved and provisioned.
+
+## Optional portable Room Store authority
+
+Existing setup remains service-free for consumers. The experimental celld route
+requires an explicit authority selection marker and migration; adding local
+endpoint options alone does not change the writer. MinIO remains independent
+of Cloudflare. Read the [disposable verification and migration guide](portable-room-store.md)
+before adopting it. Production deployment and real-data migration require
+separate owner approval.

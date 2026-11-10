@@ -17,16 +17,16 @@ _COMMON_CONNECTION_FIELDS = {
     "provider", "region", "session_id",
 }
 _PROVIDER_CONNECTION_OPTIONS = {
-    "s3": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds"},
+    "s3": {"room_store_authority_endpoint", "room_store_authority_profile", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds"},
     "r2": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "temporary_credentials", "timeout_seconds"},
-    "minio": {"ca_bundle", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds", "verify_tls"},
+    "minio": {"room_store_authority_endpoint", "room_store_authority_profile", "ca_bundle", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds", "verify_tls"},
 }
 _COMMON_DIMENSION_FIELDS = {"auth_state", "bucket", "catalog_key", "connection", "connection_id", "credential_profile", "display_name", "encryption_domain_id", "endpoint", "provider", "region"}
 _PROVIDER_DIMENSION_OPTIONS = _PROVIDER_CONNECTION_OPTIONS
 _LEGACY_DIMENSION_NAMES = {"r2": "Cloudflare R2", "minio": "MinIO", "s3": "Amazon S3"}
 _BOOLEAN_DIMENSION_OPTIONS = {"path_style", "temporary_credentials", "verify_tls"}
 _POSITIVE_INTEGER_DIMENSION_OPTIONS = {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "timeout_seconds"}
-_STRING_DIMENSION_OPTIONS = {"ca_bundle"}
+_STRING_DIMENSION_OPTIONS = {"ca_bundle", "room_store_authority_endpoint", "room_store_authority_profile"}
 
 
 def default_s3_endpoint(region: str) -> str:

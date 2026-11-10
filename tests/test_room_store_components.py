@@ -153,6 +153,8 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
         raise AssertionError(argv)
 
     monkeypatch.setattr(components, "_run", run)
+    progress = []
+    monkeypatch.setattr(components, "report_progress", lambda stage, message: progress.append(stage), raising=False)
     result = components.capture_rcc_component(
         workspace=root,
         prior_component=_prior("f" * 64),
@@ -161,6 +163,7 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
         restic=restic,
         rcc_runtime="/synthetic/rcc",
     )
+    assert progress == ["rcc-publish", "rcc-export", *(["rcc-verify"] if publish_platform is None else [])]
     assert [call[1:3] for call in calls] == [["--version"], ["env", "publish"], ["env", "export"],
         *([["env", "acquire"]] if publish_platform is None else [])]
     assert calls[1] == [
