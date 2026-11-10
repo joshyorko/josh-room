@@ -16,6 +16,11 @@ operations never ask Josh to copy a password, API token, account ID, AWS
 credential, or age key. Snapshot payloads still transfer directly over R2's
 S3-compatible API and never pass through the Worker.
 
+Cloudflare sign-in authorizes the configured existing bucket, not account-wide
+bucket administration. Add Storage offers that authorized bucket; create new
+Rooms inside it without creating another bucket. Bucket-scoped sessions do not
+list all account buckets or create buckets.
+
 Use a dedicated bucket-scoped credential and separate private Josh Room bucket.
 The fixed encrypted catalog key is `catalog.jroom.age`; immutable objects use
 `objects/sha256/<ciphertext-digest>`. Upload uses conditional create-only
