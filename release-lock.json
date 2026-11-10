@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "candidate_version": "0.1.46",
+  "candidate_version": "0.1.47",
   "optional_golden_host": {
     "repository": "https://github.com/joshyorko/room-of-requirement",
     "source_sha": "1dbf4739fc0a9577a874f91cd1a95556dd353de1",
@@ -72,29 +72,29 @@
   },
   "controller": {
     "repository": "https://github.com/joshyorko/josh-room",
-    "release_tag": "rcc-v18.19.10-controller-ffc97f8e8de2ae51a333539f7d6da46dbb5bbb84-9c06bf69ec6d487598a0b526e5562e85b762b4b3f3f486f11ffdb8152a17cb50",
-    "source_sha": "ffc97f8e8de2ae51a333539f7d6da46dbb5bbb84",
+    "release_tag": "rcc-v18.19.10-controller-fbb3f59a54e7e1dc6f1b7e8f46e8dd30706111d8-8bd2bb402bf30fa1e2862e43ac403cc0e04a322985e1bc2554ce2e07983f3549",
+    "source_sha": "fbb3f59a54e7e1dc6f1b7e8f46e8dd30706111d8",
     "rcc_version": "v18.19.10",
     "rcc_source_sha": "cf7a47e7b9430db4abebae68776f65f3e309624e",
     "platforms": {
       "linux-x64": {
-        "artifact_digest": "sha256:4d8e1ec99f04ae1ef9cc41bc42d25499e368e7d381c9f619d5056d4a1f3026e4",
-        "specification_digest": "sha256:af5af040f4df1b2ffab9bca68ff4ee97942aeab9f8d1df9fc85a945282596881",
-        "archive_sha256": "f98d1f63f03e9f66b9f005f6f89d62dd11ffcb017c5269e4cef1ee7448813d28",
-        "archive_size": 101040604,
+        "artifact_digest": "sha256:ebd1eae70657c10a22ec5cbc1e3232c1248bc58b971287932ccf965fa15de77a",
+        "specification_digest": "sha256:ba8fa41fcddcc1f2572ed46c93482cf59d7bddad01e998873eca19167f6493f9",
+        "archive_sha256": "2caec68aa79dbe5439f17c65663db1c9a2d086a883308909a411c1ffcc1235a1",
+        "archive_size": 101062112,
         "rcc_sha256": "6fcbaca47eabd90855a3a7ea733dc30df60f6f5067f99b77d87949035072921c",
-        "input_digest": "sha256:07f678bf5b433d6f197e4568e70b4502803f3ff94171ef211e055e3c8f4bcc59",
-        "freeze_sha256": "ff552f276a76e573ac09cd1db78a98c6f2bdd5bf0454dd82342e6858c6d9b305",
+        "input_digest": "sha256:eb6969326edffc57e3884f42a8618207a8a3baa8df983cabb0ca92d13f527769",
+        "freeze_sha256": "2f0fd03b86200980f1bb37fa5645454bf35e31d964eefacab749b71793c0237d",
         "freeze_size": 677
       },
       "win32-x64": {
-        "artifact_digest": "sha256:45297e2508d6f6e12903042587b060663e3539176a4d8474c39072f365c28b27",
-        "specification_digest": "sha256:a279b1c144b6e3c154a583f1e29bbc9a6ad6823bbb2e90f3a12b0829dbbbe544",
-        "archive_sha256": "1f78cba06b6500c02c596f238765b7891ff913816ecdbe20c2f8064d136b13fc",
-        "archive_size": 77975772,
+        "artifact_digest": "sha256:ce4130f509ccd2fd62b8fc2b60fd72fc37c1cf3b6bc85cc622e965891d3b8cb3",
+        "specification_digest": "sha256:2354aa25a3f16ed0969ef0887d93cac1cdc6b66066383baba1ab8483b3786079",
+        "archive_sha256": "fa8c4e4230f3d8886a1c75b65c1acdbf3fd843734538bc9e8c1c630b54a1e147",
+        "archive_size": 77996959,
         "rcc_sha256": "02ab15e529fffa506a1aaf32957c3546b8645fbe1391154d32b6058a3f8c11c5",
-        "input_digest": "sha256:e9fca625ad0f2b5d509301b1d7a038f2af35089a0c44d12cd5b4acc948bddc78",
-        "freeze_sha256": "d5b087e0c803873f75157fd95fbb6669264900af390fce530301df5c42238066",
+        "input_digest": "sha256:bf3d7bc8f9b10315e1c8cc69fefed376395c271992bb8439277bf04099e8c6a2",
+        "freeze_sha256": "985e5be6928d78d3470a0f6ac5ca20d2653c93f5e8e2604a79ecec268062eb5d",
         "freeze_size": 618
       }
     }
@@ -122,6 +122,6 @@
   },
   "template": {
     "oci": "ghcr.io/joshyorko/josh-room/templates/room",
-    "version": "0.1.16"
+    "version": "0.1.17"
   }
 }

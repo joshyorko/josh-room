@@ -34,14 +34,35 @@ def test_private_config_schema_defines_non_secret_dimensions():
     assert set(record["required"]) == {
         "display_name",
         "provider",
-        "endpoint",
         "bucket",
         "credential_profile",
     }
-    assert record["properties"]["provider"]["enum"] == ["r2", "minio"]
+    assert record["properties"]["provider"]["enum"] == ["r2", "minio", "s3"]
     assert record["additionalProperties"] is False
     assert not SECRET_FIELDS & record["properties"].keys()
-    assert {"r2", "minio"} <= schema["properties"].keys()
+    assert {"r2", "minio", "s3"} <= schema["properties"].keys()
+
+
+@pytest.mark.parametrize("provider", ["r2", "minio", "s3"])
+def test_private_config_schema_requires_provider_specific_dimension_fields(provider):
+    validator = _validator("private-config.schema.json")
+    record = {
+        "display_name": "Archive",
+        "provider": provider,
+        "bucket": "synthetic-archive",
+        "credential_profile": "synthetic-profile",
+    }
+    required_field, required_value = (
+        ("region", "eu-west-1")
+        if provider == "s3"
+        else ("endpoint", "https://example.invalid")
+    )
+
+    with pytest.raises(ValidationError):
+        validator.validate({"dimensions": {"archive": record}})
+
+    record[required_field] = required_value
+    validator.validate({"dimensions": {"archive": record}})
 
 
 def test_private_config_schema_supports_reusable_connections_and_dimension_references():

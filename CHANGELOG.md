@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.47]
+
+- Add explicit Amazon S3 and HTTPS S3-compatible storage connections.
+- Generate evidence-linked Room onboarding guides and editor configuration before capture.
+- Scope recovery tree identities to their Room and Dimension.
+- Refresh the qualified Linux/Windows controller artifacts for these changes while retaining RCC v18.19.10 and JAT v0.1.17.
+- Align Dimension schema regression checks with provider-specific endpoint and region requirements.
+
 ## [0.1.46]
 
 - Promote published RCC v18.19.10, JAT v0.1.17 runtime, and separately qualified Linux/Windows controller artifacts.
