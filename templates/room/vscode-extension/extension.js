@@ -43,6 +43,14 @@ const ENCRYPTION_SECRET_PREFIX = "josh-room.encryption.v1:";
 const RECOVERY_SECRET_PREFIX = "josh-room.recovery.v1:";
 const INSTALLATION_RECOVERY_SECRET = "josh-room.recovery.v1";
 
+function usesNativeEncryption(provider) {
+  return ["minio", "s3"].includes(nativeRegistry.providerKey(provider));
+}
+
+function nativeEncryptionLabel(provider) {
+  return nativeRegistry.providerKey(provider) === "s3" ? "S3" : "MinIO";
+}
+
 function assertWorkspaceTrusted(action = "use Josh Room") {
   if (vscode.workspace.isTrusted === false) {
     throw new Error(`Workspace Trust is required to ${action}.`);
@@ -278,16 +286,18 @@ async function switchMaterialization(cwd, selected, existing, provider) {
   );
   let promoted = false;
   try {
-    await runOperation(
-      `Restoring ${selected.label}…`,
-      nativeRegistry.dimensionArgs([
-        "hydrate", selected.projectId,
-        "--snapshot", selected.snapshotId,
-        "--destination", stage,
-        "--backend", provider,
-        "--ide", "terminal",
-      ], selected.dimensionId),
+    const restoreArgs = nativeRegistry.dimensionArgs([
+      "hydrate", selected.projectId,
+      "--snapshot", selected.snapshotId,
+      "--destination", stage,
+      "--backend", provider,
+      "--ide", "terminal",
+    ], selected.dimensionId);
+    await runSelectedEncryption(
+      restoreArgs,
       cwd,
+      selected.project?.dimension || { id: selected.dimensionId, provider },
+      { title: `Restoring ${selected.label}…`, action: "switch a Room recovery point" },
     );
     const finalDimensionId = selected.dimensionId
       || selected.project?.dimension_id
@@ -2208,7 +2218,7 @@ async function saveRoom(options = {}) {
     if (connected !== "connected") return connected;
   }
   let encryptionMaterial;
-  if (targetProvider === "minio") {
+  if (usesNativeEncryption(targetProvider)) {
     encryptionMaterial = await readEncryptionMaterial(targetDimension || { id: targetDimensionId, provider: targetProvider });
     if (!encryptionMaterial) {
       const authStatus = await runJoshRoom(
@@ -2246,7 +2256,7 @@ async function saveRoom(options = {}) {
   }
   let preview;
   let deletionConfirmationToken;
-  const nativeSave = targetProvider === "minio" || (targetProvider === "r2" && targetDimension && !targetDimension.synthetic);
+  const nativeSave = usesNativeEncryption(targetProvider) || (targetProvider === "r2" && targetDimension && !targetDimension.synthetic);
   if (nativeSave) {
     const previewArgs = nativeRegistry.dimensionArgs(
       ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
@@ -2350,7 +2360,7 @@ async function enterRoom(preferredProject) {
   if (!selected) return "cancelled";
   const selectedDimensionId = dimensionId(selected.project);
   const provider = nativeRegistry.providerKey(selected.project.provider || selected.project.dimension?.provider);
-  if (!selected.projectId || !selectedDimensionId || !["local", "r2", "minio"].includes(provider)) {
+  if (!selected.projectId || !selectedDimensionId || !["local", "r2", "minio", "s3"].includes(provider)) {
     throw new Error("Choose a trusted Provider, Dimension, Room, and JAT recovery point.");
   }
   if (!/^[a-z0-9-]+$/.test(selected.projectId) || !/^[a-z0-9][a-z0-9._-]*$/.test(selectedDimensionId)) {
@@ -2382,7 +2392,7 @@ async function enterRoom(preferredProject) {
     const historyArgs = nativeRegistry.dimensionArgs(
       ["snapshots", "list", selected.projectId, "--backend", provider], selectedDimensionId,
     );
-    history = provider === "minio"
+    history = usesNativeEncryption(provider)
       ? await runSelectedEncryption(historyArgs, cwd, selected.project?.dimension || { id: selectedDimensionId, provider }, {
         title: `Loading ${selected.label} recovery points…`, action: "read a Room",
       })
@@ -2419,7 +2429,7 @@ async function enterRoom(preferredProject) {
       "--ide",
       "terminal",
     ], selectedDimensionId);
-  if (provider === "minio") {
+  if (usesNativeEncryption(provider)) {
     await runSelectedEncryption(restoreArgs, cwd, selected.project?.dimension || { id: selectedDimensionId, provider }, {
       title: `Restoring ${selected.label}…`, action: "restore a Room",
     });
@@ -2601,12 +2611,12 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   if (!project) return "cancelled";
   const dimension = dimensionId(project);
   const provider = nativeRegistry.providerKey(project.provider || project.dimension?.provider);
-  if (!project.id || !dimension || !["local", "r2", "minio"].includes(provider)) {
+  if (!project.id || !dimension || !["local", "r2", "minio", "s3"].includes(provider)) {
     throw new Error("Choose a trusted Provider, Dimension, Room, and JAT recovery point.");
   }
   const historyTitle = `Loading ${project.display_name} recovery points…`;
   const historyArgs = nativeRegistry.dimensionArgs(["snapshots", "list", project.id], dimension);
-  const history = provider === "minio"
+  const history = usesNativeEncryption(provider)
     ? await runSelectedEncryption(historyArgs, cwd, project.dimension || { id: dimension, provider }, {
       title: historyTitle,
       action: "read Room recovery points",
@@ -2646,7 +2656,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
     });
     if (!chosen) return "cancelled";
     let encryptionMaterial;
-    if (provider === "minio") {
+    if (usesNativeEncryption(provider)) {
       const status = await runJoshRoom(["encryption", "status", "--dimension", dimension], cwd);
       encryptionMaterial = await readEncryptionMaterial({ ...(project.dimension || {}), ...status });
     }
@@ -2669,7 +2679,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
     });
   }
   let encryptionMaterial;
-  if (provider === "minio") {
+  if (usesNativeEncryption(provider)) {
     const status = await runJoshRoom(["encryption", "status", "--dimension", dimension], cwd);
     encryptionMaterial = await readEncryptionMaterial({ ...(project.dimension || {}), ...status });
   }
@@ -3576,8 +3586,8 @@ async function chooseExplicitConnection(title) {
 async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
   const cwd = activeWorkspace();
   let dimension = item && item.dimension ? item.dimension : item;
-  if (purpose === "encryption" || nativeRegistry.providerKey(dimension?.provider) === "minio") {
-    throw new Error("MinIO encryption is initialized by Josh Room; Cloudflare is R2-only.");
+  if (purpose === "encryption" || usesNativeEncryption(dimension?.provider)) {
+    throw new Error("MinIO and S3 encryption are initialized by Josh Room; Cloudflare is R2-only.");
   }
   if (!dimension) {
     const catalog = await loadCatalog(cwd, "Loading storage...");
@@ -3716,7 +3726,8 @@ async function authorizeCloudflareBroker(cwd, { timeoutMs = 600000, targetDimens
   }
 }
 
-async function prepareRecoveryHandoff(cwd) {
+async function prepareRecoveryHandoff(cwd, provider = "minio") {
+  const encryptionLabel = nativeEncryptionLabel(provider);
   const stored = await extensionContext?.secrets?.get?.(INSTALLATION_RECOVERY_SECRET);
   if (stored) return materializeRecoveryValue(stored);
   const choice = await vscode.window.showQuickPick([
@@ -3730,7 +3741,7 @@ async function prepareRecoveryHandoff(cwd) {
   if (!choice) return undefined;
   if (choice.action === "import") {
     const selected = (await vscode.window.showOpenDialog({
-      title: "Choose recovery identity for MinIO encryption",
+      title: `Choose recovery identity for ${encryptionLabel} encryption`,
       defaultUri: vscode.Uri.file(cwd),
       canSelectFiles: true,
       canSelectFolders: false,
@@ -3760,7 +3771,7 @@ async function prepareRecoveryHandoff(cwd) {
     if (!backup) return undefined;
     writeRecoveryBackup(backup.fsPath, value, cwd);
     const acknowledged = await vscode.window.showInformationMessage(
-      "Recovery identity backup saved. Continue to create the MinIO encryption domain?",
+      `Recovery identity backup saved. Continue to create the ${encryptionLabel} encryption domain?`,
       { modal: true },
       "Continue",
     );
@@ -3775,19 +3786,20 @@ async function prepareRecoveryHandoff(cwd) {
 }
 
 async function connectEncryption(item, options = {}) {
-  assertWorkspaceTrusted("initialize MinIO encryption");
+  assertWorkspaceTrusted("initialize storage encryption");
   if (!item) item = await chooseExplicitDimension("Choose a Dimension for encryption");
   if (!item) return "cancelled";
   const cwd = activeWorkspace();
   const dimension = item?.dimension || item;
+  const encryptionLabel = nativeEncryptionLabel(dimension?.provider);
   const dimensionIdValue = dimension?.id || dimension?.dimension_id || selectedDimensionId;
-  if (!dimensionIdValue || nativeRegistry.providerKey(dimension?.provider) !== "minio") {
-    throw new Error("Choose a MinIO Dimension before initializing encryption.");
+  if (!dimensionIdValue || !usesNativeEncryption(dimension?.provider)) {
+    throw new Error("Choose a MinIO or S3 Dimension before initializing encryption.");
   }
-  if (!extensionContext?.secrets?.store) throw new Error("SecretStorage is required for MinIO encryption");
+  if (!extensionContext?.secrets?.store) throw new Error("SecretStorage is required for storage encryption");
   const prepared = options.recoveryHandoff
     ? { path: options.recoveryHandoff, value: readPrivateRecoveryFile(options.recoveryHandoff), cleanup: () => {} }
-    : await prepareRecoveryHandoff(cwd);
+    : await prepareRecoveryHandoff(cwd, dimension.provider);
   if (!prepared) return "cancelled";
   try {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-operational-"));
@@ -3795,7 +3807,7 @@ async function connectEncryption(item, options = {}) {
     const materialHandoff = path.join(directory, "operational.identity");
     try {
       const result = await runOperation(
-        "Initializing MinIO encryption…",
+        `Initializing ${encryptionLabel} encryption…`,
         ["encryption", "initialize", "--dimension", dimensionIdValue, "--recovery-handoff", prepared.path, "--material-handoff", materialHandoff],
         cwd,
         { cancellable: true },
@@ -3813,7 +3825,7 @@ async function connectEncryption(item, options = {}) {
       if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), prepared.value);
       selectedDimensionId = dimensionIdValue;
       roomsProvider && await roomsProvider.reload();
-      void vscode.window.showInformationMessage("MinIO encryption is ready.");
+      void vscode.window.showInformationMessage(`${encryptionLabel} encryption is ready.`);
       return "initialized";
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
@@ -3827,7 +3839,7 @@ async function runSelectedEncryption(args, cwd, dimension, options = {}) {
   assertWorkspaceTrusted(options.action || "read or change a trusted Room");
   const selected = dimension?.dimension || dimension;
   const provider = nativeRegistry.providerKey(selected?.provider);
-  if (provider !== "minio") return runOperation(options.title || "Running Josh Room operation…", args, cwd, options);
+  if (!usesNativeEncryption(provider)) return runOperation(options.title || "Running Josh Room operation…", args, cwd, options);
   let material = options.encryptionMaterial || await readEncryptionMaterial(selected);
   if (!material && selected?.id) {
     const status = await runJoshRoom(["encryption", "status", "--dimension", selected.id], cwd);
@@ -3849,9 +3861,9 @@ function selectedDimension(item) {
 async function destructiveOperation(args, cwd, dimension, title, action) {
   const selected = dimension?.dimension || dimension;
   const provider = nativeRegistry.providerKey(selected?.provider);
-  if (provider === "minio") return runSelectedEncryption(args, cwd, selected, { title, action });
+  if (usesNativeEncryption(provider)) return runSelectedEncryption(args, cwd, selected, { title, action });
   // R2 authority and age material belong to the controller's existing
-  // Cloudflare/device session. The extension's encryption cache is MinIO-only.
+  // Cloudflare/device session. MinIO and S3 use the native keyset handoff.
   return runOperation(title, args, cwd);
 }
 
@@ -3888,11 +3900,14 @@ async function reportDeleteOutcome(result, target) {
   return "removed";
 }
 
-async function prepareLegacySourceHandoff(cwd) {
-  const choice = await vscode.window.showQuickPick([
-    { label: "Authorize Cloudflare-managed legacy identity", source: "broker", description: "Retrieve the old identity from the existing authorization broker" },
-    { label: "Use a local identity backup", source: "file", description: "Choose an existing old source identity file" },
-  ], {
+async function prepareLegacySourceHandoff(cwd, provider = "minio") {
+  const choices = provider === "s3"
+    ? [{ label: "Use a local identity backup", source: "file", description: "Choose an existing old source identity file" }]
+    : [
+      { label: "Authorize Cloudflare-managed legacy identity", source: "broker", description: "Retrieve the old identity from the existing authorization broker" },
+      { label: "Use a local identity backup", source: "file", description: "Choose an existing old source identity file" },
+    ];
+  const choice = await vscode.window.showQuickPick(choices, {
     title: "Josh: Legacy Source Identity",
     placeHolder: "Where is the identity that encrypted this legacy catalog?",
     ignoreFocusOut: true,
@@ -3900,7 +3915,7 @@ async function prepareLegacySourceHandoff(cwd) {
   if (!choice) return undefined;
   if (choice.source === "file") {
     const selected = (await vscode.window.showOpenDialog({
-      title: "Choose the old source identity that encrypted this MinIO catalog",
+      title: `Choose the old source identity that encrypted this ${nativeEncryptionLabel(provider)} catalog`,
       canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
       openLabel: "Use old source identity",
     }))?.[0]?.fsPath;
@@ -3927,12 +3942,13 @@ async function migrateEncryption(item, { resume = false } = {}) {
   if (!item) return "cancelled";
   const cwd = activeWorkspace();
   const dimension = selectedDimension(item);
+  const encryptionLabel = nativeEncryptionLabel(dimension.provider);
   const id = dimension?.id || dimension?.dimension_id;
-  if (!id || nativeRegistry.providerKey(dimension.provider) !== "minio") {
-    throw new Error("Choose a MinIO Dimension before migrating encryption.");
+  if (!id || !usesNativeEncryption(dimension.provider)) {
+    throw new Error("Choose a MinIO or S3 Dimension before migrating encryption.");
   }
-  const status = await runOperation("Checking MinIO encryption…", ["encryption", "status", "--dimension", id], cwd);
-  if (status.state === "uninitialized") throw new Error("This MinIO bucket has no legacy catalog. Use Initialize MinIO Encryption instead.");
+  const status = await runOperation(`Checking ${encryptionLabel} encryption…`, ["encryption", "status", "--dimension", id], cwd);
+  if (status.state === "uninitialized") throw new Error(`This ${encryptionLabel} bucket has no legacy catalog. Use Initialize Encryption instead.`);
   // An already published cutover only needs destination authority. The CLI
   // validates this state before requiring an old source key.
   if (resume || status.state === "ready") {
@@ -3947,19 +3963,19 @@ async function migrateEncryption(item, { resume = false } = {}) {
       if (code !== "legacy-source-identity-required") throw error;
     }
   }
-  const source = await prepareLegacySourceHandoff(cwd);
+  const source = await prepareLegacySourceHandoff(cwd, dimension.provider);
   if (!source) return "cancelled";
   let recovery;
   try {
     if (!status.encryption_domain_id) {
-      const prepared = await prepareRecoveryHandoff(cwd);
+      const prepared = await prepareRecoveryHandoff(cwd, dimension.provider);
       if (!prepared) return "cancelled";
       try { recovery = materializeRecoveryValue(prepared.value); }
       finally { prepared.cleanup(); }
     }
     const handoffs = ["--dimension", id, "--source-identity", source.path];
     if (recovery) handoffs.push("--recovery-handoff", recovery.path);
-    const plan = await runOperation("Planning MinIO encryption migration…", ["encryption", "migrate", ...handoffs], cwd);
+    const plan = await runOperation(`Planning ${encryptionLabel} encryption migration…`, ["encryption", "migrate", ...handoffs], cwd);
     if (plan.status === "committed" || plan.journal_status === "committed") {
       await roomsProvider?.reload();
       return "committed";
@@ -3990,7 +4006,7 @@ async function migrateEncryption(item, { resume = false } = {}) {
       { modal: true }, "Migrate",
     );
     if (confirmed !== "Migrate") return "cancelled";
-    const result = await runOperation("Migrating MinIO encryption…", ["encryption", "resume", ...handoffs,
+    const result = await runOperation(`Migrating ${encryptionLabel} encryption…`, ["encryption", "resume", ...handoffs,
       "--expected-catalog-etag", plan.source_catalog_etag,
       ...(adoption ? ["--expected-source-binding", plan.source_storage_binding] : [])], cwd);
     if (recovery && extensionContext?.secrets?.store) {
@@ -4016,11 +4032,11 @@ async function exportRecovery(item) {
   if (!item) return "cancelled";
   const dimension = selectedDimension(item);
   const domain = dimension?.encryption_domain_id || dimension?.encryptionDomainId;
-  if (!domain || nativeRegistry.providerKey(dimension.provider) !== "minio") {
-    throw new Error("Choose a ready MinIO Dimension before exporting recovery material.");
+  if (!domain || !usesNativeEncryption(dimension.provider)) {
+    throw new Error("Choose a ready MinIO or S3 Dimension before exporting recovery material.");
   }
   const output = await vscode.window.showSaveDialog({
-    title: "Export MinIO recovery identity",
+    title: `Export ${nativeEncryptionLabel(dimension.provider)} recovery identity`,
     defaultUri: vscode.Uri.file(path.join(os.homedir(), "josh-room-recovery.identity")),
     filters: { "Age identity": ["identity", "txt"] },
   });
@@ -4038,7 +4054,7 @@ async function importRecovery(item) {
   if (!item) return "cancelled";
   const dimension = selectedDimension(item);
   const recovery = (await vscode.window.showOpenDialog({
-    title: "Choose MinIO recovery identity",
+    title: `Choose ${nativeEncryptionLabel(dimension.provider)} recovery identity`,
     defaultUri: vscode.Uri.file(activeWorkspace()),
     canSelectFiles: true,
     canSelectFolders: false,
@@ -4053,8 +4069,8 @@ async function runDimensionRoomStoreOperation(action, item, extraArgs, title) {
   const dimension = selectedDimension(item);
   const dimensionIdValue = dimension?.id || dimension?.dimension_id;
   const provider = nativeRegistry.providerKey(dimension?.provider);
-  if (!dimensionIdValue || !["minio", "r2"].includes(provider)) {
-    throw new Error("Choose a configured MinIO or R2 Dimension for Room Store lifecycle operations.");
+  if (!dimensionIdValue || !["minio", "s3", "r2"].includes(provider)) {
+    throw new Error("Choose a configured MinIO, S3, or R2 Dimension for Room Store lifecycle operations.");
   }
   const args = nativeRegistry.dimensionArgs(["room-store", action, ...extraArgs], dimensionIdValue);
   return runSelectedEncryption(args, activeWorkspace(), dimension, {
@@ -4233,17 +4249,167 @@ async function configureStorageBucket({ provider, connectionId, dimensionId, con
   return "added";
 }
 
+async function selectS3Bucket() {
+  const bucket = await vscode.window.showInputBox({
+    title: "Josh: Add Amazon S3 / S3-compatible Storage",
+    prompt: "Existing bucket name",
+    ignoreFocusOut: true,
+    validateInput: (value) => value.trim() ? undefined : "Enter an existing bucket.",
+  });
+  if (!bucket) return "cancelled";
+  return bucket.trim();
+}
+
+async function configureS3Bucket({ connectionId, cwd, bucket }) {
+  const selectedBucket = bucket || await selectS3Bucket();
+  if (!selectedBucket || selectedBucket === "cancelled") return "cancelled";
+  await runOperation(
+    "Checking S3 bucket access...",
+    providerTools.bucketCommand("check", { provider: "s3", connectionId, bucket: selectedBucket }),
+    cwd,
+  );
+  const dimensionIdValue = `s3-${connectionId}-${selectedBucket}`
+    .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  await runOperation("Adding Amazon S3 / S3-compatible Dimension...", [
+    "dimensions", "add", dimensionIdValue,
+    "--display-name", selectedBucket,
+    "--provider", "s3",
+    "--connection", connectionId,
+    "--bucket", selectedBucket,
+  ], cwd);
+  selectedDimensionId = dimensionIdValue;
+  if (roomsProvider) await roomsProvider.reload();
+  await vscode.window.showInformationMessage(`Connected S3 bucket ${selectedBucket}. Credentials remain in the secure backend.`);
+  return "added";
+}
+
+function s3AddressingChoices(selected = false) {
+  return [
+    { label: "Virtual-host style (default)", pathStyle: false },
+    { label: "Path-style", pathStyle: true },
+  ].map((choice) => ({ ...choice, description: choice.pathStyle === selected ? "Current selection" : undefined }));
+}
+
+async function chooseS3Addressing(selected = false, title = "Josh: S3 Addressing Style") {
+  const choice = await vscode.window.showQuickPick(s3AddressingChoices(selected), {
+    title,
+    placeHolder: "Choose how the S3-compatible endpoint addresses buckets",
+    ignoreFocusOut: true,
+  });
+  return choice ? Boolean(choice.pathStyle) : undefined;
+}
+
+function s3CustomEndpoint(endpoint) {
+  return endpoint && !/^https:\/\/s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com(?:\.cn)?\/?$/i.test(endpoint) ? endpoint : "";
+}
+
+function awsS3Endpoint(region) {
+  return `https://s3.${region}.amazonaws.com${region.startsWith("cn-") ? ".cn" : ""}`;
+}
+
 async function addStorage() {
   assertWorkspaceTrusted("add storage");
   const cwd = activeWorkspace();
   const providerChoice = await vscode.window.showQuickPick([
     { label: "Cloudflare R2", provider: "r2" },
     { label: "MinIO", provider: "minio" },
+    { label: "Amazon S3 / S3-compatible", provider: "s3" },
   ], { title: "Josh: Add Storage", placeHolder: "Choose a storage provider", ignoreFocusOut: true });
   if (!providerChoice) return "cancelled";
   if (providerChoice.provider === "r2") {
     const connected = await connectCloudflare();
     return connected === "connected" ? configureStorageBucket({ provider: "r2", dimensionId: "r2", cwd }) : connected;
+  }
+  if (providerChoice.provider === "s3") {
+    let existingConnections = [];
+    try {
+      existingConnections = providerTools.connectionRecords(
+        await runOperation("Loading storage connections...", providerTools.connectionCommand("list"), cwd),
+      ).filter((connection) => nativeRegistry.providerKey(connection.provider) === "s3");
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+    }
+    const reuseChoice = existingConnections.length > 0
+      ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
+        label: connection.display_name || connection.name || connection.id,
+        description: `${connection.region || "Region unavailable"} · ${connection.id || connection.connection_id}`,
+        detail: connection.endpoint,
+        connection,
+      })).concat([{ label: "$(add) New S3 Connection…", create: true }]), {
+        title: "Josh: Choose an S3 Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
+      })
+      : undefined;
+    if (existingConnections.length > 0 && !reuseChoice) return "cancelled";
+    if (reuseChoice && !reuseChoice.create) {
+      const connection = reuseChoice.connection || reuseChoice;
+      const connectionId = connection.id || connection.connection_id;
+      if (!connectionId) throw new Error("S3 connection did not return a connection id.");
+      return configureS3Bucket({ connectionId, cwd });
+    }
+
+    const connectionName = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage",
+      prompt: "Connection name",
+      placeHolder: "Personal backups",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Name this account connection.",
+    });
+    if (!connectionName) return "cancelled";
+    const region = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage",
+      prompt: "Region",
+      value: "us-east-1",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an AWS region.",
+    });
+    if (!region) return "cancelled";
+    const endpointInput = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage",
+      prompt: "Custom HTTPS endpoint (leave blank for Amazon S3)",
+      placeHolder: "https://...",
+      ignoreFocusOut: true,
+      validateInput: (value) => !value.trim() || /^https:\/\//i.test(value.trim())
+        ? undefined : "Use an HTTPS endpoint. S3 endpoints do not allow HTTP, including loopback.",
+    });
+    if (endpointInput === undefined) return "cancelled";
+    const endpoint = endpointInput.trim() || undefined;
+    const pathStyle = endpoint ? await chooseS3Addressing(false, "Josh: Add S3 Connection") : false;
+    if (pathStyle === undefined) return "cancelled";
+    const bucket = await selectS3Bucket();
+    if (!bucket || bucket === "cancelled") return "cancelled";
+    const accessKey = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage", prompt: "Access key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an access key.",
+    });
+    if (!accessKey) return "cancelled";
+    const secretKey = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage", prompt: "Secret key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a secret key.",
+    });
+    if (!secretKey) return "cancelled";
+    const sessionToken = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage", prompt: "Session token (optional)", password: true, ignoreFocusOut: true,
+    });
+    if (sessionToken === undefined) return "cancelled";
+    const credentials = {
+      "access-key-id": accessKey,
+      "secret-access-key": secretKey,
+      ...(sessionToken.trim() ? { "session-token": sessionToken } : {}),
+    };
+    const created = await runOperation("Connecting Amazon S3 / S3-compatible Storage...", providerTools.connectionCommand("create", {
+      provider: "s3", region: region.trim(), endpoint, pathStyle,
+    }), cwd, { stdin: JSON.stringify({ display_name: connectionName.trim(), ...credentials }) });
+    const connection = created.connection || created;
+    const connectionId = typeof connection === "string" ? connection : connection.id || connection.connection_id;
+    if (!connectionId) throw new Error("S3 connection did not return a connection id.");
+    const profile = typeof connection === "object" && connection.credential_profile
+      ? connection.credential_profile : `josh-room-${connectionId}`;
+    await rememberExtensionCredentials(profile, credentials);
+    return configureS3Bucket({
+      connectionId,
+      cwd,
+      bucket,
+    });
   }
   let endpoint;
   let credentials;
@@ -4338,6 +4504,62 @@ async function editConnection(item, { reconnect = false } = {}) {
   }
   const connectionId = connection?.id || connection?.connection_id;
   if (!connectionId) return addStorage();
+  const provider = nativeRegistry.providerKey(item?.provider || connection?.provider);
+  if (provider === "s3") {
+    const region = await vscode.window.showInputBox({
+      title: reconnect ? "Josh: Reconnect S3" : "Josh: Edit S3 Connection",
+      prompt: "Region",
+      value: connection.region || "us-east-1",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an AWS region.",
+    });
+    if (!region) return "cancelled";
+    const endpointInput = await vscode.window.showInputBox({
+      title: reconnect ? "Josh: Reconnect S3" : "Josh: Edit S3 Connection",
+      prompt: "Custom HTTPS endpoint (leave blank for Amazon S3)",
+      value: s3CustomEndpoint(connection.endpoint),
+      placeHolder: "https://...",
+      ignoreFocusOut: true,
+      validateInput: (value) => !value.trim() || /^https:\/\//i.test(value.trim())
+        ? undefined : "Use an HTTPS endpoint. S3 endpoints do not allow HTTP, including loopback.",
+    });
+    if (endpointInput === undefined) return "cancelled";
+    const endpoint = endpointInput.trim() || awsS3Endpoint(region.trim());
+    const pathStyle = await chooseS3Addressing(
+      Boolean(connection.path_style ?? connection.pathStyle),
+      reconnect ? "Josh: Reconnect S3" : "Josh: Edit S3 Connection",
+    );
+    if (pathStyle === undefined) return "cancelled";
+    const accessKey = await vscode.window.showInputBox({
+      title: "Josh: S3 Connection", prompt: "Access key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an access key.",
+    });
+    if (!accessKey) return "cancelled";
+    const secretKey = await vscode.window.showInputBox({
+      title: "Josh: S3 Connection", prompt: "Secret key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a secret key.",
+    });
+    if (!secretKey) return "cancelled";
+    const sessionToken = await vscode.window.showInputBox({
+      title: "Josh: S3 Connection", prompt: "Session token (optional)", password: true, ignoreFocusOut: true,
+    });
+    if (sessionToken === undefined) return "cancelled";
+    const credentials = {
+      "access-key-id": accessKey,
+      "secret-access-key": secretKey,
+      ...(sessionToken.trim() ? { "session-token": sessionToken } : {}),
+    };
+    await runOperation(reconnect ? "Reconnecting S3..." : "Updating S3 connection...", providerTools.connectionCommand(
+      reconnect ? "reconnect" : "update",
+      { provider: "s3", connectionId, endpoint, region: region.trim(), pathStyle },
+    ), activeWorkspace(), { stdin: JSON.stringify(credentials) });
+    await rememberExtensionCredentials(
+      connection.credential_profile || `josh-room-${connectionId}`,
+      credentials,
+    );
+    if (roomsProvider) await roomsProvider.reload();
+    return reconnect ? "connected" : "updated";
+  }
   const endpoint = await vscode.window.showInputBox({
     title: reconnect ? "Josh: Reconnect MinIO" : "Josh: Edit Connection",
     prompt: "Endpoint URL", value: connection.endpoint || "", ignoreFocusOut: true,
@@ -4482,6 +4704,7 @@ class HierarchyRoomsProvider {
       : item.kind === "jat" ? item.snapshot?.payload_kind === "room-store-v1" ? "logical-jat" : "jat"
       : syntheticDimension ? "dimension-synthetic"
         : item.kind === "dimension" && item.encryption_state === "ready" && item.provider === "minio" ? "dimension-minio-ready"
+          : item.kind === "dimension" && item.encryption_state === "ready" && item.provider === "s3" ? "dimension-s3-ready"
           : item.kind === "dimension" && item.encryption_state ? `dimension-${item.encryption_state}` : item.kind;
     treeItem.description = item.description || "";
     treeItem.iconPath = new vscode.ThemeIcon(
@@ -5049,7 +5272,7 @@ async function linkRoom(preferredProject) {
   const args = ["link", "--project", context.project_id, "--snapshot", context.snapshot_id];
   if (verifiedFingerprint) args.push("--workspace-fingerprint", verifiedFingerprint);
   const routed = routeItemArgs(args, context);
-  const result = nativeRegistry.providerKey(context.provider || context.dimension?.provider) === "minio"
+  const result = usesNativeEncryption(context.provider || context.dimension?.provider)
     ? await runSelectedEncryption(routed, cwd, context.dimension || context, { title: "Linking saved Room…", action: "link a Room" })
     : await runOperation("Linking saved Room...", routed, cwd);
   await resetNativeBaseline(result);
@@ -5064,7 +5287,7 @@ async function repairRoom(preferredProject) {
   if (!context) return "cancelled";
   const args = ["repair", "--project", context.project_id, "--snapshot", context.snapshot_id];
   const routed = routeItemArgs(args, context);
-  const result = nativeRegistry.providerKey(context.provider || context.dimension?.provider) === "minio"
+  const result = usesNativeEncryption(context.provider || context.dimension?.provider)
     ? await runSelectedEncryption(routed, cwd, context.dimension || context, { title: "Repairing Room ledger…", action: "repair a Room" })
     : await runOperation("Repairing Room ledger...", routed, cwd);
   await resetNativeBaseline(result);

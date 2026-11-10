@@ -4155,6 +4155,116 @@ test("MinIO Add Storage asks for concrete settings without invoking Cloudflare O
   assert.equal(addCall.args[addCall.args.indexOf("--connection") + 1], "home");
 });
 
+test("S3 Add Storage requires an explicit bucket and keeps credentials in the private handoff", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-add-storage-s3-test-"));
+  const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
+  const values = new Map();
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") return { stdout: JSON.stringify({ ok: true, connections: [] }) };
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "create") return { stdout: JSON.stringify({ ok: true, connection: { id: "s3-home", provider: "s3", region: "eu-west-1", credential_profile: "s3-profile" } }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    throw new Error(`unexpected S3 command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  } });
+  vscode.quickPickResponses.push({ label: "Amazon S3 / S3-compatible", provider: "s3" }, { label: "Path-style", pathStyle: true });
+  vscode.inputBoxResponses.push("Synthetic account", "eu-west-1", "https://objects.example.invalid", "synthetic-room", "synthetic-access", "synthetic-secret", "synthetic-session");
+
+  assert.equal(await extension.__test__.addStorage(), "added");
+  assert.deepEqual(inputBoxCalls.map((options) => options.prompt), [
+    "Connection name", "Region", "Custom HTTPS endpoint (leave blank for Amazon S3)", "Existing bucket name", "Access key", "Secret key", "Session token (optional)",
+  ]);
+  assert.equal(inputBoxCalls[2].validateInput("http://127.0.0.1:9000"), "Use an HTTPS endpoint. S3 endpoints do not allow HTTP, including loopback.");
+  const create = spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[1] === "connection" && entry.args[2] === "create");
+  assert.ok(create.args.includes("--region"));
+  assert.equal(create.args[create.args.indexOf("--region") + 1], "eu-west-1");
+  assert.equal(create.args[create.args.indexOf("--endpoint") + 1], "https://objects.example.invalid");
+  assert.ok(create.args.includes("--path-style"));
+  assert.match(String(create.child.stdinPayload), /synthetic-session/);
+  assert.equal(JSON.parse(create.child.stdinPayload).display_name, "Synthetic account");
+  assert.doesNotMatch(create.args.join(" "), /synthetic-access|synthetic-secret|synthetic-session/);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "provider" && entry.args[1] === "bucket" && entry.args[2] === "list"), false);
+  const check = spawnHarness.calls.find((entry) => entry.args[0] === "provider" && entry.args[1] === "bucket" && entry.args[2] === "check");
+  assert.equal(check.args[check.args.indexOf("--bucket") + 1], "synthetic-room");
+  const add = spawnHarness.calls.find((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add");
+  assert.ok(add.args.includes("--provider") && add.args[add.args.indexOf("--provider") + 1] === "s3");
+  assert.ok(add.args.includes("--connection") && add.args[add.args.indexOf("--connection") + 1] === "s3-home");
+  assert.equal(add.args[add.args.indexOf("--bucket") + 1], "synthetic-room");
+  assert.deepEqual(JSON.parse(values.get("josh-room.credentials.v1")).profiles["s3-profile"], {
+    "access-key-id": "synthetic-access", "secret-access-key": "synthetic-secret", "session-token": "synthetic-session",
+  });
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[0] === "auth"), false);
+});
+
+test("S3 Add Storage reuses a local connection and asks for one explicit bucket", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-reuse-s3-test-"));
+  const { vscode, statusItem, quickPickCalls, inputBoxCalls } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    if (args[0] === "provider" && args[1] === "connection" && args[2] === "list") return { stdout: JSON.stringify({ ok: true, connections: [
+      { id: "s3-home", provider: "s3", region: "eu-north-1", endpoint: "https://objects.example.invalid" },
+      { id: "minio-home", provider: "minio", endpoint: "https://minio.example.invalid" },
+    ] }) };
+    if (args[0] === "provider" && args[1] === "bucket" && args[2] === "check") return { stdout: JSON.stringify({ ok: true, accessible: true }) };
+    if (args[0] === "dimensions" && args[1] === "add") return { stdout: JSON.stringify({ ok: true }) };
+    throw new Error(`unexpected S3 reuse command: ${args.join(" ")}`);
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  vscode.quickPickResponses.push(
+    { label: "Amazon S3 / S3-compatible", provider: "s3" },
+    { connection: { id: "s3-home", provider: "s3", region: "eu-north-1", endpoint: "https://objects.example.invalid" } },
+  );
+  vscode.inputBoxResponses.push("existing-room-bucket");
+  assert.equal(await extension.__test__.addStorage(), "added");
+  assert.deepEqual(quickPickCalls[1].items.map((item) => item.connection?.id || item.label), ["s3-home", "$(add) New S3 Connection…"]);
+  assert.deepEqual(inputBoxCalls.map((options) => options.prompt), ["Existing bucket name"]);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[2] === "create"), false);
+  assert.equal(spawnHarness.calls.some((entry) => entry.args[1] === "bucket" && entry.args[2] === "list"), false);
+  const add = spawnHarness.calls.find((entry) => entry.args[0] === "dimensions" && entry.args[1] === "add");
+  assert.equal(add.args[add.args.indexOf("--connection") + 1], "s3-home");
+  assert.equal(add.args[add.args.indexOf("--bucket") + 1], "existing-room-bucket");
+});
+
+test("S3 reconnect preserves its region and path style and refreshes the session credential privately", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-reconnect-s3-test-"));
+  const { vscode, statusItem, inputBoxCalls } = createVscodeMock(root);
+  const values = new Map();
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.equal(args[0], "provider");
+    assert.equal(args[2], "reconnect");
+    return { stdout: JSON.stringify({ ok: true, connection: "s3-home" }) };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: {
+    get: async (key) => values.get(key),
+    store: async (key, value) => values.set(key, value),
+  } });
+  vscode.inputBoxResponses.push("ap-southeast-2", "https://objects.example.invalid", "new-access", "new-secret", "new-session");
+  vscode.quickPickResponses.push({ label: "Path-style", pathStyle: true });
+  assert.equal(await extension.__test__.editConnection({ provider: "s3", connection: {
+    id: "s3-home", provider: "s3", region: "us-east-1", endpoint: "https://old.example.invalid", path_style: false,
+    credential_profile: "s3-profile",
+  } }, { reconnect: true }), "connected");
+  assert.deepEqual(inputBoxCalls.map((options) => options.prompt), [
+    "Region", "Custom HTTPS endpoint (leave blank for Amazon S3)", "Access key", "Secret key", "Session token (optional)",
+  ]);
+  const call = spawnHarness.calls[0];
+  assert.equal(call.args[call.args.indexOf("--region") + 1], "ap-southeast-2");
+  assert.equal(call.args[call.args.indexOf("--endpoint") + 1], "https://objects.example.invalid");
+  assert.ok(call.args.includes("--path-style"));
+  assert.doesNotMatch(call.args.join(" "), /new-access|new-secret|new-session/);
+  assert.match(String(call.child.stdinPayload), /new-session/);
+  assert.deepEqual(JSON.parse(values.get("josh-room.credentials.v1")).profiles["s3-profile"], {
+    "access-key-id": "new-access", "secret-access-key": "new-secret", "session-token": "new-session",
+  });
+});
+
 for (const action of ["add", "edit", "reconnect"]) {
   test(`explicit MinIO ${action} replaces the synthetic R2 cache with authoritative storage`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-storage-reload-"));
@@ -4993,6 +5103,24 @@ test("Room Store Verify uses an explicit scope and Optimize never prunes without
   const optimizeCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "room-store" && call.args[1] === "optimize");
   assert.equal(optimizeCalls.length, 1);
   assert.equal(optimizeCalls[0].args.includes("--confirm"), false);
+});
+
+test("S3 Room Store operations route through the native encryption handoff", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-s3-room-store-route-test-"));
+  const fixture = createLogicalSnapshotFixture(root);
+  const dimension = { ...fixture.dimension, id: "s3-backup", provider: "s3" };
+  const identity = "AGE-SECRET-KEY-synthetic-s3\n";
+  const secrets = new Map([[fixture.extension.__test__.encryptionSecretKey("domain-a", 1), JSON.stringify({ identity, encryption_domain_id: "domain-a" })]]);
+  fixture.extension.__test__.setExtensionContextForTests({ secrets: { get: async (key) => secrets.get(key) } });
+  fixture.vscode.quickPickResponses.push({ label: "Repository metadata", scope: "metadata" });
+
+  assert.equal(await fixture.extension.__test__.verifyRoomStore(dimension), "verified");
+  const verify = fixture.spawnHarness.calls.find((call) => call.args[0] === "room-store" && call.args[1] === "verify");
+  assert.ok(verify);
+  assert.equal(verify.args[verify.args.indexOf("--dimension") + 1], "s3-backup");
+  assert.equal(verify.options.env.JOSH_ROOM_SELECTED_DOMAIN, "domain-a");
+  assert.equal(fixture.spawnHarness.calls.some((call) => call.args[0] === "encryption" && call.args[1] === "status"), false);
+  assert.equal(fs.existsSync(verify.options.env.JOSH_ROOM_ENCRYPTION_MATERIAL), false);
 });
 
 test("confirmed Room Store Optimize runs dry-run first, then requires an explicit destructive action", async () => {
@@ -6805,17 +6933,21 @@ test("contextless disconnect asks for a connection and cancellation does not log
   assert.equal(spawnHarness.calls.some((call) => call.args[0] === "auth" && call.args[1] === "logout"), false);
 });
 
-test("ready MinIO recovery actions do not appear on R2 Dimensions", () => {
+test("ready native encryption recovery actions are provider-scoped to MinIO and S3, never R2", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-menu-"));
   const { vscode } = createVscodeMock(root);
   const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
   const provider = new extension.__test__.HierarchyRoomsProvider();
   const minio = provider.getTreeItem({ kind: "dimension", id: "a", provider: "minio", encryption_state: "ready", dimension: { id: "a", provider: "minio" } });
+  const s3 = provider.getTreeItem({ kind: "dimension", id: "s3", provider: "s3", encryption_state: "ready", dimension: { id: "s3", provider: "s3" } });
   const r2 = provider.getTreeItem({ kind: "dimension", id: "b", provider: "r2", encryption_state: "ready", dimension: { id: "b", provider: "r2" } });
   const action = require("./package.json").contributes.menus["view/item/context"].find((item) => item.command === "joshRoom.exportRecovery");
   assert.equal(minio.contextValue, "dimension-minio-ready");
+  assert.equal(s3.contextValue, "dimension-s3-ready");
   assert.equal(r2.contextValue, "dimension-ready");
   assert.match(action.when, /dimension-minio-ready/);
+  assert.match(action.when, /dimension-s3-ready/);
+  assert.doesNotMatch(require("./package.json").contributes.commands.find((command) => command.command === "joshRoom.initializeEncryption").title, /MinIO/);
 });
 
 test("Save Current Room reuses the capture choice made for that Room in this session", async () => {

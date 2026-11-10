@@ -143,13 +143,14 @@ module.exports = {
 const PROVIDER_LABELS = {
   r2: "Cloudflare R2",
   minio: "MinIO",
+  s3: "Amazon S3 / S3-compatible",
   local: "Local Object Store",
 };
 const { connectionRecords, dimensionConnection } = require("./provider");
 
 function providerKey(value) {
   const normalized = String(value || "r2").trim().toLowerCase();
-  if (normalized.includes("cloudflare") || normalized === "s3") return "r2";
+  if (normalized.includes("cloudflare")) return "r2";
   if (normalized.includes("minio")) return "minio";
   if (normalized.includes("local")) return "local";
   return normalized || "r2";

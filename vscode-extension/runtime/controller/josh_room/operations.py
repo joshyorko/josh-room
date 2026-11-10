@@ -897,7 +897,8 @@ def _destination_identity(store) -> dict:
         return {"provider": "local"}
     provider = getattr(config, "provider", None)
     if provider is None:
-        provider = "minio" if store.__class__.__module__.endswith("minio") else "r2"
+        module = store.__class__.__module__
+        provider = "minio" if module.endswith("minio") else "s3" if module.endswith("s3_backend") else "r2"
     identity = {"provider": provider}
     for name in ("dimension_id", "endpoint", "bucket"):
         value = getattr(config, name, None)

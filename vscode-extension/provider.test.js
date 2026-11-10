@@ -79,3 +79,28 @@ test("connectionCommand keeps MinIO credentials in the JSON handoff, never argv"
     "provider", "bucket", "check", "--connection", "home-minio", "--bucket", "new-room",
   ]);
 });
+
+test("S3 connection commands pass region and addressing mode but never credentials", () => {
+  assert.deepEqual(connectionCommand("create", {
+    provider: "s3",
+    region: "us-west-2",
+    endpoint: "https://objects.example.invalid",
+    pathStyle: true,
+  }), [
+    "provider", "connection", "create", "--provider", "s3", "--region", "us-west-2",
+    "--endpoint", "https://objects.example.invalid", "--path-style",
+  ]);
+  assert.deepEqual(connectionCommand("create", { provider: "s3", region: "us-east-1" }), [
+    "provider", "connection", "create", "--provider", "s3", "--region", "us-east-1",
+  ]);
+  assert.deepEqual(connectionCommand("reconnect", {
+    provider: "s3", connectionId: "s3-home", region: "eu-west-1", pathStyle: true,
+  }), [
+    "provider", "connection", "reconnect", "--connection", "s3-home", "--region", "eu-west-1", "--path-style",
+  ]);
+  assert.deepEqual(connectionCommand("update", {
+    provider: "s3", connectionId: "s3-home", region: "eu-west-1", pathStyle: false,
+  }), [
+    "provider", "connection", "update", "--connection", "s3-home", "--region", "eu-west-1", "--virtual-host-style",
+  ]);
+});

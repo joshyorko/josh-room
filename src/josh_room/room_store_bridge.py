@@ -67,6 +67,7 @@ from .room_store_operations import (
     WorkspaceValidationError,
     scan_workspace_for_status,
 )
+from .s3_backend import S3Backend, S3Config
 from .workspace_state import write_stat_workspace_marker
 
 _COMPONENTS = {"rcc_environment", "homebrew_recovery", "hauler_content"}
@@ -173,9 +174,10 @@ def _scope(dimension: DimensionConfig, material: EncryptionMaterial) -> str:
     if not isinstance(dimension, DimensionConfig) or dimension.provider not in {
         "minio",
         "r2",
+        "s3",
     }:
         raise RoomStoreBridgeError(
-            "Room Store requires a MinIO or R2 Dimension",
+            "Room Store requires a supported object-store Dimension",
             code="provider-unsupported",
         )
     if not isinstance(material, EncryptionMaterial):
@@ -285,7 +287,7 @@ def _resolve_material(
         return material, session
     if authority_session is not None:
         raise RoomStoreBridgeError(
-            "R2 authority cannot be used with a MinIO Dimension",
+            "R2 authority cannot be used with this Dimension provider",
             code="provider-binding-mismatch",
         )
     if not isinstance(selected_material, EncryptionMaterial):
@@ -297,13 +299,15 @@ def _resolve_material(
 
 
 def _repository_locator(dimension: DimensionConfig) -> str:
-    if dimension.provider not in {"minio", "r2"}:
+    if dimension.provider not in {"minio", "r2", "s3"}:
         raise RoomStoreBridgeError(
-            "Room Store requires a MinIO or R2 Dimension",
+            "Room Store requires a MinIO, R2, or S3 Dimension",
             code="provider-unsupported",
         )
     try:
         validate_bucket_name(dimension.bucket)
+        if dimension.provider == "s3" and urlsplit(dimension.endpoint).scheme != "https":
+            raise ValueError("S3 endpoint must use HTTPS")
         validate_minio_transport(
             dimension.endpoint,
             verify_tls=dimension.option("verify_tls", True),
@@ -385,6 +389,8 @@ def _create_backend(
     try:
         if dimension.provider == "r2":
             return R2Backend(R2Config.from_dimension(dimension))
+        if dimension.provider == "s3":
+            return S3Backend(S3Config.from_dimension(dimension))
         return MinioBackend(MinioConfig.from_dimension(dimension))
     except Exception:  # noqa: BLE001 - sanitize SDK, TLS, and credential diagnostics at this boundary.
         raise RoomStoreBridgeError(
@@ -417,6 +423,16 @@ def _provider_environment(dimension: DimensionConfig) -> dict[str, str]:
     return {key: value for key, value in values.items() if value}
 
 
+def _s3_lookup_option(dimension: DimensionConfig) -> dict[str, str]:
+    if dimension.provider != "s3":
+        return {}
+    path_style = dimension.option("path_style", False)
+    if "." in dimension.bucket and dimension.endpoint.startswith("https://"):
+        # Match the SDK: wildcard TLS certificates cannot cover dotted buckets.
+        path_style = True
+    return {"s3_bucket_lookup": "path" if path_style else "dns"}
+
+
 def _restic_store_factory(
     *,
     repository: str,
@@ -425,12 +441,14 @@ def _restic_store_factory(
     provider_env: Mapping[str, str],
     ca_bundle: str | None,
     executable: Path,
+    s3_bucket_lookup: str | None = None,
 ) -> ResticStore:
     return ResticStore(
         repository=repository,
         cache_dir=cache_dir,
         password_file=password_file,
         provider_env=provider_env,
+        s3_bucket_lookup=s3_bucket_lookup,
         ca_bundle=ca_bundle,
         executable=str(executable),
     )
@@ -803,6 +821,7 @@ def open_existing_room_store(
                 cache_dir=cache_dir,
                 password_file=password_file,
                 provider_env=provider_env,
+                **_s3_lookup_option(dimension),
                 ca_bundle=dimension.option("ca_bundle"),
                 executable=executable,
             )
@@ -967,6 +986,7 @@ def open_writable_room_store(
             store_factory=lambda **kwargs: _restic_store_factory(
                 **kwargs,
                 provider_env=provider_env,
+                **_s3_lookup_option(dimension),
                 ca_bundle=dimension.option("ca_bundle"),
                 executable=executable,
             ),
@@ -1312,6 +1332,7 @@ def _read_only_snapshot_entries(
             cache_dir=cache_dir,
             password_file=password_file,
             provider_env=provider_env,
+            **_s3_lookup_option(dimension),
             ca_bundle=dimension.option("ca_bundle"),
             executable=executable,
         )
@@ -1333,7 +1354,7 @@ def _verify_native_room_store_cache(dimension, domain_id, generation, secret):
     try:
         cached_secret = keyring.lookup_room_store_secret(domain_id, generation)
     except keyring.NativeSecretBackendUnavailable:
-        if dimension.provider != "minio":
+        if dimension.provider not in {"minio", "s3"}:
             raise
         # MinIO's validated remote keyset supplies durable custody on headless hosts.
         return
@@ -1652,6 +1673,7 @@ def _build_operations(
             cache_dir=cache_dir,
             password_file=password_file,
             provider_env=provider_env,
+            **_s3_lookup_option(dimension),
             ca_bundle=dimension.option("ca_bundle"),
             executable=executable,
         )
@@ -1915,7 +1937,7 @@ def save_room_store(
         and rcc_runtime is None
         and confirmation_token is None
         and authority_session is None
-        and dimension.provider == "minio"
+        and dimension.provider in {"minio", "s3"}
         and isinstance(selected_material, EncryptionMaterial)
     ):
         _scope(dimension, selected_material)

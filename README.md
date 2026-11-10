@@ -5,9 +5,9 @@ Your development workspaces, on demand.
 Josh Room gives logical names to encrypted development-workspace snapshots and
 restores them into a local or remote development workspace.
 
-R2 and MinIO are concrete provider backends. Each physical bucket / Josh Room
+R2, MinIO, and explicit Amazon S3 / S3-compatible storage are concrete provider backends. Each physical bucket / Josh Room
 Dimension is one encryption domain with its own operational identity and
-catalog. MinIO keyset enrollment and catalog reads do not require Cloudflare;
+catalog. MinIO and S3 keyset enrollment and catalog reads do not require Cloudflare;
 Cloudflare remains the R2-only authority. Provider credentials and encryption
 material are separate, and private identities or credentials never appear in
 config, workspace files, logs, receipts, argv, Git, or examples.
@@ -132,12 +132,15 @@ josh-room enter hive
 Cloudflare R2 uses the existing OAuth flow: the first R2 operation opens a local
 browser authorization and reuses its short-lived session until expiry. MinIO
 uses a user-supplied endpoint and masked credentials entered once through the
-native Connect Storage flow. A reusable Provider Connection owns that authority;
+native Connect Storage flow. S3 uses an explicit region and bucket, an optional
+HTTPS endpoint, and masked access/secret/session credentials through the same
+private authority seam; see [S3 setup and acceptance](docs/S3-SETUP.md).
+A reusable Provider Connection owns that authority;
 each Dimension is one bucket-backed encrypted catalog, containing Rooms and
 their immutable JAT history. R2 and VS Code Insiders are the defaults.
 Extension-mode `doctor` reports the managed RCC/JAT runtime and controller
 state; standalone CLI mode may report optional host integrations separately.
-`enter` discovers logical project names from the encrypted R2 or MinIO catalog
+`enter` discovers logical project names from the encrypted R2, MinIO, or S3 catalog
 selected for the Room, hydrates safely, then launches VS Code Insiders.
 
 The bundled extension provides a native Rooms TreeView, toolbar actions,

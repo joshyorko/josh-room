@@ -1,9 +1,10 @@
 # Room Store save and restore engine
 
 `josh_room.room_store_operations.RoomStoreOperations` orchestrates complete
-Restic snapshots and validated logical JAT descriptors. It is intentionally
-not wired into `operations.py`, `catalog.py`, or the CLI until the Phase 0
-provider gates admit the Room Store catalog format.
+Restic snapshots and validated logical JAT descriptors. The native controller
+bridge admits configured MinIO, R2, and S3 Dimensions without introducing a
+separate backup engine. S3 provider and packaged-extension acceptance remain
+separate from fixture evidence; see [S3 setup](S3-SETUP.md).
 
 The constructor receives the selected repository locator, private cache and
 credential directories, Dimension/backend, descriptor scope and component
