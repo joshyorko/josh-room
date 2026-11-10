@@ -268,3 +268,12 @@ def test_r2_still_requires_native_secret_custody(authority, monkeypatch):
     ))
     with pytest.raises(client.R2RoomStoreError, match="room_store_native_keyring_unavailable"):
         value.ensure_material()
+
+
+def test_rejected_generation_cannot_be_overridden_by_matching_repository(authority):
+    value, broker = authority
+    value.ensure_material()
+    value.bind_repository("d" * 64, 1)
+    broker.repository_error = "room_store_generation_conflict"
+    with pytest.raises(client.R2RoomStoreError, match="generation_conflict"):
+        value.bind_repository("d" * 64, 5)

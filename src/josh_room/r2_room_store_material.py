@@ -212,9 +212,19 @@ class R2RoomStoreAuthority:
             if generation not in {expected, expected + 1}:
                 raise R2RoomStoreError("room_store_generation_conflict")
         except R2RoomStoreError as error:
+            if str(error) not in {
+                "room_store_transport_failed",
+                "room_store_repository_write_unverified",
+                "room_store_repository_response_invalid",
+                "room_store_response_invalid",
+            }:
+                raise
             # A lost response can only be accepted after a fresh material readback.
             winner = self._read_material()
-            if winner["repositoryId"] != repository_id:
+            if (
+                winner["repositoryId"] != repository_id
+                or winner["keysetGeneration"] not in {expected, expected + 1}
+            ):
                 raise error from None
             generation = winner["keysetGeneration"]
         bound_record = self._read_material()
