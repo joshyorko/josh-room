@@ -6658,7 +6658,41 @@ test("current Room and recovery points expose current, latest and open state", (
   assert.match(newest.description, /Latest/);
   assert.match(open.description, /Open/);
   assert.match(newest.label, /2026/);
-  assert.equal(open.tooltip, "old");
+  assert.match(open.tooltip, /old/);
+  assert.match(open.tooltip, /Open · Portable/);
+  assert.match(roomItem.tooltip, /Current · Status unknown/);
+  assert.match(roomItem.accessibilityInformation.label, /Demo Room · Current · Status unknown/);
+});
+
+test("recovery tree identities distinguish Rooms sharing a snapshot ID and retain full labels", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-tree-identities-"));
+  try {
+    const { vscode } = createVscodeMock(root);
+    const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); });
+    const provider = new extension.__test__.HierarchyRoomsProvider();
+    const tree = buildProviderTree({ dimensions: [{
+      id: "archive", provider: "r2", display_name: "Long archive Dimension label",
+      projects: ["room-a", "room-b"].map(id => ({
+        id, display_name: "Same Room name", latest: "shared-snapshot",
+        snapshots: [{ snapshot_id: "shared-snapshot", created_at: "2026-10-01T12:00:00Z" }],
+      })),
+    }] });
+    const dimension = tree[0].children[0].children[0];
+    const rooms = dimension.children;
+    const points = rooms.map(room => provider.getTreeItem(room.children[0]));
+    assert.notEqual(points[0].id, points[1].id);
+    assert.equal(points[0].id, provider.getTreeItem(rooms[0].children[0]).id);
+    assert.match(provider.getTreeItem(dimension).tooltip, /Long archive Dimension label/);
+    for (const [index, point] of points.entries()) {
+      assert.match(point.tooltip, /Same Room name/);
+      assert.ok(point.tooltip.includes(rooms[index].id));
+      assert.match(point.tooltip, /shared-snapshot/);
+      assert.match(point.accessibilityInformation.label, /Latest · Portable/);
+      assert.equal(point.command.arguments[0], rooms[index].children[0]);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("Room actions keep Save and Enter inline and recovery actions contextual", () => {

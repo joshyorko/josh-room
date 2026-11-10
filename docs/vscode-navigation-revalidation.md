@@ -25,3 +25,24 @@ Release 0.1.39 also reconciles already-open dirty editor buffers with the curren
 capture policy before a native R2 or MinIO Save. Included unsaved buffers keep
 the Room dirty; deliberately excluded files do not prevent a clean Save.
 Activation still performs no runtime acquisition or storage access.
+
+## Follow-up on current main
+
+PR #158 merged the navigation and Save presentation changes described above.
+Revalidation for #107 starts from main
+`f1e77164a41b545060b574dfb07e41043e79fbe2`.
+
+Recovery tree identities now include the parent Room as well as the Dimension
+and snapshot. Two Rooms may reference the same snapshot ID without VS Code
+confusing their rows. Selection commands still receive the original complete
+resource target. Screen-reader labels retain the full row label and state.
+Tooltips also retain full IDs; recovery points include their parent Room and Dimension.
+This lets narrow sidebars retain readable labels while exposing full identity.
+
+The existing Save, capture, deletion and encryption contracts remain regression
+gates. Fixture tests do not close the installed-candidate acceptance requirements
+in #107. Fresh Welcome, setup failure/cancellation, ready R2 and MinIO, dirty
+states, mixed history, preview/deletion review, recovery/maintenance and JAT
+Tools still need screenshots from an installed candidate, bound to its source
+SHA, VSIX digest and VS Code version. Light, dark, high contrast, keyboard,
+screen-reader and remote/devcontainer behavior require that same host check.
