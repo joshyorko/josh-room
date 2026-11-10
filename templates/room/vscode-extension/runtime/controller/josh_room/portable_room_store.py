@@ -1,9 +1,11 @@
-"""Opt-in MinIO encrypted custody through the shared Durable Object authority."""
+"""Opt-in MinIO and S3 encrypted custody through the shared Durable Object authority."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import secrets
 from dataclasses import replace
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
@@ -24,7 +26,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def domain_id(dimension):
-    binding = physical_bucket_identity("minio", dimension.endpoint, dimension.bucket)
+    binding = physical_bucket_identity(dimension.provider, dimension.endpoint, dimension.bucket)
     return hashlib.sha256(binding.encode()).hexdigest()
 
 
@@ -33,7 +35,7 @@ def authority(dimension, material, *, transport=None):
     profile = dimension.option("room_store_authority_profile")
     parsed = urlsplit(endpoint or "")
     if (
-        dimension.provider != "minio"
+        dimension.provider not in {"minio", "s3"}
         or parsed.scheme != "https"
         or not parsed.hostname
         or parsed.username or parsed.password or parsed.query or parsed.fragment
@@ -76,7 +78,7 @@ def _marker_base(body, dimension):
     ):
         raise ValueError("portable Room Store authority selection mismatch")
     base = EncryptionKeyset.from_dict(
-        body["keyset"], provider="minio", endpoint=dimension.endpoint, bucket=dimension.bucket,
+        body["keyset"], provider=dimension.provider, endpoint=dimension.endpoint, bucket=dimension.bucket,
     )
     if base.format_version != 1:
         raise ValueError("portable Room Store enrollment record must not contain a password")
@@ -156,15 +158,65 @@ def migrate(dimension, backend, material, *, transport=None):
     return marker
 
 
-def selected_keyset(dimension, backend, *, repository_id=None, expected_generation=None):
+
+def _initialize_s3(dimension, backend, source, etag):
+    from .auth import _assert_keyset_matches_dimension, _material_for_keyset
+    from .encryption_domain import KEYSET_CONTROL_KEY
+
+    _assert_keyset_matches_dimension(dimension, source)
+    broker = authority(dimension, _material_for_keyset(source))
+    inner = {
+        "format": "josh-room-r2-room-store-material", "version": 1,
+        "physical_binding": broker.physical_binding,
+        "encryption_domain_id": source.encryption_domain_id,
+        "key_generation": source.key_generation,
+        "secret": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("="),
+    }
+    candidate = {
+        "format": inner["format"], "version": 1, "domainId": broker.physical_binding,
+        "keysetGeneration": 1,
+        "ciphertext": broker._encrypt(json.dumps(inner, sort_keys=True, separators=(",", ":")).encode()),
+    }
+    try:
+        broker._request("POST", "material", candidate)
+    except R2RoomStoreError as error:
+        if str(error) not in {"room_store_material_conflict", "room_store_transport_failed", "room_store_material_write_unverified"}:
+            raise
+    winner = broker.read_material_details()
+    if winner.encryption_domain_id != source.encryption_domain_id or winner.key_generation != source.key_generation:
+        raise ValueError("portable Room Store enrollment winner mismatch")
+    marker = {
+        "format": MARKER_FORMAT, "authority": dimension.option("room_store_authority_endpoint"),
+        "domainId": domain_id(dimension), "keyset": source.to_dict(),
+    }
+    encoded = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode()
+    try:
+        backend.replace_control(KEYSET_CONTROL_KEY, encoded, etag)
+    except (BotoCoreError, OSError, RuntimeError, TypeError, ValueError):
+        if backend.read_control(KEYSET_CONTROL_KEY, 65536)[0] != encoded:
+            raise RuntimeError("portable Room Store enrollment publication unverified") from None
+    if backend.read_control(KEYSET_CONTROL_KEY, 65536)[0] != encoded:
+        raise RuntimeError("portable Room Store enrollment publication unverified")
+    return replace(source, format_version=2, room_store=replace(winner.keyset, physical_binding=source.binding))
+
+def selected_keyset(dimension, backend, *, repository_id=None, expected_generation=None, initialize=False):
     from .auth import _material_for_keyset, _validate_minio_backend_transport
     from .encryption_domain import KEYSET_CONTROL_KEY
     _validate_minio_backend_transport(dimension, backend)
-    raw, _etag = backend.read_control(KEYSET_CONTROL_KEY, 65536)
+    raw, etag = backend.read_control(KEYSET_CONTROL_KEY, 65536)
     if raw is None:
         return None
     body = json.loads(raw)
     if not isinstance(body, dict) or body.get("format") != MARKER_FORMAT:
+        if (
+            initialize and dimension.provider == "s3"
+            and (dimension.option("room_store_authority_endpoint") or dimension.option("room_store_authority_profile"))
+        ):
+            source = EncryptionKeyset.from_json(raw, provider="s3", endpoint=dimension.endpoint, bucket=dimension.bucket)
+            if source.format_version == 1:
+                if not etag:
+                    raise ValueError("portable Room Store enrollment requires a versioned keyset")
+                return _initialize_s3(dimension, backend, source, etag)
         return None
     selected = marker_keyset(body, dimension, material_factory=_material_for_keyset)
     if repository_id is None:
@@ -179,6 +231,8 @@ def rollback(dimension, backend, *, transport=None):
     from .auth import _material_for_keyset
     from .encryption_domain import KEYSET_CONTROL_KEY
 
+    if dimension.provider != "minio":
+        raise ValueError("portable Room Store rollback is limited to MinIO migration")
     raw, etag = backend.read_control(KEYSET_CONTROL_KEY, 65536)
     body = json.loads(raw)
     base = _marker_base(body, dimension)

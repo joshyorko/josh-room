@@ -151,3 +151,15 @@ R2 and opted-in MinIO, not an immediate whole-repository LOC reduction.
 Operational dependency changes from zero extra MinIO services to one celld
 service type, with two nodes in the qualified disposable topology. Existing
 unmigrated consumers retain zero extra services.
+
+## Scoped Amazon S3 follow-up
+
+The follow-up starts at rebased PR head
+`8cfaf0c408da3b42632fc0c0191580feafcdb80f`, which contains fresh main
+`2dd0bdcf1bc16906818e7eef6513dad141fc1962` and the integrated R2 repairs.
+It admits explicit S3 authority options and hashes the actual provider identity.
+An explicit first Save can select DO custody from a format-1 S3 enrollment.
+Existing format-2 stores and all unmarked MinIO stores retain their legacy path.
+The actor, S3 storage backend, OAuth paths and migration commands are unchanged.
+New local tests execute that exact actor with real age encryption and synthetic
+SDK contracts. They do not claim real AWS or celld fleet qualification for S3.

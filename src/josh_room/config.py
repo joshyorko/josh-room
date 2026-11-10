@@ -17,7 +17,7 @@ _COMMON_CONNECTION_FIELDS = {
     "provider", "region", "session_id",
 }
 _PROVIDER_CONNECTION_OPTIONS = {
-    "s3": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds"},
+    "s3": {"room_store_authority_endpoint", "room_store_authority_profile", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds"},
     "r2": {"max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "temporary_credentials", "timeout_seconds"},
     "minio": {"room_store_authority_endpoint", "room_store_authority_profile", "ca_bundle", "max_attempts", "max_bytes", "multipart_chunk_size", "multipart_threshold", "path_style", "timeout_seconds", "verify_tls"},
 }

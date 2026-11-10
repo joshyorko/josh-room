@@ -55,3 +55,44 @@ bytes before reporting those lanes as verified.
 Scratch fleet processes and runtime data are removed by the qualification
 script. Task-local source clones, binaries, package output and test logs are
 removed after the draft PR is created. Tool-managed Go/npm/uv caches may persist.
+
+## Amazon S3 follow-up on the rebased branch
+
+Starting PR head `8cfaf0c408da3b42632fc0c0191580feafcdb80f` contains main
+`2dd0bdcf1bc16906818e7eef6513dad141fc1962` and the integrated R2 repairs.
+The follow-up uses an isolated checkout at that exact head, not old local
+history. A normal fast-forward-only push is conditional on the remote still
+pointing to that expected starting head.
+
+The extension admits S3 authority options and the real provider in domain
+hashes. First Save can initialize DO custody only for an opted-in format-1 S3
+enrollment. Existing format-2 S3 and unmarked MinIO stores do not migrate.
+No actor transition, S3 SDK/Restic addressing code, R2 OAuth/transport code or
+VS Code success/progress behavior changes. No migration command gains S3 support.
+
+- PASS baseline scoped suite at the rebased head, 76 tests.
+- FAIL new S3 regressions before implementation, rejected authority config options.
+- PASS scoped portable/material/S3/backend/schema/R2 client suite, 97 tests.
+- PASS local synthetic S3 flow with actual age encryption, the exact shared
+  actor imported from `worker/src/room-store.js`, cold readback in fresh Node
+  processes, binding, stale-generation rejection, wrong bucket rejection and
+  no plaintext password/private identity in actor state. This fixture uses a
+  file-backed storage double; it is not a new celld/workerd qualification.
+- PASS botocore Stubber verification of conditional S3 control publication,
+  ETag-bound head/get readback and inherited backend behavior; no AWS requests.
+- PASS Worker/VS Code tests, 382 passed and 2 skipped. PASS OMP tests, 49 passed.
+- PASS Ruff, JSON/schema parsing, changelog validation, source/controller/template
+  parity and `git diff --check`.
+- Secret scan reports one unchanged synthetic credential-rejection fixture at
+  `tests/test_s3_schema.py:24`; no newly added secret findings.
+
+Live AWS, new celld fleet qualification, service/Worker deployment, production
+migration, bucket/credential administration and installed-VSIX acceptance are
+NOT RUN for this follow-up. The previously installed test VSIX and its user's
+live container/services were not touched. Earlier cancelled large-project
+capture is not promoted to acceptance evidence. No subagents or PR watchers
+were started.
+
+Final complete follow-up verification: PASS `pytest -q --tb=short`,
+2158 passed and 10 skipped in the isolated rebased checkout. Those skips are
+not counted as live-provider or installed-platform passes.

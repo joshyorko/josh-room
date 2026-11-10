@@ -1038,7 +1038,7 @@ def ensure_room_store_keyset(dimension, backend) -> EncryptionKeyset:
     _require_minio_room_store(dimension)
     from .portable_room_store import selected_keyset
 
-    selected = selected_keyset(dimension, backend)
+    selected = selected_keyset(dimension, backend, initialize=True)
     if selected is not None:
         _cache_room_store_secret(selected)
         return selected

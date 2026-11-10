@@ -71,3 +71,15 @@ The real-provider acceptance sequence is:
 AWS/provider checks, packaged-VSIX qualification, and screenshots remain **NOT RUN**
 until receipts for the named source and package are recorded. Offline tests must
 not require AWS or a network connection.
+
+## Optional portable Room Store authority
+
+New Room Stores can opt into the [shared Durable Object authority](portable-room-store.md#new-amazon-s3-room-stores)
+with `room_store_authority_endpoint` and `room_store_authority_profile` on the
+scoped S3 connection. The capability profile is separate from the S3 credential
+profile. The first explicit Save selects the route only for a format-1 encryption
+enrollment with no Room Store material. Existing format-2 stores remain on their
+legacy route. Read-only access does not initialize or migrate an authority.
+The shared actor and snapshot transport are unchanged. Real AWS, service
+deployment, existing-data migration and installed-VSIX acceptance are not
+established by the local actor/age/SDK contract tests.
