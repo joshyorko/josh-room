@@ -126,7 +126,7 @@ def test_repository_boundary_without_supported_manifest_is_retained(tmp_path):
     guide = (tmp_path / 'AGENTS.md').read_text()
     assert 'Working directory: `service`' in guide
     assert 'Repository boundary: local .git marker present' in guide
-    assert 'Development commands: unknown' in guide
+    assert 'No supported development commands extracted' in guide
 
 
 def test_linked_documentation_does_not_read_escaped_or_symlinked_files(tmp_path):
