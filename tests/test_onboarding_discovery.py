@@ -49,7 +49,7 @@ def test_large_room_prioritizes_evidence_and_keeps_scopes_after_project_cap(tmp_
     guide = _guide(result).decode()
     assert 'Coverage: partial' in guide
     assert 'Undiscovered instruction scopes remain unknown' in guide
-    assert len(guide.split('## Discovery limits')[1].splitlines()) < 18
+    assert len(guide.split('## Discovery limits')[1].split('## Instruction scopes')[0].splitlines()) < 18
 
 
 def test_project_cap_stays_partial_with_empty_queue_and_scopes_survive(tmp_path):
@@ -293,6 +293,7 @@ def test_root_readme_is_admitted_alongside_32_repositories(tmp_path):
         component(tmp_path, f'repo-{index:02}')
     result = discover(tmp_path)
     assert result['projects'][0]['directory'] == '.'
+    assert len(result['projects']) == 32
     assert 'Root architecture context.' in _guide(result).decode()
 
 
@@ -308,3 +309,76 @@ def test_twelve_paragraphs_have_no_false_truncation_notice():
     from josh_room.workspace_onboarding import _documentation_excerpt
     result = '\n\n'.join(f'Paragraph {i}.' for i in range(12))
     assert 'Excerpt limit reached' not in '\n'.join(_documentation_excerpt(result))
+
+
+def test_linked_deep_evidence_reports_relevant_scopes_and_keeps_foreign_tasks_out(tmp_path):
+    deep = tmp_path / 'one/two/three/four'
+    deep.mkdir(parents=True)
+    (tmp_path / 'README.md').write_text('[design](one/two/three/four/README.md)')
+    (deep / 'README.md').write_text('# Architecture\n\nForeign design.\n\n```sh\npytest\n```')
+    (deep / 'package.json').write_text('{}')
+    (deep / 'AGENTS.md').write_text('Deep instructions.')
+    (deep.parent / 'AGENTS.md').write_text('Ancestor instructions.')
+    result = discover(tmp_path)
+    assert 'one/two/three/four/AGENTS.md' in result['instructions']
+    assert 'one/two/three/AGENTS.md' in result['instructions']
+    assert result['coverage']['observed']['instruction_scopes'] == len(result['instructions'])
+    guide = _guide(result).decode()
+    assert 'Foreign design.' in guide
+    assert '`pytest` in `.`' not in guide
+
+
+def test_shared_limits_precede_components_and_do_not_repeat(tmp_path):
+    for index in range(3):
+        component(tmp_path, f'repo-{index}')
+    guide = _guide(discover(tmp_path)).decode()
+    assert guide.index('## Discovery limits') < guide.index('## Component')
+    assert guide.count('Dependencies and cross-component relationships') == 1
+    assert guide.count('Coverage: ') == 1
+
+
+def test_excerpts_share_one_guide_budget_and_report_presentation_omissions(tmp_path):
+    for index in range(12):
+        path = component(tmp_path, f'repo-{index:02}')
+        (path / 'README.md').write_text('# Architecture\n\n' + '\n\n'.join(
+            f'Excerpt-{index:02}-{paragraph:02} ' + 'x' * 800 for paragraph in range(15)))
+    result = discover(tmp_path)
+    guide = _guide(result).decode()
+    assert len(guide.encode()) <= 16 * 1024
+    assert guide.count('> Excerpt-') <= 12
+    assert 'Guide presentation limit reached' in guide
+    assert result['coverage']['complete'] is True
+
+
+def test_actual_excerpt_omission_is_reported():
+    from josh_room.workspace_onboarding import _documentation_excerpt
+    text = '\n\n'.join(f'Paragraph {index}.' for index in range(13))
+    assert 'Excerpt limit reached' in '\n'.join(_documentation_excerpt(text))
+
+
+def test_linked_scope_failure_is_reported_once_for_shared_ancestry(tmp_path):
+    deep = tmp_path / 'one/two/three/four'
+    deep.mkdir(parents=True)
+    (tmp_path / 'README.md').write_text('[a](one/two/three/four/a.md) [b](one/two/three/four/b.md)')
+    (deep / 'a.md').write_text('First design.')
+    (deep / 'b.md').write_text('Second design.')
+    (deep / 'AGENTS.md').write_bytes(b'\xff')
+    result = discover(tmp_path)
+    assert 'one/two/three/four/AGENTS.md' not in result['instructions']
+    assert reasons(result)['file-unavailable']['observed'] == 1
+    assert result['coverage']['observed']['linked_instruction_scopes_checked'] == 4
+
+
+def test_total_guide_cap_includes_notice_and_keeps_utf8_valid(tmp_path):
+    for index in range(32):
+        path = component(tmp_path, f'repo-{index:02}')
+        (path / 'package.json').write_text(json.dumps({
+            'description': 'é' * 300,
+            'dependencies': {f'dependency-{number}': '*' for number in range(20)},
+        }))
+    result = discover(tmp_path)
+    guide = _guide(result)
+    assert len(guide) <= 16 * 1024
+    assert 'Guide presentation limit reached' in guide.decode()
+    assert guide == _guide(result)
+    assert result['coverage']['complete'] is True

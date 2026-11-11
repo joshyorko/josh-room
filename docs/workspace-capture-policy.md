@@ -73,9 +73,9 @@ samples at most 256 entries per directory (plus one overflow sentinel), and
 descends at most three levels. It probes only recognized marker names in sampled
 child directories. Pending admission favors nested `AGENTS.md`, then Git or
 manifest boundaries, then recognized documentation, then other directories;
-ties use depth and relative path. Component admission separately favors Git and
-manifest boundaries over documentation-only directories, with a 32-component
-cap. Reaching that cap does not stop instruction-scope discovery. This is a
+ties use depth and relative path. Component admission reserves recognized selected-root documentation first,
+then favors Git and manifest boundaries over other documentation-only
+directories, within the same 32-component cap. Reaching that cap does not stop instruction-scope discovery. This is a
 bounded scan, not a full repository inventory: important evidence behind an
 unmarked, unvisited parent can still be missed.
 
@@ -191,7 +191,23 @@ Output log without removing private filenames and paths.
 Generated onboarding guides present scan coverage and shared limitations before
 component details. Component excerpts prioritize useful architecture,
 development, design, and workflow sections while retaining heading ancestry;
-the guide has a deterministic 16 KiB presentation ceiling, reported separately
-from discovery coverage. When the ceiling omits content, the guide directs
+all document excerpts share a budget of 12 paragraphs and 4 KiB including
+section labels. The guide has a 16 KiB UTF-8 presentation ceiling including its
+truncation notice, reported separately from discovery coverage. Output is
+reproducible for the same discovery result; overfull directory sampling remains
+enumeration-order dependent as described above. When the ceiling omits content, the guide directs
 readers to linked evidence. A missing supported command is reported as “No
 supported development commands extracted,” not as proof that no commands exist.
+
+For linked evidence, discovery also checks applicable nested `AGENTS.md` files
+on the ancestry already inspected for command ownership. Each additional scope
+path is checked once, counted as `linked_instruction_scopes_checked`; missing
+files are normal, while unavailable files produce omission notices. The
+`instruction_scopes` count includes readable scopes found through links as well
+as the directory walk. These checks do not enumerate more directories. Linked
+evidence with a different command owner is labeled in the guide. Shared
+qualifications appear once. Presentation truncation does not alter structured
+discovery coverage, the commands qualified for editor tasks, or create-only
+preservation of existing guides. Large guides can omit later component details
+or instruction links at the presentation ceiling; review the discovery JSON and
+initialize a selected component for focused coverage.
