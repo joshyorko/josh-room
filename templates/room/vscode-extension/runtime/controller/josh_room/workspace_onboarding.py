@@ -1,6 +1,7 @@
 """Local evidence discovery and create-only Room onboarding, without executing code."""
 from __future__ import annotations
 
+import errno
 import itertools
 import json
 import os
@@ -16,6 +17,9 @@ _MANIFESTS = ("package.json", "pyproject.toml", "Cargo.toml", "go.mod")
 _DOCS = ("README.md", "ARCHITECTURE.md", "docs/architecture.md")
 _SKIP = {".git", ".venv", "node_modules", "target", "vendor", ".vscode", ".cache", "dist", "build"}
 _LIMIT = 64 * 1024
+_CAPS = {"projects": 32, "visited_directories": 128, "pending_directories": 128,
+         "directory_entries": 256, "depth": 3, "documents_per_component": 8,
+         "file_bytes": _LIMIT, "examples_per_reason": 3}
 _HAS_DIR_FD = os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd
 
 
@@ -36,7 +40,7 @@ def _directory(path: Path) -> int:
         raise
 
 
-def _read(path: Path) -> str | None:
+def _read(path: Path, omit=None, *, required=False) -> str | None:
     # Every parent was admitted by the bounded walk; reject symlinked docs too.
     if any(p.is_symlink() for p in (path, *path.parents)):
         return None
@@ -51,32 +55,163 @@ def _read(path: Path) -> str | None:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 return None
             data = stream.read(_LIMIT + 1)
-            return data.decode("utf-8") if len(data) <= _LIMIT else None
+            if len(data) > _LIMIT:
+                if omit:
+                    omit("file-size-cap", path)
+                return None
+            return data.decode("utf-8")
+    except FileNotFoundError:
+        if omit and required:
+            omit("file-unavailable", path)
+        return None
     except (OSError, UnicodeError):
+        if omit:
+            omit("file-unavailable", path)
         return None
 
 
 def discover(root: Path) -> dict:
-    directories = [root]
-    projects, instructions, warnings = [], [], []
-    visited = 0
-    while directories and len(projects) < 32 and visited < 128:
-        visited += 1
-        directory = directories.pop(0)
+    # Separate directory admission from component admission: a README-only
+    # directory must not consume a manifest's slot or stop instruction discovery.
+    observed = {name: 0 for name in (
+        "directories_visited", "directories_probed", "directory_entries_observed",
+        "components_observed", "components_admitted", "instruction_scopes",
+        "documents_read", "additional_document_links_observed")}
+    omissions = {}
+
+    def omit(code, path, count=1, scope="."):
+        item = omissions.setdefault((code, scope), {
+            "code": code, "scope": scope, "observed": 0, "examples": []})
+        item["observed"] += count
+        relative = path.relative_to(root).as_posix()
+        # Examples are display-only, bounded relative paths, never payloads.
+        example = re.sub(r"[^A-Za-z0-9_./ -]", "?", relative)[:160]
+        if example not in item["examples"] and len(item["examples"]) < _CAPS["examples_per_reason"]:
+            item["examples"].append(example)
+
+    def probe(directory):
+        observed["directories_probed"] += 1
+        names = set()
+        try:
+            if any(p.is_symlink() for p in (directory, *directory.parents)):
+                return names
+            descriptor = _directory(directory)
+            try:
+                for name in (".git", "AGENTS.md", *_MANIFESTS, *_DOCS):
+                    # docs/architecture.md is checked during evidence reading;
+                    # do not follow its intermediate directory while probing.
+                    if "/" in name:
+                        continue
+                    try:
+                        kwargs = {"dir_fd": descriptor} if _HAS_DIR_FD else {}
+                        info = os.stat(name if kwargs else directory / name,
+                                       follow_symlinks=False, **kwargs)
+                        if stat.S_ISREG(info.st_mode) or (name == ".git" and stat.S_ISDIR(info.st_mode)):
+                            names.add(name)
+                    except OSError as error:
+                        if error.errno != errno.ENOENT:
+                            omit("file-unavailable", directory / name)
+                if not (directory / "docs").is_symlink():
+                    try:
+                        docs_fd = _directory(directory / "docs")
+                        try:
+                            kwargs = {"dir_fd": docs_fd} if _HAS_DIR_FD else {}
+                            info = os.stat("architecture.md" if kwargs else directory / "docs/architecture.md",
+                                           follow_symlinks=False, **kwargs)
+                            if stat.S_ISREG(info.st_mode):
+                                names.add("docs/architecture.md")
+                        finally:
+                            os.close(docs_fd)
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        omit("file-unavailable", directory / "docs/architecture.md")
+            finally:
+                os.close(descriptor)
+        except OSError:
+            omit("directory-unavailable", directory)
+        return names
+
+    def priority(item):
+        directory, names = item
+        rank = (0 if "AGENTS.md" in names else
+                1 if ".git" in names or names.intersection(_MANIFESTS) else
+                2 if names.intersection(_DOCS) else 3)
+        return rank, len(directory.relative_to(root).parts), directory.relative_to(root).as_posix()
+
+    directories = [(root, probe(root))]
+    nodes, instructions, boundaries = [], [], set()
+    while directories and observed["directories_visited"] < _CAPS["visited_directories"]:
+        directories.sort(key=priority)
+        directory, names = directories.pop(0)
+        observed["directories_visited"] += 1
+        if ".git" in names or names.intersection(_MANIFESTS):
+            boundaries.add(directory)
+        if names.intersection((*_MANIFESTS, *_DOCS)) or ".git" in names:
+            nodes.append((directory, names))
+        if directory != root and "AGENTS.md" in names and _read(directory / "AGENTS.md", omit, required=True) is not None:
+            instructions.append((directory.relative_to(root) / "AGENTS.md").as_posix())
+        try:
+            descriptor = _directory(directory)
+            try:
+                with os.scandir(descriptor if _HAS_DIR_FD else directory) as entries:
+                    candidates = list(itertools.islice(entries, _CAPS["directory_entries"] + 1))
+                    children = []
+                    for entry in candidates[:_CAPS["directory_entries"]]:
+                        if entry.name.startswith(".") or entry.name in _SKIP:
+                            continue
+                        try:
+                            # DT_UNKNOWN filesystems need the live directory
+                            # descriptor for this type check.
+                            if entry.is_dir(follow_symlinks=False):
+                                children.append(entry.name)
+                        except OSError:
+                            omit("directory-unavailable", directory / entry.name)
+            finally:
+                os.close(descriptor)
+            observed["directory_entries_observed"] += len(candidates)
+            if len(candidates) > _CAPS["directory_entries"]:
+                omit("directory-entry-cap", directory)
+            for name in sorted(children):
+                child = directory / name
+                if len(directory.relative_to(root).parts) >= _CAPS["depth"]:
+                    omit("depth-cap", child)
+                    continue
+                child_names = probe(child)
+                if ".git" in child_names or child_names.intersection(_MANIFESTS):
+                    boundaries.add(child)
+                directories.append((child, child_names))
+        except OSError:
+            omit("directory-unavailable", directory)
+        if len(directories) > _CAPS["pending_directories"]:
+            directories.sort(key=priority)
+            dropped = directories[_CAPS["pending_directories"]:]
+            for child, _ in dropped:
+                omit("pending-directory-cap", child)
+            directories = directories[:_CAPS["pending_directories"]]
+    for directory, _ in directories:
+        omit("visited-directory-cap", directory)
+
+    # Keep independent boundaries/manifests ahead of incidental documentation.
+    nodes.sort(key=lambda item: (0 if ".git" in item[1] or item[1].intersection(_MANIFESTS) else 1,
+                                 len(item[0].relative_to(root).parts), item[0].relative_to(root).as_posix()))
+    observed["components_observed"] = len(nodes)
+    for directory, _ in nodes[_CAPS["projects"]:]:
+        omit("project-cap", directory)
+    projects = []
+    for directory, names in nodes[:_CAPS["projects"]]:
         relative = directory.relative_to(root).as_posix()
         evidence = {}
         for name in (*_MANIFESTS, *_DOCS):
-            content = _read(directory / name)
+            content = _read(directory / name, omit, required=name in names)
             if content is not None:
                 evidence[name] = content
         documents = [name for name in _DOCS if name in evidence]
+        seen = {Path(os.path.abspath(directory / name)) for name in documents}
         for filename in documents:
-            for target in re.findall(r"(?<!!)\[[^\]]+\]\(([^\s)]+)\)", evidence[filename]):
-                if len(documents) >= 8:
-                    warnings.append(f"Linked documentation budget reached at {relative}")
-                    break
+            for match in re.finditer(r"(?<!!)\[[^\]]+\]\(([^\s)]+)\)", evidence[filename]):
                 try:
-                    parsed = urlsplit(target)
+                    parsed = urlsplit(match[1])
                 except ValueError:
                     continue
                 if parsed.scheme or parsed.netloc or parsed.query or not parsed.path:
@@ -87,49 +222,58 @@ def discover(root: Path) -> dict:
                 linked = Path(os.path.abspath(directory / Path(filename).parent / decoded))
                 if not linked.is_relative_to(root) or linked.suffix.lower() != ".md":
                     continue
-                name = os.path.relpath(linked, directory)
-                if name in evidence:
+                parts = linked.relative_to(root).parts
+                if any(part.startswith(".") or part in _SKIP for part in parts):
                     continue
-                content = _read(linked)
+                if linked in seen or any(p.is_symlink() for p in (linked, *linked.parents)):
+                    continue
+                seen.add(linked)
+                # Additional links are observed eligible paths, not claims that
+                # their unread contents exist, fit the file cap, or are useful.
+                if len(documents) >= _CAPS["documents_per_component"]:
+                    observed["additional_document_links_observed"] += 1
+                    omit("document-cap", linked, scope=relative)
+                    continue
+                content = _read(linked, omit, required=True)
                 if content is not None:
+                    name = os.path.relpath(linked, directory)
                     evidence[name] = content
                     documents.append(name)
-        marker = directory / ".git"
-        boundary = not marker.is_symlink() and (marker.is_file() or marker.is_dir())
-        if evidence or boundary:
+        observed["documents_read"] += len(documents)
+        if evidence or ".git" in names:
             projects.append({"directory": relative, "evidence": evidence,
-                             "repository": boundary, "documents": documents, "root": root})
-        if directory != root and _read(directory / "AGENTS.md") is not None:
-            instructions.append((directory.relative_to(root) / "AGENTS.md").as_posix())
-        if len(directory.relative_to(root).parts) >= 3:
-            warnings.append(f"Discovery depth limit at {relative}")
-            continue
-        try:
-            with os.scandir(directory) as entries:
-                candidates = list(itertools.islice(entries, 257))
-            if len(candidates) > 256:
-                warnings.append(f"Directory entry limit at {relative}")
-            for entry in sorted(candidates[:256], key=lambda item: item.name):
-                if entry.name.startswith(".") or entry.name in _SKIP:
-                    continue
-                if entry.is_dir(follow_symlinks=False):
-                    directories.append(Path(entry.path))
-        except OSError:
-            warnings.append(f"Directory unavailable at {relative}")
-        if len(directories) > 128:
-            directories = directories[:128]
-            warnings.append("Directory budget reached")
-    if directories:
-        warnings.append("Discovery budget reached; discovery incomplete")
+                             "repository": ".git" in names, "documents": documents, "root": root})
+    observed["components_admitted"] = len(projects)
+    observed["instruction_scopes"] = len(instructions)
     for project in projects:
         project["command_documents"] = []
         for filename in project["documents"]:
             document = Path(os.path.abspath(root / project["directory"] / filename))
-            owners = [candidate for candidate in projects
-                      if document.is_relative_to(root / candidate["directory"])
-                      and (candidate["repository"] or any(name in candidate["evidence"] for name in _MANIFESTS))]
-            owner = max(owners, key=lambda candidate: len(Path(candidate["directory"]).parts), default=project)
-            if owner is project:
+            # A linked document can cross a boundary that directory discovery
+            # never admitted. Qualify ownership along its ancestry as well.
+            for parent in document.parents:
+                if not parent.is_relative_to(root):
+                    break
+                try:
+                    descriptor = _directory(parent)
+                    try:
+                        for name in (".git", *_MANIFESTS):
+                            kwargs = {"dir_fd": descriptor} if _HAS_DIR_FD else {}
+                            try:
+                                info = os.stat(name if kwargs else parent / name, follow_symlinks=False, **kwargs)
+                            except FileNotFoundError:
+                                continue
+                            if stat.S_ISREG(info.st_mode) or (name == ".git" and stat.S_ISDIR(info.st_mode)):
+                                boundaries.add(parent)
+                                break
+                    finally:
+                        os.close(descriptor)
+                except OSError:
+                    omit("directory-unavailable", parent)
+                    boundaries.add(parent)  # Unknown ownership cannot authorize an outer task.
+            owners = [boundary for boundary in boundaries if document.is_relative_to(boundary)]
+            owner = max(owners, key=lambda candidate: len(candidate.parts), default=root / project["directory"])
+            if owner == root / project["directory"]:
                 project["command_documents"].append(filename)
         ancestors = sorted((candidate for candidate in projects
                             if (root / project["directory"]).is_relative_to(root / candidate["directory"])),
@@ -146,7 +290,15 @@ def discover(root: Path) -> dict:
                 pass
             if ancestor["repository"]:
                 break
-    return {"projects": projects, "instructions": instructions, "warnings": warnings}
+    items = sorted(omissions.values(), key=lambda item: (item["code"], item["scope"]))
+    warnings = list(dict.fromkeys(
+        f"{item['code']} at {re.sub(r'[^A-Za-z0-9_./ -]', '?', item['scope'])}: "
+        f"{item['observed']} observed omission(s); further coverage unknown." for item in items))
+    coverage = {"scope": ".", "complete": not items, "status": "partial" if items else "complete",
+                "observed": observed, "caps": dict(_CAPS), "omissions": items,
+                "unexplored_descendants": "unknown" if items else "none within supported scope",
+                "enumeration_order_dependent": any(item["code"] == "directory-entry-cap" for item in items)}
+    return {"projects": projects, "instructions": sorted(instructions), "warnings": warnings, "coverage": coverage}
 
 
 def _link(directory: str, filename: str) -> str:
@@ -302,7 +454,22 @@ def _guide(discovery: dict) -> bytes:
     if not discovery["projects"]:
         lines += ["", "Purpose, architecture, entry points and commands are unknown; no supported documentation/manifests were discovered."]
     lines += ["", "## Discovery limits", "Only recognized local manifests/docs were read, within depth, entry, project and file-size limits. External symlinks, credential stores and project hooks were not read or run."]
-    lines += [f"- {warning}" for warning in discovery["warnings"]]
+    coverage = discovery["coverage"]
+    counts, caps = coverage["observed"], coverage["caps"]
+    lines += [f"Scan scope: selected source (`.`), at most depth {caps['depth']}; recognized manifests, Markdown and nested AGENTS.md only.",
+              (f"Coverage: {coverage['status']}. Visited {counts['directories_visited']} directories; "
+              f"admitted {counts['components_admitted']} of {counts['components_observed']} observed components, "
+              f"{counts['instruction_scopes']} nested instruction scopes and {counts['documents_read']} documents."),
+              "Undiscovered instruction scopes remain unknown; observed omissions are not totals for unexplored subtrees."]
+    totals = {}
+    for item in coverage["omissions"]:
+        totals[item["code"]] = totals.get(item["code"], 0) + item["observed"]
+    lines += [f"- {code}: {count} observed omission(s); further coverage unknown." for code, count in sorted(totals.items())]
+    if coverage["enumeration_order_dependent"]:
+        lines.append("Overfull directories use an enumeration-order-dependent entry sample; later entries may contain important evidence.")
+    if not coverage["complete"]:
+        lines.append("Review evidence and nested scopes before use. For a focused guide, initialize a selected component separately. "
+                     "Existing guides are preserved; replacement requires an explicit manual backup, review and removal before initialization.")
     return ("\n".join(lines) + "\n").encode()
 
 
@@ -412,4 +579,5 @@ def initialize_onboarding(root: Path, editor: str, selected: tuple[str, ...]) ->
     extras, omitted = _editor(root, discovery, selected) if editor == "vscode" else ({}, {})
     artifacts.update(extras)
     outcomes = {name: _create(root, name, content) for name, content in artifacts.items()}
-    return {"editor": editor, "artifacts": outcomes, "omitted": omitted, "warnings": discovery["warnings"]}
+    return {"editor": editor, "artifacts": outcomes, "omitted": omitted, "warnings": discovery["warnings"],
+            "discovery": discovery["coverage"]}
