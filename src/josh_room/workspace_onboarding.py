@@ -193,7 +193,8 @@ def discover(root: Path) -> dict:
         omit("visited-directory-cap", directory)
 
     # Keep independent boundaries/manifests ahead of incidental documentation.
-    nodes.sort(key=lambda item: (0 if ".git" in item[1] or item[1].intersection(_MANIFESTS) else 1,
+    nodes.sort(key=lambda item: (0 if item[0] == root and item[1].intersection(_DOCS) else
+                                 1 if ".git" in item[1] or item[1].intersection(_MANIFESTS) else 2,
                                  len(item[0].relative_to(root).parts), item[0].relative_to(root).as_posix()))
     observed["components_observed"] = len(nodes)
     for directory, _ in nodes[_CAPS["projects"]:]:
@@ -273,6 +274,13 @@ def discover(root: Path) -> dict:
                     boundaries.add(parent)  # Unknown ownership cannot authorize an outer task.
             owners = [boundary for boundary in boundaries if document.is_relative_to(boundary)]
             owner = max(owners, key=lambda candidate: len(candidate.parts), default=root / project["directory"])
+            for scope in reversed([p for p in document.parents if p.is_relative_to(root)]):
+                instruction_path = scope / "AGENTS.md"
+                if not instruction_path.exists():
+                    continue
+                instruction = instruction_path.relative_to(root).as_posix()
+                if instruction not in instructions and _read(root / instruction, omit, required=True) is not None:
+                    instructions.append(instruction)
             if owner == root / project["directory"]:
                 project["command_documents"].append(filename)
         ancestors = sorted((candidate for candidate in projects
@@ -354,7 +362,7 @@ def _documentation_excerpt(text: str) -> list[str]:
     fenced = False
 
     def flush():
-        if paragraph and len(excerpts) < 12:
+        if paragraph:
             context = " / ".join(title for _, title in headings)
             excerpts.append((context, "\n".join(paragraph)[:900]))
         paragraph.clear()
@@ -382,19 +390,22 @@ def _documentation_excerpt(text: str) -> list[str]:
                 paragraph.append(line)
     flush()
     lines = []
-    for context, paragraph in excerpts:
+    excerpts.sort(key=lambda item: (0 if re.search(r"architecture|development|design|component|workflow", (item[0] + " " + item[1]).lower()) else 1))
+    for context, paragraph in excerpts[:12]:
         if context:
             lines.append(f"Source section: **{context}**")
         lines.extend(["> " + paragraph.replace("\n", "\n> "), ""])
-    if len(excerpts) == 12:
-        lines.append("Excerpt limit reached; consult the linked document for further sections.")
     return lines
 
 
 def _guide(discovery: dict) -> bytes:
+    coverage = discovery["coverage"]
+    counts, caps = coverage["observed"], coverage["caps"]
     lines = ["# Room onboarding", "", "Generated from bounded local documentation and manifests; no commands were executed.",
              "Documented commands are evidence, not proof they succeed on this host. Review them before running.", "",
-             "## Instruction scopes", "Nested instructions apply only within their own directories."]
+             f"Coverage: {coverage['status']}. Visited {counts['directories_visited']} directories; admitted {counts['components_admitted']} of {counts['components_observed']} observed components; {counts['instruction_scopes']} instruction scopes; {counts['documents_read']} documents.",
+             "Undiscovered instruction scopes remain unknown." if not coverage["complete"] else "Coverage is complete within the supported discovery scope.",
+             "", "## Instruction scopes", "Nested instructions apply only within their own directories."]
     lines += [f"- {_link('.', item)}" for item in discovery["instructions"]] or ["No nested AGENTS.md was discovered within the scan budget."]
     for project in discovery["projects"]:
         directory, evidence = project["directory"], project["evidence"]
@@ -449,13 +460,11 @@ def _guide(discovery: dict) -> bytes:
         commands = _commands(project)
         lines += [f"- `{item['command']}` in `{item['directory']}` from {_link(directory, item['evidence'])}." for item in commands]
         if not commands:
-            lines.append("Development commands: unknown; consult the linked documentation.")
+            lines.append("No supported development commands extracted.")
         lines.append("Dependencies and cross-component relationships are established only by the linked evidence; undocumented relationships remain unknown.")
     if not discovery["projects"]:
         lines += ["", "Purpose, architecture, entry points and commands are unknown; no supported documentation/manifests were discovered."]
     lines += ["", "## Discovery limits", "Only recognized local manifests/docs were read, within depth, entry, project and file-size limits. External symlinks, credential stores and project hooks were not read or run."]
-    coverage = discovery["coverage"]
-    counts, caps = coverage["observed"], coverage["caps"]
     lines += [f"Scan scope: selected source (`.`), at most depth {caps['depth']}; recognized manifests, Markdown and nested AGENTS.md only.",
               (f"Coverage: {coverage['status']}. Visited {counts['directories_visited']} directories; "
               f"admitted {counts['components_admitted']} of {counts['components_observed']} observed components, "
@@ -470,7 +479,10 @@ def _guide(discovery: dict) -> bytes:
     if not coverage["complete"]:
         lines.append("Review evidence and nested scopes before use. For a focused guide, initialize a selected component separately. "
                      "Existing guides are preserved; replacement requires an explicit manual backup, review and removal before initialization.")
-    return ("\n".join(lines) + "\n").encode()
+    rendered = "\n".join(lines) + "\n"
+    if len(rendered.encode()) > 16 * 1024:
+        rendered = rendered.encode()[:16 * 1024].decode("utf-8", "ignore").rsplit("\n", 1)[0] + "\n\nGuide presentation limit reached; consult linked evidence for omitted sections.\n"
+    return rendered.encode()
 
 
 def _editor(root: Path, discovery: dict, selected: tuple[str, ...]) -> tuple[dict, dict]:

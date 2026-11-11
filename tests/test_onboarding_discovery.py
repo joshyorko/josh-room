@@ -285,3 +285,26 @@ def test_entry_type_checks_keep_scandir_descriptor_open(tmp_path, monkeypatch):
     result = discover(tmp_path)
     assert [p['directory'] for p in result['projects']] == ['repo']
     assert result['coverage']['complete'] is True
+
+
+def test_root_readme_is_admitted_alongside_32_repositories(tmp_path):
+    (tmp_path / 'README.md').write_text('# Room\n\nRoot architecture context.')
+    for index in range(32):
+        component(tmp_path, f'repo-{index:02}')
+    result = discover(tmp_path)
+    assert result['projects'][0]['directory'] == '.'
+    assert 'Root architecture context.' in _guide(result).decode()
+
+
+def test_long_guide_prefers_architecture_and_stays_bounded(tmp_path):
+    (tmp_path / 'README.md').write_text('# Room\n\n' + '\n\n'.join(f'Prerequisite paragraph {i}.' for i in range(30)) + '\n\n## Architecture\n\nArchitecture map is useful.')
+    guide = _guide(discover(tmp_path)).decode()
+    assert len(guide.encode()) <= 16 * 1024
+    assert 'Architecture map is useful.' in guide
+    assert guide.count('Documented commands are evidence') == 1
+
+
+def test_twelve_paragraphs_have_no_false_truncation_notice():
+    from josh_room.workspace_onboarding import _documentation_excerpt
+    result = '\n\n'.join(f'Paragraph {i}.' for i in range(12))
+    assert 'Excerpt limit reached' not in '\n'.join(_documentation_excerpt(result))

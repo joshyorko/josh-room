@@ -187,3 +187,11 @@ repository's administrative pointers. Choose source-only explicitly or stop and
 inspect the remaining report; Save does not prune or repair Git records.
 Diagnostic paths are intended for local review. Do not publish the report or
 Output log without removing private filenames and paths.
+
+Generated onboarding guides present scan coverage and shared limitations before
+component details. Component excerpts prioritize useful architecture,
+development, design, and workflow sections while retaining heading ancestry;
+the guide has a deterministic 16 KiB presentation ceiling, reported separately
+from discovery coverage. When the ceiling omits content, the guide directs
+readers to linked evidence. A missing supported command is reported as “No
+supported development commands extracted,” not as proof that no commands exist.
