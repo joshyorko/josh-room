@@ -136,7 +136,7 @@ def test_changed_inputs_publish_export_and_backup_only_fixed_stage(tmp_path, mon
     def run(argv, *, cwd, cancellation, timeout=1800):
         calls.append(argv)
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.10\n"
+            return b"RCC version: v18.19.11\n"
         if argv[1:4] == ["env", "publish", "--robot"]:
             return json.dumps({
                 "artifactDigest": "sha256:" + "1" * 64,
@@ -204,7 +204,7 @@ def test_native_metadata_mismatch_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(
         components,
         "_run",
-        lambda argv, **kwargs: b"RCC version: v18.19.10" if argv[1:] == ["--version"] else b'{"artifactDigest":"bad"}',
+        lambda argv, **kwargs: b"RCC version: v18.19.11" if argv[1:] == ["--version"] else b'{"artifactDigest":"bad"}',
     )
     with pytest.raises(components.RoomStoreComponentError, match="environment metadata"):
         components.capture_rcc_component(
@@ -292,7 +292,7 @@ def test_wrong_native_platform_fails_before_export_or_backup(tmp_path, monkeypat
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.10"
+            return b"RCC version: v18.19.11"
         return json.dumps({
             "artifactDigest": "sha256:" + "1" * 64,
             "specificationDigest": "sha256:" + "2" * 64,
@@ -326,7 +326,7 @@ def test_reuse_rejects_changed_platform_or_runtime(tmp_path, monkeypatch, field,
     def run(argv, **kwargs):
         calls.append(argv)
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.10"
+            return b"RCC version: v18.19.11"
         if argv[1:3] == ["env", "publish"]:
             return json.dumps({
                 "artifactDigest": "sha256:" + "1" * 64,
@@ -351,7 +351,7 @@ def test_reuse_rejects_changed_platform_or_runtime(tmp_path, monkeypatch, field,
     assert result["rcc_version"] == components.RCC_VERSION
 
 
-@pytest.mark.parametrize("version", ["v18.19.6", "v18.19.7", "v18.19.9", "v18.19.100", "v18.19.10-dev"])
+@pytest.mark.parametrize("version", ["v18.19.6", "v18.19.7", "v18.19.9", "v18.19.10", "v18.19.110", "v18.19.11-dev", "v18.19.11+build", "prefixv18.19.11"])
 def test_wrong_rcc_executable_version_fails_before_publish(tmp_path, monkeypatch, version):
     root = _workspace(tmp_path)
     calls = []
@@ -390,7 +390,7 @@ def test_source_change_during_export_prevents_component_backup(tmp_path, monkeyp
 
     def run(argv, **kwargs):
         if argv[1:] == ["--version"]:
-            return b"RCC version: v18.19.10"
+            return b"RCC version: v18.19.11"
         if argv[1:3] == ["env", "publish"]:
             return json.dumps({
                 "artifactDigest": "sha256:" + "1" * 64,

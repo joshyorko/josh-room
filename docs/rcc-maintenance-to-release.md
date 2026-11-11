@@ -39,6 +39,19 @@ template version in `devcontainer-template.json` and both release locks in the
 same candidate, and its report includes each qualified JAT platform digest for
 the generated PR description.
 
+## RCC v18.19.11 adoption
+
+This promotion consumes published [RCC v18.19.11](https://github.com/joshyorko/rcc/releases/tag/v18.19.11),
+source `953eda18d3d1f4a286c17709f282315a2ed16a16`, and immutable
+[JAT v0.1.18-jat-runtime](https://github.com/joshyorko/josh-all-the-things/releases/tag/v0.1.18-jat-runtime),
+source `5437ce5fff658dc2f74d2db6bc3a72079b0cad37`.
+Native Room Store capture requires RCC v18.19.11. Encrypted snapshot envelopes
+accept its receipts while retaining every previously supported version.
+Both shipped controller source copies, runtime manifests, freezes, and release
+locks advance together. Controller environment qualification, exact-head
+consumer CI, merged-main staging, and owner-approved publication remain
+separate evidence gates. Metadata changes alone do not establish those results.
+
 ## RCC v18.19.10 adoption
 
 This promotion consumes published [RCC v18.19.10](https://github.com/joshyorko/rcc/releases/tag/v18.19.10),
