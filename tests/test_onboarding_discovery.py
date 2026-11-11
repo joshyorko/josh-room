@@ -305,10 +305,9 @@ def test_long_guide_prefers_architecture_and_stays_bounded(tmp_path):
     assert guide.count('Documented commands are evidence') == 1
 
 
-def test_twelve_paragraphs_have_no_false_truncation_notice():
-    from josh_room.workspace_onboarding import _documentation_excerpt
-    result = '\n\n'.join(f'Paragraph {i}.' for i in range(12))
-    assert 'Excerpt limit reached' not in '\n'.join(_documentation_excerpt(result))
+def test_twelve_paragraphs_have_no_false_truncation_notice(tmp_path):
+    (tmp_path / 'README.md').write_text('\n\n'.join(f'Paragraph {i}.' for i in range(12)))
+    assert 'Guide presentation limit reached' not in _guide(discover(tmp_path)).decode()
 
 
 def test_linked_deep_evidence_reports_relevant_scopes_and_keeps_foreign_tasks_out(tmp_path):
@@ -350,10 +349,9 @@ def test_excerpts_share_one_guide_budget_and_report_presentation_omissions(tmp_p
     assert result['coverage']['complete'] is True
 
 
-def test_actual_excerpt_omission_is_reported():
-    from josh_room.workspace_onboarding import _documentation_excerpt
-    text = '\n\n'.join(f'Paragraph {index}.' for index in range(13))
-    assert 'Excerpt limit reached' in '\n'.join(_documentation_excerpt(text))
+def test_actual_excerpt_omission_is_reported(tmp_path):
+    (tmp_path / 'README.md').write_text('\n\n'.join(f'Paragraph {index}.' for index in range(13)))
+    assert 'Guide presentation limit reached' in _guide(discover(tmp_path)).decode()
 
 
 def test_linked_scope_failure_is_reported_once_for_shared_ancestry(tmp_path):
@@ -382,3 +380,22 @@ def test_total_guide_cap_includes_notice_and_keeps_utf8_valid(tmp_path):
     assert 'Guide presentation limit reached' in guide.decode()
     assert guide == _guide(result)
     assert result['coverage']['complete'] is True
+
+
+@pytest.mark.parametrize('separate_component', [False, True])
+def test_later_architecture_and_development_survive_earlier_prerequisites(tmp_path, separate_component):
+    (tmp_path / 'README.md').write_text('# Room\n\n' + '\n\n'.join(
+        f'Prerequisite {index}.' for index in range(12)))
+    target = component(tmp_path, 'service') if separate_component else tmp_path
+    (target / 'ARCHITECTURE.md').write_text(
+        '# Architecture\n\n## Current\n\nRequests use the current API.\n\n'
+        '## Proposed\n\nA queue may be added later.\n\n'
+        '## Development\n\nDevelop against the local API fixture.\n')
+    result = discover(tmp_path)
+    guide = _guide(result).decode()
+    assert 'Source section: **Architecture / Current**\n> Requests use the current API.' in guide
+    assert 'Source section: **Architecture / Proposed**\n> A queue may be added later.' in guide
+    assert 'Source section: **Architecture / Development**\n> Develop against the local API fixture.' in guide
+    assert guide.count('> ') <= 12
+    assert len(guide.encode()) <= 16 * 1024
+    assert 'Guide presentation limit reached' in guide

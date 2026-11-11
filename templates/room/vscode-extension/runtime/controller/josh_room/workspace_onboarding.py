@@ -376,10 +376,8 @@ class _ExcerptBudget:
     omitted: bool = False
 
 
-def _documentation_excerpt(text: str, budget: _ExcerptBudget | None = None) -> list[str]:
+def _documentation_paragraphs(text: str) -> list[tuple[str, str]]:
     # Keep heading ancestry: dropping a "Proposed" parent changes the meaning.
-    standalone = budget is None
-    budget = budget if budget is not None else _ExcerptBudget()
     headings, excerpts, paragraph = [], [], []
     fenced = False
 
@@ -411,23 +409,25 @@ def _documentation_excerpt(text: str, budget: _ExcerptBudget | None = None) -> l
             elif not line.lstrip().startswith(("<", "[!")):
                 paragraph.append(line)
     flush()
-    lines = []
-    excerpts.sort(key=lambda item: (0 if re.search(r"architecture|development|design|component|workflow", (item[0] + " " + item[1]).lower()) else 1))
-    for context, paragraph in excerpts:
-        block = ([f"Source section: **{context}**"] if context else [])
-        if len(paragraph) > 900:
-            budget.omitted = True
-        block.extend(["> " + paragraph[:900].replace("\n", "\n> "), ""])
-        size = len(("\n".join(block) + "\n").encode())
-        if budget.paragraphs == 0 or size > budget.bytes:
-            budget.omitted = True
-            continue
-        lines.extend(block)
-        budget.paragraphs -= 1
-        budget.bytes -= size
-    if standalone and budget.omitted:
-        lines.append("Excerpt limit reached; consult the linked document for further sections.")
-    return lines
+    return excerpts
+
+
+def _excerpt_priority(item: tuple[str, str]) -> int:
+    return 0 if re.search(r"architecture|development|design|component|workflow", " ".join(item).lower()) else 1
+
+
+def _render_excerpt(context: str, paragraph: str, budget: _ExcerptBudget) -> list[str]:
+    block = ([f"Source section: **{context}**"] if context else [])
+    if len(paragraph) > 900:
+        budget.omitted = True
+    block.extend(["> " + paragraph[:900].replace("\n", "\n> "), ""])
+    size = len(("\n".join(block) + "\n").encode())
+    if budget.paragraphs == 0 or size > budget.bytes:
+        budget.omitted = True
+        return []
+    budget.paragraphs -= 1
+    budget.bytes -= size
+    return block
 
 
 def _guide(discovery: dict) -> bytes:
@@ -451,19 +451,27 @@ def _guide(discovery: dict) -> bytes:
         lines.append("Review evidence and nested scopes before use. For a focused guide, initialize a selected component separately. "
                      "Existing guides are preserved; replacement requires an explicit manual backup, review and removal before initialization.")
     lines += ["", "## Instruction scopes", "Nested instructions apply only within their own directories."]
+    # Allocate across all admitted documents before rendering in component order.
+    candidates = []
+    for index, project in enumerate(discovery["projects"]):
+        for name in project["documents"]:
+            for context, paragraph in _documentation_paragraphs(project["evidence"].get(name, "")):
+                candidates.append((index, name, context, paragraph))
     excerpt_budget = _ExcerptBudget()
+    selected_excerpts = {}
+    for index, name, context, paragraph in sorted(candidates, key=lambda item: _excerpt_priority(item[2:])):
+        block = _render_excerpt(context, paragraph, excerpt_budget)
+        if block:
+            selected_excerpts.setdefault((index, name), []).extend(block)
     lines += [f"- {_link('.', item)}" for item in discovery["instructions"]] or ["No nested AGENTS.md was discovered within the scan budget."]
-    for project in discovery["projects"]:
+    for index, project in enumerate(discovery["projects"]):
         directory, evidence = project["directory"], project["evidence"]
         lines += ["", f"## Component in `{directory}`", f"Working directory: `{directory}`.", "",
                   "Evidence: " + ", ".join(_link(directory, name) for name in evidence) + "."]
         lines.append("Repository boundary: local .git marker present (including linked-worktree markers)." if project["repository"]
                      else "No local repository boundary established here; this may be a component of an enclosing repository.")
         for name in project["documents"]:
-            text = evidence.get(name)
-            if not text:
-                continue
-            excerpts = _documentation_excerpt(text, excerpt_budget)
+            excerpts = selected_excerpts.get((index, name), [])
             if excerpts:
                 label = "Documentation excerpt" if name in project["command_documents"] else "Linked documentation (different command owner)"
                 lines += [f"{label} ({_link(directory, name)}):", "", *excerpts]

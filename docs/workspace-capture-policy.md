@@ -189,8 +189,10 @@ Diagnostic paths are intended for local review. Do not publish the report or
 Output log without removing private filenames and paths.
 
 Generated onboarding guides present scan coverage and shared limitations before
-component details. Component excerpts prioritize useful architecture,
-development, design, and workflow sections while retaining heading ancestry;
+component details. Excerpt candidates are prioritized across all admitted
+documents before allocating the shared budget, so an earlier README cannot
+consume ordinary prose slots before later architecture, development, design,
+and workflow evidence is considered. Heading ancestry is retained;
 all document excerpts share a budget of 12 paragraphs and 4 KiB including
 section labels. The guide has a 16 KiB UTF-8 presentation ceiling including its
 truncation notice, reported separately from discovery coverage. Output is
