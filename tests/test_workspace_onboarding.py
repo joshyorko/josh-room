@@ -160,6 +160,7 @@ def test_actual_cli_initializes_selected_source_without_executing_project_code(t
     import os
     import subprocess
     import sys
+    from pathlib import Path
 
     root = tmp_path / 'selected'
     root.mkdir()
@@ -170,11 +171,17 @@ def test_actual_cli_initializes_selected_source_without_executing_project_code(t
         '# Architecture\n\n## Current\n\nThe client calls the API.\n\n'
         '## Proposed\n\nA queue may replace synchronous requests.\n'
     )
-    env = {**os.environ, 'JOSH_ROOM_CONFIG_DIR': str(tmp_path / 'private-config')}
+    env = {**os.environ, 'JOSH_ROOM_CONFIG_DIR': str(tmp_path / 'private-config'),
+           'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')}
     command = [sys.executable, '-m', 'josh_room', 'workspace', 'init',
                '--workspace', str(root), '--json']
     first = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
-    assert json.loads(first.stdout)['onboarding']['artifacts']['AGENTS.md'] == 'created'
+    onboarding = json.loads(first.stdout)['onboarding']
+    assert onboarding['artifacts']['AGENTS.md'] == 'created'
+    assert onboarding['discovery']['complete'] is True
+    assert onboarding['discovery']['observed']['components_admitted'] == 1
+    assert onboarding['discovery']['caps']['documents_per_component'] == 8
+    assert onboarding['warnings'] == []
     guide = (root / 'AGENTS.md').read_text()
     assert 'Current' in guide and 'Proposed' in guide and 'The client calls the API.' in guide
     tasks = json.loads((root / '.vscode/tasks.json').read_text())['tasks']

@@ -68,6 +68,31 @@ source, external URLs, and symlinked documents are not read. Git repository
 boundaries remain in the guide even when their manifests are unsupported; their
 purpose and commands are reported as unknown.
 
+Discovery visits at most 128 directories, keeps at most 128 pending directories,
+samples at most 256 entries per directory (plus one overflow sentinel), and
+descends at most three levels. It probes only recognized marker names in sampled
+child directories. Pending admission favors nested `AGENTS.md`, then Git or
+manifest boundaries, then recognized documentation, then other directories;
+ties use depth and relative path. Component admission separately favors Git and
+manifest boundaries over documentation-only directories, with a 32-component
+cap. Reaching that cap does not stop instruction-scope discovery. This is a
+bounded scan, not a full repository inventory: important evidence behind an
+unmarked, unvisited parent can still be missed.
+
+Ordering is reproducible for the entries within each supported sample,
+independent of creation or enumeration order. An overfull directory samples the
+first 256 enumerated entries **before** sorting; its selected subset can depend
+on filesystem enumeration order. Coverage explicitly records this limitation.
+Documents are limited to 64 KiB each and eight Markdown documents total per
+admitted component, including the recognized starting documents. Duplicate
+targets, fragment variants and cycles consume no additional slots. Additional
+eligible link targets are counted without reading their contents; that count
+does not establish their existence, readability or usefulness. Links into hidden
+or excluded tool/store directories are rejected. Commands from linked documents
+are assigned only to their own established repository/manifest owner, including
+boundaries beyond the directory scan; unknown ownership cannot qualify an outer
+component's task.
+
 Package-script tasks use the declared `packageManager` (`npm`, `pnpm`, `yarn`,
 or `bun`), inherited from enclosing manifests without crossing an independent
 repository boundary. Without a declaration, they retain the npm default.
@@ -96,12 +121,42 @@ josh-room workspace init --workspace ./selected-project --no-editor-files --json
 josh-room workspace-check --workspace ./selected-project --json
 ```
 
-The JSON result reports onboarding artifact statuses and omissions. `--editor
+The JSON result reports onboarding artifact statuses and omissions, plus
+`onboarding.discovery`: `scope`, `complete`, `status`, `observed`, configured
+`caps`, and aggregated `omissions`. Stable reason codes are `project-cap`,
+`visited-directory-cap`, `pending-directory-cap`, `directory-entry-cap`,
+`depth-cap`, `document-cap`, `directory-unavailable`, `file-unavailable` and
+`file-size-cap`. Each omission has an observed event/target count, a scope and at
+most three sanitized relative examples (160 characters each). These are observed
+omissions, **not exact totals for unexplored descendants**. `complete` means
+complete only within the recognized, non-hidden, bounded discovery scope; any
+truncation or unavailable evidence makes it partial even when no directories
+remain pending. The existing `onboarding.warnings` list remains available with
+one summary per reason/scope and no identical duplicate lines. The guide groups
+the main reasons and reports discovered evidence and unknown instruction scopes.
+
+The VS Code New Room confirmation reports this same coverage status, observed
+component/directory counts and main reasons before preview, including when the
+selected source differs from the open workspace. It directs users to the
+guide's Discovery limits and evidence; an existing guide still retains its
+original contents. Continue remains available. Documentation coverage does not
+authorize Save or replace the independent `workspace-check` safety validator.
+
+`--editor
 none` and `--no-editor-files` both retain missing-guide generation; the latter
 selects an empty editor-file set. Repeated initialization preserves existing
 file bytes and timestamps. Ordinary Enter, status, hydration, and background
 activation do not initialize onboarding. Exclusion editing uses policy-only
 initialization and never generates a guide or editor files.
+
+To replace an existing incomplete guide, explicitly review it and save a backup
+outside the selected source, then manually remove **only** the source root's
+`AGENTS.md`. Run `josh-room workspace init --workspace ./selected-project
+--editor none --json`, review the new coverage and evidence, and merge any
+owner-authored instructions from the backup before using the guide. Restore the
+backup if the replacement is unsuitable. Reinitializing without that manual
+removal never replaces the existing guide; use a narrower selected component if
+the Room still exceeds the limits. Existing editor files remain create-only.
 
 Status and scanning never initialize or edit the file. **Edit exclusions** opens
 the selected folder's file; save those edits before choosing **Continue**. The

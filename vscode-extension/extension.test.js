@@ -6639,7 +6639,7 @@ test("new Room initialization targets selected source and offers explicit source
 for (const { forceCreate, decision } of [
   { forceCreate: true, decision: "Save" },
   { forceCreate: false, decision: "Cancel" },
-]) test(`New Room onboarding runs the real CLI before preview (${forceCreate ? "forceCreate" : "picker"}, ${decision})`, async (t) => {
+]) test(`New Room partial onboarding runs the real CLI before preview (${forceCreate ? "forceCreate" : "picker"}, ${decision})`, async (t) => {
   const python = process.env.JOSH_ROOM_TEST_PYTHON || path.join(__dirname, "..", ".venv",
     process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
   if (!fs.existsSync(python)) return t.skip("Python project runtime unavailable; set JOSH_ROOM_TEST_PYTHON");
@@ -6648,8 +6648,11 @@ for (const { forceCreate, decision } of [
   const active = path.join(root, "active"), source = path.join(root, "selected");
   fs.mkdirSync(active); fs.mkdirSync(source);
   fs.writeFileSync(path.join(source, "package.json"), JSON.stringify({ scripts: { test: "never-execute-this" } }));
+  for (let index = 0; index < 33; index += 1) {
+    fs.mkdirSync(path.join(source, `repo-${String(index).padStart(2, "0")}`, ".git"), { recursive: true });
+  }
   const dimension = { id: "backup", display_name: "Synthetic Backup", provider: "minio", rooms: [] };
-  const { vscode, statusItem, quickPickCalls } = createVscodeMock(active);
+  const { vscode, statusItem, quickPickCalls, infoCalls } = createVscodeMock(active);
   let guideAtPreview;
   const spawnHarness = createSpawnHarness(({ args, options }) => {
     if (args[0] === "dimensions" || args[0] === "projects") return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
@@ -6662,12 +6665,18 @@ for (const { forceCreate, decision } of [
         env: { ...process.env, JOSH_ROOM_CONFIG_DIR: path.join(root, "private-config") },
       });
       assert.equal(initialized.status, 0, initialized.stderr);
+      const result = JSON.parse(initialized.stdout);
+      assert.equal(result.onboarding.discovery.complete, false);
+      assert.equal(result.onboarding.discovery.observed.components_admitted, 32);
+      assert.ok(result.onboarding.discovery.omissions.some(item => item.code === "project-cap"));
       return { stdout: initialized.stdout };
     }
     assert.ok(fs.existsSync(path.join(source, "AGENTS.md")));
     assert.ok(fs.existsSync(path.join(source, ".vscode", "tasks.json")));
     if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
     if (args[0] === "snapshot" && args[1] === "preview") {
+      assert.ok(infoCalls.some(call => /discovery is partial.*Discovery limits and evidence/.test(call[0])
+        && call.includes("Continue")));
       fs.appendFileSync(path.join(source, "AGENTS.md"), "\nUser edit retained after preview.\n");
       guideAtPreview = fs.readFileSync(path.join(source, "AGENTS.md"), "utf8");
       return { stdout: JSON.stringify(nativePreview()) };

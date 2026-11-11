@@ -16,7 +16,13 @@ VS Code files based on local architecture evidence. Configure
 `joshRoom.onboarding.editor` (`vscode` or `none`) and
 `joshRoom.onboarding.files` in VS Code Settings; the guide is still generated
 when editor mode is `none`. Initialization does not install extensions or run
-tasks. The preview shows the capture scope and any deletions requiring confirmation. Save
+tasks. The first-run confirmation shows whether discovery is partial, its
+observed component/directory counts and main limits, and directs you to the
+guide's evidence. Continue remains available; Save still requires its separate
+workspace safety check. Existing guides are preserved. See the
+[onboarding policy](../docs/workspace-capture-policy.md#initialize-room-onboarding-inspect-and-approve-exclusions)
+for discovery bounds and explicit manual replacement of an incomplete guide.
+The preview shows the capture scope and any deletions requiring confirmation. Save
 open editor buffers first; otherwise the Room remains marked as having changes.
 Recovery points show Latest and Open separately; the tooltip contains the full
 ID. Settings, recovery and maintenance are available from the relevant

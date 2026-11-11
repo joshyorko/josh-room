@@ -1984,8 +1984,16 @@ async function initializeRoomExclusions(source) {
     .map(([name, state]) => `${name}: ${state}`);
   const description = created.length ? `Created: ${created.join(", ")}. ` : "";
   const skipped = omissions.length ? `Skipped: ${omissions.join(", ")}. ` : "";
+  const coverage = onboardingSummary?.discovery;
+  const counts = coverage?.observed;
+  const discoveryCounts = counts ? `${counts.components_admitted} of ${counts.components_observed} observed components; ${counts.directories_visited} directories visited. ` : "";
+  const discoveryReasons = [...new Set((coverage?.omissions || []).map(item => item.code))];
+  const discoveryNotice = coverage?.complete === false
+    ? `Onboarding discovery is partial. ${discoveryCounts}${discoveryReasons.length ? `Limits: ${discoveryReasons.slice(0, 3).join(", ")}${discoveryReasons.length > 3 ? ", …" : ""}. ` : ""}Review the guide's Discovery limits and evidence before use; undiscovered scopes remain unknown. `
+    : coverage?.complete === true ? "Onboarding discovery completed within its documented scope. "
+      : "Onboarding discovery coverage is unknown. ";
   const action = await vscode.window.showInformationMessage(
-    `${description}${skipped}${conflicts.length ? `Conflicts: ${conflicts.join(", ")}. ` : ""}Room onboarding is in the selected source. Existing files are preserved; recommendations do not install extensions or run tasks.`,
+    `${description}${skipped}${conflicts.length ? `Conflicts: ${conflicts.join(", ")}. ` : ""}${discoveryNotice}Room onboarding is in the selected source. Existing files are preserved; recommendations do not install extensions or run tasks.`,
     "Continue", "Edit exclusions", ...(initialized.capture_mode !== "source-only" ? ["Use source-only"] : []), "Cancel",
   );
   if (action === "Use source-only") {
