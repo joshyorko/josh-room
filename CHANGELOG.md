@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.49]
+
+- Report bounded onboarding discovery coverage, observed counts, and limits before continuing with a new Room.
+- Preserve the onboarding-policy link byte-for-byte when packaging the VSIX.
+- Install official checksum-verified age tooling in CI before running encryption tests.
+- Promote published RCC v18.19.11 and JAT v0.1.18 runtime with separately qualified Linux/Windows controller environments.
+- Require RCC v18.19.11 for native Room Store capture and accept its encrypted snapshot receipts while retaining older supported receipt versions.
+
 ## [0.1.48]
 
 - fix: restore R2 Save and editor connection behavior (#186)
