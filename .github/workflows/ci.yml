@@ -52,7 +52,19 @@ jobs:
             --report "$RUNNER_TEMP/node-runtime.json"
       - uses: astral-sh/setup-uv@v10.0.1
       - name: Install age CLI
-        run: sudo apt-get update && sudo apt-get install --yes age
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage=$(mktemp -d "$RUNNER_TEMP/age.XXXXXX")
+          trap 'rm -rf "$stage"' EXIT
+          curl --fail --location --silent --show-error --retry 3 --connect-timeout 15 --max-time 120 \
+            https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-linux-amd64.tar.gz \
+            --output "$stage/age.tar.gz"
+          printf '%s  %s\n' 7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50 "$stage/age.tar.gz" | sha256sum --check --status
+          tar -xzf "$stage/age.tar.gz" -C "$stage" age/age age/age-keygen
+          sudo install -m 0755 "$stage/age/age" "$stage/age/age-keygen" /usr/local/bin/
+          test "$(age --version)" = v1.2.1
+          test "$(age-keygen --version)" = v1.2.1
       - run: uv sync --group dev
       - name: Validate current release changelog section
         env:

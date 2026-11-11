@@ -20,7 +20,7 @@ tasks. The first-run confirmation shows whether discovery is partial, its
 observed component/directory counts and main limits, and directs you to the
 guide's evidence. Continue remains available; Save still requires its separate
 workspace safety check. Existing guides are preserved. See the
-[onboarding policy](../docs/workspace-capture-policy.md#initialize-room-onboarding-inspect-and-approve-exclusions)
+[onboarding policy](https://github.com/joshyorko/josh-room/blob/main/docs/workspace-capture-policy.md#initialize-room-onboarding-inspect-and-approve-exclusions)
 for discovery bounds and explicit manual replacement of an incomplete guide.
 The preview shows the capture scope and any deletions requiring confirmation. Save
 open editor buffers first; otherwise the Room remains marked as having changes.

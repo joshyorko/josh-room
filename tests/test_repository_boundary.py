@@ -315,8 +315,20 @@ def test_template_workflow_validates_inputs_without_publishing():
 
 def test_ci_installs_real_age_tooling_before_tests():
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    assert "apt-get install" in workflow
-    assert "age" in workflow
+    import yaml
+
+    steps = yaml.safe_load(workflow)["jobs"]["test"]["steps"]
+    index = next(i for i, step in enumerate(steps) if step.get("name") == "Install age CLI")
+    install = steps[index]["run"]
+    assert "https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-linux-amd64.tar.gz" in install
+    assert "7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50" in install
+    assert "set -euo pipefail" in install
+    assert install.index("sha256sum --check") < install.index("tar -xzf") < install.index("install -m 0755")
+    assert '"$stage/age/age" "$stage/age/age-keygen"' in install
+    assert 'test "$(age --version)" = v1.2.1' in install
+    assert 'test "$(age-keygen --version)" = v1.2.1' in install
+    assert "apt-get" not in install
+    assert index < next(i for i, step in enumerate(steps) if "uv run pytest" in step.get("run", ""))
 
 
 def test_personal_template_has_no_host_runtime_assumption():
