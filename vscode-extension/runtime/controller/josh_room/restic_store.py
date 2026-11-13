@@ -1054,7 +1054,9 @@ class ResticStore:
             if _REPOSITORY_ID.fullmatch(expected_tree_id) is None:
                 raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
             cached = read_inventory(self._cache_dir, self._repository, self._repository_info.repository_id, snapshot_id, expected_tree_id)
-            if cached is not None:
+            if cached is not None and all(
+                row.entry_type != "symlink" or row.link_target is not None for row in cached
+            ):
                 yield from cached
                 return
         snapshot = self.snapshot(snapshot_id)
@@ -1070,7 +1072,8 @@ class ResticStore:
                     max_entries=self._max_entries,
                 ):
                     rows.append(row)
-                    yield row
+                    if row.entry_type != "symlink":
+                        yield row
             except ResticStoreError:
                 code = process.poll()
                 if code is not None and code != 0:
@@ -1078,6 +1081,59 @@ class ResticStore:
                 self._terminate(process)
                 raise
             self._raise_exit(self._wait(process))
+        trees: dict[str, dict[str, dict[str, Any]]] = {}
+        tree_entries = 0
+        for index, row in enumerate(rows):
+            if row.entry_type != "symlink":
+                continue
+            tree_id = snapshot.tree_id
+            parts = row.path.split("/")
+            for depth, name in enumerate(parts):
+                if tree_id not in trees:
+                    _code, output = self._capture(["cat", "blob", tree_id])
+                    tree = _json_object(output, max_event_bytes=self._max_capture_bytes)
+                    nodes = tree.get("nodes")
+                    if not isinstance(nodes, list) or len(nodes) > self._max_entries:
+                        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+                    tree_entries += len(nodes)
+                    if tree_entries > self._max_entries:
+                        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+                    by_name = {}
+                    for node in nodes:
+                        if not isinstance(node, dict):
+                            raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+                        node_name = node.get("name")
+                        if (
+                            not isinstance(node_name, str) or not node_name
+                            or node_name in {".", ".."} or "/" in node_name
+                            or "\\" in node_name or "\x00" in node_name
+                            or node_name in by_name
+                        ):
+                            raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+                        by_name[node_name] = node
+                    trees[tree_id] = by_name
+                node = trees[tree_id].get(name)
+                if node is None:
+                    raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+                if depth < len(parts) - 1:
+                    tree_id = node.get("subtree")
+                    if node.get("type") != "dir" or not isinstance(tree_id, str) or _REPOSITORY_ID.fullmatch(tree_id) is None:
+                        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+                else:
+                    target = node.get("linktarget")
+                    try:
+                        target_size = len(target.encode("utf-8")) if isinstance(target, str) else 0
+                    except UnicodeEncodeError:
+                        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT) from None
+                    if (
+                        node.get("type") != "symlink" or not isinstance(target, str)
+                        or not target or target_size > self._max_json_event_bytes
+                        or (row.link_target is not None and row.link_target != target)
+                    ):
+                        raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+                    row = replace(row, link_target=target)
+            rows[index] = row
+            yield row
         write_inventory(self._cache_dir, self._repository, self._repository_info.repository_id, snapshot_id, snapshot.tree_id, rows)
 
     def restore(self, snapshot_id: str, destination: Path) -> None:

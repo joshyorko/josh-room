@@ -104,6 +104,17 @@ mode, size, and link target for the caller's filesystem-policy validator. The
 adapter does not decide which entry types are safe. Closing the iterator early
 cancels the owned command through the shared process cleanup helper.
 
+Restic 0.19.1 omits symlink targets from its JSON listing. After the listing
+finishes, `entries()` reads each symlink node with `cat blob`, starting at the
+snapshot tree ID. Shared ancestor trees are read once per inventory. Symlink
+rows follow other rows, with targets populated from tree metadata. Missing,
+malformed, duplicate, or contradictory tree metadata fails closed. Cached
+inventories with missing symlink targets are refreshed. The filesystem-policy
+validator still rejects external targets and cycles.
+Each tree blob is bounded by the adapter's capture limit, 4 MiB by default.
+A larger directory tree fails closed rather than returning an incomplete
+inventory.
+
 `restore()` requires a new destination path and delegates staging/promotion
 policy to its caller. `check(read_data=False, read_data_subset=None)` runs only
 `restic check`; the legacy full-read boolean remains supported, or callers may
