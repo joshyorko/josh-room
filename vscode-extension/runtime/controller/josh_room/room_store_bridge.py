@@ -2049,8 +2049,13 @@ def save_room_store(
                 code="deletion-confirmation-required",
                 confirmation_token=error.deletion_confirmation_token,
             ) from None
+        failure_stage = error.result.get("stage", getattr(operations, "save_stage", stage))
+        if failure_stage not in SAVE_STAGES:
+            failure_stage = "operation-save"
+        diagnostic = f"Save failed at {failure_stage}: {error}"
         raise RoomStoreBridgeError(
-            str(error), code="save-failed", result=error.result
+            diagnostic, code="save-failed",
+            result={**error.result, "stage": failure_stage, "diagnostic": diagnostic},
         ) from None
     except Exception as error:  # noqa: BLE001 - emit only program-owned stage and allowlisted type.
         if stage == "operation-save":

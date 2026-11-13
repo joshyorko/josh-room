@@ -1060,6 +1060,46 @@ def test_snapshot_entries_restore_and_check_use_only_non_destructive_commands(tm
     assert all("prune" not in command and "forget" not in command for command in commands)
 
 
+@pytest.mark.parametrize("node", [
+    {"name": "link", "type": "symlink", "linktarget": "file.txt"},
+    {"name": "link", "type": "symlink"},
+    {"name": "link", "type": "file", "linktarget": "file.txt"},
+    {"name": "other", "type": "symlink", "linktarget": "file.txt"},
+    {"name": "link", "type": "symlink", "linktarget": "\ud800"},
+])
+@pytest.mark.parametrize("duplicate", [False, True])
+@pytest.mark.parametrize("cached_missing_target", [False, True])
+def test_symlink_target_comes_from_snapshot_tree(tmp_path, node, duplicate, cached_missing_target):
+    module = api()
+    from josh_room.parent_inventory import read_inventory, write_inventory
+
+    snapshot_id, tree_id = "1" * 64, "2" * 64
+    snapshot = json.dumps([{"id": snapshot_id, "tree": tree_id,
+                            "paths": ["/synthetic/room"], "time": "2026-10-02T00:00:00Z"}]).encode()
+    listing = b"\n".join(json.dumps(event).encode() for event in [
+        {"struct_type": "snapshot", "message_type": "snapshot", "id": snapshot_id,
+         "tree": tree_id, "paths": ["/synthetic/room"]},
+        {"struct_type": "node", "message_type": "node", "path": "/link", "type": "symlink"},
+    ]) + b"\n"
+    store, factory = make_store(tmp_path, [FakeProcess(restic_version()), FakeProcess(config()),
+                                         FakeProcess(snapshot), FakeProcess(listing),
+                                         FakeProcess(json.dumps({"nodes": [node] * (2 if duplicate else 1)}).encode())])
+    with store:
+        store.initialize()
+        if cached_missing_target:
+            write_inventory(store._cache_dir, store._repository, "a" * 64, snapshot_id, tree_id,
+                            [module.SnapshotEntry("link", "symlink", None, None, None)])
+        if not duplicate and node == {"name": "link", "type": "symlink", "linktarget": "file.txt"}:
+            rows = list(store.entries(snapshot_id, expected_tree_id=tree_id))
+            assert rows == [module.SnapshotEntry("link", "symlink", None, None, "file.txt")]
+            assert read_inventory(store._cache_dir, store._repository, "a" * 64, snapshot_id, tree_id) == rows
+        else:
+            with pytest.raises(module.ResticStoreError) as caught:
+                list(store.entries(snapshot_id, expected_tree_id=tree_id))
+            assert caught.value.code == module.ResticStoreErrorCode.INVALID_OUTPUT
+    assert factory.calls[-1].args[1:] == ["cat", "blob", tree_id]
+
+
 def test_authenticated_parent_inventory_hit_skips_snapshot_and_ls_subprocesses(tmp_path):
     module = api()
     from josh_room.parent_inventory import write_inventory

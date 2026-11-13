@@ -437,7 +437,11 @@ def test_managed_robot_capture_reaches_local_room_store_and_failure_never_publis
     assert (backend.catalog, backend.objects, backend.control) == before
 
 
-def test_save_surfaces_safe_restic_store_open_diagnostic(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reason,has_receipt", [
+    ("Restic store could not be opened", True),
+    ("snapshot contains an unsafe symlink", False),
+])
+def test_save_surfaces_safe_restic_store_open_diagnostic(tmp_path, monkeypatch, reason, has_receipt):
     from josh_room import local_save_receipt
     from josh_room.room_store_operations import RoomStoreOperationsError
 
@@ -464,9 +468,11 @@ def test_save_surfaces_safe_restic_store_open_diagnostic(tmp_path, monkeypatch):
     }
 
     class FailingSave:
+        save_stage = "snapshot-verification"
+
         def save(self, **_kwargs):
             raise RoomStoreOperationsError(
-                "Restic store could not be opened", result=diagnostic
+                reason, result=diagnostic if has_receipt else None
             )
 
     monkeypatch.setattr(local_save_receipt, "invalidate", lambda *_args: None)
@@ -502,7 +508,13 @@ def test_save_surfaces_safe_restic_store_open_diagnostic(tmp_path, monkeypatch):
         )
 
     assert failure.value.code == "save-failed"
-    assert failure.value.result == {"ok": False, "error": "save-failed", **diagnostic}
+    expected_stage = "restic-store-open" if has_receipt else "snapshot-verification"
+    assert failure.value.result == {
+        "ok": False, "error": "save-failed",
+        **(diagnostic if has_receipt else {}),
+        "stage": expected_stage,
+        "diagnostic": f"Save failed at {expected_stage}: {reason}",
+    }
 
 
 @pytest.mark.parametrize("existing_store", [False, True])
