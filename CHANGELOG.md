@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.50]
+
+- Save resolved symlink targets in Restic snapshots and surface operation diagnostics in Room Store responses.
+- Preserve root context and compact scope-aware onboarding guides.
+- Refresh Linux and Windows controller artifacts from source `c70f0799e07ec8db89365f7c123e27d94b1f18f6`, retaining verified RCC v18.19.11 and JAT v0.1.18 runtimes.
+
 ## [0.1.49]
 
 - Report bounded onboarding discovery coverage, observed counts, and limits before continuing with a new Room.
