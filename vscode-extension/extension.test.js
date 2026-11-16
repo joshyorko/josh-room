@@ -721,6 +721,27 @@ test("extension consumes the private controller result receipt when RCC suppress
   assert.deepEqual(result, { ok: true, operation: "status" });
 });
 
+test("failed Save exposes its operation stage and reason", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-diagnostic-test-"));
+  const { vscode } = createVscodeMock(root);
+  const diagnostic = "Save failed at snapshot-verification: snapshot contains an unsafe symlink";
+  const spawnHarness = createSpawnHarness(() => ({
+    code: 2,
+    stdout: JSON.stringify({ ok: false, error: "save-failed", stage: "snapshot-verification", diagnostic }),
+  }));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  try {
+    await assert.rejects(extension.__test__.runJoshRoom(["snapshot", "create", "synthetic-room"], root), (error) => {
+      assert.match(error.message, /snapshot-verification/);
+      assert.match(error.message, /snapshot contains an unsafe symlink/);
+      assert.equal(error.diagnostic, diagnostic);
+      return true;
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("failed controller result exposes bounded layered statuses and one redacted JAT diagnostic", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-layered-failure-test-"));
   const { vscode, statusItem } = createVscodeMock(root);

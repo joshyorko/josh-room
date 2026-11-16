@@ -68,3 +68,9 @@ validation. The bridge vertical uses a synthetic S3 backend and injected
 keyring with real local Restic and age on Linux; it does not pass the live HTTPS
 MinIO/provider gate or constitute a Windows bridge acceptance run. The root
 integration lane retains those checks.
+
+Known Save operation failures retain the `save-failed` machine code and include
+the failing stage and the operation's path-free reason in `diagnostic`. The CLI
+and extension display that diagnostic. Unexpected exceptions report only an
+allowlisted stage and exception type. Raw exception text and subprocess stderr
+remain private.
