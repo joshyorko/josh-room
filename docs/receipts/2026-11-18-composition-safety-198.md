@@ -72,6 +72,10 @@ request-changes, not final approval. It never edited or implemented code.
   Sol corrected the lint findings and repeated the lightweight suite: 19 passed,
   three dependency skips. The next exact-SHA full run must verify lint and the
   previously skipped regression stages before any all-green claim.
+- CI trigger repair: full CI now runs for dependent pull requests as well as
+  main-target PRs. Main push scope and read-only workflow permissions are
+  unchanged. This makes full lint/regression failures visible to the PR watcher
+  instead of relying on a separate dispatch omitted from automatic check counts.
 - NOT RUN installed VSIX, native RCC/JAT/age vertical, live providers or platform
   qualification. All fixtures are synthetic; no real work/PHI data was accessed.
 

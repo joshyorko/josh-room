@@ -20,6 +20,15 @@ def _workflow(name):
     return yaml.load((WORKFLOWS / name).read_text(), Loader=yaml.BaseLoader)
 
 
+def test_ci_checks_dependent_pull_requests_without_broadening_push_or_permissions():
+    workflow = _workflow("ci.yml")
+    events = workflow["on"]
+    assert "pull_request" in events
+    assert events["pull_request"] in ("", None)
+    assert events["push"]["branches"] == ["main"]
+    assert workflow["permissions"] == {"contents": "read"}
+
+
 def _steps(job):
     return "\n".join(str(step.get("run", "")) for step in job.get("steps", []))
 
