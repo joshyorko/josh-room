@@ -70,3 +70,8 @@ approval. Runtime, CI, and live gates remain separate.
 Josh Room remains public-first and native-extension-aware. It does not add web
 UI, webview, daemon, generic provider framework, automatic bucket administration,
 JAT changes, or MinIO infrastructure changes.
+# Composition preview
+
+[Composable Rooms](room-composition.md) defines the offline schema/planner and
+the retention, crash-consistency and capture-isolation gates that block split
+publication. It does not change the storage or restore format.
