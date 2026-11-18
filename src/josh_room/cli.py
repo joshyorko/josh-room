@@ -462,6 +462,11 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("workspace-check", help="validate workspace metadata without changing it")
     check.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(check)
+    composition = commands.add_parser("composition", help="offline split preview; publication is blocked")
+    composition.add_argument("composition_command", choices=("plan",))
+    composition.add_argument("--workspace", type=Path, required=True)
+    composition.add_argument("--child", action="append", default=[])
+    _json_option(composition)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
     _json_option(context)
@@ -656,6 +661,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["composition"]:
+        args = build_parser().parse_args(argv)
+        try:
+            result = dispatch(args, Path("."))
+        except (OSError, ValueError):
+            result = {"ok": False, "error": "Composition preview refused unsafe or unavailable input"}
+        result = _bounded_json_result(result)
+        _write_runtime_result(result)
+        emit(result, True)
+        return _exit_code(result)
     if argv[:2] == ["hook", "codex"]:
         return codex_hook_main()
     if argv[:1] == ["context"]:
@@ -1577,6 +1592,9 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 
 def dispatch(args, instance: Path) -> dict:
+    if args.command == "composition":
+        from .composition import plan_split
+        return plan_split(args.workspace, args.child)
     if args.command == "workspace":
         if args.workspace_command == "init":
             from .workspace_init import initialize_capture_policy, initialize_workspace

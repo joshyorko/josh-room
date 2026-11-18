@@ -1023,6 +1023,7 @@ function shellQuote(value) {
 }
 
 function sanitizeControllerArgv(argv) {
+  if (argv[0] === "composition") return ["composition", "plan", "[local selection redacted]"];
   const sanitized = [];
   const sensitiveFlag = /^-{1,2}(?:legacy-source-handoff|source-identity|recovery-handoff|material-handoff|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key|bearer)(?:$|[-_=])/i;
   const sensitiveAssignment = /^(?:[a-z_][a-z0-9_]*(?:access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)|access[-_ ]?key|secret[-_ ]?key|session[-_ ]?token|token|password|oauth[-_ ]?code|authorization|auth|identity|credential|credentials|secret|key)\s*=/i;
@@ -1132,7 +1133,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     environment = managedRuntime.mergeRuntimeEnvironment(process.env, { ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath });
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
-      authFree: args[0] === "status",
+      authFree: ["status", "composition"].includes(args[0]),
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
@@ -1178,7 +1179,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         }
       }
       child = childProcess.spawn(runtime.command, runtime.args(args, receiptPath), {
-        cwd,
+        cwd: args[0] === "composition" ? path.join(__dirname, "runtime", "controller") : cwd,
         env: environment,
         detached: true,
         stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
@@ -2095,6 +2096,39 @@ const sessionCaptureChoices = new Map();
 
 function captureChoiceKey(source, dimension, project) {
   return JSON.stringify([path.resolve(source), dimension, project]);
+}
+
+async function splitWorkspace() {
+  assertWorkspaceTrusted("preview a workspace split");
+  const folders = await vscode.window.showOpenDialog({
+    title: "Josh: Split Workspace into Rooms (Preview Only)",
+    defaultUri: vscode.Uri.file(activeWorkspace()),
+    canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
+    openLabel: "Preview this folder",
+  });
+  if (!folders?.length) return "cancelled";
+  const source = folders[0].fsPath;
+  const args = ["composition", "plan", "--workspace", source];
+  const discovery = await runOperation("Discovering child boundaries…", args, source);
+  const selection = await vscode.window.showQuickPick(
+    discovery.candidates.filter((row) => row.selectable).map((row) => ({
+      label: row.path, description: row.kind, picked: false, childPath: row.path,
+    })), {
+      title: "Split preview: select child folders",
+      placeHolder: `${discovery.coverage.complete ? "Boundary pass complete" : "Partial discovery"} — unchecked folders keep their current parent policy. No files will change.`,
+      canPickMany: true, ignoreFocusOut: true,
+    },
+  );
+  if (!selection?.length) return "cancelled";
+  const plan = await runOperation("Checking selected boundaries…",
+    [...args, ...selection.map((row) => `--child=${row.childPath}`)], source);
+  await vscode.window.showInformationMessage(
+    "Split preview only. Saving children and parent exclusions is blocked until pin retention and interrupted-publication safety are implemented. All local files remain untouched.",
+    { modal: true, detail: plan.selected.map((row) => `${row.path} → proposed exclusion ${row.proposed_exclusion}`).join("\n")
+      + "\nDestination and Room IDs are unresolved; no provider was contacted. Git history isolation is unproven. This is not a Save preview or recovery guarantee." },
+    "Close Preview",
+  );
+  return "preview-only";
 }
 
 async function saveRoom(options = {}) {
@@ -3413,6 +3447,7 @@ function activate(context) {
   }));
   register(context, "joshRoom.save", () => saveRoom({ current: true }));
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
+  register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.enter", enterRoom);
@@ -3441,6 +3476,7 @@ function activate(context) {
 
 module.exports = { activate };
 module.exports.__test__ = {
+  splitWorkspace,
   enterRoom,
   checkWorkspace,
   resetNativeBaseline,
@@ -5421,6 +5457,7 @@ function activateNative(context) {
   }));
   register(context, "joshRoom.save", () => saveRoom({ current: true }));
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
+  register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
   register(context, "joshRoom.addStorage", addStorage);

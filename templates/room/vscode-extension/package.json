@@ -61,7 +61,8 @@
     "onCommand:joshRoom.jatServe",
     "onCommand:joshRoom.jatExport",
     "onCommand:joshRoom.jatCopy",
-    "onView:joshRoom.rooms"
+    "onView:joshRoom.rooms",
+    "onCommand:joshRoom.splitWorkspace"
   ],
   "main": "./extension.js",
   "extensionKind": [
@@ -279,6 +280,10 @@
         "command": "joshRoom.jatCopy",
         "title": "JAT: Copy / Seed\u2026",
         "icon": "$(copy)"
+      },
+      {
+        "command": "joshRoom.splitWorkspace",
+        "title": "Josh: Split Workspace into Rooms (Preview Only)"
       }
     ],
     "viewsContainers": {

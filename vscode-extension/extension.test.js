@@ -7087,3 +7087,50 @@ test("R2 native Save of the open folder ignores controller marker writes and tra
   await workspaceWatcher().didCreate({ fsPath: path.join(root, "src", "from-terminal.py") });
   assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "dirty");
 });
+
+test("composition native split preview selects A/C from chosen source without Save or secrets", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-composition-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const inherited = process.env.JOSH_ROOM_PROVIDER_CREDENTIALS;
+  process.env.JOSH_ROOM_PROVIDER_CREDENTIALS = "/synthetic/credential-pointer";
+  t.after(() => { if (inherited === undefined) delete process.env.JOSH_ROOM_PROVIDER_CREDENTIALS; else process.env.JOSH_ROOM_PROVIDER_CREDENTIALS = inherited; });
+  const source = path.join(root, "selected");
+  fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, "keep.txt"), "synthetic retained data");
+  const mock = createVscodeMock(root);
+  mock.openDialogResponses.push([{ fsPath: source }]);
+  mock.quickPickResponses.push([{ childPath: "a" }, { childPath: "c" }]);
+  const harness = createSpawnHarness(({ args, options }) => {
+    assert.equal(args[0], "composition");
+    assert.equal(options.cwd, path.join(__dirname, "runtime", "controller"));
+    assert.equal(options.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
+    assert.equal(args[args.indexOf("--workspace") + 1], source);
+    return { stdout: JSON.stringify({ ok: true, can_apply: false,
+      candidates: ["a", "b", "c"].map((p) => ({ path: p, kind: "folder", selectable: true })),
+      coverage: { complete: false }, selected: [{ path: "a", proposed_exclusion: "a/**" }, { path: "c", proposed_exclusion: "c/**" }] }) };
+  });
+  const extension = loadExtension(mock.vscode, harness.spawn);
+  extension.__test__.setOutputChannelForTests(mock.outputChannel);
+  extension.__test__.setStatusItem(mock.statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async () => { throw new Error("unexpected secret read"); } } });
+  assert.equal(await extension.__test__.splitWorkspace(), "preview-only");
+  assert.equal(harness.calls.length, 2);
+  const picker = mock.quickPickCalls[0];
+  assert.equal(picker.options.canPickMany, true);
+  assert.ok(picker.items.every((row) => row.picked === false));
+  assert.match(picker.options.placeHolder, /Partial discovery/);
+  assert.deepEqual(harness.calls[1].args.filter((arg) => arg.startsWith("--child=")), ["--child=a", "--child=c"]);
+  assert.deepEqual(fs.readdirSync(source), ["keep.txt"]);
+  assert.ok(mock.infoCalls[0][1].detail.includes("a/**"));
+  assert.ok(mock.logLines.every((line) => !line.includes(source) && !line.includes("--child")));
+});
+
+test("composition cancel and Workspace Trust gates do not start controller work", async () => {
+  const mock = createVscodeMock(os.tmpdir());
+  const harness = createSpawnHarness(() => { throw new Error("controller must not run"); });
+  const extension = loadExtension(mock.vscode, harness.spawn);
+  assert.equal(await extension.__test__.splitWorkspace(), "cancelled");
+  mock.vscode.workspace.isTrusted = false;
+  await assert.rejects(extension.__test__.splitWorkspace(), /Workspace Trust/);
+  assert.equal(harness.calls.length, 0);
+});
