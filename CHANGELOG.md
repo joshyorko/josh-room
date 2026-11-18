@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.51]
+
+- Add an explicit native checkbox preview for splitting a workspace into child Rooms, with bounded offline discovery and exact proposed exclusions.
+- Add strict composition-manifest and candidate-v4 evidence validation with exact historical pins and read-only reconciliation.
+- Refuse unsupported composed Save before capture or provider work, while preserving historical restore and export compatibility.
+- Ship newly qualified Linux and Windows managed controller artifacts containing the composition preview and safety checks.
+- Keep writable split publication, selective hydration and unload unavailable pending the documented retention and publication safeguards.
+
 ## [0.1.50]
 
 - Save resolved symlink targets in Restic snapshots and surface operation diagnostics in Room Store responses.
