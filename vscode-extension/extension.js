@@ -2155,6 +2155,15 @@ async function saveRoom(options = {}) {
   });
   if (!folders?.length) return "cancelled";
   const source = folders[0].fsPath;
+  for (const name of [".josh-room-composition.json", ".josh-room-split.json"]) {
+    try {
+      fs.lstatSync(path.join(source, name));
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw new Error("Composition admission cannot be checked safely.");
+    }
+    throw new Error("Composed Save is blocked until retention and publication are admitted.");
+  }
   const imageChoices = [
     { label: "Workspace only", allImages: false },
     { label: "Workspace + all tagged local OCI images", allImages: true },

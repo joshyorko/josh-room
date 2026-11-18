@@ -31,6 +31,7 @@ from typing import Any
 from .auth import bind_room_store_repository, ensure_room_store_keyset
 from .cancellation import CLICancelled, defer_sigterm_cancellation
 from .catalog import CatalogConflict
+from .composition import require_uncomposed_workspace
 from .git_workspace import GitWorkspaceError, validate_git_storage
 from .logical_jat import LogicalJat
 from .restic_store import (
@@ -838,7 +839,14 @@ class RoomStoreOperations:
             token,
         )
 
+    def _require_save_admission(self) -> None:
+        try:
+            require_uncomposed_workspace(self.workspace)
+        except ValueError as error:
+            raise RoomStoreOperationsError(str(error)) from None
+
     def preview(self, parent: LogicalJat | None = None) -> SavePreview:
+        self._require_save_admission()
         policy = self._policy()
         try:
             scan = _scan_workspace(self.workspace, policy)
@@ -972,6 +980,7 @@ class RoomStoreOperations:
         cancellation: Any = None,
         preflight_scan: tuple[str, WorkspaceScan] | None = None,
     ) -> SaveResult:
+        self._require_save_admission()
         self.save_stage = "catalog-read"
         latest, etag = self.read_latest()
         selected_parent = parent if parent is not None else latest

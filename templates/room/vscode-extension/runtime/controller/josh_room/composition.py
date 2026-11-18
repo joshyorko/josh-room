@@ -14,11 +14,24 @@ from .workspace_onboarding import _directory
 from .workspace_policy import load_capture_policy
 
 MANIFEST = ".josh-room-composition.json"
+SPLIT_GUARD = ".josh-room-split.json"
 MAX_CHILDREN = 32
 LIMITS = {"directories": 128, "entries_per_directory": 256, "depth": 3}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$", *(f"com{i}" for i in range(1, 10)),
              *(f"lpt{i}" for i in range(1, 10))}
+
+
+def require_uncomposed_workspace(root: Path) -> None:
+    """Refuse unsupported composed Save, even if metadata is user-excluded."""
+    for name in (MANIFEST, SPLIT_GUARD):
+        try:
+            (Path(root) / name).lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise ValueError("composition admission cannot be checked safely") from None
+        raise ValueError("composed Save is blocked until retention and publication are admitted")
 
 
 def portable_path(value: str) -> tuple[str, ...]:
@@ -112,6 +125,7 @@ def discover(root: Path) -> dict:
         device = os.fstat(root_fd).st_dev
         policy = load_capture_policy(root, directory_fd=root_fd)
         candidates, omissions = [], set()
+        incomplete_sibling_scopes = set()
         queue = [("", 0)]
         visited = observed = huge = 0
         parent_git = False
@@ -136,6 +150,7 @@ def discover(root: Path) -> dict:
                 observed += len(sample)
                 if len(sample) > LIMITS["entries_per_directory"]:
                     omissions.add("entry-cap")
+                    incomplete_sibling_scopes.add(relative)
                 metadata = {}
                 for entry in sample[:LIMITS["entries_per_directory"]]:
                     metadata[entry.name] = entry.stat(follow_symlinks=False)
@@ -194,6 +209,8 @@ def discover(root: Path) -> dict:
         # Fold aliases even on case-sensitive hosts; never offer ambiguous paths.
         keys = [portable_path(row["path"]) for row in candidates]
         for index, row in enumerate(candidates):
+            if any(not prefix or row["path"].startswith(prefix + "/") for prefix in incomplete_sibling_scopes):
+                row["selectable"] = False
             if any(keys[index][:min(len(keys[index]), len(other))] == other[:min(len(keys[index]), len(other))]
                    and tuple(row["path"].split("/")[:min(len(keys[index]), len(other))])
                    != tuple(candidates[j]["path"].split("/")[:min(len(keys[index]), len(other))])

@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/composition-safety-v1.schema.json",
+  "title": "Candidate v4 composition evidence; writable admission prohibited",
+  "$comment": "Structural schema only; CompositionSafetyState validates phase, pin, digest, overlap and scope semantics. This is not an admitted production catalog version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "contract",
+    "scope",
+    "revision",
+    "dimension_catalog",
+    "operations"
+  ],
+  "properties": {
+    "format_version": {
+      "const": 4
+    },
+    "contract": {
+      "const": "composition-safety-v1"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "connection_id",
+        "dimension_id",
+        "encryption_domain_id",
+        "repository_id",
+        "catalog_key"
+      ],
+      "properties": {
+        "provider": {
+          "enum": [
+            "r2",
+            "minio",
+            "s3"
+          ]
+        },
+        "connection_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "not": {
+            "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+          }
+        },
+        "dimension_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "not": {
+            "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+          }
+        },
+        "encryption_domain_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+        },
+        "repository_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "catalog_key": {
+          "const": "catalog.jroom.age"
+        }
+      }
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "dimension_catalog": {
+      "$ref": "dimension-catalog-v3.schema.json"
+    },
+    "operations": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+        "not": {
+          "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/operation"
+      }
+    }
+  },
+  "$defs": {
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_path_sha256",
+        "capture_policy_sha256",
+        "parent_room_id",
+        "parent_logical_jat_id",
+        "expected_parent_logical_jat_id",
+        "capture_mode",
+        "children"
+      ],
+      "properties": {
+        "source_path_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "capture_policy_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "parent_room_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "not": {
+            "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+          }
+        },
+        "parent_logical_jat_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "not": {
+            "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+          }
+        },
+        "expected_parent_logical_jat_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+              "not": {
+                "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capture_mode": {
+          "const": "source-only"
+        },
+        "children": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "room_id",
+              "logical_jat_id"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "room_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                "not": {
+                  "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+                }
+              },
+              "logical_jat_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+                "not": {
+                  "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "room_id",
+        "logical_jat_id",
+        "descriptor_sha256"
+      ],
+      "properties": {
+        "room_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "not": {
+            "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+          }
+        },
+        "logical_jat_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "not": {
+            "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+          }
+        },
+        "descriptor_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "plan_sha256",
+        "phase",
+        "child_pins",
+        "parent_pin",
+        "manifest_sha256",
+        "parent_policy_sha256"
+      ],
+      "properties": {
+        "plan": {
+          "$ref": "#/$defs/plan"
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "phase": {
+          "enum": [
+            "reserved",
+            "children-recorded",
+            "parent-prepared",
+            "committed"
+          ]
+        },
+        "child_pins": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {
+            "$ref": "#/$defs/pin"
+          }
+        },
+        "parent_pin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/pin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manifest_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_policy_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
