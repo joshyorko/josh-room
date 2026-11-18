@@ -171,7 +171,7 @@ class CompositionSafetyState:
 def reconcile(state, descriptors, repository, inventory, *, expected_scope):
     """Validate supplied evidence, report only. Never repair or infer admission."""
     if not isinstance(state, CompositionSafetyState):
-        raise ValueError("validated composition state is required")
+        raise TypeError("validated composition state is required")
     state = CompositionSafetyState.from_dict(state.to_dict())
     body = state.to_dict()
     scope = body["scope"]

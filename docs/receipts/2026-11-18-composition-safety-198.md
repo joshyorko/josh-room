@@ -65,6 +65,13 @@ request-changes, not final approval. It never edited or implemented code.
 - Hosted full CI was explicitly dispatched for `76c7336` because pull-request CI
   only auto-triggers for main-target PRs. That dispatch is not final-fix evidence;
   the final checkpoint requires its own exact-SHA dispatch and terminal result.
+- FAIL exact-SHA full CI run `44361328920` at `a35400e`: eight Ruff findings
+  (exception type, import ordering, combined context managers and dict literals).
+  Its full Python/Node regression steps were skipped after lint failed. The four
+  automatic PR checks passing did not qualify this separately dispatched run.
+  Sol corrected the lint findings and repeated the lightweight suite: 19 passed,
+  three dependency skips. The next exact-SHA full run must verify lint and the
+  previously skipped regression stages before any all-green claim.
 - NOT RUN installed VSIX, native RCC/JAT/age vertical, live providers or platform
   qualification. All fixtures are synthetic; no real work/PHI data was accessed.
 

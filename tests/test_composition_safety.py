@@ -155,13 +155,17 @@ class CompositionSafetyTests(unittest.TestCase):
             for operation in [operations.preview, operations.save]:
                 with self.assertRaisesRegex(RoomStoreOperationsError, '^composed Save is blocked'):
                     operation()
-            with patch.object(room_store_bridge, '_resolve_material', side_effect=AssertionError('provider admission attempted')):
-                with self.assertRaisesRegex(ValueError, '^composed Save is blocked'):
-                    room_store_bridge.save_room_store(root, None, 'parent', root, None, components={})
+            with (
+                patch.object(room_store_bridge, '_resolve_material', side_effect=AssertionError('provider admission attempted')),
+                self.assertRaisesRegex(ValueError, '^composed Save is blocked'),
+            ):
+                room_store_bridge.save_room_store(root, None, 'parent', root, None, components={})
             from josh_room.operations import create_snapshot
-            with patch('josh_room.operations.run_build', side_effect=AssertionError('portable build attempted')):
-                with self.assertRaisesRegex(ValueError, '^composed Save is blocked'):
-                    create_snapshot(root / 'not-created', 'parent', root, root, [])
+            with (
+                patch('josh_room.operations.run_build', side_effect=AssertionError('portable build attempted')),
+                self.assertRaisesRegex(ValueError, '^composed Save is blocked'),
+            ):
+                create_snapshot(root / 'not-created', 'parent', root, root, [])
             self.assertFalse((root / 'not-created').exists())
 
     def test_headless_create_guard_precedes_receipts_and_provider_setup(self):
@@ -176,11 +180,14 @@ class CompositionSafetyTests(unittest.TestCase):
             (root / '.josh-room-split.json').write_text('{}')
             for backend in ['local', 'minio', 's3']:
                 stdout = io.StringIO()
-                with patch.object(cli, 'initialize_system_trust'), patch.object(cli, '_write_runtime_result'):
-                    with patch.object(cli, '_instance_root', side_effect=AssertionError('runtime setup attempted')):
-                        with redirect_stdout(stdout):
-                            status = cli.main(['snapshot', 'create', 'parent', '--backend', backend,
-                                               '--source', str(root), '--json'])
+                with (
+                    patch.object(cli, 'initialize_system_trust'),
+                    patch.object(cli, '_write_runtime_result'),
+                    patch.object(cli, '_instance_root', side_effect=AssertionError('runtime setup attempted')),
+                    redirect_stdout(stdout),
+                ):
+                    status = cli.main(['snapshot', 'create', 'parent', '--backend', backend,
+                                       '--source', str(root), '--json'])
                 self.assertNotEqual(status, 0)
                 self.assertFalse(json.loads(stdout.getvalue())['ok'])
 
@@ -220,16 +227,19 @@ class CompositionSafetyTests(unittest.TestCase):
         state, descriptors, inventory = fixture()
         bundle = {'state': state, 'descriptors': [d.to_dict() for d in descriptors.values()],
                   'repository': {'repository_id': REPOSITORY, 'repository_format': 2},
-                  'inventory': [dict(snapshot_id=i.snapshot_id, tree_id=i.tree_id, time=i.time,
-                                     parent_snapshot_id=None) for i in inventory], 'expected_scope': state['scope']}
+                  'inventory': [{'snapshot_id': i.snapshot_id, 'tree_id': i.tree_id, 'time': i.time,
+                                 'parent_snapshot_id': None} for i in inventory], 'expected_scope': state['scope']}
         with tempfile.TemporaryDirectory(prefix='composition-cli-') as directory:
             path = Path(directory) / 'evidence.json'
             path.write_text(json.dumps(bundle))
             stdout = io.StringIO()
-            with patch.object(cli, 'initialize_system_trust', side_effect=AssertionError('trust initialized')):
-                with patch.object(cli, '_instance_root', side_effect=AssertionError('runtime configured')):
-                    with patch.object(cli, '_write_runtime_result'), redirect_stdout(stdout):
-                        status = cli.main(['composition', 'reconcile', '--evidence-file', str(path), '--json'])
+            with (
+                patch.object(cli, 'initialize_system_trust', side_effect=AssertionError('trust initialized')),
+                patch.object(cli, '_instance_root', side_effect=AssertionError('runtime configured')),
+                patch.object(cli, '_write_runtime_result'),
+                redirect_stdout(stdout),
+            ):
+                status = cli.main(['composition', 'reconcile', '--evidence-file', str(path), '--json'])
             result = json.loads(stdout.getvalue())
             self.assertEqual(status, 0)
             self.assertEqual(result['evidence_trust'], 'offline-untrusted-input')
@@ -362,8 +372,8 @@ class CompositionSafetyTests(unittest.TestCase):
         state, descriptors, inventory = fixture()
         bundle = {'state': state, 'descriptors': [d.to_dict() for d in descriptors.values()],
                   'repository': {'repository_id': REPOSITORY, 'repository_format': 2},
-                  'inventory': [dict(snapshot_id=i.snapshot_id, tree_id=i.tree_id, time=i.time,
-                                     parent_snapshot_id=None) for i in inventory], 'expected_scope': state['scope']}
+                  'inventory': [{'snapshot_id': i.snapshot_id, 'tree_id': i.tree_id, 'time': i.time,
+                                 'parent_snapshot_id': None} for i in inventory], 'expected_scope': state['scope']}
         with tempfile.TemporaryDirectory(prefix='composition-evidence-') as directory:
             path = Path(directory) / 'evidence.json'
             path.write_text(json.dumps(bundle))
