@@ -411,6 +411,21 @@ class CompositionSafetyTests(unittest.TestCase):
                     with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                         inspect_evidence_file(path)
 
+    def test_reserved_child_record_cannot_exist_without_its_atomic_pin(self):
+        body = copy.deepcopy(self.body)
+        del body['dimension_catalog']['projects']['parent']
+        operation = body['operations']['operation']
+        operation.update(phase='reserved', parent_pin=None, manifest_sha256=None,
+                         parent_policy_sha256=None)
+        # A committed child plus its pin is a valid partial reservation.
+        CompositionSafetyState.from_dict(body)
+        operation['child_pins'].clear()
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(body)
+        # A genuinely unfilled slot has neither record nor pin.
+        del body['dimension_catalog']['projects']['child']
+        CompositionSafetyState.from_dict(body)
+
     def test_conflicting_operation_and_plan_change_refused(self):
         bad = copy.deepcopy(self.body)
         bad['operations']['operation']['plan']['children'][0]['path'] = 'changed'

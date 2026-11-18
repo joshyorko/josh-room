@@ -98,3 +98,10 @@ output record; empty evidence arrays remain valid for a genuinely empty reserved
 state. Missing arrays and present null origins are refused. Source mirrors and
 `git diff --check` pass. The revised checkpoint requires a new explicit Astra
 approval and hosted CI; the green run at `89ffe12` remains historical evidence.
+
+The follow-up review at `cbc7058` confirmed those four fixes and found one
+additional inconsistent state: an allocated child record without its pin in a
+reserved operation. Sol added the converse record/pin check. Its regression
+failed before the fix and now passes, including valid partial reservations and
+genuinely unfilled slots. The focused suite now has 27 cases: 24 passed, three
+dependency skips. Exact-head final approval and CI remain required.

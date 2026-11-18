@@ -158,6 +158,10 @@ class CompositionSafetyState:
                 raise ValueError("incomplete or unknown composition child pins")
             for path, pin in pins.items():
                 _pin(pin, catalog, slots[path]["room_id"], slots[path]["logical_jat_id"])
+            for path, slot in slots.items():
+                records = inner["projects"].get(slot["room_id"], {}).get("snapshots", {})
+                if path not in pins and slot["logical_jat_id"] in records:
+                    raise ValueError("child output appeared without its atomic pin association")
             for field in ("manifest_sha256", "parent_policy_sha256"):
                 if phase in ("parent-prepared", "committed"):
                     _digest(operation[field])
