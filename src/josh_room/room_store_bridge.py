@@ -1923,6 +1923,9 @@ def save_room_store(
     preflight_scan: Any = None,
 ) -> dict:
     from .local_save_receipt import invalidate, read_noop, write_verified_receipt
+    from .composition import require_uncomposed_workspace
+
+    require_uncomposed_workspace(source)
 
     if cancellation is not None and cancellation.cancelled:
         raise CLICancelled

@@ -463,10 +463,14 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(check)
     composition = commands.add_parser("composition", help="offline split preview; publication is blocked")
-    composition.add_argument("composition_command", choices=("plan",))
-    composition.add_argument("--workspace", type=Path, required=True)
-    composition.add_argument("--child", action="append", default=[])
-    _json_option(composition)
+    composition_commands = composition.add_subparsers(dest="composition_command", required=True)
+    composition_plan = composition_commands.add_parser("plan")
+    composition_plan.add_argument("--workspace", type=Path, required=True)
+    composition_plan.add_argument("--child", action="append", default=[])
+    _json_option(composition_plan)
+    composition_reconcile = composition_commands.add_parser("reconcile", help="inspect offline evidence; never repair")
+    composition_reconcile.add_argument("--evidence-file", type=Path, required=True)
+    _json_option(composition_reconcile)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
     _json_option(context)
@@ -1593,8 +1597,11 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
-        from .composition import plan_split
-        return plan_split(args.workspace, args.child)
+        if args.composition_command == "plan":
+            from .composition import plan_split
+            return plan_split(args.workspace, args.child)
+        from .composition_safety import inspect_evidence_file
+        return inspect_evidence_file(args.evidence_file)
     if args.command == "workspace":
         if args.workspace_command == "init":
             from .workspace_init import initialize_capture_policy, initialize_workspace

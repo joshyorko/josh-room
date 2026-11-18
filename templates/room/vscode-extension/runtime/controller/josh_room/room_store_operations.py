@@ -31,6 +31,7 @@ from typing import Any
 from .auth import bind_room_store_repository, ensure_room_store_keyset
 from .cancellation import CLICancelled, defer_sigterm_cancellation
 from .catalog import CatalogConflict
+from .composition import require_uncomposed_workspace
 from .git_workspace import GitWorkspaceError, validate_git_storage
 from .logical_jat import LogicalJat
 from .restic_store import (
@@ -375,6 +376,10 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None, *, capture_mode: s
             raise RoomStoreOperationsError("workspace path cannot be restored safely")
         if not resolved_root.is_dir():
             raise RoomStoreOperationsError("workspace is not a directory")
+        try:
+            require_uncomposed_workspace(resolved_root)
+        except ValueError as error:
+            raise RoomStoreOperationsError(str(error)) from None
         root_device = resolved_root.stat().st_dev
     except OSError as error:
         raise RoomStoreOperationsError("workspace is unavailable") from error

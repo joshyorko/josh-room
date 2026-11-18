@@ -280,6 +280,8 @@ def read_noop(
     """Verify current local metadata before any auth/provider/runtime work."""
     try:
         source = Path(source)
+        from .composition import require_uncomposed_workspace
+        require_uncomposed_workspace(source)
         path = receipt_path(instance, source)
         _outside_workspace(path.parent, source)
         receipt = _read_json(path, private=True)

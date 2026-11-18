@@ -2,7 +2,38 @@
 
 Issue #198 PR A currently supplies a **read-only contract and planner**, not a
 working split, composed recovery, child Enter, or unload. Existing Save/Enter
-contracts remain in force. Do not create parent exclusions from a proposal.
+contracts remain in force for ordinary Rooms. Save now refuses reserved
+composition metadata and split guards, even when user-excluded. Do not create
+parent exclusions from a proposal.
+
+## Read-only safety evidence
+
+`josh-room composition reconcile --evidence-file <synthetic-evidence.json> --json`
+validates an explicitly supplied local evidence bundle. It does not contact a
+provider, read keys, migrate a catalog, repair state or resume publication. The
+bundle contains `state`, `descriptors`, `repository`, `inventory`, `expected_scope`.
+Results explicitly say `offline-untrusted-input`, `can_apply: false`, and
+`can_resume: false`. A consistent bundle is not a durable recovery guarantee.
+Missing referenced Restic data returns `ok: false`, including component data.
+Output contains only operation IDs, phase and summary counts, not child paths.
+
+`composition_safety.CompositionSafetyState` validates the closed candidate-v4
+envelope in `schemas/composition-safety-v1.schema.json`. It embeds an unchanged
+sealed v3 catalog. Exact pins bind reserved Room/logical ID slots to descriptor
+ciphertext digests and are reconciled with corroborated descriptors, repository
+identity and snapshot/tree inventory. Historical pins never resolve latest.
+Caller maps are copied; phase-specific fields, overlap and nesting are checked.
+The ordinary catalog decoder continues to reject v4; no production migration or
+v4 writer exists. Existing in-flight maintenance cannot be fenced by a new ETag
+alone. See [the corrected safety design](composition-safety-design.md) for the
+source-backed admission blockers and required crash/concurrency qualification.
+
+The native Save UI, controller Save bridge, authoritative scanner and local
+no-op receipt path refuse a root `.josh-room-composition.json` or
+`.josh-room-split.json` of any type without reading its contents. This is an
+unsupported-composition admission check, not a lock against concurrent writers.
+Do not delete a guard to work around it; preserve the workspace and investigate
+the operation that created it. No code in this increment creates either file.
 
 ## Explicit preview
 

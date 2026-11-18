@@ -4,6 +4,33 @@ Starting point: draft #199 at `9519ce5ff925d6ade82480428576f3e37a1a7ec7`.
 Scope: same-Dimension, explicit source selection, synthetic qualification only.
 This is a proposed design for independent review, not permission to use real data.
 
+## Independent review correction
+
+Astra's review at `da70c81` rejected writable admission. A catalog version/ETag
+does not fence a v3 remover already past its CAS, nor an already-open Optimize
+operation. Alternate catalog keys can also share the same physical repository.
+Do not enable migration based on this design. The current increment is closed
+read-only candidate-v4 decoding, exact-pin/inventory reconciliation and refusal
+of ordinary Save when composition metadata or a split guard is present. It has
+no reserve, commit, repair, resume or migration API. The publication sequence
+below remains a proposal, requiring these corrections before writes:
+
+- Establish one authenticated catalog authority for the physical repository and
+  quiesce/fence supported old writers at descriptor deletion, legacy deletion,
+  Restic forget and prune boundaries. Catalog CAS alone is insufficient.
+- Allocate operation/slot logical IDs durably before the first network mutation;
+  publish child record plus slot association in the same CAS. Read back exact
+  operation/phase/digest/body with its paired ETag after every uncertain response.
+  No marker, verified receipt or next phase before verified readback.
+- Block cached authoritative success for participating Rooms without fresh
+  admission evidence. Old clients returning offline cached no-op are an explicit
+  exception to the version-rejection guarantee.
+- Never compare then overwrite concurrent owner policy bytes. Prefer isolated
+  capture metadata; local installation needs its own no-clobber contract.
+- Read manifest/policy bytes from the exact immutable parent snapshot before
+  parent CAS, verify reserved digests and selected-child absence. Partial preview
+  is never mutation authorization. Preserve the earlier eight preview fixes.
+
 ## Safety boundary
 
 A sidecar by itself cannot protect pins: older catalog-v3 clients could delete
@@ -13,7 +40,7 @@ v4 at decode. Do not silently migrate a Dimension on ordinary Save or activation
 Use one catalog CAS as the authority for both pin reservations and publication
 phases. No global lock, new daemon, GC, or distributed cross-Dimension transaction.
 
-The first v4 implementation conservatively refuses every Room/JAT deletion and
+An eventual writable v4 implementation must refuse every Room/JAT deletion and
 Optimize in a composition-enabled Dimension. Preserve complete logical records,
 descriptor objects and Restic snapshots, not merely underlying shared bytes.
 Reconcile remains read-only and verifies all recorded pins against exact catalog

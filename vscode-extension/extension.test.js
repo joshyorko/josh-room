@@ -7134,3 +7134,20 @@ test("composition cancel and Workspace Trust gates do not start controller work"
   await assert.rejects(extension.__test__.splitWorkspace(), /Workspace Trust/);
   assert.equal(harness.calls.length, 0);
 });
+
+for (const name of [".josh-room-composition.json", ".josh-room-split.json"]) {
+  test(`composition admission blocks native Save before runtime and provider work: ${name}`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-admission-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(root, name), "synthetic-sensitive-sentinel");
+    fs.writeFileSync(path.join(root, ".josh-roomignore"), `${name}/**\n`);
+    const mock = createVscodeMock(root);
+    mock.openDialogResponses.push([{ fsPath: root }]);
+    const harness = createSpawnHarness(() => { throw new Error("no controller or provider work allowed"); });
+    const extension = loadExtension(mock.vscode, harness.spawn);
+    await assert.rejects(extension.__test__.saveRoom({ forceCreate: true }), /Composed Save is blocked/);
+    assert.equal(harness.calls.length, 0);
+    assert.equal(fs.readFileSync(path.join(root, name), "utf8"), "synthetic-sensitive-sentinel");
+    assert.equal(mock.quickPickCalls.length, 0);
+  });
+}
