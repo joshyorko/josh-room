@@ -83,3 +83,18 @@ The offline CLI labels evidence `offline-untrusted-input`. Even an internally
 consistent fixture returns `can_apply=false` and `can_resume=false`. This does
 not prove ciphertext was fetched/authenticated or actual payloads restored, and
 must never be presented as a durable composed recovery point.
+
+## Final-review follow-up
+
+Astra's final read-only review at `89ffe12` requested four evidence-validation
+corrections: pre-commit phase with an already published parent output, output
+identity equal to prior baseline, non-array descriptor/inventory containers, and
+present null legacy origin. Sol reproduced all four (nine failing subcases),
+then added the boundary checks without changing ordinary v3 decoding.
+
+`PYTHONPATH=src python tests/test_composition_safety.py` now reports 26 cases:
+23 passed, three dependency skips. Valid pre-commit fixtures have no published
+output record; empty evidence arrays remain valid for a genuinely empty reserved
+state. Missing arrays and present null origins are refused. Source mirrors and
+`git diff --check` pass. The revised checkpoint requires a new explicit Astra
+approval and hosted CI; the green run at `89ffe12` remains historical evidence.

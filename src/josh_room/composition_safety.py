@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .catalog import Catalog
+from .catalog import Catalog, _validate_identifier
 from .composition import validate_paths
 from .logical_jat import LogicalJat
 from .restic_store import RepositoryInfo, SnapshotInventoryItem
@@ -98,6 +98,8 @@ class CompositionSafetyState:
                     if not legacy_fields <= record.keys() or record.keys() - legacy_fields - {"origin_project_id"}:
                         raise ValueError("legacy composition evidence has unknown or missing fields")
                     _timestamp(record["created_at"])
+                    if "origin_project_id" in record:
+                        _validate_identifier("legacy origin project", record["origin_project_id"])
         revision = body["revision"]
         if type(revision) is not int or revision < inner["revision"]:
             raise ValueError("invalid composition revision")
@@ -118,6 +120,8 @@ class CompositionSafetyState:
             baseline = plan["expected_parent_logical_jat_id"]
             if baseline is not None:
                 _identifier(baseline)
+                if baseline == plan["parent_logical_jat_id"]:
+                    raise ValueError("parent baseline must differ from its reserved output")
                 if catalog.resolve_snapshot(plan["parent_room_id"], baseline).get("payload_kind") != "room-store-v1":
                     raise ValueError("invalid parent baseline")
             if plan["capture_mode"] != "source-only" or operation["plan_sha256"] != plan_digest(plan):
@@ -138,6 +142,9 @@ class CompositionSafetyState:
             phase = operation["phase"]
             if phase not in _PHASES:
                 raise ValueError("unsupported composition phase")
+            parent_records = inner["projects"].get(plan["parent_room_id"], {}).get("snapshots", {})
+            if phase != "committed" and plan["parent_logical_jat_id"] in parent_records:
+                raise ValueError("parent output appeared before atomic commit")
             involved = rooms | {plan["parent_room_id"]}
             for previous_rooms, previous_phase, previous_parent in used:
                 if involved & previous_rooms and (phase != "committed" or previous_phase != "committed"):
@@ -225,6 +232,8 @@ def inspect_evidence_file(path: Path):
     try:
         evidence = json.loads(raw, object_pairs_hook=unique)
         _object(evidence, "state descriptors repository inventory expected_scope")
+        if not isinstance(evidence["descriptors"], list) or not isinstance(evidence["inventory"], list):
+            raise TypeError("composition descriptor and inventory evidence must be arrays")
         state = CompositionSafetyState.from_dict(evidence["state"])
         descriptors = {}
         for value in evidence["descriptors"]:

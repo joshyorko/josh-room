@@ -354,9 +354,62 @@ class CompositionSafetyTests(unittest.TestCase):
             op['phase'] = phase
             if phase != 'parent-prepared':
                 op['manifest_sha256'] = op['parent_policy_sha256'] = None
-            result = self.report(state)
+            del state['dimension_catalog']['projects']['parent']
+            descriptors = {key: value for key, value in self.descriptors.items() if key[0] != 'parent'}
+            result = self.report(state, descriptors=descriptors)
             self.assertFalse(result['can_resume'])
             self.assertEqual(result['operations'][0]['phase'], phase)
+
+    def test_precommit_phases_refuse_already_published_parent_output(self):
+        for phase in ['reserved', 'children-recorded', 'parent-prepared']:
+            bad = copy.deepcopy(self.body)
+            op = bad['operations']['operation']
+            op['phase'] = phase
+            op['parent_pin'] = None
+            if phase != 'parent-prepared':
+                op['manifest_sha256'] = op['parent_policy_sha256'] = None
+            with self.subTest(phase=phase), self.assertRaises(ValueError):
+                CompositionSafetyState.from_dict(bad)
+
+    def test_parent_output_cannot_equal_prior_baseline(self):
+        op = self.body['operations']['operation']
+        op['plan']['expected_parent_logical_jat_id'] = op['plan']['parent_logical_jat_id']
+        op['plan_sha256'] = plan_digest(op['plan'])
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_present_legacy_origin_must_be_schema_identifier(self):
+        record = {'snapshot_id': 'legacy-jat', 'object_key': 'objects/sha256/' + 'a' * 64,
+                  'ciphertext_sha256': 'a' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00Z', 'workspace_fingerprint': 'b' * 64,
+                  'origin_project_id': None}
+        self.body['dimension_catalog']['projects']['legacy'] = {
+            'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat', 'snapshots': {'legacy-jat': record}}
+        Catalog.from_body(self.body['dimension_catalog'])
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+        record['origin_project_id'] = 'origin-room'
+        CompositionSafetyState.from_dict(self.body)
+
+    def test_empty_evidence_arrays_are_valid_but_other_iterables_are_not(self):
+        body = copy.deepcopy(self.body)
+        body['dimension_catalog']['projects'].clear()
+        op = body['operations']['operation']
+        op.update(phase='reserved', child_pins={}, parent_pin=None,
+                  manifest_sha256=None, parent_policy_sha256=None)
+        bundle = {'state': body, 'descriptors': [], 'inventory': [], 'expected_scope': body['scope'],
+                  'repository': {'repository_id': REPOSITORY, 'repository_format': 2}}
+        with tempfile.TemporaryDirectory(prefix='composition-array-') as directory:
+            path = Path(directory) / 'evidence.json'
+            path.write_text(json.dumps(bundle))
+            self.assertTrue(inspect_evidence_file(path)['ok'])
+            for field in ['descriptors', 'inventory']:
+                for value in ['', {}]:
+                    invalid = copy.deepcopy(bundle)
+                    invalid[field] = value
+                    path.write_text(json.dumps(invalid))
+                    with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                        inspect_evidence_file(path)
 
     def test_conflicting_operation_and_plan_change_refused(self):
         bad = copy.deepcopy(self.body)
