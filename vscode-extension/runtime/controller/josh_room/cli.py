@@ -667,6 +667,7 @@ def main(argv=None):
             result = dispatch(args, Path("."))
         except (OSError, ValueError):
             result = {"ok": False, "error": "Composition preview refused unsafe or unavailable input"}
+        result = _bounded_json_result(result)
         _write_runtime_result(result)
         emit(result, True)
         return _exit_code(result)

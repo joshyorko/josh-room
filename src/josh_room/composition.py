@@ -17,7 +17,7 @@ MANIFEST = ".josh-room-composition.json"
 MAX_CHILDREN = 32
 LIMITS = {"directories": 128, "entries_per_directory": 256, "depth": 3}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
-_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
+_RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$", *(f"com{i}" for i in range(1, 10)),
              *(f"lpt{i}" for i in range(1, 10))}
 
 
@@ -26,8 +26,13 @@ def portable_path(value: str) -> tuple[str, ...]:
     if not isinstance(value, str) or not value or len(value) > 512:
         raise ValueError("invalid composition child path")
     parts = value.split("/")
+    # CLI diagnostics normalize whitespace and redact key-shaped strings.
+    # Such names cannot safely serve as round-trippable selection identities.
+    if (" ".join(value.split()) != value
+            or re.search(r"AGE-SECRET-KEY-[A-Za-z0-9_-]+|\bage1[0-9a-z]{20,}|(?i:bearer\s+)", value)):
+        raise ValueError("composition path cannot round-trip safely")
     if any(not part or part in {".", ".."} or part.endswith((".", " "))
-           or part.casefold().split(".")[0] in _RESERVED
+           or unicodedata.normalize("NFKC", part.casefold()).split(".")[0].rstrip() in _RESERVED
            or part.casefold().startswith(".josh-room") or part.casefold() == ".git"
            or any(unicodedata.category(c).startswith("C") or c in '\\:*?[]!<>|"#' for c in part)
            or part != part.strip() or unicodedata.normalize("NFC", part) != part
@@ -62,7 +67,7 @@ def validate_manifest(body: dict) -> dict:
     identities = set()
     for row in body["children"]:
         if (not isinstance(row, dict) or set(row) != {"path", "provider", "connection_id", "dimension_id", "room_id", "snapshot_id", "hydration"}
-                or row["provider"] not in {"r2", "minio", "s3"}
+                or row["provider"] not in ("r2", "minio", "s3")
                 or row["hydration"] != "explicit"
                 or any(not isinstance(row[k], str) or not _ID.fullmatch(row[k])
                        for k in ("connection_id", "dimension_id", "room_id", "snapshot_id"))
@@ -105,7 +110,7 @@ def discover(root: Path) -> dict:
     try:
         root_fd = _directory(root)
         device = os.fstat(root_fd).st_dev
-        policy = load_capture_policy(root)
+        policy = load_capture_policy(root, directory_fd=root_fd)
         candidates, omissions = [], set()
         queue = [("", 0)]
         visited = observed = huge = 0
@@ -134,6 +139,19 @@ def discover(root: Path) -> dict:
                 metadata = {}
                 for entry in sample[:LIMITS["entries_per_directory"]]:
                     metadata[entry.name] = entry.stat(follow_symlinks=False)
+                # Security boundaries must not depend on enumeration order.
+                for name in (".git", ".josh-room.json"):
+                    try:
+                        metadata[name] = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                sibling_keys = {}
+                for name in metadata:
+                    key = unicodedata.normalize("NFC", name.casefold())
+                    sibling_keys.setdefault(key, []).append(name)
+                aliases = {name for group in sibling_keys.values() if len(group) > 1 for name in group}
+                if aliases:
+                    omissions.add("path-collision")
                 git = metadata.get(".git")
                 bound = ".josh-room.json" in metadata
                 if not relative:
@@ -146,6 +164,8 @@ def discover(root: Path) -> dict:
                 for name, info in sorted(metadata.items()):
                     path = f"{relative}/{name}" if relative else name
                     if name == ".git" or policy.is_excluded(path):
+                        continue
+                    if name in aliases:
                         continue
                     if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
                         omissions.add("linked-entry")
@@ -180,8 +200,12 @@ def discover(root: Path) -> dict:
                    for j, other in enumerate(keys) if j != index):
                 row["selectable"] = False
                 omissions.add("path-collision")
-        if load_capture_policy(root).sha256 != policy.sha256:
+        if load_capture_policy(root, directory_fd=root_fd).sha256 != policy.sha256:
             raise ValueError("capture policy changed during composition discovery")
+        # Leave room for selected rows and envelope under the CLI's 64 KiB cap.
+        while len(json.dumps(candidates).encode()) > 16 * 1024:
+            candidates.pop()
+            omissions.add("output-cap")
         return {"ok": True, "format_version": 1, "status": "preview-only", "can_apply": False,
                 "capture_policy_sha256": policy.sha256, "capture_mode": policy.capture_mode,
                 "candidates": sorted(candidates, key=lambda row: row["path"]),

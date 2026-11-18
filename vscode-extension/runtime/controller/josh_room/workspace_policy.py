@@ -99,10 +99,10 @@ def _read_defaults() -> tuple[bytes, dict]:
     return raw, body
 
 
-def _read_ignore(root: Path) -> bytes | None:
+def _read_ignore(root: Path, *, directory_fd: int | None = None) -> bytes | None:
     path = root / _IGNORE_NAME
     try:
-        metadata = path.lstat()
+        metadata = path.lstat() if directory_fd is None else os.stat(_IGNORE_NAME, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
         return None
     except OSError as error:
@@ -117,7 +117,7 @@ def _read_ignore(root: Path) -> bytes | None:
             os.O_RDONLY | getattr(os, "O_BINARY", 0)
             | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
-        descriptor = os.open(path, flags)
+        descriptor = os.open(path, flags) if directory_fd is None else os.open(_IGNORE_NAME, flags, dir_fd=directory_fd)
         opened = os.fstat(descriptor)
         if (
             not stat.S_ISREG(opened.st_mode)
@@ -258,13 +258,16 @@ def load_capture_policy(
     workspace_root: Path,
     *,
     active_runtime_root: Path | None = None,
+    directory_fd: int | None = None,
 ) -> CapturePolicy:
     """Load shared defaults and exclusion-only workspace rules."""
-    root = Path(workspace_root).resolve()
-    if not root.is_dir():
+    root = Path(workspace_root) if directory_fd is not None else Path(workspace_root).resolve()
+    if not (stat.S_ISDIR(os.fstat(directory_fd).st_mode) if directory_fd is not None else root.is_dir()):
         raise ValueError("workspace must be a directory")
+    if directory_fd is not None and active_runtime_root is not None:
+        raise ValueError("descriptor-bound policy does not support runtime path resolution")
     defaults_raw, defaults = _read_defaults()
-    ignore_raw = _read_ignore(root)
+    ignore_raw = _read_ignore(root, directory_fd=directory_fd)
     capture_mode = "full-repository"
     directives = [line.strip() for line in (ignore_raw or b"").decode("utf-8").splitlines()
                   if line.strip().startswith("# josh-room capture-mode:")]

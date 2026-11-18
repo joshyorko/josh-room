@@ -36,7 +36,7 @@ def test_schema_and_parser_agree():
 
 @pytest.mark.parametrize("path", ["../escape", "/absolute", "a//b", "a/./b", "C:/child", "a\\b",
     "a/*", "a?", "a[bc]", "a!", ".git/worktrees", ".josh-room.json", "a/CON.txt", "a/nul",
-    "a/trailing.", "a/ trailing", "a/line\n", "e\u0301", "a/#comment"])
+    "a/trailing.", "a/ trailing", "a/line\n", "e\u0301", "a/#comment", "bearer token", "com1 .txt"])
 def test_paths_reject_untrusted_or_nonportable_names(path):
     body = manifest()
     body["children"][0]["path"] = path
@@ -148,3 +148,100 @@ def test_cli_offline_no_auth_config_or_network(tmp_path, monkeypatch, capsys):
     assert cli.main(['composition', 'plan', '--workspace', str(tmp_path), '--json']) == 0
     assert json.loads(capsys.readouterr().out)['can_apply'] is False
     assert not list(tmp_path.iterdir())
+
+
+def test_discovery_policy_change_refuses_stale_preview(tmp_path, monkeypatch):
+    from josh_room import composition
+    original = composition.load_capture_policy
+    calls = 0
+    def changing(root, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            (root / '.josh-roomignore').write_text('other/**\n')
+        return original(root, **kwargs)
+    monkeypatch.setattr(composition, 'load_capture_policy', changing)
+    with pytest.raises(ValueError, match='policy changed'):
+        discover(tmp_path)
+
+
+def test_discovery_deadline_and_unsupported_platform(tmp_path, monkeypatch):
+    from josh_room import composition
+    ticks = iter([0, 3])
+    monkeypatch.setattr(composition.time, 'monotonic', lambda: next(ticks))
+    assert 'time-cap' in discover(tmp_path)['coverage']['omissions']
+    monkeypatch.setattr(composition.os, 'supports_dir_fd', set())
+    with pytest.raises(ValueError, match='unavailable on this platform'):
+        discover(tmp_path)
+
+
+@pytest.mark.parametrize('marker', ['.git', '.josh-room.json'])
+def test_boundary_lookup_is_independent_of_entry_sample(tmp_path, monkeypatch, marker):
+    from josh_room import composition
+    child = tmp_path / 'child'
+    child.mkdir()
+    (child / marker).write_text('never read')
+    original = composition.os.scandir
+    class WithoutMarkers:
+        def __init__(self, fd):
+            self.inner = original(fd)
+        def __enter__(self):
+            return iter([e for e in self.inner if e.name not in {'.git', '.josh-room.json'}])
+        def __exit__(self, *args):
+            self.inner.close()
+    monkeypatch.setattr(composition.os, 'scandir', WithoutMarkers)
+    # Keep the capability set aligned with the substituted callable.
+    monkeypatch.setattr(composition.os, 'supports_fd', {WithoutMarkers})
+    result = discover(tmp_path)
+    assert result['candidates'][0]['selectable'] is False
+
+
+def test_policy_reads_held_tree_after_root_path_replaced(tmp_path, monkeypatch):
+    from josh_room import composition
+    root = tmp_path / 'root'
+    root.mkdir()
+    (root / 'child').mkdir()
+    (root / '.josh-roomignore').write_text('child/**\n')
+    original = composition.load_capture_policy
+    first = True
+    def replaced(path, **kwargs):
+        nonlocal first
+        if first:
+            first = False
+            root.rename(tmp_path / 'original')
+            root.mkdir()
+            (root / '.josh-roomignore').write_text('other/**\n')
+        return original(path, **kwargs)
+    monkeypatch.setattr(composition, 'load_capture_policy', replaced)
+    assert discover(root)['candidates'] == []
+
+
+def test_nonportable_sibling_cannot_leave_nfc_alias_selectable(tmp_path):
+    for name in ['é', 'e\u0301', 'COM¹', 'CONIN$']:
+        (tmp_path / name).mkdir()
+    result = discover(tmp_path)
+    assert not result['candidates']
+    assert {'path-collision', 'nonportable-path'} <= set(result['coverage']['omissions'])
+
+
+def test_cli_names_round_trip_and_output_overflow_is_honest(tmp_path, capsys, monkeypatch):
+    from josh_room import cli, composition
+    for name in ['a  b', 'a b', '-tools']:
+        (tmp_path / name).mkdir()
+    monkeypatch.delenv('JOSH_ROOM_RESULT_FILE', raising=False)
+    assert cli.main(['composition', 'plan', '--workspace', str(tmp_path), '--child=-tools']) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert [r['path'] for r in result['candidates']] == ['-tools', 'a b']
+    assert result['selected'][0]['path'] == '-tools'
+    assert not result['coverage']['complete']
+    monkeypatch.setattr(composition, 'plan_split', lambda *args: {'ok': True, 'large': ['é' * 4000] * 120})
+    assert cli.main(['composition', 'plan', '--workspace', str(tmp_path)]) != 0
+    assert json.loads(capsys.readouterr().out)['ok'] is False
+
+
+def test_serialized_candidate_budget_reports_partial(tmp_path):
+    for index in range(100):
+        (tmp_path / (f'{index:03}' + 'é' * 80)).mkdir()
+    result = discover(tmp_path)
+    assert 'output-cap' in result['coverage']['omissions']
+    assert len(json.dumps(result).encode()) < 64 * 1024

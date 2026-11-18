@@ -47,6 +47,16 @@ Neither is read, executed or interpreted as authority. Discovery currently
 requires descriptor-relative, no-follow directory operations; unsupported
 platforms fail closed (Windows qualification remains blocked).
 
+Fixed Git/Room boundary names are statted independently of the entry sample.
+Policy reads and rechecks use the held root descriptor, even if its original
+pathname is replaced. Unicode sibling aliases are blocked before descent,
+including aliases whose spelling is otherwise unsupported. Candidate JSON is
+bounded to 16 KiB with an explicit `output-cap` omission. Names that diagnostics
+would normalize or redact (for example repeated spaces or key-shaped strings)
+are unsupported and never offered as a different sibling. The native controller
+launch uses its packaged controller directory, never the selected source as a
+Python import directory, and removes the inherited provider credential pointer.
+
 ## Closed portable manifest
 
 `schemas/room-composition-v1.schema.json` describes the proposed parent file

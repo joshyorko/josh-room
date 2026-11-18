@@ -27,3 +27,8 @@ open editor buffers first; otherwise the Room remains marked as having changes.
 Recovery points show Latest and Open separately; the tooltip contains the full
 ID. Settings, recovery and maintenance are available from the relevant
 Dimension's context menu. Show Details opens the sanitized Save receipt.
+
+`Josh: Split Workspace into Rooms (Preview Only)` offers an explicit folder
+checkbox preview. It does not save, exclude or unload children. Publication is
+blocked pending pin retention and crash-consistent orchestration; see the
+[composition contract](https://github.com/joshyorko/josh-room/blob/main/docs/room-composition.md).

@@ -1131,9 +1131,9 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     runtime = await runtimeFor(cwd, args, progressReporter, cancellationToken);
     if (cancellationToken?.isCancellationRequested) throw cancellationError();
     environment = managedRuntime.mergeRuntimeEnvironment(process.env, { ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath });
-    credentialsCleanup = args[0] === "composition" ? () => {} : await writeRuntimeCredentials(environment, {
+    credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
-      authFree: args[0] === "status",
+      authFree: ["status", "composition"].includes(args[0]),
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
@@ -1179,7 +1179,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         }
       }
       child = childProcess.spawn(runtime.command, runtime.args(args, receiptPath), {
-        cwd,
+        cwd: args[0] === "composition" ? path.join(__dirname, "runtime", "controller") : cwd,
         env: environment,
         detached: true,
         stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
@@ -2121,7 +2121,7 @@ async function splitWorkspace() {
   );
   if (!selection?.length) return "cancelled";
   const plan = await runOperation("Checking selected boundaries…",
-    [...args, ...selection.flatMap((row) => ["--child", row.childPath])], source);
+    [...args, ...selection.map((row) => `--child=${row.childPath}`)], source);
   await vscode.window.showInformationMessage(
     "Split preview only. Saving children and parent exclusions is blocked until pin retention and interrupted-publication safety are implemented. All local files remain untouched.",
     { modal: true, detail: plan.selected.map((row) => `${row.path} → proposed exclusion ${row.proposed_exclusion}`).join("\n")

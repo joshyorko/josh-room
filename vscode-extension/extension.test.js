@@ -7091,6 +7091,9 @@ test("R2 native Save of the open folder ignores controller marker writes and tra
 test("composition native split preview selects A/C from chosen source without Save or secrets", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-composition-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const inherited = process.env.JOSH_ROOM_PROVIDER_CREDENTIALS;
+  process.env.JOSH_ROOM_PROVIDER_CREDENTIALS = "/synthetic/credential-pointer";
+  t.after(() => { if (inherited === undefined) delete process.env.JOSH_ROOM_PROVIDER_CREDENTIALS; else process.env.JOSH_ROOM_PROVIDER_CREDENTIALS = inherited; });
   const source = path.join(root, "selected");
   fs.mkdirSync(source);
   fs.writeFileSync(path.join(source, "keep.txt"), "synthetic retained data");
@@ -7099,7 +7102,8 @@ test("composition native split preview selects A/C from chosen source without Sa
   mock.quickPickResponses.push([{ childPath: "a" }, { childPath: "c" }]);
   const harness = createSpawnHarness(({ args, options }) => {
     assert.equal(args[0], "composition");
-    assert.equal(options.cwd, source);
+    assert.equal(options.cwd, path.join(__dirname, "runtime", "controller"));
+    assert.equal(options.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
     assert.equal(args[args.indexOf("--workspace") + 1], source);
     return { stdout: JSON.stringify({ ok: true, can_apply: false,
       candidates: ["a", "b", "c"].map((p) => ({ path: p, kind: "folder", selectable: true })),
@@ -7115,7 +7119,7 @@ test("composition native split preview selects A/C from chosen source without Sa
   assert.equal(picker.options.canPickMany, true);
   assert.ok(picker.items.every((row) => row.picked === false));
   assert.match(picker.options.placeHolder, /Partial discovery/);
-  assert.deepEqual(harness.calls[1].args.filter((arg, i, args) => args[i - 1] === "--child"), ["a", "c"]);
+  assert.deepEqual(harness.calls[1].args.filter((arg) => arg.startsWith("--child=")), ["--child=a", "--child=c"]);
   assert.deepEqual(fs.readdirSync(source), ["keep.txt"]);
   assert.ok(mock.infoCalls[0][1].detail.includes("a/**"));
   assert.ok(mock.logLines.every((line) => !line.includes(source) && !line.includes("--child")));
