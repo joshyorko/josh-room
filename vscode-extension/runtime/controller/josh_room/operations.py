@@ -137,6 +137,8 @@ def create_snapshot(
     selected_material: EncryptionMaterial | None = None,
     selected_domain: EncryptionKeyset | None = None,
 ) -> dict:
+    from .composition import require_uncomposed_workspace
+    require_uncomposed_workspace(source)
     recipients = _selected_recipients(recipients, selected_material)
     instance.mkdir(parents=True, exist_ok=True)
     source_fingerprint = workspace_fingerprint(source)

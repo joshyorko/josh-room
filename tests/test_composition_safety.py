@@ -134,6 +134,7 @@ class CompositionSafetyTests(unittest.TestCase):
         try:
             from josh_room import room_store_bridge
             from josh_room.room_store_operations import (
+                RoomStoreOperations,
                 RoomStoreOperationsError,
                 _scan_workspace,
             )
@@ -144,11 +145,70 @@ class CompositionSafetyTests(unittest.TestCase):
             root = Path(directory)
             (root / '.josh-room-composition.json').write_text('{}')
             (root / '.josh-roomignore').write_text('.josh-room-composition.json\n')
-            with self.assertRaisesRegex(RoomStoreOperationsError, '^composed Save is blocked'):
-                _scan_workspace(root, load_capture_policy(root))
+            # Restore/export share this scanner: historical files remain valid.
+            scan = _scan_workspace(root, load_capture_policy(root))
+            self.assertNotIn('.josh-room-composition.json', scan.paths)
+            (root / '.josh-roomignore').unlink()
+            self.assertIn('.josh-room-composition.json', _scan_workspace(root, load_capture_policy(root)).paths)
+            operations = object.__new__(RoomStoreOperations)
+            operations.workspace = root
+            for operation in [operations.preview, operations.save]:
+                with self.assertRaisesRegex(RoomStoreOperationsError, '^composed Save is blocked'):
+                    operation()
             with patch.object(room_store_bridge, '_resolve_material', side_effect=AssertionError('provider admission attempted')):
                 with self.assertRaisesRegex(ValueError, '^composed Save is blocked'):
                     room_store_bridge.save_room_store(root, None, 'parent', root, None, components={})
+            from josh_room.operations import create_snapshot
+            with patch('josh_room.operations.run_build', side_effect=AssertionError('portable build attempted')):
+                with self.assertRaisesRegex(ValueError, '^composed Save is blocked'):
+                    create_snapshot(root / 'not-created', 'parent', root, root, [])
+            self.assertFalse((root / 'not-created').exists())
+
+    def test_headless_create_guard_precedes_receipts_and_provider_setup(self):
+        from unittest.mock import patch
+
+        try:
+            from josh_room import cli
+        except ModuleNotFoundError as error:
+            self.skipTest(f'CLI runtime dependency unavailable: {error.name}')
+        with tempfile.TemporaryDirectory(prefix='composition-create-') as directory:
+            root = Path(directory)
+            (root / '.josh-room-split.json').write_text('{}')
+            for backend in ['local', 'minio', 's3']:
+                stdout = io.StringIO()
+                with patch.object(cli, 'initialize_system_trust'), patch.object(cli, '_write_runtime_result'):
+                    with patch.object(cli, '_instance_root', side_effect=AssertionError('runtime setup attempted')):
+                        with redirect_stdout(stdout):
+                            status = cli.main(['snapshot', 'create', 'parent', '--backend', backend,
+                                               '--source', str(root), '--json'])
+                self.assertNotEqual(status, 0)
+                self.assertFalse(json.loads(stdout.getvalue())['ok'])
+
+    def test_truncated_siblings_are_not_selectable_even_if_alias_was_omitted(self):
+        from unittest.mock import patch
+
+        from josh_room import composition
+        with tempfile.TemporaryDirectory(prefix='composition-alias-') as directory:
+            root = Path(directory)
+            (root / 'Tools').mkdir()
+            (root / 'tools').mkdir()
+            with patch.dict(composition.LIMITS, {'entries_per_directory': 1}):
+                result = composition.discover(root)
+                self.assertIn('entry-cap', result['coverage']['omissions'])
+                self.assertTrue(result['candidates'])
+                self.assertTrue(all(not row['selectable'] for row in result['candidates']))
+
+    def test_candidate_boundary_closes_legacy_records_without_changing_v3(self):
+        legacy = {'snapshot_id': 'legacy-jat', 'object_key': 'objects/sha256/' + 'a' * 64,
+                  'ciphertext_sha256': 'a' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00Z', 'workspace_fingerprint': 'b' * 64}
+        self.body['dimension_catalog']['projects']['legacy'] = {
+            'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat', 'snapshots': {'legacy-jat': legacy}}
+        CompositionSafetyState.from_dict(self.body)
+        legacy['unexpected'] = 'synthetic-sensitive-sentinel'
+        Catalog.from_body(self.body['dimension_catalog'])  # preserve v3 behavior
+        with self.assertRaisesRegex(ValueError, 'legacy composition evidence'):
+            CompositionSafetyState.from_dict(self.body)
 
     def test_actual_cli_reconcile_remains_offline_and_reports_only_counts(self):
         from unittest.mock import patch
@@ -310,6 +370,12 @@ class CompositionSafetyTests(unittest.TestCase):
             result = inspect_evidence_file(path)
             self.assertEqual(result['evidence_trust'], 'offline-untrusted-input')
             self.assertNotIn('projects/-child folder', json.dumps(result))
+            for field, value in [('time', {}), ('time', '2026-11-18'), ('parent_snapshot_id', 5)]:
+                invalid = copy.deepcopy(bundle)
+                invalid['inventory'][0][field] = value
+                path.write_text(json.dumps(invalid))
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, '^invalid composition reconciliation evidence$'):
+                    inspect_evidence_file(path)
             path.write_text('{"state":0,"state":"synthetic-sensitive-sentinel"}')
             with self.assertRaisesRegex(ValueError, '^invalid composition reconciliation evidence$'):
                 inspect_evidence_file(path)

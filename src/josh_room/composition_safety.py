@@ -11,6 +11,7 @@ import os
 import re
 import stat
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .catalog import Catalog
@@ -23,6 +24,7 @@ from .workspace_onboarding import _directory
 MAX_BYTES = 1024 * 1024
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
+_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})\Z")
 _PHASES = ("reserved", "children-recorded", "parent-prepared", "committed")
 
 
@@ -39,6 +41,11 @@ def _identifier(value):
 def _digest(value):
     if not isinstance(value, str) or not _SHA.fullmatch(value):
         raise ValueError("invalid composition digest")
+
+
+def _timestamp(value):
+    if not isinstance(value, str) or not _TIMESTAMP.fullmatch(value) or datetime.fromisoformat(value).tzinfo is None:
+        raise ValueError("invalid composition timestamp")
 
 
 def plan_digest(plan: dict) -> str:
@@ -84,6 +91,13 @@ class CompositionSafetyState:
         if not isinstance(inner, dict) or inner.get("format_version") != 3 or inner.get("encryption_domain_id") != scope["encryption_domain_id"]:
             raise ValueError("composition requires an explicit v3 domain binding")
         catalog = Catalog.from_body(inner, scope["dimension_id"], scope["encryption_domain_id"])
+        legacy_fields = {"snapshot_id", "object_key", "ciphertext_sha256", "ciphertext_size", "created_at", "workspace_fingerprint"}
+        for project in inner["projects"].values():
+            for record in project["snapshots"].values():
+                if "payload_kind" not in record:
+                    if not legacy_fields <= record.keys() or record.keys() - legacy_fields - {"origin_project_id"}:
+                        raise ValueError("legacy composition evidence has unknown or missing fields")
+                    _timestamp(record["created_at"])
         revision = body["revision"]
         if type(revision) is not int or revision < inner["revision"]:
             raise ValueError("invalid composition revision")
@@ -219,8 +233,17 @@ def inspect_evidence_file(path: Path):
             if key in descriptors:
                 raise ValueError("duplicate descriptor evidence")
             descriptors[key] = descriptor
+        inventory = []
+        for row in evidence["inventory"]:
+            _object(row, "snapshot_id tree_id time parent_snapshot_id")
+            _digest(row["snapshot_id"])
+            _digest(row["tree_id"])
+            if row["parent_snapshot_id"] is not None:
+                _digest(row["parent_snapshot_id"])
+            _timestamp(row["time"])
+            inventory.append(SnapshotInventoryItem(**row))
         result = reconcile(state, descriptors, RepositoryInfo(**evidence["repository"]),
-                           [SnapshotInventoryItem(**row) for row in evidence["inventory"]],
+                           inventory,
                            expected_scope=evidence["expected_scope"])
         result["evidence_trust"] = "offline-untrusted-input"
         return result

@@ -376,10 +376,6 @@ def _scan_workspace(root: Path, policy: CapturePolicy | None, *, capture_mode: s
             raise RoomStoreOperationsError("workspace path cannot be restored safely")
         if not resolved_root.is_dir():
             raise RoomStoreOperationsError("workspace is not a directory")
-        try:
-            require_uncomposed_workspace(resolved_root)
-        except ValueError as error:
-            raise RoomStoreOperationsError(str(error)) from None
         root_device = resolved_root.stat().st_dev
     except OSError as error:
         raise RoomStoreOperationsError("workspace is unavailable") from error
@@ -843,7 +839,14 @@ class RoomStoreOperations:
             token,
         )
 
+    def _require_save_admission(self) -> None:
+        try:
+            require_uncomposed_workspace(self.workspace)
+        except ValueError as error:
+            raise RoomStoreOperationsError(str(error)) from None
+
     def preview(self, parent: LogicalJat | None = None) -> SavePreview:
+        self._require_save_admission()
         policy = self._policy()
         try:
             scan = _scan_workspace(self.workspace, policy)
@@ -977,6 +980,7 @@ class RoomStoreOperations:
         cancellation: Any = None,
         preflight_scan: tuple[str, WorkspaceScan] | None = None,
     ) -> SaveResult:
+        self._require_save_admission()
         self.save_stage = "catalog-read"
         latest, etag = self.read_latest()
         selected_parent = parent if parent is not None else latest

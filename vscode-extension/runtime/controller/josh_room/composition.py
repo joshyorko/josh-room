@@ -125,6 +125,7 @@ def discover(root: Path) -> dict:
         device = os.fstat(root_fd).st_dev
         policy = load_capture_policy(root, directory_fd=root_fd)
         candidates, omissions = [], set()
+        incomplete_sibling_scopes = set()
         queue = [("", 0)]
         visited = observed = huge = 0
         parent_git = False
@@ -149,6 +150,7 @@ def discover(root: Path) -> dict:
                 observed += len(sample)
                 if len(sample) > LIMITS["entries_per_directory"]:
                     omissions.add("entry-cap")
+                    incomplete_sibling_scopes.add(relative)
                 metadata = {}
                 for entry in sample[:LIMITS["entries_per_directory"]]:
                     metadata[entry.name] = entry.stat(follow_symlinks=False)
@@ -207,6 +209,8 @@ def discover(root: Path) -> dict:
         # Fold aliases even on case-sensitive hosts; never offer ambiguous paths.
         keys = [portable_path(row["path"]) for row in candidates]
         for index, row in enumerate(candidates):
+            if any(not prefix or row["path"].startswith(prefix + "/") for prefix in incomplete_sibling_scopes):
+                row["selectable"] = False
             if any(keys[index][:min(len(keys[index]), len(other))] == other[:min(len(keys[index]), len(other))]
                    and tuple(row["path"].split("/")[:min(len(keys[index]), len(other))])
                    != tuple(candidates[j]["path"].split("/")[:min(len(keys[index]), len(other))])

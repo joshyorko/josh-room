@@ -684,6 +684,15 @@ def main(argv=None):
         return _exit_code(result)
     initialize_system_trust()
     args = build_parser().parse_args(argv)
+    if args.command == "snapshot" and args.snapshot_command == "create":
+        from .composition import require_uncomposed_workspace
+        try:
+            require_uncomposed_workspace(args.source or Path.cwd())
+        except (OSError, ValueError):
+            result = {"ok": False, "error": "Composed Save admission refused; preserve the workspace and reconcile its operation"}
+            _write_runtime_result(result)
+            emit(result, getattr(args, "json", False))
+            return _exit_code(result)
     cancelled = False
     try:
         with sigterm_cancellation():

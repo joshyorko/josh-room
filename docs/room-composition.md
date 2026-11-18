@@ -28,12 +28,15 @@ v4 writer exists. Existing in-flight maintenance cannot be fenced by a new ETag
 alone. See [the corrected safety design](composition-safety-design.md) for the
 source-backed admission blockers and required crash/concurrency qualification.
 
-The native Save UI, controller Save bridge, authoritative scanner and local
-no-op receipt path refuse a root `.josh-room-composition.json` or
+The native Save UI, headless create entry point, direct portable/native Save,
+Save preview and local no-op receipt path refuse a root `.josh-room-composition.json` or
 `.josh-room-split.json` of any type without reading its contents. This is an
 unsupported-composition admission check, not a lock against concurrent writers.
 Do not delete a guard to work around it; preserve the workspace and investigate
 the operation that created it. No code in this increment creates either file.
+The shared scanner remains unchanged for restore and export: older snapshots
+containing these filenames remain recoverable. Truncated sibling discovery
+disables selection below that scope; unseen aliases cannot authorize a selection.
 
 ## Explicit preview
 
