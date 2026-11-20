@@ -16,6 +16,19 @@ Results explicitly say `offline-untrusted-input`, `can_apply: false`, and
 `can_resume: false`. A consistent bundle is not a durable recovery guarantee.
 Missing referenced Restic data returns `ok: false`, including component data.
 Output contains only operation IDs, phase and summary counts, not child paths.
+Contradictory claims about one ciphertext object (payload kind, size, or logical
+descriptor) are refused. Shared legacy objects and shared Restic snapshots remain
+valid when their evidence agrees. This stricter offline check does not alter the
+ordinary deletion planner's conservative handling of shared objects. A committed
+parent's explicit logical/Restic lineage must agree with its reserved baseline;
+absent lineage remains supported when Save receives no Restic parent. Present
+origin fields and timezone offsets must satisfy their closed-schema contracts.
+Retained committed operations may coexist with one active continuation touching
+the same Rooms. An active operation's baseline must match the current parent
+head; historical committed parents need not remain latest. Two active operations
+cannot overlap, and historical pins cannot be dropped. Missing baselines and
+legacy records whose embedded snapshot IDs differ from their catalog slots are
+refused with bounded validation errors.
 
 `composition_safety.CompositionSafetyState` validates the closed candidate-v4
 envelope in `schemas/composition-safety-v1.schema.json`. It embeds an unchanged
@@ -28,7 +41,7 @@ v4 writer exists. Existing in-flight maintenance cannot be fenced by a new ETag
 alone. See [the corrected safety design](composition-safety-design.md) for the
 source-backed admission blockers and required crash/concurrency qualification.
 
-The native Save UI, headless create entry point, direct portable/native Save,
+The native Save UI, headless create/preview entry points, direct portable/native Save,
 Save preview and local no-op receipt path refuse a root `.josh-room-composition.json` or
 `.josh-room-split.json` of any type without reading its contents. This is an
 unsupported-composition admission check, not a lock against concurrent writers.
@@ -43,10 +56,15 @@ disables selection below that scope; unseen aliases cannot authorize a selection
 Run `Josh: Split Workspace into Rooms (Preview Only)` from the command palette.
 Choose the source folder (it need not be the open folder), then check desired
 child directories in the native picker. Every checkbox starts unchecked.
+Select at most 32 non-overlapping directories. Selecting a directory and one of
+its descendants, or too many children, returns to the picker with the selection
+preserved for correction. If no supported choices are available, a message
+explains the limit instead of opening an empty picker.
 Unchecked directories keep their existing parent capture policy. The final
 dialog shows selected paths and proposed literal exclusions locally, then ends.
 There is no apply button. Cancel does not change workspace files or contact a
-storage provider. Workspace Trust is required before controller acquisition.
+storage provider. The source picker also works in a trusted window without an
+open folder. Workspace Trust is required before controller acquisition.
 The managed controller may require normal runtime installation and temporary
 local process receipts; the planner does not read provider credentials or keys.
 
@@ -77,14 +95,20 @@ validation. Over-limit sampling is filesystem-order-dependent.
 
 A `.git` directory is an unverified repository candidate; a gitfile is an
 unsupported pointer boundary. A local Room marker is unverified and unselectable.
-Neither is read, executed or interpreted as authority. Discovery currently
+Either reserved composition filename also makes a child unselectable and stops
+descent, regardless of whether it is a file, directory, or dangling link. No
+composition contents are read. These metadata checks match Save admission.
+No boundary metadata is read, executed or interpreted as authority. Discovery currently
 requires descriptor-relative, no-follow directory operations; unsupported
 platforms fail closed (Windows qualification remains blocked).
 
-Fixed Git/Room boundary names are statted independently of the entry sample.
+Fixed Git/Room/composition boundary names are statted independently of the entry sample.
 Policy reads and rechecks use the held root descriptor, even if its original
 pathname is replaced. Unicode sibling aliases are blocked before descent,
-including aliases whose spelling is otherwise unsupported. Candidate JSON is
+including aliases whose spelling is otherwise unsupported. Win32 trailing-dot
+and trailing-space sibling aliases are also blocked. Source and evidence paths
+containing a lexical `..` are refused before normalization, so the planner cannot
+silently inspect a different tree. Candidate JSON is
 bounded to 16 KiB with an explicit `output-cap` omission. Names that diagnostics
 would normalize or redact (for example repeated spaces or key-shaped strings)
 are unsupported and never offered as a different sibling. The native controller
@@ -103,7 +127,8 @@ or marker schema is extended.
 
 Each entry requires `path`, `provider` (R2/MinIO/S3), opaque `connection_id`,
 `dimension_id`, `room_id`, immutable logical `snapshot_id`, and
-`hydration: explicit`. `latest` is forbidden. A connection ID is a lookup hint,
+`hydration: explicit`. Dotted identifiers are supported, matching catalog and
+logical-JAT identities. `latest` is forbidden as a snapshot selector. A connection ID is a lookup hint,
 not a credential profile or authorization. No absolute paths, URLs, credentials,
 contents or nested catalogs belong here. This file is ordinary encrypted parent
 workspace content once publication is safely supported; **schema validation does
@@ -112,7 +137,8 @@ marker, never a portable pointer. No child stub is written in this patch.
 
 Exclusions use the existing grammar: `service-a/**` is root-anchored and excludes
 that directory and descendants; it does not exclude `other/service-a`. The
-planner does not rewrite `.josh-roomignore`, compute a future policy digest, or
+planner validates that each portable path can compile into its literal exclusion,
+including the capture grammar's segment limit. It does not rewrite `.josh-roomignore`, compute a future policy digest, or
 claim every retained file was enumerated. Existing policy may already exclude
 unselected files. No file is removed or migrated.
 

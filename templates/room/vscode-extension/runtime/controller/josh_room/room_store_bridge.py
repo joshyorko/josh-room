@@ -1805,6 +1805,9 @@ def preview_room_store(
     homebrew_archive: Path | None = None,
 ) -> dict:
     """Preview an explicit Save, preparing local tools without remote writes."""
+    from .composition import require_uncomposed_workspace
+
+    require_uncomposed_workspace(source)
     component_value = _components(components)
     _check_required_components(component_value, required_components)
     selected_material, authority_session = _resolve_material(

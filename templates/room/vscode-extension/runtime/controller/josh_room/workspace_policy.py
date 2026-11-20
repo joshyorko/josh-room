@@ -137,13 +137,13 @@ def _read_ignore(root: Path, *, directory_fd: int | None = None) -> bytes | None
         data = bytes(chunks)
     except OSError as error:
         raise ValueError("workspace ignore file could not be read safely") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     try:
         data.decode("utf-8", errors="strict")
     except UnicodeDecodeError as error:
         raise ValueError("workspace ignore file must be valid UTF-8") from error
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
     return data
 
 

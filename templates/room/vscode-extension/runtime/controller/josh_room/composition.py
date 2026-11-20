@@ -11,13 +11,13 @@ import unicodedata
 from pathlib import Path
 
 from .workspace_onboarding import _directory
-from .workspace_policy import load_capture_policy
+from .workspace_policy import _parts, load_capture_policy
 
 MANIFEST = ".josh-room-composition.json"
 SPLIT_GUARD = ".josh-room-split.json"
 MAX_CHILDREN = 32
 LIMITS = {"directories": 128, "entries_per_directory": 256, "depth": 3}
-_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$", *(f"com{i}" for i in range(1, 10)),
              *(f"lpt{i}" for i in range(1, 10))}
 
@@ -51,6 +51,7 @@ def portable_path(value: str) -> tuple[str, ...]:
            or part != part.strip() or unicodedata.normalize("NFC", part) != part
            for part in parts):
         raise ValueError("invalid composition child path")
+    _parts(value + "/**")
     return tuple(unicodedata.normalize("NFC", p.casefold()) for p in parts)
 
 
@@ -118,6 +119,9 @@ def discover(root: Path) -> dict:
     """
     if os.open not in os.supports_dir_fd or os.scandir not in os.supports_fd:
         raise ValueError("safe composition discovery is unavailable on this platform")
+    root = Path(root)
+    if ".." in root.parts:
+        raise ValueError("composition source contains parent traversal")
     root = Path(os.path.abspath(root))
     root_fd = None
     try:
@@ -155,26 +159,30 @@ def discover(root: Path) -> dict:
                 for entry in sample[:LIMITS["entries_per_directory"]]:
                     metadata[entry.name] = entry.stat(follow_symlinks=False)
                 # Security boundaries must not depend on enumeration order.
-                for name in (".git", ".josh-room.json"):
+                for name in (".git", ".josh-room.json", MANIFEST, SPLIT_GUARD):
                     try:
-                        metadata[name] = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                        info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                        metadata[name] = info
+                        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                            omissions.add("linked-entry")
                     except FileNotFoundError:
                         pass
                 sibling_keys = {}
                 for name in metadata:
-                    key = unicodedata.normalize("NFC", name.casefold())
+                    key = unicodedata.normalize("NFC", name.rstrip(" .").casefold())
                     sibling_keys.setdefault(key, []).append(name)
                 aliases = {name for group in sibling_keys.values() if len(group) > 1 for name in group}
                 if aliases:
                     omissions.add("path-collision")
                 git = metadata.get(".git")
                 bound = ".josh-room.json" in metadata
+                composed = MANIFEST in metadata or SPLIT_GUARD in metadata
                 if not relative:
                     parent_git = git is not None
                 else:
-                    kind = "room-marker-unverified" if bound else "git-directory-unverified" if git and stat.S_ISDIR(git.st_mode) else "git-pointer-unsupported" if git else "folder"
+                    kind = "composition-metadata-unsupported" if composed else "room-marker-unverified" if bound else "git-directory-unverified" if git and stat.S_ISDIR(git.st_mode) else "git-pointer-unsupported" if git else "folder"
                     candidates.append({"path": relative, "kind": kind, "selectable": kind in {"folder", "git-directory-unverified"}})
-                    if git or bound:
+                    if git or bound or composed:
                         continue
                 for name, info in sorted(metadata.items()):
                     path = f"{relative}/{name}" if relative else name
@@ -204,7 +212,7 @@ def discover(root: Path) -> dict:
                 omissions.add("unavailable-directory")
             finally:
                 os.close(fd)
-        if queue:
+        if queue and "time-cap" not in omissions:
             omissions.add("directory-cap")
         # Fold aliases even on case-sensitive hosts; never offer ambiguous paths.
         keys = [portable_path(row["path"]) for row in candidates]

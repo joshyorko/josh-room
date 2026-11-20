@@ -10,6 +10,27 @@ from josh_room import workspace_policy
 from josh_room.workspace_policy import load_capture_policy
 
 
+def test_ignore_read_failure_closes_its_file_descriptor(tmp_path, monkeypatch):
+    ignore = tmp_path / '.josh-roomignore'
+    ignore.write_text('cache/**\n')
+    opened = []
+    original_open = workspace_policy.os.open
+    def tracked_open(*args, **kwargs):
+        descriptor = original_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+    def failed_read(*_args):
+        raise OSError('synthetic read failure')
+    monkeypatch.setattr(workspace_policy.os, 'open', tracked_open)
+    monkeypatch.setattr(workspace_policy.os, 'read', failed_read)
+    with pytest.raises(ValueError, match='could not be read safely'):
+        load_capture_policy(tmp_path)
+    assert opened
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+
+
 def test_policy_excludes_generated_directories_at_any_depth(tmp_path: Path) -> None:
     policy = load_capture_policy(tmp_path)
 

@@ -7125,6 +7125,67 @@ test("composition native split preview selects A/C from chosen source without Sa
   assert.ok(mock.logLines.every((line) => !line.includes(source) && !line.includes("--child")));
 });
 
+for (const invalidSelection of ["overlap", "count"]) {
+  test(`composition ${invalidSelection} selection can be corrected before replanning`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-picker-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const paths = invalidSelection === "overlap" ? ["a", "a/nested", "b"]
+      : Array.from({ length: 33 }, (_, i) => `child-${i}`);
+    const valid = paths.at(-1);
+    const mock = createVscodeMock(root);
+    mock.openDialogResponses.push([{ fsPath: root }]);
+    mock.quickPickResponses.push(paths.map((childPath) => ({ childPath })), [{ childPath: valid }]);
+    const harness = createSpawnHarness(({ args }) => {
+      const selected = args.filter((arg) => arg.startsWith("--child="));
+      assert.ok(selected.length === 0 || (selected.length === 1 && selected[0] === `--child=${valid}`));
+      return { stdout: JSON.stringify({ ok: true, can_apply: false,
+        candidates: paths.map((p) => ({ path: p, kind: "folder", selectable: true })),
+        coverage: { complete: true }, selected: [{ path: valid, proposed_exclusion: `${valid}/**` }] }) };
+    });
+    const extension = loadExtension(mock.vscode, harness.spawn);
+    extension.__test__.setStatusItem(mock.statusItem);
+    assert.equal(await extension.__test__.splitWorkspace(), "preview-only");
+    assert.equal(harness.calls.length, 2);
+    assert.equal(mock.quickPickCalls.length, 2);
+    assert.ok(mock.quickPickCalls[1].items.every((row) => row.picked));
+    assert.equal(mock.warningCalls.length, 0);
+    assert.match(mock.quickPickCalls[1].options.placeHolder, invalidSelection === "overlap" ? /descendants/ : /at most 32/);
+  });
+}
+
+test("composition empty discovery explains unavailable boundaries without a blank picker", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-empty-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mock = createVscodeMock(root);
+  mock.openDialogResponses.push([{ fsPath: root }]);
+  const harness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true,
+    candidates: [{ path: "service", kind: "composition-metadata-unsupported", selectable: false }],
+    coverage: { complete: false, omissions: ["entry-cap"] } }) }));
+  const extension = loadExtension(mock.vscode, harness.spawn);
+  extension.__test__.setStatusItem(mock.statusItem);
+  assert.equal(await extension.__test__.splitWorkspace(), "cancelled");
+  assert.equal(harness.calls.length, 1);
+  assert.equal(mock.quickPickCalls.length, 0);
+  assert.match(mock.infoCalls[0][0], /No supported child folders/);
+  assert.equal(mock.infoCalls[0][1].modal, true);
+  assert.match(mock.infoCalls[0][1].detail, /partial/i);
+});
+
+test("composition source picker works in a trusted window without an open folder", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-no-workspace-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mock = createVscodeMock(root);
+  mock.vscode.workspace.workspaceFolders = [];
+  mock.openDialogResponses.push([{ fsPath: root }]);
+  const harness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true,
+    candidates: [], coverage: { complete: true } }) }));
+  const extension = loadExtension(mock.vscode, harness.spawn);
+  extension.__test__.setStatusItem(mock.statusItem);
+  assert.equal(await extension.__test__.splitWorkspace(), "cancelled");
+  assert.equal(mock.openDialogCalls[0].defaultUri, undefined);
+  assert.equal(harness.calls.length, 1);
+});
+
 test("composition cancel and Workspace Trust gates do not start controller work", async () => {
   const mock = createVscodeMock(os.tmpdir());
   const harness = createSpawnHarness(() => { throw new Error("controller must not run"); });

@@ -89,6 +89,32 @@ class CompositionSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Catalog.from_body(self.body)
 
+    def test_candidate_schema_and_decoder_cover_closed_contract(self):
+        try:
+            from jsonschema import Draft202012Validator, ValidationError
+            from referencing import Registry, Resource
+        except ModuleNotFoundError:
+            self.skipTest('schema validation dependency unavailable')
+        directory = Path(__file__).resolve().parents[1] / 'schemas'
+        catalog_schema = json.loads((directory / 'dimension-catalog-v3.schema.json').read_text())
+        schema = json.loads((directory / 'composition-safety-v1.schema.json').read_text())
+        registry = Registry().with_resource(catalog_schema['$id'], Resource.from_contents(catalog_schema))
+        validator = Draft202012Validator(schema, registry=registry)
+        validator.validate(self.body)
+        CompositionSafetyState.from_dict(self.body)
+        for change in ['origin', 'version', 'unknown']:
+            invalid = copy.deepcopy(self.body)
+            if change == 'origin':
+                invalid['dimension_catalog']['projects']['child']['snapshots']['jat-child']['origin_room_id'] = None
+            elif change == 'version':
+                invalid['format_version'] = 5
+            else:
+                invalid['unknown'] = True
+            with self.subTest(change=change), self.assertRaises(ValidationError):
+                validator.validate(invalid)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                CompositionSafetyState.from_dict(invalid)
+
     def test_source_maps_are_not_retained(self):
         state = CompositionSafetyState.from_dict(self.body)
         self.body['operations'].clear()
@@ -160,6 +186,11 @@ class CompositionSafetyTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, '^composed Save is blocked'),
             ):
                 room_store_bridge.save_room_store(root, None, 'parent', root, None, components={})
+            with (
+                patch.object(room_store_bridge, '_resolve_material', side_effect=AssertionError('provider admission attempted')),
+                self.assertRaisesRegex(ValueError, '^composed Save is blocked'),
+            ):
+                room_store_bridge.preview_room_store(root, None, 'parent', root, None, components={})
             from josh_room.operations import create_snapshot
             with (
                 patch('josh_room.operations.run_build', side_effect=AssertionError('portable build attempted')),
@@ -190,6 +221,93 @@ class CompositionSafetyTests(unittest.TestCase):
                                        '--source', str(root), '--json'])
                 self.assertNotEqual(status, 0)
                 self.assertFalse(json.loads(stdout.getvalue())['ok'])
+
+    def test_headless_preview_guard_precedes_runtime_and_provider_setup(self):
+        from unittest.mock import patch
+
+        from josh_room import cli
+        with tempfile.TemporaryDirectory(prefix='composition-preview-') as directory:
+            root = Path(directory)
+            (root / '.josh-room-split.json').write_text('{}')
+            stdout = io.StringIO()
+            with (
+                patch.object(cli, 'initialize_system_trust'),
+                patch.object(cli, '_write_runtime_result'),
+                patch.object(cli, '_instance_root', side_effect=AssertionError('runtime setup attempted')),
+                redirect_stdout(stdout),
+            ):
+                status = cli.main(['snapshot', 'preview', 'parent', '--source', str(root), '--json'])
+            self.assertNotEqual(status, 0)
+            self.assertFalse(json.loads(stdout.getvalue())['ok'])
+
+    def test_legacy_snapshot_identity_must_match_its_catalog_slot(self):
+        legacy = {'snapshot_id': 'different-id', 'object_key': 'objects/sha256/' + '0' * 64,
+                  'ciphertext_sha256': '0' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00Z', 'workspace_fingerprint': 'b' * 64}
+        self.body['dimension_catalog']['projects']['legacy'] = {
+            'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat', 'snapshots': {'legacy-jat': legacy}}
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_missing_parent_baseline_has_a_bounded_validation_error(self):
+        del self.body['dimension_catalog']['projects']['parent']
+        operation = self.body['operations']['operation']
+        operation['plan']['expected_parent_logical_jat_id'] = 'missing-parent-pin'
+        operation['plan_sha256'] = plan_digest(operation['plan'])
+        with self.assertRaisesRegex(ValueError, '^composition parent baseline is missing$'):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_historical_pins_allow_one_coherent_active_continuation(self):
+        historical = copy.deepcopy(self.body['operations']['operation'])
+        pending = copy.deepcopy(historical)
+        pending['plan']['parent_logical_jat_id'] = 'jat-parent-next'
+        pending['plan']['expected_parent_logical_jat_id'] = 'jat-parent'
+        pending['plan']['children'][0]['logical_jat_id'] = 'jat-child-next'
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        pending.update(phase='reserved', child_pins={}, parent_pin=None,
+                       manifest_sha256=None, parent_policy_sha256=None)
+        self.body['operations']['next-operation'] = pending
+        self.assertTrue(self.report()['ok'])
+        self.assertEqual(self.body['operations']['operation'], historical)
+        self.body['operations'] = dict(reversed(list(self.body['operations'].items())))
+        self.assertTrue(self.report()['ok'])
+        missing = copy.deepcopy(self.body)
+        del missing['dimension_catalog']['projects']['child']
+        with self.assertRaises(ValueError):
+            self.report(missing)
+        self.body['operations']['overlapping-operation'] = copy.deepcopy(pending)
+        self.body['operations']['overlapping-operation']['plan']['parent_logical_jat_id'] = 'jat-parent-conflict'
+        self.body['operations']['overlapping-operation']['plan_sha256'] = plan_digest(
+            self.body['operations']['overlapping-operation']['plan'])
+        with self.assertRaisesRegex(ValueError, 'overlapping incomplete'):
+            self.report()
+        del self.body['operations']['overlapping-operation']
+        pending['plan']['expected_parent_logical_jat_id'] = None
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        with self.assertRaisesRegex(ValueError, 'baseline differs from current parent'):
+            self.report()
+        pending['plan']['expected_parent_logical_jat_id'] = 'jat-parent'
+        pending['plan']['children'][0]['room_id'] = 'parent'
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        with self.assertRaises(ValueError):
+            self.report()
+
+    def test_active_parent_baseline_must_be_current_but_history_can_be_older(self):
+        original = self.body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent']
+        newer = {**original, 'snapshot_id': 'jat-parent-newer'}
+        self.body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent-newer'] = newer
+        self.body['dimension_catalog']['projects']['parent']['latest'] = 'jat-parent-newer'
+        # Historical pin decoding does not require that historical parent to be latest.
+        CompositionSafetyState.from_dict(self.body)
+        pending = copy.deepcopy(self.body['operations']['operation'])
+        pending['plan'].update(parent_logical_jat_id='jat-parent-next', expected_parent_logical_jat_id='jat-parent')
+        pending['plan']['children'][0]['logical_jat_id'] = 'jat-child-next'
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        pending.update(phase='reserved', child_pins={}, parent_pin=None,
+                       manifest_sha256=None, parent_policy_sha256=None)
+        self.body['operations']['next-operation'] = pending
+        with self.assertRaisesRegex(ValueError, 'baseline differs from current parent'):
+            CompositionSafetyState.from_dict(self.body)
 
     def test_truncated_siblings_are_not_selectable_even_if_alias_was_omitted(self):
         from unittest.mock import patch
@@ -252,6 +370,8 @@ class CompositionSafetyTests(unittest.TestCase):
         latest['snapshot_id'] = 'jat-newer'
         latest['workspace_snapshot_id'] = '6' * 64
         latest['tree_id'] = '7' * 64
+        digest = hashlib.sha256(b'synthetic newer child').hexdigest()
+        latest.update(object_key=f'objects/sha256/{digest}', ciphertext_sha256=digest)
         body['projects']['child']['snapshots']['jat-newer'] = latest
         body['projects']['child']['latest'] = 'jat-newer'
         new = self.descriptors[('child', 'jat-child')].to_dict()
@@ -390,6 +510,129 @@ class CompositionSafetyTests(unittest.TestCase):
             CompositionSafetyState.from_dict(self.body)
         record['origin_project_id'] = 'origin-room'
         CompositionSafetyState.from_dict(self.body)
+
+    def test_present_logical_origin_must_be_schema_identifier(self):
+        record = self.body['dimension_catalog']['projects']['child']['snapshots']['jat-child']
+        record['origin_room_id'] = None
+        Catalog.from_body(self.body['dimension_catalog'])
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_invalid_timezone_offset_is_not_normalized(self):
+        record = {'snapshot_id': 'legacy-jat', 'object_key': 'objects/sha256/' + 'a' * 64,
+                  'ciphertext_sha256': 'a' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00+00:60', 'workspace_fingerprint': 'b' * 64}
+        self.body['dimension_catalog']['projects']['legacy'] = {
+            'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat', 'snapshots': {'legacy-jat': record}}
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_logical_timezone_offset_is_not_normalized(self):
+        invalid = '2026-11-18T12:00:00+00:60'
+        self.body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent']['created_at'] = invalid
+        descriptor = self.descriptors[('parent', 'jat-parent')].to_dict()
+        descriptor['created_at'] = invalid
+        self.descriptors[('parent', 'jat-parent')] = LogicalJat.from_dict(descriptor)
+        with self.assertRaises(ValueError):
+            self.report()
+
+    def test_evidence_parent_traversal_is_not_normalized_to_another_tree(self):
+        state, descriptors, inventory = fixture()
+        bundle = {'state': state, 'descriptors': [d.to_dict() for d in descriptors.values()],
+                  'repository': {'repository_id': REPOSITORY, 'repository_format': 2},
+                  'inventory': [{
+                      'snapshot_id': i.snapshot_id, 'tree_id': i.tree_id, 'time': i.time,
+                      'parent_snapshot_id': i.parent_snapshot_id} for i in inventory],
+                  'expected_scope': state['scope']}
+        with tempfile.TemporaryDirectory(prefix='composition-parent-') as directory:
+            path = Path(directory) / 'evidence.json'
+            path.write_text(json.dumps(bundle))
+            self.assertTrue(inspect_evidence_file(path)['ok'])
+            with self.assertRaises(ValueError):
+                inspect_evidence_file(Path(directory) / 'missing' / '..' / path.name)
+
+    def test_one_ciphertext_cannot_claim_different_descriptors_or_sizes(self):
+        for change in ['descriptor', 'size', 'legacy-size', 'legacy-kind']:
+            body = copy.deepcopy(self.body)
+            record = body['dimension_catalog']['projects']['child']['snapshots']['jat-child']
+            if change in ['descriptor', 'size']:
+                parent = body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent']
+                parent.update(object_key=record['object_key'], ciphertext_sha256=record['ciphertext_sha256'])
+                body['operations']['operation']['parent_pin']['descriptor_sha256'] = record['ciphertext_sha256']
+                if change == 'size':
+                    parent['ciphertext_size'] += 1
+            else:
+                legacy = {field: record[field] for field in [
+                    'object_key', 'ciphertext_sha256', 'ciphertext_size', 'created_at']}
+                legacy.update(snapshot_id='legacy-jat', workspace_fingerprint='b' * 64)
+                if change == 'legacy-size':
+                    legacy.update(object_key='objects/sha256/' + '0' * 64, ciphertext_sha256='0' * 64)
+                    other = {**legacy, 'snapshot_id': 'legacy-copy', 'ciphertext_size': legacy['ciphertext_size'] + 1}
+                    body['dimension_catalog']['projects']['legacy-copy'] = {
+                        'display_name': 'Synthetic Copy', 'latest': 'legacy-copy',
+                        'snapshots': {'legacy-copy': other}}
+                body['dimension_catalog']['projects']['legacy'] = {
+                    'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat',
+                    'snapshots': {'legacy-jat': legacy}}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.report(body)
+
+    def test_consistent_shared_legacy_objects_and_restic_snapshots_are_allowed(self):
+        legacy = {'snapshot_id': 'legacy-jat', 'object_key': 'objects/sha256/' + '0' * 64,
+                  'ciphertext_sha256': '0' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00Z', 'workspace_fingerprint': 'b' * 64}
+        for room in ['legacy-a', 'legacy-b']:
+            self.body['dimension_catalog']['projects'][room] = {
+                'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat',
+                'snapshots': {'legacy-jat': copy.deepcopy(legacy)}}
+        child = self.descriptors[('child', 'jat-child')].to_dict()
+        child['workspace'].update(snapshot_id='2' * 64, tree_id='4' * 64)
+        self.descriptors[('child', 'jat-child')] = LogicalJat.from_dict(child)
+        record = self.body['dimension_catalog']['projects']['child']['snapshots']['jat-child']
+        record.update(workspace_snapshot_id='2' * 64, tree_id='4' * 64)
+        self.assertTrue(self.report(inventory=self.inventory[1:])['ok'])
+
+    def test_committed_parent_explicit_lineage_must_match_baseline(self):
+        for baseline in [None, 'jat-before']:
+            body, descriptors, inventory = fixture()
+            operation = body['operations']['operation']
+            operation['plan']['expected_parent_logical_jat_id'] = baseline
+            operation['plan_sha256'] = plan_digest(operation['plan'])
+            if baseline is not None:
+                prior = descriptors[('parent', 'jat-parent')].to_dict()
+                prior['logical_jat_id'] = baseline
+                prior['workspace'].update(snapshot_id='4' * 64, tree_id='5' * 64)
+                prior = LogicalJat.from_dict(prior)
+                digest = hashlib.sha256(b'synthetic prior parent').hexdigest()
+                catalog = Catalog.from_body(body['dimension_catalog']).add_logical_snapshot(
+                    'parent', 'Synthetic Room', prior,
+                    ObjectRef(f'objects/sha256/{digest}', digest, 50), 'c' * 64)
+                body['dimension_catalog'] = catalog.body
+                descriptors[('parent', baseline)] = prior
+                inventory.append(SnapshotInventoryItem('4' * 64, '5' * 64, '', None))
+            # Save may omit lineage when Restic reports no parent, even with a baseline.
+            self.assertTrue(self.report(body, descriptors, inventory)['ok'])
+            parent = descriptors[('parent', 'jat-parent')].to_dict()
+            if baseline is not None:
+                parent['parent_logical_jat_id'] = baseline
+                parent['workspace']['parent_snapshot_id'] = '4' * 64
+                descriptors[('parent', 'jat-parent')] = LogicalJat.from_dict(parent)
+                self.assertTrue(self.report(body, descriptors, inventory)['ok'])
+            for change in ['logical', 'workspace', 'missing-logical', 'missing-workspace']:
+                invalid = copy.deepcopy(parent)
+                invalid['parent_logical_jat_id'] = baseline or 'unplanned-parent'
+                invalid['workspace']['parent_snapshot_id'] = '4' * 64
+                if change == 'logical':
+                    invalid['parent_logical_jat_id'] = 'unplanned-parent'
+                elif change == 'workspace':
+                    invalid['workspace']['parent_snapshot_id'] = '9' * 64
+                elif change == 'missing-logical':
+                    invalid.pop('parent_logical_jat_id')
+                else:
+                    invalid['workspace'].pop('parent_snapshot_id')
+                changed = {**descriptors, ('parent', 'jat-parent'): LogicalJat.from_dict(invalid)}
+                with self.subTest(baseline=baseline, change=change), self.assertRaises(ValueError):
+                    self.report(body, changed, inventory)
 
     def test_empty_evidence_arrays_are_valid_but_other_iterables_are_not(self):
         body = copy.deepcopy(self.body)

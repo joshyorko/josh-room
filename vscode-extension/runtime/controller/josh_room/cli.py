@@ -684,7 +684,7 @@ def main(argv=None):
         return _exit_code(result)
     initialize_system_trust()
     args = build_parser().parse_args(argv)
-    if args.command == "snapshot" and args.snapshot_command == "create":
+    if args.command == "snapshot" and args.snapshot_command in {"create", "preview"}:
         from .composition import require_uncomposed_workspace
         try:
             require_uncomposed_workspace(args.source or Path.cwd())
