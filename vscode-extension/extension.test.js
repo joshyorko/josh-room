@@ -7093,7 +7093,7 @@ test("composition native inventory protocol keeps chosen source and credentials 
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const mock = createVscodeMock(root);
   mock.openDialogResponses.push([{ fsPath: root }]);
-  mock.quickPickResponses.push({ action: "review" });
+  mock.quickPickResponses.push({ action: "review" }, { action: "finish" });
   const harness = createSpawnHarness(({ args, options, child }) => {
     assert.equal(args[0], "composition");
     assert.equal(args[1], "inventory");
@@ -7114,7 +7114,7 @@ test("composition native inventory protocol keeps chosen source and credentials 
   extension.__test__.setExtensionContextForTests({ secrets: { get: async () => { throw new Error("unexpected secret read"); } } });
   assert.equal(await extension.__test__.splitWorkspace(), "preview-only");
   assert.equal(harness.calls.length, 1);
-  assert.ok(mock.quickPickCalls[0].items.length <= 55);
+  assert.ok(mock.quickPickCalls[0].items.length <= 56);
 });
 
 test("composition cancel and Workspace Trust gates do not start controller work", async () => {

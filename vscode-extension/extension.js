@@ -1193,6 +1193,8 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     if (options.inventoryHandler) {
       let buffer = "";
       let pending;
+      let sessionClosed = false;
+      child.stdin.on("error", () => pending?.reject(new Error("Inventory input closed")));
       child.stdout.on("data", (chunk) => {
         buffer += chunk.toString();
         if (buffer.length > 65536) {
@@ -1207,11 +1209,20 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
           if (!pending) continue;
           const current = pending;
           pending = undefined;
-          try { current.resolve(JSON.parse(line)); } catch (_) { current.reject(new Error("Invalid inventory response")); }
+          try {
+            const value = JSON.parse(line);
+            if (value?.ok === false) {
+              const error = new Error("Inventory refused stale, unsafe or unavailable input");
+              error.recoverable = value.recoverable === true;
+              current.reject(error);
+            }
+            else current.resolve(value);
+          } catch (_) { current.reject(new Error("Invalid inventory response")); }
         }
       });
-      child.on("close", () => pending?.reject(new Error("Inventory session closed")));
+      child.on("close", () => { sessionClosed = true; pending?.reject(new Error("Inventory session closed")); });
       const request = (body) => new Promise((resolve, reject) => {
+        if (sessionClosed) return reject(new Error("Inventory session closed"));
         if (pending) return reject(new Error("Concurrent inventory request"));
         pending = { resolve, reject };
         child.stdin.write(JSON.stringify(body) + "\n");

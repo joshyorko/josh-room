@@ -5,10 +5,10 @@ const { pickInventory } = require("./inventory-picker");
 
 test("inventory native picker retains deep explicit picks across pages and global filters", async () => {
   const requests = [];
-  const actions = [{ action: "next" }, { path: "deep/nonrecommended" }, { action: "search" }, { action: "review" }];
+  const actions = [{ action: "next" }, { path: "deep/nonrecommended" }, { action: "search" }, { action: "review" }, { action: "finish" }];
   const vscode = { ProgressLocation: { Notification: 1 }, window: {
     withProgress: async (_, body) => body({ report() {} }, { isCancellationRequested: false }),
-    showQuickPick: async (rows) => { assert.ok(rows.length <= 55); return actions.shift(); },
+    showQuickPick: async (rows) => { assert.ok(rows.length <= 56); return actions.shift(); },
     showInputBox: async () => "last-9999",
     showInformationMessage: async (message) => assert.match(message, /1 explicit/),
   } };
@@ -37,4 +37,23 @@ test("inventory cancellation pauses and resumes without accepting recommendation
   }), "cancelled");
   assert.ok(requests.some((r) => r.action === "cancel"));
   assert.ok(!requests.some((r) => r.action === "lookup"));
+});
+
+test("inventory invalid manual lookup preserves previous picks and the session", async () => {
+  const actions = [{ path: "safe", id: "7" }, { action: "manual" }, { action: "review" }, { action: "finish" }];
+  let warnings = 0;
+  const vscode = { ProgressLocation: { Notification: 1 }, window: {
+    withProgress: async (_, body) => body({ report() {} }, { isCancellationRequested: false }),
+    showQuickPick: async () => actions.shift(),
+    showInputBox: async () => "typo",
+    showWarningMessage: async () => { warnings++; },
+    showInformationMessage: async (message) => assert.match(message, /1 explicit/),
+  } };
+  assert.equal(await pickInventory(vscode, async (request) => {
+    if (request.action === "lookup" && request.path === "typo") {
+      const error = new Error("synthetic invalid lookup"); error.recoverable = true; throw error;
+    }
+    return { status: "complete", directories_indexed: 1, candidates: [{ path: "safe", id: "7" }], next: null };
+  }), "preview-only");
+  assert.equal(warnings, 1);
 });
