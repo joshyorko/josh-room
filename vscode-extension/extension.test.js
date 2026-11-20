@@ -7171,6 +7171,21 @@ test("composition empty discovery explains unavailable boundaries without a blan
   assert.match(mock.infoCalls[0][1].detail, /partial/i);
 });
 
+test("composition source picker works in a trusted window without an open folder", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-no-workspace-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mock = createVscodeMock(root);
+  mock.vscode.workspace.workspaceFolders = [];
+  mock.openDialogResponses.push([{ fsPath: root }]);
+  const harness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true,
+    candidates: [], coverage: { complete: true } }) }));
+  const extension = loadExtension(mock.vscode, harness.spawn);
+  extension.__test__.setStatusItem(mock.statusItem);
+  assert.equal(await extension.__test__.splitWorkspace(), "cancelled");
+  assert.equal(mock.openDialogCalls[0].defaultUri, undefined);
+  assert.equal(harness.calls.length, 1);
+});
+
 test("composition cancel and Workspace Trust gates do not start controller work", async () => {
   const mock = createVscodeMock(os.tmpdir());
   const harness = createSpawnHarness(() => { throw new Error("controller must not run"); });

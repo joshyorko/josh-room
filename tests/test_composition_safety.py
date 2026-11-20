@@ -89,6 +89,32 @@ class CompositionSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Catalog.from_body(self.body)
 
+    def test_candidate_schema_and_decoder_cover_closed_contract(self):
+        try:
+            from jsonschema import Draft202012Validator, ValidationError
+            from referencing import Registry, Resource
+        except ModuleNotFoundError:
+            self.skipTest('schema validation dependency unavailable')
+        directory = Path(__file__).resolve().parents[1] / 'schemas'
+        catalog_schema = json.loads((directory / 'dimension-catalog-v3.schema.json').read_text())
+        schema = json.loads((directory / 'composition-safety-v1.schema.json').read_text())
+        registry = Registry().with_resource(catalog_schema['$id'], Resource.from_contents(catalog_schema))
+        validator = Draft202012Validator(schema, registry=registry)
+        validator.validate(self.body)
+        CompositionSafetyState.from_dict(self.body)
+        for change in ['origin', 'version', 'unknown']:
+            invalid = copy.deepcopy(self.body)
+            if change == 'origin':
+                invalid['dimension_catalog']['projects']['child']['snapshots']['jat-child']['origin_room_id'] = None
+            elif change == 'version':
+                invalid['format_version'] = 5
+            else:
+                invalid['unknown'] = True
+            with self.subTest(change=change), self.assertRaises(ValidationError):
+                validator.validate(invalid)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                CompositionSafetyState.from_dict(invalid)
+
     def test_source_maps_are_not_retained(self):
         state = CompositionSafetyState.from_dict(self.body)
         self.body['operations'].clear()
@@ -160,6 +186,11 @@ class CompositionSafetyTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, '^composed Save is blocked'),
             ):
                 room_store_bridge.save_room_store(root, None, 'parent', root, None, components={})
+            with (
+                patch.object(room_store_bridge, '_resolve_material', side_effect=AssertionError('provider admission attempted')),
+                self.assertRaisesRegex(ValueError, '^composed Save is blocked'),
+            ):
+                room_store_bridge.preview_room_store(root, None, 'parent', root, None, components={})
             from josh_room.operations import create_snapshot
             with (
                 patch('josh_room.operations.run_build', side_effect=AssertionError('portable build attempted')),
@@ -190,6 +221,93 @@ class CompositionSafetyTests(unittest.TestCase):
                                        '--source', str(root), '--json'])
                 self.assertNotEqual(status, 0)
                 self.assertFalse(json.loads(stdout.getvalue())['ok'])
+
+    def test_headless_preview_guard_precedes_runtime_and_provider_setup(self):
+        from unittest.mock import patch
+
+        from josh_room import cli
+        with tempfile.TemporaryDirectory(prefix='composition-preview-') as directory:
+            root = Path(directory)
+            (root / '.josh-room-split.json').write_text('{}')
+            stdout = io.StringIO()
+            with (
+                patch.object(cli, 'initialize_system_trust'),
+                patch.object(cli, '_write_runtime_result'),
+                patch.object(cli, '_instance_root', side_effect=AssertionError('runtime setup attempted')),
+                redirect_stdout(stdout),
+            ):
+                status = cli.main(['snapshot', 'preview', 'parent', '--source', str(root), '--json'])
+            self.assertNotEqual(status, 0)
+            self.assertFalse(json.loads(stdout.getvalue())['ok'])
+
+    def test_legacy_snapshot_identity_must_match_its_catalog_slot(self):
+        legacy = {'snapshot_id': 'different-id', 'object_key': 'objects/sha256/' + '0' * 64,
+                  'ciphertext_sha256': '0' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00Z', 'workspace_fingerprint': 'b' * 64}
+        self.body['dimension_catalog']['projects']['legacy'] = {
+            'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat', 'snapshots': {'legacy-jat': legacy}}
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_missing_parent_baseline_has_a_bounded_validation_error(self):
+        del self.body['dimension_catalog']['projects']['parent']
+        operation = self.body['operations']['operation']
+        operation['plan']['expected_parent_logical_jat_id'] = 'missing-parent-pin'
+        operation['plan_sha256'] = plan_digest(operation['plan'])
+        with self.assertRaisesRegex(ValueError, '^composition parent baseline is missing$'):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_historical_pins_allow_one_coherent_active_continuation(self):
+        historical = copy.deepcopy(self.body['operations']['operation'])
+        pending = copy.deepcopy(historical)
+        pending['plan']['parent_logical_jat_id'] = 'jat-parent-next'
+        pending['plan']['expected_parent_logical_jat_id'] = 'jat-parent'
+        pending['plan']['children'][0]['logical_jat_id'] = 'jat-child-next'
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        pending.update(phase='reserved', child_pins={}, parent_pin=None,
+                       manifest_sha256=None, parent_policy_sha256=None)
+        self.body['operations']['next-operation'] = pending
+        self.assertTrue(self.report()['ok'])
+        self.assertEqual(self.body['operations']['operation'], historical)
+        self.body['operations'] = dict(reversed(list(self.body['operations'].items())))
+        self.assertTrue(self.report()['ok'])
+        missing = copy.deepcopy(self.body)
+        del missing['dimension_catalog']['projects']['child']
+        with self.assertRaises(ValueError):
+            self.report(missing)
+        self.body['operations']['overlapping-operation'] = copy.deepcopy(pending)
+        self.body['operations']['overlapping-operation']['plan']['parent_logical_jat_id'] = 'jat-parent-conflict'
+        self.body['operations']['overlapping-operation']['plan_sha256'] = plan_digest(
+            self.body['operations']['overlapping-operation']['plan'])
+        with self.assertRaisesRegex(ValueError, 'overlapping incomplete'):
+            self.report()
+        del self.body['operations']['overlapping-operation']
+        pending['plan']['expected_parent_logical_jat_id'] = None
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        with self.assertRaisesRegex(ValueError, 'baseline differs from current parent'):
+            self.report()
+        pending['plan']['expected_parent_logical_jat_id'] = 'jat-parent'
+        pending['plan']['children'][0]['room_id'] = 'parent'
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        with self.assertRaises(ValueError):
+            self.report()
+
+    def test_active_parent_baseline_must_be_current_but_history_can_be_older(self):
+        original = self.body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent']
+        newer = {**original, 'snapshot_id': 'jat-parent-newer'}
+        self.body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent-newer'] = newer
+        self.body['dimension_catalog']['projects']['parent']['latest'] = 'jat-parent-newer'
+        # Historical pin decoding does not require that historical parent to be latest.
+        CompositionSafetyState.from_dict(self.body)
+        pending = copy.deepcopy(self.body['operations']['operation'])
+        pending['plan'].update(parent_logical_jat_id='jat-parent-next', expected_parent_logical_jat_id='jat-parent')
+        pending['plan']['children'][0]['logical_jat_id'] = 'jat-child-next'
+        pending['plan_sha256'] = plan_digest(pending['plan'])
+        pending.update(phase='reserved', child_pins={}, parent_pin=None,
+                       manifest_sha256=None, parent_policy_sha256=None)
+        self.body['operations']['next-operation'] = pending
+        with self.assertRaisesRegex(ValueError, 'baseline differs from current parent'):
+            CompositionSafetyState.from_dict(self.body)
 
     def test_truncated_siblings_are_not_selectable_even_if_alias_was_omitted(self):
         from unittest.mock import patch

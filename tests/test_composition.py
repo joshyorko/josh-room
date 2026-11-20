@@ -44,6 +44,26 @@ def test_paths_reject_untrusted_or_nonportable_names(path):
         validate_manifest(body)
 
 
+def test_manifest_paths_compile_to_literal_capture_exclusions():
+    body = manifest()
+    body['children'][0]['path'] = '/'.join(['a'] * 127)
+    validate_manifest(body)
+    _parts(body['children'][0]['path'] + '/**')
+    body['children'][0]['path'] += '/a'
+    with pytest.raises(ValueError):
+        validate_manifest(body)
+
+
+def test_manifest_preserves_dotted_catalog_identities():
+    import jsonschema
+    schema = json.loads(Path('schemas/room-composition-v1.schema.json').read_text())
+    body = manifest()
+    for field in ['connection_id', 'dimension_id', 'room_id', 'snapshot_id']:
+        body['children'][0][field] = 'identity.1'
+    assert parse_manifest(json.dumps(body).encode()) == body
+    jsonschema.validate(body, schema)
+
+
 @pytest.mark.parametrize("other", ["projects/service-a", "Projects/service-b", "projects/service-a/nested", "projects", "projects/SERVICE-A"])
 def test_overlap_and_ancestor_aliases_rejected(other):
     body = manifest()
@@ -169,10 +189,18 @@ def test_discovery_deadline_and_unsupported_platform(tmp_path, monkeypatch):
     from josh_room import composition
     ticks = iter([0, 3])
     monkeypatch.setattr(composition.time, 'monotonic', lambda: next(ticks))
-    assert 'time-cap' in discover(tmp_path)['coverage']['omissions']
+    assert discover(tmp_path)['coverage']['omissions'] == ['time-cap']
     monkeypatch.setattr(composition.os, 'supports_dir_fd', set())
     with pytest.raises(ValueError, match='unavailable on this platform'):
         discover(tmp_path)
+
+
+def test_root_git_symlink_reports_partial_coverage(tmp_path):
+    (tmp_path / '.git').symlink_to(tmp_path / 'missing', target_is_directory=True)
+    result = discover(tmp_path)
+    assert result['parent_git'] == 'history-unknown'
+    assert result['coverage']['complete'] is False
+    assert 'linked-entry' in result['coverage']['omissions']
 
 
 @pytest.mark.parametrize('marker', ['.git', '.josh-room.json', '.josh-room-composition.json', '.josh-room-split.json'])

@@ -11,13 +11,13 @@ import unicodedata
 from pathlib import Path
 
 from .workspace_onboarding import _directory
-from .workspace_policy import load_capture_policy
+from .workspace_policy import _parts, load_capture_policy
 
 MANIFEST = ".josh-room-composition.json"
 SPLIT_GUARD = ".josh-room-split.json"
 MAX_CHILDREN = 32
 LIMITS = {"directories": 128, "entries_per_directory": 256, "depth": 3}
-_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$", *(f"com{i}" for i in range(1, 10)),
              *(f"lpt{i}" for i in range(1, 10))}
 
@@ -51,6 +51,7 @@ def portable_path(value: str) -> tuple[str, ...]:
            or part != part.strip() or unicodedata.normalize("NFC", part) != part
            for part in parts):
         raise ValueError("invalid composition child path")
+    _parts(value + "/**")
     return tuple(unicodedata.normalize("NFC", p.casefold()) for p in parts)
 
 
@@ -160,7 +161,10 @@ def discover(root: Path) -> dict:
                 # Security boundaries must not depend on enumeration order.
                 for name in (".git", ".josh-room.json", MANIFEST, SPLIT_GUARD):
                     try:
-                        metadata[name] = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                        info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                        metadata[name] = info
+                        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                            omissions.add("linked-entry")
                     except FileNotFoundError:
                         pass
                 sibling_keys = {}
@@ -208,7 +212,7 @@ def discover(root: Path) -> dict:
                 omissions.add("unavailable-directory")
             finally:
                 os.close(fd)
-        if queue:
+        if queue and "time-cap" not in omissions:
             omissions.add("directory-cap")
         # Fold aliases even on case-sensitive hosts; never offer ambiguous paths.
         keys = [portable_path(row["path"]) for row in candidates]

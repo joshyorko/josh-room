@@ -2102,7 +2102,7 @@ async function splitWorkspace() {
   assertWorkspaceTrusted("preview a workspace split");
   const folders = await vscode.window.showOpenDialog({
     title: "Josh: Split Workspace into Rooms (Preview Only)",
-    defaultUri: vscode.Uri.file(activeWorkspace()),
+    defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
     canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
     openLabel: "Preview this folder",
   });

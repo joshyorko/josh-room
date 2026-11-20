@@ -93,8 +93,10 @@ class CompositionSafetyState:
         catalog = Catalog.from_body(inner, scope["dimension_id"], scope["encryption_domain_id"])
         legacy_fields = {"snapshot_id", "object_key", "ciphertext_sha256", "ciphertext_size", "created_at", "workspace_fingerprint"}
         for project in inner["projects"].values():
-            for record in project["snapshots"].values():
+            for snapshot_id, record in project["snapshots"].items():
                 _timestamp(record["created_at"])
+                if record["snapshot_id"] != snapshot_id:
+                    raise ValueError("composition snapshot differs from its catalog slot")
                 if "payload_kind" not in record:
                     if not legacy_fields <= record.keys() or record.keys() - legacy_fields - {"origin_project_id"}:
                         raise ValueError("legacy composition evidence has unknown or missing fields")
@@ -124,7 +126,11 @@ class CompositionSafetyState:
                 _identifier(baseline)
                 if baseline == plan["parent_logical_jat_id"]:
                     raise ValueError("parent baseline must differ from its reserved output")
-                if catalog.resolve_snapshot(plan["parent_room_id"], baseline).get("payload_kind") != "room-store-v1":
+                try:
+                    baseline_record = catalog.resolve_snapshot(plan["parent_room_id"], baseline)
+                except (KeyError, ValueError):
+                    raise ValueError("composition parent baseline is missing") from None
+                if baseline_record.get("payload_kind") != "room-store-v1":
                     raise ValueError("invalid parent baseline")
             if plan["capture_mode"] != "source-only" or operation["plan_sha256"] != plan_digest(plan):
                 raise ValueError("composition plan or approved capture mode differs")
@@ -147,9 +153,12 @@ class CompositionSafetyState:
             parent_records = inner["projects"].get(plan["parent_room_id"], {}).get("snapshots", {})
             if phase != "committed" and plan["parent_logical_jat_id"] in parent_records:
                 raise ValueError("parent output appeared before atomic commit")
+            parent_latest = inner["projects"].get(plan["parent_room_id"], {}).get("latest")
+            if phase != "committed" and baseline != parent_latest:
+                raise ValueError("composition baseline differs from current parent")
             involved = rooms | {plan["parent_room_id"]}
             for previous_rooms, previous_phase, previous_parent in used:
-                if involved & previous_rooms and (phase != "committed" or previous_phase != "committed"):
+                if involved & previous_rooms and phase != "committed" and previous_phase != "committed":
                     raise ValueError("overlapping incomplete composition operations")
                 if previous_parent == (plan["parent_room_id"], plan["parent_logical_jat_id"]):
                     raise ValueError("historical parent identity is duplicated")

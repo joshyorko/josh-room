@@ -23,6 +23,12 @@ ordinary deletion planner's conservative handling of shared objects. A committed
 parent's explicit logical/Restic lineage must agree with its reserved baseline;
 absent lineage remains supported when Save receives no Restic parent. Present
 origin fields and timezone offsets must satisfy their closed-schema contracts.
+Retained committed operations may coexist with one active continuation touching
+the same Rooms. An active operation's baseline must match the current parent
+head; historical committed parents need not remain latest. Two active operations
+cannot overlap, and historical pins cannot be dropped. Missing baselines and
+legacy records whose embedded snapshot IDs differ from their catalog slots are
+refused with bounded validation errors.
 
 `composition_safety.CompositionSafetyState` validates the closed candidate-v4
 envelope in `schemas/composition-safety-v1.schema.json`. It embeds an unchanged
@@ -35,7 +41,7 @@ v4 writer exists. Existing in-flight maintenance cannot be fenced by a new ETag
 alone. See [the corrected safety design](composition-safety-design.md) for the
 source-backed admission blockers and required crash/concurrency qualification.
 
-The native Save UI, headless create entry point, direct portable/native Save,
+The native Save UI, headless create/preview entry points, direct portable/native Save,
 Save preview and local no-op receipt path refuse a root `.josh-room-composition.json` or
 `.josh-room-split.json` of any type without reading its contents. This is an
 unsupported-composition admission check, not a lock against concurrent writers.
@@ -57,7 +63,8 @@ explains the limit instead of opening an empty picker.
 Unchecked directories keep their existing parent capture policy. The final
 dialog shows selected paths and proposed literal exclusions locally, then ends.
 There is no apply button. Cancel does not change workspace files or contact a
-storage provider. Workspace Trust is required before controller acquisition.
+storage provider. The source picker also works in a trusted window without an
+open folder. Workspace Trust is required before controller acquisition.
 The managed controller may require normal runtime installation and temporary
 local process receipts; the planner does not read provider credentials or keys.
 
@@ -120,7 +127,8 @@ or marker schema is extended.
 
 Each entry requires `path`, `provider` (R2/MinIO/S3), opaque `connection_id`,
 `dimension_id`, `room_id`, immutable logical `snapshot_id`, and
-`hydration: explicit`. `latest` is forbidden. A connection ID is a lookup hint,
+`hydration: explicit`. Dotted identifiers are supported, matching catalog and
+logical-JAT identities. `latest` is forbidden as a snapshot selector. A connection ID is a lookup hint,
 not a credential profile or authorization. No absolute paths, URLs, credentials,
 contents or nested catalogs belong here. This file is ordinary encrypted parent
 workspace content once publication is safely supported; **schema validation does
@@ -129,7 +137,8 @@ marker, never a portable pointer. No child stub is written in this patch.
 
 Exclusions use the existing grammar: `service-a/**` is root-anchored and excludes
 that directory and descendants; it does not exclude `other/service-a`. The
-planner does not rewrite `.josh-roomignore`, compute a future policy digest, or
+planner validates that each portable path can compile into its literal exclusion,
+including the capture grammar's segment limit. It does not rewrite `.josh-roomignore`, compute a future policy digest, or
 claim every retained file was enumerated. Existing policy may already exclude
 unselected files. No file is removed or migrated.
 
