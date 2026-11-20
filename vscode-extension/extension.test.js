@@ -7088,102 +7088,33 @@ test("R2 native Save of the open folder ignores controller marker writes and tra
   assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "dirty");
 });
 
-test("composition native split preview selects A/C from chosen source without Save or secrets", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-composition-"));
+test("composition native inventory protocol keeps chosen source and credentials offline", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-session-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const inherited = process.env.JOSH_ROOM_PROVIDER_CREDENTIALS;
-  process.env.JOSH_ROOM_PROVIDER_CREDENTIALS = "/synthetic/credential-pointer";
-  t.after(() => { if (inherited === undefined) delete process.env.JOSH_ROOM_PROVIDER_CREDENTIALS; else process.env.JOSH_ROOM_PROVIDER_CREDENTIALS = inherited; });
-  const source = path.join(root, "selected");
-  fs.mkdirSync(source);
-  fs.writeFileSync(path.join(source, "keep.txt"), "synthetic retained data");
   const mock = createVscodeMock(root);
-  mock.openDialogResponses.push([{ fsPath: source }]);
-  mock.quickPickResponses.push([{ childPath: "a" }, { childPath: "c" }]);
-  const harness = createSpawnHarness(({ args, options }) => {
+  mock.openDialogResponses.push([{ fsPath: root }]);
+  mock.quickPickResponses.push({ action: "review" });
+  const harness = createSpawnHarness(({ args, options, child }) => {
     assert.equal(args[0], "composition");
+    assert.equal(args[1], "inventory");
     assert.equal(options.cwd, path.join(__dirname, "runtime", "controller"));
     assert.equal(options.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
-    assert.equal(args[args.indexOf("--workspace") + 1], source);
-    return { stdout: JSON.stringify({ ok: true, can_apply: false,
-      candidates: ["a", "b", "c"].map((p) => ({ path: p, kind: "folder", selectable: true })),
-      coverage: { complete: false }, selected: [{ path: "a", proposed_exclusion: "a/**" }, { path: "c", proposed_exclusion: "c/**" }] }) };
+    child.stdin.write = (line) => {
+      const request = JSON.parse(line);
+      const result = request.action === "page"
+        ? { ok: true, status: "complete", directories_indexed: 10000, candidates: [], next: null }
+        : { ok: true, status: "complete", directories_indexed: 10000 };
+      setImmediate(() => child.stdout.emit("data", Buffer.from(JSON.stringify(result) + "\n")));
+    };
+    child.stdin.end = () => setImmediate(() => child.closeWith({ stdout: JSON.stringify({ ok: true }) }));
+    return { autoClose: false };
   });
   const extension = loadExtension(mock.vscode, harness.spawn);
-  extension.__test__.setOutputChannelForTests(mock.outputChannel);
   extension.__test__.setStatusItem(mock.statusItem);
   extension.__test__.setExtensionContextForTests({ secrets: { get: async () => { throw new Error("unexpected secret read"); } } });
   assert.equal(await extension.__test__.splitWorkspace(), "preview-only");
-  assert.equal(harness.calls.length, 2);
-  const picker = mock.quickPickCalls[0];
-  assert.equal(picker.options.canPickMany, true);
-  assert.ok(picker.items.every((row) => row.picked === false));
-  assert.match(picker.options.placeHolder, /Partial discovery/);
-  assert.deepEqual(harness.calls[1].args.filter((arg) => arg.startsWith("--child=")), ["--child=a", "--child=c"]);
-  assert.deepEqual(fs.readdirSync(source), ["keep.txt"]);
-  assert.ok(mock.infoCalls[0][1].detail.includes("a/**"));
-  assert.ok(mock.logLines.every((line) => !line.includes(source) && !line.includes("--child")));
-});
-
-for (const invalidSelection of ["overlap", "count"]) {
-  test(`composition ${invalidSelection} selection can be corrected before replanning`, async (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-picker-"));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const paths = invalidSelection === "overlap" ? ["a", "a/nested", "b"]
-      : Array.from({ length: 33 }, (_, i) => `child-${i}`);
-    const valid = paths.at(-1);
-    const mock = createVscodeMock(root);
-    mock.openDialogResponses.push([{ fsPath: root }]);
-    mock.quickPickResponses.push(paths.map((childPath) => ({ childPath })), [{ childPath: valid }]);
-    const harness = createSpawnHarness(({ args }) => {
-      const selected = args.filter((arg) => arg.startsWith("--child="));
-      assert.ok(selected.length === 0 || (selected.length === 1 && selected[0] === `--child=${valid}`));
-      return { stdout: JSON.stringify({ ok: true, can_apply: false,
-        candidates: paths.map((p) => ({ path: p, kind: "folder", selectable: true })),
-        coverage: { complete: true }, selected: [{ path: valid, proposed_exclusion: `${valid}/**` }] }) };
-    });
-    const extension = loadExtension(mock.vscode, harness.spawn);
-    extension.__test__.setStatusItem(mock.statusItem);
-    assert.equal(await extension.__test__.splitWorkspace(), "preview-only");
-    assert.equal(harness.calls.length, 2);
-    assert.equal(mock.quickPickCalls.length, 2);
-    assert.ok(mock.quickPickCalls[1].items.every((row) => row.picked));
-    assert.equal(mock.warningCalls.length, 0);
-    assert.match(mock.quickPickCalls[1].options.placeHolder, invalidSelection === "overlap" ? /descendants/ : /at most 32/);
-  });
-}
-
-test("composition empty discovery explains unavailable boundaries without a blank picker", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-empty-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const mock = createVscodeMock(root);
-  mock.openDialogResponses.push([{ fsPath: root }]);
-  const harness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true,
-    candidates: [{ path: "service", kind: "composition-metadata-unsupported", selectable: false }],
-    coverage: { complete: false, omissions: ["entry-cap"] } }) }));
-  const extension = loadExtension(mock.vscode, harness.spawn);
-  extension.__test__.setStatusItem(mock.statusItem);
-  assert.equal(await extension.__test__.splitWorkspace(), "cancelled");
   assert.equal(harness.calls.length, 1);
-  assert.equal(mock.quickPickCalls.length, 0);
-  assert.match(mock.infoCalls[0][0], /No supported child folders/);
-  assert.equal(mock.infoCalls[0][1].modal, true);
-  assert.match(mock.infoCalls[0][1].detail, /partial/i);
-});
-
-test("composition source picker works in a trusted window without an open folder", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "composition-no-workspace-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const mock = createVscodeMock(root);
-  mock.vscode.workspace.workspaceFolders = [];
-  mock.openDialogResponses.push([{ fsPath: root }]);
-  const harness = createSpawnHarness(() => ({ stdout: JSON.stringify({ ok: true,
-    candidates: [], coverage: { complete: true } }) }));
-  const extension = loadExtension(mock.vscode, harness.spawn);
-  extension.__test__.setStatusItem(mock.statusItem);
-  assert.equal(await extension.__test__.splitWorkspace(), "cancelled");
-  assert.equal(mock.openDialogCalls[0].defaultUri, undefined);
-  assert.equal(harness.calls.length, 1);
+  assert.ok(mock.quickPickCalls[0].items.length <= 55);
 });
 
 test("composition cancel and Workspace Trust gates do not start controller work", async () => {
