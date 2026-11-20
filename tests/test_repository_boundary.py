@@ -219,7 +219,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
 
 def test_vscode_extension_root_and_template_copies_are_byte_identical():
     for name in (
-        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js",
+        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js", "inventory-picker.js",
         "runtime/manifest.json", "runtime/controller/robot.yaml", "runtime/controller/conda.yaml",
         "runtime/controller/environment_linux_amd64_freeze.yaml", "media/room.svg",
     ):

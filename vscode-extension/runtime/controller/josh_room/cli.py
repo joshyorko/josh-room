@@ -468,6 +468,9 @@ def build_parser() -> argparse.ArgumentParser:
     composition_plan.add_argument("--workspace", type=Path, required=True)
     composition_plan.add_argument("--child", action="append", default=[])
     _json_option(composition_plan)
+    inventory = composition_commands.add_parser("inventory", help="local paged JSON-lines discovery session")
+    inventory.add_argument("--workspace", type=Path, required=True)
+    _json_option(inventory)
     composition_reconcile = composition_commands.add_parser("reconcile", help="inspect offline evidence; never repair")
     composition_reconcile.add_argument("--evidence-file", type=Path, required=True)
     _json_option(composition_reconcile)
@@ -1606,6 +1609,10 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
+        if args.composition_command == "inventory":
+            from .directory_inventory import serve
+            serve(args.workspace, sys.stdin, sys.stdout)
+            return {"ok": True, "can_apply": False, "status": "closed"}
         if args.composition_command == "plan":
             from .composition import plan_split
             return plan_split(args.workspace, args.child)
