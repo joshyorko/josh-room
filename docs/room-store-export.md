@@ -87,10 +87,14 @@ The extension uses a unique private directory per Serve invocation. JAT publishe
 an atomic new-file-only startup receipt after its owned listeners are ready:
 `{schema_version: 1, state: "ready", operation: "serve", pid, serve: {mode,
 fileserver_url, registry_url, fileserver_bind, registry_bind}}`. Mode is resolved
-(`files`, `registry`, `both`); inactive URLs are null and active bind values are
-`loopback`. Room requires explicit `http://127.0.0.1:<port>` URLs, validates the
-mode and endpoints, and reads the registry catalog only from that session's URL.
+(`files`, `registry`, `both`); inactive URL/bind values are null. Fileserver
+bind is `all-interfaces` on unpatched Hauler 2.1.1 (or `loopback` when explicitly
+provided by a capable runtime); registry bind must remain `loopback`. Room
+requires explicit `http://127.0.0.1:<port>` URLs, validates the mode and endpoints, and reads the registry catalog only from that session's URL.
 Status, copy actions and image references use those URLs, never 8080/5000 guesses.
+A localhost connection URL does not imply a localhost-only listener. Normal
+startup/status wording names the actual fileserver scope; it never describes
+wildcard artifact serving as private.
 The startup file is removed by JAT on shutdown. Room watches the per-session
 controller result, RCC receipt, terminal lifecycle and an interruption-safe
 command completion marker during startup, surfacing
@@ -98,11 +102,14 @@ export/unsupported-runtime failure immediately rather than waiting on a default
 port. There is no browser action service or Room-owned port allocator.
 
 This is a source-level integration with the JAT dynamic-serving branch. Current
-released pins lack startup reporting; source preflight fails before Room
-materialization when that support is absent. Pinned Hauler 2.1.1 files serving
-also lacks loopback binding. A qualified JAT and Hauler update, paired managed
-artifacts, and installed-extension acceptance are required before promoting
-pins. Fixtures or tests against a locally patched Hauler are not evidence that
-the released runtime supports this feature. No pin, release or live service is
-changed here. The original `portable-export-failed` incident remains separate:
-a port collision has not been established as its cause.
+released JAT pins lack startup reporting; source preflight fails before Room
+materialization when that support is absent. Unpatched Hauler 2.1.1 is supported
+for artifact files/registry/both/auto serving; no Hauler patch or new release is
+required. A matching qualified JAT runtime, paired managed artifacts and
+installed-extension acceptance remain required before pin promotion. Tests of
+source JAT with the unchanged Hauler pin are separate from those runtime gates.
+The optional upstream Hauler bind-host proposal is not a blocker for artifact
+serving or #202. Room View retains its own strict localhost-only transport.
+No pin, release or live service is changed here. The original
+`portable-export-failed` incident remains separate: a port collision has not
+been established as its cause.

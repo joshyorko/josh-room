@@ -387,7 +387,7 @@ function syntheticServeEndpoints(mode = "files") {
     mode,
     fileserver_url: mode !== "registry" ? "http://127.0.0.1:41257" : null,
     registry_url: mode !== "files" ? "http://127.0.0.1:41258" : null,
-    fileserver_bind: mode !== "registry" ? "loopback" : null,
+    fileserver_bind: mode !== "registry" ? "all-interfaces" : null,
     registry_bind: mode !== "files" ? "loopback" : null,
   };
 }
@@ -7225,8 +7225,33 @@ test("Fileserver notification copies the reported endpoint and updates its dynam
     assert.ok(infoCalls[0].includes("Copy Fileserver URL"));
     assert.deepEqual(copied, ["http://127.0.0.1:41257"]);
     assert.match(statusItem.text, /Files :41257/);
+    assert.match(statusItem.text, /all interfaces/);
+    assert.match(infoCalls[0][0], /listening on all interfaces/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact Serve wording distinguishes all-interface files from loopback registry and optional loopback files", async (t) => {
+  for (const [mode, bind, scope] of [["both", "all-interfaces", "all interfaces"], ["files", "loopback", "localhost only"]]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-serve-scope-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+    const endpoints = { ...syntheticServeEndpoints(mode), fileserver_bind: bind };
+    const extension = loadExtension(vscode, () => { throw new Error("no direct spawn"); }, {
+      waitForServeStartup: async () => endpoints,
+    });
+    extension.__test__.setStatusItem(statusItem);
+    vscode.openDialogResponses.push([{ fsPath: path.join(root, "demo.haul") }]);
+    vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES.find((item) => item.mode === mode));
+    assert.equal(await extension.__test__.jatServe(), "started");
+    assert.ok(statusItem.text.includes(scope));
+    assert.ok(infoCalls[0][0].includes(`listening on ${scope}`));
+    if (mode === "both") {
+      assert.match(infoCalls[0][0], /registry listening on localhost only/);
+      assert.match(infoCalls[0][0], /http:\/\/127\.0\.0\.1:41257/);
+      assert.match(statusItem.text, /Registry :41258/);
+    }
   }
 });
 

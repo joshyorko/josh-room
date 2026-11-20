@@ -3382,11 +3382,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     );
     const fileserverUrl = outcome.fileserver_url;
     const registryUrl = outcome.registry_url;
+    const fileserverScope = outcome.fileserver_bind === "all-interfaces" ? "all interfaces" : "localhost only";
     if (outcome.mode === "files") {
-      setStatus(`$(server-process) Files :${new URL(fileserverUrl).port}`, title);
-      outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}) · ${title}`);
+      setStatus(`$(server-process) Files :${new URL(fileserverUrl).port} (${fileserverScope})`, title);
+      outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}; ${fileserverScope}) · ${title}`);
       const filesAction = await vscode.window.showInformationMessage(
-        `JAT is serving files at ${fileserverUrl}. Close the ${terminalName} terminal to stop.`,
+        `JAT is serving files at ${fileserverUrl}, listening on ${fileserverScope}. Close the ${terminalName} terminal to stop.`,
         "Copy Fileserver URL",
         "Show Logs",
       );
@@ -3403,11 +3404,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     const count = repositories.length;
     const servingFiles = outcome.mode === "both";
     progressReporter?.event({ stage: "complete", message: "Serve endpoints ready" });
-    setStatus(`$(server-process) Registry :${new URL(registryUrl).port}${servingFiles ? ` / Files :${new URL(fileserverUrl).port}` : ""}`, `${count} repositories · ${title}`);
+    setStatus(`$(server-process) Registry :${new URL(registryUrl).port}${servingFiles ? ` / Files :${new URL(fileserverUrl).port} (${fileserverScope})` : ""}`, `${count} repositories · ${title}`);
     outputChannel?.info(`READY · ${registryUrl} · ${count} ${count === 1 ? "repository" : "repositories"}`);
+    if (servingFiles) outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}; ${fileserverScope})`);
     const action = await vscode.window.showInformationMessage(
       servingFiles
-        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl} and files at ${fileserverUrl}.`
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl} (registry listening on localhost only) and files at ${fileserverUrl} (fileserver listening on ${fileserverScope}).`
         : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl}.`,
       "Show Images",
       "Copy Registry URL",

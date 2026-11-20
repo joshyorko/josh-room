@@ -21,7 +21,8 @@ function validateServeStartup(value, requestedMode = "auto") {
   for (const [key, active] of [["fileserver", serve.mode !== "registry"], ["registry", serve.mode !== "files"]]) {
     if (active) {
       serveUrl(serve[`${key}_url`]);
-      if (serve[`${key}_bind`] !== "loopback") throw new Error("JAT Serve listener is not loopback-only");
+      const allowedBindings = key === "fileserver" ? ["loopback", "all-interfaces"] : ["loopback"];
+      if (!allowedBindings.includes(serve[`${key}_bind`])) throw new Error("JAT reported an unsupported Serve listener scope");
     } else if (serve[`${key}_url`] !== null || serve[`${key}_bind`] !== null) {
       throw new Error("JAT reported an unexpected Serve endpoint");
     }

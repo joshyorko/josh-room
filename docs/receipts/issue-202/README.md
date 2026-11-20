@@ -39,5 +39,9 @@ records the decision and remaining gates.
 
 Pending acceptance: five-second recognition with 8–10 unbriefed participants
 (target ≥70% filesystem recognition), three identical lookup tasks compared
-against Grid, physical low-end GPU timing, installed VSIX and qualified managed
-JAT/Hauler runtime integration. No merge, release or live deployment is implied.
+against Grid, physical low-end GPU timing, installed VSIX and qualified managed JAT runtime integration using the
+unchanged Hauler pin. The optional Hauler bind-host feature is not required. No merge, release or live deployment is implied.
+
+[Artifact listener-scope correction](artifact-scope-correction.json) supersedes the
+earlier blanket Hauler bind-host dependency: real unchanged 2.1.1 artifact
+serving and current Room parser/probes pass across Files/Registry/Both/Auto.

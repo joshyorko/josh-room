@@ -569,7 +569,7 @@ def require_serve_startup(jat_root: Path) -> None:
     except OSError:
         source = ""
     if "--startup-file" not in source:
-        raise JATError("Acquired JAT runtime does not support safe automatic Serve endpoints; update the pinned JAT runtime")
+        raise JATError("Acquired JAT runtime does not support automatic Serve endpoint reporting; update the pinned JAT runtime")
 
 
 def run_serve(

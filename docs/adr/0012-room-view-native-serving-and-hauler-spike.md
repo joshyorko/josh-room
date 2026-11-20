@@ -57,9 +57,32 @@ It records the executable SHA-256 and the following observed results:
 The fixture mode is a Python loopback simulation only; it is not evidence of
 Hauler behavior. The live test establishes native file serving, not safe live
 workspace observation. Hauler owns artifact bytes; Room owns workspace scope,
-policy and sanitized previews. Consuming Hauler outside isolation requires a
-proven loopback/auth arrangement. Dynamic binding/endpoint reporting is being
-coordinated separately with JAT; no released-runtime support is claimed here.
+policy and sanitized previews. The experiment used isolation to contain its
+synthetic exposure tests; that test setup is not a product requirement for
+existing Hauler artifact serving.
+
+## Artifact listener-scope correction
+
+The localhost-only rule applies to `josh-room view`, not to every native Hauler
+artifact listener. Unpatched Hauler 2.1.1 supports artifact files, registry,
+both and automatic mode selection with JAT-chosen nonzero ports. Room accepts
+truthful fileserver `all-interfaces` metadata while keeping connection URLs
+strictly `http://127.0.0.1:<port>` and registry binding strictly `loopback`.
+Startup notifications, status and logs name the fileserver listener scope;
+a localhost connection URL is not described as private or localhost-only.
+Optional fileserver `loopback` metadata remains valid. Unknown binding values,
+wildcard registry binding and non-loopback connection URLs remain rejected.
+
+Hauler's optional upstream bind-host feature (#963) is independent, not a
+blanket dependency for #202 or supported artifact serving. No container/proxy
+subsystem or new approval flow is added. Matching JAT startup-receipt artifacts
+and installed-runtime qualification remain real gates; no released-runtime
+support or pin promotion is claimed here.
+
+[Correction evidence](../receipts/issue-202/artifact-scope-correction.json) records
+real unpatched 2.1.1 Files/Registry/Both/Auto sessions consumed by Room, with
+occupied defaults, concurrency and shutdown cleanup. This source integration
+is distinct from published managed-runtime and installed-VSIX acceptance.
 
 ## Extension discovery
 
@@ -75,6 +98,6 @@ and provides Copy Fileserver URL. Root/template sources remain identical.
 
 - Installed extension and released pinned JAT runtime acceptance.
 - Actual JAT capture → portable export → serve vertical, including export failure.
-- Windows/native-platform serving and loopback isolation qualification.
+- Windows/native-platform artifact-serving and listener-scope qualification.
 - Resumable workspace pagination and bounded extraction of nested saved contents.
 - Human five-second recognition/lookup studies and physical GPU timing.

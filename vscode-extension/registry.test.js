@@ -15,7 +15,7 @@ function startup(mode, fileserverUrl = null, registryUrl = null) {
   } };
 }
 
-test("startup receipts reject unsafe URLs, wrong modes and wildcard listeners", () => {
+test("startup receipts accept truthful artifact scope but reject unsafe URLs and non-loopback registries", () => {
   const good = startup("files", "http://127.0.0.1:41257");
   assert.equal(validateServeStartup(good, "auto").fileserver_url, good.serve.fileserver_url);
   for (const url of ["http://example.test:8080", "http://127.0.0.1:0", "http://127.0.0.1:99999",
@@ -26,6 +26,13 @@ test("startup receipts reject unsafe URLs, wrong modes and wildcard listeners", 
   assert.throws(() => validateServeStartup({ ...good, serve: { ...good.serve, registry_bind: "all-interfaces" } }));
   assert.throws(() => validateServeStartup({ ...good, serve: { ...good.serve, fileserver_bind: "0.0.0.0" } }));
   assert.throws(() => validateServeStartup(startup("both", good.serve.fileserver_url, good.serve.fileserver_url)));
+  const wildcard = { ...good, serve: { ...good.serve, fileserver_bind: "all-interfaces" } };
+  assert.equal(validateServeStartup(wildcard, "files").fileserver_bind, "all-interfaces");
+  const both = startup("both", good.serve.fileserver_url, "http://127.0.0.1:41258");
+  both.serve.fileserver_bind = "all-interfaces";
+  assert.equal(validateServeStartup(both).registry_bind, "loopback");
+  both.serve.registry_bind = "all-interfaces";
+  assert.throws(() => validateServeStartup(both));
 });
 
 test("startup waits only for its session file and stops immediately on controller failure", async (t) => {
