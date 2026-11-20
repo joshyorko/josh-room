@@ -170,6 +170,14 @@ including the capture grammar's segment limit. It does not rewrite `.josh-roomig
 claim every retained file was enumerated. Existing policy may already exclude
 unselected files. No file is removed or migrated.
 
+## Bounded formal discovery check
+
+The [discovery verification](../verification/discovery/README.md) checks sibling
+admission with TLA+/TLC and bounded generated schedules against the real scanner.
+Use the project-local `verify-discovery-admission` skill when changing admission,
+alias handling, iterator failures or pagination. This checks a finite scope; it
+does not prove arbitrary filesystem safety or any Save/publication behavior.
+
 ## Hard gates before enabling split publication
 
 1. **Historical pin retention.** `room_store_references.build_reference_index`

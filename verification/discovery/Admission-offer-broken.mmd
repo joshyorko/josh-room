@@ -1,0 +1,22 @@
+---
+title: "Discovery: validate all siblings before entering a child"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Breaks SiblingAdmission
+    lg1: Path to the SiblingAdmission bug
+  }
+  class lg0 breaks
+  class lg1 bugPath
+  s0: Reading all sibling names
+  s1: Scope inaccessible
+  s2: Unsafe choices offered
+  [*] --> s0
+  s0 --> s0: observe a sibling
+  s0 --> s1: directory read fails
+  s1 --> s2: offer choices
+  classDef breaks fill:#ffecee,stroke:#e72e3b,stroke-width:2.5px,color:#cd2834
+  class s0 bugPath
+  class s1 bugPath
+  class s2 breaks
+  class s2 bugPath
