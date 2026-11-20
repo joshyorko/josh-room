@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.metadata
+import inspect
 import math
 import re
 from collections.abc import Mapping
@@ -35,6 +36,30 @@ ALLOWED_EMBED_MEDIA_TYPES = frozenset(
         "text/html",
     }
 )
+ALLOWED_PREVIEW_MEDIA_TYPES = frozenset(
+    {
+        "text/plain",
+        "text/x-diff",
+        "application/json",
+        "application/x-josh-run+json",
+    }
+)
+ALLOWED_PREVIEW_STATUSES = frozenset({"available", "unavailable", "redacted", "omitted"})
+ALLOWED_NODE_KINDS = frozenset({"directory", "file", "run", "artifact"})
+ALLOWED_LINK_RELATIONS = frozenset(
+    {
+        "producer",
+        "output",
+        "consumer",
+        "depends_on",
+        "caused_by",
+        "references",
+        "artifact_of",
+        "configures",
+        "verifies",
+    }
+)
+MAX_PREVIEW_BODY_CHARS = 16384
 ALLOWED_VIEW_MODES = frozenset({"3d", "grid"})
 ALLOWED_LEGEND_SHAPES = frozenset({"solid", "notch", "hollow"})
 NON_SENSITIVE_MARKINGS = frozenset({"public", "synthetic"})
@@ -101,6 +126,16 @@ def _validate_non_empty_text(value: object, field_name: str, *, max_len: int = 1
         or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
     ):
         raise ViewValidationError("invalid-text", f"invalid {field_name}")
+    return value
+
+
+def _validate_multiline_text(value: object, field_name: str, *, max_len: int = MAX_PREVIEW_BODY_CHARS) -> str:
+    if not isinstance(value, str) or len(value) > max_len:
+        raise ViewValidationError("invalid-preview-body", f"invalid {field_name}")
+    for ch in value:
+        code = ord(ch)
+        if code == 0x7F or (code < 0x20 and ch not in {"\n", "\r", "\t"}):
+            raise ViewValidationError("control-chars", f"control character in {field_name}")
     return value
 
 
@@ -467,6 +502,235 @@ class AttachmentRef:
 
 
 @dataclass(frozen=True, slots=True)
+class PreviewContent:
+    """Bounded, sanitized read-only preview slot attached to an inspectable object."""
+
+    slot: str
+    media_type: str
+    title: str
+    status: str = "available"
+    body: str | None = None
+    reason: str | None = None
+    language: str | None = None
+    truncated: bool = False
+    summary: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "slot", validate_safe_label(self.slot, "preview slot"))
+        mt = validate_media_type(self.media_type)
+        if mt not in ALLOWED_PREVIEW_MEDIA_TYPES and self.status == "available":
+            raise ViewValidationError("disallowed-preview-media-type", f"unsupported preview media type {mt}")
+        object.__setattr__(self, "media_type", mt)
+        object.__setattr__(self, "title", _validate_non_empty_text(self.title, "preview title", max_len=96))
+        if self.status not in ALLOWED_PREVIEW_STATUSES:
+            raise ViewValidationError("invalid-preview-status", "invalid preview status")
+        if self.status == "available":
+            if self.body is None:
+                raise ViewValidationError("invalid-preview-body", "available preview requires body text")
+            object.__setattr__(
+                self,
+                "body",
+                _validate_multiline_text(self.body, f"preview.{self.slot}.body", max_len=MAX_PREVIEW_BODY_CHARS),
+            )
+        else:
+            if self.body is not None:
+                raise ViewValidationError(
+                    "invalid-preview-body",
+                    "unavailable/redacted/omitted preview must not carry body text",
+                )
+            if not self.reason:
+                raise ViewValidationError("invalid-preview-reason", "unavailable preview requires a reason")
+        if self.reason is not None:
+            object.__setattr__(
+                self,
+                "reason",
+                _validate_non_empty_text(self.reason, "preview reason", max_len=160),
+            )
+        if self.language is not None:
+            object.__setattr__(self, "language", validate_safe_label(self.language, "preview language"))
+        if type(self.truncated) is not bool:
+            raise ViewValidationError("invalid-preview", "preview truncated must be boolean")
+        if self.summary is not None:
+            object.__setattr__(
+                self,
+                "summary",
+                _validate_non_empty_text(self.summary, "preview summary", max_len=160),
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "slot": self.slot,
+            "media_type": self.media_type,
+            "title": self.title,
+            "status": self.status,
+            "truncated": self.truncated,
+        }
+        if self.body is not None:
+            result["body"] = self.body
+        if self.reason is not None:
+            result["reason"] = self.reason
+        if self.language is not None:
+            result["language"] = self.language
+        if self.summary is not None:
+            result["summary"] = self.summary
+        return result
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> PreviewContent:
+        if not isinstance(raw, Mapping):
+            raise ViewValidationError("invalid-preview", "preview must be an object")
+        return cls(
+            slot=raw.get("slot"),  # type: ignore[arg-type]
+            media_type=raw.get("media_type"),  # type: ignore[arg-type]
+            title=raw.get("title"),  # type: ignore[arg-type]
+            status=str(raw.get("status", "available")),
+            body=raw.get("body"),  # type: ignore[arg-type]
+            reason=raw.get("reason"),  # type: ignore[arg-type]
+            language=raw.get("language"),  # type: ignore[arg-type]
+            truncated=bool(raw.get("truncated", False)),
+            summary=raw.get("summary"),  # type: ignore[arg-type]
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectLink:
+    """Explicit directional relationship tracing producer -> output -> consumer."""
+
+    relation: str
+    target_id: str
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.relation, str) or self.relation not in ALLOWED_LINK_RELATIONS:
+            raise ViewValidationError("invalid-link-relation", "unsupported link relation")
+        object.__setattr__(self, "target_id", validate_safe_label(self.target_id, "link target_id"))
+        if self.label:
+            object.__setattr__(self, "label", _validate_non_empty_text(self.label, "link label", max_len=96))
+
+    def to_dict(self) -> dict[str, str]:
+        result = {"relation": self.relation, "target_id": self.target_id}
+        if self.label:
+            result["label"] = self.label
+        return result
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> ObjectLink:
+        if not isinstance(raw, Mapping):
+            raise ViewValidationError("invalid-link", "link must be an object")
+        return cls(
+            relation=raw.get("relation"),  # type: ignore[arg-type]
+            target_id=raw.get("target_id"),  # type: ignore[arg-type]
+            label=str(raw.get("label", "")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NodeState:
+    """Arbitrary-depth provider-defined hierarchy node for NAVIGATE & INSPECT."""
+
+    id: str
+    parent_id: str | None
+    node_kind: str
+    label: str
+    updated_at: str
+    kind: str | None = None
+    metric: float | None = None
+    summary: str | None = None
+    order: int | None = None
+    attachments: tuple[AttachmentRef, ...] = ()
+    previews: tuple[PreviewContent, ...] = ()
+    links: tuple[ObjectLink, ...] = ()
+    fields: Mapping[str, str | int | float | bool | None] = field(default_factory=lambda: MappingProxyType({}))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", validate_safe_label(self.id, "node id"))
+        if self.parent_id is not None:
+            object.__setattr__(self, "parent_id", validate_safe_label(self.parent_id, "node parent_id"))
+        if self.node_kind not in ALLOWED_NODE_KINDS:
+            raise ViewValidationError("invalid-node-kind", "node_kind must be directory, file, run, or artifact")
+        object.__setattr__(self, "label", _validate_non_empty_text(self.label, "node label", max_len=96))
+        object.__setattr__(self, "updated_at", validate_timestamp(self.updated_at, "node updated_at"))
+        if self.kind is not None:
+            object.__setattr__(self, "kind", validate_safe_label(self.kind, "node kind"))
+        elif self.node_kind != "directory":
+            raise ViewValidationError("invalid-node", "leaf nodes must declare a legend kind")
+        if self.metric is not None:
+            if isinstance(self.metric, bool) or not isinstance(self.metric, (int, float)) or not math.isfinite(float(self.metric)):
+                raise ViewValidationError("invalid-metric", "node metric must be finite")
+            object.__setattr__(self, "metric", float(self.metric))
+        if self.summary is not None:
+            object.__setattr__(self, "summary", _validate_non_empty_text(self.summary, "node summary", max_len=160))
+        if self.order is not None and (type(self.order) is not int or self.order < 0):
+            raise ViewValidationError("invalid-node", "node order must be a non-negative integer")
+        attachments = tuple(self.attachments)
+        if any(not isinstance(att, AttachmentRef) for att in attachments):
+            raise ViewValidationError("invalid-attachment", "attachments must contain AttachmentRef instances")
+        if len({att.name for att in attachments}) != len(attachments):
+            raise ViewValidationError("duplicate-attachment", "attachment names per node must be unique")
+        object.__setattr__(self, "attachments", attachments)
+        previews = tuple(self.previews)
+        if any(not isinstance(prev, PreviewContent) for prev in previews):
+            raise ViewValidationError("invalid-preview", "previews must contain PreviewContent instances")
+        if len({prev.slot for prev in previews}) != len(previews):
+            raise ViewValidationError("duplicate-preview", "preview slots per node must be unique")
+        object.__setattr__(self, "previews", previews)
+        links = tuple(self.links)
+        if any(not isinstance(link, ObjectLink) for link in links):
+            raise ViewValidationError("invalid-link", "links must contain ObjectLink instances")
+        if len({(link.relation, link.target_id) for link in links}) != len(links):
+            raise ViewValidationError("duplicate-link", "duplicate (relation, target_id) link on node")
+        object.__setattr__(self, "links", links)
+        object.__setattr__(self, "fields", _validate_scalar_mapping(self.fields, "node fields"))
+
+    def to_dict(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "id": self.id,
+            "parent_id": self.parent_id,
+            "node_kind": self.node_kind,
+            "label": self.label,
+            "updated_at": self.updated_at,
+            "attachments": [att.to_dict() for att in self.attachments],
+            "previews": [prev.to_dict() for prev in self.previews],
+            "links": [link.to_dict() for link in self.links],
+            "fields": dict(self.fields),
+        }
+        if self.kind is not None:
+            result["kind"] = self.kind
+        if self.metric is not None:
+            result["metric"] = self.metric
+        if self.summary is not None:
+            result["summary"] = self.summary
+        if self.order is not None:
+            result["order"] = self.order
+        return result
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> NodeState:
+        if not isinstance(raw, Mapping):
+            raise ViewValidationError("invalid-node", "node must be an object")
+        raw_atts = raw.get("attachments", [])
+        raw_previews = raw.get("previews", [])
+        raw_links = raw.get("links", [])
+        if not isinstance(raw_atts, list) or not isinstance(raw_previews, list) or not isinstance(raw_links, list):
+            raise ViewValidationError("invalid-node", "node attachments, previews, and links must be lists")
+        return cls(
+            id=raw.get("id"),  # type: ignore[arg-type]
+            parent_id=raw.get("parent_id"),  # type: ignore[arg-type]
+            node_kind=raw.get("node_kind"),  # type: ignore[arg-type]
+            label=raw.get("label"),  # type: ignore[arg-type]
+            updated_at=raw.get("updated_at"),  # type: ignore[arg-type]
+            kind=raw.get("kind"),  # type: ignore[arg-type]
+            metric=raw.get("metric"),  # type: ignore[arg-type]
+            summary=raw.get("summary"),  # type: ignore[arg-type]
+            order=raw.get("order"),  # type: ignore[arg-type]
+            attachments=tuple(AttachmentRef.from_dict(att) for att in raw_atts),
+            previews=tuple(PreviewContent.from_dict(p) for p in raw_previews),
+            links=tuple(ObjectLink.from_dict(lk) for lk in raw_links),
+            fields=raw.get("fields", {}),  # type: ignore[arg-type]
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ItemState:
     id: str
     group: str
@@ -476,6 +740,8 @@ class ItemState:
     updated_at: str
     metric: float | None = None
     attachments: tuple[AttachmentRef, ...] = ()
+    previews: tuple[PreviewContent, ...] = ()
+    links: tuple[ObjectLink, ...] = ()
     fields: Mapping[str, str | int | float | bool | None] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
@@ -496,6 +762,18 @@ class ItemState:
         if len(set(att_names)) != len(att_names):
             raise ViewValidationError("duplicate-attachment", "attachment names per item must be unique")
         object.__setattr__(self, "attachments", attachments)
+        previews = tuple(self.previews)
+        if any(not isinstance(prev, PreviewContent) for prev in previews):
+            raise ViewValidationError("invalid-preview", "previews must contain PreviewContent instances")
+        if len({prev.slot for prev in previews}) != len(previews):
+            raise ViewValidationError("duplicate-preview", "preview slots per item must be unique")
+        object.__setattr__(self, "previews", previews)
+        links = tuple(self.links)
+        if any(not isinstance(link, ObjectLink) for link in links):
+            raise ViewValidationError("invalid-link", "links must contain ObjectLink instances")
+        if len({(link.relation, link.target_id) for link in links}) != len(links):
+            raise ViewValidationError("duplicate-link", "duplicate (relation, target_id) link on item")
+        object.__setattr__(self, "links", links)
         object.__setattr__(self, "fields", _validate_scalar_mapping(self.fields, "item fields"))
 
     def to_dict(self) -> dict[str, object]:
@@ -511,6 +789,10 @@ class ItemState:
         }
         if self.metric is not None:
             result["metric"] = self.metric
+        if self.previews:
+            result["previews"] = [prev.to_dict() for prev in self.previews]
+        if self.links:
+            result["links"] = [link.to_dict() for link in self.links]
         return result
 
     @classmethod
@@ -518,8 +800,10 @@ class ItemState:
         if not isinstance(raw, Mapping):
             raise ViewValidationError("invalid-item", "item must be an object")
         raw_attachments = raw.get("attachments", [])
-        if not isinstance(raw_attachments, list):
-            raise ViewValidationError("invalid-attachment", "attachments must be a list")
+        raw_previews = raw.get("previews", [])
+        raw_links = raw.get("links", [])
+        if not isinstance(raw_attachments, list) or not isinstance(raw_previews, list) or not isinstance(raw_links, list):
+            raise ViewValidationError("invalid-attachment", "attachments, previews, and links must be lists")
         return cls(
             id=raw.get("id"),  # type: ignore[arg-type]
             group=raw.get("group"),  # type: ignore[arg-type]
@@ -529,6 +813,8 @@ class ItemState:
             updated_at=raw.get("updated_at"),  # type: ignore[arg-type]
             metric=raw.get("metric"),  # type: ignore[arg-type]
             attachments=tuple(AttachmentRef.from_dict(att) for att in raw_attachments),
+            previews=tuple(PreviewContent.from_dict(p) for p in raw_previews),
+            links=tuple(ObjectLink.from_dict(lk) for lk in raw_links),
             fields=raw.get("fields", {}),  # type: ignore[arg-type]
         )
 
@@ -567,6 +853,7 @@ class ViewState:
     steps: tuple[StepState, ...] = ()
     summary: Mapping[str, str | int | float | bool | None] = field(default_factory=lambda: MappingProxyType({}))
     stale: StaleStatus | None = None
+    nodes: tuple[NodeState, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "taken_at", validate_timestamp(self.taken_at, "state taken_at"))
@@ -587,6 +874,14 @@ class ViewState:
             raise ViewValidationError("duplicate-item", "item ids must be unique")
         object.__setattr__(self, "items", items)
 
+        nodes = tuple(self.nodes)
+        if any(not isinstance(node, NodeState) for node in nodes):
+            raise ViewValidationError("invalid-node", "nodes must contain NodeState instances")
+        node_ids = [node.id for node in nodes]
+        if len(set(node_ids)) != len(node_ids):
+            raise ViewValidationError("duplicate-node", "node ids must be unique")
+        object.__setattr__(self, "nodes", nodes)
+
         steps = tuple(self.steps)
         if any(not isinstance(step, StepState) for step in steps):
             raise ViewValidationError("invalid-step", "steps must contain StepState instances")
@@ -604,6 +899,8 @@ class ViewState:
             "steps": [step.to_dict() for step in self.steps],
             "summary": dict(self.summary),
         }
+        if self.nodes:
+            result["nodes"] = [node.to_dict() for node in self.nodes]
         if self.stale is not None:
             result["stale"] = self.stale.to_dict()
         return result
@@ -615,8 +912,14 @@ class ViewState:
         raw_groups = raw.get("groups", [])
         raw_items = raw.get("items", [])
         raw_steps = raw.get("steps", [])
-        if not isinstance(raw_groups, list) or not isinstance(raw_items, list) or not isinstance(raw_steps, list):
-            raise ViewValidationError("invalid-state", "groups, items, and steps must be lists")
+        raw_nodes = raw.get("nodes", [])
+        if (
+            not isinstance(raw_groups, list)
+            or not isinstance(raw_items, list)
+            or not isinstance(raw_steps, list)
+            or not isinstance(raw_nodes, list)
+        ):
+            raise ViewValidationError("invalid-state", "groups, items, steps, and nodes must be lists")
         raw_stale = raw.get("stale")
         return cls(
             taken_at=raw.get("taken_at"),  # type: ignore[arg-type]
@@ -626,6 +929,7 @@ class ViewState:
             steps=tuple(StepState.from_dict(s) for s in raw_steps),
             summary=raw.get("summary", {}),  # type: ignore[arg-type]
             stale=StaleStatus.from_dict(raw_stale) if raw_stale is not None else None,
+            nodes=tuple(NodeState.from_dict(n) for n in raw_nodes),
         )
 
 
@@ -669,6 +973,29 @@ class ViewStateProvider(Protocol):
     def attachment(self, item_id: str, name: str) -> Attachment | None: ...
 
 
+def compute_node_paths(nodes: tuple[NodeState, ...]) -> dict[str, str]:
+    """Compute synthetic UNIX display paths ('/', '/src', '/src/core/scheduler.py') from parent links."""
+    by_id = {node.id: node for node in nodes}
+    cache: dict[str, str] = {}
+
+    def resolve(node_id: str) -> str:
+        if node_id in cache:
+            return cache[node_id]
+        node = by_id[node_id]
+        if node.parent_id is None:
+            path = "/"
+        else:
+            parent_path = resolve(node.parent_id)
+            seg = node.label.strip("/")
+            path = f"/{seg}" if parent_path == "/" else f"{parent_path}/{seg}"
+        cache[node_id] = path
+        return path
+
+    for node in nodes:
+        resolve(node.id)
+    return cache
+
+
 def validate_state_against_descriptor(descriptor: ViewDescriptor, state: ViewState) -> None:
     """Verify referential integrity between descriptor and state."""
     if not isinstance(descriptor, ViewDescriptor):
@@ -679,6 +1006,8 @@ def validate_state_against_descriptor(descriptor: ViewDescriptor, state: ViewSta
     stage_ids = {stage.id for stage in descriptor.stages}
     legend_kinds = set(descriptor.legend.keys())
     item_ids = {item.id for item in state.items}
+    node_by_id = {node.id: node for node in state.nodes}
+    known_object_ids = item_ids | set(node_by_id.keys())
 
     for item in state.items:
         if item.group not in group_ids:
@@ -687,9 +1016,49 @@ def validate_state_against_descriptor(descriptor: ViewDescriptor, state: ViewSta
             raise ViewValidationError("unknown-stage", f"item references unknown stage {item.stage}")
         if item.kind not in legend_kinds:
             raise ViewValidationError("unknown-kind", f"item references unknown legend kind {item.kind}")
+        for link in item.links:
+            if link.target_id not in known_object_ids:
+                raise ViewValidationError("unknown-link-target", f"item link targets unknown object {link.target_id}")
+
+    if state.nodes:
+        roots = [node for node in state.nodes if node.parent_id is None]
+        if len(roots) != 1 or roots[0].node_kind != "directory":
+            raise ViewValidationError("invalid-tree-root", "nodes hierarchy must have exactly one root directory")
+        for node in state.nodes:
+            if node.parent_id is not None:
+                parent = node_by_id.get(node.parent_id)
+                if parent is None:
+                    raise ViewValidationError("unknown-parent", f"node references unknown parent {node.parent_id}")
+                if parent.node_kind != "directory":
+                    raise ViewValidationError("non-directory-parent", f"node parent {node.parent_id} must be a directory")
+            if node.kind is not None and node.kind not in legend_kinds:
+                raise ViewValidationError("unknown-kind", f"node references unknown legend kind {node.kind}")
+            # Cycle detection
+            seen: set[str] = {node.id}
+            cur = node.parent_id
+            while cur is not None:
+                if cur in seen:
+                    raise ViewValidationError("tree-cycle", f"cycle detected at node {node.id}")
+                seen.add(cur)
+                cur = node_by_id[cur].parent_id
+            for link in node.links:
+                if link.target_id not in known_object_ids:
+                    raise ViewValidationError("unknown-link-target", f"node link targets unknown object {link.target_id}")
+
     for step in state.steps:
-        if step.item_id not in item_ids:
+        if step.item_id not in known_object_ids:
             raise ViewValidationError("unknown-step-item", f"step references unknown item {step.item_id}")
+
+
+def _instantiate_provider_target(target: object) -> ViewStateProvider:
+    """Instantiate a class or factory target, or return an already-constructed provider instance."""
+    if inspect.isclass(target) or (callable(target) and not isinstance(target, ViewStateProvider)):
+        provider = target()
+    else:
+        provider = target
+    if inspect.isclass(provider) or not isinstance(provider, ViewStateProvider):
+        raise ViewValidationError("invalid-provider", "loaded object does not implement ViewStateProvider")
+    return provider
 
 
 def load_provider(spec: str) -> ViewStateProvider:
@@ -698,13 +1067,14 @@ def load_provider(spec: str) -> ViewStateProvider:
         raise ViewValidationError("invalid-provider", "provider specification is required")
     spec = spec.strip()
 
-    from .synthetic_provider import SyntheticPipelineProvider
+    from .synthetic_provider import SyntheticPipelineProvider, SyntheticUnixFsProvider
 
     builtins = {
         "synthetic": lambda: SyntheticPipelineProvider(preset="default"),
         "synthetic-small": lambda: SyntheticPipelineProvider(preset="small"),
         "synthetic-large": lambda: SyntheticPipelineProvider(preset="large"),
         "synthetic-sensitive": lambda: SyntheticPipelineProvider(preset="sensitive"),
+        "synthetic-unix": lambda: SyntheticUnixFsProvider(),
     }
     if spec in builtins:
         return builtins[spec]()
@@ -713,11 +1083,7 @@ def load_provider(spec: str) -> ViewStateProvider:
         eps = importlib.metadata.entry_points(group="josh_room.view_providers")
         for ep in eps:
             if ep.name == spec:
-                loaded = ep.load()
-                provider = loaded() if callable(loaded) else loaded
-                if not isinstance(provider, ViewStateProvider):
-                    raise ViewValidationError("invalid-provider", "entry point does not implement ViewStateProvider")
-                return provider
+                return _instantiate_provider_target(ep.load())
         raise ViewValidationError("unknown-provider", f"unknown view provider {spec!r}")
 
     module_name, attr_name = spec.split(":", 1)
@@ -730,7 +1096,4 @@ def load_provider(spec: str) -> ViewStateProvider:
         target = getattr(module, attr_name)
     except (ImportError, AttributeError) as error:
         raise ViewValidationError("provider-load-failed", f"could not load provider {spec!r}") from error
-    provider = target() if callable(target) and not isinstance(target, ViewStateProvider) else target
-    if not isinstance(provider, ViewStateProvider):
-        raise ViewValidationError("invalid-provider", "loaded object does not implement ViewStateProvider")
-    return provider
+    return _instantiate_provider_target(target)

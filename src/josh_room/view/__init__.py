@@ -1,17 +1,20 @@
-"""Read-only localhost Room View and single-file offline HTML snapshot."""
-
-from __future__ import annotations
+"""Josh Room View: localhost read-only dashboard and single-file offline FSN export."""
 
 from .contract import (
     ALLOWED_EMBED_MEDIA_TYPES,
-    NON_SENSITIVE_MARKINGS,
-    SENSITIVITY_LEVELS,
+    ALLOWED_LINK_RELATIONS,
+    ALLOWED_NODE_KINDS,
+    ALLOWED_PREVIEW_MEDIA_TYPES,
+    ALLOWED_PREVIEW_STATUSES,
     Attachment,
     AttachmentRef,
     GroupState,
     ItemState,
     LegendEntry,
     MetricDescriptor,
+    NodeState,
+    ObjectLink,
+    PreviewContent,
     SqlPreset,
     StageDescriptor,
     StaleStatus,
@@ -20,6 +23,7 @@ from .contract import (
     ViewState,
     ViewStateProvider,
     ViewValidationError,
+    compute_node_paths,
     load_provider,
     validate_attachment_name,
     validate_safe_label,
@@ -33,19 +37,24 @@ from .sanitizer import (
     sanitize_descriptor,
     sanitize_state,
 )
-from .synthetic_provider import SyntheticPipelineProvider
+from .synthetic_provider import SyntheticPipelineProvider, SyntheticUnixFsProvider
 
 __all__ = [
     "ALLOWED_EMBED_MEDIA_TYPES",
+    "ALLOWED_LINK_RELATIONS",
+    "ALLOWED_NODE_KINDS",
+    "ALLOWED_PREVIEW_MEDIA_TYPES",
+    "ALLOWED_PREVIEW_STATUSES",
     "DEFAULT_SANITIZATION_POLICY",
-    "NON_SENSITIVE_MARKINGS",
-    "SENSITIVITY_LEVELS",
     "Attachment",
     "AttachmentRef",
     "GroupState",
     "ItemState",
     "LegendEntry",
     "MetricDescriptor",
+    "NodeState",
+    "ObjectLink",
+    "PreviewContent",
     "SanitizationPolicy",
     "SensitivityAssessment",
     "SqlPreset",
@@ -53,10 +62,12 @@ __all__ = [
     "StaleStatus",
     "StepState",
     "SyntheticPipelineProvider",
+    "SyntheticUnixFsProvider",
     "ViewDescriptor",
     "ViewState",
     "ViewStateProvider",
     "ViewValidationError",
+    "compute_node_paths",
     "load_provider",
     "resolve_sensitivity",
     "sanitize_descriptor",

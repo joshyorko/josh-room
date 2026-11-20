@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "chrome": "/usr/bin/google-chrome",
   "viewport": "1440x900",
   "zero_network": {
-    "total_observed_requests": 12,
+    "total_observed_requests": 18,
     "blocked_external_requests": [],
     "csp_violations": [],
     "console_errors": [],
@@ -15,18 +15,135 @@
     "shadow_updates_during_idle": 0,
     "pass": true
   },
+  "unix_navigate_inspect": {
+    "mode": "offline",
+    "webglActive": true,
+    "itemCount": 34,
+    "firstFrameMs": 1196.9,
+    "drawCalls": 172,
+    "cameraY": 8.892,
+    "layoutSummary": {
+      "isUnixTree": true,
+      "maxDepth": 4,
+      "pedestals": 21,
+      "blocks": 34,
+      "summaryBlocks": 0,
+      "wires": 20
+    },
+    "inspectorHiddenOnLoad": true,
+    "legendItems": [
+      "Artifact",
+      "Config",
+      "×Failed",
+      "Verified",
+      "Redacted",
+      "Source"
+    ],
+    "wallBootMs": 1305,
+    "file_bytes": 1671368,
+    "breadcrumbs_inside_dir": [
+      "/",
+      "src",
+      "core"
+    ],
+    "source_preview": {
+      "title": "scheduler.py",
+      "path": "/src/core/scheduler.py",
+      "codeLines": 10,
+      "slots": [
+        "diff",
+        "source"
+      ],
+      "linkTargets": [
+        {
+          "rel": "producer",
+          "target": "run-var-gate-verify"
+        },
+        {
+          "rel": "references",
+          "target": "file-etc-policy-json"
+        },
+        {
+          "rel": "incoming:references",
+          "target": "file-src-sanitizer-patch"
+        },
+        {
+          "rel": "incoming:verifies",
+          "target": "file-src-test-gate"
+        },
+        {
+          "rel": "incoming:producer",
+          "target": "run-var-gate-verify"
+        }
+      ]
+    },
+    "diff_highlight_lines": 3,
+    "relationship_link_jump": {
+      "currentNodeId": "node/run-var-gate-verify",
+      "title": "gate-verify",
+      "path": "/var/runs/gate-verify",
+      "stepRows": 4,
+      "hasErrorBox": true,
+      "linkTargets": [
+        "file-src-sanitizer-patch",
+        "file-var-log-042",
+        "file-var-report-html",
+        "file-src-scheduler",
+        "file-etc-room-conf",
+        "file-src-scheduler",
+        "file-src-sanitizer-patch",
+        "file-src-test-gate",
+        "file-usr-rules",
+        "file-var-log-042",
+        "file-var-report-html",
+        "file-var-visual-diff",
+        "file-home-notes"
+      ]
+    },
+    "json_tree": {
+      "detailsCount": 5,
+      "keyCount": 10
+    },
+    "redacted_card": {
+      "status": "redacted",
+      "badge": "CONTENT REDACTED"
+    },
+    "unix_pdf": {
+      "canvasCount": 1,
+      "firstPageMs": 15.5
+    },
+    "sql_links_rows": 23,
+    "pass": false
+  },
+  "pr_review_regressions": {
+    "tree_single_key_dispatch": {
+      "beforeId": "root",
+      "afterId": "node/dir-etc",
+      "expectedNext": "node/dir-etc",
+      "singleStepOnly": true
+    },
+    "collision_free_and_custom_legend": {
+      "distinctStagePedestals": true,
+      "noDuplicateBlocks": true,
+      "customLegendPassIsZero": true,
+      "customLegendBadge": "× Error"
+    },
+    "pass": true
+  },
   "performance": {
     "fixture_300": {
       "mode": "offline",
       "viewMode": "3d",
       "webglActive": true,
       "itemCount": 300,
-      "firstFrameMs": 1228.8,
-      "drawCalls": 118,
-      "renderCount": 5,
+      "firstFrameMs": 710.3,
+      "drawCalls": 163,
+      "renderCount": 4,
       "shadowUpdateCount": 1,
-      "cameraY": 12.977388541482313,
+      "cameraY": 7.44758552684584,
       "layoutSummary": {
+        "isUnixTree": false,
+        "maxDepth": 2,
         "pedestals": 16,
         "blocks": 81,
         "summaryBlocks": 7,
@@ -38,30 +155,32 @@
       "treeItemCount": 4,
       "livePolite": "polite",
       "hasImportMap": true,
-      "wallBootMs": 1334,
-      "file_bytes": 1644509,
+      "wallBootMs": 872,
+      "file_bytes": 1703640,
       "first_click_ms": 0,
       "shadow_updates_on_select": 1,
       "pdf_first_page": {
-        "canvasCount": 2,
-        "infoText": "3 pages · p1 in 9.8ms",
-        "firstPageMs": 9.8,
-        "statusText": "Fit WidthFit Page−+3 pages · p1 in 9.8msPage 1 / 3Page 2 / 3Page 3 / 3"
+        "canvasCount": 1,
+        "infoText": "3 pages · p1 in 101.4ms",
+        "firstPageMs": 101.4,
+        "statusText": "Fit WidthFit Page−+3 pages · p1 in 101.4msPage 1 / 3Page 2 / 3Page 3 / 3"
       },
       "sql_preset_rows": 53,
       "sql_mutation_blocked": true
     },
     "fixture_540": {
       "itemCount": 540,
-      "firstFrameMs": 112.9,
-      "drawCalls": 125,
+      "firstFrameMs": 123,
+      "drawCalls": 135,
       "layoutSummary": {
+        "isUnixTree": false,
+        "maxDepth": 1,
         "pedestals": 5,
         "blocks": 0,
         "summaryBlocks": 24,
         "wires": 4
       },
-      "wallBootMs": 205
+      "wallBootMs": 233
     }
   },
   "accessibility": {
@@ -69,12 +188,12 @@
     "tree_role": "tree",
     "tree_items_rendered": 4,
     "live_region_politeness": "polite",
-    "live_announcement_sample": "Focused sector-beta / verify / verify-01.fail, fail, 293.4",
+    "live_announcement_sample": "Focused /sector-beta/verify/verify-01.fail, Fail, 293.4",
     "keyboard_next_fail_synced_tree": true,
     "after_next_fail": {
-      "currentNodeId": "item:item-0003",
-      "selectedTreeNode": "item:item-0003",
-      "liveText": "Focused sector-alpha / ingest / ingest-03.fail, fail, 335.2"
+      "currentNodeId": "item/item-0003",
+      "selectedTreeNode": "item/item-0003",
+      "liveText": "Focused /sector-alpha/ingest/ingest-03.fail, Fail, 335.2"
     }
   },
   "security": {
@@ -88,22 +207,27 @@
     "viewMode": "grid",
     "gridVisible": true,
     "noticeVisible": true,
-    "tileCount": 300,
+    "tileCount": 34,
+    "filterChipCount": 7,
     "sqlRowCount": 1,
     "inspectorOpen": true,
     "pass": true
   },
   "screenshots": [
-    "01-night-overview.png",
-    "02-night-directory.png",
+    "01-night-unix-overview.png",
+    "02-night-unix-directory.png",
     "03-night-spotlight-v2.png",
     "04-night-spotlight-baseline.png",
-    "03b-night-spotlight-v2-evidence-pdf.png",
-    "10-sql-console.png",
-    "05-grass-overview.png",
-    "06-grass-directory.png",
+    "04b-night-inspect-source-diff.png",
+    "04c-night-inspect-run-jump.png",
+    "04d-night-inspect-json-tree.png",
+    "05-grass-unix-overview.png",
+    "06-grass-unix-directory.png",
     "07-grass-spotlight-v2.png",
     "08-grass-spotlight-baseline.png",
+    "10-sql-console.png",
+    "01b-night-pipeline-300-overview.png",
+    "03b-night-spotlight-v2-evidence-pdf.png",
     "09-night-reduced-motion.png",
     "11-scale-10-items.png",
     "12-scale-540-items.png",

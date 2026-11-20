@@ -21,6 +21,7 @@ from .contract import (
     ViewState,
     ViewStateProvider,
     ViewValidationError,
+    compute_node_paths,
     validate_attachment_name,
     validate_safe_label,
 )
@@ -58,15 +59,32 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE groups(id TEXT PRIMARY KEY, name TEXT, ord INT);
 CREATE TABLE stages(id TEXT PRIMARY KEY, name TEXT, ord INT, terminal INT, failure INT);
 CREATE TABLE items(id TEXT PRIMARY KEY, group_id TEXT, stage_id TEXT, kind TEXT, label TEXT, metric REAL, updated_at TEXT, fields_json TEXT);
+CREATE TABLE nodes(id TEXT PRIMARY KEY, parent_id TEXT, node_kind TEXT, label TEXT, path TEXT, kind TEXT, metric REAL, updated_at TEXT, summary TEXT, ord INT, fields_json TEXT);
+CREATE TABLE previews(node_id TEXT, slot TEXT, media_type TEXT, title TEXT, status TEXT, body TEXT, reason TEXT, language TEXT, truncated INT, summary TEXT, PRIMARY KEY(node_id, slot));
+CREATE TABLE links(source_id TEXT, relation TEXT, target_id TEXT, label TEXT, PRIMARY KEY(source_id, relation, target_id));
 CREATE TABLE steps(item_id TEXT, name TEXT, at TEXT);
 CREATE TABLE attachments(item_id TEXT, name TEXT, media_type TEXT, size INT, sha256 TEXT, bytes BLOB, PRIMARY KEY(item_id, name));
 CREATE TABLE attachment_blobs(sha256 TEXT PRIMARY KEY, bytes BLOB);
 CREATE TABLE summary(key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX idx_items_group_stage ON items(group_id, stage_id);
 CREATE INDEX idx_items_kind ON items(kind);
+CREATE INDEX idx_nodes_parent ON nodes(parent_id);
+CREATE INDEX idx_nodes_path ON nodes(path);
+CREATE INDEX idx_previews_node ON previews(node_id);
+CREATE INDEX idx_links_source ON links(source_id);
+CREATE INDEX idx_links_target ON links(target_id);
 CREATE INDEX idx_steps_item ON steps(item_id);
 CREATE INDEX idx_attachments_sha ON attachments(sha256);
 """
+
+
+def gzip_deterministic(data: bytes) -> bytes:
+    """Compress with mtime=0 and normalized RFC 1952 OS byte (0xFF) across Python versions."""
+    compressed = bytearray(gzip.compress(data, compresslevel=9, mtime=0))
+    if len(compressed) >= 10:
+        compressed[4:8] = b"\x00\x00\x00\x00"
+        compressed[9] = 0xFF
+    return bytes(compressed)
 
 
 class SensitivityAckRequiredError(ValueError):
@@ -173,11 +191,13 @@ class FromStateProvider:
         if self._attachments_dir is not None and not self._attachments_dir.is_dir():
             raise ViewValidationError("invalid-attachments-dir", "attachments directory does not exist")
 
-        # Index declared attachment refs so media_type/digest are strictly enforced
         self._refs: dict[tuple[str, str], tuple[str, str]] = {}
         for item in self._state.items:
             for ref in item.attachments:
                 self._refs[(item.id, ref.name)] = (ref.media_type, ref.digest)
+        for node in self._state.nodes:
+            for ref in node.attachments:
+                self._refs[(node.id, ref.name)] = (ref.media_type, ref.digest)
 
     def describe(self) -> ViewDescriptor:
         return self._descriptor
@@ -194,7 +214,6 @@ class FromStateProvider:
         if ref is None:
             return None
         media_type, expected_digest = ref
-        # Support either <dir>/<item_id>/<name> or flat <dir>/<name>
         candidates = (
             self._attachments_dir / safe_item / safe_name,
             self._attachments_dir / safe_name,
@@ -255,6 +274,8 @@ def _build_sqlite_bytes(
     missing_attachment_count = 0
     per_media_type: dict[str, dict[str, int]] = {}
 
+    node_paths = compute_node_paths(state.nodes) if state.nodes else {}
+
     with tempfile.TemporaryDirectory(prefix="josh-room-view-db-") as tmp:
         os.chmod(tmp, 0o700)
         db_path = Path(tmp) / "view.sqlite"
@@ -298,6 +319,97 @@ def _build_sqlite_bytes(
                     for item in state.items
                 ],
             )
+            if state.nodes:
+                conn.executemany(
+                    (
+                        "INSERT INTO nodes(id, parent_id, node_kind, label, path, kind, metric, updated_at, summary, ord, fields_json) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    [
+                        (
+                            node.id,
+                            node.parent_id,
+                            node.node_kind,
+                            node.label,
+                            node_paths.get(node.id, f"/{node.label}"),
+                            node.kind,
+                            node.metric,
+                            node.updated_at,
+                            node.summary,
+                            node.order if node.order is not None else idx,
+                            json.dumps(dict(node.fields), sort_keys=True, separators=(",", ":")),
+                        )
+                        for idx, node in enumerate(state.nodes)
+                    ],
+                )
+
+            # Collect previews and links across both items and nodes (deduplicated by primary key)
+            preview_map: dict[tuple[str, str], tuple[str, str, str, str, str, str | None, str | None, str | None, int, str | None]] = {}
+            link_map: dict[tuple[str, str, str], tuple[str, str, str, str]] = {}
+            att_sources: dict[tuple[str, str], tuple[str, object]] = {}
+
+            for item in state.items:
+                for prev in item.previews:
+                    preview_map[(item.id, prev.slot)] = (
+                        item.id,
+                        prev.slot,
+                        prev.media_type,
+                        prev.title,
+                        prev.status,
+                        prev.body,
+                        prev.reason,
+                        prev.language,
+                        int(prev.truncated),
+                        prev.summary,
+                    )
+                for link in item.links:
+                    link_map[(item.id, link.relation, link.target_id)] = (
+                        item.id,
+                        link.relation,
+                        link.target_id,
+                        link.label,
+                    )
+                for ref in item.attachments:
+                    att_sources[(item.id, ref.name)] = (item.id, ref)
+
+            for node in state.nodes:
+                for prev in node.previews:
+                    preview_map[(node.id, prev.slot)] = (
+                        node.id,
+                        prev.slot,
+                        prev.media_type,
+                        prev.title,
+                        prev.status,
+                        prev.body,
+                        prev.reason,
+                        prev.language,
+                        int(prev.truncated),
+                        prev.summary,
+                    )
+                for link in node.links:
+                    link_map[(node.id, link.relation, link.target_id)] = (
+                        node.id,
+                        link.relation,
+                        link.target_id,
+                        link.label,
+                    )
+                for ref in node.attachments:
+                    att_sources[(node.id, ref.name)] = (node.id, ref)
+
+            if preview_map:
+                conn.executemany(
+                    (
+                        "INSERT INTO previews(node_id, slot, media_type, title, status, body, reason, language, truncated, summary) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    [preview_map[k] for k in sorted(preview_map)],
+                )
+            if link_map:
+                conn.executemany(
+                    "INSERT INTO links(source_id, relation, target_id, label) VALUES (?, ?, ?, ?)",
+                    [link_map[k] for k in sorted(link_map)],
+                )
+
             conn.executemany(
                 "INSERT INTO steps(item_id, name, at) VALUES (?, ?, ?)",
                 [(step.item_id, step.name, step.at) for step in state.steps],
@@ -311,48 +423,45 @@ def _build_sqlite_bytes(
             )
 
             attachment_rows: list[tuple[str, str, str, int, str, bytes | None]] = []
-            for item in state.items:
-                for ref in item.attachments:
-                    referenced_attachment_count += 1
-                    referenced_attachment_bytes += ref.size
-                    mt_entry = per_media_type.setdefault(
-                        ref.media_type, {"count": 0, "referenced_bytes": 0, "embedded_count": 0}
-                    )
-                    mt_entry["count"] += 1
-                    mt_entry["referenced_bytes"] += ref.size
+            for key in sorted(att_sources):
+                owner_id, ref = att_sources[key]
+                referenced_attachment_count += 1
+                referenced_attachment_bytes += ref.size
+                mt_entry = per_media_type.setdefault(
+                    ref.media_type, {"count": 0, "referenced_bytes": 0, "embedded_count": 0}
+                )
+                mt_entry["count"] += 1
+                mt_entry["referenced_bytes"] += ref.size
 
-                    if not include_attachments:
-                        attachment_rows.append((item.id, ref.name, ref.media_type, ref.size, ref.digest, None))
-                        continue
+                if not include_attachments:
+                    attachment_rows.append((owner_id, ref.name, ref.media_type, ref.size, ref.digest, None))
+                    continue
 
-                    if ref.media_type not in ALLOWED_EMBED_MEDIA_TYPES:
-                        skipped_disallowed_count += 1
-                        attachment_rows.append((item.id, ref.name, ref.media_type, ref.size, ref.digest, None))
-                        continue
+                if ref.media_type not in ALLOWED_EMBED_MEDIA_TYPES:
+                    skipped_disallowed_count += 1
+                    attachment_rows.append((owner_id, ref.name, ref.media_type, ref.size, ref.digest, None))
+                    continue
 
-                    if ref.digest in unique_blobs:
-                        # Deduplicated: payload already stored in attachment_blobs
-                        embedded_attachment_count += 1
-                        mt_entry["embedded_count"] += 1
-                        attachment_rows.append((item.id, ref.name, ref.media_type, ref.size, ref.digest, None))
-                        continue
-
-                    att = provider.attachment(item.id, ref.name)
-                    if att is None:
-                        missing_attachment_count += 1
-                        attachment_rows.append((item.id, ref.name, ref.media_type, ref.size, ref.digest, None))
-                        continue
-                    if att.media_type != ref.media_type or att.sha256 != ref.digest:
-                        raise ViewValidationError(
-                            "attachment-mismatch",
-                            f"attachment {item.id}/{ref.name} does not match declared metadata",
-                        )
-                    unique_blobs[att.sha256] = att.data
+                if ref.digest in unique_blobs:
                     embedded_attachment_count += 1
                     mt_entry["embedded_count"] += 1
-                    # Keep bytes NULL in attachments and store unique bytes once in attachment_blobs
-                    # to achieve genuine SHA-256 deduplication in the SQLite file.
-                    attachment_rows.append((item.id, ref.name, ref.media_type, att.size, att.sha256, None))
+                    attachment_rows.append((owner_id, ref.name, ref.media_type, ref.size, ref.digest, None))
+                    continue
+
+                att = provider.attachment(owner_id, ref.name)
+                if att is None:
+                    missing_attachment_count += 1
+                    attachment_rows.append((owner_id, ref.name, ref.media_type, ref.size, ref.digest, None))
+                    continue
+                if att.media_type != ref.media_type or att.sha256 != ref.digest:
+                    raise ViewValidationError(
+                        "attachment-mismatch",
+                        f"attachment {owner_id}/{ref.name} does not match declared metadata",
+                    )
+                unique_blobs[att.sha256] = att.data
+                embedded_attachment_count += 1
+                mt_entry["embedded_count"] += 1
+                attachment_rows.append((owner_id, ref.name, ref.media_type, att.size, att.sha256, None))
 
             conn.executemany(
                 "INSERT INTO attachment_blobs(sha256, bytes) VALUES (?, ?)",
@@ -375,6 +484,9 @@ def _build_sqlite_bytes(
     unique_blob_bytes = sum(len(blob) for blob in unique_blobs.values())
     stats: dict[str, object] = {
         "item_count": len(state.items),
+        "node_count": len(state.nodes),
+        "preview_count": len(preview_map),
+        "link_count": len(link_map),
         "group_count": len(state.groups),
         "stage_count": len(descriptor.stages),
         "step_count": len(state.steps),
@@ -437,7 +549,7 @@ def build_offline_export(
         include_attachments=include_attachments,
         room_id=room_id,
     )
-    db_gzip = gzip.compress(sqlite_bytes, compresslevel=9, mtime=0)
+    db_gzip = gzip_deterministic(sqlite_bytes)
     db_b64 = base64.b64encode(db_gzip).decode("ascii")
     db_sha256 = hashlib.sha256(sqlite_bytes).hexdigest()
 
@@ -465,7 +577,6 @@ def build_offline_export(
     if max_size_bytes is not None and len(final_bytes) > max_size_bytes:
         raise ExportSizeLimitError(len(final_bytes), max_size_bytes, accounting)
 
-    # Guardrail: no external CDN URLs in the non-blob shell of exported HTML
     shell_without_blobs = re.sub(
         r'<script[^>]+type="application/octet-stream"[^>]*>.*?</script>',
         "",

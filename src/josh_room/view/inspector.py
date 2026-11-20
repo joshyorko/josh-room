@@ -104,7 +104,19 @@ def inspect_view_snapshot(path: Path) -> dict[str, object]:
                 ).fetchall()
             }
             table_counts: dict[str, int] = {}
-            for name in ("meta", "groups", "stages", "items", "steps", "attachments", "attachment_blobs", "summary"):
+            for name in (
+                "meta",
+                "groups",
+                "stages",
+                "items",
+                "nodes",
+                "previews",
+                "links",
+                "steps",
+                "attachments",
+                "attachment_blobs",
+                "summary",
+            ):
                 if name in tables:
                     table_counts[name] = int(conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0])
 

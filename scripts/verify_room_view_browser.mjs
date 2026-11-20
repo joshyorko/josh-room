@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Headless Chrome (CDP) verification and synthetic screenshot receipt generator
- * for Josh Room View (issue #202).
+ * for Josh Room View (issue #202 — Pass 2: Isla Nublar UNIX FSN + NAVIGATE + INSPECT).
  *
  * Uses zero external npm dependencies (native Node 22+ WebSocket + Chrome DevTools Protocol).
  */
@@ -47,7 +47,10 @@ async function launchChrome({ chromePath, disableWebgl = false, width = 1440, he
   }
   args.push('about:blank');
 
-  const proc = spawn(chromePath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn(chromePath, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, TMPDIR: shortTmp },
+  });
   let stderrBuf = '';
   const wsUrl = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Chrome startup timeout. stderr=${stderrBuf}`)), 20000);
@@ -65,7 +68,6 @@ async function launchChrome({ chromePath, disableWebgl = false, width = 1440, he
     });
   });
 
-  // Get first page target WebSocket URL
   const port = new URL(wsUrl).port;
   const targetsResp = await fetch(`http://127.0.0.1:${port}/json/list`);
   const targets = await targetsResp.json();
@@ -169,6 +171,7 @@ async function main() {
   for (let i = 0; i < args.length; i += 2) {
     opt[args[i].replace(/^--/, '')] = args[i + 1];
   }
+  const htmlUnix = opt.htmlunix ? path.resolve(opt.htmlunix) : null;
   const html300 = opt.html300 ? path.resolve(opt.html300) : null;
   const html10 = opt.html10 ? path.resolve(opt.html10) : null;
   const html540 = opt.html540 ? path.resolve(opt.html540) : null;
@@ -183,9 +186,18 @@ async function main() {
       await cdpLive.send('Page.navigate', { url: liveUrl });
       await waitForAppBoot(cdpLive);
       await cdpLive.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.settle()');
-      await sleep(250);
+      await sleep(220);
       await cdpLive.evalJs(`(() => {
-        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('item-0001', true, true);
+        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('run-var-gate-verify', true, true);
+      })()`);
+      await sleep(300);
+      // Verify live /content/<id>/<slot> endpoint + PDF evidence + SQL + live inspector refresh
+      const contentApi = await cdpLive.evalJs(`(async () => {
+        const r = await fetch('/content/file-src-scheduler/diff', { cache: 'no-store' });
+        const data = await r.json();
+        return { status: r.status, slot: data?.preview?.slot || null, media: data?.preview?.media_type || null };
+      })()`);
+      await cdpLive.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
       })()`);
       await sleep(500);
@@ -195,12 +207,22 @@ async function main() {
         itemCount: window.__JOSH_ROOM_VIEW_DEBUG__.itemCount,
         exportBtnVisible: !document.getElementById('btn-export-live')?.hidden,
         pdfCanvases: document.querySelectorAll('#tab-evidence .pdf-page-slot canvas').length,
-        sqlRows: window.__JOSH_ROOM_VIEW_DEBUG__.runSql('SELECT COUNT(*) AS n FROM items').rowCount,
+        sqlNodesRows: window.__JOSH_ROOM_VIEW_DEBUG__.runSql('SELECT COUNT(*) AS n FROM nodes').rowCount,
+        sqlLinksRows: window.__JOSH_ROOM_VIEW_DEBUG__.runSql('SELECT COUNT(*) AS n FROM links').rowCount,
       }))()`);
-      console.log(JSON.stringify({ ok: liveCheck.mode === 'live' && liveCheck.webglActive && liveCheck.itemCount > 0 && liveCheck.exportBtnVisible && liveCheck.pdfCanvases >= 1 && liveCheck.sqlRows === 1, live: liveCheck }, null, 2));
-      if (!(liveCheck.mode === 'live' && liveCheck.webglActive && liveCheck.itemCount > 0 && liveCheck.exportBtnVisible && liveCheck.pdfCanvases >= 1 && liveCheck.sqlRows === 1)) {
-        process.exitCode = 1;
-      }
+      const ok = (
+        liveCheck.mode === 'live' &&
+        liveCheck.webglActive &&
+        liveCheck.itemCount > 0 &&
+        liveCheck.exportBtnVisible &&
+        liveCheck.pdfCanvases >= 1 &&
+        liveCheck.sqlNodesRows === 1 &&
+        liveCheck.sqlLinksRows === 1 &&
+        contentApi.status === 200 &&
+        contentApi.slot === 'diff'
+      );
+      console.log(JSON.stringify({ ok, live: liveCheck, contentApi }, null, 2));
+      if (!ok) process.exitCode = 1;
     } finally {
       await cdpLive.close();
     }
@@ -208,11 +230,13 @@ async function main() {
   }
 
   const receipt = {
-    schema_version: 1,
+    schema_version: 2,
     chrome: chromePath,
     viewport: '1440x900',
     zero_network: {},
     render_on_demand: {},
+    unix_navigate_inspect: {},
+    pr_review_regressions: {},
     performance: {},
     accessibility: {},
     security: {},
@@ -220,7 +244,6 @@ async function main() {
     screenshots: [],
   };
 
-  // --- PASS 1: WebGL enabled, strict zero-network interception from file:// ---
   const cdp = await launchChrome({ chromePath, disableWebgl: false });
   const networkRequests = [];
   const blockedExternalRequests = [];
@@ -243,7 +266,6 @@ async function main() {
     consoleErrors.push(p.exceptionDetails?.text || 'runtime-exception');
   });
 
-  // Intercept and block ALL http/https requests at the browser Fetch layer
   await cdp.send('Fetch.enable', {
     patterns: [
       { urlPattern: 'http://*' },
@@ -258,13 +280,291 @@ async function main() {
   });
 
   try {
+    // =========================================================================
+    // PART A: Flagship Synthetic UNIX Filesystem Navigator (synthetic-unix)
+    // =========================================================================
+    if (htmlUnix) {
+      const unixUrl = pathToFileURL(htmlUnix).href;
+      const unixStart = Date.now();
+      await cdp.send('Page.navigate', { url: unixUrl });
+      await waitForAppBoot(cdp);
+      const unixWallBootMs = Date.now() - unixStart;
+      await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.settle()');
+      await sleep(260);
+
+      const unixPerf = await cdp.evalJs(`(() => {
+        const d = window.__JOSH_ROOM_VIEW_DEBUG__;
+        return {
+          mode: d.mode,
+          webglActive: d.webglActive,
+          itemCount: d.itemCount,
+          firstFrameMs: d.firstFrameMs,
+          drawCalls: d.drawCalls,
+          cameraY: d.cameraY,
+          layoutSummary: d.layoutSummary,
+          inspectorHiddenOnLoad: Boolean(document.getElementById('inspector-drawer')?.hidden),
+          legendItems: Array.from(document.querySelectorAll('#legend-strip .legend-item')).map((el) => el.textContent.trim()),
+        };
+      })()`);
+
+      // 1. Night UNIX Root Overview (Isla Nublar near-ground entry!)
+      const pUnix01 = path.join(outDir, '01-night-unix-overview.png');
+      await cdp.screenshot(pUnix01);
+      receipt.screenshots.push(path.basename(pUnix01));
+
+      // 2. Fly INTO /src/core (arbitrary-depth corridor view showing files + /src/core/codec -> /vectors receding)
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.focusNode('node/dir-src-core', true);
+      })()`);
+      await sleep(220);
+      const breadcrumbsDir = await cdp.evalJs(`Array.from(document.querySelectorAll('#breadcrumbs .crumb-btn')).map((b) => b.textContent)`);
+      const pUnix02 = path.join(outDir, '02-night-unix-directory.png');
+      await cdp.screenshot(pUnix02);
+      receipt.screenshots.push(path.basename(pUnix02));
+
+      // 3. Spotlight v2 on /var/runs/gate-verify (no inspector so full overhead BEAM + floor pool is unobstructed)
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
+        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('run-var-gate-verify', false, true);
+      })()`);
+      await sleep(240);
+      const pUnix03 = path.join(outDir, '03-night-spotlight-v2.png');
+      await cdp.screenshot(pUnix03);
+      receipt.screenshots.push(path.basename(pUnix03));
+
+      // 4. Spotlight Baseline on same selected object for A/B comparison
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('baseline');
+        window.__JOSH_ROOM_VIEW_DEBUG__.settle();
+      })()`);
+      await sleep(220);
+      const pUnix04 = path.join(outDir, '04-night-spotlight-baseline.png');
+      await cdp.screenshot(pUnix04);
+      receipt.screenshots.push(path.basename(pUnix04));
+
+      // 5. Inspect Source & Unified Diff (/src/core/scheduler.py) with Spotlight v2
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
+        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-src-scheduler', true, true);
+      })()`);
+      await sleep(220);
+      const sourceCheck = await cdp.evalJs(`(() => ({
+        title: document.getElementById('inspector-title')?.textContent || '',
+        path: document.getElementById('inspector-path')?.textContent || '',
+        codeLines: document.querySelectorAll('#tab-content .code-line').length,
+        slots: Array.from(document.querySelectorAll('#tab-content [data-preview-slot]')).map((b) => b.dataset.previewSlot),
+        linkTargets: Array.from(document.querySelectorAll('#tab-content .link-chip')).map((b) => ({
+          rel: b.dataset.linkRelation,
+          target: b.dataset.linkTarget,
+        })),
+      }))()`);
+      // Switch to diff slot to verify unified diff highlighting too
+      await cdp.evalJs(`(() => {
+        const diffBtn = document.querySelector('#tab-content [data-preview-slot="diff"]');
+        if (diffBtn) diffBtn.click();
+      })()`);
+      await sleep(160);
+      const diffLineCount = await cdp.evalJs(`document.querySelectorAll('#tab-content .code-line.diff-add, #tab-content .code-line.diff-del').length`);
+      const pUnixSrc = path.join(outDir, '04b-night-inspect-source-diff.png');
+      await cdp.screenshot(pUnixSrc);
+      receipt.screenshots.push(path.basename(pUnixSrc));
+
+      // 6. Click producer -> /var/runs/gate-verify relationship link chip to jump across branches!
+      await cdp.evalJs(`(() => {
+        const chip = document.querySelector('#tab-content .link-chip[data-link-target="run-var-gate-verify"]');
+        if (chip) chip.click();
+        window.__JOSH_ROOM_VIEW_DEBUG__.settle();
+      })()`);
+      await sleep(240);
+      const runJumpCheck = await cdp.evalJs(`(() => ({
+        currentNodeId: window.__JOSH_ROOM_VIEW_DEBUG__.currentNodeId,
+        title: document.getElementById('inspector-title')?.textContent || '',
+        path: document.getElementById('inspector-path')?.textContent || '',
+        stepRows: document.querySelectorAll('#tab-content .run-step-row').length,
+        hasErrorBox: Boolean(document.querySelector('#tab-content .run-error-box')),
+        linkTargets: Array.from(document.querySelectorAll('#tab-content .link-chip')).map((b) => b.dataset.linkTarget),
+      }))()`);
+      const pUnixRun = path.join(outDir, '04c-night-inspect-run-jump.png');
+      await cdp.screenshot(pUnixRun);
+      receipt.screenshots.push(path.basename(pUnixRun));
+
+      // 7. Inspect collapsible JSON tree (/etc/policy.json) & explicit REDACTED card (/etc/vault.policy)
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-etc-policy-json', true, true);
+      })()`);
+      await sleep(200);
+      const jsonCheck = await cdp.evalJs(`(() => ({
+        detailsCount: document.querySelectorAll('#tab-content .json-tree details').length,
+        keyCount: document.querySelectorAll('#tab-content .json-key').length,
+      }))()`);
+      const pUnixJson = path.join(outDir, '04d-night-inspect-json-tree.png');
+      await cdp.screenshot(pUnixJson);
+      receipt.screenshots.push(path.basename(pUnixJson));
+
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-etc-vault-policy', true, true);
+      })()`);
+      await sleep(160);
+      const redactedCheck = await cdp.evalJs(`(() => ({
+        status: document.querySelector('#tab-content .unavail-card')?.dataset?.previewStatus || '',
+        badge: document.querySelector('#tab-content .unavail-badge')?.textContent || '',
+      }))()`);
+
+      // 8. Click through to /var/artifacts/report.html -> verify PDF + Inert HTML XSS safety on UNIX fixture!
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-var-report-html', true, true);
+        window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
+      })()`);
+      let unixPdfInfo = { canvasCount: 0, firstPageMs: -1 };
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        await sleep(160);
+        unixPdfInfo = await cdp.evalJs(`(() => {
+          const canvases = document.querySelectorAll('#tab-evidence .pdf-page-slot canvas');
+          const infoEl = document.querySelector('#tab-evidence .pdf-controls .muted-text');
+          return { canvasCount: canvases.length, firstPageMs: Number(infoEl?.dataset?.firstPageMs || -1) };
+        })()`);
+        if (unixPdfInfo.canvasCount >= 1 && unixPdfInfo.firstPageMs >= 0) break;
+      }
+
+      // 9. Verify Grass Theme on UNIX filesystem (Overview, Directory, Spotlight v2, Spotlight Baseline)
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.hideInspector();
+        window.__JOSH_ROOM_VIEW_DEBUG__.setTheme('grass');
+        window.__JOSH_ROOM_VIEW_DEBUG__.frameAll(true);
+      })()`);
+      await sleep(220);
+      const pGrass05 = path.join(outDir, '05-grass-unix-overview.png');
+      await cdp.screenshot(pGrass05);
+      receipt.screenshots.push(path.basename(pGrass05));
+
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.focusNode('node/dir-src-core', true);
+      })()`);
+      await sleep(200);
+      const pGrass06 = path.join(outDir, '06-grass-unix-directory.png');
+      await cdp.screenshot(pGrass06);
+      receipt.screenshots.push(path.basename(pGrass06));
+
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
+        window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('run-var-gate-verify', false, true);
+      })()`);
+      await sleep(220);
+      const pGrass07 = path.join(outDir, '07-grass-spotlight-v2.png');
+      await cdp.screenshot(pGrass07);
+      receipt.screenshots.push(path.basename(pGrass07));
+
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('baseline');
+        window.__JOSH_ROOM_VIEW_DEBUG__.settle();
+      })()`);
+      await sleep(200);
+      const pGrass08 = path.join(outDir, '08-grass-spotlight-baseline.png');
+      await cdp.screenshot(pGrass08);
+      receipt.screenshots.push(path.basename(pGrass08));
+
+      // 10. Verify single-key dispatch inside APG ARIA tree (PR #205 review regression test!)
+      const treeKeyCheck = await cdp.evalJs(`(() => {
+        const app = window.__JOSH_ROOM_VIEW_APP__;
+        app.frameAll({ instant: true });
+        const rootEl = document.getElementById('aria-tree-root');
+        const firstTreeItem = rootEl.querySelector('[role="treeitem"]');
+        const beforeOrder = app.ariaTree.flatOrder.slice();
+        const beforeId = app.ariaTree.focusedId;
+        firstTreeItem.focus();
+        firstTreeItem.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+        const afterId = app.ariaTree.focusedId;
+        const expectedNext = beforeOrder[1];
+        return { beforeId, afterId, expectedNext, singleStepOnly: afterId === expectedNext };
+      })()`);
+
+      // 11. Verify collision-free group/stage IDs (PR #205 review regression test!)
+      const collisionCheck = await cdp.evalJs(`(() => {
+        const L = window.RoomViewLayout;
+        const desc = {
+          title: 'Colon Test',
+          stages: [{ id: 'b::c', name: 'BC', order: 0 }, { id: 'c', name: 'C', order: 1 }],
+          legend: { error: { label: 'Error', color: '#E11D48', shape: 'notch' } },
+        };
+        const st = {
+          groups: [{ id: 'a', name: 'A', order: 0 }, { id: 'a::b', name: 'AB', order: 1 }],
+          items: [
+            { id: 'i1', group: 'a', stage: 'b::c', kind: 'error', label: 'one', updated_at: '2026-11-20T00:00:00Z', metric: 10 },
+            { id: 'i2', group: 'a::b', stage: 'c', kind: 'error', label: 'two', updated_at: '2026-11-20T00:00:00Z', metric: 20 },
+          ],
+        };
+        const lay = L.buildFsnLayout(desc, st);
+        const stagePeds = lay.pedestals.filter((p) => p.nodeType === 'stage');
+        const counts = L.outcomeCounts(st.items, desc);
+        const badge = L.formatOutcomeBadge(desc, 'error');
+        return {
+          distinctStagePedestals: stagePeds.length === 2 && stagePeds[0].id !== stagePeds[1].id,
+          noDuplicateBlocks: lay.blocks.length === 2,
+          customLegendPassIsZero: counts.pass === 0 && counts.fail === 2,
+          customLegendBadge: badge,
+        };
+      })()`);
+
+      // Switch back to night & verify SQL nodes/links query
+      await cdp.evalJs(`(() => {
+        window.__JOSH_ROOM_VIEW_DEBUG__.setTheme('night');
+        window.__JOSH_ROOM_VIEW_DEBUG__.setViewMode('sql');
+      })()`);
+      const unixSqlLinks = await cdp.evalJs(`window.__JOSH_ROOM_VIEW_DEBUG__.runSql("SELECT s.path, l.relation, t.path FROM links l JOIN nodes s ON s.id = l.source_id JOIN nodes t ON t.id = l.target_id")`);
+      await sleep(160);
+      const pSql = path.join(outDir, '10-sql-console.png');
+      await cdp.screenshot(pSql);
+      receipt.screenshots.push(path.basename(pSql));
+
+      receipt.unix_navigate_inspect = {
+        ...unixPerf,
+        wallBootMs: unixWallBootMs,
+        file_bytes: fs.statSync(htmlUnix).size,
+        breadcrumbs_inside_dir: breadcrumbsDir,
+        source_preview: sourceCheck,
+        diff_highlight_lines: diffLineCount,
+        relationship_link_jump: runJumpCheck,
+        json_tree: jsonCheck,
+        redacted_card: redactedCheck,
+        unix_pdf: unixPdfInfo,
+        sql_links_rows: unixSqlLinks.rowCount,
+        pass: (
+          unixPerf.webglActive === true &&
+          unixPerf.layoutSummary.isUnixTree === true &&
+          unixPerf.layoutSummary.maxDepth >= 4 &&
+          sourceCheck.codeLines >= 15 &&
+          diffLineCount >= 3 &&
+          runJumpCheck.currentNodeId === 'node/run-var-gate-verify' &&
+          runJumpCheck.stepRows >= 4 &&
+          runJumpCheck.hasErrorBox === true &&
+          jsonCheck.detailsCount >= 3 &&
+          redactedCheck.status === 'redacted' &&
+          unixPdfInfo.canvasCount >= 1 &&
+          unixSqlLinks.rowCount >= 10
+        ),
+      };
+      receipt.pr_review_regressions = {
+        tree_single_key_dispatch: treeKeyCheck,
+        collision_free_and_custom_legend: collisionCheck,
+        pass: (
+          treeKeyCheck.singleStepOnly === true &&
+          collisionCheck.distinctStagePedestals === true &&
+          collisionCheck.noDuplicateBlocks === true &&
+          collisionCheck.customLegendPassIsZero === true &&
+          collisionCheck.customLegendBadge === '× Error'
+        ),
+      };
+    }
+
+    // =========================================================================
+    // PART B: Legacy 300-item Pipeline Backwards-Compat, Render-on-Demand,
+    // PDF, Inert HTML XSS Probe, Reduced Motion & Scale (10 / 540 items)
+    // =========================================================================
     const fileUrl300 = pathToFileURL(html300).href;
     const navStart = Date.now();
     await cdp.send('Page.navigate', { url: fileUrl300 });
     await waitForAppBoot(cdp);
     const wallBootMs = Date.now() - navStart;
-
-    // Wait briefly for initial establishing shot / settle
     await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.settle()');
     await sleep(250);
 
@@ -290,7 +590,6 @@ async function main() {
       };
     })()`);
 
-    // 1. Render-on-demand verification: measure idle renders over 1200ms
     const beforeIdle = await cdp.evalJs('({ r: window.__JOSH_ROOM_VIEW_DEBUG__.renderCount, s: window.__JOSH_ROOM_VIEW_DEBUG__.shadowUpdateCount })');
     await sleep(1200);
     const afterIdle = await cdp.evalJs('({ r: window.__JOSH_ROOM_VIEW_DEBUG__.renderCount, s: window.__JOSH_ROOM_VIEW_DEBUG__.shadowUpdateCount })');
@@ -301,21 +600,10 @@ async function main() {
       pass: (afterIdle.r - beforeIdle.r) === 0 && (afterIdle.s - beforeIdle.s) === 0,
     };
 
-    // 2. Capture Night Overview (full viewport, no inspector)
-    const p1 = path.join(outDir, '01-night-overview.png');
-    await cdp.screenshot(p1);
-    receipt.screenshots.push(path.basename(p1));
+    const pPipe01 = path.join(outDir, '01b-night-pipeline-300-overview.png');
+    await cdp.screenshot(pPipe01);
+    receipt.screenshots.push(path.basename(pPipe01));
 
-    // 3. Capture Night Intermediate Directory (sector-beta/verify with +9 more SpaceTree block)
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.focusNode('stage:sector-beta:verify', true);
-    })()`);
-    await sleep(180);
-    const p2 = path.join(outDir, '02-night-directory.png');
-    await cdp.screenshot(p2);
-    receipt.screenshots.push(path.basename(p2));
-
-    // 4. Select a failing item with PDF + images + HTML report (item-0061 or first fail in sector-beta:verify)
     const targetFailId = await cdp.evalJs(`(() => {
       const app = window.__JOSH_ROOM_VIEW_APP__;
       const fail = app.data.state.items.find((it) => it.group === 'sector-beta' && it.stage === 'verify' && it.kind === 'fail');
@@ -325,36 +613,15 @@ async function main() {
     const shadowBeforeSelect = await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.shadowUpdateCount');
     await cdp.evalJs(`(() => {
       window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
-      window.__JOSH_ROOM_VIEW_DEBUG__.selectItem(${JSON.stringify(targetFailId)}, false, true);
-    })()`);
-    await sleep(220);
-    const shadowAfterSelect = await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.shadowUpdateCount');
-    const firstClickMs = await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.lastFirstClickMs');
-    const liveAnnouncement = await cdp.evalJs('document.getElementById("aria-live-region")?.textContent || ""');
-
-    const p3 = path.join(outDir, '03-night-spotlight-v2.png');
-    await cdp.screenshot(p3);
-    receipt.screenshots.push(path.basename(p3));
-
-    // 5. Same selected item with Spotlight Baseline for direct A/B comparison
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('baseline');
-      window.__JOSH_ROOM_VIEW_DEBUG__.settle();
-    })()`);
-    await sleep(200);
-    const p4 = path.join(outDir, '04-night-spotlight-baseline.png');
-    await cdp.screenshot(p4);
-    receipt.screenshots.push(path.basename(p4));
-
-    // Switch back to v2 and open Inspector Drawer + Evidence PDF + Inert HTML probe
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
       window.__JOSH_ROOM_VIEW_DEBUG__.selectItem(${JSON.stringify(targetFailId)}, true, true);
       window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
       const pdfBtn = Array.from(document.querySelectorAll('#tab-evidence .att-pill')).find((b) => b.dataset.attachmentName === 'evidence-report.pdf');
       if (pdfBtn) pdfBtn.click();
     })()`);
-    // Wait up to 4s for pdf.js worker decode + first page canvas render
+    const shadowAfterSelect = await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.shadowUpdateCount');
+    const firstClickMs = await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.lastFirstClickMs');
+    const liveAnnouncement = await cdp.evalJs('document.getElementById("aria-live-region")?.textContent || ""');
+
     let pdfInfo = { canvasCount: 0, infoText: '', firstPageMs: -1, statusText: '' };
     for (let attempt = 0; attempt < 25; attempt += 1) {
       await sleep(160);
@@ -376,14 +643,14 @@ async function main() {
     await cdp.screenshot(p3b);
     receipt.screenshots.push(path.basename(p3b));
 
-    // Test Inert HTML attachment script execution probe (select item-0001 which carries comparison.html with script probe)
+    // Inert HTML attachment XSS safety probe
     await cdp.evalJs(`(() => {
       window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('item-0001', true, true);
       window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
       const htmlBtn = Array.from(document.querySelectorAll('#tab-evidence .att-pill')).find((b) => b.dataset.attachmentName === 'comparison.html');
       if (htmlBtn) htmlBtn.click();
     })()`);
-    await sleep(300);
+    await sleep(280);
     const htmlSafety = await cdp.evalJs(`(() => ({
       xssExecuted: typeof window.__JOSH_ROOM_HTML_ATTACHMENT_XSS__ !== 'undefined',
       inertBadge: document.querySelector('#tab-evidence .inert-badge')?.textContent || '',
@@ -396,58 +663,10 @@ async function main() {
       pass: htmlSafety.xssExecuted === false && htmlSafety.tableRows >= 3,
     };
 
-    // 6. Test SQL Console preset query
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.hideInspector();
-      window.__JOSH_ROOM_VIEW_DEBUG__.setViewMode('sql');
-    })()`);
     const sqlRes = await cdp.evalJs(`window.__JOSH_ROOM_VIEW_DEBUG__.runSql()`);
-    await sleep(180);
-    const pSql = path.join(outDir, '10-sql-console.png');
-    await cdp.screenshot(pSql);
-    receipt.screenshots.push(path.basename(pSql));
-
-    // Also prove read-only SQL blocks mutations
     const sqlMutationRes = await cdp.evalJs(`window.__JOSH_ROOM_VIEW_DEBUG__.runSql("DROP TABLE items;")`);
 
-    // 7. Grass Theme captures (Overview, Intermediate Directory, Spotlight v2, Spotlight Baseline)
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.setViewMode('3d');
-      window.__JOSH_ROOM_VIEW_DEBUG__.setTheme('grass');
-      window.__JOSH_ROOM_VIEW_DEBUG__.frameAll(true);
-    })()`);
-    await sleep(220);
-    const p5 = path.join(outDir, '05-grass-overview.png');
-    await cdp.screenshot(p5);
-    receipt.screenshots.push(path.basename(p5));
-
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.focusNode('stage:sector-beta:verify', true);
-    })()`);
-    await sleep(180);
-    const p6 = path.join(outDir, '06-grass-directory.png');
-    await cdp.screenshot(p6);
-    receipt.screenshots.push(path.basename(p6));
-
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
-      window.__JOSH_ROOM_VIEW_DEBUG__.selectItem(${JSON.stringify(targetFailId)}, false, true);
-    })()`);
-    await sleep(220);
-    const p7 = path.join(outDir, '07-grass-spotlight-v2.png');
-    await cdp.screenshot(p7);
-    receipt.screenshots.push(path.basename(p7));
-
-    await cdp.evalJs(`(() => {
-      window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('baseline');
-      window.__JOSH_ROOM_VIEW_DEBUG__.settle();
-    })()`);
-    await sleep(200);
-    const p8 = path.join(outDir, '08-grass-spotlight-baseline.png');
-    await cdp.screenshot(p8);
-    receipt.screenshots.push(path.basename(p8));
-
-    // 8. Reduced motion capture (emulating prefers-reduced-motion: reduce)
+    // Reduced motion capture
     await cdp.send('Emulation.setEmulatedMedia', {
       features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
     });
@@ -457,12 +676,12 @@ async function main() {
       window.__JOSH_ROOM_VIEW_DEBUG__.setReducedMotion(true);
       window.__JOSH_ROOM_VIEW_DEBUG__.selectItem(${JSON.stringify(targetFailId)}, false, true);
     })()`);
-    await sleep(200);
+    await sleep(180);
     const p9 = path.join(outDir, '09-night-reduced-motion.png');
     await cdp.screenshot(p9);
     receipt.screenshots.push(path.basename(p9));
 
-    // 9. Verify keyboard shortcuts & APG ARIA tree synchronization
+    // Keyboard ] shortcut sync check
     await cdp.evalJs(`(() => {
       window.__JOSH_ROOM_VIEW_DEBUG__.frameAll(true);
       document.dispatchEvent(new KeyboardEvent('keydown', { key: ']', bubbles: true }));
@@ -474,13 +693,13 @@ async function main() {
       liveText: document.getElementById('aria-live-region')?.textContent || '',
     }))()`);
 
-    // 10. Scale check: 10-item and 540-item fixtures
+    // Scale checks: 10 & 540 items
     let perf540 = null;
     if (html10) {
       await cdp.send('Page.navigate', { url: pathToFileURL(html10).href });
       await waitForAppBoot(cdp);
       await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.settle()');
-      await sleep(200);
+      await sleep(180);
       const p10 = path.join(outDir, '11-scale-10-items.png');
       await cdp.screenshot(p10);
       receipt.screenshots.push(path.basename(p10));
@@ -491,7 +710,7 @@ async function main() {
       await waitForAppBoot(cdp);
       const boot540Ms = Date.now() - start540;
       await cdp.evalJs('window.__JOSH_ROOM_VIEW_DEBUG__.settle()');
-      await sleep(200);
+      await sleep(180);
       perf540 = await cdp.evalJs(`(() => ({
         itemCount: window.__JOSH_ROOM_VIEW_DEBUG__.itemCount,
         firstFrameMs: window.__JOSH_ROOM_VIEW_DEBUG__.firstFrameMs,
@@ -539,34 +758,42 @@ async function main() {
     await cdp.close();
   }
 
-  // --- PASS 2: WebGL disabled fallback verification ---
+  // --- WebGL disabled 2D Grid fallback verification ---
   const cdpNoGl = await launchChrome({ chromePath, disableWebgl: true });
   try {
-    await cdpNoGl.send('Page.navigate', { url: pathToFileURL(html300).href });
+    await cdpNoGl.send('Page.navigate', { url: pathToFileURL(htmlUnix || html300).href });
     await waitForAppBoot(cdpNoGl);
     await sleep(300);
     const fb = await cdpNoGl.evalJs(`(() => {
       const d = window.__JOSH_ROOM_VIEW_DEBUG__;
       const sqlOut = d.runSql('SELECT COUNT(*) AS n FROM items');
-      d.selectItem('item-0001', true, true);
-      d.openEvidenceTab();
+      d.selectItem(${JSON.stringify(htmlUnix ? 'file-src-scheduler' : 'item-0001')}, true, true);
       return {
         webglActive: d.webglActive,
         viewMode: d.viewMode,
         gridVisible: !document.getElementById('grid-view')?.hidden,
         noticeVisible: !document.getElementById('webgl-fallback-notice')?.hidden,
         tileCount: document.querySelectorAll('.grid-tile').length,
+        filterChipCount: document.querySelectorAll('#grid-filters .filter-chip').length,
         sqlRowCount: sqlOut.rowCount,
         inspectorOpen: !document.getElementById('inspector-drawer')?.hidden,
       };
     })()`);
-    await sleep(250);
+    await sleep(220);
     const pFb = path.join(outDir, '13-webgl-off-grid-fallback.png');
     await cdpNoGl.screenshot(pFb);
     receipt.screenshots.push(path.basename(pFb));
     receipt.fallback_webgl_off = {
       ...fb,
-      pass: fb.webglActive === false && fb.viewMode === 'grid' && fb.gridVisible && fb.tileCount === 300 && fb.sqlRowCount === 1 && fb.inspectorOpen,
+      pass: (
+        fb.webglActive === false &&
+        fb.viewMode === 'grid' &&
+        fb.gridVisible &&
+        fb.tileCount > 0 &&
+        fb.filterChipCount >= 4 &&
+        fb.sqlRowCount === 1 &&
+        fb.inspectorOpen
+      ),
     };
   } finally {
     await cdpNoGl.close();
@@ -581,6 +808,8 @@ async function main() {
     receipt.render_on_demand.pass &&
     receipt.security.pass &&
     receipt.fallback_webgl_off.pass &&
+    (!htmlUnix || receipt.unix_navigate_inspect.pass) &&
+    (!htmlUnix || receipt.pr_review_regressions.pass) &&
     receipt.performance.fixture_300.webglActive === true &&
     receipt.performance.fixture_300.pdf_first_page.canvasCount >= 1 &&
     receipt.performance.fixture_300.sql_preset_rows > 0 &&

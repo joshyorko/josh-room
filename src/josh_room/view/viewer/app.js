@@ -1,4 +1,6 @@
 // Main shared Room View controller (used identically by live localhost and offline single-file HTML).
+// Implements arbitrary-depth NAVIGATE, typed read-only INSPECT, clickable relationship jumps,
+// custom legend rendering, live-poll inspector reconciliation, and single-handled keyboard events.
 (function (global) {
   'use strict';
 
@@ -17,7 +19,7 @@
         (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
       );
 
-      this.expandedGroups = new Set();
+      this.expandedDirs = new Set();
       this.expandedPedestals = new Set();
       this.history = [];
       this.currentNodeId = 'root';
@@ -32,7 +34,9 @@
       this.searchInputEl = document.getElementById('search-input');
       this.searchBarEl = document.getElementById('search-results-bar');
 
-      this.evidence = new global.RoomViewEvidence.EvidenceDrawer(dataLayer, loadPdfJs);
+      this.evidence = new global.RoomViewEvidence.EvidenceDrawer(dataLayer, loadPdfJs, {
+        onJumpToObject: (objectId) => this.selectItemById(objectId, { openInspector: true }),
+      });
       this.sqlConsole = new global.RoomViewSql.SqlConsoleView(dataLayer);
       this.gridView = new global.RoomViewGrid.GridFallbackView(
         document.getElementById('grid-content'),
@@ -77,9 +81,7 @@
         this.scene3d.setReducedMotion(this.reducedMotion);
         this.scene3d.setSpotlightMode(this.spotlightMode);
         this.webglActive = true;
-        if (descriptorWantsGrid) {
-          this.setViewMode('grid');
-        }
+        if (descriptorWantsGrid) this.setViewMode('grid');
       } catch (_) {
         this.scene3d = null;
         this._activateWebglFallback();
@@ -95,6 +97,45 @@
       this.setViewMode('grid');
     }
 
+    _renderBottomLegend(descriptor) {
+      const strip = document.getElementById('legend-strip');
+      if (!strip) return;
+      strip.textContent = '';
+      const entries = global.RoomViewLayout.getLegendEntries(descriptor);
+      for (const entry of entries) {
+        const span = document.createElement('span');
+        span.className = 'legend-item';
+        const sw = document.createElement('span');
+        sw.className = 'swatch';
+        sw.setAttribute('aria-hidden', 'true');
+        if (entry.shape === 'hollow') {
+          sw.style.border = `2px solid ${entry.color}`;
+          sw.style.background = 'transparent';
+        } else {
+          sw.style.background = entry.color;
+          if (entry.shape === 'notch') {
+            sw.style.color = '#fff';
+            sw.textContent = '×';
+          }
+        }
+        span.append(sw, document.createTextNode(entry.label));
+        strip.appendChild(span);
+      }
+      const sep = document.createElement('span');
+      sep.className = 'legend-sep';
+      sep.setAttribute('aria-hidden', 'true');
+      sep.textContent = '|';
+      const metricSpan = document.createElement('span');
+      metricSpan.id = 'legend-metric';
+      metricSpan.className = 'legend-metric';
+      if (descriptor && descriptor.metric) {
+        metricSpan.textContent = `Height: ${descriptor.metric.name} (5 quantile bins${descriptor.metric.unit ? `, ${descriptor.metric.unit}` : ''})`;
+      } else {
+        metricSpan.textContent = 'Height: 5 quantile bins';
+      }
+      strip.append(sep, metricSpan);
+    }
+
     _syncFromData({ isInitial = false } = {}) {
       const desc = this.data.descriptor;
       const state = this.data.state;
@@ -102,7 +143,6 @@
 
       document.title = `${desc.title || 'Josh Room View'} — Room View`;
 
-      // Mode & sensitivity badges/banners
       const modeBadge = document.getElementById('badge-mode');
       modeBadge.textContent = this.data.mode === 'live' ? 'LIVE' : 'OFFLINE';
 
@@ -129,25 +169,48 @@
       const liveExportBtn = document.getElementById('btn-export-live');
       liveExportBtn.hidden = this.data.mode !== 'live';
 
-      const metricLabel = document.getElementById('legend-metric');
-      if (desc.metric) {
-        metricLabel.textContent = `Height: ${desc.metric.name} (5 quantile bins${desc.metric.unit ? `, ${desc.metric.unit}` : ''})`;
+      this._renderBottomLegend(desc);
+      this._rebuildLayout({ runEstablishingShot: isInitial, preserveCamera: !isInitial });
+      this.gridView.render(desc, state, this.layout);
+      this.sqlConsole.renderPresets(desc);
+
+      // Reconcile open inspector drawer against refreshed state after live poll!
+      if (!isInitial && this.evidence.isOpen() && this.evidence.currentObjectId) {
+        const objId = this.evidence.currentObjectId;
+        const refreshedLeaf = this.layout.allLeavesByObjectId.get(objId);
+        if (refreshedLeaf) {
+          const blockNode = this.layout.itemNodeById.get(objId);
+          const qBin = blockNode
+            ? blockNode.quantileBin
+            : global.RoomViewLayout.metricToQuantileBin(refreshedLeaf.metric, this.layout.quantileBreaks) + 1;
+          this.evidence.showTarget(refreshedLeaf, desc, state, this.layout, {
+            quantileBin: qBin,
+            preserveTab: true,
+          });
+        } else {
+          this.evidence.hide();
+          if (this.scene3d) this.scene3d.clearSpotlight();
+          if (!this.layout.nodeById.has(this.currentNodeId)) {
+            this.currentNodeId = 'root';
+          }
+        }
       }
 
-      this._rebuildLayout({ runEstablishingShot: isInitial });
-      this.gridView.render(desc, state);
-      this.sqlConsole.renderPresets(desc);
       this._updateBreadcrumbs();
       this._updateTelemetry();
     }
 
-    _rebuildLayout({ runEstablishingShot = false } = {}) {
+    _rebuildLayout({ runEstablishingShot = false, preserveCamera = false } = {}) {
       this.layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor, this.data.state, {
-        expandedGroups: this.expandedGroups,
+        expandedDirs: this.expandedDirs,
         expandedPedestals: this.expandedPedestals,
       });
       if (this.scene3d) {
-        this.scene3d.setLayout(this.layout, { runEstablishingShot });
+        this.scene3d.setLayout(this.layout, {
+          descriptor: this.data.descriptor,
+          runEstablishingShot,
+          preserveCamera,
+        });
       }
       this.ariaTree.build(this.data.descriptor, this.data.state, this.layout);
     }
@@ -168,33 +231,54 @@
       document.getElementById('btn-mode-3d').classList.toggle('active', mode === '3d');
       document.getElementById('btn-mode-grid').classList.toggle('active', mode === 'grid');
       document.getElementById('btn-mode-sql').classList.toggle('active', mode === 'sql');
-      if (mode === '3d' && this.scene3d) {
-        this.scene3d.requestRender();
-      }
+      if (mode === '3d' && this.scene3d) this.scene3d.requestRender();
     }
 
     expandPedestal(pedestalId) {
       this.expandedPedestals.add(pedestalId);
-      this._rebuildLayout({ runEstablishingShot: false });
+      this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
       this.handleNodeSelect(pedestalId, { pushHistory: false });
     }
 
-    expandGroup(groupId) {
-      this.expandedGroups.add(groupId);
-      this._rebuildLayout({ runEstablishingShot: false });
+    expandDirectory(dirId) {
+      this.expandedDirs.add(dirId);
+      this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
+    }
+
+    _ensureAncestorsExpanded(treeNodeId) {
+      if (!this.layout || !this.layout.allTreeNodesById) return false;
+      let rebuilt = false;
+      let cur = this.layout.allTreeNodesById.get(treeNodeId);
+      while (cur && cur.parentId) {
+        const parentId = cur.parentId;
+        const parentPed = this.layout.nodeById.get(parentId);
+        if (parentPed && parentPed.collapsed) {
+          this.expandedDirs.add(parentId);
+          rebuilt = true;
+        }
+        cur = this.layout.allTreeNodesById.get(parentId);
+      }
+      if (rebuilt) {
+        this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
+      }
+      return rebuilt;
     }
 
     handleNodeSelect(nodeId, { shiftKey = false, fromTree = false, pushHistory = true, instant = false } = {}) {
       if (!this.layout) return;
-      // Handle "+N more" and collapsed stage summaries cleanly
-      const node = this.layout.nodeById.get(nodeId);
+      let node = this.layout.nodeById.get(nodeId);
       if (!node) {
-        // Item may currently be inside a collapsed group (>50) or aggregated >16 pedestal!
-        if (nodeId.startsWith('item:')) {
-          const rawItemId = nodeId.slice(5);
-          this.selectItemById(rawItemId, { openInspector: true, instant });
+        // Node may live inside a collapsed subtree (>50) or aggregated >16 pedestal!
+        const treeNode = this.layout.allTreeNodesById && this.layout.allTreeNodesById.get(nodeId);
+        if (treeNode) {
+          if (treeNode.nodeType === 'item') {
+            this.selectItemById(treeNode.objectId, { openInspector: true, instant });
+            return;
+          }
+          this._ensureAncestorsExpanded(nodeId);
+          node = this.layout.nodeById.get(nodeId);
         }
-        return;
+        if (!node) return;
       }
 
       if (node.nodeType === 'more') {
@@ -203,13 +287,13 @@
       }
 
       if (node.nodeType === 'stage-summary') {
-        this.expandGroup(node.groupId);
-        this.handleNodeSelect(`stage:${node.groupId}:${node.stageId}`, { instant });
+        this.expandDirectory(node.expandDirId);
+        this.handleNodeSelect(node.targetDirId, { instant });
         return;
       }
 
-      if (node.nodeType === 'group' && node.collapsed) {
-        this.expandGroup(node.groupId);
+      if ((node.nodeType === 'directory' || node.nodeType === 'group') && node.collapsed) {
+        this.expandDirectory(node.id);
       }
 
       if (pushHistory && this.currentNodeId && this.currentNodeId !== nodeId) {
@@ -225,13 +309,17 @@
       }
 
       if (freshNode.nodeType === 'item') {
-        this.evidence.showItem(freshNode.item, this.data.descriptor, this.data.state, freshNode.quantileBin);
-        const announcement = `Focused ${freshNode.groupId} / ${freshNode.stageId} / ${freshNode.label}, ${freshNode.kind}${freshNode.item.metric != null ? `, ${freshNode.item.metric}` : ''}`;
+        const entry = global.RoomViewLayout.getLegendEntry(this.data.descriptor, freshNode.kind);
+        this.evidence.showTarget(freshNode.item, this.data.descriptor, this.data.state, this.layout, {
+          quantileBin: freshNode.quantileBin,
+          preserveTab: false,
+        });
+        const announcement = `Focused ${freshNode.path}, ${entry.label}${freshNode.item.metric != null ? `, ${freshNode.item.metric}` : ''}`;
         if (!fromTree) this.ariaTree.syncFromWorld(nodeId, announcement);
         else this.ariaTree.announce(announcement);
       } else {
         this.evidence.hide();
-        const announcement = `Focused directory ${freshNode.label}, ${freshNode.counts ? freshNode.counts.total : 0} items`;
+        const announcement = `Entered directory ${freshNode.path || freshNode.label}, ${freshNode.counts ? freshNode.counts.total : 0} items`;
         if (!fromTree) this.ariaTree.syncFromWorld(nodeId, announcement);
         else this.ariaTree.announce(announcement);
       }
@@ -239,24 +327,33 @@
       this._updateTelemetry();
     }
 
-    selectItemById(itemId, { openInspector = true, instant = false } = {}) {
-      const item = (this.data.state.items || []).find((it) => it.id === itemId);
-      if (!item) return false;
-      // Ensure group (>50) and pedestal (>16) are expanded if item was aggregated
-      let rebuilt = false;
-      const gNode = this.layout.nodeById.get(`group:${item.group}`);
-      if (gNode && gNode.collapsed) {
-        this.expandedGroups.add(item.group);
-        rebuilt = true;
+    selectItemById(objectId, { openInspector = true, instant = false } = {}) {
+      if (!this.layout) return false;
+      const leaf = this.layout.allLeavesByObjectId.get(objectId);
+      if (!leaf) {
+        // Also support jumping to a directory by objectId or treeId
+        if (this.layout.allTreeNodesById.has(objectId)) {
+          this.handleNodeSelect(objectId, { instant });
+          return true;
+        }
+        for (const tn of this.layout.allTreeNodesById.values()) {
+          if (tn.objectId === objectId) {
+            this.handleNodeSelect(tn.id, { instant });
+            return true;
+          }
+        }
+        return false;
       }
-      if (!this.layout.itemNodeById.has(item.id)) {
-        this.expandedPedestals.add(`stage:${item.group}:${item.stage}`);
+
+      let rebuilt = this._ensureAncestorsExpanded(leaf.id);
+      if (!this.layout.itemNodeById.has(objectId)) {
+        this.expandedPedestals.add(leaf.parentId);
         rebuilt = true;
       }
       if (rebuilt) {
-        this._rebuildLayout({ runEstablishingShot: false });
+        this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
       }
-      this.handleNodeSelect(`item:${item.id}`, { instant });
+      this.handleNodeSelect(leaf.id, { instant });
       if (!openInspector) this.evidence.hide();
       return true;
     }
@@ -287,10 +384,11 @@
     }
 
     stepFailure(delta) {
-      const failures = (this.data.state.items || []).filter((it) => it.kind === 'fail');
+      const allLeaves = (this.layout && this.layout.allLeaves) || [];
+      const failures = allLeaves.filter((leaf) => global.RoomViewLayout.getLegendEntry(this.data.descriptor, leaf.kind).isFailure);
       if (!failures.length) return;
       this.failureIndex = (this.failureIndex + delta + failures.length) % failures.length;
-      this.selectItemById(failures[this.failureIndex].id, { openInspector: true });
+      this.selectItemById(failures[this.failureIndex].objectId, { openInspector: true });
     }
 
     _updateBreadcrumbs() {
@@ -298,16 +396,16 @@
       nav.textContent = '';
       if (!this.layout) return;
       const chain = [];
-      let cur = this.layout.nodeById.get(this.currentNodeId);
+      let cur = this.layout.allTreeNodesById.get(this.currentNodeId) || this.layout.nodeById.get(this.currentNodeId);
       while (cur) {
         chain.unshift(cur);
-        cur = cur.parentId ? this.layout.nodeById.get(cur.parentId) : null;
+        cur = cur.parentId ? (this.layout.allTreeNodesById.get(cur.parentId) || this.layout.nodeById.get(cur.parentId)) : null;
       }
       if (!chain.length && this.layout.nodeById.has('root')) {
         chain.push(this.layout.nodeById.get('root'));
       }
       chain.forEach((node, idx) => {
-        if (idx > 0) {
+        if (idx > 0 && !(idx === 1 && chain[0].nodeType === 'root')) {
           const sep = document.createElement('span');
           sep.className = 'crumb-sep';
           sep.textContent = '/';
@@ -316,7 +414,9 @@
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'crumb-btn';
-        btn.textContent = node.nodeType === 'root' ? 'root' : node.label;
+        const seg = node.nodeType === 'root' ? '/' : (node.segmentLabel || node.label).replace(/^\/+/, '');
+        btn.textContent = seg;
+        btn.title = node.path || seg;
         btn.addEventListener('click', () => this.handleNodeSelect(node.id));
         nav.appendChild(btn);
       });
@@ -324,11 +424,12 @@
 
     _updateTelemetry() {
       const el = document.getElementById('hud-telemetry');
-      const items = (this.data.state && this.data.state.items) || [];
-      const counts = global.RoomViewLayout.outcomeCounts(items);
-      const spotLabel = this.spotlightMode === 'v2' ? 'Spot v2' : 'Spot baseline';
+      const allLeaves = (this.layout && this.layout.allLeaves) || [];
+      const counts = global.RoomViewLayout.outcomeCounts(allLeaves, this.data.descriptor);
+      const spotLabel = this.spotlightMode === 'v2' ? 'Spot v2' : 'Spot base';
       const draws = this.scene3d ? ` · ${this.scene3d.stats.drawCalls} draws` : ' · 2D';
-      el.textContent = `${counts.total} items (${counts.fail} fail) · ${spotLabel}${draws}`;
+      const dirInfo = this.layout ? `${this.layout.pedestals.length} dirs · ` : '';
+      el.textContent = `${dirInfo}${counts.total} objects (${counts.fail} fail) · ${spotLabel}${draws}`;
     }
 
     _updateHoverTooltip(node, x, y) {
@@ -340,17 +441,18 @@
       this.tooltipEl.textContent = '';
       const tEl = document.createElement('div');
       tEl.className = 'tt-title';
-      tEl.textContent = node.label;
+      tEl.textContent = node.path || node.label;
       const mEl = document.createElement('div');
       mEl.className = 'tt-meta';
       if (node.nodeType === 'item') {
+        const entry = global.RoomViewLayout.getLegendEntry(this.data.descriptor, node.kind);
         const rawMetric = node.item.metric != null ? `${node.item.metric}${unit} (Bin ${node.quantileBin}/5)` : 'n/a';
-        mEl.textContent = `${node.kind.toUpperCase()} · ${rawMetric} · /${node.groupId}/${node.stageId}`;
+        mEl.textContent = `${entry.symbol} ${entry.label} · ${rawMetric}`;
       } else if (node.counts) {
-        mEl.textContent = `${node.counts.total} items · ${node.counts.pass} pass · ${node.counts.fail} fail · ${node.counts.skip} skip`;
+        mEl.textContent = global.RoomViewLayout.formatCountsSummary(node.counts, this.data.descriptor);
       }
       this.tooltipEl.append(tEl, mEl);
-      this.tooltipEl.style.left = `${Math.min(window.innerWidth - 290, x + 14)}px`;
+      this.tooltipEl.style.left = `${Math.min(window.innerWidth - 320, x + 14)}px`;
       this.tooltipEl.style.top = `${Math.min(window.innerHeight - 90, y + 14)}px`;
       this.tooltipEl.hidden = false;
     }
@@ -363,9 +465,15 @@
         this.searchBarEl.textContent = '';
         return;
       }
-      const hits = (this.data.state.items || [])
-        .filter((it) => `${it.id} ${it.label} ${it.group} ${it.stage} ${it.kind}`.toLowerCase().includes(q))
-        .slice(0, 14);
+      const allNodes = this.layout ? Array.from(this.layout.allTreeNodesById.values()) : [];
+      const hits = allNodes
+        .filter((n) => {
+          const entry = n.kind ? global.RoomViewLayout.getLegendEntry(this.data.descriptor, n.kind) : null;
+          const hay = `${n.objectId || n.id} ${n.label} ${n.path || ''} ${n.kind || ''} ${entry ? entry.label : ''} ${n.summary || ''}`.toLowerCase();
+          return hay.includes(q);
+        })
+        .slice(0, 16);
+
       this.searchBarEl.textContent = '';
       if (!hits.length) {
         const div = document.createElement('div');
@@ -374,19 +482,29 @@
         div.textContent = `No matches for "${query}"`;
         this.searchBarEl.appendChild(div);
       } else {
-        for (const item of hits) {
+        for (const hit of hits) {
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'search-hit';
           const left = document.createElement('span');
-          left.textContent = `${item.kind === 'fail' ? '×' : (item.kind === 'skip' ? '○' : '●')} ${item.label} (${item.id})`;
+          if (hit.nodeType === 'item') {
+            const entry = global.RoomViewLayout.getLegendEntry(this.data.descriptor, hit.kind);
+            left.textContent = `${entry.symbol} ${hit.label}`;
+          } else {
+            left.textContent = `▸ ${hit.path || hit.label}`;
+          }
           const right = document.createElement('span');
           right.className = 'muted-text';
-          right.textContent = `${item.group}/${item.stage}`;
+          right.style.fontFamily = 'var(--font-mono)';
+          right.textContent = hit.nodeType === 'item' ? (hit.parentPath || '/') : 'dir';
           btn.append(left, right);
           btn.addEventListener('click', () => {
             this.searchBarEl.hidden = true;
-            this.selectItemById(item.id, { openInspector: true });
+            if (hit.nodeType === 'item') {
+              this.selectItemById(hit.objectId, { openInspector: true });
+            } else {
+              this.handleNodeSelect(hit.id);
+            }
           });
           this.searchBarEl.appendChild(btn);
         }
@@ -413,7 +531,8 @@
         list.className = 'kv-grid';
         const rows = [
           ['Sensitivity', sens.level.toUpperCase()],
-          ['Items', String(acc.item_count)],
+          ['Items / Nodes', `${acc.item_count} items / ${acc.node_count || 0} nodes`],
+          ['Previews / Links', `${acc.preview_count || 0} previews / ${acc.link_count || 0} links`],
           ['Attachments', `${acc.attachment_count} (${acc.unique_attachment_blobs} unique)`],
           ['Template', mb(acc.template_bytes)],
           ['SQLite DB', `${Math.round(acc.db_raw_bytes / 1024)} KiB`],
@@ -543,11 +662,12 @@
 
     _bindKeyboardMatrix() {
       window.addEventListener('keydown', (ev) => {
+        // Never double-handle events already handled by AccessibleTreeTwin or sub-widgets
+        if (ev.defaultPrevented) return;
         const tag = (document.activeElement && document.activeElement.tagName) || '';
         const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
         if (inInput) return;
 
-        // Cancel establishing shot on any key press
         if (this.scene3d) this.scene3d.cancelIntroAndTour();
 
         if (ev.key === '/') {
@@ -635,7 +755,7 @@
         get webglActive() { return app.webglActive; },
         get reducedMotion() { return app.reducedMotion; },
         get currentNodeId() { return app.currentNodeId; },
-        get itemCount() { return (app.data.state.items || []).length; },
+        get itemCount() { return app.layout ? app.layout.allLeaves.length : 0; },
         get renderCount() { return app.scene3d ? app.scene3d.stats.renderCount : 0; },
         get shadowUpdateCount() { return app.scene3d ? app.scene3d.stats.shadowUpdateCount : 0; },
         get drawCalls() { return app.scene3d ? app.scene3d.stats.drawCalls : 0; },
@@ -645,6 +765,8 @@
         get layoutSummary() {
           if (!app.layout) return null;
           return {
+            isUnixTree: app.layout.isUnixTree,
+            maxDepth: app.layout.maxDepth,
             pedestals: app.layout.pedestals.length,
             blocks: app.layout.blocks.length,
             summaryBlocks: app.layout.summaryBlocks.length,
@@ -678,7 +800,12 @@
         settle: () => {
           if (app.scene3d) app.scene3d.settleAnimationsImmediately();
         },
+        refreshNow: async () => {
+          await app.data.refreshLive();
+          app._syncFromData({ isInitial: false });
+        },
         runSql: (q) => app.sqlConsole.execute(q),
+        openTab: (tab) => app.evidence.switchTab(tab),
         openEvidenceTab: () => app.evidence.switchTab('evidence'),
         hideInspector: () => app.evidence.hide(),
       };

@@ -66,6 +66,27 @@
     return raw;
   }
 
+  function computeNodePathsJs(nodes) {
+    const byId = new Map();
+    for (const n of nodes || []) byId.set(n.id, n);
+    const cache = new Map();
+    const resolve = (id) => {
+      if (cache.has(id)) return cache.get(id);
+      const n = byId.get(id);
+      if (!n) return '/';
+      let path = '/';
+      if (n.parent_id != null && byId.has(n.parent_id)) {
+        const pp = resolve(n.parent_id);
+        const seg = String(n.label || '').replace(/^\/+|\/+$/g, '');
+        path = pp === '/' ? `/${seg}` : `${pp}/${seg}`;
+      }
+      cache.set(id, path);
+      return path;
+    };
+    for (const n of nodes || []) resolve(n.id);
+    return cache;
+  }
+
   function hydrateLiveSqlite(SQL, descriptor, state, sensitivity) {
     const db = new SQL.Database();
     db.run(`
@@ -73,6 +94,9 @@
       CREATE TABLE groups(id TEXT PRIMARY KEY, name TEXT, ord INT);
       CREATE TABLE stages(id TEXT PRIMARY KEY, name TEXT, ord INT, terminal INT, failure INT);
       CREATE TABLE items(id TEXT PRIMARY KEY, group_id TEXT, stage_id TEXT, kind TEXT, label TEXT, metric REAL, updated_at TEXT, fields_json TEXT);
+      CREATE TABLE nodes(id TEXT PRIMARY KEY, parent_id TEXT, node_kind TEXT, label TEXT, path TEXT, kind TEXT, metric REAL, updated_at TEXT, summary TEXT, ord INT, fields_json TEXT);
+      CREATE TABLE previews(node_id TEXT, slot TEXT, media_type TEXT, title TEXT, status TEXT, body TEXT, reason TEXT, language TEXT, truncated INT, summary TEXT, PRIMARY KEY(node_id, slot));
+      CREATE TABLE links(source_id TEXT, relation TEXT, target_id TEXT, label TEXT, PRIMARY KEY(source_id, relation, target_id));
       CREATE TABLE steps(item_id TEXT, name TEXT, at TEXT);
       CREATE TABLE attachments(item_id TEXT, name TEXT, media_type TEXT, size INT, sha256 TEXT, bytes BLOB, PRIMARY KEY(item_id, name));
       CREATE TABLE attachment_blobs(sha256 TEXT PRIMARY KEY, bytes BLOB);
@@ -83,6 +107,7 @@
       ['taken_at', state.taken_at || ''],
       ['since', state.since || ''],
       ['title', descriptor.title || ''],
+      ['descriptor_json', JSON.stringify(descriptor || {})],
       ['sensitivity', (sensitivity && sensitivity.level) || descriptor.sensitivity || 'synthetic'],
       ['tool', descriptor.tool || 'josh-room'],
       ['tool_version', descriptor.tool_version || '0.1.0'],
@@ -100,15 +125,59 @@
     insertStage.free();
 
     const insertItem = db.prepare('INSERT INTO items(id, group_id, stage_id, kind, label, metric, updated_at, fields_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-    const insertAtt = db.prepare('INSERT INTO attachments(item_id, name, media_type, size, sha256, bytes) VALUES (?, ?, ?, ?, ?, NULL)');
+    const insertAtt = db.prepare('INSERT OR IGNORE INTO attachments(item_id, name, media_type, size, sha256, bytes) VALUES (?, ?, ?, ?, ?, NULL)');
+    const insertPrev = db.prepare('INSERT OR REPLACE INTO previews(node_id, slot, media_type, title, status, body, reason, language, truncated, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insertLink = db.prepare('INSERT OR IGNORE INTO links(source_id, relation, target_id, label) VALUES (?, ?, ?, ?)');
+
     for (const item of (state.items || [])) {
       insertItem.run([item.id, item.group, item.stage, item.kind, item.label, item.metric != null ? item.metric : null, item.updated_at, JSON.stringify(item.fields || {})]);
       for (const att of (item.attachments || [])) {
         insertAtt.run([item.id, att.name, att.media_type, att.size, att.digest]);
       }
+      for (const prev of (item.previews || [])) {
+        insertPrev.run([
+          item.id, prev.slot, prev.media_type, prev.title, prev.status || 'available',
+          prev.body != null ? prev.body : null, prev.reason || null, prev.language || null,
+          prev.truncated ? 1 : 0, prev.summary || null,
+        ]);
+      }
+      for (const lk of (item.links || [])) {
+        insertLink.run([item.id, lk.relation, lk.target_id, lk.label || '']);
+      }
     }
     insertItem.free();
+
+    const nodes = state.nodes || [];
+    if (nodes.length) {
+      const pathMap = computeNodePathsJs(nodes);
+      const insertNode = db.prepare('INSERT INTO nodes(id, parent_id, node_kind, label, path, kind, metric, updated_at, summary, ord, fields_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      nodes.forEach((n, idx) => {
+        insertNode.run([
+          n.id, n.parent_id != null ? n.parent_id : null, n.node_kind, n.label,
+          pathMap.get(n.id) || `/${n.label}`, n.kind || null,
+          n.metric != null ? n.metric : null, n.updated_at,
+          n.summary || null, n.order != null ? n.order : idx,
+          JSON.stringify(n.fields || {}),
+        ]);
+        for (const att of (n.attachments || [])) {
+          insertAtt.run([n.id, att.name, att.media_type, att.size, att.digest]);
+        }
+        for (const prev of (n.previews || [])) {
+          insertPrev.run([
+            n.id, prev.slot, prev.media_type, prev.title, prev.status || 'available',
+            prev.body != null ? prev.body : null, prev.reason || null, prev.language || null,
+            prev.truncated ? 1 : 0, prev.summary || null,
+          ]);
+        }
+        for (const lk of (n.links || [])) {
+          insertLink.run([n.id, lk.relation, lk.target_id, lk.label || '']);
+        }
+      });
+      insertNode.free();
+    }
     insertAtt.free();
+    insertPrev.free();
+    insertLink.free();
 
     const insertStep = db.prepare('INSERT INTO steps(item_id, name, at) VALUES (?, ?, ?)');
     for (const step of (state.steps || [])) {
@@ -125,6 +194,12 @@
   }
 
   function readStateFromSqlite(db) {
+    const tables = new Set();
+    const tRes = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
+    if (tRes[0]) {
+      for (const [name] of tRes[0].values) tables.add(name);
+    }
+
     const meta = {};
     const mRes = db.exec('SELECT key, value FROM meta');
     if (mRes[0]) {
@@ -144,6 +219,37 @@
         attByItem.get(item_id).push({ name, media_type, size, digest: sha256 });
       }
     }
+    const prevByNode = new Map();
+    if (tables.has('previews')) {
+      const pRes = db.exec('SELECT node_id, slot, media_type, title, status, body, reason, language, truncated, summary FROM previews ORDER BY node_id, slot');
+      if (pRes[0]) {
+        for (const [node_id, slot, media_type, title, status, body, reason, language, truncated, summary] of pRes[0].values) {
+          if (!prevByNode.has(node_id)) prevByNode.set(node_id, []);
+          prevByNode.get(node_id).push({
+            slot,
+            media_type,
+            title,
+            status: status || 'available',
+            body: body === null ? null : String(body),
+            reason: reason || null,
+            language: language || null,
+            truncated: Boolean(truncated),
+            summary: summary || null,
+          });
+        }
+      }
+    }
+    const linksBySource = new Map();
+    if (tables.has('links')) {
+      const lRes = db.exec('SELECT source_id, relation, target_id, label FROM links ORDER BY source_id, relation, target_id');
+      if (lRes[0]) {
+        for (const [source_id, relation, target_id, label] of lRes[0].values) {
+          if (!linksBySource.has(source_id)) linksBySource.set(source_id, []);
+          linksBySource.get(source_id).push({ relation, target_id, label: label || '' });
+        }
+      }
+    }
+
     const items = [];
     const iRes = db.exec('SELECT id, group_id, stage_id, kind, label, metric, updated_at, fields_json FROM items ORDER BY id ASC');
     if (iRes[0]) {
@@ -160,9 +266,39 @@
           updated_at,
           fields,
           attachments: attByItem.get(id) || [],
+          previews: prevByNode.get(id) || [],
+          links: linksBySource.get(id) || [],
         });
       }
     }
+
+    const nodes = [];
+    if (tables.has('nodes')) {
+      const nRes = db.exec('SELECT id, parent_id, node_kind, label, path, kind, metric, updated_at, summary, ord, fields_json FROM nodes ORDER BY ord ASC, id ASC');
+      if (nRes[0]) {
+        for (const [id, parent_id, node_kind, label, path, kind, metric, updated_at, summary, ord, fields_json] of nRes[0].values) {
+          let fields = {};
+          try { fields = JSON.parse(fields_json || '{}'); } catch (_) { fields = {}; }
+          nodes.push({
+            id,
+            parent_id: parent_id === null ? null : String(parent_id),
+            node_kind,
+            label,
+            path,
+            kind: kind || null,
+            metric: metric === null ? null : Number(metric),
+            updated_at,
+            summary: summary || null,
+            order: ord === null ? null : Number(ord),
+            fields,
+            attachments: attByItem.get(id) || [],
+            previews: prevByNode.get(id) || [],
+            links: linksBySource.get(id) || [],
+          });
+        }
+      }
+    }
+
     const steps = [];
     const sRes = db.exec('SELECT item_id, name, at FROM steps ORDER BY item_id ASC, at ASC');
     if (sRes[0]) {
@@ -193,6 +329,7 @@
         since: meta.since || '',
         groups,
         items,
+        nodes,
         steps,
         summary,
         stale,
@@ -267,8 +404,21 @@
       return `/export.html${this._liveQuerySuffix(params)}`;
     }
 
+    async fetchPreviewSlot(objectId, slot) {
+      if (this.mode === 'live') {
+        const url = `/content/${encodeURIComponent(objectId)}/${encodeURIComponent(slot)}${this._liveQuerySuffix()}`;
+        const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
+        if (!resp.ok) return null;
+        const payload = await resp.json();
+        return payload && payload.preview ? payload.preview : null;
+      }
+      const allObjs = [...(this.state.nodes || []), ...(this.state.items || [])];
+      const match = allObjs.find((o) => o.id === objectId);
+      if (!match || !match.previews) return null;
+      return match.previews.find((p) => p.slot === slot) || null;
+    }
+
     async loadAttachmentBytes(itemId, name) {
-      const key = `${itemId}/${name}`;
       if (this.mode === 'live') {
         const url = `/attachments/${encodeURIComponent(itemId)}/${encodeURIComponent(name)}${this._liveQuerySuffix()}`;
         const resp = await fetch(url, { cache: 'no-store', headers: this._liveHeaders() });
@@ -301,7 +451,7 @@
     }
 
     async getAttachmentBlobUrl(itemId, name) {
-      const key = `${itemId}/${name}`;
+      const key = `${encodeURIComponent(itemId)}/${encodeURIComponent(name)}`;
       if (this._blobCache.has(key)) return this._blobCache.get(key);
       const data = await this.loadAttachmentBytes(itemId, name);
       if (!data) return null;

@@ -15,7 +15,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
   <div id="world-stage" class="world-stage">
     <canvas id="fsn-canvas" aria-hidden="true"></canvas>
     <div id="webgl-fallback-notice" class="floating-notice" hidden>
-      WebGL unavailable — running in 2D Grid mode. Attachments and SQL console remain active.
+      WebGL unavailable — running in 2D Grid mode. Content previews, attachments, and SQL console remain active.
     </div>
     <div id="hover-tooltip" class="hover-tooltip" role="tooltip" hidden></div>
   </div>
@@ -29,9 +29,9 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <span id="badge-sensitivity" class="pill pill-sensitivity">SYNTHETIC</span>
     </div>
     <div class="hud-right">
-      <label class="search-wrap" aria-label="Search items">
+      <label class="search-wrap" aria-label="Search files and directories">
         <span class="search-slash" aria-hidden="true">/</span>
-        <input id="search-input" type="search" placeholder="Search files, stages, groups..." autocomplete="off" spellcheck="false">
+        <input id="search-input" type="search" placeholder="Search paths, files, runs..." autocomplete="off" spellcheck="false">
       </label>
       <div class="seg-group" role="group" aria-label="View mode">
         <button id="btn-mode-3d" class="seg-btn active" type="button" data-view="3d">3D</button>
@@ -65,19 +65,19 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <h2>Filesystem Tree</h2>
       <button id="btn-tree-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close tree panel">&times;</button>
     </div>
-    <div id="aria-tree-root" class="aria-tree" role="tree" aria-label="Room pipeline hierarchy"></div>
+    <div id="aria-tree-root" class="aria-tree" role="tree" aria-label="Room filesystem hierarchy"></div>
   </aside>
 
   <!-- Polite live region for screen reader landing announcements -->
   <div id="aria-live-region" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <!-- Dismissible Contextual Inspector & Evidence Drawer (HIDDEN until selection) -->
-  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected item details and evidence" hidden>
+  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected object content, details, links, and evidence" hidden>
     <div class="drawer-header">
       <div class="drawer-title-group">
         <span id="inspector-kind-badge" class="kind-badge">PASS</span>
         <div>
-          <h2 id="inspector-title">Item</h2>
+          <h2 id="inspector-title">Object</h2>
           <p id="inspector-path" class="drawer-subtitle"></p>
         </div>
       </div>
@@ -88,11 +88,13 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       </div>
     </div>
     <div class="drawer-tabs" role="tablist" aria-label="Inspector sections">
-      <button class="tab-btn active" role="tab" aria-selected="true" data-tab="details" type="button">Details</button>
+      <button class="tab-btn active" role="tab" aria-selected="true" data-tab="content" type="button">Content <span id="content-count-badge" class="tab-count">0</span></button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="details" type="button">Details</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button">Evidence <span id="evidence-count-badge" class="tab-count">0</span></button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="timeline" type="button">Timeline</button>
     </div>
-    <div id="tab-details" class="drawer-body" role="tabpanel"></div>
+    <div id="tab-content" class="drawer-body" role="tabpanel"></div>
+    <div id="tab-details" class="drawer-body" role="tabpanel" hidden></div>
     <div id="tab-evidence" class="drawer-body" role="tabpanel" hidden></div>
     <div id="tab-timeline" class="drawer-body" role="tabpanel" hidden></div>
   </aside>
@@ -100,12 +102,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
   <!-- Full 2D Grid Fallback / Triage View -->
   <main id="grid-view" class="overlay-view" aria-label="2D Triage Grid" hidden>
     <div class="grid-toolbar">
-      <div class="grid-filters">
-        <button class="filter-chip active" type="button" data-filter="all">All</button>
-        <button class="filter-chip" type="button" data-filter="pass"><span class="cue-pass" aria-hidden="true">&#9632;</span> Pass</button>
-        <button class="filter-chip" type="button" data-filter="fail"><span class="cue-fail" aria-hidden="true">&times;</span> Fail</button>
-        <button class="filter-chip" type="button" data-filter="skip"><span class="cue-skip" aria-hidden="true">&#9633;</span> Skip</button>
-      </div>
+      <div id="grid-filters" class="grid-filters"></div>
       <div id="grid-summary-stats" class="grid-summary-stats"></div>
     </div>
     <div id="grid-content" class="grid-content"></div>
@@ -116,7 +113,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
     <div class="sql-header">
       <div>
         <h2>Read-Only SQL Console</h2>
-        <p class="muted-text">Runs locally in WebAssembly (sql.js) over the embedded <code>room-view-v1</code> SQLite database. Zero network calls.</p>
+        <p class="muted-text">Runs locally in WebAssembly (sql.js) over the embedded <code>room-view-v1</code> SQLite database (<code>nodes</code>, <code>previews</code>, <code>links</code>, <code>items</code>, <code>attachments</code>). Zero network calls.</p>
       </div>
       <div class="sql-actions">
         <button id="btn-download-sqlite" class="hud-btn hud-btn-accent" type="button">Download .sqlite</button>
@@ -135,13 +132,7 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
 
   <!-- Bottom-Left Minimal Legend & Telemetry Strip -->
   <footer id="hud-bottom" class="hud-bottom" aria-label="Legend and scene status">
-    <div class="legend-strip">
-      <span class="legend-item"><span class="swatch swatch-pass" aria-hidden="true"></span>Pass</span>
-      <span class="legend-item"><span class="swatch swatch-fail" aria-hidden="true">&times;</span>Fail</span>
-      <span class="legend-item"><span class="swatch swatch-skip" aria-hidden="true"></span>Skip</span>
-      <span class="legend-sep" aria-hidden="true">|</span>
-      <span id="legend-metric" class="legend-metric">Height: 5 quantile bins</span>
-    </div>
+    <div id="legend-strip" class="legend-strip"></div>
     <div id="hud-telemetry" class="hud-telemetry"></div>
   </footer>
 
@@ -161,16 +152,16 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
         <button id="btn-help-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close help">&times;</button>
       </div>
       <div class="modal-body">
-        <p class="muted-text">Click a pedestal or ground wire to fly along the directory branch; click a file tower to focus it under the overhead spotlight. Drag to orbit, Shift-drag to pan, scroll to zoom.</p>
+        <p class="muted-text">Click a directory slab or conduit wire to fly along its branch; click any file, run, or artifact block to spotlight it and inspect bounded read-only source, diffs, JSON trees, execution logs, evidence, and relationship links. Drag to orbit, Shift-drag to pan, scroll to zoom.</p>
         <table class="shortcuts-table">
           <tbody>
             <tr><td><kbd>&#8593;</kbd> / <kbd>&#8595;</kbd></td><td>Previous / next sibling</td></tr>
             <tr><td><kbd>&#8594;</kbd> / <kbd>&#8592;</kbd></td><td>Descend into child / ascend to parent</td></tr>
             <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>First / last sibling</td></tr>
-            <tr><td><kbd>Enter</kbd></td><td>Fly to and select focused item</td></tr>
+            <tr><td><kbd>Enter</kbd></td><td>Fly to and select focused object</td></tr>
             <tr><td><kbd>Esc</kbd></td><td>Close inspector or climb to parent</td></tr>
             <tr><td><kbd>F</kbd></td><td>Frame entire filesystem tree</td></tr>
-            <tr><td><kbd>/</kbd></td><td>Search across all items (including aggregated)</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Search across all paths &amp; objects (including aggregated)</td></tr>
             <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Previous / next failure</td></tr>
             <tr><td><kbd>G</kbd></td><td>Toggle 2D Grid triage view</td></tr>
             <tr><td><kbd>M</kbd></td><td>Toggle reduced motion</td></tr>

@@ -51,8 +51,22 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _normalize_gzip_header(gz_bytes: bytes) -> bytes:
+    """Normalize RFC 1952 gzip header fields (mtime=0, OS=0xFF) for cross-version determinism.
+
+    Python <=3.13 writes OS=0x03 on Unix while Python 3.14+ writes OS=0xFF.
+    Normalizing byte 9 to 0xFF keeps gzip bytes identical across Python runtimes and platforms.
+    """
+    if len(gz_bytes) < 10 or gz_bytes[0] != 0x1F or gz_bytes[1] != 0x8B:
+        return gz_bytes
+    normalized = bytearray(gz_bytes)
+    normalized[4:8] = b"\x00\x00\x00\x00"
+    normalized[9] = 0xFF
+    return bytes(normalized)
+
+
 def _gzip_deterministic(data: bytes) -> bytes:
-    return gzip.compress(data, compresslevel=9, mtime=0)
+    return _normalize_gzip_header(gzip.compress(data, compresslevel=9, mtime=0))
 
 
 def update_lock_from_vendor_dir(vendor_dir: Path, lock_path: Path = LOCK_PATH) -> dict:
@@ -113,15 +127,19 @@ def _load_verified_libraries(
     for key, entry in lock["libraries"].items():
         if key not in extracted:
             raise ValueError(f"existing template is missing library blob lib-{key}")
-        gz = extracted[key]
-        raw = gzip.decompress(gz)
+        gz_cached = _normalize_gzip_header(extracted[key])
+        raw = gzip.decompress(gz_cached)
         if _sha256(raw) != entry["raw_sha256"]:
             raise ValueError(f"raw SHA-256 verification failed for cached lib-{key}")
-        # Recompress deterministically to guarantee byte-identical reproducibility
+        # Prefer freshly normalized recompression when it matches the pinned digest,
+        # and fall back to verified normalized cached bytes if host zlib flags differ.
         gz_det = _gzip_deterministic(raw)
-        if _sha256(gz_det) != entry["gzip_sha256"]:
+        if _sha256(gz_det) == entry["gzip_sha256"]:
+            result[key] = (entry, gz_det)
+        elif _sha256(gz_cached) == entry["gzip_sha256"]:
+            result[key] = (entry, gz_cached)
+        else:
             raise ValueError(f"gzip SHA-256 verification failed for cached lib-{key}")
-        result[key] = (entry, gz_det)
     return result
 
 

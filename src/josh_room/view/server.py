@@ -147,10 +147,26 @@ class ViewCollector:
             since=current.since,
             groups=current.groups,
             items=current.items,
+            nodes=current.nodes,
             steps=current.steps,
             summary=current.summary,
             stale=stale,
         )
+
+    def lookup_preview(self, object_id: str, slot: str) -> dict[str, object] | None:
+        """Return an already-sanitized read-only preview slot from the active snapshot."""
+        with self._lock:
+            for node in self._state.nodes:
+                if node.id == object_id:
+                    for prev in node.previews:
+                        if prev.slot == slot:
+                            return prev.to_dict()
+            for item in self._state.items:
+                if item.id == object_id:
+                    for prev in item.previews:
+                        if prev.slot == slot:
+                            return prev.to_dict()
+        return None
 
     def current_payload(self) -> dict[str, object]:
         with self._lock:
@@ -440,6 +456,42 @@ class RoomViewServer:
                         artifact.html_bytes,
                         "text/html; charset=utf-8",
                         extra_headers={"Content-Disposition": disposition},
+                        head_only=head_only,
+                    )
+                    return
+
+                if path.startswith("/content/"):
+                    rest = path[len("/content/"):]
+                    parts = rest.split("/")
+                    if len(parts) != 2 or not parts[0] or not parts[1]:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "error": "invalid-content-route"},
+                            head_only=head_only,
+                        )
+                        return
+                    raw_obj, raw_slot = unquote(parts[0]), unquote(parts[1])
+                    try:
+                        obj_id = validate_safe_label(raw_obj, "object id")
+                        slot_id = validate_safe_label(raw_slot, "preview slot")
+                    except ViewValidationError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"ok": False, "error": "invalid-content-identifier"},
+                            head_only=head_only,
+                        )
+                        return
+                    preview = owner.collector.lookup_preview(obj_id, slot_id)
+                    if preview is None:
+                        self._send_json(
+                            HTTPStatus.NOT_FOUND,
+                            {"ok": False, "error": "content-not-found"},
+                            head_only=head_only,
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"ok": True, "object_id": obj_id, "preview": preview},
                         head_only=head_only,
                     )
                     return

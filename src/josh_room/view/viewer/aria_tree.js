@@ -1,4 +1,5 @@
-// Synchronized APG role="tree" accessible twin for the aria-hidden 3D WebGL canvas.
+// Synchronized APG role="tree" accessible twin for arbitrary-depth hierarchies.
+// Uses collision-free node IDs, declared legend entries, and single-handled key events.
 (function (global) {
   'use strict';
 
@@ -19,7 +20,6 @@
     announce(message) {
       if (!this.liveEl) return;
       this.liveEl.textContent = '';
-      // Force polite live-region re-announcement
       requestAnimationFrame(() => {
         this.liveEl.textContent = message;
       });
@@ -33,110 +33,89 @@
       this.nodeElements.clear();
       this.modelById.clear();
       this.flatOrder = [];
+      if (!layout || !layout.treeRoot) return;
 
-      const stages = (descriptor.stages || []).slice().sort((a, b) => a.order - b.order);
-      const groups = (state.groups || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-      const itemsByGS = new Map();
-      for (const item of (state.items || [])) {
-        const key = `${item.group}::${item.stage}`;
-        if (!itemsByGS.has(key)) itemsByGS.set(key, []);
-        itemsByGS.get(key).push(item);
-      }
-
-      const rootModel = {
-        id: 'root',
-        label: `/ (${descriptor.title})`,
-        parentId: null,
-        children: [],
-        nodeType: 'root',
-      };
-      this.modelById.set('root', rootModel);
-
-      for (const group of groups) {
-        const gId = `group:${group.id}`;
-        const gModel = {
-          id: gId,
-          label: group.name,
-          parentId: 'root',
+      const buildModel = (dirNode, parentId) => {
+        const isRoot = dirNode.id === 'root';
+        const label = isRoot
+          ? `/ (${descriptor.title || 'Room View'})`
+          : `${dirNode.label} (${dirNode.counts ? dirNode.counts.total : 0})`;
+        const model = {
+          id: dirNode.id,
+          label,
+          path: dirNode.path,
+          parentId,
           children: [],
-          nodeType: 'group',
-          groupId: group.id,
+          nodeType: dirNode.nodeType,
         };
-        rootModel.children.push(gModel);
-        this.modelById.set(gId, gModel);
+        this.modelById.set(model.id, model);
 
-        for (const stage of stages) {
-          const sItems = itemsByGS.get(`${group.id}::${stage.id}`) || [];
-          if (!sItems.length) continue;
-          const sId = `stage:${group.id}:${stage.id}`;
-          const ranked = global.RoomViewLayout.sortItemsByInterest(sItems);
-          const pedLayout = layout.nodeById.get(sId);
+        // Child directories first (arbitrary depth!)
+        for (const childDir of dirNode.dirChildren || []) {
+          model.children.push(buildModel(childDir, dirNode.id));
+        }
+
+        // Direct leaf files/runs/artifacts on this directory
+        const leaves = dirNode.leafChildren || [];
+        if (leaves.length) {
+          const ranked = global.RoomViewLayout.sortItemsByInterest(leaves, descriptor);
+          const pedLayout = layout.nodeById.get(dirNode.id);
           const aggregated = pedLayout ? Boolean(pedLayout.aggregated) : (ranked.length > 16);
           const visible = aggregated ? ranked.slice(0, 11) : ranked;
           const hidden = aggregated ? ranked.slice(11) : [];
 
-          const sModel = {
-            id: sId,
-            label: `${stage.name} (${sItems.length})`,
-            parentId: gId,
-            children: [],
-            nodeType: 'stage',
-            groupId: group.id,
-            stageId: stage.id,
-            totalItems: sItems.length,
-          };
-          gModel.children.push(sModel);
-          this.modelById.set(sId, sModel);
-
-          visible.forEach((item, idx) => {
-            const cue = item.kind === 'fail' ? '×' : (item.kind === 'skip' ? '○' : '●');
+          visible.forEach((leaf, idx) => {
+            const entry = global.RoomViewLayout.getLegendEntry(descriptor, leaf.kind);
             const m = {
-              id: `item:${item.id}`,
-              itemId: item.id,
-              label: `${cue} ${item.label}`,
-              meta: `${item.kind}${item.metric != null ? ` · ${item.metric}` : ''}`,
-              parentId: sId,
+              id: leaf.id,
+              objectId: leaf.objectId,
+              label: `${entry.symbol} ${leaf.label}`,
+              meta: `${entry.label}${leaf.metric != null ? ` · ${leaf.metric}` : ''}`,
+              parentId: dirNode.id,
               children: [],
               nodeType: 'item',
-              setsize: sItems.length,
+              setsize: leaves.length,
               posinset: idx + 1,
             };
-            sModel.children.push(m);
+            model.children.push(m);
             this.modelById.set(m.id, m);
           });
 
           if (hidden.length > 0) {
-            const moreId = `more:${group.id}:${stage.id}`;
+            const moreId = global.RoomViewLayout.makeMoreNodeId(dirNode.id);
             const moreModel = {
               id: moreId,
               label: `+${hidden.length} more items`,
-              parentId: sId,
-              children: hidden.map((item, hIdx) => {
-                const cue = item.kind === 'fail' ? '×' : (item.kind === 'skip' ? '○' : '●');
+              parentId: dirNode.id,
+              children: hidden.map((leaf, hIdx) => {
+                const entry = global.RoomViewLayout.getLegendEntry(descriptor, leaf.kind);
                 const hm = {
-                  id: `item:${item.id}`,
-                  itemId: item.id,
-                  label: `${cue} ${item.label}`,
-                  meta: `${item.kind}${item.metric != null ? ` · ${item.metric}` : ''}`,
+                  id: leaf.id,
+                  objectId: leaf.objectId,
+                  label: `${entry.symbol} ${leaf.label}`,
+                  meta: `${entry.label}${leaf.metric != null ? ` · ${leaf.metric}` : ''}`,
                   parentId: moreId,
                   children: [],
                   nodeType: 'item',
-                  setsize: sItems.length,
+                  setsize: leaves.length,
                   posinset: visible.length + hIdx + 1,
                 };
                 this.modelById.set(hm.id, hm);
                 return hm;
               }),
               nodeType: 'more',
-              pedestalId: sId,
+              pedestalId: dirNode.id,
               setsize: visible.length + 1,
               posinset: visible.length + 1,
             };
-            sModel.children.push(moreModel);
+            model.children.push(moreModel);
             this.modelById.set(moreId, moreModel);
           }
         }
-      }
+        return model;
+      };
+
+      const rootModel = buildModel(layout.treeRoot, null);
 
       const renderNode = (model, container, setsize, posinset) => {
         const hasKids = model.children && model.children.length > 0;
@@ -218,7 +197,6 @@
 
     syncFromWorld(nodeId, announcement) {
       if (!nodeId || !this.modelById.has(nodeId)) return;
-      // Ensure ancestors are expanded in ARIA tree so node is reachable
       let cur = this.modelById.get(nodeId);
       while (cur && cur.parentId) {
         this.expanded.add(cur.parentId);
@@ -285,14 +263,18 @@
 
     _bindKeyboard() {
       this.rootEl.addEventListener('keydown', (ev) => {
-        if (ev.key === 'ArrowDown') { ev.preventDefault(); this.moveRelative('down'); }
-        else if (ev.key === 'ArrowUp') { ev.preventDefault(); this.moveRelative('up'); }
-        else if (ev.key === 'ArrowRight') { ev.preventDefault(); this.moveRelative('right'); }
-        else if (ev.key === 'ArrowLeft') { ev.preventDefault(); this.moveRelative('left'); }
-        else if (ev.key === 'Home') { ev.preventDefault(); this.moveRelative('home'); }
-        else if (ev.key === 'End') { ev.preventDefault(); this.moveRelative('end'); }
+        const handled = new Set(['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End', 'Enter', ' ']);
+        if (!handled.has(ev.key)) return;
+        ev.preventDefault();
+        // Prevent bubbling to global window keyboard handler so each key press executes once!
+        ev.stopPropagation();
+        if (ev.key === 'ArrowDown') this.moveRelative('down');
+        else if (ev.key === 'ArrowUp') this.moveRelative('up');
+        else if (ev.key === 'ArrowRight') this.moveRelative('right');
+        else if (ev.key === 'ArrowLeft') this.moveRelative('left');
+        else if (ev.key === 'Home') this.moveRelative('home');
+        else if (ev.key === 'End') this.moveRelative('end');
         else if (ev.key === 'Enter' || ev.key === ' ') {
-          ev.preventDefault();
           const cur = this.modelById.get(this.focusedId);
           if (cur && cur.nodeType === 'more' && this.callbacks.onExpandMore) {
             this.callbacks.onExpandMore(cur.pedestalId);

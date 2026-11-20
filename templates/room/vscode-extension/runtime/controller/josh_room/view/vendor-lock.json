@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "template_version": "room-view-template-v1",
+  "libraries": {
+    "three": {
+      "package": "three",
+      "version": "0.170.0",
+      "license": "MIT",
+      "file": "three.module.min.js",
+      "media_type": "text/javascript",
+      "raw_bytes": 691648,
+      "raw_sha256": "08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7",
+      "gzip_bytes": 170881,
+      "gzip_sha256": "9f65f3a0a14094574158dd942de39082ef97d09b42ff34d686d69d301c45008d"
+    },
+    "sqljs": {
+      "package": "sql.js",
+      "version": "1.12.0",
+      "license": "MIT",
+      "file": "sql-wasm.js",
+      "media_type": "text/javascript",
+      "raw_bytes": 48863,
+      "raw_sha256": "43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee",
+      "gzip_bytes": 16961,
+      "gzip_sha256": "bf723961f30abed33a67d2d4c71c5fa8582d8943b7b7d83385d326d4480812ab"
+    },
+    "sqljs-wasm": {
+      "package": "sql.js",
+      "version": "1.12.0",
+      "license": "MIT",
+      "file": "sql-wasm.wasm",
+      "media_type": "application/wasm",
+      "raw_bytes": 652953,
+      "raw_sha256": "083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b",
+      "gzip_bytes": 318567,
+      "gzip_sha256": "32e0ea6b4d05f77fe36f6d1c7c409cd8a8d4c59d2d1fabd7f302d817a34a6cf7"
+    },
+    "pdfjs": {
+      "package": "pdfjs-dist",
+      "version": "4.10.38",
+      "license": "Apache-2.0",
+      "file": "pdf.min.mjs",
+      "media_type": "text/javascript",
+      "raw_bytes": 352645,
+      "raw_sha256": "27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c",
+      "gzip_bytes": 98752,
+      "gzip_sha256": "ba8769fed54006769d38a30e0c30ae27a9a4bb09ebefee136ebf328b38108792"
+    },
+    "pdfjs-worker": {
+      "package": "pdfjs-dist",
+      "version": "4.10.38",
+      "license": "Apache-2.0",
+      "file": "pdf.worker.min.mjs",
+      "media_type": "text/javascript",
+      "raw_bytes": 1375838,
+      "raw_sha256": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36",
+      "gzip_bytes": 402193,
+      "gzip_sha256": "6cb493e07a9fe6d02f80ff4a3a3e978f59f469585ed3a351eb792ecaa6e19cc1"
+    }
+  }
+}

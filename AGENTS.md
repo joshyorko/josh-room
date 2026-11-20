@@ -7,9 +7,15 @@ Josh Room is a public-first, one-owner CLI for encrypted workspace snapshots.
 - age owns encryption. R2, MinIO, and S3 are concrete provider backends; the physical bucket/Dimension is the encryption boundary.
 - RCC owns runtime environments; Actions owns runtime execution; Hive owns
   agents, models, tools, and task orchestration.
-- Do not add web UI, webview, daemon, watcher, generic provider framework,
-  multi-user auth, sync, DevPod/Devsy, automatic bucket administration, or
-  snapshot garbage collection. Do not make JAT changes or MinIO infrastructure
+- Do not add web UI (hosted/control-plane web apps or management UIs),
+  webview, daemon, watcher, generic provider framework, multi-user auth, sync,
+  DevPod/Devsy, automatic bucket administration, or snapshot garbage
+  collection. Narrow owner-authorized exception (#202): `josh-room view` may
+  serve a localhost-only (`127.0.0.1`), read-only (`GET`/`HEAD` only)
+  observability viewer and export self-contained zero-network offline HTML
+  snapshots via the closed `ViewStateProvider` contract—never a hosted web UI,
+  VS Code webview, background daemon, general-purpose host file server, or
+  action/POST control plane. Do not make JAT changes or MinIO infrastructure
   changes.
 
 Never commit real identities, credentials, catalogs, snapshots, private paths,

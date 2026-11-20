@@ -666,7 +666,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     view_commands = view.add_subparsers(dest="view_command", required=True)
     view_serve = view_commands.add_parser("serve", help="serve a localhost-only read-only Room View dashboard")
-    view_serve.add_argument("--provider", required=True, help="provider name (synthetic, entry point, or module:attr)")
+    view_serve.add_argument(
+        "--provider",
+        required=True,
+        help="provider name (synthetic-unix, synthetic, entry point, or module:attr)",
+    )
     view_serve.add_argument("--port", type=int, default=0, help="localhost port (0 = auto)")
     view_serve.add_argument("--interval", type=float, default=5.0, help="poll interval in seconds")
     view_serve.add_argument("--workspace", type=Path, help="optional Room workspace for sensitivity policy")
@@ -675,7 +679,10 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(view_serve)
     view_export = view_commands.add_parser("export", help="export a single self-contained offline HTML view snapshot")
     view_source = view_export.add_mutually_exclusive_group(required=True)
-    view_source.add_argument("--provider", help="provider name (synthetic, entry point, or module:attr)")
+    view_source.add_argument(
+        "--provider",
+        help="provider name (synthetic-unix, synthetic, entry point, or module:attr)",
+    )
     view_source.add_argument("--from-state", type=Path, dest="from_state", help="offline/CI state JSON file")
     view_export.add_argument("--attachments-dir", type=Path, dest="attachments_dir", help="attachments directory for --from-state")
     view_export.add_argument("--output", type=Path, required=True, help="destination .html file path")

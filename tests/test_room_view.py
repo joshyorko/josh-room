@@ -18,13 +18,19 @@ from josh_room.view import (
     ItemState,
     LegendEntry,
     MetricDescriptor,
+    NodeState,
+    ObjectLink,
+    PreviewContent,
     SqlPreset,
     StageDescriptor,
     StepState,
     SyntheticPipelineProvider,
+    SyntheticUnixFsProvider,
     ViewDescriptor,
     ViewState,
     ViewValidationError,
+    compute_node_paths,
+    load_provider,
     resolve_sensitivity,
     sanitize_descriptor,
     sanitize_state,
@@ -35,12 +41,13 @@ from josh_room.view.exporter import (
     SensitivityAckRequiredError,
     build_offline_export,
     export_view_snapshot,
+    gzip_deterministic,
     parse_size_bytes,
 )
 from josh_room.view.inspector import inspect_view_snapshot
 from josh_room.view.server import RoomViewServer
 from scripts.build_view_template import DEFAULT_OUTPUT as TEMPLATE_OUTPUT
-from scripts.build_view_template import build_template_html
+from scripts.build_view_template import _normalize_gzip_header, build_template_html
 
 
 def _minimal_descriptor(**overrides) -> ViewDescriptor:
@@ -584,3 +591,281 @@ def test_cli_view_commands_are_identity_free_and_end_to_end(tmp_path, monkeypatc
     assert served["ok"] is True
     assert served["host"] == "127.0.0.1"
     assert served["read_only"] is True
+
+
+# --- 8. PR #205 Review Regressions & Pass-2 NAVIGATE / INSPECT ---
+
+
+def test_descriptor_sanitizer_blocks_secrets_and_host_paths_in_legend_metric_and_sql_presets():
+    # P1 regression: legend labels, metric name/unit, and SQL presets must never bypass sanitizer
+    bad_legend = _minimal_descriptor(
+        legend={
+            "pass": LegendEntry(label="Bearer syntheticSecretToken1234", color="#3FB68B", shape="solid"),
+        }
+    )
+    with pytest.raises(ViewValidationError) as exc1:
+        sanitize_descriptor(bad_legend)
+    assert exc1.value.code == "forbidden-bearer-token"
+
+    with pytest.raises(ViewValidationError):
+        build_offline_export(_SimpleProvider(bad_legend, _minimal_state()))
+
+    bad_legend_key = _minimal_descriptor(
+        legend={"api_token": LegendEntry(label="Ok", color="#3FB68B", shape="solid")}
+    )
+    with pytest.raises(ViewValidationError) as exc_key:
+        sanitize_descriptor(bad_legend_key)
+    assert exc_key.value.code == "forbidden-secret-key"
+
+    bad_metric_name = _minimal_descriptor(metric=MetricDescriptor(name="/home/user/latency", unit="ms"))
+    with pytest.raises(ViewValidationError) as exc2:
+        sanitize_descriptor(bad_metric_name)
+    assert exc2.value.code == "forbidden-host-path"
+
+    bad_metric_unit = _minimal_descriptor(metric=MetricDescriptor(name="latency", unit="192.168.1.5"))
+    with pytest.raises(ViewValidationError) as exc3:
+        sanitize_descriptor(bad_metric_unit)
+    assert exc3.value.code == "forbidden-private-ip"
+
+    bad_sql_desc = _minimal_descriptor(
+        sql_presets=(
+            SqlPreset(
+                id="bad-desc",
+                name="Check",
+                sql="SELECT 1",
+                description="Bearer syntheticSecretToken1234",
+            ),
+        )
+    )
+    with pytest.raises(ViewValidationError) as exc4:
+        sanitize_descriptor(bad_sql_desc)
+    assert exc4.value.code == "forbidden-bearer-token"
+
+    bad_sql_query = _minimal_descriptor(
+        sql_presets=(
+            SqlPreset(
+                id="bad-sql",
+                name="Check",
+                sql="SELECT 'Bearer syntheticSecretToken1234' AS leak",
+            ),
+        )
+    )
+    with pytest.raises(ViewValidationError) as exc5:
+        sanitize_descriptor(bad_sql_query)
+    assert exc5.value.code == "forbidden-bearer-token"
+
+
+def test_gzip_deterministic_normalizes_os_header_byte_across_python_versions():
+    gz = gzip_deterministic(b"deterministic room view payload")
+    assert gz[:2] == b"\x1f\x8b"
+    assert gz[4:8] == b"\x00\x00\x00\x00"
+    assert gz[9] == 0xFF
+
+    # Simulated Python <=3.13 Unix OS byte (0x03) normalizes identically to 0xFF
+    unix_os_gz = bytearray(gz)
+    unix_os_gz[9] = 0x03
+    assert _normalize_gzip_header(bytes(unix_os_gz)) == gz
+
+
+def test_load_provider_instantiates_module_classes_and_synthetic_unix():
+    pipe = load_provider("josh_room.view.synthetic_provider:SyntheticPipelineProvider")
+    assert isinstance(pipe, SyntheticPipelineProvider)
+    assert pipe.describe().title
+
+    unix_cls = load_provider("josh_room.view.synthetic_provider:SyntheticUnixFsProvider")
+    assert isinstance(unix_cls, SyntheticUnixFsProvider)
+    assert len(unix_cls.state().nodes) > 40
+
+    unix_builtin = load_provider("synthetic-unix")
+    assert isinstance(unix_builtin, SyntheticUnixFsProvider)
+
+
+def test_unix_fs_provider_arbitrary_depth_previews_links_and_sqlite_roundtrip(tmp_path):
+    provider = SyntheticUnixFsProvider()
+    desc = sanitize_descriptor(provider.describe())
+    state = sanitize_state(desc, provider.state())
+    paths = compute_node_paths(state.nodes)
+
+    assert "/" in paths.values()
+    assert "/src/core/codec/vectors/frame-v1.json" in paths.values()
+    assert "/var/runs/gate-verify" in paths.values()
+    assert "/etc/policy.json" in paths.values()
+    assert "/etc/vault.policy" in paths.values()
+
+    out = tmp_path / "unix.html"
+    report = export_view_snapshot(provider, out)
+    assert report["ok"] is True
+    assert report["accounting"]["node_count"] == len(state.nodes)
+    assert report["accounting"]["preview_count"] >= 25
+    assert report["accounting"]["link_count"] >= 15
+
+    inspected = inspect_view_snapshot(out)
+    assert inspected["ok"] is True
+    assert inspected["table_counts"]["nodes"] == len(state.nodes)
+    assert inspected["table_counts"]["previews"] >= 25
+    assert inspected["table_counts"]["links"] >= 15
+    assert inspected["external_urls"] == []
+
+
+def test_preview_and_node_hierarchy_sanitization_rejects_leaks_and_cycles():
+    desc = _minimal_descriptor()
+    ts = "2026-11-20T15:41:00Z"
+
+    # Secret inside preview JSON key
+    secret_json_state = _minimal_state(
+        items=(
+            ItemState(
+                id="item-0001",
+                group="sector-alpha",
+                stage="verify",
+                kind="pass",
+                label="cfg.json",
+                updated_at=ts,
+                previews=(
+                    PreviewContent(
+                        slot="json",
+                        media_type="application/json",
+                        title="cfg.json",
+                        body='{"api_token": "synthetic"}',
+                    ),
+                ),
+            ),
+        )
+    )
+    with pytest.raises(ViewValidationError) as exc1:
+        sanitize_state(desc, secret_json_state)
+    assert exc1.value.code == "forbidden-secret-key"
+
+    # Host path inside diff preview
+    host_path_preview = _minimal_state(
+        items=(
+            ItemState(
+                id="item-0001",
+                group="sector-alpha",
+                stage="verify",
+                kind="pass",
+                label="patch.diff",
+                updated_at=ts,
+                previews=(
+                    PreviewContent(
+                        slot="diff",
+                        media_type="text/x-diff",
+                        title="patch.diff",
+                        body="--- /home/realuser/secret.py\n+++ /home/realuser/secret.py",
+                    ),
+                ),
+            ),
+        )
+    )
+    with pytest.raises(ViewValidationError) as exc2:
+        sanitize_state(desc, host_path_preview)
+    assert exc2.value.code == "forbidden-host-path"
+
+    # Broken link target rejected
+    broken_link_state = _minimal_state(
+        items=(
+            ItemState(
+                id="item-0001",
+                group="sector-alpha",
+                stage="verify",
+                kind="pass",
+                label="ok",
+                updated_at=ts,
+                links=(ObjectLink(relation="output", target_id="does-not-exist"),),
+            ),
+        )
+    )
+    with pytest.raises(ViewValidationError) as exc3:
+        sanitize_state(desc, broken_link_state)
+    assert exc3.value.code == "unknown-link-target"
+
+    # Cyclic node tree rejected
+    cyclic_nodes = (
+        NodeState(id="root", parent_id=None, node_kind="directory", label="/", updated_at=ts),
+        NodeState(id="dir-a", parent_id="dir-b", node_kind="directory", label="a", updated_at=ts),
+        NodeState(id="dir-b", parent_id="dir-a", node_kind="directory", label="b", updated_at=ts),
+    )
+    with pytest.raises(ViewValidationError) as exc4:
+        sanitize_state(desc, _minimal_state(nodes=cyclic_nodes))
+    assert exc4.value.code == "tree-cycle"
+
+
+def test_live_server_content_preview_route_is_read_only_and_sanitized():
+    provider = SyntheticUnixFsProvider()
+    with RoomViewServer(provider, port=0, interval_seconds=60.0) as server:
+        status, hdrs, body = _raw_http(server.port, "GET", "/content/file-src-scheduler/diff")
+        assert status == 200
+        assert hdrs.get("Cache-Control") == "no-store"
+        assert hdrs.get("X-Content-Type-Options") == "nosniff"
+        assert hdrs.get("Cross-Origin-Resource-Policy") == "same-origin"
+        data = json.loads(body)
+        assert data["ok"] is True
+        assert data["preview"]["media_type"] == "text/x-diff"
+        assert "evaluate_budget" in data["preview"]["body"]
+
+        # Redacted slot returns explicit status without body
+        status, _, body = _raw_http(server.port, "GET", "/content/file-etc-vault-policy/policy")
+        assert status == 200
+        redacted = json.loads(body)
+        assert redacted["preview"]["status"] == "redacted"
+        assert "body" not in redacted["preview"]
+
+        # Bad identifiers & mutating methods refused
+        status, _, _ = _raw_http(server.port, "GET", "/content/..%2Fetc/passwd")
+        assert status == 400
+        status, _, _ = _raw_http(server.port, "GET", "/content/file-src-scheduler/missing")
+        assert status == 404
+        status, _, _ = _raw_http(server.port, "POST", "/content/file-src-scheduler/diff")
+        assert status == 405
+
+
+def test_both_controller_copies_ship_view_package_and_can_export(tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    canonical_view = root / "src/josh_room/view"
+    expected_rel = sorted(
+        p.relative_to(canonical_view)
+        for p in [
+            *canonical_view.glob("*.py"),
+            canonical_view / "vendor-lock.json",
+            canonical_view / "assets/room-view-template.html",
+        ]
+    )
+    for rel_ctrl in (
+        "vscode-extension/runtime/controller",
+        "templates/room/vscode-extension/runtime/controller",
+    ):
+        ctrl_root = root / rel_ctrl
+        pkg_view = ctrl_root / "josh_room/view"
+        for rel_file in expected_rel:
+            assert (pkg_view / rel_file).is_file(), f"missing {rel_file} in {rel_ctrl}"
+            assert (pkg_view / rel_file).read_bytes() == (canonical_view / rel_file).read_bytes()
+
+        out_html = tmp_path / f"{rel_ctrl.replace('/', '_')}.html"
+        env = {**os.environ, "PYTHONPATH": str(ctrl_root)}
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "josh_room",
+                "view",
+                "export",
+                "--provider",
+                "synthetic-unix",
+                "--output",
+                str(out_html),
+                "--json",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        res = json.loads(proc.stdout)
+        assert res["ok"] is True
+        assert out_html.is_file()

@@ -11,7 +11,7 @@
       "raw_bytes": 691648,
       "raw_sha256": "08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7",
       "gzip_bytes": 170881,
-      "gzip_sha256": "168b6e4fb483616351f968bf7ea4ae1bbab33d6afafbb97b79dc166e6590f1a1"
+      "gzip_sha256": "9f65f3a0a14094574158dd942de39082ef97d09b42ff34d686d69d301c45008d"
     },
     "sqljs": {
       "package": "sql.js",
@@ -22,7 +22,7 @@
       "raw_bytes": 48863,
       "raw_sha256": "43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee",
       "gzip_bytes": 16961,
-      "gzip_sha256": "22167993c6865e2c77b928e886afec8164cfe3b9f4b24c9b82c3f9876a914625"
+      "gzip_sha256": "bf723961f30abed33a67d2d4c71c5fa8582d8943b7b7d83385d326d4480812ab"
     },
     "sqljs-wasm": {
       "package": "sql.js",
@@ -33,7 +33,7 @@
       "raw_bytes": 652953,
       "raw_sha256": "083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b",
       "gzip_bytes": 318567,
-      "gzip_sha256": "0d34c03243943cf126e96af12d3b4f23fe62fef631fede6f8d58bfd2ff7163c1"
+      "gzip_sha256": "32e0ea6b4d05f77fe36f6d1c7c409cd8a8d4c59d2d1fabd7f302d817a34a6cf7"
     },
     "pdfjs": {
       "package": "pdfjs-dist",
@@ -44,7 +44,7 @@
       "raw_bytes": 352645,
       "raw_sha256": "27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c",
       "gzip_bytes": 98752,
-      "gzip_sha256": "b202f9f4c47e60b346a169e967bcb96083e5f6e791cc5a69dcfad05e2fc4cc97"
+      "gzip_sha256": "ba8769fed54006769d38a30e0c30ae27a9a4bb09ebefee136ebf328b38108792"
     },
     "pdfjs-worker": {
       "package": "pdfjs-dist",
@@ -55,7 +55,7 @@
       "raw_bytes": 1375838,
       "raw_sha256": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36",
       "gzip_bytes": 402193,
-      "gzip_sha256": "af0fb8be8875d0ff21189df29da88adba2e57916469d1be394519f23166e5380"
+      "gzip_sha256": "6cb493e07a9fe6d02f80ff4a3a3e978f59f469585ed3a351eb792ecaa6e19cc1"
     }
   }
 }
