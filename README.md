@@ -168,10 +168,21 @@ Room. `Josh: Enter Room` reopens an already materialized `(Dimension, Room)` on
 the device without downloading it again. A missing Room is restored beneath
 the configured Josh Room workspace root; selecting another historical JAT reuses
 that same folder after an explicit clean/dirty-state confirmation.
-Save can include all tagged local OCI images in the JAT haul. `Josh: Serve Room
-Images` decrypts the chosen snapshot only into private runtime staging and runs
-JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
-removes the temporary haul and registry store.
+Save can include all tagged local OCI images in the JAT haul. Right-click a Room
+and choose `Josh: Serve Room Content…`, or right-click a logical recovery point
+and choose `Josh: Serve this Logical JAT…`. Logical Room Store snapshots offer
+Files, Registry, Files + Registry, or Auto through the existing
+`josh-room snapshot serve` path; no portable export is needed first. Files use
+JAT's default endpoint `http://127.0.0.1:8080` (with Copy Fileserver URL), and the
+registry uses `http://127.0.0.1:5000`. A JAT workspace archive is served as an
+archive, not as its nested source files. Legacy portable snapshots retain the
+older registry-only flow. Stopping the foreground terminal cleans up staging.
+
+Hauler 2.1.1's fileserver binds all interfaces by default, despite the localhost
+URL shown by the extension. Serve only trusted synthetic or approved content
+inside an isolated container/network namespace; the extension label does not
+make the native fileserver loopback-only. Room View's separate read-only
+presentation transport binds strictly to `127.0.0.1` and does not start Hauler.
 
 A separate `JAT Tools` view preserves one-off automation outside the Room/storage
 workflow: pack any folder into a portable capability capsule (with optional

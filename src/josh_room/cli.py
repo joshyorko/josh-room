@@ -672,11 +672,12 @@ def build_parser() -> argparse.ArgumentParser:
     view_serve.add_argument(
         "--provider",
         required=True,
-        help="provider name (synthetic-unix, synthetic, entry point, or module:attr)",
+        help="provider name (room, capsule-manifest, synthetic-unix, synthetic, entry point, or module:attr)",
     )
     view_serve.add_argument("--port", type=int, default=0, help="localhost port (0 = auto)")
     view_serve.add_argument("--interval", type=float, default=5.0, help="poll interval in seconds")
-    view_serve.add_argument("--workspace", type=Path, help="optional Room workspace for sensitivity policy")
+    view_serve.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also sensitivity policy)")
+    view_serve.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
     view_serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
     view_serve.add_argument("--max-seconds", type=float, help=argparse.SUPPRESS)
     _json_option(view_serve)
@@ -684,7 +685,7 @@ def build_parser() -> argparse.ArgumentParser:
     view_source = view_export.add_mutually_exclusive_group(required=True)
     view_source.add_argument(
         "--provider",
-        help="provider name (synthetic-unix, synthetic, entry point, or module:attr)",
+        help="provider name (room, capsule-manifest, synthetic-unix, synthetic, entry point, or module:attr)",
     )
     view_source.add_argument("--from-state", type=Path, dest="from_state", help="offline/CI state JSON file")
     view_export.add_argument("--attachments-dir", type=Path, dest="attachments_dir", help="attachments directory for --from-state")
@@ -692,7 +693,8 @@ def build_parser() -> argparse.ArgumentParser:
     view_export.add_argument("--no-attachments", action="store_true", help="omit attachment payloads")
     view_export.add_argument("--max-size", default="50MB", help="maximum allowed HTML snapshot size (e.g. 50MB)")
     view_export.add_argument("--sensitivity-ack", action="store_true", help="acknowledge exporting sensitive Room data")
-    view_export.add_argument("--workspace", type=Path, help="optional Room workspace for sensitivity policy")
+    view_export.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also sensitivity policy)")
+    view_export.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
     view_export.add_argument("--room-id", dest="room_id", help="optional sanitized Room identifier")
     _json_option(view_export)
     view_inspect = view_commands.add_parser("inspect", help="inspect an offline view snapshot without rendering")

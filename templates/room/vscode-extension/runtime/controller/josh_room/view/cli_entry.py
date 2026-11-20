@@ -31,11 +31,12 @@ def register_view_subparser(commands, json_option) -> None:
     serve.add_argument(
         "--provider",
         required=True,
-        help="provider name (e.g. synthetic, entry point, or module:attr)",
+        help="provider name (room, capsule-manifest, synthetic, synthetic-unix, entry point, or module:attr)",
     )
     serve.add_argument("--port", type=int, default=0, help="localhost port (0 = auto)")
     serve.add_argument("--interval", type=float, default=5.0, help="poll interval in seconds")
-    serve.add_argument("--workspace", type=Path, help="optional Room workspace for sensitivity policy")
+    serve.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also used for sensitivity policy)")
+    serve.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
     serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
     serve.add_argument("--max-seconds", type=float, help=argparse.SUPPRESS)
     json_option(serve)
@@ -47,7 +48,7 @@ def register_view_subparser(commands, json_option) -> None:
     source_group = export.add_mutually_exclusive_group(required=True)
     source_group.add_argument(
         "--provider",
-        help="provider name (e.g. synthetic, entry point, or module:attr)",
+        help="provider name (room, capsule-manifest, synthetic, synthetic-unix, entry point, or module:attr)",
     )
     source_group.add_argument(
         "--from-state",
@@ -73,7 +74,8 @@ def register_view_subparser(commands, json_option) -> None:
         action="store_true",
         help="explicitly acknowledge exporting non-public/sensitive Room data",
     )
-    export.add_argument("--workspace", type=Path, help="optional Room workspace for sensitivity policy")
+    export.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also used for sensitivity policy)")
+    export.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
     export.add_argument("--room-id", dest="room_id", help="optional sanitized Room identifier")
     json_option(export)
 
@@ -95,7 +97,11 @@ def dispatch_view(args) -> dict[str, object]:
         if args.from_state is not None:
             provider = FromStateProvider(args.from_state, args.attachments_dir)
         else:
-            provider = load_provider(args.provider)
+            provider = load_provider(
+                args.provider,
+                workspace=args.workspace,
+                manifest=getattr(args, "manifest", None),
+            )
         max_bytes = parse_size_bytes(args.max_size) if args.max_size else DEFAULT_MAX_SIZE_BYTES
         return export_view_snapshot(
             provider,
@@ -108,7 +114,11 @@ def dispatch_view(args) -> dict[str, object]:
         )
 
     if sub == "serve":
-        provider = load_provider(args.provider)
+        provider = load_provider(
+            args.provider,
+            workspace=args.workspace,
+            manifest=getattr(args, "manifest", None),
+        )
         return serve_forever_cli(
             provider,
             port=args.port,

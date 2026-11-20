@@ -1061,13 +1061,34 @@ def _instantiate_provider_target(target: object) -> ViewStateProvider:
     return provider
 
 
-def load_provider(spec: str) -> ViewStateProvider:
+def load_provider(
+    spec: str,
+    *,
+    workspace: object | None = None,
+    manifest: object | None = None,
+) -> ViewStateProvider:
     """Load a ViewStateProvider by builtin name, entry point, or module:attr."""
     if not isinstance(spec, str) or not spec.strip():
         raise ViewValidationError("invalid-provider", "provider specification is required")
     spec = spec.strip()
 
+    from .room_provider import RoomWorkspaceProvider, SavedCapsuleManifestProvider
     from .synthetic_provider import SyntheticPipelineProvider, SyntheticUnixFsProvider
+
+    if spec == "room":
+        if workspace is None:
+            raise ViewValidationError(
+                "workspace-required",
+                "provider 'room' requires --workspace <path>",
+            )
+        return RoomWorkspaceProvider(workspace)
+    if spec == "capsule-manifest":
+        if manifest is None:
+            raise ViewValidationError(
+                "manifest-required",
+                "provider 'capsule-manifest' requires --manifest <path>",
+            )
+        return SavedCapsuleManifestProvider(manifest)
 
     builtins = {
         "synthetic": lambda: SyntheticPipelineProvider(preset="default"),

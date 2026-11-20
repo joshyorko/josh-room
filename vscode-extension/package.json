@@ -44,6 +44,7 @@
     "onCommand:joshRoom.deleteRecoveryPoint",
     "onCommand:joshRoom.deleteRoom",
     "onCommand:joshRoom.serve",
+    "onCommand:joshRoom.serveLogicalSnapshot",
     "onCommand:joshRoom.inspectLogicalSnapshot",
     "onCommand:joshRoom.exportPortableJat",
     "onCommand:joshRoom.extractLogicalSnapshot",
@@ -193,7 +194,12 @@
       },
       {
         "command": "joshRoom.serve",
-        "title": "Josh: Serve Room Images",
+        "title": "Josh: Serve Room Content\u2026",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "joshRoom.serveLogicalSnapshot",
+        "title": "Josh: Serve this Logical JAT\u2026",
         "icon": "$(server-process)"
       },
       {
@@ -481,7 +487,7 @@
           "group": "logical@3"
         },
         {
-          "command": "joshRoom.serve",
+          "command": "joshRoom.serveLogicalSnapshot",
           "when": "view == joshRoom.rooms && viewItem == logical-jat",
           "group": "logical@4"
         },

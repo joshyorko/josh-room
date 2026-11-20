@@ -2724,7 +2724,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
         description: item.created_at || item.snapshot_id,
         snapshotId: item.snapshot_id,
       })),
-      { title: `Serve images from ${project.display_name}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
+      { title: `Serve content from ${project.display_name}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
     );
     if (!selected) return "cancelled";
     snapshotId = selected.snapshotId;
@@ -2738,7 +2738,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   if ((selectedRecord?.payload_kind || preferredRecord?.payload_kind) === "room-store-v1") {
     const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
       title: `Serve ${project.display_name} logical JAT`,
-      placeHolder: "How should JAT expose this recovery point?",
+      placeHolder: "Choose projection (Files :8080, Registry :5000, Both, or Auto)",
       ignoreFocusOut: true,
     });
     if (!chosen) return "cancelled";
@@ -2773,7 +2773,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   return startRegistry({
     cwd,
     title: `Serving ${project.display_name}`,
-    terminalName: `Images: ${project.display_name}`,
+    terminalName: `Serve: ${project.display_name}`,
     args: ["serve", project.id, "--snapshot", snapshotId, "--backend", provider, "--dimension", dimension],
     encryptionMaterial,
     retry: () => vscode.commands.executeCommand("joshRoom.serve", project),
@@ -3371,15 +3371,21 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
       },
     );
     if (!outcome || outcome.kind === "files") {
-      setStatus("$(server-process) Serving files", title);
-      outputChannel?.info(`READY · JAT fileserver · ${title}`);
+      setStatus("$(server-process) Files :8080", title);
+      outputChannel?.info(`READY · JAT fileserver (${FILESERVER_URL}) · ${title}`);
       const filesAction = await vscode.window.showInformationMessage(
         outcome
           ? `JAT resolved this capsule to a files projection — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`
           : `JAT is serving files from this capsule — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`,
+        "Copy Fileserver URL",
         "Show Logs",
       );
-      if (filesAction === "Show Logs") outputChannel?.show(true);
+      if (filesAction === "Copy Fileserver URL") {
+        await vscode.env.clipboard.writeText(FILESERVER_URL);
+        await vscode.window.showInformationMessage(`Copied ${FILESERVER_URL}.`);
+      } else if (filesAction === "Show Logs") {
+        outputChannel?.show(true);
+      }
       return "started";
     }
     const catalog = outcome.catalog;
@@ -3500,6 +3506,7 @@ function activate(context) {
   register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
   register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
   register(context, "joshRoom.refresh", () => roomsProvider.refresh());
   register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
   register(context, "joshRoom.clearLocalFallback", clearLocalFallback);
@@ -3622,7 +3629,7 @@ async function chooseServeProject(projects, marker, preferredProject) {
   }
   const choice = await vscode.window.showQuickPick(
     projects.map((project) => ({ label: roomLabel(project), project })),
-    { title: "Josh: Serve Room Images", placeHolder: "Choose a Room", ignoreFocusOut: true },
+    { title: "Josh: Serve Room Content\u2026", placeHolder: "Choose a Room", ignoreFocusOut: true },
   );
   return choice && choice.project;
 }
@@ -5527,6 +5534,7 @@ function activateNative(context) {
   register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
   register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.exportPortableJat", exportPortableJat);
   register(context, "joshRoom.extractLogicalSnapshot", extractLogicalSnapshot);

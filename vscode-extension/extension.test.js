@@ -7143,3 +7143,93 @@ for (const name of [".josh-room-composition.json", ".josh-room-split.json"]) {
     assert.equal(mock.quickPickCalls.length, 0);
   });
 }
+
+test("Room and Logical JAT serve commands expose honest content/fileserver labels in root and template manifests", () => {
+  for (const manifestPath of ["vscode-extension/package.json", "templates/room/vscode-extension/package.json"]) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifestPath), "utf8"));
+    const commandsById = new Map(manifest.contributes.commands.map((cmd) => [cmd.command, cmd]));
+    assert.equal(commandsById.get("joshRoom.serve")?.title, "Josh: Serve Room Content\u2026");
+    assert.equal(commandsById.get("joshRoom.serveLogicalSnapshot")?.title, "Josh: Serve this Logical JAT\u2026");
+    assert.ok(manifest.activationEvents.includes("onCommand:joshRoom.serveLogicalSnapshot"));
+    assert.equal(
+      manifest.contributes.commands.some((cmd) => /Serve Room Images/i.test(cmd.title)),
+      false,
+      `${manifestPath} must not keep misleading Serve Room Images label`,
+    );
+    const contexts = manifest.contributes.menus["view/item/context"];
+    assert.ok(contexts.some((item) => item.command === "joshRoom.serve" && item.when.includes("viewItem == room")));
+    assert.ok(contexts.some((item) => item.command === "joshRoom.serveLogicalSnapshot" && item.when.includes("viewItem == logical-jat")));
+  }
+});
+
+test("Serve this Logical JAT command reuses serveRoom for files/both modes and enforces Workspace Trust", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-serve-logical-ux-"));
+  try {
+    const regMock = createVscodeMock(root);
+    const regExt = loadExtension(regMock.vscode, () => { throw new Error("spawn must not run on activate"); });
+    regExt.__test__.setStatusItem(regMock.statusItem);
+    regExt.activate({
+      extensionPath: root,
+      globalStorageUri: { fsPath: root },
+      subscriptions: [],
+      secrets: { get: async () => undefined },
+    });
+    assert.equal(typeof regMock.commandCallbacks.get("joshRoom.serveLogicalSnapshot"), "function");
+
+    const fixture = createLogicalSnapshotFixture(root);
+    const { vscode } = fixture;
+    const terminals = [];
+
+    for (const chosenMode of ["files", "registry", "both", "auto"]) {
+      terminals.length = 0;
+      const modeItem = fixture.extension.__test__.JAT_SERVE_MODES.find((item) => item.mode === chosenMode);
+      vscode.quickPickResponses.push(modeItem);
+      const outcome = await fixture.extension.__test__.serveRoom(fixture.jat, {
+        startRegistry: async (options) => {
+          terminals.push(options);
+          return "started";
+        },
+      });
+      assert.equal(outcome, "started");
+      assert.equal(terminals.length, 1);
+      assert.equal(terminals[0].mode, chosenMode);
+      assert.deepEqual(terminals[0].args, [
+        "snapshot", "serve", "demo-room", "--snapshot", fixture.snapshotId, "--mode", chosenMode, "--dimension", "backup",
+      ]);
+      assert.match(fixture.quickPickCalls.at(-1).options.placeHolder, /Files :8080/);
+    }
+
+    // Untrusted workspace must be blocked before any controller call
+    vscode.workspace.isTrusted = false;
+    const callsBefore = fixture.spawnHarness.calls.length;
+    await assert.rejects(
+      fixture.extension.__test__.serveRoom(fixture.jat),
+      /Workspace Trust/,
+    );
+    assert.equal(fixture.spawnHarness.calls.length, callsBefore);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Fileserver ready notification offers Copy Fileserver URL and updates status with :8080", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fileserver-copy-"));
+  try {
+    const haul = path.join(root, "files.capsule.tar.zst");
+    const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+    const copied = [];
+    vscode.env = { clipboard: { writeText: async (text) => { copied.push(text); } } };
+    vscode.infoResponses.push("Copy Fileserver URL");
+    const extension = loadExtension(vscode, () => { throw new Error("serve must not spawn a controller"); });
+    extension.__test__.setStatusItem(statusItem);
+    vscode.openDialogResponses.push([{ fsPath: haul }]);
+    vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[1]);
+
+    assert.equal(await extension.__test__.jatServe(), "started");
+    assert.ok(infoCalls[0].includes("Copy Fileserver URL"));
+    assert.deepEqual(copied, ["http://127.0.0.1:8080"]);
+    assert.match(statusItem.text, /Files :8080/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

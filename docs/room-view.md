@@ -19,13 +19,38 @@ All examples, fixtures, receipts, and screenshots in this repository use
 ## CLI contract
 
 ```text
-josh-room view serve  --provider <name|module:attr> [--port 0] [--interval 5] [--workspace <path>] [--require-token] [--json]
-josh-room view export --provider <name|module:attr> --output <file.html> [--no-attachments] [--max-size 50MB] [--sensitivity-ack] [--workspace <path>] [--room-id <id>] [--json]
+josh-room view serve  --provider <name|module:attr> [--port 0] [--interval 5] [--workspace <path>] [--manifest <file.json>] [--require-token] [--json]
+josh-room view export --provider <name|module:attr> --output <file.html> [--no-attachments] [--max-size 50MB] [--sensitivity-ack] [--workspace <path>] [--manifest <file.json>] [--room-id <id>] [--json]
 josh-room view export --from-state <state.json> [--attachments-dir <dir>] --output <file.html> [--no-attachments] [--max-size 50MB] [--sensitivity-ack] [--json]
 josh-room view inspect <file.html> [--json]
 ```
 
+Built-in native providers:
+
+- `room --workspace <dir>` — bounded read-only workspace observation using Room
+  identity, capture policy, descriptor-relative no-follow reads, mount checks,
+  and typed sanitized previews. Requires safe descriptor-relative file APIs
+  (verified on Linux); unsupported platforms fail closed. Defaults: 250 nodes,
+  depth 6, 64 children per directory, 5 seconds, 16 KiB per preview and 512 KiB
+  total preview content. Caps produce explicit omissions, not complete coverage.
+  There is no continuation cursor yet. Incomplete sibling scans are withheld
+  rather than admitting names before all aliases are checked.
+- `capsule-manifest --manifest <file.json>` — validates a saved Logical JAT
+  descriptor and displays recorded workspace/component anchors. This validates
+  manifest structure, not the existence or digest of underlying archive bytes;
+  it neither extracts nested files nor starts Hauler.
+
+Both native providers default to `internal`: offline export needs
+`--sensitivity-ack`. Secret-named files are never opened; detected sensitive
+text/JSON becomes a `redacted` preview. Small PDF/image attachments remain
+binary evidence, not content-sanitized text. Attachment reads verify bytes and
+recheck current capture policy. Live workspace observation is not an atomic
+snapshot or Save authority.
+
 Built-in synthetic providers for testing and demos:
+
+- `synthetic-unix` — original synthetic `/usr`, `/etc`, `/var`, `/home`, `/src`
+  hierarchy with source, diff, JSON, execution log and linked evidence examples.
 
 - `synthetic` — 3 groups × 6 stages = 300 synthetic items with deduplicated
   synthetic PDFs, before/after PNGs, and inert HTML reports.
@@ -180,64 +205,43 @@ into a structured comparison view with scripts/iframes/objects stripped.
 
 ## Click-through interaction contract (`NAVIGATE` / `INSPECT` / `ACT`)
 
-Room View is a **localhost-only, sanitized, read-only state viewer**—not a
-general-purpose UNIX file server. To keep the SGI FSN 3D landscape genuinely
-useful in daily Room workflows without weakening security or offline
-portability, click-through behavior is structured around three distinct
-capabilities:
+`NAVIGATE` and `INSPECT` are implemented in this PR. `ACT` remains out of scope.
 
-### Current v1 behavior (implemented in #202)
+| Target | Read-only behavior |
+| --- | --- |
+| Directory pedestal | Enter/focus its branch; parent-child wires, breadcrumbs and Back preserve location. |
+| Summary tower | Expand aggregated children at unchanged world-space dimensions. |
+| File, grid tile, tree or search result | Fly/select, spotlight, and open the dismissible inspector. |
+| Inspector content | Source/config/log text with line numbers, diff highlighting, collapsible JSON, structured execution details, PDF/image/inert HTML evidence and timeline. |
+| Relationship link | Jump to its producer, output, consumer or other declared object, without network access. |
 
-| Click target | Current v1 action | What it displays |
-| --- | --- | --- |
-| Root `/` pedestal | Flies back to low-angle overview; clears spotlight; hides inspector; syncs breadcrumbs and APG `role="tree"`. | Full tree overview (with `>50`-item groups collapsed to stage summaries). |
-| Group pedestal | Expands collapsed group (`>50` items) in place; swoops camera ~30° above pedestal; brightens root → group wire. | Group summary counts and fanned stage pedestals. |
-| Stage pedestal | Swoops camera ~30° above stage pedestal; brightens root → group → stage wire. | Individual file towers (≤12–16) or 11 highest-interest items + `+N more` SpaceTree block. |
-| `+N more` / stage-summary tower | Expands aggregated siblings or collapsed group in place and flies to the expanded branch. | Previously aggregated items at constant world-unit dimensions. |
-| Ground wire | Selects child pedestal; second click ascends to parent (FSN convention). | Active parent-child branch highlight. |
-| File / item tower (or Grid/Search hit) | Swoops camera ~40° above block; activates Spotlight v2 (no lamp); opens dismissible Inspector drawer; syncs APG tree & polite live announcement. Shift-click selects without camera flight; clicking the beam zooms closer. | **Details** (ID, group/stage, outcome cue, metric + quantile bin, sanitized scalar `fields`), **Evidence** (lazy `pdf.js` PDFs, side-by-side PNG/JPEG/WebP + ≤1.25× lightbox, inert `DOMParser` HTML reports, or explicit unavailability notice), and **Timeline** (ordered `steps`). |
+Providers may supply `ViewState.nodes`: `{id, parent_id, node_kind, label,
+updated_at, kind?, metric?, fields?, previews?, attachments?, links?}`. Trees are
+validated for unique IDs, valid parents and cycles. Legacy group/stage/item
+providers map automatically to root → group → stage → item. Search, ARIA tree,
+grid and SQL retain nodes hidden by 3D aggregation or LOD.
 
-### Absent capabilities & scoped follow-up architecture
+`PreviewContent` stores a bounded typed body, slot, title, language, summary and
+status (`available`, `unavailable`, `redacted`, `omitted`). `ObjectLink` stores a
+validated relation and target ID. Preview and relationship data passes the same
+mandatory sanitizer as descriptor/state data. Live content uses only validated
+`GET /content/<id>/<slot>`; there is no arbitrary path route. Offline snapshots
+embed the same content and links with zero network.
 
-The following capabilities are **intentionally outside #202 v1** and reserved
-for a backwards-compatible follow-up issue (keeping existing
-`ViewStateProvider` implementations working unchanged):
+Additive SQLite tables in `room-view-v1` are `nodes` (including computed `path`),
+`previews` (keyed by `node_id, slot`), and `links` (source/relation/target).
+Missing, redacted or capped content renders an explicit notice. Refreshing live
+state updates an open inspector while preserving its tab, or closes it when
+its item disappears.
 
-1. **`NAVIGATE` — arbitrary-depth provider-defined hierarchy (follow-up)**:
-   - v1 fixes the hierarchy to four levels (`root → group → stage → item`).
-   - Additive follow-up: optional `nodes` table/list
-     (`{id, parent_id, node_kind, label, kind?, metric?, summary?}`) enabling
-     provider-defined trees of arbitrary depth (e.g.
-     `root → service → package → suite → run → artifact`) while mapping v1
-     `groups`/`stages`/`items` onto the same model automatically. Aggregation
-     (`>16` children, `>50` subtree) and distance LOD remain bounded while
-     keeping every node reachable via APG tree, search, 2D Grid, and SQL.
-2. **`INSPECT` — typed read-only content previews & relationship links (follow-up)**:
-   - v1 limits leaf inspection to scalar `fields` (≤160 chars), step timestamps,
-     and the five allowlisted attachment media types (`application/pdf`,
-     `image/png`, `image/jpeg`, `image/webp`, inert `text/html`).
-   - Additive follow-up schema separates five distinct read-only layers:
-     - **Summary**: compact inline metadata (existing `ItemState` fields).
-     - **Preview**: bounded, server-sanitized typed preview payloads (e.g.
-       `text/plain`, `text/x-diff` with line numbers/diff highlighting,
-       `application/json` collapsible tree, structured execution log/exit-code
-       records) stored in an additive `item_previews(item_id, slot, media_type, status, reason, body_text)`
-       table for identical live + offline HTML rendering.
-     - **Content**: optional allowlisted read-only `content(item_id, slot)`
-       provider method subject to the same strict sanitizer, size cap, and
-       zero-host-path guarantees—never serving arbitrary host files.
-     - **Attachments**: existing deduplicated allowlisted blobs.
-     - **Links**: additive `item_links(source_id, relation, target_id, label)`
-       tracing `producer → output → consumer` / `caused_by` / `depends_on`
-       relationships as clickable in-world jump links (zero network).
-   - **Explicit unavailability**: missing, redacted, size-capped, disallowed,
-     or `--no-attachments`-omitted content must render a typed unavailability
-     state (`omitted`, `disallowed-media-type`, `redacted-by-policy`,
-     `unavailable`) and never invent placeholder data.
-3. **`ACT` — separately authorized action surface (reserved, out of #202 v1)**:
-   - Future operational actions (e.g., open in IDE, retry a stage, approve a
-     gate) require an explicit opt-in, separately authorized host-controlled
-     boundary—never implicit filesystem writes or browser-triggered mutation
-     routes.
-   - #202 v1 enforces read-only `GET`/`HEAD` only (`405` on all mutation
-     methods) and zero action endpoints.
+The viewer never starts native artifact serving. Extension Room context menus
+invoke the existing logical-JAT `snapshot serve --mode files|registry|both|auto`
+path; `JAT: Serve Haul…` independently serves a selected portable archive.
+See [README](../README.md#standalone-vsix) and
+[ADR 0012](adr/0012-room-view-native-serving-and-hauler-spike.md) for the native
+serving distinction and isolated Hauler experiment.
+
+No browser action endpoints, filesystem writes, retry/approve controls, hosted
+UI or VS Code webview are implemented. Human recognition, lookup studies and
+physical GPU qualification remain pending; synthetic browser checks cannot
+certify those gates.

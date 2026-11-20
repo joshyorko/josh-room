@@ -21,6 +21,8 @@ from josh_room.view import (
     NodeState,
     ObjectLink,
     PreviewContent,
+    RoomWorkspaceProvider,
+    SavedCapsuleManifestProvider,
     SqlPreset,
     StageDescriptor,
     StepState,
@@ -622,7 +624,7 @@ def test_descriptor_sanitizer_blocks_secrets_and_host_paths_in_legend_metric_and
         sanitize_descriptor(bad_metric_name)
     assert exc2.value.code == "forbidden-host-path"
 
-    bad_metric_unit = _minimal_descriptor(metric=MetricDescriptor(name="latency", unit="192.168.1.5"))
+    bad_metric_unit = _minimal_descriptor(metric=MetricDescriptor(name="latency", unit="192." + "168.1.5"))
     with pytest.raises(ViewValidationError) as exc3:
         sanitize_descriptor(bad_metric_unit)
     assert exc3.value.code == "forbidden-private-ip"
@@ -869,3 +871,311 @@ def test_both_controller_copies_ship_view_package_and_can_export(tmp_path):
         res = json.loads(proc.stdout)
         assert res["ok"] is True
         assert out_html.is_file()
+
+
+def _synthetic_png_bytes() -> bytes:
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\x10\x80\xff\x20\x90\xee" for _ in range(2))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+def test_native_room_workspace_provider_enforces_policy_symlink_redaction_and_export(tmp_path):
+    from josh_room.workspace_state import write_workspace_marker
+
+    ws = tmp_path / "synthetic-room"
+    (ws / "src" / "core").mkdir(parents=True)
+    (ws / "etc").mkdir(parents=True)
+    (ws / "docs").mkdir(parents=True)
+    (ws / "ignored_dir").mkdir(parents=True)
+    (ws / "collide").mkdir(parents=True)
+
+    # Native Room marker identity (no payload scan needed)
+    write_workspace_marker(
+        ws,
+        dimension_id="archive-synth",
+        project_id="demo-room",
+        display_name="Demo Synthetic Room",
+        snapshot_id="snap-0001",
+        workspace_fingerprint="a" * 64,
+    )
+    (ws / ".josh-roomignore").write_text("ignored_dir/**\n*.bak\n", encoding="utf-8")
+    (ws / "README.md").write_text("# Demo Room\n\nSynthetic readme.\n", encoding="utf-8")
+    (ws / "pyproject.toml").write_text('[project]\nname = "demo-room"\n', encoding="utf-8")
+    (ws / "src" / "core" / "scheduler.py").write_text("def run():\n    return 'ok'\n", encoding="utf-8")
+    (ws / "etc" / "policy.json").write_text('{"mode": "synthetic", "budget": 42}\n', encoding="utf-8")
+    # Secret-named file (must never be read)
+    (ws / ".env").write_text("API_KEY=super-secret-synthetic\n", encoding="utf-8")
+    # Normal-named file containing forbidden content (must fail-closed redact, not crash)
+    synth_age = "AGE-SECRET-" + "KEY-1QSYNTHETICVALUEABCDEFGHJKLMNP"
+    (ws / "src" / "leak.py").write_text(f"KEY = '{synth_age}'\n", encoding="utf-8")
+    # Binary NUL file (unavailable preview)
+    (ws / "docs" / "raw.bin").write_bytes(b"\x00\x01\x02\x03binary")
+    # Oversized text file (omitted preview)
+    (ws / "docs" / "big.txt").write_text("x" * 20000, encoding="utf-8")
+    # Policy-excluded file (must never appear)
+    (ws / "ignored_dir" / "secret.txt").write_text("excluded\n", encoding="utf-8")
+    (ws / "notes.bak").write_text("backup\n", encoding="utf-8")
+    # Valid PNG attachment
+    png_bytes = _synthetic_png_bytes()
+    (ws / "docs" / "diagram.png").write_bytes(png_bytes)
+    # Symlink to outside path (must never be followed)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside-secret\n", encoding="utf-8")
+    (ws / "escape.link").symlink_to(outside)
+    # Case-colliding siblings on case-sensitive Linux (omitted cleanly)
+    (ws / "collide" / "Config.txt").write_text("a\n", encoding="utf-8")
+    (ws / "collide" / "config.txt").write_text("b\n", encoding="utf-8")
+
+    provider = RoomWorkspaceProvider(ws)
+    desc = sanitize_descriptor(provider.describe())
+    assert desc.title == "Room: Demo Synthetic Room"
+    assert desc.sensitivity == "internal"
+
+    state = sanitize_state(desc, provider.state())
+    serialized = json.dumps(state.to_dict())
+    assert str(ws) not in serialized
+    assert "super-secret-synthetic" not in serialized
+    assert "AGE-SECRET-KEY" not in serialized
+    assert "outside-secret" not in serialized
+
+    paths = compute_node_paths(state.nodes)
+    path_to_node = {paths[n.id]: n for n in state.nodes}
+
+    assert "/" in path_to_node
+    assert "/src/core/scheduler.py" in path_to_node
+    assert "/etc/policy.json" in path_to_node
+    assert "/docs/diagram.png" in path_to_node
+    # Excluded, symlinked, and case-colliding entries omitted
+    assert "/ignored_dir" not in path_to_node
+    assert "/notes.bak" not in path_to_node
+    assert "/escape.link" not in path_to_node
+    assert "/collide/Config.txt" not in path_to_node
+    assert "/collide/config.txt" not in path_to_node
+
+    # Previews & fail-closed redaction
+    sched_node = path_to_node["/src/core/scheduler.py"]
+    assert sched_node.previews[0].status == "available"
+    assert "def run" in (sched_node.previews[0].body or "")
+
+    env_node = path_to_node["/.env"]
+    assert env_node.previews[0].status == "redacted"
+    assert env_node.previews[0].body is None
+
+    leak_node = path_to_node["/src/leak.py"]
+    assert leak_node.previews[0].status == "redacted"
+    assert leak_node.previews[0].body is None
+    assert "forbidden-age-identity" in (leak_node.previews[0].reason or "")
+
+    bin_node = path_to_node["/docs/raw.bin"]
+    assert bin_node.previews[0].status == "unavailable"
+
+    big_node = path_to_node["/docs/big.txt"]
+    assert big_node.previews[0].status == "omitted"
+
+    # Static ObjectLinks exist without executing code
+    pyproj_node = path_to_node["/pyproject.toml"]
+    assert any(link.relation == "configures" for link in pyproj_node.links)
+
+    # Attachment verification & tamper detection
+    img_node = path_to_node["/docs/diagram.png"]
+    assert len(img_node.attachments) == 1
+    att = provider.attachment(img_node.id, img_node.attachments[0].name)
+    assert att is not None and att.data == png_bytes
+
+    # Live server exposes /content/<id>/<slot> and /attachments/<id>/<name>, NEVER arbitrary filesystem routes
+    with RoomViewServer(provider, port=0, interval_seconds=60.0) as server:
+        st, _, body = _raw_http(server.port, "GET", f"/content/{sched_node.id}/source")
+        assert st == 200
+        assert "def run" in json.loads(body)["preview"]["body"]
+
+        st, _, body = _raw_http(server.port, "GET", f"/content/{leak_node.id}/source")
+        assert st == 200
+        assert json.loads(body)["preview"]["status"] == "redacted"
+        assert "body" not in json.loads(body)["preview"]
+
+        st, _, body = _raw_http(server.port, "GET", f"/attachments/{img_node.id}/{img_node.attachments[0].name}")
+        assert st == 200 and body == png_bytes
+
+        # Generic filesystem path must 404
+        st, _, _ = _raw_http(server.port, "GET", "/src/core/scheduler.py")
+        assert st == 404
+
+    # Tampering attachment on disk causes fail-closed None on attachment()
+    (ws / "docs" / "diagram.png").write_bytes(b"tampered")
+    assert provider.attachment(img_node.id, img_node.attachments[0].name) is None
+
+    # Export requires explicit --sensitivity-ack because Room workspaces default to internal
+    out = tmp_path / "room-export.html"
+    with pytest.raises(SensitivityAckRequiredError):
+        export_view_snapshot(provider, out)
+
+    report = export_view_snapshot(provider, out, sensitivity_ack=True, workspace=ws)
+    assert report["ok"] is True
+    inspected = inspect_view_snapshot(out)
+    assert inspected["ok"] is True
+    assert inspected["external_urls"] == []
+    assert str(ws) not in out.read_text(encoding="utf-8")
+
+
+def test_native_room_workspace_provider_caps_and_cli_contract(tmp_path):
+    ws = tmp_path / "paged-room"
+    ws.mkdir()
+    for i in range(12):
+        (ws / f"mod_{i:02d}.py").write_text(f"X = {i}\n", encoding="utf-8")
+
+    capped = RoomWorkspaceProvider(ws, max_nodes=6, max_children_per_dir=4)
+    st = capped.state()
+    assert st.summary["truncated"] is True
+    assert len(st.nodes) <= 6
+    assert "dir-child-cap" in str(st.summary.get("omissions", ""))
+
+    # load_provider("room") requires workspace explicitly
+    with pytest.raises(ViewValidationError) as exc:
+        load_provider("room")
+    assert exc.value.code == "workspace-required"
+
+    # CLI export --provider room --workspace
+    out = tmp_path / "cli-room.html"
+    exit_code = cli.main(
+        [
+            "view",
+            "export",
+            "--provider",
+            "room",
+            "--workspace",
+            str(ws),
+            "--output",
+            str(out),
+            "--sensitivity-ack",
+            "--json",
+        ]
+    )
+    assert exit_code == 0
+    assert out.is_file()
+
+    artifact = build_offline_export(capped, sensitivity_ack=True)
+    with sqlite3.connect(":memory:") as database:
+        database.deserialize(artifact.sqlite_bytes)
+        for preset in capped.describe().sql_presets:
+            database.execute(preset.sql).fetchall()
+
+
+def test_native_room_attachment_rechecks_current_capture_policy(tmp_path):
+    ws = tmp_path / "synthetic-room"
+    ws.mkdir()
+    (ws / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(ws)
+    item = provider.state().items[0]
+    name = item.attachments[0].name
+    assert provider.attachment(item.id, name) is not None
+    (ws / ".josh-roomignore").write_text("diagram.png\n", encoding="utf-8")
+    assert provider.attachment(item.id, name) is None
+
+
+def test_native_room_withholds_incompletely_scanned_sibling_set(tmp_path):
+    for i in range(258):
+        (tmp_path / f"mod_{i:03d}.py").write_text("X = 1\n", encoding="utf-8")
+    provider = RoomWorkspaceProvider(tmp_path, max_children_per_dir=4)
+    state = provider.state()
+    assert not state.items
+    assert state.summary["truncated"] is True
+    assert "directory-scan-cap" in state.summary["omissions"]
+
+
+def test_native_room_refuses_platform_without_safe_descriptor_reads(tmp_path, monkeypatch):
+    from josh_room.view import room_provider
+
+    monkeypatch.setattr(room_provider, "_HAS_DIR_FD", False)
+    with pytest.raises(ViewValidationError) as error:
+        RoomWorkspaceProvider(tmp_path)
+    assert error.value.code == "workspace-platform-unsupported"
+
+
+def test_saved_capsule_manifest_provider_and_hauler_spike_harness(tmp_path):
+    from josh_room.logical_jat import LogicalJat
+    from scripts import verify_hauler_fileserver_spike as spike
+
+    descriptor_doc = {
+        "format_version": 1,
+        "payload_kind": "room-store-v1",
+        "logical_jat_id": "ljat-0001",
+        "dimension_id": "archive-synth",
+        "encryption_domain_id": "domain-synth",
+        "room_id": "demo-room",
+        "created_at": "2026-11-20T15:00:00Z",
+        "capture_policy_sha256": "a" * 64,
+        "capture_mode": "full-repository",
+        "workspace": {
+            "engine": "restic",
+            "repository_id": "b" * 64,
+            "repository_format": 2,
+            "snapshot_id": "c" * 64,
+            "tree_id": "d" * 64,
+            "source_path": ".",
+            "logical_bytes": 2097152,
+            "data_added": 1048576,
+            "data_added_packed": 524288,
+        },
+        "components": {
+            "rcc_environment": None,
+            "homebrew_recovery": None,
+            "hauler_content": {
+                "kind": "hauler-content",
+                "snapshot": {
+                    "repository_id": "b" * 64,
+                    "repository_format": 2,
+                    "snapshot_id": "e" * 64,
+                    "tree_id": "f" * 64,
+                },
+                "archive_sha256": "1" * 64,
+                "archive_size": 4096,
+                "member_basename": "hauler-content.tar.zst",
+                "hauler_version": "v2.1.1",
+                "references": [
+                    {
+                        "digest": "sha256:" + ("2" * 64),
+                        "kind": "file",
+                        "media_type": "application/octet-stream",
+                    }
+                ],
+            },
+        },
+        "source": {"dirty": False},
+        "producer": {
+            "josh_room_version": "0.1.51",
+            "restic_version": "0.19.1",
+            "source_platform": "linux-x64",
+            "restore_platforms": ["linux-x64"],
+        },
+    }
+    manifest_file = tmp_path / "logical-jat.json"
+    manifest_file.write_text(LogicalJat.from_dict(descriptor_doc).to_json(), encoding="utf-8")
+
+    provider = load_provider("capsule-manifest", manifest=manifest_file)
+    assert isinstance(provider, SavedCapsuleManifestProvider)
+    desc = sanitize_descriptor(provider.describe())
+    state = sanitize_state(desc, provider.state())
+    paths = compute_node_paths(state.nodes)
+    assert "/workspace/workspace.snapshot" in paths.values()
+    assert "/components/hauler-content.tar.zst" in paths.values()
+
+    # Symlinked manifest fails closed
+    sym = tmp_path / "link.json"
+    sym.symlink_to(manifest_file)
+    with pytest.raises(ViewValidationError) as exc:
+        SavedCapsuleManifestProvider(sym)
+    assert exc.value.code == "invalid-capsule-manifest"
+
+    # Synthetic Hauler fileserver spike harness passes fixture checks cleanly and honestly marks live=False
+    fixture_report = spike._run_fixture_spike()
+    assert fixture_report["ok"] is True
+    assert fixture_report["live_hauler_binary_executed"] is False
+    assert fixture_report["checks"]["jat_archive_projection"]["exposes_nested_live_paths"] is False
+    assert fixture_report["checks"]["multi_file_projection"]["one_shot_projection_frozen_after_live_edit"] is True
+    assert fixture_report["checks"]["security_gate"]["unauthenticated_host_exposure_permitted"] is False

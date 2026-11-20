@@ -29,6 +29,7 @@ from .contract import (
     validate_safe_label,
     validate_state_against_descriptor,
 )
+from .room_provider import RoomWorkspaceProvider, SavedCapsuleManifestProvider
 from .sanitizer import (
     DEFAULT_SANITIZATION_POLICY,
     SanitizationPolicy,
@@ -55,7 +56,9 @@ __all__ = [
     "NodeState",
     "ObjectLink",
     "PreviewContent",
+    "RoomWorkspaceProvider",
     "SanitizationPolicy",
+    "SavedCapsuleManifestProvider",
     "SensitivityAssessment",
     "SqlPreset",
     "StageDescriptor",

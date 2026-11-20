@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -603,24 +605,47 @@ def _read_workspace_sensitivity(workspace: Path | None) -> tuple[str | None, str
         return None, None
     root = Path(workspace)
     ignore = root / ".josh-roomignore"
-    if ignore.is_file() and not ignore.is_symlink():
+    try:
+        meta = ignore.lstat()
+    except FileNotFoundError:
+        return None, None
+    except OSError:
+        return "sensitive", "workspace-policy-unreadable"
+    if not stat.S_ISREG(meta.st_mode) or meta.st_size > 65536:
+        return "sensitive", "workspace-policy-unreadable"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(ignore, flags)
         try:
-            text = ignore.read_text(encoding="utf-8", errors="strict")
-        except OSError:
+            opened = os.fstat(fd)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != meta.st_dev
+                or opened.st_ino != meta.st_ino
+                or opened.st_size > 65536
+            ):
+                return "sensitive", "workspace-policy-unreadable"
+            raw = os.read(fd, 65537)
+        finally:
+            os.close(fd)
+        if len(raw) > 65536:
             return "sensitive", "workspace-policy-unreadable"
-        directives = [
-            line.strip().split(":", 1)[1].strip().lower()
-            for line in text.splitlines()
-            if line.strip().lower().startswith("# josh-room sensitivity:")
-        ]
-        if directives:
-            # Take most restrictive valid level; fail closed on unknown level.
-            worst = None
-            for raw in directives:
-                level = raw if raw in SENSITIVITY_LEVELS else "sensitive"
-                if worst is None or SENSITIVITY_ORDER[level] > SENSITIVITY_ORDER[worst]:
-                    worst = level
-            return worst, "workspace-capture-policy"
+        text = raw.decode("utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return "sensitive", "workspace-policy-unreadable"
+    directives = [
+        line.strip().split(":", 1)[1].strip().lower()
+        for line in text.splitlines()
+        if line.strip().lower().startswith("# josh-room sensitivity:")
+    ]
+    if directives:
+        # Take most restrictive valid level; fail closed on unknown level.
+        worst = None
+        for raw_level in directives:
+            level = raw_level if raw_level in SENSITIVITY_LEVELS else "sensitive"
+            if worst is None or SENSITIVITY_ORDER[level] > SENSITIVITY_ORDER[worst]:
+                worst = level
+        return worst, "workspace-capture-policy"
     return None, None
 
 
