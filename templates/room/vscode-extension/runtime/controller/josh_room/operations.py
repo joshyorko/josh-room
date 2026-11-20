@@ -19,7 +19,7 @@ from .encryption_domain import (
     EncryptionMaterial,
 )
 from .envelope import build_envelope_file, read_envelope_file, verify_envelope_file
-from .jat import run_build, run_restore, run_serve
+from .jat import require_serve_startup, run_build, run_restore, run_serve
 from .local_store import ImmutableLocalStore, ObjectRef
 from .progress import report_progress
 from .workspace_policy import load_capture_policy
@@ -527,7 +527,8 @@ def _assert_expected_delete_state(catalog, project_id, expected_revision, expect
         raise ValueError("recovery point inventory changed after deletion confirmation; reload and confirm again")
 
 
-def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: Path, jat_root: Path, backend=None, *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None) -> dict:
+def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: Path, jat_root: Path, backend=None, *, selected_material: EncryptionMaterial | None = None, selected_domain: EncryptionKeyset | None = None, fileserver_port=0, registry_port=0, startup_file=None) -> dict:
+    require_serve_startup(jat_root)
     identity = _selected_identity(identity, selected_material)
     instance.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="serve-", dir=instance) as work:
@@ -559,7 +560,7 @@ def serve_snapshot(instance: Path, project_id: str, snapshot_id: str, identity: 
         if not _manifest_matches_snapshot(manifest, project_id, snapshot):
             raise ValueError("manifest project mismatch")
         report_progress("serve", "Starting read-only Hauler registry")
-        return run_serve(jat_root, haul)
+        return run_serve(jat_root, haul, fileserver_port=fileserver_port, registry_port=registry_port, startup_file=startup_file)
 
 
 def export_snapshot(

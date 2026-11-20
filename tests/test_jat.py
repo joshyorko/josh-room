@@ -543,6 +543,9 @@ def test_jat_cli_failure_raises_with_exit_status(tmp_path, monkeypatch):
 
 
 def test_jat_cli_serve_runs_foreground_without_timeout(tmp_path, monkeypatch):
+    source = tmp_path / "src/jat"
+    source.mkdir(parents=True)
+    (source / "cli.py").write_text('# synthetic CLI contract: --startup-file\n')
     _managed_env(monkeypatch)
     haul = tmp_path / "workspace.haul"
     seen = {}
@@ -551,7 +554,29 @@ def test_jat_cli_serve_runs_foreground_without_timeout(tmp_path, monkeypatch):
 
     assert seen["timeout"] is None
     command = seen["argv"][seen["argv"].index("--") + 1:]
-    assert command == ["python", "-m", "jat.cli", "serve", "--haul", str(haul), "--mode", "both", "--json"]
+    assert command == ["python", "-m", "jat.cli", "serve", "--haul", str(haul), "--mode", "both", "--fileserver-port", "0", "--registry-port", "0", "--json"]
+
+
+def test_serve_forwards_startup_file_and_explicit_ports_and_refuses_old_runtime(tmp_path, monkeypatch):
+    from josh_room.jat import run_serve
+
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_MODE", "0")
+    seen = {}
+    monkeypatch.setattr("josh_room.jat._run_cli", _fake_run_cli(seen, _cli_stdout("serve")))
+    startup = tmp_path / "startup.json"
+    with pytest.raises(JATError, match="update the pinned JAT runtime"):
+        run_serve(tmp_path, tmp_path / "demo.haul", startup_file=startup)
+    assert not seen
+    source = tmp_path / "src/jat"
+    source.mkdir(parents=True)
+    (source / "cli.py").write_text('# synthetic CLI contract: --startup-file\n')
+    run_serve(tmp_path, tmp_path / "demo.haul", mode="files", fileserver_port=41257,
+              registry_port=0, startup_file=startup)
+    command = seen["argv"]
+    assert command[command.index("--fileserver-port") + 1] == "41257"
+    assert command[command.index("--registry-port") + 1] == "0"
+    assert command[command.index("--startup-file") + 1] == str(startup)
+    assert seen["timeout"] is None
 
 
 def test_jat_cli_extract_passes_reference_and_destination_verbatim(tmp_path, monkeypatch):

@@ -10,8 +10,8 @@ Security invariant:
   truthful `status: "blocked"` JSON receipt instead of faking a pass or binding
   on host interfaces.
 - In `--mode fixture`, runs a synthetic, strictly `127.0.0.1`-bound model of the
-  four spike checks (archive-only JAT projection, multi-file projection &
-  basename collisions, one-shot copy vs live edit divergence, and bind-scope
+  synthetic checks (archive-shaped projection, multi-file projection,
+  one-shot copy vs live edit divergence, and bind-scope
   audit) and explicitly marks `live_hauler_binary_executed: false`.
 """
 
@@ -104,10 +104,7 @@ def _run_fixture_spike() -> dict[str, Any]:
         archive_bytes = b"synthetic-zstd-tar-placeholder-payload"
         (jat_proj / "joshs-all-the-things-workspace.tar.zst").write_bytes(archive_bytes)
 
-        # (2) Multi-file projection simulating Hauler mapper.Files() OCI Title mapping:
-        #     - flat basenames preserved
-        #     - nested path attempt flattened/collided when OCI Title lacks safe dir mapping
-        #     - one-shot copy projection frozen relative to source mutations
+        # (2) Prepared multi-file projection; actual Hauler title mapping is tested in live mode.
         source_ws = root / "live-workspace"
         (source_ws / "src").mkdir(parents=True)
         (source_ws / "etc").mkdir(parents=True)
@@ -385,12 +382,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         live = _run_live_spike(env)
         if live.get("status") == "blocked":
+            fixture = _run_fixture_spike()
             report = {
-                "ok": True,
+                "ok": fixture["ok"],
                 "status": "live-blocked-fixture-passed",
                 "environment": env,
                 "live": live,
-                "fixture": _run_fixture_spike(),
+                "fixture": fixture,
             }
         else:
             report = live

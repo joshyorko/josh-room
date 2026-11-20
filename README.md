@@ -172,16 +172,21 @@ Save can include all tagged local OCI images in the JAT haul. Right-click a Room
 and choose `Josh: Serve Room Content…`, or right-click a logical recovery point
 and choose `Josh: Serve this Logical JAT…`. Logical Room Store snapshots offer
 Files, Registry, Files + Registry, or Auto through the existing
-`josh-room snapshot serve` path; no portable export is needed first. Files use
-JAT's default endpoint `http://127.0.0.1:8080` (with Copy Fileserver URL), and the
-registry uses `http://127.0.0.1:5000`. A JAT workspace archive is served as an
-archive, not as its nested source files. Legacy portable snapshots retain the
-older registry-only flow. Stopping the foreground terminal cleans up staging.
+`josh-room snapshot serve` path; no portable export is needed first. Ports are
+selected by JAT and reported through a private startup receipt. The extension
+uses those actual endpoints for status, Copy Fileserver URL / Copy Registry URL,
+and image addresses. A JAT workspace archive is served as an archive, not as its
+nested source files. Legacy portable snapshots retain their older command path
+without the logical-JAT mode picker. Stopping the foreground terminal cleans up
+staging.
 
-Hauler 2.1.1's fileserver binds all interfaces by default, despite the localhost
-URL shown by the extension. Serve only trusted synthetic or approved content
-inside an isolated container/network namespace; the extension label does not
-make the native fileserver loopback-only. Room View's separate read-only
+This source change requires a qualified JAT runtime with startup reporting and
+safe automatic binding. The current release pin lacks that contract: Serve
+reports an unsupported-runtime diagnostic instead of guessing fixed ports.
+Pinned Hauler 2.1.1 cannot bind its fileserver loopback-only; files/both serving
+also requires a qualified Hauler bind-host update. No dependency pin is promoted
+by this PR. See [native serving](docs/room-store-export.md#native-serving-endpoints)
+for the contract and remaining runtime gate. Room View's separate read-only
 presentation transport binds strictly to `127.0.0.1` and does not start Hauler.
 
 A separate `JAT Tools` view preserves one-off automation outside the Room/storage
@@ -256,7 +261,7 @@ josh-room jat build --source <path> --output <haul.tar.zst> [--image <ref> ... |
 josh-room jat restore --haul <haul.tar.zst> --destination <path> [--json]
 josh-room jat inspect --haul <haul.tar.zst> [--json]
 josh-room jat extract --haul <haul.tar.zst> --reference <ref> --destination <path> [--json]
-josh-room jat serve --haul <haul.tar.zst> [--mode auto|files|registry|both] [--json]
+josh-room jat serve --haul <haul.tar.zst> [--mode auto|files|registry|both] [--fileserver-port 0] [--registry-port 0] [--startup-file <private.json>] [--json]
 josh-room jat export --haul <haul.tar.zst> --output <images.tar> [--json]
 josh-room jat copy --haul <haul.tar.zst> --to <registry://...|dir://...> [--retries <n>] [--plain-http] [--insecure] [--json]
 josh-room view serve --provider <name|module:attr> [--port 0] [--interval 5] [--require-token] [--json]

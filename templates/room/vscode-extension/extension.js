@@ -12,7 +12,7 @@ const {
   formatProgressDisplay,
   operationKind,
 } = require("./progress");
-const { FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
+const { followLogFile, stageForLog, waitForServeStartup, probeRegistry, readServeJson } = require("./registry");
 const providerTools = require("./provider");
 
 let outputChannel;
@@ -2738,7 +2738,7 @@ async function serveRoom(preferredProject, { startRegistry = startRegistryTermin
   if ((selectedRecord?.payload_kind || preferredRecord?.payload_kind) === "room-store-v1") {
     const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
       title: `Serve ${project.display_name} logical JAT`,
-      placeHolder: "Choose projection (Files :8080, Registry :5000, Both, or Auto)",
+      placeHolder: "Choose projection (Files, Registry, Both, or Auto; ports selected by JAT)",
       ignoreFocusOut: true,
     });
     if (!chosen) return "cancelled";
@@ -2793,6 +2793,28 @@ function shellJoin(values, platform = process.platform) {
 function buildTerminalLaunch(runtime, args, environment, platform = process.platform, receiptFile) {
   return {
     command: shellJoin([runtime.command, ...runtime.args(args, receiptFile)], platform),
+    environment: { ...environment },
+  };
+}
+
+function buildServeTerminalLaunch(runtime, args, environment, receiptFile, completionFile, platform = process.platform) {
+  const argv = [runtime.command, ...runtime.args(args, receiptFile)];
+  if (platform === "win32") {
+    const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+    const script = `$joshServeExit = 1; try { & ${argv.map(quote).join(" ")}; $joshServeExit = $LASTEXITCODE } finally { [System.IO.File]::WriteAllText(${quote(completionFile)}, [string]$joshServeExit) }`;
+    return {
+      command: `& ${["powershell.exe", "-NoLogo", "-NoProfile", "-Command", script].map(quote).join(" ")}`,
+      shellPath: "powershell.exe",
+      shellArgs: ["-NoLogo", "-NoProfile"],
+      environment: { ...environment },
+    };
+  }
+  const completion = `printf '%s\\n' "$?" > ${shellQuote(completionFile, platform)}`;
+  const script = `trap ${shellQuote(completion, platform)} 0; trap 'exit 130' INT; trap 'exit 143' TERM; ${shellJoin(argv, platform)}`;
+  return {
+    command: shellJoin(["/bin/sh", "-c", script], platform),
+    shellPath: "/bin/sh",
+    shellArgs: [],
     environment: { ...environment },
   };
 }
@@ -3229,33 +3251,6 @@ async function jatCopy() {
   return "copied";
 }
 
-function firstEndpointSuccess(attempts) {
-  return new Promise((resolve, reject) => {
-    let pending = attempts.length;
-    let lastError;
-    if (!pending) {
-      resolve(undefined);
-      return;
-    }
-    for (const attempt of attempts) {
-      attempt.then(resolve, (error) => {
-        lastError = error;
-        pending -= 1;
-        if (pending === 0) reject(lastError);
-      });
-    }
-  });
-}
-
-function waitForServeEndpoint() {
-  // Auto delegates the projection decision to JAT, so wait for the first
-  // endpoint JAT actually starts (registry or fileserver) and report that.
-  return firstEndpointSuccess([
-    waitForRegistry().then((catalog) => ({ kind: "registry", catalog })),
-    waitForFileserver().then(() => ({ kind: "files" })),
-  ]);
-}
-
 async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry, encryptionMaterial }) {
   const runtime = await runtimeFor(cwd, args);
   const environment = { ...runtime.env };
@@ -3274,10 +3269,15 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
   const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
   fs.writeFileSync(progressPath, "", { mode: 0o600 });
   environment.JOSH_ROOM_PROGRESS_FILE = progressPath;
-  const launch = buildTerminalLaunch(runtime, args, environment, process.platform, receiptPath);
+  const startupPath = path.join(progressDirectory, "serve-startup.json");
+  const resultPath = path.join(progressDirectory, "controller-result.json");
+  const completionPath = path.join(progressDirectory, "command-exit.txt");
+  environment.JOSH_ROOM_RESULT_FILE = resultPath;
+  const serveArgs = [...args, "--fileserver-port", "0", "--registry-port", "0", "--startup-file", startupPath];
+  const launch = buildServeTerminalLaunch(runtime, serveArgs, environment, receiptPath, completionPath);
   let terminal;
   try {
-    terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment });
+    terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment, shellPath: launch.shellPath, shellArgs: launch.shellArgs });
   } catch (error) {
     credentialsCleanup();
     encryptionCleanup();
@@ -3305,10 +3305,13 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
   );
   let stopped = false;
+  let terminalEnded = false;
+  let shellExecution;
   const stopFollowing = () => {
     if (stopped) return;
     stopped = true;
     for (const follower of followers) follower.dispose();
+    shellExecution?.dispose();
     progressReporter?.dispose();
     credentialsCleanup();
     encryptionCleanup();
@@ -3339,11 +3342,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     else outputChannel?.info("REGISTRY · Stopped");
     refreshRoomStatus();
   });
+  shellExecution = vscode.window.onDidEndTerminalShellExecution?.((event) => {
+    if (event.terminal === terminal) terminalEnded = true;
+  });
   outputChannel?.info(`START · ${title}`);
   outputChannel?.info(`LOGS · ${path.join(jatRoot, "output")}`);
   setStatus("$(sync~spin) Starting serve endpoints", title);
-  const autoServe = mode === "auto";
-  const waitsForRegistry = mode !== "files";
   terminal.show(true);
   try {
     const outcome = await vscode.window.withProgress(
@@ -3358,31 +3362,37 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
         terminal.sendText(launch.command, true);
         try {
-          if (autoServe) {
-            // JAT resolves Auto itself: a files-only capsule starts only the
-            // fileserver. Wait for whichever endpoint JAT actually starts
-            // instead of assuming the registry projection.
-            return await waitForServeEndpoint();
-          }
-          return waitsForRegistry ? { kind: "registry", catalog: await waitForRegistry() } : undefined;
+          const checkStopped = () => {
+            if (stopped) throw new Error("Serve terminal closed before readiness");
+            const completed = readServeJson(resultPath, 65536);
+            if (completed) throw new Error(sanitizeRuntimeLine(completed.diagnostic || completed.error || "Serve controller exited before readiness"));
+            if (fs.existsSync(receiptPath)) throw controllerReceiptError() || new Error("Serve controller exited before readiness");
+            if (fs.existsSync(completionPath)) throw new Error("Serve command exited before readiness; see terminal output for the runtime failure");
+            if (terminalEnded) throw new Error("Serve command exited before reporting endpoints; update the acquired runtime if it lacks startup support");
+          };
+          const serve = await waitForServeStartup(startupPath, { mode, checkStopped });
+          checkStopped();
+          const catalog = serve.registry_url ? await probeRegistry(serve.registry_url) : null;
+          checkStopped();
+          return { ...serve, catalog };
         } finally {
           progressActive = false;
         }
       },
     );
-    if (!outcome || outcome.kind === "files") {
-      setStatus("$(server-process) Files :8080", title);
-      outputChannel?.info(`READY · JAT fileserver (${FILESERVER_URL}) · ${title}`);
+    const fileserverUrl = outcome.fileserver_url;
+    const registryUrl = outcome.registry_url;
+    if (outcome.mode === "files") {
+      setStatus(`$(server-process) Files :${new URL(fileserverUrl).port}`, title);
+      outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}) · ${title}`);
       const filesAction = await vscode.window.showInformationMessage(
-        outcome
-          ? `JAT resolved this capsule to a files projection — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`
-          : `JAT is serving files from this capsule — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`,
+        `JAT is serving files at ${fileserverUrl}. Close the ${terminalName} terminal to stop.`,
         "Copy Fileserver URL",
         "Show Logs",
       );
       if (filesAction === "Copy Fileserver URL") {
-        await vscode.env.clipboard.writeText(FILESERVER_URL);
-        await vscode.window.showInformationMessage(`Copied ${FILESERVER_URL}.`);
+        await vscode.env.clipboard.writeText(fileserverUrl);
+        await vscode.window.showInformationMessage(`Copied ${fileserverUrl}.`);
       } else if (filesAction === "Show Logs") {
         outputChannel?.show(true);
       }
@@ -3391,16 +3401,17 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     const catalog = outcome.catalog;
     const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
     const count = repositories.length;
-    const servingFiles = mode === "both";
+    const servingFiles = outcome.mode === "both";
     progressReporter?.event({ stage: "complete", message: "Serve endpoints ready" });
-    setStatus("$(server-process) Registry :5000", `${count} repositories · ${title}`);
-    outputChannel?.info(`READY · ${REGISTRY_URL} · ${count} ${count === 1 ? "repository" : "repositories"}`);
+    setStatus(`$(server-process) Registry :${new URL(registryUrl).port}${servingFiles ? ` / Files :${new URL(fileserverUrl).port}` : ""}`, `${count} repositories · ${title}`);
+    outputChannel?.info(`READY · ${registryUrl} · ${count} ${count === 1 ? "repository" : "repositories"}`);
     const action = await vscode.window.showInformationMessage(
       servingFiles
-        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL} and files at ${FILESERVER_URL}.`
-        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl} and files at ${fileserverUrl}.`
+        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl}.`,
       "Show Images",
       "Copy Registry URL",
+      ...(servingFiles ? ["Copy Fileserver URL"] : []),
       "Show Logs",
     );
     if (action === "Show Images") {
@@ -3410,14 +3421,16 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         await vscode.window.showQuickPick(
           repositories.map((repository) => ({
             label: `$(package) ${repository}`,
-            description: `127.0.0.1:5000/${repository}`,
+            description: `${new URL(registryUrl).host}/${repository}`,
           })),
           { title: "Images served by JAT", placeHolder: "Registry contents" },
         );
       }
+    } else if (action === "Copy Fileserver URL") {
+      await vscode.env.clipboard.writeText(fileserverUrl);
     } else if (action === "Copy Registry URL") {
-      await vscode.env.clipboard.writeText(REGISTRY_URL);
-      await vscode.window.showInformationMessage(`Copied ${REGISTRY_URL}.`);
+      await vscode.env.clipboard.writeText(registryUrl);
+      await vscode.window.showInformationMessage(`Copied ${registryUrl}.`);
     } else if (action === "Show Logs") {
       outputChannel?.show(true);
     }
@@ -3427,7 +3440,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     terminal.dispose();
     terminalClosed.dispose();
     progressActive = false;
-    const detail = sanitizeRuntimeLine(latestLog || error.message || String(error));
+    const detail = sanitizeRuntimeLine(error.message || latestLog || String(error));
     progressReporter?.fail(error);
     outputChannel?.error(`JAT serve failed: ${detail}`);
     setStatus("$(error) JAT serve failed", detail);
@@ -5776,7 +5789,6 @@ async function editStorageSettings(item) {
 Object.assign(module.exports.__test__, {
   JAT_SERVE_MODES,
   JatToolsProvider,
-  waitForServeEndpoint,
   jatBuild,
   jatInspect,
   jatExtract,
@@ -5829,6 +5841,7 @@ Object.assign(module.exports.__test__, {
   operationNeedsJat,
   clearLocalFallback,
   buildTerminalLaunch,
+  buildServeTerminalLaunch,
   isSafeRestoreName,
   terminateChild,
   serveRoom,

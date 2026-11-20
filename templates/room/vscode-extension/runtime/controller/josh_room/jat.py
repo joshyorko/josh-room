@@ -562,10 +562,30 @@ def run_restore(jat_root: Path, haul: Path, destination: Path) -> dict:
     return _run_task(jat_root, "Restore", {"haul": str(haul), "destination": str(destination)})
 
 
-def run_serve(jat_root: Path, haul: Path, *, mode: str = "auto") -> dict:
+def require_serve_startup(jat_root: Path) -> None:
+    """Fail before materialization when the acquired JAT lacks endpoint reporting."""
+    try:
+        source = (jat_root / "src/jat/cli.py").read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    if "--startup-file" not in source:
+        raise JATError("Acquired JAT runtime does not support safe automatic Serve endpoints; update the pinned JAT runtime")
+
+
+def run_serve(
+    jat_root: Path, haul: Path, *, mode: str = "auto",
+    fileserver_port: int = 0, registry_port: int = 0, startup_file: Path | None = None,
+) -> dict:
+    for port in (fileserver_port, registry_port):
+        if type(port) is not int or not 0 <= port <= 65535:
+            raise ValueError("Serve port must be between 0 (automatic) and 65535")
+    require_serve_startup(jat_root)
+    options = ["--fileserver-port", str(fileserver_port), "--registry-port", str(registry_port)]
+    if startup_file is not None:
+        options += ["--startup-file", str(startup_file)]
     return _run_jat_cli(
         jat_root,
-        ["serve", "--haul", str(haul), "--mode", str(mode), "--json"],
+        ["serve", "--haul", str(haul), "--mode", str(mode), *options, "--json"],
         foreground=True,
     )
 

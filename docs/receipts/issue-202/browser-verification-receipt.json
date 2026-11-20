@@ -18,15 +18,15 @@
   "unix_navigate_inspect": {
     "mode": "offline",
     "webglActive": true,
-    "itemCount": 34,
-    "firstFrameMs": 1196.9,
-    "drawCalls": 172,
-    "cameraY": 8.892,
+    "itemCount": 41,
+    "firstFrameMs": 1309.2,
+    "drawCalls": 175,
+    "cameraY": 13.2,
     "layoutSummary": {
       "isUnixTree": true,
       "maxDepth": 4,
       "pedestals": 21,
-      "blocks": 34,
+      "blocks": 41,
       "summaryBlocks": 0,
       "wires": 20
     },
@@ -39,8 +39,8 @@
       "Redacted",
       "Source"
     ],
-    "wallBootMs": 1305,
-    "file_bytes": 1671368,
+    "wallBootMs": 1423,
+    "file_bytes": 1675347,
     "breadcrumbs_inside_dir": [
       "/",
       "src",
@@ -49,10 +49,10 @@
     "source_preview": {
       "title": "scheduler.py",
       "path": "/src/core/scheduler.py",
-      "codeLines": 10,
+      "codeLines": 22,
       "slots": [
-        "diff",
-        "source"
+        "source",
+        "diff"
       ],
       "linkTargets": [
         {
@@ -64,16 +64,12 @@
           "target": "file-etc-policy-json"
         },
         {
-          "rel": "incoming:references",
-          "target": "file-src-sanitizer-patch"
-        },
-        {
           "rel": "incoming:verifies",
           "target": "file-src-test-gate"
         },
         {
-          "rel": "incoming:producer",
-          "target": "run-var-gate-verify"
+          "rel": "incoming:references",
+          "target": "file-src-sanitizer-patch"
         }
       ]
     },
@@ -88,12 +84,12 @@
         "file-src-sanitizer-patch",
         "file-var-log-042",
         "file-var-report-html",
-        "file-src-scheduler",
         "file-etc-room-conf",
+        "file-src-test-gate",
         "file-src-scheduler",
         "file-src-sanitizer-patch",
-        "file-src-test-gate",
         "file-usr-rules",
+        "file-var-state",
         "file-var-log-042",
         "file-var-report-html",
         "file-var-visual-diff",
@@ -110,10 +106,10 @@
     },
     "unix_pdf": {
       "canvasCount": 1,
-      "firstPageMs": 15.5
+      "firstPageMs": 11.5
     },
     "sql_links_rows": 23,
-    "pass": false
+    "pass": true
   },
   "pr_review_regressions": {
     "tree_single_key_dispatch": {
@@ -136,11 +132,11 @@
       "viewMode": "3d",
       "webglActive": true,
       "itemCount": 300,
-      "firstFrameMs": 710.3,
+      "firstFrameMs": 821.2,
       "drawCalls": 163,
       "renderCount": 4,
       "shadowUpdateCount": 1,
-      "cameraY": 7.44758552684584,
+      "cameraY": 13.2,
       "layoutSummary": {
         "isUnixTree": false,
         "maxDepth": 2,
@@ -155,22 +151,22 @@
       "treeItemCount": 4,
       "livePolite": "polite",
       "hasImportMap": true,
-      "wallBootMs": 872,
-      "file_bytes": 1703640,
-      "first_click_ms": 0,
+      "wallBootMs": 1077,
+      "file_bytes": 1704375,
+      "first_click_ms": 0.1,
       "shadow_updates_on_select": 1,
       "pdf_first_page": {
         "canvasCount": 1,
-        "infoText": "3 pages · p1 in 101.4ms",
-        "firstPageMs": 101.4,
-        "statusText": "Fit WidthFit Page−+3 pages · p1 in 101.4msPage 1 / 3Page 2 / 3Page 3 / 3"
+        "infoText": "3 pages · p1 in 110.2ms",
+        "firstPageMs": 110.2,
+        "statusText": "Fit WidthFit Page−+3 pages · p1 in 110.2msPage 1 / 3Page 2 / 3Page 3 / 3"
       },
       "sql_preset_rows": 53,
       "sql_mutation_blocked": true
     },
     "fixture_540": {
       "itemCount": 540,
-      "firstFrameMs": 123,
+      "firstFrameMs": 122.4,
       "drawCalls": 135,
       "layoutSummary": {
         "isUnixTree": false,
@@ -180,7 +176,7 @@
         "summaryBlocks": 24,
         "wires": 4
       },
-      "wallBootMs": 233
+      "wallBootMs": 218
     }
   },
   "accessibility": {
@@ -207,7 +203,7 @@
     "viewMode": "grid",
     "gridVisible": true,
     "noticeVisible": true,
-    "tileCount": 34,
+    "tileCount": 41,
     "filterChipCount": 7,
     "sqlRowCount": 1,
     "inspectorOpen": true,

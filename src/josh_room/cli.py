@@ -171,6 +171,17 @@ def _assert_delete_inventory(catalog, project, args):
             raise ValueError("recovery point inventory changed after deletion confirmation; reload and confirm again")
 
 
+def _add_serve_options(parser):
+    parser.add_argument("--fileserver-port", type=int, default=0, help="0 selects an automatic fileserver port")
+    parser.add_argument("--registry-port", type=int, default=0, help="0 selects an automatic registry port")
+    parser.add_argument("--startup-file", type=Path, help="private JAT endpoint startup receipt")
+
+
+def _serve_options(args):
+    return {name: getattr(args, name, default) for name, default in (
+        ("fileserver_port", 0), ("registry_port", 0), ("startup_file", None))}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="josh-room")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -553,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
             snapshot_action.add_argument("--output", type=Path, required=True)
         elif action == "serve":
             snapshot_action.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+            _add_serve_options(snapshot_action)
         elif action == "extract":
             snapshot_action.add_argument("reference")
             snapshot_action.add_argument("--destination", type=Path, required=True)
@@ -585,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--snapshot", default="latest")
     serve.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     serve.add_argument("--dimension")
+    _add_serve_options(serve)
     _json_option(serve)
     room_store = commands.add_parser("room-store")
     room_store_commands = room_store.add_subparsers(dest="room_store_command", required=True)
@@ -625,6 +638,7 @@ def build_parser() -> argparse.ArgumentParser:
     jat_serve = jat_commands.add_parser("serve")
     jat_serve.add_argument("--haul", type=Path, required=True)
     jat_serve.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+    _add_serve_options(jat_serve)
     _json_option(jat_serve)
     jat_export = jat_commands.add_parser("export")
     jat_export.add_argument("--haul", type=Path, required=True)
@@ -2310,7 +2324,7 @@ def dispatch(args, instance: Path) -> dict:
                         output=args.output,
                     )
                 if args.snapshot_command == "serve":
-                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode)
+                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode, **_serve_options(args))
                 return extract_logical_jat(
                     context,
                     args.reference,
@@ -2529,6 +2543,7 @@ def dispatch(args, instance: Path) -> dict:
                 Path(identity),
                 _jat_root(),
                 _backend_for_args(args, instance),
+                **_serve_options(args),
             ),
         }
     if args.command == "room-store":
@@ -2569,7 +2584,7 @@ def dispatch(args, instance: Path) -> dict:
         if args.jat_command == "extract":
             return {"ok": True, **run_extract(jat_root, args.haul, args.reference, args.destination)}
         if args.jat_command == "serve":
-            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode)}
+            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode, **_serve_options(args))}
         if args.jat_command == "export":
             return {"ok": True, **run_export(jat_root, args.haul, args.output)}
         if args.jat_command == "copy":

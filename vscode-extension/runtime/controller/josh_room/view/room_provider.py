@@ -469,7 +469,7 @@ class RoomWorkspaceProvider:
                 SqlPreset(
                     "workspace_dirs",
                     "Indexed directories",
-                    "SELECT id, path, label, depth FROM nodes WHERE node_kind = 'directory' ORDER BY path",
+                    "SELECT id, path, label FROM nodes WHERE node_kind = 'directory' ORDER BY path",
                     "List root-scoped directories admitted by capture policy",
                 ),
                 SqlPreset(

@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "scope": "JAT working-tree startup_receipt + ServeEndpoints to Room JS validator; no server or released runtime invoked",
+  "checks": [
+    {
+      "mode": "files",
+      "receipt_accepted": true,
+      "cleanup_verified": true
+    },
+    {
+      "mode": "registry",
+      "receipt_accepted": true,
+      "cleanup_verified": true
+    },
+    {
+      "mode": "both",
+      "receipt_accepted": true,
+      "cleanup_verified": true
+    }
+  ],
+  "source_sha256": {
+    "serving.py": "f4fdbb6b9859fa7c6df6f3a791bf9cdb1b0f9424c4e674c1883fbacc7033fa5d",
+    "models.py": "a10be3e5790a8fe390a25fd0d6b50ea659b65a24709319beb81bb45254b91f91"
+  }
+}

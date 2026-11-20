@@ -382,6 +382,16 @@ function createVscodeMock(workspaceFolder, textDocuments = [], settings = {}) {
   };
 }
 
+function syntheticServeEndpoints(mode = "files") {
+  return {
+    mode,
+    fileserver_url: mode !== "registry" ? "http://127.0.0.1:41257" : null,
+    registry_url: mode !== "files" ? "http://127.0.0.1:41258" : null,
+    fileserver_bind: mode !== "registry" ? "loopback" : null,
+    registry_bind: mode !== "files" ? "loopback" : null,
+  };
+}
+
 function loadExtension(vscodeMock, spawnMock, registryMock) {
   const originalLoad = Module._load;
   const targets = [
@@ -395,8 +405,13 @@ function loadExtension(vscodeMock, spawnMock, registryMock) {
   Module._load = function patchedLoad(request, parent, isMain) {
     if (request === "vscode") return vscodeMock;
     if (request === "child_process") return { spawn: spawnMock };
-    if (request === "./registry" && registryMock) {
-      return { ...originalLoad(request, parent, isMain), ...registryMock };
+    if (request === "./registry") {
+      return {
+        ...originalLoad(request, parent, isMain),
+        waitForServeStartup: async (_file, { mode }) => syntheticServeEndpoints(mode === "auto" ? "files" : mode),
+        probeRegistry: async () => ({ repositories: ["demo/app"] }),
+        ...registryMock,
+      };
     }
     return originalLoad(request, parent, isMain);
   };
@@ -5566,7 +5581,7 @@ test("Serve JAT offers the four projection modes and launches the mode-specific 
 
   assert.equal(await extension.__test__.jatServe(), "started");
   assert.equal(quickPickCalls.at(-1).items, extension.__test__.JAT_SERVE_MODES);
-  assert.match(infoCalls[0][0], /serving files from this capsule/);
+  assert.match(infoCalls[0][0], /serving files at/);
   assert.deepEqual(spawnHarness.calls, []);
 
   const launch = extension.__test__.buildTerminalLaunch(
@@ -5586,7 +5601,8 @@ test("Auto serve reports the registry when JAT starts the registry projection", 
   const { vscode, statusItem, infoCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
   const extension = loadExtension(vscode, spawnHarness.spawn, {
-    waitForRegistry: async () => ({ repositories: ["demo/app"] }),
+    waitForServeStartup: async () => syntheticServeEndpoints("registry"),
+    probeRegistry: async () => ({ repositories: ["demo/app"] }),
     waitForFileserver: async () => { throw new Error("fileserver must not win when the registry is up"); },
   });
   extension.__test__.setStatusItem(statusItem);
@@ -5605,8 +5621,7 @@ test("Auto serve follows the fileserver when JAT resolves a files-only capsule",
   const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
   const extension = loadExtension(vscode, spawnHarness.spawn, {
     // A files-only capsule never opens port 5000; the wait must not hang on it.
-    waitForRegistry: () => new Promise(() => {}),
-    waitForFileserver: async () => ({ fileserver: true }),
+    waitForServeStartup: async () => syntheticServeEndpoints("files"),
   });
   extension.__test__.setStatusItem(statusItem);
 
@@ -5614,8 +5629,8 @@ test("Auto serve follows the fileserver when JAT resolves a files-only capsule",
   vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[0]);
 
   assert.equal(await extension.__test__.jatServe(), "started");
-  assert.match(infoCalls[0][0], /resolved this capsule to a files projection/);
-  assert.match(infoCalls[0][0], /127\.0\.0\.1:8080/);
+  assert.match(infoCalls[0][0], /serving files at/);
+  assert.match(infoCalls[0][0], /127\.0\.0\.1:41257/);
 });
 
 test("Auto serve fails when no JAT serve endpoint becomes ready", async () => {
@@ -5624,8 +5639,7 @@ test("Auto serve fails when no JAT serve endpoint becomes ready", async () => {
   const { vscode, statusItem } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(() => { throw new Error("serve must not spawn a controller"); });
   const extension = loadExtension(vscode, spawnHarness.spawn, {
-    waitForRegistry: async () => { throw new Error("registry down"); },
-    waitForFileserver: async () => { throw new Error("fileserver down"); },
+    waitForServeStartup: async () => { throw new Error("fileserver down"); },
   });
   extension.__test__.setStatusItem(statusItem);
   const extras = withWindowExtras(vscode);
@@ -5658,11 +5672,7 @@ test("JAT serve failure redacts structured progress material from every error si
     dispose() {},
   });
   const extension = loadExtension(vscode, () => { throw new Error("serve must not spawn a controller"); }, {
-    waitForRegistry: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 180));
-      throw new Error("registry down");
-    },
-    waitForFileserver: async () => {
+    waitForServeStartup: async () => {
       await new Promise((resolve) => setTimeout(resolve, 180));
       throw new Error("fileserver down");
     },
@@ -5678,20 +5688,6 @@ test("JAT serve failure redacts structured progress material from every error si
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(identity)), false);
   assert.equal(sinks.some((sink) => JSON.stringify(sink).includes(recipient)), false);
   assert.equal(progressReports.some((report) => report.message?.includes("[REDACTED AGE IDENTITY]")), true);
-});
-
-test("waitForServeEndpoint resolves with the first endpoint JAT starts", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-auto-race-test-"));
-  const { vscode } = createVscodeMock(root);
-  let registryResolve;
-  const extension = loadExtension(vscode, () => { throw new Error("spawn must not run"); }, {
-    waitForRegistry: () => new Promise((resolve) => { registryResolve = resolve; }),
-    waitForFileserver: async () => ({ fileserver: true }),
-  });
-
-  const pending = extension.__test__.waitForServeEndpoint();
-  registryResolve({ repositories: ["late/app"] });
-  assert.equal((await pending).kind, "files");
 });
 
 test("cancelling a JAT operation kills the spawned controller child", async () => {
@@ -7196,7 +7192,7 @@ test("Serve this Logical JAT command reuses serveRoom for files/both modes and e
       assert.deepEqual(terminals[0].args, [
         "snapshot", "serve", "demo-room", "--snapshot", fixture.snapshotId, "--mode", chosenMode, "--dimension", "backup",
       ]);
-      assert.match(fixture.quickPickCalls.at(-1).options.placeHolder, /Files :8080/);
+      assert.match(fixture.quickPickCalls.at(-1).options.placeHolder, /ports selected by JAT/);
     }
 
     // Untrusted workspace must be blocked before any controller call
@@ -7212,7 +7208,7 @@ test("Serve this Logical JAT command reuses serveRoom for files/both modes and e
   }
 });
 
-test("Fileserver ready notification offers Copy Fileserver URL and updates status with :8080", async () => {
+test("Fileserver notification copies the reported endpoint and updates its dynamic port", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-fileserver-copy-"));
   try {
     const haul = path.join(root, "files.capsule.tar.zst");
@@ -7227,9 +7223,123 @@ test("Fileserver ready notification offers Copy Fileserver URL and updates statu
 
     assert.equal(await extension.__test__.jatServe(), "started");
     assert.ok(infoCalls[0].includes("Copy Fileserver URL"));
-    assert.deepEqual(copied, ["http://127.0.0.1:8080"]);
-    assert.match(statusItem.text, /Files :8080/);
+    assert.deepEqual(copied, ["http://127.0.0.1:41257"]);
+    assert.match(statusItem.text, /Files :41257/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Serve reports controller export failure without waiting for a startup endpoint", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-serve-exit-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode, statusItem, errorCalls } = createVscodeMock(root);
+  let launch;
+  vscode.window.createTerminal = ({ env }) => ({
+    show() {},
+    sendText(command) {
+      launch = command;
+      fs.writeFileSync(env.JOSH_ROOM_RESULT_FILE, JSON.stringify({
+        ok: false, error: "portable-export-failed", diagnostic: "portable export requires more free disk space",
+      }));
+    },
+    dispose() {},
+  });
+  const extension = loadExtension(vscode, () => { throw new Error("no direct spawn"); }, {
+    waitForServeStartup: require("./registry").waitForServeStartup,
+  });
+  extension.__test__.setStatusItem(statusItem);
+  vscode.openDialogResponses.push([{ fsPath: path.join(root, "demo.haul") }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[1]);
+  const began = Date.now();
+  assert.equal(await extension.__test__.jatServe(), "failed");
+  assert.ok(Date.now() - began < 1000);
+  assert.match(errorCalls[0][0], /more free disk space/);
+  assert.ok(launch.includes("--fileserver-port") && launch.includes("--registry-port") && launch.includes("--startup-file"));
+});
+
+test("Serve terminal wrapper preserves Windows quoting and writes a completion marker", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode, () => { throw new Error("no spawn"); });
+  const launch = extension.__test__.buildServeTerminalLaunch(
+    { command: "C:\\Program Files\\RCC\\rcc.exe", args: () => ["a'b", "$literal"] },
+    [], {}, "receipt.json", "C:\\private\\command-exit.txt", "win32",
+  );
+  assert.equal(launch.shellPath, "powershell.exe");
+  assert.match(launch.command, /^& 'powershell.exe'/);
+  assert.ok(launch.command.includes("a''''b"));
+  assert.ok(launch.command.includes("$literal"));
+  assert.match(launch.command, /WriteAllText.*command-exit.txt/);
+});
+
+test("fallback Serve detects command exit without receipts or shell integration", { skip: process.platform === "win32" }, async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-serve-fallback-exit-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode, statusItem, errorCalls } = createVscodeMock(root);
+  let options;
+  vscode.window.createTerminal = (value) => {
+    options = value;
+    return {
+      show() {},
+      sendText(command) {
+        const child = require("node:child_process").spawnSync(options.shellPath, ["-c", command], { timeout: 5000 });
+        assert.equal(child.status, 7);
+        assert.equal(fs.readFileSync(path.join(path.dirname(options.env.JOSH_ROOM_RESULT_FILE), "command-exit.txt"), "utf8").trim(), "7");
+      },
+      dispose() {},
+    };
+  };
+  const extension = loadExtension(vscode, () => { throw new Error("no direct spawn"); }, {
+    waitForServeStartup: require("./registry").waitForServeStartup,
+  });
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeForTests({
+    command: process.execPath, args: () => ["-e", "process.exit(7)"], env: {}, jatRoot: root,
+  });
+  vscode.openDialogResponses.push([{ fsPath: path.join(root, "demo.haul") }]);
+  vscode.quickPickResponses.push(extension.__test__.JAT_SERVE_MODES[1]);
+  const began = Date.now();
+  assert.equal(await extension.__test__.jatServe(), "failed");
+  assert.ok(Date.now() - began < 1000);
+  assert.match(errorCalls[0][0], /command exited before readiness/);
+});
+
+test("Serve interruption writes completion before returning to an open interactive shell", { skip: process.platform !== "linux" }, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-serve-interrupt-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, () => { throw new Error("no spawn"); });
+  const started = path.join(root, "started");
+  const completion = path.join(root, "command-exit.txt");
+  const launch = extension.__test__.buildServeTerminalLaunch({
+    command: process.execPath,
+    args: () => ["-e", `require('fs').writeFileSync(${JSON.stringify(started)}, 'ready'); setInterval(() => {}, 1000)`],
+  }, [], {}, "receipt.json", completion);
+  const script = `
+import os, pty, signal, sys, time
+pid, master = pty.fork()
+if pid == 0:
+    os.execv('/bin/sh', ['/bin/sh', '-i'])
+def await_file(path):
+    end = time.monotonic() + 3
+    while not os.path.exists(path):
+        if time.monotonic() > end:
+            raise AssertionError('interactive Serve completion timed out')
+        time.sleep(.02)
+try:
+    os.write(master, (sys.argv[1] + '\\n').encode())
+    await_file(sys.argv[2])
+    os.write(master, b'\\x03')
+    await_file(sys.argv[3])
+finally:
+    foreground = os.tcgetpgrp(master)
+    for group in set([foreground, pid]):
+        if group > 0:
+            try: os.killpg(group, signal.SIGKILL)
+            except ProcessLookupError: pass
+    os.waitpid(pid, 0)
+    os.close(master)
+`;
+  require("node:child_process").execFileSync("python3", ["-c", script, launch.command, started, completion], { timeout: 8000 });
+  assert.ok(fs.existsSync(completion));
 });

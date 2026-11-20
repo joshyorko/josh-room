@@ -346,6 +346,7 @@ async function main() {
       await cdp.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.setSpotlightMode('v2');
         window.__JOSH_ROOM_VIEW_DEBUG__.selectItem('file-src-scheduler', true, true);
+        document.querySelector('#tab-content [data-preview-slot="source"]')?.click();
       })()`);
       await sleep(220);
       const sourceCheck = await cdp.evalJs(`(() => ({

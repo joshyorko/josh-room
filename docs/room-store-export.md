@@ -30,10 +30,13 @@ not claim byte identity with a historical monolithic archive.
 The output is create-only. JAT builds into an unpublished temporary file, and
 Josh Room promotes it with an atomic no-replace link only after inspection,
 restore, and identity checks succeed. Cancellation and every failure remove
-staging and leave no promoted partial capsule. Disk preflight reserves twice the
-descriptor's logical workspace and component archive bytes for materialization
+staging and leave no promoted partial capsule. Disk preflight reserves eight times the
+descriptor's logical workspace and component archive bytes, plus 512 MiB, for materialization
 and output work; this is an estimate, since the final Hauler capsule can be
 larger than its inputs.
+
+Export and Serve failures retain the `portable-export-failed` error code and
+include the path-free export reason in `diagnostic` in the controller JSON result.
 
 The helper returns a bounded `PortableExportResult`: logical JAT ID, status,
 output size and SHA-256, workspace entry count, verified component names, and
@@ -71,3 +74,35 @@ Historical Room Store snapshots that excluded `.git` cannot regain that data
 through portable export; the capsule faithfully represents their incomplete
 recorded contents. Create a new recovery point from an intact workspace before
 relying on Git recovery.
+
+## Native serving endpoints
+
+`josh-room snapshot serve <room>`, legacy `josh-room serve <room>`, and
+`josh-room jat serve --haul <file>` forward `--fileserver-port`, `--registry-port`
+and `--startup-file` to JAT. Port `0` (the default) requests automatic allocation;
+explicit nonzero ports must be honored by JAT or fail. Room never probes a free
+port and then asks JAT to bind it.
+
+The extension uses a unique private directory per Serve invocation. JAT publishes
+an atomic new-file-only startup receipt after its owned listeners are ready:
+`{schema_version: 1, state: "ready", operation: "serve", pid, serve: {mode,
+fileserver_url, registry_url, fileserver_bind, registry_bind}}`. Mode is resolved
+(`files`, `registry`, `both`); inactive URLs are null and active bind values are
+`loopback`. Room requires explicit `http://127.0.0.1:<port>` URLs, validates the
+mode and endpoints, and reads the registry catalog only from that session's URL.
+Status, copy actions and image references use those URLs, never 8080/5000 guesses.
+The startup file is removed by JAT on shutdown. Room watches the per-session
+controller result, RCC receipt, terminal lifecycle and an interruption-safe
+command completion marker during startup, surfacing
+export/unsupported-runtime failure immediately rather than waiting on a default
+port. There is no browser action service or Room-owned port allocator.
+
+This is a source-level integration with the JAT dynamic-serving branch. Current
+released pins lack startup reporting; source preflight fails before Room
+materialization when that support is absent. Pinned Hauler 2.1.1 files serving
+also lacks loopback binding. A qualified JAT and Hauler update, paired managed
+artifacts, and installed-extension acceptance are required before promoting
+pins. Fixtures or tests against a locally patched Hauler are not evidence that
+the released runtime supports this feature. No pin, release or live service is
+changed here. The original `portable-export-failed` incident remains separate:
+a port collision has not been established as its cause.
