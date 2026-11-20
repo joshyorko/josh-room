@@ -94,10 +94,10 @@ class CompositionSafetyState:
         legacy_fields = {"snapshot_id", "object_key", "ciphertext_sha256", "ciphertext_size", "created_at", "workspace_fingerprint"}
         for project in inner["projects"].values():
             for record in project["snapshots"].values():
+                _timestamp(record["created_at"])
                 if "payload_kind" not in record:
                     if not legacy_fields <= record.keys() or record.keys() - legacy_fields - {"origin_project_id"}:
                         raise ValueError("legacy composition evidence has unknown or missing fields")
-                    _timestamp(record["created_at"])
                     if "origin_project_id" in record:
                         _validate_identifier("legacy origin project", record["origin_project_id"])
                 elif "origin_room_id" in record:

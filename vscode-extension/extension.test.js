@@ -7148,7 +7148,8 @@ for (const invalidSelection of ["overlap", "count"]) {
     assert.equal(harness.calls.length, 2);
     assert.equal(mock.quickPickCalls.length, 2);
     assert.ok(mock.quickPickCalls[1].items.every((row) => row.picked));
-    assert.match(mock.warningCalls[0][0], invalidSelection === "overlap" ? /descendants/ : /32/);
+    assert.equal(mock.warningCalls.length, 0);
+    assert.match(mock.quickPickCalls[1].options.placeHolder, invalidSelection === "overlap" ? /descendants/ : /at most 32/);
   });
 }
 
@@ -7166,6 +7167,7 @@ test("composition empty discovery explains unavailable boundaries without a blan
   assert.equal(harness.calls.length, 1);
   assert.equal(mock.quickPickCalls.length, 0);
   assert.match(mock.infoCalls[0][0], /No supported child folders/);
+  assert.equal(mock.infoCalls[0][1].modal, true);
   assert.match(mock.infoCalls[0][1].detail, /partial/i);
 });
 

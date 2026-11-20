@@ -409,6 +409,15 @@ class CompositionSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CompositionSafetyState.from_dict(self.body)
 
+    def test_logical_timezone_offset_is_not_normalized(self):
+        invalid = '2026-11-18T12:00:00+00:60'
+        self.body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent']['created_at'] = invalid
+        descriptor = self.descriptors[('parent', 'jat-parent')].to_dict()
+        descriptor['created_at'] = invalid
+        self.descriptors[('parent', 'jat-parent')] = LogicalJat.from_dict(descriptor)
+        with self.assertRaises(ValueError):
+            self.report()
+
     def test_evidence_parent_traversal_is_not_normalized_to_another_tree(self):
         state, descriptors, inventory = fixture()
         bundle = {'state': state, 'descriptors': [d.to_dict() for d in descriptors.values()],
