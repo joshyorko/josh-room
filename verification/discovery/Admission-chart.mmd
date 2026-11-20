@@ -1,0 +1,34 @@
+---
+title: "Discovery: validate all siblings before entering a child"
+---
+stateDiagram-v2
+  s0: Reading all sibling names
+  s1: Scope inaccessible
+  s2: Checking aliases
+  s3: Paused
+  s4: Parent validated
+  s5: Child queued#59; parent not complete
+  s6: Validated child entered
+  s7: Safe choices available
+  [*] --> s0
+  s0 --> s1: directory read fails
+  s0 --> s3: pause
+  s0 --> s2: all names observed
+  s1 --> s3: pause
+  s2 --> s4: alias checks finish
+  s2 --> s3: pause
+  s3 --> s0: resume
+  s2 --> s5: admit or reject a child
+  s4 --> s3: pause
+  s3 --> s1: resume
+  s3 --> s2: resume
+  s5 --> s4: alias checks finish
+  s5 --> s3: pause
+  s3 --> s4: resume
+  s4 --> s6: enter child
+  s3 --> s5: resume
+  s6 --> s7: offer choices
+  s6 --> s3: pause
+  s7 --> s3: pause
+  s3 --> s6: resume
+  s3 --> s7: resume

@@ -54,66 +54,94 @@ disables selection below that scope; unseen aliases cannot authorize a selection
 ## Explicit preview
 
 Run `Josh: Split Workspace into Rooms (Preview Only)` from the command palette.
-Choose the source folder (it need not be the open folder), then check desired
-child directories in the native picker. Every checkbox starts unchecked.
-Select at most 32 non-overlapping directories. Selecting a directory and one of
-its descendants, or too many children, returns to the picker with the selection
-preserved for correction. If no supported choices are available, a message
-explains the limit instead of opening an empty picker.
-Unchecked directories keep their existing parent capture policy. The final
-dialog shows selected paths and proposed literal exclusions locally, then ends.
-There is no apply button. Cancel does not change workspace files or contact a
-storage provider. The source picker also works in a trusted window without an
-open folder. Workspace Trust is required before controller acquisition.
-The managed controller may require normal runtime installation and temporary
-local process receipts; the planner does not read provider credentials or keys.
+Choose the source folder (it need not be the open folder). Discovery builds a
+private local SQLite metadata index outside that source. A cancellable native
+progress notification shows observed counts. Cancel pauses; Resume continues the
+same live controller session. Closing discards the index. **Process loss requires
+restarting discovery**; durable cross-process resume is not implemented.
 
-Headless equivalent:
+The native picker shows at most 50 directory rows per page, with Next/First,
+a visible workspace recommendation, separate suggested-boundary pages,
+search across the whole index, and exact relative-path lookup. Select a row to
+toggle an explicit choice. Picks survive navigation and filters, and no
+recommendation starts selected. Review displays the actual explicit choices in bounded pages, allows removal,
+validates every chosen path and ends with
+an explicitly read-only message. There is no 32-choice ceiling in this discovery
+picker. It does not serialize a composition manifest or authorize capture. The
+v1 manifest remains limited to 32 children / 64 KiB; scalable versioned storage
+and tri-state capture assignment belong to future PR E.
+
+### Local JSON discovery session
 
 ```sh
-josh-room composition plan --workspace /synthetic/workspace --child service-a --child service-c --json
+josh-room composition inventory --workspace /synthetic/workspace --json
 ```
 
-This returns `status: preview-only`, `can_apply: false`, coverage, candidates,
-selected paths, proposed exclusions, the current capture-policy digest and
-blocker codes. It never creates Room IDs or pretends a destination is authorized.
-Paths are local interactive metadata: do not publish results from private trees.
-The extension redacts composition arguments from Output logs.
+This foreground command accepts one JSON object per stdin line and flushes one
+JSON result per request. Send `{"action":"advance"}` repeatedly until `status`
+is `complete`, `partial`, or `stale`. Each advance consumes at most 256 work units
+and a 100 ms deadline checked between blocking filesystem calls. Send
+`{"action":"cancel"}` to pause; another advance resumes without reopening the
+active directory stream. `{"action":"page","after":"","query":""}` returns
+up to 50 sorted rows, bounded to 32,000 encoded candidate bytes. Its `next` key
+is a bounded session-local row ID cursor for the next page. Browsed choices use
+row IDs; long path labels are explicitly marked as truncated display text, never
+used as identities. Manual paths are limited to 16,000 UTF-8 bytes per request;
+longer eligible paths remain reachable by browse/search and row ID. Search covers the full index,
+not just the rendered page. `{"action":"lookup","path":"src/deep/manual"}`
+validates a manual choice; `{"action":"lookup","id":"42"}` validates a browsed
+choice. Invalid choices return a recoverable request error without discarding
+the session. `{"action":"page","suggested":true}` pages repository suggestions. `{"action":"close"}` or EOF cleans up the private
+index. The final command receipt says `closed` and `can_apply: false`.
 
-Discovery enumerates at most 128 directories, samples at most 257 entries per
-directory (256 admitted plus one overflow sentinel), and descends at most three
-levels. It checks a two-second deadline between directories; blocking filesystem
-calls are not interruptible. Payload contents, Git config/index/objects, scripts,
-and marker contents are never read. Only the existing bounded capture-policy
-file/defaults are read. Large regular files are counted by stat (at least 1 GiB),
-without classification of their contents. Symlinks, reparse points, device
-crossings, special entries, inaccessible paths and limits make coverage partial.
-Excluded directories are pruned with the canonical capture policy. Candidates
-inside Git/Room boundaries are deliberately not enumerated. `complete` describes
-this boundary pass only, **not** an exhaustive inventory or passing workspace
-validation. Over-limit sampling is filesystem-order-dependent.
+Results carry a random live-session generation, policy digest, observed counts,
+omission codes, `payload_bytes_read: 0`, and an explicit observation freshness
+label. An iterative, descriptor-relative traversal avoids call-stack recursion,
+never follows symlinks or reparse entries, and checks Linux mount IDs as well as
+devices (including same-device bind mounts). Unsupported platforms fail closed.
+Administrative `.git` internals are not traversed. Git pointers, nested Room markers and
+reserved composition metadata stop that branch. An ordinary Room marker at the
+selected source root does not hide its directories. All sibling names, including
+files and rejected spellings, are indexed before descendants are admitted.
+Undecodable byte names are omitted explicitly. Sibling finalization is batched;
+an incomplete sibling scan never admits staged descendants, so a
+late case/Unicode alias cannot escape the alias check. Excluded directories
+remain discoverable with a local-only policy label. Unsupported names and
+inaccessible scopes make coverage partial, while completed safe scopes remain
+browsable. Complete means the eligible directory metadata observation finished,
+not a stable filesystem snapshot, complete file inventory or passing Save gate.
 
-A `.git` directory is an unverified repository candidate; a gitfile is an
-unsupported pointer boundary. A local Room marker is unverified and unselectable.
-Either reserved composition filename also makes a child unselectable and stops
-descent, regardless of whether it is a file, directory, or dangling link. No
-composition contents are read. These metadata checks match Save admission.
-No boundary metadata is read, executed or interpreted as authority. Discovery currently
-requires descriptor-relative, no-follow directory operations; unsupported
-platforms fail closed (Windows qualification remains blocked).
+Completed scopes receive a bounded revalidation pass before browsing. Detected
+source/policy changes mark the session stale; selected paths additionally recheck
+all ancestor identities, sibling-generation timestamps, guards and policy.
+Changes after an observation are possible: this is not a filesystem lock or
+cryptographic snapshot, and in-place file edits need not change directory stamps.
+No payload size or data-isolation claim follows from the index. Regular files
+are statted, never opened. Only canonical capture-policy inputs and Linux mount
+metadata are read. No Git commands, hooks, provider or authentication reads occur.
 
-Fixed Git/Room/composition boundary names are statted independently of the entry sample.
-Policy reads and rechecks use the held root descriptor, even if its original
-pathname is replaced. Unicode sibling aliases are blocked before descent,
-including aliases whose spelling is otherwise unsupported. Win32 trailing-dot
-and trailing-space sibling aliases are also blocked. Source and evidence paths
-containing a lexical `..` are refused before normalization, so the planner cannot
-silently inspect a different tree. Candidate JSON is
-bounded to 16 KiB with an explicit `output-cap` omission. Names that diagnostics
-would normalize or redact (for example repeated spaces or key-shaped strings)
-are unsupported and never offered as a different sibling. The native controller
-launch uses its packaged controller directory, never the selected source as a
-Python import directory, and removes the inherited provider credential pointer.
+Ranking is pure deterministic metadata labeling: one workspace-level cohesive
+recommendation for a root Git directory, one candidate per independently observed
+nested Git directory, internal ordinary folders retained with their cohesive
+repository by default, excluded/generated branches local-only, and ordinary
+unknown folders manually selectable. Evidence code, reason, numeric rank,
+confidence (`unknown` for unverified ownership), and proposed consequence are
+included. Git-directory evidence remains **unverified**; validating Git storage
+requires the separate Save gate. Dataset-specific size heuristics are not yet
+implemented. Recommendations never select, exclude or save anything.
+
+The old `composition plan --workspace ... --child ... --json` contract remains
+available for compatibility with prior previews. Its bounded boundary discovery
+and 32-child preview limit are unchanged; it is **not** the exhaustive inventory
+API and is no longer used by the native picker. Ordinary New Room and Save
+semantics are unchanged. No Room ID, exclusion, manifest or provider data is
+created by either preview path. Never publish private discovery responses.
+
+The native integration uses the existing managed controller receipt lifecycle
+and packaged controller cwd; installed VS Code and RCC stdin forwarding remain
+separate qualification gates. Fixture UI tests do not establish installed UI
+behavior. A process killed before cleanup can leave its temporary index behind;
+this first vertical has no durable resume or crash cleanup service.
 
 ## Closed portable manifest
 
@@ -141,6 +169,14 @@ planner validates that each portable path can compile into its literal exclusion
 including the capture grammar's segment limit. It does not rewrite `.josh-roomignore`, compute a future policy digest, or
 claim every retained file was enumerated. Existing policy may already exclude
 unselected files. No file is removed or migrated.
+
+## Bounded formal discovery check
+
+The [discovery verification](../verification/discovery/README.md) checks sibling
+admission with TLA+/TLC and bounded generated schedules against the real scanner.
+Use the project-local `verify-discovery-admission` skill when changing admission,
+alias handling, iterator failures or pagination. This checks a finite scope; it
+does not prove arbitrary filesystem safety or any Save/publication behavior.
 
 ## Hard gates before enabling split publication
 

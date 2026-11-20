@@ -1182,7 +1182,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         cwd: args[0] === "composition" ? path.join(__dirname, "runtime", "controller") : cwd,
         env: environment,
         detached: true,
-        stdio: [stdinPayload === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        stdio: [stdinPayload === undefined && !options.inventoryHandler ? "ignore" : "pipe", "pipe", "pipe"],
       });
     } catch (error) {
       cleanup();
@@ -1190,6 +1190,54 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       return;
     }
     progressReporter?.event({ stage: "controller", message: "Starting Josh Room controller" });
+    if (options.inventoryHandler) {
+      let buffer = "";
+      let pending;
+      let sessionClosed = false;
+      child.stdin.on("error", () => pending?.reject(new Error("Inventory input closed")));
+      child.stdout.on("data", (chunk) => {
+        buffer += chunk.toString();
+        if (buffer.length > 65536) {
+          pending?.reject(new Error("Inventory response exceeded page budget"));
+          terminateChild(child);
+          return;
+        }
+        let newline;
+        while ((newline = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (!pending) continue;
+          const current = pending;
+          pending = undefined;
+          try {
+            const value = JSON.parse(line);
+            if (value?.ok === false) {
+              const error = new Error("Inventory refused stale, unsafe or unavailable input");
+              error.recoverable = value.recoverable === true;
+              current.reject(error);
+            }
+            else current.resolve(value);
+          } catch (_) { current.reject(new Error("Invalid inventory response")); }
+        }
+      });
+      child.on("close", () => { sessionClosed = true; pending?.reject(new Error("Inventory session closed")); });
+      const request = (body) => new Promise((resolve, reject) => {
+        if (sessionClosed) return reject(new Error("Inventory session closed"));
+        if (pending) return reject(new Error("Concurrent inventory request"));
+        const frame = JSON.stringify(body) + "\n";
+        if (Buffer.byteLength(frame, "utf8") > 120000) {
+          const error = new Error("Inventory request exceeds frame budget");
+          error.recoverable = true;
+          return reject(error);
+        }
+        pending = { resolve, reject };
+        child.stdin.write(frame);
+      });
+      options.inventoryHandler(request).then(() => child.stdin.end('{"action":"close"}\n'), (error) => {
+        options.inventoryError = error;
+        child.stdin.end();
+      });
+    }
     if (stdinPayload !== undefined) child.stdin.end(stdinPayload);
     let stdout = "";
     let stderr = "";
@@ -1281,6 +1329,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
         return;
       }
       cleanup();
+      if (options.inventoryError) { reject(options.inventoryError); return; }
       if (cancelled || cancellationToken?.isCancellationRequested) {
         reject(cancellationError());
         return;
@@ -2108,50 +2157,14 @@ async function splitWorkspace() {
   });
   if (!folders?.length) return "cancelled";
   const source = folders[0].fsPath;
-  const args = ["composition", "plan", "--workspace", source];
-  const discovery = await runOperation("Discovering child boundaries…", args, source);
-  const candidates = discovery.candidates.filter((row) => row.selectable);
-  if (!candidates.length) {
-    await vscode.window.showInformationMessage("No supported child folders are available for this split preview.", {
-      modal: true,
-      detail: `${discovery.coverage.complete ? "The boundary pass completed." : "Discovery is partial; limits or unavailable entries may hide child folders."} Existing Room markers, composition metadata, and unsupported boundaries cannot be selected. Choose a narrower source folder to inspect other boundaries. No files changed.`,
-    });
-    return "cancelled";
-  }
-  let selection;
-  let correction = "";
-  for (;;) {
-    const picked = new Set(selection?.map((row) => row.childPath));
-    selection = await vscode.window.showQuickPick(
-      candidates.map((row) => ({
-        label: row.path, description: row.kind, picked: picked.has(row.path), childPath: row.path,
-      })), {
-        title: "Split preview: select child folders",
-        placeHolder: correction || `${discovery.coverage.complete ? "Boundary pass complete" : "Partial discovery"} — select up to 32 non-overlapping folders. Unchecked folders keep their current parent policy. No files will change.`,
-        canPickMany: true, ignoreFocusOut: true,
+  let outcome = "cancelled";
+  await executeJoshRoom(["composition", "inventory", "--workspace", source], source,
+    undefined, undefined, undefined, {
+      inventoryHandler: async (request) => {
+        outcome = await require("./inventory-picker").pickInventory(vscode, request);
       },
-    );
-    if (!selection?.length) return "cancelled";
-    if (selection.length > 32) {
-      correction = "Choose at most 32 child folders for a split preview.";
-      continue;
-    }
-    const paths = selection.map((row) => row.childPath);
-    if (paths.some((p, i) => paths.some((other, j) => i !== j && p.startsWith(`${other}/`)))) {
-      correction = "Choose either a folder or its descendants, not both.";
-      continue;
-    }
-    break;
-  }
-  const plan = await runOperation("Checking selected boundaries…",
-    [...args, ...selection.map((row) => `--child=${row.childPath}`)], source);
-  await vscode.window.showInformationMessage(
-    "Split preview only. Saving children and parent exclusions is blocked until pin retention and interrupted-publication safety are implemented. All local files remain untouched.",
-    { modal: true, detail: plan.selected.map((row) => `${row.path} → proposed exclusion ${row.proposed_exclusion}`).join("\n")
-      + "\nDestination and Room IDs are unresolved; no provider was contacted. Git history isolation is unproven. This is not a Save preview or recovery guarantee." },
-    "Close Preview",
-  );
-  return "preview-only";
+    });
+  return outcome;
 }
 
 async function saveRoom(options = {}) {
