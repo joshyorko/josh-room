@@ -177,3 +177,67 @@ into a structured comparison view with scripts/iframes/objects stripped.
   report template bytes, raw/gzip/base64 DB bytes, referenced vs. unique
   deduplicated attachment bytes, and final HTML size. `--max-size` and
   `--no-attachments` enforce export size budgets.
+
+## Click-through interaction contract (`NAVIGATE` / `INSPECT` / `ACT`)
+
+Room View is a **localhost-only, sanitized, read-only state viewer**—not a
+general-purpose UNIX file server. To keep the SGI FSN 3D landscape genuinely
+useful in daily Room workflows without weakening security or offline
+portability, click-through behavior is structured around three distinct
+capabilities:
+
+### Current v1 behavior (implemented in #202)
+
+| Click target | Current v1 action | What it displays |
+| --- | --- | --- |
+| Root `/` pedestal | Flies back to low-angle overview; clears spotlight; hides inspector; syncs breadcrumbs and APG `role="tree"`. | Full tree overview (with `>50`-item groups collapsed to stage summaries). |
+| Group pedestal | Expands collapsed group (`>50` items) in place; swoops camera ~30° above pedestal; brightens root → group wire. | Group summary counts and fanned stage pedestals. |
+| Stage pedestal | Swoops camera ~30° above stage pedestal; brightens root → group → stage wire. | Individual file towers (≤12–16) or 11 highest-interest items + `+N more` SpaceTree block. |
+| `+N more` / stage-summary tower | Expands aggregated siblings or collapsed group in place and flies to the expanded branch. | Previously aggregated items at constant world-unit dimensions. |
+| Ground wire | Selects child pedestal; second click ascends to parent (FSN convention). | Active parent-child branch highlight. |
+| File / item tower (or Grid/Search hit) | Swoops camera ~40° above block; activates Spotlight v2 (no lamp); opens dismissible Inspector drawer; syncs APG tree & polite live announcement. Shift-click selects without camera flight; clicking the beam zooms closer. | **Details** (ID, group/stage, outcome cue, metric + quantile bin, sanitized scalar `fields`), **Evidence** (lazy `pdf.js` PDFs, side-by-side PNG/JPEG/WebP + ≤1.25× lightbox, inert `DOMParser` HTML reports, or explicit unavailability notice), and **Timeline** (ordered `steps`). |
+
+### Absent capabilities & scoped follow-up architecture
+
+The following capabilities are **intentionally outside #202 v1** and reserved
+for a backwards-compatible follow-up issue (keeping existing
+`ViewStateProvider` implementations working unchanged):
+
+1. **`NAVIGATE` — arbitrary-depth provider-defined hierarchy (follow-up)**:
+   - v1 fixes the hierarchy to four levels (`root → group → stage → item`).
+   - Additive follow-up: optional `nodes` table/list
+     (`{id, parent_id, node_kind, label, kind?, metric?, summary?}`) enabling
+     provider-defined trees of arbitrary depth (e.g.
+     `root → service → package → suite → run → artifact`) while mapping v1
+     `groups`/`stages`/`items` onto the same model automatically. Aggregation
+     (`>16` children, `>50` subtree) and distance LOD remain bounded while
+     keeping every node reachable via APG tree, search, 2D Grid, and SQL.
+2. **`INSPECT` — typed read-only content previews & relationship links (follow-up)**:
+   - v1 limits leaf inspection to scalar `fields` (≤160 chars), step timestamps,
+     and the five allowlisted attachment media types (`application/pdf`,
+     `image/png`, `image/jpeg`, `image/webp`, inert `text/html`).
+   - Additive follow-up schema separates five distinct read-only layers:
+     - **Summary**: compact inline metadata (existing `ItemState` fields).
+     - **Preview**: bounded, server-sanitized typed preview payloads (e.g.
+       `text/plain`, `text/x-diff` with line numbers/diff highlighting,
+       `application/json` collapsible tree, structured execution log/exit-code
+       records) stored in an additive `item_previews(item_id, slot, media_type, status, reason, body_text)`
+       table for identical live + offline HTML rendering.
+     - **Content**: optional allowlisted read-only `content(item_id, slot)`
+       provider method subject to the same strict sanitizer, size cap, and
+       zero-host-path guarantees—never serving arbitrary host files.
+     - **Attachments**: existing deduplicated allowlisted blobs.
+     - **Links**: additive `item_links(source_id, relation, target_id, label)`
+       tracing `producer → output → consumer` / `caused_by` / `depends_on`
+       relationships as clickable in-world jump links (zero network).
+   - **Explicit unavailability**: missing, redacted, size-capped, disallowed,
+     or `--no-attachments`-omitted content must render a typed unavailability
+     state (`omitted`, `disallowed-media-type`, `redacted-by-policy`,
+     `unavailable`) and never invent placeholder data.
+3. **`ACT` — separately authorized action surface (reserved, out of #202 v1)**:
+   - Future operational actions (e.g., open in IDE, retry a stage, approve a
+     gate) require an explicit opt-in, separately authorized host-controlled
+     boundary—never implicit filesystem writes or browser-triggered mutation
+     routes.
+   - #202 v1 enforces read-only `GET`/`HEAD` only (`405` on all mutation
+     methods) and zero action endpoints.

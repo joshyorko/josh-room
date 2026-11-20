@@ -195,10 +195,11 @@
         } else if (att.media_type === 'text/html') {
           this._openInertHtml(item.id, att, stageEl, reqSeq);
         } else {
-          const p = document.createElement('p');
-          p.className = 'muted-text';
-          p.textContent = `${att.name} (${att.media_type}, ${att.size} bytes) — listed only, not embedded.`;
-          stageEl.appendChild(p);
+          this._renderUnavailable(
+            stageEl,
+            'disallowed-media-type',
+            `${att.name} (${att.media_type}, ${att.size} bytes) is listed as metadata only and is not embedded under v1 allowlist rules.`
+          );
         }
       };
 
@@ -213,6 +214,20 @@
         listEl.appendChild(btn);
         if (idx === 0) selectAtt(att, btn);
       });
+    }
+
+    _renderUnavailable(container, reasonCode, detailText) {
+      container.textContent = '';
+      const box = document.createElement('div');
+      box.className = 'inert-report';
+      const badge = document.createElement('div');
+      badge.className = 'inert-badge';
+      badge.textContent = `CONTENT UNAVAILABLE (${reasonCode})`;
+      const p = document.createElement('p');
+      p.className = 'muted-text';
+      p.textContent = detailText;
+      box.append(badge, p);
+      container.appendChild(box);
     }
 
     _teardownPdf() {
@@ -240,7 +255,11 @@
         ]);
         if (reqSeq !== this._attRequestSeq) return;
         if (!payload || !payload.bytes) {
-          status.textContent = 'PDF payload unavailable (snapshot exported with --no-attachments).';
+          this._renderUnavailable(
+            container,
+            'payload-omitted',
+            `${att.name} payload is not embedded in this snapshot (for example, exported with --no-attachments or unavailable from provider).`
+          );
           return;
         }
         const loadingTask = pdfjsLib.getDocument({
@@ -472,10 +491,11 @@
       const payload = await this.data.loadAttachmentBytes(itemId, att.name);
       if (reqSeq !== this._attRequestSeq) return;
       if (!payload || !payload.bytes) {
-        const p = document.createElement('p');
-        p.className = 'muted-text';
-        p.textContent = 'HTML report payload unavailable.';
-        container.appendChild(p);
+        this._renderUnavailable(
+          container,
+          'payload-omitted',
+          `${att.name} HTML report payload is not embedded in this snapshot.`
+        );
         return;
       }
       const rawHtml = new TextDecoder('utf-8').decode(payload.bytes);

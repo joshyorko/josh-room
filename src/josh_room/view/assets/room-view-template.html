@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;2a5a7b10a0ede23c808da064b1c7211c8567b341ad7586ff477bf0bd3ef250bd&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;ca7e4ef57a07002812f3a3e818dd4ce7ac62e77a660cff32373b5576fb7b5f50&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -18022,10 +18022,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         } else if (att.media_type === 'text/html') {
           this._openInertHtml(item.id, att, stageEl, reqSeq);
         } else {
-          const p = document.createElement('p');
-          p.className = 'muted-text';
-          p.textContent = `${att.name} (${att.media_type}, ${att.size} bytes) — listed only, not embedded.`;
-          stageEl.appendChild(p);
+          this._renderUnavailable(
+            stageEl,
+            'disallowed-media-type',
+            `${att.name} (${att.media_type}, ${att.size} bytes) is listed as metadata only and is not embedded under v1 allowlist rules.`
+          );
         }
       };
 
@@ -18040,6 +18041,20 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         listEl.appendChild(btn);
         if (idx === 0) selectAtt(att, btn);
       });
+    }
+
+    _renderUnavailable(container, reasonCode, detailText) {
+      container.textContent = '';
+      const box = document.createElement('div');
+      box.className = 'inert-report';
+      const badge = document.createElement('div');
+      badge.className = 'inert-badge';
+      badge.textContent = `CONTENT UNAVAILABLE (${reasonCode})`;
+      const p = document.createElement('p');
+      p.className = 'muted-text';
+      p.textContent = detailText;
+      box.append(badge, p);
+      container.appendChild(box);
     }
 
     _teardownPdf() {
@@ -18067,7 +18082,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         ]);
         if (reqSeq !== this._attRequestSeq) return;
         if (!payload || !payload.bytes) {
-          status.textContent = 'PDF payload unavailable (snapshot exported with --no-attachments).';
+          this._renderUnavailable(
+            container,
+            'payload-omitted',
+            `${att.name} payload is not embedded in this snapshot (for example, exported with --no-attachments or unavailable from provider).`
+          );
           return;
         }
         const loadingTask = pdfjsLib.getDocument({
@@ -18299,10 +18318,11 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const payload = await this.data.loadAttachmentBytes(itemId, att.name);
       if (reqSeq !== this._attRequestSeq) return;
       if (!payload || !payload.bytes) {
-        const p = document.createElement('p');
-        p.className = 'muted-text';
-        p.textContent = 'HTML report payload unavailable.';
-        container.appendChild(p);
+        this._renderUnavailable(
+          container,
+          'payload-omitted',
+          `${att.name} HTML report payload is not embedded in this snapshot.`
+        );
         return;
       }
       const rawHtml = new TextDecoder('utf-8').decode(payload.bytes);

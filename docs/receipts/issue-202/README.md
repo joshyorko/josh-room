@@ -14,7 +14,7 @@ credentials, private paths, or third-party assets are included.
 | [02-night-directory.png](02-night-directory.png) | Night | Mid-flight / directory focus settled on `Sector Beta / Verify` (`20 items · 6 fail`) showing individual fail blocks with WCAG `×` crowns, pass blocks, and the `+9 more` SpaceTree summary tower. |
 | [03-night-spotlight-v2.png](03-night-spotlight-v2.png) | Night | Selected `verify-01.fail` under **Spotlight v2**: `SpotLight.map` warm floor pool with soft PCF shadows, feathered `FrontSide` apex-faded dithered volumetric beam, dimmed surroundings/wires/grid, no literal lamp, intact coral block hue and `×` crown. |
 | [04-night-spotlight-baseline.png](04-night-spotlight-baseline.png) | Night | **Spotlight A/B Baseline** on the exact same item/camera (`SpotLight(0xfff1c9, 300*L)` + additive floor decal + cylinder): demonstrates the additive pedestal white-out and sharper beam edge eliminated by Spotlight v2. |
-| [03b-night-spotlight-v2-evidence-pdf.png](03b-night-spotlight-v2-evidence-pdf.png) | Night | Dismissible contextual Evidence drawer open alongside Spotlight v2, rendering multi-page synthetic `evidence-report.pdf` via bundled `pdf.js` (`p1 in 12.6 ms`, zero network). |
+| [03b-night-spotlight-v2-evidence-pdf.png](03b-night-spotlight-v2-evidence-pdf.png) | Night | Dismissible contextual Evidence drawer open alongside Spotlight v2, rendering multi-page synthetic `evidence-report.pdf` via bundled `pdf.js` (`p1 in 9.8 ms`, zero network). |
 | [05-grass-overview.png](05-grass-overview.png) | Grass (FSN light) | FSN-inspired Grass palette (`#0087d5` → `#91fff0` sky, `#0f4f1a` → `#418a59` ground) with identical geometry and navigation. |
 | [06-grass-directory.png](06-grass-directory.png) | Grass | Directory focus on `Sector Beta / Verify` in Grass theme. |
 | [07-grass-spotlight-v2.png](07-grass-spotlight-v2.png) | Grass | **Spotlight v2** in Grass (`NormalBlending` beam + `SpotLight.map` warm pool, vivid block color intact). |
@@ -41,9 +41,9 @@ Exact metrics are saved in [browser-verification-receipt.json](browser-verificat
 Key verified results on `synthetic` (300 items, 1.57 MiB offline HTML) and `synthetic-large` (540 items):
 
 - Zero external network fetches (`blocked_external_requests: []`), `0` CSP violations, `0` console errors.
-- Time to first interactive 3D frame: `1233.9 ms` (300 items) / `106.9 ms` (540 items) — within `< 2000 ms` budget.
+- Time to first interactive 3D frame: `1228.8 ms` (300 items) / `112.9 ms` (540 items) — within `< 2000 ms` budget.
 - Render on demand: `0` renders and `0` shadow updates over `1200 ms` idle.
-- PDF.js first page visible: `12.6 ms` (`< 500 ms` budget).
+- PDF.js first page visible: `9.8 ms` (`< 500 ms` budget).
 - Inert HTML report security probe: `window.__JOSH_ROOM_HTML_ATTACHMENT_XSS__` never executed (`scripts blocked: 1`).
 - Read-only SQL console: preset returned `53` rows; `DROP TABLE items;` rejected.
 - WebGL-off fallback: automatic switch to 2D Grid (`300` tiles) with Evidence drawer and SQL active.

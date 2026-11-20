@@ -21,7 +21,7 @@
       "viewMode": "3d",
       "webglActive": true,
       "itemCount": 300,
-      "firstFrameMs": 1233.9,
+      "firstFrameMs": 1228.8,
       "drawCalls": 118,
       "renderCount": 5,
       "shadowUpdateCount": 1,
@@ -38,22 +38,22 @@
       "treeItemCount": 4,
       "livePolite": "polite",
       "hasImportMap": true,
-      "wallBootMs": 1332,
-      "file_bytes": 1643840,
+      "wallBootMs": 1334,
+      "file_bytes": 1644509,
       "first_click_ms": 0,
       "shadow_updates_on_select": 1,
       "pdf_first_page": {
         "canvasCount": 2,
-        "infoText": "3 pages · p1 in 12.6ms",
-        "firstPageMs": 12.6,
-        "statusText": "Fit WidthFit Page−+3 pages · p1 in 12.6msPage 1 / 3Page 2 / 3Page 3 / 3"
+        "infoText": "3 pages · p1 in 9.8ms",
+        "firstPageMs": 9.8,
+        "statusText": "Fit WidthFit Page−+3 pages · p1 in 9.8msPage 1 / 3Page 2 / 3Page 3 / 3"
       },
       "sql_preset_rows": 53,
       "sql_mutation_blocked": true
     },
     "fixture_540": {
       "itemCount": 540,
-      "firstFrameMs": 106.9,
+      "firstFrameMs": 112.9,
       "drawCalls": 125,
       "layoutSummary": {
         "pedestals": 5,
@@ -61,7 +61,7 @@
         "summaryBlocks": 24,
         "wires": 4
       },
-      "wallBootMs": 191
+      "wallBootMs": 205
     }
   },
   "accessibility": {

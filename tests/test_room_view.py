@@ -406,6 +406,7 @@ def test_export_lists_disallowed_media_type_without_embedding_bytes(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM attachment_blobs").fetchone()[0] == 0
     finally:
         conn.close()
+    assert b"CONTENT UNAVAILABLE" in artifact.html_bytes
 
 
 def test_from_state_offline_export_and_symlink_rejection(tmp_path):
