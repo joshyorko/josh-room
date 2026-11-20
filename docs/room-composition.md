@@ -16,6 +16,13 @@ Results explicitly say `offline-untrusted-input`, `can_apply: false`, and
 `can_resume: false`. A consistent bundle is not a durable recovery guarantee.
 Missing referenced Restic data returns `ok: false`, including component data.
 Output contains only operation IDs, phase and summary counts, not child paths.
+Contradictory claims about one ciphertext object (payload kind, size, or logical
+descriptor) are refused. Shared legacy objects and shared Restic snapshots remain
+valid when their evidence agrees. This stricter offline check does not alter the
+ordinary deletion planner's conservative handling of shared objects. A committed
+parent's explicit logical/Restic lineage must agree with its reserved baseline;
+absent lineage remains supported when Save receives no Restic parent. Present
+origin fields and timezone offsets must satisfy their closed-schema contracts.
 
 `composition_safety.CompositionSafetyState` validates the closed candidate-v4
 envelope in `schemas/composition-safety-v1.schema.json`. It embeds an unchanged
@@ -43,6 +50,10 @@ disables selection below that scope; unseen aliases cannot authorize a selection
 Run `Josh: Split Workspace into Rooms (Preview Only)` from the command palette.
 Choose the source folder (it need not be the open folder), then check desired
 child directories in the native picker. Every checkbox starts unchecked.
+Select at most 32 non-overlapping directories. Selecting a directory and one of
+its descendants, or too many children, returns to the picker with the selection
+preserved for correction. If no supported choices are available, a message
+explains the limit instead of opening an empty picker.
 Unchecked directories keep their existing parent capture policy. The final
 dialog shows selected paths and proposed literal exclusions locally, then ends.
 There is no apply button. Cancel does not change workspace files or contact a
@@ -77,14 +88,20 @@ validation. Over-limit sampling is filesystem-order-dependent.
 
 A `.git` directory is an unverified repository candidate; a gitfile is an
 unsupported pointer boundary. A local Room marker is unverified and unselectable.
-Neither is read, executed or interpreted as authority. Discovery currently
+Either reserved composition filename also makes a child unselectable and stops
+descent, regardless of whether it is a file, directory, or dangling link. No
+composition contents are read. These metadata checks match Save admission.
+No boundary metadata is read, executed or interpreted as authority. Discovery currently
 requires descriptor-relative, no-follow directory operations; unsupported
 platforms fail closed (Windows qualification remains blocked).
 
-Fixed Git/Room boundary names are statted independently of the entry sample.
+Fixed Git/Room/composition boundary names are statted independently of the entry sample.
 Policy reads and rechecks use the held root descriptor, even if its original
 pathname is replaced. Unicode sibling aliases are blocked before descent,
-including aliases whose spelling is otherwise unsupported. Candidate JSON is
+including aliases whose spelling is otherwise unsupported. Win32 trailing-dot
+and trailing-space sibling aliases are also blocked. Source and evidence paths
+containing a lexical `..` are refused before normalization, so the planner cannot
+silently inspect a different tree. Candidate JSON is
 bounded to 16 KiB with an explicit `output-cap` omission. Names that diagnostics
 would normalize or redact (for example repeated spaces or key-shaped strings)
 are unsupported and never offered as a different sibling. The native controller

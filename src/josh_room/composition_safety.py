@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .catalog import Catalog, _validate_identifier
+from .catalog import Catalog, _validate_identifier, _validate_logical_identifier
 from .composition import validate_paths
 from .logical_jat import LogicalJat
 from .restic_store import RepositoryInfo, SnapshotInventoryItem
@@ -24,7 +24,7 @@ from .workspace_onboarding import _directory
 MAX_BYTES = 1024 * 1024
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
-_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})\Z")
+_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z")
 _PHASES = ("reserved", "children-recorded", "parent-prepared", "committed")
 
 
@@ -100,6 +100,8 @@ class CompositionSafetyState:
                     _timestamp(record["created_at"])
                     if "origin_project_id" in record:
                         _validate_identifier("legacy origin project", record["origin_project_id"])
+                elif "origin_room_id" in record:
+                    _validate_logical_identifier("logical origin room", record["origin_room_id"])
         revision = body["revision"]
         if type(revision) is not int or revision < inner["revision"]:
             raise ValueError("invalid composition revision")
@@ -190,11 +192,26 @@ def reconcile(state, descriptors, repository, inventory, *, expected_scope):
         raise ValueError("composition evidence belongs to another authority")
     catalog = Catalog.from_body(body["dimension_catalog"], scope["dimension_id"], scope["encryption_domain_id"])
     index = build_reference_index(catalog, descriptors)
+    object_evidence = {}
+    for room_id, project in catalog.body["projects"].items():
+        for snapshot_id, record in project["snapshots"].items():
+            kind = record.get("payload_kind", "legacy-jat-hauler-v1")
+            evidence = (kind, record["ciphertext_size"],
+                        descriptors[(room_id, snapshot_id)].sha256 if kind == "room-store-v1" else None)
+            if object_evidence.setdefault(record["object_key"], evidence) != evidence:
+                raise ValueError("composition ciphertext evidence is inconsistent")
     report = compare_restic_inventory(index, repository, inventory)
     for operation in body["operations"].values():
         if operation["phase"] == "committed":
             plan = operation["plan"]
             parent = descriptors[(plan["parent_room_id"], plan["parent_logical_jat_id"])].to_dict()
+            if "parent_logical_jat_id" in parent or "parent_snapshot_id" in parent["workspace"]:
+                baseline = plan["expected_parent_logical_jat_id"]
+                if baseline is None or parent.get("parent_logical_jat_id") != baseline:
+                    raise ValueError("parent lineage differs from reserved baseline")
+                prior = descriptors[(plan["parent_room_id"], baseline)].to_dict()
+                if parent["workspace"].get("parent_snapshot_id") != prior["workspace"]["snapshot_id"]:
+                    raise ValueError("parent workspace lineage differs from reserved baseline")
             if parent.get("capture_mode", "full-repository") != "source-only" or parent["capture_policy_sha256"] != operation["parent_policy_sha256"]:
                 raise ValueError("parent capture contract differs from reserved metadata")
             if any(parent["components"].values()):
@@ -212,6 +229,8 @@ def reconcile(state, descriptors, repository, inventory, *, expected_scope):
 
 def inspect_evidence_file(path: Path):
     """Offline evidence only: arbitrary local JSON never confers provider authority."""
+    if ".." in path.parts:
+        raise ValueError("composition evidence path contains parent traversal")
     if os.open not in os.supports_dir_fd or not hasattr(os, "O_NOFOLLOW"):
         raise ValueError("safe composition evidence inspection is unavailable")
     directory = _directory(path.parent)

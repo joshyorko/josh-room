@@ -2110,16 +2110,37 @@ async function splitWorkspace() {
   const source = folders[0].fsPath;
   const args = ["composition", "plan", "--workspace", source];
   const discovery = await runOperation("Discovering child boundaries…", args, source);
-  const selection = await vscode.window.showQuickPick(
-    discovery.candidates.filter((row) => row.selectable).map((row) => ({
-      label: row.path, description: row.kind, picked: false, childPath: row.path,
-    })), {
-      title: "Split preview: select child folders",
-      placeHolder: `${discovery.coverage.complete ? "Boundary pass complete" : "Partial discovery"} — unchecked folders keep their current parent policy. No files will change.`,
-      canPickMany: true, ignoreFocusOut: true,
-    },
-  );
-  if (!selection?.length) return "cancelled";
+  const candidates = discovery.candidates.filter((row) => row.selectable);
+  if (!candidates.length) {
+    await vscode.window.showInformationMessage("No supported child folders are available for this split preview.", {
+      detail: `${discovery.coverage.complete ? "The boundary pass completed." : "Discovery is partial; limits or unavailable entries may hide child folders."} Existing Room markers, composition metadata, and unsupported boundaries cannot be selected. Choose a narrower source folder to inspect other boundaries. No files changed.`,
+    });
+    return "cancelled";
+  }
+  let selection;
+  for (;;) {
+    const picked = new Set(selection?.map((row) => row.childPath));
+    selection = await vscode.window.showQuickPick(
+      candidates.map((row) => ({
+        label: row.path, description: row.kind, picked: picked.has(row.path), childPath: row.path,
+      })), {
+        title: "Split preview: select child folders",
+        placeHolder: `${discovery.coverage.complete ? "Boundary pass complete" : "Partial discovery"} — select up to 32 non-overlapping folders. Unchecked folders keep their current parent policy. No files will change.`,
+        canPickMany: true, ignoreFocusOut: true,
+      },
+    );
+    if (!selection?.length) return "cancelled";
+    if (selection.length > 32) {
+      await vscode.window.showWarningMessage("Choose at most 32 child folders for a split preview.");
+      continue;
+    }
+    const paths = selection.map((row) => row.childPath);
+    if (paths.some((p, i) => paths.some((other, j) => i !== j && p.startsWith(`${other}/`)))) {
+      await vscode.window.showWarningMessage("Choose either a folder or its descendants, not both.");
+      continue;
+    }
+    break;
+  }
   const plan = await runOperation("Checking selected boundaries…",
     [...args, ...selection.map((row) => `--child=${row.childPath}`)], source);
   await vscode.window.showInformationMessage(

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- Keep child folders with reserved composition metadata out of split selection, stop discovery at those boundaries, and reject ambiguous source paths and Win32 sibling aliases.
+- Refuse contradictory offline composition evidence about encrypted objects, parent lineage, optional origins, and timezone offsets.
+- Let users correct overlapping or oversized split selections and explain when discovery has no supported choices.
+
 ## [0.1.51]
 
 - Add an explicit native checkbox preview for splitting a workspace into child Rooms, with bounded offline discovery and exact proposed exclusions.

@@ -252,6 +252,8 @@ class CompositionSafetyTests(unittest.TestCase):
         latest['snapshot_id'] = 'jat-newer'
         latest['workspace_snapshot_id'] = '6' * 64
         latest['tree_id'] = '7' * 64
+        digest = hashlib.sha256(b'synthetic newer child').hexdigest()
+        latest.update(object_key=f'objects/sha256/{digest}', ciphertext_sha256=digest)
         body['projects']['child']['snapshots']['jat-newer'] = latest
         body['projects']['child']['latest'] = 'jat-newer'
         new = self.descriptors[('child', 'jat-child')].to_dict()
@@ -390,6 +392,120 @@ class CompositionSafetyTests(unittest.TestCase):
             CompositionSafetyState.from_dict(self.body)
         record['origin_project_id'] = 'origin-room'
         CompositionSafetyState.from_dict(self.body)
+
+    def test_present_logical_origin_must_be_schema_identifier(self):
+        record = self.body['dimension_catalog']['projects']['child']['snapshots']['jat-child']
+        record['origin_room_id'] = None
+        Catalog.from_body(self.body['dimension_catalog'])
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_invalid_timezone_offset_is_not_normalized(self):
+        record = {'snapshot_id': 'legacy-jat', 'object_key': 'objects/sha256/' + 'a' * 64,
+                  'ciphertext_sha256': 'a' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00+00:60', 'workspace_fingerprint': 'b' * 64}
+        self.body['dimension_catalog']['projects']['legacy'] = {
+            'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat', 'snapshots': {'legacy-jat': record}}
+        with self.assertRaises(ValueError):
+            CompositionSafetyState.from_dict(self.body)
+
+    def test_evidence_parent_traversal_is_not_normalized_to_another_tree(self):
+        state, descriptors, inventory = fixture()
+        bundle = {'state': state, 'descriptors': [d.to_dict() for d in descriptors.values()],
+                  'repository': {'repository_id': REPOSITORY, 'repository_format': 2},
+                  'inventory': [{
+                      'snapshot_id': i.snapshot_id, 'tree_id': i.tree_id, 'time': i.time,
+                      'parent_snapshot_id': i.parent_snapshot_id} for i in inventory],
+                  'expected_scope': state['scope']}
+        with tempfile.TemporaryDirectory(prefix='composition-parent-') as directory:
+            path = Path(directory) / 'evidence.json'
+            path.write_text(json.dumps(bundle))
+            self.assertTrue(inspect_evidence_file(path)['ok'])
+            with self.assertRaises(ValueError):
+                inspect_evidence_file(Path(directory) / 'missing' / '..' / path.name)
+
+    def test_one_ciphertext_cannot_claim_different_descriptors_or_sizes(self):
+        for change in ['descriptor', 'size', 'legacy-size', 'legacy-kind']:
+            body = copy.deepcopy(self.body)
+            record = body['dimension_catalog']['projects']['child']['snapshots']['jat-child']
+            if change in ['descriptor', 'size']:
+                parent = body['dimension_catalog']['projects']['parent']['snapshots']['jat-parent']
+                parent.update(object_key=record['object_key'], ciphertext_sha256=record['ciphertext_sha256'])
+                body['operations']['operation']['parent_pin']['descriptor_sha256'] = record['ciphertext_sha256']
+                if change == 'size':
+                    parent['ciphertext_size'] += 1
+            else:
+                legacy = {field: record[field] for field in [
+                    'object_key', 'ciphertext_sha256', 'ciphertext_size', 'created_at']}
+                legacy.update(snapshot_id='legacy-jat', workspace_fingerprint='b' * 64)
+                if change == 'legacy-size':
+                    legacy.update(object_key='objects/sha256/' + '0' * 64, ciphertext_sha256='0' * 64)
+                    other = {**legacy, 'snapshot_id': 'legacy-copy', 'ciphertext_size': legacy['ciphertext_size'] + 1}
+                    body['dimension_catalog']['projects']['legacy-copy'] = {
+                        'display_name': 'Synthetic Copy', 'latest': 'legacy-copy',
+                        'snapshots': {'legacy-copy': other}}
+                body['dimension_catalog']['projects']['legacy'] = {
+                    'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat',
+                    'snapshots': {'legacy-jat': legacy}}
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.report(body)
+
+    def test_consistent_shared_legacy_objects_and_restic_snapshots_are_allowed(self):
+        legacy = {'snapshot_id': 'legacy-jat', 'object_key': 'objects/sha256/' + '0' * 64,
+                  'ciphertext_sha256': '0' * 64, 'ciphertext_size': 1,
+                  'created_at': '2026-11-18T12:00:00Z', 'workspace_fingerprint': 'b' * 64}
+        for room in ['legacy-a', 'legacy-b']:
+            self.body['dimension_catalog']['projects'][room] = {
+                'display_name': 'Synthetic Legacy', 'latest': 'legacy-jat',
+                'snapshots': {'legacy-jat': copy.deepcopy(legacy)}}
+        child = self.descriptors[('child', 'jat-child')].to_dict()
+        child['workspace'].update(snapshot_id='2' * 64, tree_id='4' * 64)
+        self.descriptors[('child', 'jat-child')] = LogicalJat.from_dict(child)
+        record = self.body['dimension_catalog']['projects']['child']['snapshots']['jat-child']
+        record.update(workspace_snapshot_id='2' * 64, tree_id='4' * 64)
+        self.assertTrue(self.report(inventory=self.inventory[1:])['ok'])
+
+    def test_committed_parent_explicit_lineage_must_match_baseline(self):
+        for baseline in [None, 'jat-before']:
+            body, descriptors, inventory = fixture()
+            operation = body['operations']['operation']
+            operation['plan']['expected_parent_logical_jat_id'] = baseline
+            operation['plan_sha256'] = plan_digest(operation['plan'])
+            if baseline is not None:
+                prior = descriptors[('parent', 'jat-parent')].to_dict()
+                prior['logical_jat_id'] = baseline
+                prior['workspace'].update(snapshot_id='4' * 64, tree_id='5' * 64)
+                prior = LogicalJat.from_dict(prior)
+                digest = hashlib.sha256(b'synthetic prior parent').hexdigest()
+                catalog = Catalog.from_body(body['dimension_catalog']).add_logical_snapshot(
+                    'parent', 'Synthetic Room', prior,
+                    ObjectRef(f'objects/sha256/{digest}', digest, 50), 'c' * 64)
+                body['dimension_catalog'] = catalog.body
+                descriptors[('parent', baseline)] = prior
+                inventory.append(SnapshotInventoryItem('4' * 64, '5' * 64, '', None))
+            # Save may omit lineage when Restic reports no parent, even with a baseline.
+            self.assertTrue(self.report(body, descriptors, inventory)['ok'])
+            parent = descriptors[('parent', 'jat-parent')].to_dict()
+            if baseline is not None:
+                parent['parent_logical_jat_id'] = baseline
+                parent['workspace']['parent_snapshot_id'] = '4' * 64
+                descriptors[('parent', 'jat-parent')] = LogicalJat.from_dict(parent)
+                self.assertTrue(self.report(body, descriptors, inventory)['ok'])
+            for change in ['logical', 'workspace', 'missing-logical', 'missing-workspace']:
+                invalid = copy.deepcopy(parent)
+                invalid['parent_logical_jat_id'] = baseline or 'unplanned-parent'
+                invalid['workspace']['parent_snapshot_id'] = '4' * 64
+                if change == 'logical':
+                    invalid['parent_logical_jat_id'] = 'unplanned-parent'
+                elif change == 'workspace':
+                    invalid['workspace']['parent_snapshot_id'] = '9' * 64
+                elif change == 'missing-logical':
+                    invalid.pop('parent_logical_jat_id')
+                else:
+                    invalid['workspace'].pop('parent_snapshot_id')
+                changed = {**descriptors, ('parent', 'jat-parent'): LogicalJat.from_dict(invalid)}
+                with self.subTest(baseline=baseline, change=change), self.assertRaises(ValueError):
+                    self.report(body, changed, inventory)
 
     def test_empty_evidence_arrays_are_valid_but_other_iterables_are_not(self):
         body = copy.deepcopy(self.body)

@@ -175,7 +175,7 @@ def test_discovery_deadline_and_unsupported_platform(tmp_path, monkeypatch):
         discover(tmp_path)
 
 
-@pytest.mark.parametrize('marker', ['.git', '.josh-room.json'])
+@pytest.mark.parametrize('marker', ['.git', '.josh-room.json', '.josh-room-composition.json', '.josh-room-split.json'])
 def test_boundary_lookup_is_independent_of_entry_sample(tmp_path, monkeypatch, marker):
     from josh_room import composition
     child = tmp_path / 'child'
@@ -186,7 +186,8 @@ def test_boundary_lookup_is_independent_of_entry_sample(tmp_path, monkeypatch, m
         def __init__(self, fd):
             self.inner = original(fd)
         def __enter__(self):
-            return iter([e for e in self.inner if e.name not in {'.git', '.josh-room.json'}])
+            return iter([e for e in self.inner if e.name not in {
+                '.git', '.josh-room.json', '.josh-room-composition.json', '.josh-room-split.json'}])
         def __exit__(self, *args):
             self.inner.close()
     monkeypatch.setattr(composition.os, 'scandir', WithoutMarkers)
@@ -194,6 +195,45 @@ def test_boundary_lookup_is_independent_of_entry_sample(tmp_path, monkeypatch, m
     monkeypatch.setattr(composition.os, 'supports_fd', {WithoutMarkers})
     result = discover(tmp_path)
     assert result['candidates'][0]['selectable'] is False
+
+
+@pytest.mark.parametrize('marker', ['.josh-room-composition.json', '.josh-room-split.json'])
+@pytest.mark.parametrize('kind', ['file', 'directory', 'dangling-link'])
+def test_reserved_composition_children_are_boundaries(tmp_path, marker, kind):
+    child = tmp_path / 'service'
+    (child / 'nested').mkdir(parents=True)
+    (tmp_path / '.josh-roomignore').write_text(f'**/{marker}\n')
+    reserved = child / marker
+    if kind == 'file':
+        reserved.write_text('synthetic metadata must not be read')
+    elif kind == 'directory':
+        reserved.mkdir()
+    else:
+        reserved.symlink_to(child / 'missing')
+    result = discover(tmp_path)
+    assert result['candidates'] == [{
+        'path': 'service', 'kind': 'composition-metadata-unsupported', 'selectable': False,
+    }]
+    assert result['coverage']['directories_visited'] == 2
+    with pytest.raises(ValueError):
+        plan_split(tmp_path, ['service'])
+
+
+def test_source_parent_traversal_is_not_normalized_to_another_tree(tmp_path):
+    (tmp_path / 'existing' / 'child').mkdir(parents=True)
+    source = tmp_path / 'existing' / 'missing' / '..'
+    assert not source.exists()
+    with pytest.raises(ValueError):
+        plan_split(source, ['child'])
+
+
+@pytest.mark.parametrize('alias', ['service.', 'service '])
+def test_nonportable_win32_alias_blocks_selectable_sibling(tmp_path, alias):
+    (tmp_path / 'service').mkdir()
+    (tmp_path / alias).mkdir()
+    result = discover(tmp_path)
+    assert not any(row['selectable'] for row in result['candidates'])
+    assert 'path-collision' in result['coverage']['omissions']
 
 
 def test_policy_reads_held_tree_after_root_path_replaced(tmp_path, monkeypatch):
