@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "chrome": "/usr/bin/google-chrome",
+  "viewport": "1440x900",
+  "zero_network": {
+    "total_observed_requests": 12,
+    "blocked_external_requests": [],
+    "csp_violations": [],
+    "console_errors": [],
+    "pass": true
+  },
+  "render_on_demand": {
+    "idle_ms": 1200,
+    "renders_during_idle": 0,
+    "shadow_updates_during_idle": 0,
+    "pass": true
+  },
+  "performance": {
+    "fixture_300": {
+      "mode": "offline",
+      "viewMode": "3d",
+      "webglActive": true,
+      "itemCount": 300,
+      "firstFrameMs": 1233.9,
+      "drawCalls": 118,
+      "renderCount": 5,
+      "shadowUpdateCount": 1,
+      "cameraY": 12.977388541482313,
+      "layoutSummary": {
+        "pedestals": 16,
+        "blocks": 81,
+        "summaryBlocks": 7,
+        "wires": 15
+      },
+      "inspectorHiddenOnLoad": true,
+      "canvasAriaHidden": "true",
+      "treeRole": "tree",
+      "treeItemCount": 4,
+      "livePolite": "polite",
+      "hasImportMap": true,
+      "wallBootMs": 1332,
+      "file_bytes": 1643840,
+      "first_click_ms": 0,
+      "shadow_updates_on_select": 1,
+      "pdf_first_page": {
+        "canvasCount": 2,
+        "infoText": "3 pages · p1 in 12.6ms",
+        "firstPageMs": 12.6,
+        "statusText": "Fit WidthFit Page−+3 pages · p1 in 12.6msPage 1 / 3Page 2 / 3Page 3 / 3"
+      },
+      "sql_preset_rows": 53,
+      "sql_mutation_blocked": true
+    },
+    "fixture_540": {
+      "itemCount": 540,
+      "firstFrameMs": 106.9,
+      "drawCalls": 125,
+      "layoutSummary": {
+        "pedestals": 5,
+        "blocks": 0,
+        "summaryBlocks": 24,
+        "wires": 4
+      },
+      "wallBootMs": 191
+    }
+  },
+  "accessibility": {
+    "canvas_aria_hidden": true,
+    "tree_role": "tree",
+    "tree_items_rendered": 4,
+    "live_region_politeness": "polite",
+    "live_announcement_sample": "Focused sector-beta / verify / verify-01.fail, fail, 293.4",
+    "keyboard_next_fail_synced_tree": true,
+    "after_next_fail": {
+      "currentNodeId": "item:item-0003",
+      "selectedTreeNode": "item:item-0003",
+      "liveText": "Focused sector-alpha / ingest / ingest-03.fail, fail, 335.2"
+    }
+  },
+  "security": {
+    "html_attachment_script_executed": false,
+    "inert_report_badge": "INERT PARSED REPORT (scripts blocked: 1)",
+    "inert_table_rows": 4,
+    "pass": true
+  },
+  "fallback_webgl_off": {
+    "webglActive": false,
+    "viewMode": "grid",
+    "gridVisible": true,
+    "noticeVisible": true,
+    "tileCount": 300,
+    "sqlRowCount": 1,
+    "inspectorOpen": true,
+    "pass": true
+  },
+  "screenshots": [
+    "01-night-overview.png",
+    "02-night-directory.png",
+    "03-night-spotlight-v2.png",
+    "04-night-spotlight-baseline.png",
+    "03b-night-spotlight-v2-evidence-pdf.png",
+    "10-sql-console.png",
+    "05-grass-overview.png",
+    "06-grass-directory.png",
+    "07-grass-spotlight-v2.png",
+    "08-grass-spotlight-baseline.png",
+    "09-night-reduced-motion.png",
+    "11-scale-10-items.png",
+    "12-scale-540-items.png",
+    "13-webgl-off-grid-fallback.png"
+  ]
+}

@@ -660,6 +660,34 @@ def build_parser() -> argparse.ArgumentParser:
     device_remove = device_commands.add_parser("remove-local", help="remove local enrollment and native-store secrets")
     device_remove.add_argument("--profile")
     _json_option(device_remove)
+    view = commands.add_parser(
+        "view",
+        help="localhost read-only Room View dashboard and single-file offline HTML export",
+    )
+    view_commands = view.add_subparsers(dest="view_command", required=True)
+    view_serve = view_commands.add_parser("serve", help="serve a localhost-only read-only Room View dashboard")
+    view_serve.add_argument("--provider", required=True, help="provider name (synthetic, entry point, or module:attr)")
+    view_serve.add_argument("--port", type=int, default=0, help="localhost port (0 = auto)")
+    view_serve.add_argument("--interval", type=float, default=5.0, help="poll interval in seconds")
+    view_serve.add_argument("--workspace", type=Path, help="optional Room workspace for sensitivity policy")
+    view_serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
+    view_serve.add_argument("--max-seconds", type=float, help=argparse.SUPPRESS)
+    _json_option(view_serve)
+    view_export = view_commands.add_parser("export", help="export a single self-contained offline HTML view snapshot")
+    view_source = view_export.add_mutually_exclusive_group(required=True)
+    view_source.add_argument("--provider", help="provider name (synthetic, entry point, or module:attr)")
+    view_source.add_argument("--from-state", type=Path, dest="from_state", help="offline/CI state JSON file")
+    view_export.add_argument("--attachments-dir", type=Path, dest="attachments_dir", help="attachments directory for --from-state")
+    view_export.add_argument("--output", type=Path, required=True, help="destination .html file path")
+    view_export.add_argument("--no-attachments", action="store_true", help="omit attachment payloads")
+    view_export.add_argument("--max-size", default="50MB", help="maximum allowed HTML snapshot size (e.g. 50MB)")
+    view_export.add_argument("--sensitivity-ack", action="store_true", help="acknowledge exporting sensitive Room data")
+    view_export.add_argument("--workspace", type=Path, help="optional Room workspace for sensitivity policy")
+    view_export.add_argument("--room-id", dest="room_id", help="optional sanitized Room identifier")
+    _json_option(view_export)
+    view_inspect = view_commands.add_parser("inspect", help="inspect an offline view snapshot without rendering")
+    view_inspect.add_argument("file", type=Path, help="exported .html view snapshot")
+    _json_option(view_inspect)
     return parser
 
 
@@ -706,7 +734,7 @@ def main(argv=None):
                     return _exit_code(preflight)
                 runtime_loaded = False
                 scoped_minio = _uses_minio_encryption(args)
-                identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook"}
+                identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook", "view"}
                 identity_context = nullcontext() if args.command in identity_free_commands or scoped_minio else _identity_environment()
                 with _provider_error_boundary(args), identity_context:
                     if args.command not in identity_free_commands and not scoped_minio:
@@ -748,6 +776,9 @@ def main(argv=None):
         for line in lines:
             print(line)
         return _exit_code(result)
+    if getattr(args, "command", None) == "view" and getattr(args, "view_command", None) == "serve" and result.get("ok"):
+        _write_runtime_result(_bounded_json_result(result))
+        return 0
     result = _bounded_json_result(result)
     _write_runtime_result(result)
     emit(result, getattr(args, "json", False))
@@ -2537,6 +2568,10 @@ def dispatch(args, instance: Path) -> dict:
                     insecure=args.insecure,
                 ),
             }
+    if args.command == "view":
+        from .view.cli_entry import dispatch_view
+
+        return dispatch_view(args)
     if args.command == "setup":
         credentials = json.load(sys.stdin)
         required = {

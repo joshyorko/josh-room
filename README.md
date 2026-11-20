@@ -248,6 +248,9 @@ josh-room jat extract --haul <haul.tar.zst> --reference <ref> --destination <pat
 josh-room jat serve --haul <haul.tar.zst> [--mode auto|files|registry|both] [--json]
 josh-room jat export --haul <haul.tar.zst> --output <images.tar> [--json]
 josh-room jat copy --haul <haul.tar.zst> --to <registry://...|dir://...> [--retries <n>] [--plain-http] [--insecure] [--json]
+josh-room view serve --provider <name|module:attr> [--port 0] [--interval 5] [--require-token] [--json]
+josh-room view export (--provider <name|module:attr> | --from-state <state.json> [--attachments-dir <dir>]) --output <file.html> [--no-attachments] [--max-size 50MB] [--sensitivity-ack] [--json]
+josh-room view inspect <file.html> [--json]
 ```
 
 The native extension also offers **Josh: Check Workspace**. This read-only
@@ -294,5 +297,5 @@ gates are reported separately. The project does not add web UI, webview, daemon,
 generic provider framework, automatic bucket administration, JAT changes, or
 MinIO infrastructure changes.
 
-See [architecture](docs/architecture.md), [ADRs](docs/adr), and
+See [architecture](docs/architecture.md), [Room View](docs/room-view.md), [ADRs](docs/adr), and
 [deferred integrations](docs/DEFERRED-INTEGRATIONS.md).

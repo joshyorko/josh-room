@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en" data-theme="night">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
+  <meta name="josh-room-view" content="__TPL_JOSH_ROOM_VIEW_META__">
+  <title>Josh Room View — 3D Filesystem Navigator</title>
+  <style>
+__TPL_JOSH_ROOM_VIEW_STYLES__
+  </style>
+</head>
+<body>
+  <!-- Full-viewport 3D UNIX Filesystem World (aria-hidden; mirrored by APG role="tree") -->
+  <div id="world-stage" class="world-stage">
+    <canvas id="fsn-canvas" aria-hidden="true"></canvas>
+    <div id="webgl-fallback-notice" class="floating-notice" hidden>
+      WebGL unavailable — running in 2D Grid mode. Attachments and SQL console remain active.
+    </div>
+    <div id="hover-tooltip" class="hover-tooltip" role="tooltip" hidden></div>
+  </div>
+
+  <!-- Thin Perimeter HUD: Top Bar -->
+  <header id="hud-top" class="hud-top" aria-label="Room View navigation and controls">
+    <div class="hud-left">
+      <button id="btn-back" class="hud-btn hud-icon-btn" type="button" title="Go back (Backspace)" aria-label="Go back" disabled>&#8592;</button>
+      <nav id="breadcrumbs" class="breadcrumbs" aria-label="Directory path"></nav>
+      <span id="badge-mode" class="pill pill-mode">OFFLINE</span>
+      <span id="badge-sensitivity" class="pill pill-sensitivity">SYNTHETIC</span>
+    </div>
+    <div class="hud-right">
+      <label class="search-wrap" aria-label="Search items">
+        <span class="search-slash" aria-hidden="true">/</span>
+        <input id="search-input" type="search" placeholder="Search files, stages, groups..." autocomplete="off" spellcheck="false">
+      </label>
+      <div class="seg-group" role="group" aria-label="View mode">
+        <button id="btn-mode-3d" class="seg-btn active" type="button" data-view="3d">3D</button>
+        <button id="btn-mode-grid" class="seg-btn" type="button" data-view="grid" title="Toggle 2D Grid (G)">Grid</button>
+        <button id="btn-mode-sql" class="seg-btn" type="button" data-view="sql">SQL</button>
+      </div>
+      <div class="seg-group" role="group" aria-label="Landscape theme">
+        <button id="btn-theme-night" class="seg-btn active" type="button" data-theme="night">Night</button>
+        <button id="btn-theme-grass" class="seg-btn" type="button" data-theme="grass">Grass</button>
+      </div>
+      <button id="btn-tree-toggle" class="hud-btn" type="button" aria-expanded="false" aria-controls="tree-panel" title="Toggle accessible directory tree">Tree</button>
+      <button id="btn-spotlight-ab" class="hud-btn" type="button" title="Switch Spotlight v2 / Baseline">Spot: v2</button>
+      <button id="btn-motion" class="hud-btn" type="button" title="Toggle motion (M)">Motion</button>
+      <button id="btn-frame-all" class="hud-btn" type="button" title="Frame entire tree (F)">Frame</button>
+      <button id="btn-export-live" class="hud-btn hud-btn-accent" type="button" hidden>Export HTML</button>
+      <button id="btn-print" class="hud-btn" type="button" title="Print top-down map and 2D grid">Print</button>
+      <button id="btn-help" class="hud-btn hud-icon-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Help">?</button>
+    </div>
+  </header>
+
+  <!-- Sensitivity / Stale Banners (thin strip directly below HUD when active) -->
+  <div id="banner-stack" class="banner-stack">
+    <div id="sensitivity-banner" class="banner banner-sensitivity" hidden></div>
+    <div id="stale-banner" class="banner banner-stale" role="status" hidden></div>
+    <div id="search-results-bar" class="search-results-bar" hidden></div>
+  </div>
+
+  <!-- Synchronized APG role="tree" accessible twin (always in DOM for SR/keyboard; visually toggleable) -->
+  <aside id="tree-panel" class="tree-panel" aria-label="Accessible filesystem tree" data-open="false">
+    <div class="panel-header">
+      <h2>Filesystem Tree</h2>
+      <button id="btn-tree-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close tree panel">&times;</button>
+    </div>
+    <div id="aria-tree-root" class="aria-tree" role="tree" aria-label="Room pipeline hierarchy"></div>
+  </aside>
+
+  <!-- Polite live region for screen reader landing announcements -->
+  <div id="aria-live-region" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Dismissible Contextual Inspector & Evidence Drawer (HIDDEN until selection) -->
+  <aside id="inspector-drawer" class="inspector-drawer" aria-label="Selected item details and evidence" hidden>
+    <div class="drawer-header">
+      <div class="drawer-title-group">
+        <span id="inspector-kind-badge" class="kind-badge">PASS</span>
+        <div>
+          <h2 id="inspector-title">Item</h2>
+          <p id="inspector-path" class="drawer-subtitle"></p>
+        </div>
+      </div>
+      <div class="drawer-header-actions">
+        <button id="btn-prev-fail" class="hud-btn hud-sm" type="button" title="Previous failure ([)">[ Fail</button>
+        <button id="btn-next-fail" class="hud-btn hud-sm" type="button" title="Next failure (])">Fail ]</button>
+        <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector (Esc)">&times;</button>
+      </div>
+    </div>
+    <div class="drawer-tabs" role="tablist" aria-label="Inspector sections">
+      <button class="tab-btn active" role="tab" aria-selected="true" data-tab="details" type="button">Details</button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button">Evidence <span id="evidence-count-badge" class="tab-count">0</span></button>
+      <button class="tab-btn" role="tab" aria-selected="false" data-tab="timeline" type="button">Timeline</button>
+    </div>
+    <div id="tab-details" class="drawer-body" role="tabpanel"></div>
+    <div id="tab-evidence" class="drawer-body" role="tabpanel" hidden></div>
+    <div id="tab-timeline" class="drawer-body" role="tabpanel" hidden></div>
+  </aside>
+
+  <!-- Full 2D Grid Fallback / Triage View -->
+  <main id="grid-view" class="overlay-view" aria-label="2D Triage Grid" hidden>
+    <div class="grid-toolbar">
+      <div class="grid-filters">
+        <button class="filter-chip active" type="button" data-filter="all">All</button>
+        <button class="filter-chip" type="button" data-filter="pass"><span class="cue-pass" aria-hidden="true">&#9632;</span> Pass</button>
+        <button class="filter-chip" type="button" data-filter="fail"><span class="cue-fail" aria-hidden="true">&times;</span> Fail</button>
+        <button class="filter-chip" type="button" data-filter="skip"><span class="cue-skip" aria-hidden="true">&#9633;</span> Skip</button>
+      </div>
+      <div id="grid-summary-stats" class="grid-summary-stats"></div>
+    </div>
+    <div id="grid-content" class="grid-content"></div>
+  </main>
+
+  <!-- Read-Only SQL Console View -->
+  <section id="sql-view" class="overlay-view sql-view" aria-label="Read-only SQL Console" hidden>
+    <div class="sql-header">
+      <div>
+        <h2>Read-Only SQL Console</h2>
+        <p class="muted-text">Runs locally in WebAssembly (sql.js) over the embedded <code>room-view-v1</code> SQLite database. Zero network calls.</p>
+      </div>
+      <div class="sql-actions">
+        <button id="btn-download-sqlite" class="hud-btn hud-btn-accent" type="button">Download .sqlite</button>
+      </div>
+    </div>
+    <div id="sql-presets" class="sql-presets"></div>
+    <div class="sql-editor-wrap">
+      <textarea id="sql-input" rows="4" spellcheck="false" aria-label="Read-only SQL query">SELECT id, group_id, stage_id, kind, label, metric FROM items WHERE kind = 'fail' ORDER BY metric DESC LIMIT 25;</textarea>
+      <div class="sql-run-bar">
+        <button id="btn-sql-run" class="hud-btn hud-btn-accent" type="button">Run Query (Ctrl+Enter)</button>
+        <span id="sql-status" class="muted-text"></span>
+      </div>
+    </div>
+    <div id="sql-results" class="sql-results"></div>
+  </section>
+
+  <!-- Bottom-Left Minimal Legend & Telemetry Strip -->
+  <footer id="hud-bottom" class="hud-bottom" aria-label="Legend and scene status">
+    <div class="legend-strip">
+      <span class="legend-item"><span class="swatch swatch-pass" aria-hidden="true"></span>Pass</span>
+      <span class="legend-item"><span class="swatch swatch-fail" aria-hidden="true">&times;</span>Fail</span>
+      <span class="legend-item"><span class="swatch swatch-skip" aria-hidden="true"></span>Skip</span>
+      <span class="legend-sep" aria-hidden="true">|</span>
+      <span id="legend-metric" class="legend-metric">Height: 5 quantile bins</span>
+    </div>
+    <div id="hud-telemetry" class="hud-telemetry"></div>
+  </footer>
+
+  <!-- Print-only static top-down map capture + printable triage table -->
+  <section id="print-sheet" class="print-sheet" aria-hidden="true">
+    <h1 id="print-title">Josh Room View Snapshot</h1>
+    <p id="print-meta"></p>
+    <img id="print-map-img" alt="Top-down filesystem map capture">
+    <div id="print-grid-table"></div>
+  </section>
+
+  <!-- Modal: Help & Keyboard Shortcuts (?) -->
+  <div id="help-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="help-modal-title" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="help-modal-title">Navigation &amp; Keyboard Shortcuts</h2>
+        <button id="btn-help-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close help">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted-text">Click a pedestal or ground wire to fly along the directory branch; click a file tower to focus it under the overhead spotlight. Drag to orbit, Shift-drag to pan, scroll to zoom.</p>
+        <table class="shortcuts-table">
+          <tbody>
+            <tr><td><kbd>&#8593;</kbd> / <kbd>&#8595;</kbd></td><td>Previous / next sibling</td></tr>
+            <tr><td><kbd>&#8594;</kbd> / <kbd>&#8592;</kbd></td><td>Descend into child / ascend to parent</td></tr>
+            <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>First / last sibling</td></tr>
+            <tr><td><kbd>Enter</kbd></td><td>Fly to and select focused item</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Close inspector or climb to parent</td></tr>
+            <tr><td><kbd>F</kbd></td><td>Frame entire filesystem tree</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Search across all items (including aggregated)</td></tr>
+            <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Previous / next failure</td></tr>
+            <tr><td><kbd>G</kbd></td><td>Toggle 2D Grid triage view</td></tr>
+            <tr><td><kbd>M</kbd></td><td>Toggle reduced motion</td></tr>
+            <tr><td><kbd>?</kbd></td><td>Show / hide this help dialog</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Live Export Confirmation Dialog -->
+  <div id="export-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="export-modal-title" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="export-modal-title">Export Offline View Snapshot</h2>
+        <button id="btn-export-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close export dialog">&times;</button>
+      </div>
+      <div id="export-modal-body" class="modal-body"></div>
+      <div class="modal-footer">
+        <button id="btn-export-cancel" class="hud-btn" type="button">Cancel</button>
+        <button id="btn-export-confirm" class="hud-btn hud-btn-accent" type="button">Download Offline HTML</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Image Lightbox (capped at <= 1.25x natural size) -->
+  <div id="lightbox-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Enlarged image preview" hidden>
+    <div class="lightbox-card">
+      <div class="modal-header">
+        <span id="lightbox-caption"></span>
+        <button id="btn-lightbox-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close image preview">&times;</button>
+      </div>
+      <div class="lightbox-body">
+        <img id="lightbox-img" alt="Attachment preview">
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading / Error Status Toast -->
+  <div id="boot-overlay" class="boot-overlay">
+    <div class="boot-card">
+      <div class="boot-spinner" aria-hidden="true"></div>
+      <div id="boot-status">Initializing offline Room View...</div>
+    </div>
+  </div>
+
+  <!-- Embedded Pinned Libraries (gzip + base64; decoded in memory with zero network fetches) -->
+__TPL_JOSH_ROOM_VIEW_LIBRARIES__
+
+  <script>
+__TPL_JOSH_ROOM_VIEW_SCRIPT__
+  </script>
+</body>
+</html>
