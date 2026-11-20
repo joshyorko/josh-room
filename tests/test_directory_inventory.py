@@ -250,3 +250,4 @@ def test_recoverable_lookup_does_not_close_session(tmp_path):
     records = [json.loads(line) for line in output.getvalue().splitlines()]
     assert records[-2]['ok'] is False and records[-2]['recoverable'] is True
     assert records[-1]['selected'] == 'safe'
+    assert records[-1]['id'].isdigit()

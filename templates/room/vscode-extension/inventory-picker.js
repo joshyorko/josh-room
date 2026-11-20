@@ -25,7 +25,12 @@ async function pickInventory(vscode, request) {
   let reviewOffset = 0;
   async function validate(choice) {
     try {
-      await request(choice.id ? { action: "lookup", id: choice.id } : { action: "lookup", path: choice.path });
+      if (!choice.id && Buffer.byteLength(choice.path, "utf8") > 16000) {
+        await vscode.window.showWarningMessage("Manual path exceeds 16,000 bytes. Browse or search for its directory instead.");
+        return false;
+      }
+      const result = await request(choice.id ? { action: "lookup", id: choice.id } : { action: "lookup", path: choice.path });
+      choice.id = result.id || choice.id || choice.path;
       return true;
     } catch (error) {
       if (!error.recoverable) throw error;
@@ -47,7 +52,11 @@ async function pickInventory(vscode, request) {
       else if (review.action === "first") reviewOffset = 0;
       else if (review.action === "back") reviewing = false;
       else if (review.action === "finish") {
-        for (const choice of selected.values()) if (!await validate(choice)) return "cancelled";
+        let valid = true;
+        for (const choice of selected.values()) {
+          if (!await validate(choice)) { valid = false; break; }
+        }
+        if (!valid) continue;
         await vscode.window.showInformationMessage(`${selected.size} explicit directory choices reviewed. Preview only; no capture, exclusions or provider operations.`, { modal: true, detail: "Existing full-workspace Save is unchanged. Scalable composition storage, tri-state assignment, publication and hydration remain future work. Git history isolation is unproven." });
         return "preview-only";
       }
@@ -74,10 +83,16 @@ async function pickInventory(vscode, request) {
     else if (picked.action === "suggestions") { suggested = !suggested; after = ""; }
     else if (picked.action === "search") {
       const value = await vscode.window.showInputBox({ title: "Search every indexed directory", value: query });
-      if (value !== undefined) { query = value; after = ""; suggested = false; }
+      if (value !== undefined) {
+        if (Buffer.byteLength(value, "utf8") > 16000) await vscode.window.showWarningMessage("Search exceeds 16,000 bytes. Use a shorter search.");
+        else { query = value; after = ""; suggested = false; }
+      }
     } else if (picked.action === "manual") {
       const value = await vscode.window.showInputBox({ title: "Exact workspace-relative directory (preview only)" });
-      if (value && await validate({ path: value })) selected.set(value, { path: value });
+      if (value) {
+        const choice = { path: value };
+        if (await validate(choice)) selected.set(choice.id, choice);
+      }
     } else if (picked.action === "review") {
       reviewing = true;
       reviewOffset = 0;

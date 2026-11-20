@@ -1224,8 +1224,14 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       const request = (body) => new Promise((resolve, reject) => {
         if (sessionClosed) return reject(new Error("Inventory session closed"));
         if (pending) return reject(new Error("Concurrent inventory request"));
+        const frame = JSON.stringify(body) + "\n";
+        if (Buffer.byteLength(frame, "utf8") > 120000) {
+          const error = new Error("Inventory request exceeds frame budget");
+          error.recoverable = true;
+          return reject(error);
+        }
         pending = { resolve, reject };
-        child.stdin.write(JSON.stringify(body) + "\n");
+        child.stdin.write(frame);
       });
       options.inventoryHandler(request).then(() => child.stdin.end('{"action":"close"}\n'), (error) => {
         options.inventoryError = error;

@@ -324,8 +324,8 @@ class DirectoryInventory:
             raise ValueError('manual path frame too large; browse by row ID')
         discovery_path(path)
         result = self.page(query=path, limit=1)
-        row = self.db.execute('select state from dirs where path=?', (path,)).fetchone()
-        if self.status not in ('complete', 'partial') or row != (2,):
+        row = self.db.execute('select rowid,state from dirs where path=?', (path,)).fetchone()
+        if self.status not in ('complete', 'partial') or not row or row[1] != 2:
             raise ValueError('manual path unavailable or unsupported')
         # Validate each ancestor's identity, full sibling generation and guards;
         # a typed path receives exactly the same checks as a browsed path.
@@ -340,7 +340,7 @@ class DirectoryInventory:
                     raise ValueError('manual choice generation is stale')
             finally:
                 os.close(fd)
-        return {**result, 'candidates': [], 'selected': path if len(path) <= 2048 else path[:2048] + '…', 'writes_performed': False}
+        return {**result, 'candidates': [], 'id': str(row[0]), 'selected': path if len(path) <= 2048 else path[:2048] + '…', 'writes_performed': False}
 
 
 def serve(root, input_stream, output_stream):
