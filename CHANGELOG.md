@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.52]
+
+- feat: exhaustive paginated directory discovery preview (#198) (#204)
+- fix: harden composition previews and offline evidence (#198) (#203)
+
 ## [Unreleased]
 
 - Keep child folders with reserved composition metadata out of split selection, stop discovery at those boundaries, and reject ambiguous source paths and Win32 sibling aliases.
