@@ -1,0 +1,153 @@
+{
+  "checks": [
+    {
+      "cleanup": "PASS",
+      "concurrent_receipts": [
+        {
+          "fileserver_bind": "all-interfaces",
+          "fileserver_url": "http://127.0.0.1:52018",
+          "mode": "files",
+          "registry_bind": null,
+          "registry_url": null
+        },
+        {
+          "fileserver_bind": "all-interfaces",
+          "fileserver_url": "http://127.0.0.1:55024",
+          "mode": "files",
+          "registry_bind": null,
+          "registry_url": null
+        }
+      ],
+      "mode": "files",
+      "room_parser_and_probes": "PASS"
+    },
+    {
+      "cleanup": "PASS",
+      "concurrent_receipts": [
+        {
+          "fileserver_bind": null,
+          "fileserver_url": null,
+          "mode": "registry",
+          "registry_bind": "loopback",
+          "registry_url": "http://127.0.0.1:51536"
+        },
+        {
+          "fileserver_bind": null,
+          "fileserver_url": null,
+          "mode": "registry",
+          "registry_bind": "loopback",
+          "registry_url": "http://127.0.0.1:62394"
+        }
+      ],
+      "mode": "registry",
+      "room_parser_and_probes": "PASS"
+    },
+    {
+      "cleanup": "PASS",
+      "concurrent_receipts": [
+        {
+          "fileserver_bind": "all-interfaces",
+          "fileserver_url": "http://127.0.0.1:63872",
+          "mode": "both",
+          "registry_bind": "loopback",
+          "registry_url": "http://127.0.0.1:65408"
+        },
+        {
+          "fileserver_bind": "all-interfaces",
+          "fileserver_url": "http://127.0.0.1:54658",
+          "mode": "both",
+          "registry_bind": "loopback",
+          "registry_url": "http://127.0.0.1:61054"
+        }
+      ],
+      "mode": "both",
+      "room_parser_and_probes": "PASS"
+    },
+    {
+      "cleanup": "PASS",
+      "concurrent_receipts": [
+        {
+          "fileserver_bind": "all-interfaces",
+          "fileserver_url": "http://127.0.0.1:52758",
+          "mode": "files",
+          "registry_bind": null,
+          "registry_url": null
+        },
+        {
+          "fileserver_bind": "all-interfaces",
+          "fileserver_url": "http://127.0.0.1:49637",
+          "mode": "files",
+          "registry_bind": null,
+          "registry_url": null
+        }
+      ],
+      "mode": "auto",
+      "room_parser_and_probes": "PASS"
+    }
+  ],
+  "default_ports_occupied": true,
+  "hauler_patched": false,
+  "hauler_sha256": "68deab80633307d3834c52d40d5b39d8f06e9636f94896beff03f69217b907b4",
+  "hauler_version": "2.1.1",
+  "jat_source_head": "759f12197738919b9211c1ecad58a74d8802f8a2",
+  "jat_source_representation": "working tree; file digests bind tested source independently of pending JAT commit",
+  "jat_source_sha256": {
+    "__init__.py": "59723ca758b52e518757c86df2f6965e1cea8407de46b10a35187b10e7ba8645",
+    "archive.py": "3e4f635524fc9aa7a4238823021e7549d30e6a876ccab14cefc91214322b5e36",
+    "capture.py": "f403f54451ab048a52f8b349f0108b677518b511c0982f7cefa551c3f3e9938c",
+    "cli.py": "245d30b85fc783cd016bf30dce8171bb34eabebc0b476f36e9084bba05c9fc58",
+    "hauler.py": "bb17d648efcaafe38b8dd783f0b43710b6e47f95e9a5fddc1d96eb7e11d5c44b",
+    "io.py": "5250ae5f2ae9daa6f95f72da18df4e02c1f2f594a39c08123bdb1bf26ea5883f",
+    "models.py": "a10be3e5790a8fe390a25fd0d6b50ea659b65a24709319beb81bb45254b91f91",
+    "process.py": "e0ed11a780dca0182ec6ab7cbeff32804485cd972624960253260a290146f807",
+    "rcc_artifacts.py": "fb990505ec6611b701ffb19358c8f179d32caeea80009b8a4e5b7fe023fb3fd2",
+    "runtime.py": "01f2fe64a34c7a70121693c39e7723c92c211c8333d42accfb734687a8e55c02",
+    "safety.py": "fb38df561feffe526848ec824a15db7f462fceebc2f2d4155aa2ef82ab4e7e8b",
+    "services.py": "adca0d7705ebea9dd48050667d8ffe33fa72b0da4231307c3d04a06d80d4a920",
+    "serving.py": "2ef6dbf201fd88f5f645e51ff254270e2c3a941a5fc3dda8780945c51bdb2fdb",
+    "staging.py": "e2a77a6e866e65cc4760db8b408bb0d17682164c7a82d15295d48480ef45e0fb",
+    "task_runner.py": "200bbd3099a961e43aaf2c152bed9f9cafd12a06a42bb1e5a94dd47325cddb50"
+  },
+  "ok": true,
+  "optional_hauler_host_release_required": false,
+  "owned_process_cleanup": true,
+  "remaining_gates": [
+    "matching published JAT startup-receipt/runtime artifact qualification",
+    "installed VSIX full controller/export acceptance",
+    "Windows native serving and listener-scope acceptance",
+    "full CI at final pushed Room head"
+  ],
+  "room_source_sha256": {
+    "src/josh_room/jat.py": "153e9f5f2d129b6d5db7650e63957cb82bc7fb9d24e26e674203daf5e697af35",
+    "vscode-extension/extension.js": "b5668134771d85931f1b36377ec589ea4fd654ebf52a02d6e03670149d938858",
+    "vscode-extension/registry.js": "7fe4e6921751f1c9fa8a92fe99e586b31318ce4083ec08a0b7d2913f65c6a726"
+  },
+  "room_view_binding_changed": false,
+  "scope": "actual source JAT CLI and current Room parser/probes with unpatched Hauler; synthetic artifact; isolated test network; not full controller/export or released artifact qualification",
+  "shutdown_receipts_removed": true,
+  "verification": [
+    {
+      "command": "node --test vscode-extension/*.test.js scripts/verify_node_version.test.js",
+      "result": "390 passed, 2 skipped",
+      "status": "PASS"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_jat.py tests/test_room_view.py tests/test_repository_boundary.py tests/test_controller_artifact.py tests/test_cli_contract.py -q",
+      "result": "201 passed",
+      "status": "PASS"
+    },
+    {
+      "command": ".venv/bin/ruff check src tests",
+      "status": "PASS"
+    },
+    {
+      "command": "scripts/sync_controller_sources.py",
+      "result": "0 files changed; parity retained",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ]
+}

@@ -168,10 +168,28 @@ Room. `Josh: Enter Room` reopens an already materialized `(Dimension, Room)` on
 the device without downloading it again. A missing Room is restored beneath
 the configured Josh Room workspace root; selecting another historical JAT reuses
 that same folder after an explicit clean/dirty-state confirmation.
-Save can include all tagged local OCI images in the JAT haul. `Josh: Serve Room
-Images` decrypts the chosen snapshot only into private runtime staging and runs
-JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
-removes the temporary haul and registry store.
+Save can include all tagged local OCI images in the JAT haul. Right-click a Room
+and choose `Josh: Serve Room Content…`, or right-click a logical recovery point
+and choose `Josh: Serve this Logical JAT…`. Logical Room Store snapshots offer
+Files, Registry, Files + Registry, or Auto through the existing
+`josh-room snapshot serve` path; no portable export is needed first. Ports are
+selected by JAT and reported through a private startup receipt. The extension
+uses those actual endpoints for status, Copy Fileserver URL / Copy Registry URL,
+and image addresses. A JAT workspace archive is served as an archive, not as its
+nested source files. Legacy portable snapshots retain their older command path
+without the logical-JAT mode picker. Stopping the foreground terminal cleans up
+staging.
+
+Automatic endpoint reporting requires the matching qualified JAT runtime;
+current released JAT pins lacking that contract fail clearly instead of guessing
+fixed ports. **Unpatched Hauler 2.1.1 already supports artifact serving.** Its
+fileserver listens on all interfaces, while its displayed `127.0.0.1` URL is the
+local connection address. Startup and status explicitly show that listener
+scope; the registry remains localhost-only. Hauler's optional future bind-host
+feature is not required. No dependency pin is promoted by this PR. See
+[native serving](docs/room-store-export.md#native-serving-endpoints) for the
+receipt/runtime qualification gate. Room View's separate read-only observability
+transport remains strictly bound to `127.0.0.1` and does not start Hauler.
 
 A separate `JAT Tools` view preserves one-off automation outside the Room/storage
 workflow: pack any folder into a portable capability capsule (with optional
@@ -245,9 +263,12 @@ josh-room jat build --source <path> --output <haul.tar.zst> [--image <ref> ... |
 josh-room jat restore --haul <haul.tar.zst> --destination <path> [--json]
 josh-room jat inspect --haul <haul.tar.zst> [--json]
 josh-room jat extract --haul <haul.tar.zst> --reference <ref> --destination <path> [--json]
-josh-room jat serve --haul <haul.tar.zst> [--mode auto|files|registry|both] [--json]
+josh-room jat serve --haul <haul.tar.zst> [--mode auto|files|registry|both] [--fileserver-port 0] [--registry-port 0] [--startup-file <private.json>] [--json]
 josh-room jat export --haul <haul.tar.zst> --output <images.tar> [--json]
 josh-room jat copy --haul <haul.tar.zst> --to <registry://...|dir://...> [--retries <n>] [--plain-http] [--insecure] [--json]
+josh-room view serve --provider <name|module:attr> [--port 0] [--interval 5] [--require-token] [--json]
+josh-room view export (--provider <name|module:attr> | --from-state <state.json> [--attachments-dir <dir>]) --output <file.html> [--no-attachments] [--max-size 50MB] [--sensitivity-ack] [--json]
+josh-room view inspect <file.html> [--json]
 ```
 
 The native extension also offers **Josh: Check Workspace**. This read-only
@@ -294,5 +315,5 @@ gates are reported separately. The project does not add web UI, webview, daemon,
 generic provider framework, automatic bucket administration, JAT changes, or
 MinIO infrastructure changes.
 
-See [architecture](docs/architecture.md), [ADRs](docs/adr), and
+See [architecture](docs/architecture.md), [Room View](docs/room-view.md), [ADRs](docs/adr), and
 [deferred integrations](docs/DEFERRED-INTEGRATIONS.md).

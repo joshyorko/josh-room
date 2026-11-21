@@ -171,6 +171,17 @@ def _assert_delete_inventory(catalog, project, args):
             raise ValueError("recovery point inventory changed after deletion confirmation; reload and confirm again")
 
 
+def _add_serve_options(parser):
+    parser.add_argument("--fileserver-port", type=int, default=0, help="0 selects an automatic fileserver port")
+    parser.add_argument("--registry-port", type=int, default=0, help="0 selects an automatic registry port")
+    parser.add_argument("--startup-file", type=Path, help="private JAT endpoint startup receipt")
+
+
+def _serve_options(args):
+    return {name: getattr(args, name, default) for name, default in (
+        ("fileserver_port", 0), ("registry_port", 0), ("startup_file", None))}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="josh-room")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -553,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
             snapshot_action.add_argument("--output", type=Path, required=True)
         elif action == "serve":
             snapshot_action.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+            _add_serve_options(snapshot_action)
         elif action == "extract":
             snapshot_action.add_argument("reference")
             snapshot_action.add_argument("--destination", type=Path, required=True)
@@ -585,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--snapshot", default="latest")
     serve.add_argument("--backend", choices=("local", "r2", "minio", "s3"), default="r2")
     serve.add_argument("--dimension")
+    _add_serve_options(serve)
     _json_option(serve)
     room_store = commands.add_parser("room-store")
     room_store_commands = room_store.add_subparsers(dest="room_store_command", required=True)
@@ -625,6 +638,7 @@ def build_parser() -> argparse.ArgumentParser:
     jat_serve = jat_commands.add_parser("serve")
     jat_serve.add_argument("--haul", type=Path, required=True)
     jat_serve.add_argument("--mode", choices=("auto", "files", "registry", "both"), default="auto")
+    _add_serve_options(jat_serve)
     _json_option(jat_serve)
     jat_export = jat_commands.add_parser("export")
     jat_export.add_argument("--haul", type=Path, required=True)
@@ -663,6 +677,43 @@ def build_parser() -> argparse.ArgumentParser:
     device_remove = device_commands.add_parser("remove-local", help="remove local enrollment and native-store secrets")
     device_remove.add_argument("--profile")
     _json_option(device_remove)
+    view = commands.add_parser(
+        "view",
+        help="localhost read-only Room View dashboard and single-file offline HTML export",
+    )
+    view_commands = view.add_subparsers(dest="view_command", required=True)
+    view_serve = view_commands.add_parser("serve", help="serve a localhost-only read-only Room View dashboard")
+    view_serve.add_argument(
+        "--provider",
+        required=True,
+        help="provider name (room, capsule-manifest, synthetic-unix, synthetic, entry point, or module:attr)",
+    )
+    view_serve.add_argument("--port", type=int, default=0, help="localhost port (0 = auto)")
+    view_serve.add_argument("--interval", type=float, default=5.0, help="poll interval in seconds")
+    view_serve.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also sensitivity policy)")
+    view_serve.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
+    view_serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
+    view_serve.add_argument("--max-seconds", type=float, help=argparse.SUPPRESS)
+    _json_option(view_serve)
+    view_export = view_commands.add_parser("export", help="export a single self-contained offline HTML view snapshot")
+    view_source = view_export.add_mutually_exclusive_group(required=True)
+    view_source.add_argument(
+        "--provider",
+        help="provider name (room, capsule-manifest, synthetic-unix, synthetic, entry point, or module:attr)",
+    )
+    view_source.add_argument("--from-state", type=Path, dest="from_state", help="offline/CI state JSON file")
+    view_export.add_argument("--attachments-dir", type=Path, dest="attachments_dir", help="attachments directory for --from-state")
+    view_export.add_argument("--output", type=Path, required=True, help="destination .html file path")
+    view_export.add_argument("--no-attachments", action="store_true", help="omit attachment payloads")
+    view_export.add_argument("--max-size", default="50MB", help="maximum allowed HTML snapshot size (e.g. 50MB)")
+    view_export.add_argument("--sensitivity-ack", action="store_true", help="acknowledge exporting sensitive Room data")
+    view_export.add_argument("--workspace", type=Path, help="Room workspace root (required for --provider room; also sensitivity policy)")
+    view_export.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
+    view_export.add_argument("--room-id", dest="room_id", help="optional sanitized Room identifier")
+    _json_option(view_export)
+    view_inspect = view_commands.add_parser("inspect", help="inspect an offline view snapshot without rendering")
+    view_inspect.add_argument("file", type=Path, help="exported .html view snapshot")
+    _json_option(view_inspect)
     return parser
 
 
@@ -709,7 +760,7 @@ def main(argv=None):
                     return _exit_code(preflight)
                 runtime_loaded = False
                 scoped_minio = _uses_minio_encryption(args)
-                identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook"}
+                identity_free_commands = {"auth", "setup", "status", "workspace", "workspace-check", "encryption", "device", "harvest", "hook", "view"}
                 identity_context = nullcontext() if args.command in identity_free_commands or scoped_minio else _identity_environment()
                 with _provider_error_boundary(args), identity_context:
                     if args.command not in identity_free_commands and not scoped_minio:
@@ -751,6 +802,9 @@ def main(argv=None):
         for line in lines:
             print(line)
         return _exit_code(result)
+    if getattr(args, "command", None) == "view" and getattr(args, "view_command", None) == "serve" and result.get("ok"):
+        _write_runtime_result(_bounded_json_result(result))
+        return 0
     result = _bounded_json_result(result)
     _write_runtime_result(result)
     emit(result, getattr(args, "json", False))
@@ -2270,7 +2324,7 @@ def dispatch(args, instance: Path) -> dict:
                         output=args.output,
                     )
                 if args.snapshot_command == "serve":
-                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode)
+                    return serve_logical_jat(context, jat_root=jat_root, mode=args.mode, **_serve_options(args))
                 return extract_logical_jat(
                     context,
                     args.reference,
@@ -2489,6 +2543,7 @@ def dispatch(args, instance: Path) -> dict:
                 Path(identity),
                 _jat_root(),
                 _backend_for_args(args, instance),
+                **_serve_options(args),
             ),
         }
     if args.command == "room-store":
@@ -2529,7 +2584,7 @@ def dispatch(args, instance: Path) -> dict:
         if args.jat_command == "extract":
             return {"ok": True, **run_extract(jat_root, args.haul, args.reference, args.destination)}
         if args.jat_command == "serve":
-            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode)}
+            return {"ok": True, **run_serve(jat_root, args.haul, mode=args.mode, **_serve_options(args))}
         if args.jat_command == "export":
             return {"ok": True, **run_export(jat_root, args.haul, args.output)}
         if args.jat_command == "copy":
@@ -2544,6 +2599,10 @@ def dispatch(args, instance: Path) -> dict:
                     insecure=args.insecure,
                 ),
             }
+    if args.command == "view":
+        from .view.cli_entry import dispatch_view
+
+        return dispatch_view(args)
     if args.command == "setup":
         credentials = json.load(sys.stdin)
         required = {

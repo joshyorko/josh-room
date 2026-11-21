@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import corroborate_logical_snapshot
-from .jat import run_extract, run_serve
+from .jat import require_serve_startup, run_extract, run_serve
 from .logical_jat import LogicalJat
 from .operations import _encrypt_catalog, snapshot_payload_kind
 from .private_paths import (
@@ -201,7 +201,9 @@ def export_logical_jat(
             cancellation=cancellation,
         )
     except PortableExportError as error:
-        raise RoomStoreLifecycleError(str(error), code="portable-export-failed") from None
+        raise RoomStoreLifecycleError(
+            str(error), code="portable-export-failed", result={"diagnostic": str(error)}
+        ) from None
     return {
         "ok": True,
         "logical_jat_id": result.logical_jat_id,
@@ -236,14 +238,17 @@ def _materialized_portable_haul(context, jat_root, cancellation=None):
             )
             yield output
     except PortableExportError as error:
-        raise RoomStoreLifecycleError(str(error), code="portable-export-failed") from None
+        raise RoomStoreLifecycleError(
+            str(error), code="portable-export-failed", result={"diagnostic": str(error)}
+        ) from None
 
 
-def serve_logical_jat(context, *, jat_root, mode: str = "auto", cancellation=None) -> dict[str, Any]:
+def serve_logical_jat(context, *, jat_root, mode: str = "auto", cancellation=None, fileserver_port=0, registry_port=0, startup_file=None) -> dict[str, Any]:
     if mode not in {"auto", "files", "registry", "both"}:
         raise ValueError("JAT Serve mode is invalid")
+    require_serve_startup(jat_root)
     with _materialized_portable_haul(context, jat_root, cancellation) as haul:
-        result = run_serve(jat_root, haul, mode=mode)
+        result = run_serve(jat_root, haul, mode=mode, fileserver_port=fileserver_port, registry_port=registry_port, startup_file=startup_file)
     return {"ok": True, "logical_jat_id": context.selected_descriptor.to_dict()["logical_jat_id"], **result}
 
 

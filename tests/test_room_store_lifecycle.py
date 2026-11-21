@@ -577,6 +577,33 @@ def test_optimize_defaults_to_dry_run_and_requires_explicit_confirmation():
     assert completed["status"] == "completed"
 
 
+@pytest.mark.parametrize("action", ["export", "serve"])
+def test_portable_failure_preserves_public_diagnostic(monkeypatch, tmp_path, action):
+    monkeypatch.setattr("josh_room.room_store_lifecycle.require_serve_startup", lambda _root: None)
+    from josh_room.room_store_export import PortableExportError
+    from josh_room.room_store_lifecycle import RoomStoreLifecycleError
+
+    context = _context(descriptor=_descriptor())
+    context.private_dir = tmp_path / "private"
+    context.private_dir.mkdir(mode=0o700)
+    diagnostic = "portable export requires more free disk space"
+
+    def fail(**kwargs):
+        raise PortableExportError(diagnostic)
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat", fail)
+    with pytest.raises(RoomStoreLifecycleError) as caught:
+        if action == "export":
+            export_logical_jat(context, jat_root=tmp_path, output=tmp_path / "out.haul")
+        else:
+            serve_logical_jat(context, jat_root=tmp_path, mode="files")
+
+    assert caught.value.result == {
+        "error": "portable-export-failed", "diagnostic": diagnostic,
+    }
+    assert list(context.private_dir.iterdir()) == []
+
+
 def test_export_delegates_only_when_explicitly_called(monkeypatch, tmp_path):
     descriptor = _descriptor()
     context = _context(descriptor=descriptor)
@@ -615,6 +642,7 @@ def test_serve_and_extract_materialize_only_for_the_explicit_actions(monkeypatch
         return SimpleNamespace()
 
     monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat", export)
+    monkeypatch.setattr("josh_room.room_store_lifecycle.require_serve_startup", lambda _root: None)
     monkeypatch.setattr("josh_room.room_store_lifecycle.run_serve", lambda *_args, **kwargs: calls.append(("serve", kwargs)) or {"served": True})
     monkeypatch.setattr("josh_room.room_store_lifecycle.run_extract", lambda *_args: calls.append(("extract", _args)) or {"extracted": True})
 
@@ -871,3 +899,12 @@ def test_catalog_conflict_never_deletes_descriptor_objects_or_restic_snapshots(t
 
     assert raised.value.result["publication_state"] == "rejected"
     assert deleted_objects == []
+
+
+def test_serve_refuses_unsupported_jat_before_portable_materialization(tmp_path, monkeypatch):
+    from josh_room.jat import JATError
+
+    monkeypatch.setattr("josh_room.room_store_lifecycle.export_portable_jat",
+                        lambda **_kwargs: pytest.fail("unsupported Serve must not materialize"))
+    with pytest.raises(JATError, match="update the pinned JAT runtime"):
+        serve_logical_jat(_context(descriptor=_descriptor()), jat_root=tmp_path)

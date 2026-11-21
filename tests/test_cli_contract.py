@@ -902,7 +902,7 @@ def test_one_off_jat_commands_use_typed_service_without_room_backend(tmp_path, m
     assert module.dispatch(export, tmp_path / "instance")["operation"] == "export"
     assert module.dispatch(copy, tmp_path / "instance")["operation"] == "copy"
     assert [call[0] for call in calls] == ["build", "restore", "serve", "inspect", "extract", "export", "copy"]
-    assert calls[2][3] == {"mode": "both"}
+    assert calls[2][3] == {"mode": "both", "fileserver_port": 0, "registry_port": 0, "startup_file": None}
     assert calls[3][2] == tmp_path / "haul"
     assert calls[4][3] == "hauler/app:latest"
     assert calls[6][3] == "registry://registry.example.test"

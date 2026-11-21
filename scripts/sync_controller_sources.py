@@ -12,6 +12,10 @@ def synchronize(root: Path, *, names: list[str] | None = None) -> list[str]:
     files.extend([source / "workspace_capture_defaults.json"])
     files.extend(sorted(path for path in (source / "_vendor").rglob("*")
                         if path.suffix in {".py", ".json"} or path.name == "LICENSE"))
+    view_dir = source / "view"
+    if view_dir.is_dir():
+        files.extend(sorted(view_dir.glob("*.py")))
+        files.extend([view_dir / "vendor-lock.json", view_dir / "assets" / "room-view-template.html"])
     files = [path for path in files if path.is_file()]
     changed = []
     for relative in ("vscode-extension/runtime/controller", "templates/room/vscode-extension/runtime/controller"):

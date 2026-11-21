@@ -154,6 +154,7 @@ def test_remove_snapshot_publishes_promoted_latest_before_object_cleanup(tmp_pat
 
 
 def test_serve_snapshot_materializes_private_haul_for_foreground_jat(tmp_path, monkeypatch):
+    monkeypatch.setattr("josh_room.operations.require_serve_startup", lambda _root: None)
     snapshot = {"snapshot_id": "one", "object_key": "objects/sha256/" + "a" * 64, "ciphertext_sha256": "a" * 64, "ciphertext_size": 1}
     catalog = Catalog.empty().add_snapshot("demo", "Demo", snapshot)
     captured = {}
@@ -170,7 +171,7 @@ def test_serve_snapshot_materializes_private_haul_for_foreground_jat(tmp_path, m
         return {"project_id": "demo"}
 
     monkeypatch.setattr("josh_room.operations.read_envelope_file", read_envelope)
-    monkeypatch.setattr("josh_room.operations.run_serve", lambda _jat, haul: captured.update(path=haul, body=haul.read_bytes()) or {"success": True})
+    monkeypatch.setattr("josh_room.operations.run_serve", lambda _jat, haul, **options: captured.update(path=haul, body=haul.read_bytes()) or {"success": True})
 
     result = serve_snapshot(tmp_path / "instance", "demo", "latest", tmp_path / "identity", tmp_path / "jat", Backend())
 
