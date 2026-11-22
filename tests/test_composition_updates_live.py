@@ -30,6 +30,34 @@ def refresh(r, parent, pins, operation='refresh', approval=None):
                           r.authority, r.factory, r.private, approval=approval)
 
 
+def test_remote_commit_reports_saved_pin_without_claiming_changed_source_is_saved(runtime, monkeypatch):
+    from josh_room import composition_updates
+
+    r = runtime
+    _, target, child = entered(r)
+    (target / 'a/file.txt').write_text('approved child update bytes')
+    plan = update(r, target, child)
+    original = composition_updates._bind_child
+    def change_before_binding(*args):
+        (target / 'a/file.txt').write_text('later unsaved local edits')
+        return original(*args)
+    monkeypatch.setattr(composition_updates, '_bind_child', change_before_binding)
+    result = update(r, target, child, approval=plan['approval_sha256'])
+    assert not result['ok'] and result['snapshot_verified'] and not result['marker_verified']
+    assert result['status'] == 'saved-local-binding-unverified'
+    assert result['snapshot_id'] == plan['snapshot_id']
+    assert context_status(target / 'a')['snapshot_id'] == child['snapshot_id']
+    assert (target / 'a/file.txt').read_text() == 'later unsaved local edits'
+    envelope, _ = r.authority.read()
+    record = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots'][result['snapshot_id']]
+    descriptor = r.authority.descriptor(record)
+    proof = r.private / 'reported-commit-proof'
+    with r.factory(envelope['secret']) as store:
+        store.open_existing()
+        store.restore(descriptor.to_dict()['workspace']['snapshot_id'], proof)
+    assert (proof / 'file.txt').read_text() == 'approved child update bytes'
+
+
 def test_changed_child_save_and_explicit_refresh_keep_old_parent_exact(runtime, monkeypatch):
     from contextlib import contextmanager
 

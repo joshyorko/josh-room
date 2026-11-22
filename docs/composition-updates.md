@@ -24,6 +24,12 @@ A committed child Save updates only the child's local guard and marker. Both
 old/new marker combinations are accepted solely when resuming that same committed
 operation. Content changed after remote commit is not rebound as saved. A parent
 is never refreshed implicitly.
+If local rebinding fails after a verified remote commit, the CLI returns a nonzero
+`saved-local-binding-unverified` receipt containing the saved pin and operation ID.
+The working folder and later local edits remain unverified. Preserve both the
+receipt and local edits; do not clear the guard or start a blind replacement.
+Committed-operation retries re-read the exact descriptor and verify restored
+payload bytes before reporting success or rebinding metadata.
 
 Parent refresh requires a current exact parent baseline and explicit
 `child-path=exact-snapshot` selections. It proves availability of those saved child

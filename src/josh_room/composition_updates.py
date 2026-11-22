@@ -193,6 +193,14 @@ def _bind_child(workspace, dimension, namespace, room, output, plan, authority):
                 pass
 
 
+def _binding_failure(namespace, room, snapshot, operation_id, new_snapshot):
+    return {'ok': False, 'status': 'saved-local-binding-unverified', 'namespace': namespace,
+            'room_id': room, 'snapshot_id': snapshot, 'operation_id': operation_id,
+            'snapshot_verified': True, 'marker_verified': False, 'new_snapshot_committed': new_snapshot,
+            'parent_refreshed': False,
+            'error': f'Child recovery point {snapshot} is saved; local binding is unverified. Preserve edits and reconcile operation {operation_id}.'}
+
+
 def save_child(workspace, dimension, namespace, room, baseline, operation_id,
                authority, store_factory, private, *, approval=None):
     """Plan or apply an independent child Save; never refresh a parent implicitly."""
@@ -231,7 +239,10 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
         if approval != digest:
             raise ValueError('child Save approval is stale')
         if not changed and old is None:
-            _bind_child(workspace, dimension, namespace, room, baseline, plan, authority)
+            try:
+                _bind_child(workspace, dimension, namespace, room, baseline, plan, authority)
+            except (OSError, ValueError):
+                return _binding_failure(namespace, room, baseline, operation_id, False)
             return {'ok': True, 'status': 'unchanged', 'snapshot_id': baseline,
                     'namespace': namespace, 'catalog_writes': False, 'parent_refreshed': False,
                     'marker_verified': context_status(workspace).get('snapshot_id') == baseline}
@@ -261,7 +272,14 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             body['revision'] += 1
             state = CompositionSafetyState.from_dict(body)
             envelope, etag = _commit(authority, envelope, etag, state)
-        _bind_child(workspace, dimension, namespace, room, output, plan, authority)
+        else:
+            _, committed = _descriptor(authority, state, room, output)
+            if committed.to_dict().get('parent_logical_jat_id') != baseline or _content_digest(_proof(store, committed, private)) != plan['content_sha256']:
+                raise ValueError('committed child output differs; preserve history')
+        try:
+            _bind_child(workspace, dimension, namespace, room, output, plan, authority)
+        except (OSError, ValueError):
+            return _binding_failure(namespace, room, output, operation_id, True)
         return {'ok': True, 'status': 'saved', 'namespace': namespace, 'room_id': room,
                 'snapshot_id': output, 'parent_refreshed': False, 'marker_verified': context_status(workspace).get('snapshot_id') == output}
 
@@ -357,5 +375,9 @@ def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,
             state = record_parent(state, operation_id, plan_digest(plan), descriptor=descriptor,
                 object_ref=authority.put_descriptor(descriptor), workspace_signature=saved_scan.signature, display_name='Catalog Room')
             envelope, etag = _commit(authority, envelope, etag, state)
+        else:
+            _, committed = _descriptor(authority, state, room, output)
+            if _content_digest(_proof(store, committed, private)) != _content_digest(view):
+                raise ValueError('committed parent output differs; preserve history')
         return {'ok': True, 'status': 'saved', 'namespace': namespace, 'room_id': room,
                 'snapshot_id': output, 'workspace_modified': False, 'previous_parent_snapshot_id': baseline}
