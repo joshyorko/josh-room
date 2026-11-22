@@ -15,6 +15,7 @@ async function main() {
     pr_head_sha: process.env.JOSH_ROOM_ACCEPTANCE_HEAD_SHA };
   try {
     await prepareWindowsHandoff(root);
+    if (fs.statSync(path.join(root, "material.identity")).size !== 0) throw new Error("Native ACL preflight wrote unexpected content");
     const result = spawnSync(process.env.JOSH_ROOM_ACCEPTANCE_PYTHON, ["-c",
       "import sys; from pathlib import Path; from josh_room.private_paths import verify_private_path; p=Path(sys.argv[1]); verify_private_path(p,directory=True); verify_private_path(p/'material.identity',directory=False)", root],
     { env: { ...process.env, PYTHONPATH: path.resolve(__dirname, "../src") }, encoding: "utf8", timeout: 10000 });

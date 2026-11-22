@@ -21,7 +21,7 @@ foreach ($sid in @($user, $system)) {
   $directory.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
 }
 $stage = 'directory-apply'
-Set-Acl -LiteralPath $root -AclObject $directory
+$item.SetAccessControl($directory)
 $stage = 'file-create'
 $file = Join-Path $root 'material.identity'
 $handle = [IO.File]::Open($file, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -34,7 +34,7 @@ foreach ($sid in @($user, $system)) {
   $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
 }
 $stage = 'file-apply'
-Set-Acl -LiteralPath $file -AclObject $acl
+[IO.FileInfo]::new($file).SetAccessControl($acl)
 } catch {
   $failure = $_.Exception.GetBaseException()
   [Console]::Error.WriteLine(('JR_HANDOFF:{0}:{1}:{2}' -f $stage, $failure.GetType().Name, $failure.HResult))
