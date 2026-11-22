@@ -194,6 +194,24 @@ test("dimensionArgs routes storage operations through the selected Dimension", (
   assert.deepEqual(dimensionArgs(["doctor", "--ide", "terminal"], undefined), ["doctor", "--ide", "terminal"]);
 });
 
+test("routed history status arguments are accepted by the real controller parser", t => {
+  const python = process.env.JOSH_ROOM_TEST_PYTHON || path.join(__dirname, "..", ".venv",
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  if (!fs.existsSync(python)) return t.skip("Python project runtime unavailable; set JOSH_ROOM_TEST_PYTHON");
+  const args = dimensionArgs(["snapshot", "agent-save-status", "demo-room", "--source", ".", "--backend", "minio"], "backup");
+  assert.equal(args.includes("--backend"), false);
+  const result = require("node:child_process").spawnSync(python, ["-c", [
+    "import json,sys",
+    "from josh_room.cli import build_parser",
+    "args=build_parser().parse_args(json.loads(sys.argv[1]))",
+    "print(json.dumps({'command':args.snapshot_command,'dimension':args.dimension,'room':args.project}))",
+  ].join(";"), JSON.stringify(args)], {
+    encoding: "utf8", env: { ...process.env, PYTHONPATH: path.join(__dirname, "..", "src") },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { command: "agent-save-status", dimension: "backup", room: "demo-room" });
+});
+
 test("buildProviderTree reads v2 dimension catalogs and populates JAT children", () => {
   const tree = buildProviderTree({
     dimensions: {

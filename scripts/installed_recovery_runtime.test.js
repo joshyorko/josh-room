@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { applyInstalledRuntime } = require("./installed_recovery_runtime");
 const { candidateRuntime } = require("./installed_recovery_runtime");
+const { runCandidatePhase } = require("./installed_recovery_runtime");
 
 test("Windows runtime override reaches canonical activated instances, not another extension", () => {
   const received = [];
@@ -49,3 +50,35 @@ test("candidate mode never repairs malformed subject, artifact or command using 
 });
 
 function pathAbsolute(name) { return require("node:path").resolve(name); }
+
+test("RCC timeout retains exact phase and safe progress without argv, paths or raw output", () => {
+  const records = [];
+  let clock = 0;
+  assert.throws(() => runCandidatePhase("acquire-archive", "private/rcc.exe", ["private/archive"], {
+    record: event => records.push(event), now: () => clock++ * 180000,
+    invoke: (_command, _args, options) => {
+      assert.equal(options.timeout, 180000);
+      return { status: null, error: { code: "ETIMEDOUT" }, stdout: "private identity content",
+        stderr: "private/account/path Progress: 14/15 extracting archive" };
+    },
+  }), /acquire-archive timed out/);
+  assert.equal(records[0].state, "RUNNING");
+  assert.equal(records[1].state, "FAIL");
+  assert.equal(records[1].timed_out, true);
+  assert.deepEqual(records[1].progress_steps, [[14, 15]]);
+  assert.ok(records[1].progress_categories.includes("extract"));
+  assert.doesNotMatch(JSON.stringify(records), /private|identity content|account/);
+});
+
+test("RCC probe has a separate short deadline and returns actual output only on success", () => {
+  const records = [];
+  const output = runCandidatePhase("interpreter-probe", "rcc.exe", [], {
+    record: event => records.push(event), invoke: (_command, _args, options) => {
+      assert.equal(options.timeout, 60000);
+      return { status: 0, stdout: ' {"origin":"actual"} ', stderr: "" };
+    },
+  });
+  assert.equal(output, '{"origin":"actual"}');
+  assert.equal(records[1].state, "PASS");
+  assert.throws(() => runCandidatePhase("solve", "rcc.exe", [], { record: () => {} }), /Invalid RCC/);
+});

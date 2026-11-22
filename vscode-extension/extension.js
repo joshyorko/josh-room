@@ -2521,7 +2521,7 @@ async function saveRoom(options = {}) {
       const agentBytes = knownBytes ? entries.reduce((sum, entry) => sum + entry.data_uploaded, 0) : undefined;
       action = await vscode.window.showInformationMessage(result.agent_result && !knownBytes
         ? "Workspace already saved; agent HISTORY receipt has no verified upload count."
-        : agentBytes > 0 ? `Workspace already saved; agent HISTORY uploaded ${agentBytes} bytes.` : "Already saved — 0 bytes uploaded", "Show Details");
+        : agentBytes > 0 ? `Workspace already saved; agent HISTORY uploaded ${agentBytes} bytes.` : "Already saved — no new backup data", "Show Details");
     } else if (result.status === "saved-but-dirty" || saveEventGeneration !== workspaceEventGeneration) {
       action = await vscode.window.showWarningMessage(`Saved “${name}”, but workspace changes remain.`, "Show Details");
     } else {

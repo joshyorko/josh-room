@@ -561,7 +561,7 @@ def test_native_noop_save_has_explicit_human_receipt(capsys):
 
     emit({"ok": True, "status": "already-saved", "data_added_bytes": 0}, False)
 
-    assert capsys.readouterr().out.strip() == "Already saved — 0 bytes uploaded"
+    assert capsys.readouterr().out.strip() == "Already saved — no new backup data"
 
 
 def test_preview_prints_the_deletion_confirmation_token(capsys):

@@ -222,6 +222,38 @@ agent Save availability remains false pending final integrated qualification.
 
 ## Windows installed checkpoint integration
 
+The frozen cb860f7 Linux trial found a real chooser-routing defect. Direct
+installed/current-RCC history status admitted both existing profiles, but the
+registered New command's Dimension router removed the legacy `--backend` hint
+and the new parser required it. The chooser therefore showed unavailable rows
+before any target Room point was created. The retained package is not modified
+or counted as a successful chooser trial. The correction makes the backend
+hint optional, keeps the required explicit Dimension authoritative, and refuses
+any status fallback that could reach snapshot creation. A cross-language test
+feeds actual routed native arguments into the real controller parser; dispatch
+coverage confirms metadata-only behavior. Corrected package acceptance is a
+separate next trial.
+
+The same frozen trial also refused a new Room whose folder/content matched the
+bootstrap Room: Restic auto-selected that physical snapshot and skipped creating
+the new Room's first snapshot. No target descriptor committed. When no logical
+parent is selected, backup now uses the pinned Restic forced-scan path, which
+disables automatic parent selection; explicit Linux parents retain incremental
+behavior. The real-tool regression covers two root captures of the same folder,
+then explicit-parent no-op and exact restore. A bridge regression covers distinct
+logical Room identities sharing the folder/content. Windows forced-scan behavior
+is unchanged.
+
+Direct installed CLI/current-RCC checks on cb860f7 passed two-tool Save, exact
+no-op, A-B-A history, changed-workspace capture and both cold historical restores.
+They do not qualify the failed registered chooser. The wire trace observed three
+temporary Restic lock PUT/DELETE pairs during repeat and no non-lock payload,
+history or catalog writes. The literal zero-wire-write assertion remains a
+recorded failure; earlier zero-Botocore observations were not wire measurements.
+Locks remain enabled. Human no-op wording now says no new backup data rather
+than implying zero network traffic. Fault/retry, remaining native UI and legacy
+cases from this frozen pass remain skipped/unverified.
+
 #220 at `5e05954ead917d7a4b8af18300e2fa6801a848ae` is now included. Its
 [installed Windows job](https://github.com/joshyorko/josh-room/actions/runs/45068423905/job/137349700818)
 passed alongside the native private-runtime and recovery jobs. Two environment

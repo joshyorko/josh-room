@@ -1843,7 +1843,7 @@ test("native Save trusts the controller's exact already-saved receipt after prev
   assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
 
   assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "create").length, 1);
-  assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
+  assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — no new backup data"));
 });
 
 test("native Save confirms suspicious deletions with the exact preview token", async () => {

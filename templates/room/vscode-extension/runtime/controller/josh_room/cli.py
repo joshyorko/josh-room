@@ -611,7 +611,8 @@ def build_parser() -> argparse.ArgumentParser:
     agent_capabilities.add_argument("project")
     agent_capabilities.add_argument("--source", type=Path, required=True)
     agent_capabilities.add_argument("--dimension", required=True)
-    agent_capabilities.add_argument("--backend", choices=("minio", "s3", "r2"), required=True)
+    # Dimension routing removes the legacy backend hint, as for native Save.
+    agent_capabilities.add_argument("--backend", choices=("minio", "s3", "r2"), default="r2")
     _json_option(agent_capabilities)
     installed_capabilities = snapshot_commands.add_parser("homebrew-capabilities")
     _json_option(installed_capabilities)
@@ -2698,6 +2699,8 @@ def dispatch(args, instance: Path) -> dict:
                 **capture_options,
                 **({"jat_root": _jat_root()} if capture_options else {}),
             )
+        if args.snapshot_command == "agent-save-status":
+            raise ValueError("agent Save status requires a native Room Store Dimension")
         if any(
             getattr(args, name, None) is not None
             for name in ("agent_selection", "agent_plan")
@@ -3763,7 +3766,7 @@ def emit(result: dict, json_mode: bool) -> None:
         agent_result = result.get("agent_result")
         entries = agent_result.get("entries") if isinstance(agent_result, dict) else None
         if agent_result is None:
-            print("Already saved — 0 bytes uploaded")
+            print("Already saved — no new backup data")
         elif isinstance(entries, list) and entries and all(
             isinstance(entry, dict)
             and type(entry.get("data_uploaded")) is int
@@ -3775,7 +3778,7 @@ def emit(result: dict, json_mode: bool) -> None:
             if uploaded:
                 print(f"Workspace already saved — {uploaded} bytes uploaded for agent history")
             else:
-                print("Already saved — 0 bytes uploaded")
+                print("Already saved — no new backup data")
         else:
             print("Workspace already saved — agent history upload size unknown")
     elif result.get("ok") and "deleted_paths" in result:

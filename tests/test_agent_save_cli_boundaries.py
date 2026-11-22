@@ -62,9 +62,9 @@ def test_human_noop_does_not_call_unknown_history_upload_zero(capsys):
 
 
 @pytest.mark.parametrize("agent_result", [None, {"entries": [{"data_uploaded": 0}]}])
-def test_human_true_zero_byte_noop_keeps_existing_message(capsys, agent_result):
+def test_human_noop_reports_backup_data_not_wire_bytes(capsys, agent_result):
     result = {"ok": True, "status": "already-saved"}
     if agent_result is not None:
         result["agent_result"] = agent_result
     cli.emit(result, False)
-    assert capsys.readouterr().out == "Already saved — 0 bytes uploaded\n"
+    assert capsys.readouterr().out == "Already saved — no new backup data\n"

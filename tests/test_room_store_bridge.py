@@ -697,6 +697,24 @@ def test_loopback_http_minio_locator_is_accepted_by_restic_store(tmp_path):
 
 
 @pytest.mark.integration
+def test_new_room_same_folder_content_has_own_initial_snapshot(tmp_path, monkeypatch):
+    dimension, material, _backend, _identity, _recovery = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("synthetic identical contents\n")
+    instance = tmp_path / "instance"
+    bootstrap = bridge.save_room_store(instance, dimension, "synthetic-bootstrap", workspace, material, components=[])
+    created = bridge.save_room_store(instance, dimension, "synthetic-new", workspace, material, components=[])
+    assert bootstrap["status"] == created["status"] == "saved"
+    assert created["project_id"] == "synthetic-new"
+    assert created["workspace_snapshot_id"] != bootstrap["workspace_snapshot_id"]
+    assert created["workspace_parent_snapshot_id"] is None
+    unchanged = bridge.save_room_store(instance, dimension, "synthetic-new", workspace, material, components=[])
+    assert unchanged["status"] == "already-saved"
+    assert unchanged["snapshot_id"] == created["snapshot_id"]
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("native_cache", [True, False])
 def test_fake_s3_real_restic_and_age_save_noop_incremental_hydrate(
     tmp_path, monkeypatch, native_cache

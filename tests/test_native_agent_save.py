@@ -65,6 +65,29 @@ def components():
     }
 
 
+def test_dimension_routed_history_status_is_metadata_only(tmp_path, monkeypatch):
+    from josh_room import cli
+
+    args = build_parser().parse_args([
+        "snapshot", "agent-save-status", "Demo Room", "--source", str(tmp_path),
+        "--dimension", "backup",
+    ])
+    dimension = SimpleNamespace(provider="minio", dimension_id="backup")
+    material = object()
+    args._selected_encryption_material = material
+    monkeypatch.setattr(cli, "_effective_dimension", lambda _: dimension)
+    calls = []
+    result = {"ok": True, "agent_save": {"available": False}}
+    monkeypatch.setattr(save, "status", lambda *a: calls.append(a) or result)
+    monkeypatch.setattr(cli, "create_snapshot", lambda *a, **k: pytest.fail("metadata created a snapshot"))
+    assert cli.dispatch(args, tmp_path) == result
+    assert calls == [(tmp_path, dimension, material, "demo-room", tmp_path)]
+    monkeypatch.setattr(cli, "_effective_dimension", lambda _: None)
+    with pytest.raises(ValueError, match="native Room Store Dimension"):
+        cli.dispatch(args, tmp_path)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize(
     ("platform", "provider"),
     [("win32", "minio"), ("darwin", "minio"), ("linux", "s3"), ("linux", "r2")],

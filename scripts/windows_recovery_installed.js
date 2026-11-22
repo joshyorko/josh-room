@@ -11,6 +11,7 @@ const repository = path.resolve(__dirname, "..");
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const digest = data => crypto.createHash("sha256").update(data).digest("hex");
 const pins = require("./windows_recovery_dependencies.json");
+const { runCandidatePhase } = require("./installed_recovery_runtime");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 180000, ...options });
@@ -186,13 +187,18 @@ async function main() {
         JOSH_ROOM_RCC_EXE: rcc.executable, JOSH_ROOM_RCC_HOME: rccHome,
         JOSH_ROOM_CONTROLLER_ROOT: env.PYTHONPATH, JOSH_ROOM_CONTROLLER_ARTIFACT: candidateInput.artifact,
         JOSH_ROOM_JAT_ROOT: path.join(base, "empty-jat-log-root") });
-      const acquired = runtime.parseJsonOutput(run(rcc.executable,
-        ["env", "acquire", "--archive", candidateInput.archive, "--permissive-local", "--json"], { env }));
+      const record = event => {
+        receipt.rcc_phases ||= {};
+        receipt.rcc_phases[event.phase] = event;
+        fs.writeFileSync(path.join(evidence, "installed-windows-recovery.json"), JSON.stringify(receipt, null, 2));
+      };
+      const acquired = runtime.parseJsonOutput(runCandidatePhase("acquire-archive", rcc.executable,
+        ["env", "acquire", "--archive", candidateInput.archive, "--permissive-local", "--json"], { env, record }));
       if ((acquired.artifactDigest || acquired.artifact_digest) !== candidateInput.artifact
         || acquired.verification?.valid !== true) throw new Error("RCC candidate acquisition failed verification");
       const prefix = ["--no-build", "env", "exec", "--artifact", candidateInput.artifact, "--permissive-local", "--inherit-streams", "--"];
-      const probe = JSON.parse(run(rcc.executable, [...prefix, "python", "-c",
-        "import json,sys,josh_room; print(json.dumps({'prefix':sys.prefix,'executable':sys.executable,'controller':josh_room.__file__}))"], { env }));
+      const probe = JSON.parse(runCandidatePhase("interpreter-probe", rcc.executable, [...prefix, "python", "-c",
+        "import json,sys,josh_room; print(json.dumps({'prefix':sys.prefix,'executable':sys.executable,'controller':josh_room.__file__}))"], { env, record }));
       if (!path.resolve(probe.executable).toLowerCase().startsWith(path.resolve(rccHome).toLowerCase() + path.sep)
         || !path.resolve(probe.controller).toLowerCase().startsWith(path.resolve(env.PYTHONPATH).toLowerCase() + path.sep)) {
         throw new Error("Candidate interpreter or controller origin mismatch");

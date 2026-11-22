@@ -188,6 +188,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Verify patched Node 22 runtime
+        shell: pwsh
+        run: |
+          node scripts/verify_node_version.js --minimum "$env:NODE_VERSION" --source-sha "$env:GITHUB_SHA" --report "$env:RUNNER_TEMP/windows-immutable-node-runtime.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Patched Node runtime verification failed.' }
       - name: Retrieve existing exact-subject inputs without solve or product rebuild
         shell: pwsh
         run: |

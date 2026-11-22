@@ -967,7 +967,8 @@ class ResticStore:
             raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
         if cancellation is not None and cancellation.cancelled:
             raise ResticStoreError(ResticStoreErrorCode.CANCELLED)
-        force_scan = sys.platform.startswith("win")
+        # Restic otherwise auto-selects a matching snapshot from another Room.
+        force_scan = parent is None or sys.platform.startswith("win")
         args = ["backup", "--json", "--skip-if-unchanged", "--no-scan"]
         args.extend(self._tag_args(tags))
         if force_scan:

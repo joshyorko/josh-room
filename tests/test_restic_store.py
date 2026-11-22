@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -710,8 +711,42 @@ def test_composition_backup_attaches_an_exact_tag_for_crash_reconciliation(tmp_p
         store.backup(workspace, tags=('composition:jat-synthetic-slot',))
     assert factory.calls[-1].args[1:] == [
         'backup', '--json', '--skip-if-unchanged', '--no-scan',
-        '--tag', 'composition:jat-synthetic-slot', '--', '.',
+        '--tag', 'composition:jat-synthetic-slot', '--force', '--', '.',
     ]
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(os.name == "nt", reason="Windows already forces every content scan")
+def test_real_first_snapshot_ignores_other_room_automatic_parent(tmp_path):
+    executable = os.environ.get("JOSH_ROOM_TEST_RESTIC") or shutil.which("restic")
+    if not executable:
+        pytest.skip("requires pinned Restic 0.19.1")
+    version = subprocess.run([executable, "version"], check=True, capture_output=True).stdout.split()
+    if len(version) < 2 or version[1] != b"0.19.1":
+        pytest.skip("requires repository-pinned Restic 0.19.1")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    content = b"synthetic unchanged workspace\n"
+    (workspace / "file.txt").write_bytes(content)
+    password = tmp_path / "password"
+    descriptor = os.open(password, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write(os.urandom(32).hex())
+    store = api().ResticStore(repository=tmp_path / "repository", cache_dir=tmp_path / "cache",
+                              password_file=password, executable=executable)
+    with store:
+        store.initialize()
+        first = store.backup(workspace)
+        second = store.backup(workspace)
+        assert first.snapshot_id and second.snapshot_id and first.snapshot_id != second.snapshot_id
+        assert first.force_scan and second.force_scan
+        assert store.snapshot(second.snapshot_id).parent_snapshot_id is None
+        unchanged = store.backup(workspace, parent=second.snapshot_id)
+        assert unchanged.snapshot_id is None and not unchanged.force_scan
+        assert unchanged.effective_parent_id == second.snapshot_id
+        destination = tmp_path / "restored"
+        store.restore(second.snapshot_id, destination)
+        assert (destination / "file.txt").read_bytes() == content
 
 
 @pytest.mark.parametrize('tags', [('untrusted,tag',), ('../path',), ('line\nbreak',), ('-option',), ('valid',) * 5])
