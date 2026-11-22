@@ -7611,10 +7611,12 @@ test("Serve passes a private startup path and offers the active mapping or catal
       display_label: "base:v1", digest, pull_reference: "127.0.0.1:45218/" + name + "@" + digest };
     let closed;
     let terminal;
+    let startupPath;
     vscode.window.onDidCloseTerminal = (fn) => { closed = fn; return { dispose() {} }; };
     vscode.window.createTerminal = ({ env }) => {
       terminal = { show() {}, dispose() {}, sendText() {
-        fs.writeFileSync(env.JOSH_ROOM_SERVE_STARTUP_FILE, JSON.stringify({
+        assert.equal(fs.statSync(path.dirname(startupPath)).mode & 0o077, 0);
+        fs.writeFileSync(startupPath, JSON.stringify({
           schema_version: 1, operation: "serve", state: "ready", pid: process.pid, session_id: "owned",
           serve: { mode: "registry", registry_bind: "loopback", registry_url: registry,
             fileserver_url: null, fileserver_bind: null,
@@ -7624,9 +7626,15 @@ test("Serve passes a private startup path and offers the active mapping or catal
       return terminal;
     };
     const extension = loadExtension(vscode, undefined, {
+      waitForServeStartup: require("./registry").waitForServeStartup,
       probeRegistry: async (url) => { assert.equal(url, registry); return { repositories: [name] }; },
     });
-    extension.__test__.setRuntimeForTests({ command: "rcc", args: args => args, env: {}, jatRoot: root });
+    extension.__test__.setRuntimeForTests({ command: "rcc", args: args => {
+      startupPath = args[args.indexOf("--startup-file") + 1];
+      assert.equal(args[args.indexOf("--fileserver-port") + 1], "0");
+      assert.equal(args[args.indexOf("--registry-port") + 1], "0");
+      return args;
+    }, env: {}, jatRoot: root });
     extension.__test__.setStatusItem(statusItem);
     vscode.openDialogResponses.push([{ fsPath: path.join(root, "test.haul") }]);
     vscode.quickPickResponses.push({ mode: "registry" }, mapped ? { image } : { name }, { label: "Copy Pull Command" });

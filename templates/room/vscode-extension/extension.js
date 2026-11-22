@@ -3380,8 +3380,6 @@ async function showMappedImages(serve, isActive) {
 async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry, encryptionMaterial }) {
   const runtime = await runtimeFor(cwd, args);
   const jatRoot = runtime.jatRoot || runtime.env?.JOSH_ROOM_JAT_ROOT;
-  const producerCli = path.join(jatRoot, "src", "jat", "cli.py");
-  const supportsStartup = fs.existsSync(producerCli) && fs.readFileSync(producerCli, "utf8").includes("--startup-file");
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
   let encryptionCleanup = () => {};
@@ -3393,13 +3391,6 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
   }
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
   fs.chmodSync(progressDirectory, 0o700);
-  const startupPath = supportsStartup
-    ? path.join(progressDirectory, "serve-startup.json") : undefined;
-  const resultPath = path.join(progressDirectory, "controller-result.json");
-  if (startupPath) {
-    environment.JOSH_ROOM_SERVE_STARTUP_FILE = startupPath;
-    environment.JOSH_ROOM_RESULT_FILE = resultPath;
-  }
   const progressPath = path.join(progressDirectory, "events.jsonl");
   const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
   fs.writeFileSync(progressPath, "", { mode: 0o600 });
@@ -3526,7 +3517,6 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         `JAT is serving files at ${fileserverUrl}, listening on ${fileserverScope}. Close the ${terminalName} terminal to stop.`,
         "Copy Fileserver URL",
         "Show Logs",
-        ...(serve ? ["Copy Fileserver URL"] : []),
       );
       if (filesAction === "Copy Fileserver URL") {
         await vscode.env.clipboard.writeText(fileserverUrl);
