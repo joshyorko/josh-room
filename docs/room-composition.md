@@ -391,7 +391,7 @@ or invalid counts and wrong ancestry stop reconciliation; unknown added bytes ar
 never reported as zero. Payload comparisons frame each entry with its path, type,
 mode and byte length, so an empty file and empty directory are distinct. Existing
 immutable descriptors remain readable and are verified from restored payloads.
-New child descriptors authenticate `source.composition_policy=inherited-rules-v1`
+New child descriptors authenticate `source.composition_policy=inherited-rules-v2`
 only after the rebased private-view proof. Generated leading `#` rules are escaped
 as `\#` and decoded identically by Python and the native dirty-state reader.
 Previously saved policies and snapshots are never rewritten. Historical descriptors
@@ -400,3 +400,8 @@ baselines refuse even a fresh operation ID. User-editable policy comments cannot
 supply provenance. Safe legacy-policy reconciliation is not implemented; retain
 the old recovery points and use an explicitly approved new capture rather than
 blindly upgrading a descriptor or retrying with another operation ID.
+
+Experimental v1 provenance remains readable but cannot authorize child updates.
+The v2 writer requires the live/private/restored effective policy digest to match
+the exact authenticated baseline through publication, including for fresh/no-op
+operations. Policy changes require reconciliation, which remains unsupported.

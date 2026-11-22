@@ -304,7 +304,7 @@ def _commit(authority, envelope, etag, state):
 
 
 CONTENT_DIGEST_ALGORITHM = "sha256-framed-v2"
-INHERITED_POLICY = "inherited-rules-v1"
+INHERITED_POLICY = "inherited-rules-v2"
 
 
 def _content_digest(root):

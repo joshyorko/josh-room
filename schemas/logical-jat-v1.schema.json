@@ -165,7 +165,7 @@
       "properties": {
         "git_commit": { "type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$" },
         "dirty": { "type": "boolean" },
-        "composition_policy": { "const": "inherited-rules-v1" }
+        "composition_policy": { "enum": ["inherited-rules-v1", "inherited-rules-v2"] }
       }
     },
     "producer": {
