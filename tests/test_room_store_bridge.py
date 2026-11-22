@@ -1940,3 +1940,47 @@ def test_component_preview_token_refuses_new_latest_before_capture(tmp_path, mon
     bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request)
     with pytest.raises(bridge.RoomStoreBridgeError, match='stale'):
         bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request, component_plan_token=preview['component_plan_token'])
+
+
+def test_changed_selected_homebrew_bytes_bypass_noop_and_omit_keeps_history(tmp_path, monkeypatch):
+    from josh_room.component_selection import COMPONENTS
+    from josh_room.room_store_homebrew import prepare_recipe_archive
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    (workspace / 'notes.txt').write_text('unchanged synthetic workspace')
+    recipe = tmp_path / 'recipe'
+    recipe.mkdir()
+    (recipe / 'Brewfile').write_text('brew "hello"\n')
+    archive = prepare_recipe_archive(recipe, tmp_path / 'synthetic.tar.zst')
+
+    class FixtureValidator:
+        def validate_brew_archive(self, path):
+            # This test qualifies Restic and selection semantics, not managed JAT.
+            assert path.name == 'homebrew-recovery.tar.zst'
+            assert path.stat().st_size > 0
+
+    monkeypatch.setattr(bridge, 'create_managed_hauler_adapter', lambda *_args, **_kwargs: FixtureValidator())
+    request = {'format_version': 1, 'components': {**dict.fromkeys(COMPONENTS, 'keep'), 'homebrew_recovery': 'refresh'}}
+
+    def save(selected, **options):
+        return bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=selected, **options)
+
+    first = save(request, homebrew_archive=archive, jat_root=tmp_path / 'fixture-jat')
+    assert first['status'] == 'saved'
+    assert save(request, homebrew_archive=archive, jat_root=tmp_path / 'fixture-jat')['status'] == 'already-saved'
+    (recipe / 'Brewfile').write_text('brew "jq"\n')
+    archive.unlink()
+    prepare_recipe_archive(recipe, archive)
+    changed = save(request, homebrew_archive=archive, jat_root=tmp_path / 'fixture-jat')
+    assert changed['status'] == 'saved'
+    assert changed['workspace_signature'] == first['workspace_signature']
+    assert changed['component_receipt']['homebrew_recovery']['reference']['archive_sha256'] != first['component_receipt']['homebrew_recovery']['reference']['archive_sha256']
+    keep = {'format_version': 1, 'components': dict.fromkeys(COMPONENTS, 'keep')}
+    assert save(keep)['status'] == 'already-saved'
+    historical_objects = set(backend.objects)
+    omit = {'format_version': 1, 'components': {**keep['components'], 'homebrew_recovery': 'omit'}}
+    omitted = save(omit)
+    assert omitted['status'] == 'saved'
+    assert omitted['component_receipt']['homebrew_recovery']['status'] == 'excluded'
+    assert historical_objects <= set(backend.objects)

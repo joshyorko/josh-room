@@ -14,6 +14,10 @@
     }
   },
   "cancellationPassed": true,
+  "deselectAllOptionalPassed": true,
   "fullSave": "NOT RUN: no qualified synthetic provider/managed runtime in isolated profile",
-  "nativeBinaryRestore": "NOT RUN"
+  "nativeBinaryRestore": "NOT RUN",
+  "vsix_sha256": "6f7e38e8b2d1fbac5ae4799ddb382c27cf0cd358c9c7bc365daabdedc3212a0b",
+  "implementation_commit": "3748ec2439b7a76c590d1ea91bf58576a3647067",
+  "packaged_source_byte_parity": true
 }

@@ -16,7 +16,7 @@ This receipt records Linux x64 evidence, not release qualification or issue clos
 | Scoped Ruff and `git diff --check` | PASS | Changed Python and whitespace |
 | `npx --yes @vscode/vsce@4.0.0 package --no-dependencies` | PASS | Local test VSIX only; no publication |
 | `code --user-data-dir <disposable-profile> --extensions-dir <disposable-extensions> --install-extension <test.vsix> --force` | PASS | Installed isolated profile; user profile untouched |
-| Installed VS Code 1.147.0 activation + actual native QuickPick | PASS | Registered New/Save/SaveFolderAs; rendered mandatory workspace and unavailable rows; accepted default keep plan; cancellation |
+| Installed VS Code 1.147.0 activation + actual native QuickPick | PASS | Registered New/Save/SaveFolderAs; rendered mandatory workspace and unavailable rows; accepted default keep plan; deselected all optional rows with mandatory workspace intact; cancellation |
 
 The installed native test uses Xvfb, a disposable synthetic workspace and the
 real VS Code API. `installed-picker-driver.cjs` is the test runner; set
@@ -77,3 +77,29 @@ full cold-host binary restore, #188 Dimension-authorized capture and native new
 turns. These are open gates, not passing tests. Strong immutable input staging
 against adversarial change-and-revert is not established by repeated token checks.
 No release, merge, tag, release staging/publication or hosted model call occurred.
+
+## Broader follow-up checks
+
+Full extension suite: `node --test vscode-extension/*.test.js`, PASS 379,
+SKIP 2. Repository-wide `ruff check src tests` PASS after fixing two unused
+new test variables identified by CI at a3f65f1.
+
+Full Python suite with `JOSH_ROOM_TEST_RESTIC` set: FAIL 4, PASS 2327, SKIP 10,
+47 subtests passed. Four real native tests use `shutil.which("restic")` instead
+of that override and picked host 0.20.0. Affected rerun with pinned 0.19.1 first in PATH: PASS 4. The full suite was
+not repeated afterward; the original full result remains FAIL.
+
+Additional fail-closed CLI token/no-selection regression and recipe/native CLI suite: PASS 40.
+
+Registered installed Save trial initially FAIL: public component_plan_token was
+redacted by CLI JSON serialization, so create correctly refused the stale token.
+The fix preserves only an exact 64-character lowercase hexadecimal digest under
+that program-owned field; authentication and arbitrary token fields remain
+redacted. Regression crosses the emit/JSON boundary. Affected serializer/CLI/
+safety run: 106 PASS, 1 FAIL from a test using a read-only default host state
+path. That single test rerun with task-local XDG_STATE_HOME/instance: PASS.
+
+Actual pinned local Restic regression with synthetic Homebrew archive bytes:
+PASS unchanged-workspace + changed-selected-archive creates a new logical point;
+unchanged archive and explicit keep return already-saved; explicit omit retains
+historical encrypted objects. JAT validation is a fixture here, not managed JAT.

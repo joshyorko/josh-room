@@ -93,3 +93,21 @@ def test_recipe_directory_fails_closed_without_platform_containment(tmp_path, mo
     monkeypatch.setattr(os, "supports_dir_fd", set())
     with pytest.raises(RoomStoreHomebrewError, match="not qualified"):
         recipe_bytes(source)
+
+
+def test_cli_token_cannot_bypass_selection_via_local_noop():
+    from josh_room.cli import _native_capture_options, build_parser
+    args = build_parser().parse_args(['snapshot', 'create', 'synthetic-room', '--component-plan-token', 'a' * 64])
+    with pytest.raises(ValueError, match='explicit component selection'):
+        _native_capture_options(args)
+
+
+def test_cli_json_preserves_only_public_plan_digest_and_redacts_credentials(capsys):
+    from josh_room.cli import emit
+    emit({'ok': True, 'component_plan_token': 'a' * 64, 'session_token': 'synthetic-sensitive', 'other_token': 'b' * 64}, True)
+    result = json.loads(capsys.readouterr().out)
+    assert result['component_plan_token'] == 'a' * 64
+    assert result['session_token'] == '<redacted>'
+    assert result['other_token'] == '<redacted>'
+    emit({'ok': True, 'component_plan_token': 'not-a-public-digest'}, True)
+    assert json.loads(capsys.readouterr().out)['component_plan_token'] == '<redacted>'
