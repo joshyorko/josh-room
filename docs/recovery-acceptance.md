@@ -158,10 +158,13 @@ Controller-generated operational identity files now receive the existing native
 private-file ACL before any identity bytes are written on Windows. Encryption
 readiness verifies that native ACL instead of applying POSIX permission bits to
 Windows `stat` emulation. Unverifiable, inherited or broad ACLs fail closed;
-POSIX admission is unchanged. The ordinary Windows recovery tests include a
-real native ACL readiness/inheritance-denial check, independently of the
-installed UI/provider job. Existing explicit material handoffs keep their
-current admission; this does not relax legacy handoff checks.
+POSIX admission is unchanged. Explicit existing operational handoffs use the
+same native Windows verifier, retaining size, identity-content and recipient
+binding checks without falling back after failed admission. The ordinary
+Windows recovery tests include real native ACL readiness, inheritance denial,
+foreign-ACE denial and file-reparse denial checks, independently of the
+installed UI/provider job. File-symlink privilege absence is an explicit skip,
+not reparse proof. POSIX mode-denial regressions run on Linux.
 
 A small development driver selects the installed controller source using the
 existing `local-build-fallback` test hook after activation, matching the loaded
