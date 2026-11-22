@@ -160,7 +160,11 @@ readiness verifies that native ACL instead of applying POSIX permission bits to
 Windows `stat` emulation. Unverifiable, inherited or broad ACLs fail closed;
 POSIX admission is unchanged. Explicit existing operational handoffs use the
 same native Windows verifier, retaining size, identity-content and recipient
-binding checks without falling back after failed admission. The ordinary
+binding checks without falling back after failed admission. An
+explicit `JOSH_ROOM_ENCRYPTION_MATERIAL` input must already exist: a missing or
+deleted input is refused rather than regenerated from vault/keyset material,
+and cannot initialize a backend. Requested new-output callers keep their
+existing generation behavior. The ordinary
 Windows recovery tests include real native ACL readiness, inheritance denial,
 foreign-ACE denial and file-reparse denial checks, independently of the
 installed UI/provider job. File-symlink privilege absence is an explicit skip,
@@ -195,6 +199,17 @@ entry point with a guard which independently verifies the existing file and
 parent ACLs and records only action/exit-status metadata. It refuses missing
 handoffs. This preserves provider, keyset, ciphertext and recipient binding in
 the real CLI, and makes fresh-vault fallback insufficient for UI acceptance.
+
+The fixture also bypasses that adapter and invokes the installed CLI directly
+for missing and deleted handoff inputs, for both inspect and extract. Each must
+fail at handoff admission without recreating the identity or creating a recovery
+destination. Runtime/workspace inventories, remote object ETags/sizes and owned
+native vault values must remain unchanged; only result metadata is retained.
+The deleted-input fixture removes a native-protected file before the subprocess
+starts. A separate regression deletes the file after the keyset read and before
+admission. Neither case relies on the adapter's pre-CLI missing-file rejection.
+Native qualification of this added guard is reported separately from the prior
+passing present-handoff receipt below.
 
 The acceptance covers the pinned tree, current comparison in an
 actual native readonly diff tab, exact tab/Unicode text preservation, rejected

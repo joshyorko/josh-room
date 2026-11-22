@@ -3,9 +3,13 @@
 from types import SimpleNamespace
 
 import pytest
-from test_minio_encryption_flow import FakeBackend, dimension, identity, make_keyset
+from test_minio_encryption_flow import FakeBackend, dimension, make_keyset
 
 from josh_room import auth, cli, crypto
+
+
+def private_identity(path):
+    return auth._write_encryption_identity(path, make_keyset().operational_identity)
 
 
 @pytest.fixture
@@ -27,7 +31,7 @@ def test_explicit_cli_input_is_not_regenerated(tmp_path, monkeypatch, existing_k
     _keyset, backend, calls = existing_keyset
     handoff = tmp_path / "handoff"
     if kind == "removed-after-keyset-read":
-        identity(handoff)
+        private_identity(handoff)
         original = backend.read_control
 
         def remove_before_admission(*args):
@@ -49,7 +53,7 @@ def test_explicit_cli_input_is_not_regenerated(tmp_path, monkeypatch, existing_k
 
 def test_present_cli_input_remains_caller_owned(tmp_path, monkeypatch, existing_keyset):
     _keyset, _backend, calls = existing_keyset
-    handoff = identity(tmp_path / "handoff")
+    handoff = private_identity(tmp_path / "handoff")
     original = handoff.read_bytes()
     monkeypatch.setenv("JOSH_ROOM_ENCRYPTION_MATERIAL", str(handoff))
     with cli._selected_encryption_environment(SimpleNamespace(), tmp_path / "instance") as material:
@@ -72,7 +76,7 @@ def test_existing_input_cannot_initialize_an_empty_backend(tmp_path, existing_ke
     backend = FakeBackend()
     with pytest.raises(auth.EncryptionStateError, match="uninitialized"):
         auth.resolve_encryption_material(
-            dimension(), backend, identity_path=identity(tmp_path / "handoff"),
+            dimension(), backend, identity_path=private_identity(tmp_path / "handoff"),
             require_existing_identity=True, recovery_recipients=keyset.recovery_recipients,
         )
     assert calls == []

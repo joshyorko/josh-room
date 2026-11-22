@@ -167,6 +167,9 @@ async function main() {
       return fs.existsSync(path.join(base, "provider-ready.json"));
     }, "production Dimension/keyset/snapshots", 240000);
     receipt.storage_and_native_custody_state = "PASS";
+    const inputDenials = JSON.parse(await fsp.readFile(path.join(base, "explicit-input-denials.json")));
+    if (inputDenials.state !== "PASS" || inputDenials.records.length !== 4) throw new Error("Direct installed CLI input denials incomplete");
+    receipt.direct_installed_cli_missing_deleted_handoff_denials = "PASS";
     const driver = path.join(base, "driver");
     await fsp.mkdir(driver);
     await fsp.copyFile(path.join(__dirname, "windows_recovery_ui_driver.js"), path.join(driver, "extension.js"));
@@ -307,7 +310,7 @@ async function main() {
     if (provider) {
       await fsp.writeFile(path.join(base, "stop-provider"), "stop");
       await until(() => provider.exitCode !== null, "owned native credential cleanup", 30000);
-      for (const name of ["provider-ready.json", "provider-failed.json", "provider-cli-failed.json",
+      for (const name of ["provider-ready.json", "provider-failed.json", "provider-cli-failed.json", "explicit-input-denials.json",
         "provider-progress.json", "ui-driver-ready.json", "ui-command-started.json", "ui-command-finished.json",
         "ui-command-failed.json", "ui-process-state.json", "ui-controller-summary.json", "ui-editor-focus.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
         if (fs.existsSync(path.join(base, name))) {

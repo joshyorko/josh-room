@@ -43,6 +43,55 @@ def public_cli_failure(body, *, forbidden=()):
     return result
 
 
+def verify_explicit_input_denials(base, cli, arguments, existing_handoff, targets):
+    """Invoke the installed CLI directly, without the GUI qualification guard."""
+    from josh_room import auth
+    from josh_room.cli import _backend_for_args, build_parser
+
+    workspace = base / "provider-workspace"
+    runtime = base / "provider-runtime"
+    args = build_parser().parse_args(["recovery", "inspect", *arguments, "--json"])
+    backend = _backend_for_args(args, workspace)
+
+    def objects():
+        inventory = {}
+        for page in backend.client.get_paginator("list_objects_v2").paginate(Bucket=backend.config.bucket):
+            for item in page.get("Contents", []):
+                inventory[item["Key"]] = (item["ETag"], item["Size"])
+                if len(inventory) > 1024:
+                    raise RuntimeError("synthetic fixture object inventory exceeded bound")
+        return inventory
+
+    records = []
+    for kind in ("missing", "deleted"):
+        for operation in ("inspect", "extract"):
+            handoff = runtime / f"explicit-{kind}-{operation}.identity"
+            if handoff.exists():
+                raise RuntimeError("negative fixture handoff unexpectedly exists")
+            if kind == "deleted":
+                auth._write_encryption_identity(handoff, existing_handoff.read_text())
+                handoff.unlink()
+            destination = base / f"refused-{kind}-{operation}"
+            before = (fingerprint(runtime), fingerprint(workspace), objects(),
+                      tuple(keyring.secure_lookup(name, field) for name, field in targets))
+            os.environ["JOSH_ROOM_ENCRYPTION_MATERIAL"] = str(handoff)
+            try:
+                extra = ["--destination", str(destination)] if operation == "extract" else []
+                result = cli("recovery", operation, *arguments, *extra, expected=1)
+            finally:
+                os.environ.pop("JOSH_ROOM_ENCRYPTION_MATERIAL", None)
+            if result.get("ok") is not False or result.get("error") != "encryption identity handoff is unsafe":
+                raise RuntimeError("direct CLI did not refuse explicit missing handoff at admission")
+            after = (fingerprint(runtime), fingerprint(workspace), objects(),
+                     tuple(keyring.secure_lookup(name, field) for name, field in targets))
+            if handoff.exists() or destination.exists() or before != after:
+                raise RuntimeError("explicit missing handoff refusal modified owned state")
+            records.append({"input": kind, "operation": operation, "state": "PASS",
+                            "direct_installed_cli": True, "wrapper_used": False,
+                            "identity_regenerated": False, "runtime_workspace_remote_vault_unchanged": True})
+    (base / "explicit-input-denials.json").write_text(json.dumps({"state": "PASS", "records": records}))
+
+
 def sanitize_ui_stdin():
     """Redact owned native-vault values before UI diagnostics can reach a file."""
     base = Path(os.environ["JOSH_ROOM_ACCEPTANCE_ROOT"]).resolve(strict=True)
@@ -175,6 +224,7 @@ def main():
         expected = 'def greeting():\n\treturn "first 你好"\n'.encode()
         if old.get("sha256") != hashlib.sha256(expected).hexdigest():
             raise RuntimeError("installed CLI historical digest mismatch")
+        verify_explicit_input_denials(base, cli, arguments, existing_handoff, targets)
         existing = base / "existing.txt"
         existing.write_bytes(b"preserved destination")
         cli("recovery", "extract", *arguments, "--destination", str(existing), expected=1)
