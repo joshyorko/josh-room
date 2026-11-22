@@ -116,7 +116,8 @@ def capabilities():
         "storage": "explicit-local-encrypted-reference",
         "automatic_room_restore": False,
         "room_reference": {
-            "contract_version": 1, "format": "josh-room.agent-references.v1", "mode": "history-only",
+            "contract_version": 2, "format": "josh-room.agent-references.v2", "mode": "history-only",
+            "capture_history": True, "selection": "explicit-capture-id",
             "storage": "dimension-encrypted-sidecar", "opt_in": "host-grant-v3",
             "providers": ["codex", "claude"], "selectable": False, "save_integration": False,
             "native_resume_verified": False,

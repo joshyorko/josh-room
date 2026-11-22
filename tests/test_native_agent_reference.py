@@ -236,6 +236,12 @@ def documents(room, context=None):
     return reference._load(context or room.context)[0]
 
 
+def capture_id(room, tool="codex"):
+    entries = [entry for entry in documents(room)["entries"] if entry["tool"] == tool]
+    assert len(entries) == 1
+    return entries[0]["capture_id"]
+
+
 def test_absent_references_preserve_opt_out_without_remote_writes(room):
     assert reference.inspect_reference(room.context) is None
     assert reference.export_reference(room.context, room.root / "snapshot.haul") is None
@@ -310,16 +316,16 @@ def test_capture_is_encrypted_and_verify_restores_original_identity_without_over
     for body in [*room.store.controls.values(), *room.store.objects.values()]:
         assert body.startswith(b"age-encryption.org/v1")
         assert b"synthetic retained" not in body and str(room.workspace).encode() not in body
-    verified = reference.verify_reference(room.context, grant=room.grant, tool="codex")
+    verified = reference.verify_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room))
     assert verified["sessions"] == [{"provider_session_id": SESSION, "tool": "codex", "cwd_matches": True}]
     room.native_file.unlink()
-    restored = reference.restore_reference(room.context, grant=room.grant, tool="codex", session_id=SESSION)
+    restored = reference.restore_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), session_id=SESSION)
     assert restored["state"] == "history-materialized" and restored["native_resume_verified"] is False
     assert room.native_file.read_bytes() == room.payload
-    assert reference.restore_reference(room.context, grant=room.grant, tool="codex", session_id=SESSION)["recovered_commit"] is True
+    assert reference.restore_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), session_id=SESSION)["recovered_commit"] is True
     room.native_file.write_bytes(room.payload + b"\n")
     with pytest.raises(native.NativeAgentError, match="target-mismatch"):
-        reference.restore_reference(room.context, grant=room.grant, tool="codex", session_id=SESSION)
+        reference.restore_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), session_id=SESSION)
 
 
 @pytest.mark.parametrize("change", ["point", "path", "contents"])
@@ -358,7 +364,7 @@ def test_verified_reference_refuses_missing_or_corrupt_native_ciphertext(room, c
     else:
         room.store.objects[key] += b"tampered"
     with pytest.raises(native.NativeAgentError, match="unavailable|invalid"):
-        reference.verify_reference(room.context, grant=room.grant, tool="codex")
+        reference.verify_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room))
 
 
 @pytest.mark.parametrize("field,value", [
@@ -384,9 +390,9 @@ def test_encrypted_companion_is_standalone_verified_and_collision_safe(room):
     assert b"synthetic retained" not in companion.read_bytes()
     room.store.objects.clear()
     room.native_file.unlink()
-    verified = reference.verify_reference(room.context, grant=room.grant, tool="codex", export_path=companion)
+    verified = reference.verify_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), export_path=companion)
     assert verified["sessions"][0]["provider_session_id"] == SESSION
-    reference.restore_reference(room.context, grant=room.grant, tool="codex", session_id=SESSION, export_path=companion)
+    reference.restore_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), session_id=SESSION, export_path=companion)
     assert room.native_file.read_bytes() == room.payload
     with pytest.raises(native.NativeAgentError, match="export-collision"):
         reference.export_reference(room.context, room.root / "snapshot.haul")
@@ -401,7 +407,7 @@ def test_companion_rejects_inner_ciphertext_tampering(room):
     bundle["objects"][first] = base64.b64encode(b"corrupted encrypted archive").decode()
     companion.write_bytes(reference._encrypt(reference._canonical_json(bundle), room.recipients))
     with pytest.raises(native.NativeAgentError, match="export-invalid"):
-        reference.verify_reference(room.context, grant=room.grant, tool="codex", export_path=companion)
+        reference.verify_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), export_path=companion)
 
 
 def test_copy_has_independent_ciphertext_origin_and_survives_source_removal(room):
@@ -431,7 +437,7 @@ def test_copy_has_independent_ciphertext_origin_and_survives_source_removal(room
     assert cleanup["removed_objects"] == [source_entry["object"]["key"]]
     assert copied_entry["object"]["key"] in room.store.objects
     mark(room, copied)
-    restored = reference.restore_reference(copied, grant=copied_grant, tool="codex", session_id=SESSION)
+    restored = reference.restore_reference(copied, grant=copied_grant, tool="codex", capture_id=capture_id(room), session_id=SESSION)
     assert restored["state"] == "history-materialized"
     assert (Path(copied_grant["profile_root"]) / "codex" / room.relative).read_bytes() == room.payload
     report = reference.reconcile_references(copied, {("copy", "copy-point"): copied_descriptor},
@@ -446,7 +452,7 @@ def test_closed_reference_retains_readability_but_refuses_new_capture(room):
         {("demo", "history-first"): room.context.selected_descriptor})
     assert receipts and str(room.workspace) not in json.dumps(receipts)
     assert reference.inspect_reference(room.context)["captures_closed"] is True
-    assert reference.verify_reference(room.context, grant=room.grant, tool="codex")["sessions"][0]["provider_session_id"] == SESSION
+    assert reference.verify_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room))["sessions"][0]["provider_session_id"] == SESSION
     before = list(room.store.writes)
     with pytest.raises(native.NativeAgentError, match="capture-closed-or-collision"):
         capture(room)
@@ -482,10 +488,10 @@ def test_claude_and_codex_have_separate_durable_native_formats(room):
     reference.capture_reference(room.context, grant=room.grant, tool="claude")
     document = documents(room)
     assert {entry["archive_format"] for entry in document["entries"]} == {native.FORMAT, native.CLAUDE_FORMAT}
-    assert reference.verify_reference(room.context, grant=room.grant, tool="claude")["sessions"] == [
+    assert reference.verify_reference(room.context, grant=room.grant, tool="claude", capture_id=capture_id(room, "claude"))["sessions"] == [
         {"provider_session_id": SESSION, "tool": "claude", "cwd_matches": True}]
     cold_grant = room.configure(room.context, "claude-cold-profile")
-    restored = reference.restore_reference(room.context, grant=cold_grant, tool="claude", session_id=SESSION)
+    restored = reference.restore_reference(room.context, grant=cold_grant, tool="claude", capture_id=capture_id(room, "claude"), session_id=SESSION)
     cold_file = Path(cold_grant["profile_root"]) / source.relative_to(Path(room.grant["profile_root"]))
     assert restored["native_resume_verified"] is False and cold_file.read_bytes() == payload
     assert source.read_bytes() == payload
@@ -500,7 +506,7 @@ def test_companion_refuses_another_historical_point_without_materializing(room):
         selected_record=other_catalog.resolve_snapshot("demo", "history-other"), selected_descriptor=other_descriptor)
     before = room.native_file.read_bytes()
     with pytest.raises(native.NativeAgentError, match="historical-binding-mismatch"):
-        reference.restore_reference(other, grant=room.grant, tool="codex", session_id=SESSION, export_path=Path(output["output"]))
+        reference.restore_reference(other, grant=room.grant, tool="codex", capture_id=capture_id(room), session_id=SESSION, export_path=Path(output["output"]))
     assert room.native_file.read_bytes() == before
 
 
@@ -734,7 +740,7 @@ def test_cross_dimension_copy_uses_new_keys_and_keeps_original_native_identity(r
     assert entry["object"]["key"] not in room.store.objects
     assert entry["object"]["key"] in store.objects
     mark(room, destination)
-    result = reference.restore_reference(destination, grant=grant, tool="codex", session_id=SESSION)
+    result = reference.restore_reference(destination, grant=grant, tool="codex", capture_id=capture_id(room), session_id=SESSION)
     assert result["native_resume_verified"] is False
     assert (Path(grant["profile_root"]) / "codex" / room.relative).read_bytes() == room.payload
 
@@ -854,7 +860,7 @@ def test_restore_cleanup_failure_preserves_materialized_history_and_uncertainty(
     monkeypatch.setattr(reference, "_cipher_file", failed_cleanup)
     room.native_file.unlink()
     with pytest.raises(native.NativeAgentError, match="materialization-uncertain") as caught:
-        reference.restore_reference(room.context, grant=room.grant, tool="codex", session_id=SESSION)
+        reference.restore_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), session_id=SESSION)
     assert caught.value.committed is True
     assert room.native_file.read_bytes() == room.payload
 
@@ -893,7 +899,7 @@ def test_sidecar_encryption_revocation_is_checked_before_actual_control_cas(room
     assert room.store.controls == controls
 
 
-def test_history_restore_accepts_clean_hydrated_stat_baseline_but_capture_does_not(room):
+def test_history_restore_and_noop_capture_accept_clean_hydrated_content_baseline(room):
     import os
 
     capture(room)
@@ -908,8 +914,11 @@ def test_history_restore_accepts_clean_hydrated_stat_baseline_but_capture_does_n
         project_id="demo", snapshot_id="history-first", encryption_domain_id=room.context.material.encryption_domain_id,
         display_name="Synthetic Room", workspace_signature=hydrated.signature,
         signature_algorithm=hydrated.signature_algorithm, capture_policy_sha256=hydrated.capture_policy_sha256)
-    restored = reference.restore_reference(room.context, grant=room.grant, tool="codex", session_id=SESSION)
+    restored = reference.restore_reference(room.context, grant=room.grant, tool="codex", capture_id=capture_id(room), session_id=SESSION)
     assert restored["state"] == "history-materialized" and restored["native_resume_verified"] is False
     assert room.native_file.read_bytes() == room.payload and historical.read_bytes() == before
-    with pytest.raises(native.NativeAgentError, match="workspace-binding-mismatch"):
-        capture(room)
+    writes = room.store.writes.copy()
+    result = capture(room)
+    assert result["noop"] is True and result["created"] is False
+    assert result["capture_id"] == capture_id(room)
+    assert room.store.writes == writes

@@ -1,8 +1,8 @@
 # Native capture-history contract v2
 
-Design checkpoint for the dependent follow-up to #210. The initial tested slice
-adds Claude archive-policy v2 recapture; this immutable Room-history extension is
-specified here before implementation. It is **not** Save integration. Selectors
+Implemented contract for the dependent follow-up to #210. Claude archive-policy
+v2 permits the qualified completed tool-free turn; this extension retains its
+successive immutable Room captures. It is **not** Save integration. Selectors
 remain false, and unknown contract versions remain unavailable.
 
 ## Stable address and versioned document
@@ -67,6 +67,8 @@ all unrelated live catalog objects. Existing pending/orphan receipts, publicatio
 uncertainty and the catalog-CAS fence remain required. A no-op never clears older
 uncertain receipts.
 
-The separately reviewed Save capability will advertise version 2 only after this
-contract is implemented/qualified, with `selectable: false` and
-`save_integration: false`. No #190 wiring follows from this specification.
+The optional capability advertises version 2 with `capture_history: true` and
+`selection: explicit-capture-id`, retaining `selectable: false` and
+`save_integration: false`. Capture receipts distinguish `created: true`/`noop: false`
+from `created: false`/`noop: true`, return the retained `capture_id`, and count
+`data_uploaded` in bytes (zero for no-op). No #190 wiring follows from this contract.

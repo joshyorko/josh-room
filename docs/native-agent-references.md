@@ -19,7 +19,8 @@ grant domain, physical bucket, generation and recipients.
 The native recovery-point row offers **Agent Recovery Status…**, **Capture Agent
 Recovery…**, and **Restore Agent History…**. These registered commands retain
 the exact Dimension/Room/logical ID, never `latest`. Private roots stay inside
-the controller; the UI passes only opaque selectors and native UUIDs.
+the controller; the UI passes only opaque selectors, immutable capture IDs and
+native UUIDs. Restore explicitly chooses a historical capture before its session.
 
 ```sh
 josh-room agents recovery-status --dimension demo --room demo-room --snapshot EXACT_ID --json
@@ -27,9 +28,10 @@ josh-room agents room-status --dimension demo --room demo-room --workspace /work
 josh-room agents recovery-capture --dimension demo --room demo-room --snapshot EXACT_ID \
   --workspace /workspaces/demo --profile-ref OPAQUE_PROFILE_REF --tool codex --json
 josh-room agents recovery-verify --dimension demo --room demo-room --snapshot EXACT_ID \
-  --workspace /workspaces/demo --profile-ref OPAQUE_PROFILE_REF --tool codex --json
+  --workspace /workspaces/demo --profile-ref OPAQUE_PROFILE_REF --tool codex --capture-id CAPTURE_ID --json
 josh-room agents recovery-restore --dimension demo --room demo-room --snapshot EXACT_ID \
-  --workspace /workspaces/demo --profile-ref OPAQUE_PROFILE_REF --tool codex --session-id NATIVE_UUID --json
+  --workspace /workspaces/demo --profile-ref OPAQUE_PROFILE_REF --tool codex \
+  --capture-id CAPTURE_ID --session-id NATIVE_UUID --json
 ```
 
 Selectors come from `room-status`, not authority. Every operation re-resolves
@@ -41,7 +43,7 @@ supported; R2 and Windows remain unqualified.
 
 Catalog v3 and logical JAT v1 retain their closed schemas. No agent state enters
 RCC, Homebrew, Hauler or PCC slots. The separately encrypted
-`josh-room.agent-references.v1` control object is stored at
+`josh-room.agent-references.v2` control object is stored at the unchanged
 `control/agent-references/v1/<binding-sha256>.age`; native archives use immutable
 content-addressed ciphertext objects.
 
@@ -49,13 +51,24 @@ Binding includes the physical bucket, domain/generation, Room/logical ID,
 descriptor ciphertext digest/size, Restic repository/snapshot/tree, capture
 policy and source workspace signature. The key excludes generation so rotation
 fails explicitly instead of making old references appear absent. Entries retain
-profile/tool, native format, ciphertext integrity and original provenance. One
-profile/tool capture per point is immutable; successive captures against an
-unchanged workspace point are not implemented. Sidecars use bounded, conditional
-revision updates with read-back verification.
+profile/tool, native format, ciphertext integrity and original provenance. Each
+capture has an immutable opaque ID and a raw-native-content digest. Repeated
+capture at one unchanged workspace point appends history; identical latest
+profile/tool content returns its existing ID without upload, sidecar/catalog
+write or new pending receipt. A → B → A retains three events. The 64-entry/control
+size limit fails before upload; it never prunes older captures. V2 verify/restore
+require `--capture-id`, never an implicit latest selection. Status may filter by
+the complete `--workspace`/`--profile-ref`/`--tool` selector. Sidecars use bounded
+conditional revision updates. Existing v1 single-capture reads remain supported.
 
-Capture requires the exact path-bound v3 marker and a fresh Save scan matching
-the original catalog signature/policy. Restore authenticates that exact history,
+The first capture requires the exact path-bound marker and a fresh Save scan
+matching the original catalog signature/policy. It establishes an authenticated
+content/mode/policy digest with descriptor-bound no-follow reads. Later capture
+requires a clean current marker and the same digest, so normal same-cwd cold
+hydration can retain new agent turns without a phantom workspace snapshot.
+Content and authority are checked again before publication. V1 promotion needs
+the original stat baseline; a hydrated marker alone cannot supply its missing
+historical content proof. Restore authenticates that exact history,
 current host grant/keyset/Git identity and original native cwd, then requires a
 clean local marker baseline. Cold hydration can establish a different stat
 baseline. Restore compares against that hydrated baseline; it does not prove
@@ -74,7 +87,8 @@ Normal logical Copy preflights separate source/destination grants and independen
 re-encrypts references even within one Dimension. New Room/JAT bindings preserve
 original native provenance/cwd; profile and scope remain unchanged. Admission
 must bind the actual opened bucket/generation, not just an equal Dimension name.
-No source identity or credential is copied.
+All historical capture IDs, raw-content digests, native bytes, timestamps and
+provenance survive copy. No source identity or credential is copied.
 Unsupported authority fails explicitly rather than silently dropping references.
 
 Normal portable export writes the original capsule plus a separately versioned
@@ -83,7 +97,8 @@ No agent state enters Hauler. Verify/restore accept `--export COMPANION` against
 the exact selected authorized history; offline import/rebinding after that point
 is removed is not implemented. The two files are not one atomic transaction;
 partial output is disclosed. Existing companions are never overwritten. The
-companion limit is 32 MiB.
+companion limit is 32 MiB; aggregate encoded size is preflighted before collecting
+blobs or publishing the ordinary capsule. Every retained capture is included.
 
 Removal CAS-closes existing captures before catalog removal. If catalog deletion
 fails, references stay readable but capture-closed. After fresh reachability
@@ -108,17 +123,19 @@ when ciphertext was uploaded; unknown publication/reachability stays unknown.
 
 ## Capability and qualification
 
-The optional offline `capabilities.room_reference` contract is version 1,
+The optional offline `capabilities.room_reference` contract is version 2,
 `mode: history-only`, `storage: dimension-encrypted-sidecar`, and
-`opt_in: host-grant-v3`, for Codex/Claude. It retains `selectable: false`,
+`opt_in: host-grant-v3`, with `capture_history: true` and
+`selection: explicit-capture-id`, for Codex/Claude. It retains `selectable: false`,
 `save_integration: false`, and `native_resume_verified: false`. Unknown versions
 or modes remain unavailable. Issue #190 owns later Save integration.
 
 See [real admission](native-agent-live-admission.md),
 [lifecycle acceptance](native-agent-reference-acceptance.md) and the
 [verification ledger](native-agent-verification.md) for exact source/runtime
-overrides and evidence. Native continuation, original T3 recovery, broader formats,
-repeated unchanged-point capture, offline import/rebinding, Windows and immutable
+overrides and evidence. See the [immutable-history contract](native-capture-history-contract.md)
+for versioning and selection. Hosted native continuation, original T3 recovery,
+broader formats, offline import/rebinding, Windows and immutable
 controller qualification remain separate gates. No release or model/paid call is
 authorized by this contract.
 

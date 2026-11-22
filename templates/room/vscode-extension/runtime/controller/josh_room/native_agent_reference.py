@@ -8,6 +8,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import secrets
 import subprocess
 import uuid
 from datetime import UTC, datetime
@@ -22,7 +23,8 @@ from .cancellation import CLICancelled, terminate_owned_process
 from .crypto import _managed_executable
 from .r2 import R2PublicationError
 
-FORMAT = "josh-room.agent-references.v1"
+FORMAT_V1 = "josh-room.agent-references.v1"
+FORMAT = "josh-room.agent-references.v2"
 EXPORT_FORMAT = "josh-room.agent-reference-export.v1"
 MAX_CONTROL = 64 * 1024
 MAX_EXPORT = native.MAX_BYTES * 2
@@ -32,6 +34,11 @@ _TARGET_FIELDS = {
     "workspace_snapshot_id", "workspace_tree_id", "capture_policy_sha256", "workspace_signature",
 }
 _ENTRY_FIELDS = {"profile", "tool", "scope", "created_at", "archive_format", "object", "archive_binding", "origin"}
+_HISTORY_FIELDS = {"capture_id", "content_sha256"}
+
+
+def _is_digest(value):
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
 
 
 class NativeReferenceError(native.NativeAgentError):
@@ -117,17 +124,24 @@ def _validate(document, target):
 
 
 def _validate_document(document, target):
-    if (not isinstance(document, dict) or set(document) != {"format", "binding", "revision", "captures_closed", "entries"}
-            or document["format"] != FORMAT or type(document["revision"]) is not int or document["revision"] < 1
+    if not isinstance(document, dict) or document.get("format") not in {FORMAT_V1, FORMAT}:
+        _fail("native-reference-format-invalid")
+    history = document["format"] == FORMAT
+    fields = {"format", "binding", "revision", "captures_closed", "entries"}
+    if history:
+        fields.add("workspace_content_sha256")
+    if (set(document) != fields or type(document["revision"]) is not int or document["revision"] < 1
             or type(document["captures_closed"]) is not bool or not isinstance(document["entries"], list)
             or not 1 <= len(document["entries"]) <= 64):
+        _fail("native-reference-format-invalid")
+    if history and not _is_digest(document["workspace_content_sha256"]):
         _fail("native-reference-format-invalid")
     _validate_target(document["binding"])
     if document["binding"] != target:
         _fail("native-reference-historical-binding-mismatch")
     identities = set()
     for entry in document["entries"]:
-        if not isinstance(entry, dict) or set(entry) != _ENTRY_FIELDS:
+        if not isinstance(entry, dict) or set(entry) != _ENTRY_FIELDS | (_HISTORY_FIELDS if history else set()):
             _fail("native-reference-format-invalid")
         if (not isinstance(entry["profile"], str) or not authority._LABEL.fullmatch(entry["profile"])
                 or entry["tool"] not in {"codex", "claude"} or entry["scope"] not in {"personal", "oss", "homelab"}
@@ -136,7 +150,9 @@ def _validate_document(document, target):
         stamp = datetime.fromisoformat(entry["created_at"])
         if stamp.utcoffset() is None:
             _fail("native-reference-format-invalid")
-        identity = (entry["profile"], entry["tool"])
+        if history and (not _is_digest(entry["capture_id"]) or not _is_digest(entry["content_sha256"])):
+            _fail("native-reference-format-invalid")
+        identity = entry["capture_id"] if history else (entry["profile"], entry["tool"])
         if identity in identities:
             _fail("native-reference-identity-ambiguous")
         identities.add(identity)
@@ -266,6 +282,18 @@ def _workspace(context, workspace, *, captured_baseline=True):
         _fail("native-reference-workspace-changed")
 
 
+def _workspace_content(context, workspace, document):
+    from .native_workspace_content import fingerprint
+
+    history = document is not None and document["format"] == FORMAT
+    _workspace(context, workspace, captured_baseline=not history)
+    digest = fingerprint(Path(workspace), expected_policy_sha256=_target(context)["capture_policy_sha256"])
+    if history and digest != document["workspace_content_sha256"]:
+        _fail("native-reference-workspace-content-mismatch")
+    _workspace(context, workspace, captured_baseline=not history)
+    return digest
+
+
 def _grant(context, profile, tool, workspace, operation, *, destination=None):
     matches = [grant for _, grant, tools in discovery._matching_grants(context.dimension.dimension_id, context.project_id, Path(workspace))
                if grant["profile"] == profile and tool in tools]
@@ -308,8 +336,26 @@ def _sessions(decoded, tool):
     return sessions
 
 
-def _entry(context, document, profile, tool):
+def _capture_id(entry):
+    if "capture_id" in entry:
+        return entry["capture_id"]
+    metadata = {name: entry[name] for name in ("origin", "archive_binding", "profile", "tool", "scope", "created_at")}
+    return hashlib.sha256(_canonical_json(["josh-room.native-capture-id.legacy.v1", metadata])).hexdigest()
+
+
+def _content_digest(decoded, tool):
+    manifest = [(path, len(data), hashlib.sha256(data).hexdigest()) for path, data in sorted(decoded.items())]
+    return hashlib.sha256(_canonical_json(["josh-room.native-capture-content.v1", tool, manifest])).hexdigest()
+
+
+def _entry(context, document, profile, tool, capture_id=None):
+    if capture_id is not None and not _is_digest(capture_id):
+        _fail("native-reference-capture-id-invalid")
+    if document["format"] == FORMAT and capture_id is None:
+        _fail("native-reference-capture-id-required")
     entries = [entry for entry in document["entries"] if (entry["profile"], entry["tool"]) == (profile, tool)]
+    if capture_id is not None:
+        entries = [entry for entry in entries if _capture_id(entry) == capture_id]
     if len(entries) != 1:
         _fail("native-reference-unavailable")
     entry = entries[0]
@@ -394,20 +440,27 @@ def _decode_entry(context, entry, data=None):
         plain = native._json(native._decrypt_to_memory(source, [context.material.identity]))
     if plain["format"] != entry["archive_format"]:
         _fail("native-reference-archive-format-mismatch")
+    if "content_sha256" in entry and _content_digest(decoded, entry["tool"]) != entry["content_sha256"]:
+        _fail("native-reference-content-mismatch")
     if recipients != _recipients(context):
         _fail("native-reference-recipient-mismatch")
     _sessions(decoded, entry["tool"])
     return decoded, plain
 
 
-def inspect_reference(context):
+def inspect_reference(context, *, profile=None, tool=None):
     document, _ = _load(context)
     if document is None:
         return None
-    return {"state": "history-reference", "history_only": True, "native_resume_verified": False,
+    entries = [entry for entry in document["entries"]
+               if (profile is None or entry["profile"] == profile) and (tool is None or entry["tool"] == tool)]
+    return {"state": "history-reference", "contract_version": 2, "format": document["format"],
+            "history_only": True, "native_resume_verified": False,
             "original_t3_identity_restored": False, "captures_closed": document["captures_closed"],
             "entries": [{"profile": entry["profile"], "tool": entry["tool"], "scope": entry["scope"],
-                         "capture_closed": document["captures_closed"]} for entry in document["entries"]]}
+                         "capture_closed": document["captures_closed"], "capture_id": _capture_id(entry),
+                         "created_at": entry["created_at"], "content_sha256": entry.get("content_sha256"),
+                         "legacy": document["format"] == FORMAT_V1} for entry in entries]}
 
 
 def capture_reference(context, *, grant, tool):
@@ -415,14 +468,25 @@ def capture_reference(context, *, grant, tool):
     actual, binding, admitted = _grant(context, grant["profile"], tool, workspace, "room-capture")
     if actual != grant:
         _fail("native-profile-selector-stale-or-unavailable")
-    _workspace(context, workspace)
     current = _fresh(context)
     if _target(current) != _target(context):
         _fail("native-reference-historical-binding-mismatch")
     context = current
     document, etag = _load(context)
-    if document is not None and (document["captures_closed"] or any((entry["profile"], entry["tool"]) == (binding["profile"], tool) for entry in document["entries"])):
+    if document is not None and document["captures_closed"]:
         _fail("native-reference-capture-closed-or-collision")
+    workspace_digest = _workspace_content(context, workspace, document)
+    retained_guards = []
+
+    def commit_guard():
+        if _grant(context, binding["profile"], tool, workspace, "room-capture") != (grant, binding, admitted):
+            _fail("native-admission-changed")
+        if _workspace_content(context, workspace, document) != workspace_digest:
+            _fail("native-reference-workspace-content-mismatch")
+        for check in retained_guards:
+            check()
+        _same_history(context)
+
     root = Path(grant["profile_root"])
     output = Path(grant["local_reference_root"]) / ("room-capture-" + uuid.uuid4().hex + ".age")
     published = False
@@ -436,40 +500,65 @@ def capture_reference(context, *, grant, tool):
             _fail("native-reference-object-invalid")
         _sessions(decoded, tool)
         cipher = native._read(output, native.MAX_BYTES * 2)
-        if _grant(context, binding["profile"], tool, workspace, "room-capture") != (grant, binding, admitted):
-            _fail("native-admission-changed")
-        _workspace(context, workspace)
-        _same_history(context)
+        content_digest = _content_digest(decoded, tool)
+        commit_guard()
+        entries = [] if document is None else document["entries"]
+        matching = [entry for entry in entries if (entry["profile"], entry["tool"]) == (binding["profile"], tool)]
+        if matching:
+            latest = matching[-1]
+            verify_guard = _authority_guard(context, latest, "room-verify")
+            verify_guard()
+            retained, _ = _decode_entry(context, latest)
+            verify_guard()
+            if _content_digest(retained, tool) == content_digest:
+                commit_guard()
+                if _load(context) != (document, etag):
+                    _fail("native-reference-conflict")
+                return {"ok": True, **inspect_reference(context), "capture_id": _capture_id(latest),
+                        "created": False, "noop": True, "data_uploaded": 0}
+        # Legacy promotion requires original-stat workspace authority above and
+        # verification under every retained entry's current grant, not just the
+        # profile submitting this new capture.
+        if document is not None and document["format"] == FORMAT_V1:
+            migrated = []
+            for previous in entries:
+                guard = _authority_guard(context, previous, "room-verify")
+                retained_guards.append(guard)
+                guard()
+                retained, _ = _decode_entry(context, previous)
+                guard()
+                migrated.append({**previous, "capture_id": _capture_id(previous),
+                                 "content_sha256": _content_digest(retained, previous["tool"])})
+            entries = migrated
         digest = hashlib.sha256(cipher).hexdigest()
-        pending = _pending(context, [{"key": "objects/sha256/" + digest, "sha256": digest, "size": len(cipher)}], "capture")
-        uploaded = True
-        reference = _put_blob(context, cipher)
+        reference = {"key": "objects/sha256/" + digest, "sha256": digest, "size": len(cipher)}
         entry = {"profile": binding["profile"], "tool": tool, "scope": grant["scope"],
                  "created_at": datetime.now(UTC).isoformat(), "archive_format": native._native_format(tool),
-                 "object": reference,
+                 "object": reference, "capture_id": secrets.token_hex(32), "content_sha256": content_digest,
                  "archive_binding": binding, "origin": _target(context)}
+        updated = {"format": FORMAT, "binding": _target(context), "revision": 1 if document is None else document["revision"] + 1,
+                   "captures_closed": False, "workspace_content_sha256": workspace_digest, "entries": entries + [entry]}
+        if len(updated["entries"]) > 64:
+            _fail("native-reference-limit")
+        _validate(updated, _target(context))
+        if len(_canonical_json(updated)) > MAX_CONTROL - 2048:
+            _fail("native-reference-limit")
+        commit_guard()
+        pending = _pending(context, [reference], "capture")
+        uploaded = True
+        if _put_blob(context, cipher) != reference:
+            _fail("native-reference-object-invalid")
         _blob(context, entry)
-        _workspace(context, workspace)
-        if _grant(context, binding["profile"], tool, workspace, "room-capture")[2] != admitted:
-            _fail("native-admission-changed")
-        _same_history(context)
-        document = {"format": FORMAT, "binding": _target(context), "revision": 1 if document is None else document["revision"] + 1,
-                    "captures_closed": False, "entries": ([] if document is None else document["entries"]) + [entry]}
         published = True
-        def commit_guard():
-            if _grant(context, binding["profile"], tool, workspace, "room-capture") != (grant, binding, admitted):
-                _fail("native-admission-changed")
-            _workspace(context, workspace)
-            _same_history(context)
-
-        _publish(context, document, etag, before_commit=commit_guard)
+        _publish(context, updated, etag, before_commit=commit_guard)
         publication_confirmed = True
         if _grant(context, binding["profile"], tool, workspace, "room-capture") != (grant, binding, admitted):
             _fail("native-admission-changed")
         _same_history(context)
         _fence_publication(context, commit_guard)
         pending.unlink()
-        return {"ok": True, **inspect_reference(context)}
+        return {"ok": True, **inspect_reference(context), "capture_id": entry["capture_id"],
+                "created": True, "noop": False, "data_uploaded": len(cipher)}
     except (KeyError, ValueError, RuntimeError, OSError, BotoCoreError, ClientError, KeyboardInterrupt, CLICancelled) as error:
         if published or uploaded:
             if isinstance(error, native.NativeAgentError) and str(error) == "native-reference-conflict":
@@ -486,11 +575,11 @@ def capture_reference(context, *, grant, tool):
             raise
 
 
-def verify_reference(context, *, grant, tool, export_path=None):
+def verify_reference(context, *, grant, tool, capture_id=None, export_path=None):
     document = _load_export(context, export_path)[0] if export_path else _load(context)[0]
     if document is None:
         _fail("native-reference-unavailable")
-    entry = _entry(context, document, grant["profile"], tool)
+    entry = _entry(context, document, grant["profile"], tool, capture_id)
     if grant["workspace"] != entry["archive_binding"]["workspace"]:
         _fail("path-mismatch")
     blobs = _load_export(context, export_path)[1] if export_path else None
@@ -504,14 +593,14 @@ def verify_reference(context, *, grant, tool, export_path=None):
     guard()
     _same_history(context)
     return {"ok": True, "state": "history-verified", "history_only": True, "native_resume_verified": False,
-            "original_t3_identity_restored": False, "sessions": sessions}
+            "original_t3_identity_restored": False, "capture_id": _capture_id(entry), "sessions": sessions}
 
 
-def restore_reference(context, *, grant, tool, session_id, export_path=None):
+def restore_reference(context, *, grant, tool, session_id, capture_id=None, export_path=None):
     document, blobs = _load_export(context, export_path) if export_path else (_load(context)[0], None)
     if document is None:
         _fail("native-reference-unavailable")
-    entry = _entry(context, document, grant["profile"], tool)
+    entry = _entry(context, document, grant["profile"], tool, capture_id)
     workspace = entry["archive_binding"]["workspace"]
     if grant["workspace"] != workspace:
         _fail("path-mismatch")
@@ -520,6 +609,10 @@ def restore_reference(context, *, grant, tool, session_id, export_path=None):
     if actual != grant:
         _fail("native-profile-selector-stale-or-unavailable")
     cipher = _blob(context, entry) if blobs is None else blobs[entry["object"]["key"]]
+    guard = _authority_guard(context, entry, "room-verify")
+    guard()
+    _decode_entry(context, entry, cipher)
+    guard()
     committed = False
     try:
         with _cipher_file(context, cipher, directory=grant["local_reference_root"]) as source:
@@ -539,7 +632,7 @@ def restore_reference(context, *, grant, tool, session_id, export_path=None):
         if committed or getattr(error, "committed", False):
             _fail("native-reference-materialization-uncertain", committed=True)
         raise
-    return {**result, "history_only": True, "original_t3_identity_restored": False}
+    return {**result, "history_only": True, "original_t3_identity_restored": False, "capture_id": _capture_id(entry)}
 
 
 def preflight_copy(source_context, destination_context, destination_room_id):
@@ -596,8 +689,8 @@ def copy_reference(source_context, destination_context, destination_room_id, des
             guard()
         _same_history(source_context)
         guard()
-        _publish(destination, {"format": FORMAT, "binding": _target(destination), "revision": 1,
-                             "captures_closed": document["captures_closed"], "entries": entries}, None, before_commit=guard)
+        copied = {**document, "binding": _target(destination), "revision": 1, "entries": entries}
+        _publish(destination, copied, None, before_commit=guard)
         guard()
         _same_history(destination)
         _fence_publication(destination, guard)
@@ -616,6 +709,11 @@ def preflight_export(context, output):
     destination = Path(str(output) + ".agents.age")
     if destination.exists() or destination.is_symlink():
         _fail("native-reference-export-collision")
+    objects = {entry["object"]["key"]: entry["object"]["size"] for entry in document["entries"]}
+    skeleton = _canonical_json({"format": EXPORT_FORMAT, "reference": document,
+                                "objects": {key: "" for key in objects}})
+    if len(skeleton) + sum(4 * ((size + 2) // 3) for size in objects.values()) > MAX_EXPORT - 2048:
+        _fail("native-reference-export-limit")
     for entry in document["entries"]:
         _grant(context, entry["profile"], entry["tool"], entry["archive_binding"]["workspace"], "room-export")
         _decode_entry(context, entry)

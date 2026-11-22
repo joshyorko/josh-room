@@ -16,12 +16,12 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--room", required=True)
         command.add_argument("--snapshot", required=True)
         command.add_argument("--json", action="store_true")
-        if action != "recovery-status":
-            command.add_argument("--workspace", type=Path, required=True)
-            command.add_argument("--profile-ref", required=True)
-            command.add_argument("--tool", choices=("codex", "claude"), required=True)
+        command.add_argument("--workspace", type=Path, required=action != "recovery-status")
+        command.add_argument("--profile-ref", required=action != "recovery-status")
+        command.add_argument("--tool", choices=("codex", "claude"), required=action != "recovery-status")
         if action in {"recovery-verify", "recovery-restore"}:
             command.add_argument("--export", type=Path)
+            command.add_argument("--capture-id")
         if action == "recovery-restore":
             command.add_argument("--session-id", required=True)
     for action in ("room-status", "discover"):

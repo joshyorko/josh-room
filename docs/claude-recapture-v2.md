@@ -47,9 +47,22 @@ those 204 parser cases. An AST audit confirmed the legacy validator and original
 helper bodies unchanged. Ruff/whitespace passed. The review did not rerun native
 providers or perform a syscall/filesystem audit.
 
-Repeated durable capture at the unchanged Room point is the next separate slice.
-Its [versioned immutable-history contract](native-capture-history-contract.md) keeps
-explicit capture IDs, no-op/copy/export/removal/pending accounting and the exact
-workspace binding. The existing one-profile/tool-per-point collision is not
-silently bypassed here. Save selectors remain false; #210 stays on its reviewed
-branch. No feature-branch integration, main merge or release action is performed.
+## Same-point immutable-history cycle
+
+The subsequent [immutable-history contract](native-capture-history-contract.md)
+retains both captures at the same logical Room point. The opt-in
+`tests/test_native_claude_history_cycle.py` passed **1 case in 1.40s** against
+source-bound controller modules and the pinned native CLI. It captures the initial
+two rows, deletes the source profile, restores the explicit first capture into a
+new authorized profile, runs the original-ID loopback turn, recaptures all 14 rows
+under a second immutable ID, and restores that ID into another fresh profile.
+The first capture still verifies/decrypts to its original bytes/ciphertext.
+Identical recapture returns the second ID with zero remote writes; decrypting the
+catalog fence confirms no phantom workspace point. Pending receipts are empty.
+
+This cycle uses real age/native CLI but synthetic storage/admission. It is distinct
+from live MinIO/native Secret Service and registered installed-command evidence.
+Independent history review found no actionable issue; the 35 history regressions
+cover no-op races, legacy migration, limits, copy/export/removal and uncertainty.
+Save selectors remain false; #210 stays on its reviewed branch. No feature-branch
+integration, main merge or release action is performed.
