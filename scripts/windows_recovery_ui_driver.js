@@ -24,12 +24,14 @@ exports.activate = async context => {
   });
   await target.activate();
   const pins = JSON.parse(fs.readFileSync(path.join(base, "provider-pins.json"), "utf8"));
+  let invocation = 0;
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.start", async () => {
+    const current = ++invocation;
     try {
       const result = await vscode.commands.executeCommand("joshRoom.browseRecoveryPoint", {
         id: "synthetic-room", dimension: { id: "recovery-fixture", provider: "minio" }, snapshot_id: pins[0],
       });
-      write("ui-command-finished.json", { result, pin: pins[0] });
+      write("ui-command-finished.json", { result, pin: pins[0], invocation: current });
     } catch {
       write("ui-command-failed.json", { state: "FAIL", boundary: "registered-command" });
     }
@@ -45,6 +47,9 @@ exports.activate = async context => {
       const before = 'def greeting():\n\treturn "first 你好"\n';
       const after = 'def greeting():\n\treturn "third 你好"\n';
       if (left.getText() !== before || right.getText() !== after) throw new Error("Diff bytes changed");
+      if ([left, right].some(doc => doc.uri.toString().includes(pins[0]) || doc.uri.toString().includes(base))) {
+        throw new Error("Historical provider URI is not opaque");
+      }
       const edit = new vscode.WorkspaceEdit();
       edit.insert(left.uri, new vscode.Position(0, 0), "synthetic forbidden edit");
       const accepted = await vscode.workspace.applyEdit(edit);

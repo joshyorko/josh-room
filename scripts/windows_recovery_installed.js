@@ -200,13 +200,19 @@ async function main() {
     if (!(await fsp.readFile(destination)).equals(expected)) throw new Error("Historical selective recovery bytes differ");
     await until(async () => (await cdp.widget())?.rows.some(value => value.includes("code.py")), "pinned tree after extraction");
     await cdp.key("Escape", "Escape", 27);
-    await until(() => fs.existsSync(path.join(base, "ui-command-finished.json")), "native picker cancellation");
+    const cancelled = await until(async () => {
+      try {
+        const result = JSON.parse(await fsp.readFile(path.join(base, "ui-command-finished.json")));
+        return result.invocation === 2 && result.result === "cancelled" && result;
+      } catch { return null; }
+    }, "native picker cancellation");
     if (fs.existsSync(path.join(base, "ui-command-failed.json"))) throw new Error("Registered action failed");
     receipt.native_picker = "PASS";
     receipt.native_readonly_diff = "PASS";
     receipt.registered_selective_extract = "PASS";
     receipt.recovered_sha256 = digest(expected);
     receipt.cancelled_without_extra_writes = true;
+    receipt.cancelled_exact_pin = cancelled.pin;
   } catch (error) { failure = error; receipt.failed_boundary = error.message; }
   finally {
     cdp?.socket.close();

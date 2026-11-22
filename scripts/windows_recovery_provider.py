@@ -8,6 +8,7 @@ No provider or UI callbacks are replaced.
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -73,6 +74,7 @@ def main():
     server = None
 
     def cli(*args, expected=0):
+        (base / "provider-stage.json").write_text(json.dumps({"stage": list(args[:2])}))
         result = subprocess.run([sys.executable, "-m", "josh_room", *args, "--json"],
                                 capture_output=True, timeout=120, check=False)
         body = json.loads(result.stdout)
@@ -135,6 +137,8 @@ def main():
             raise RuntimeError("native operational identity missing")
         if not keyring.lookup_room_store_secret(domain, 1):
             raise RuntimeError("native Room Store secret missing")
+        if not (workspace / ".josh-room.json").is_file():
+            raise RuntimeError("synthetic Room marker missing")
         (base / "provider-before.json").write_text(json.dumps(fingerprint(workspace)))
         (base / "provider-pins.json").write_text(json.dumps(pins))
         (base / "provider-ready.json").write_text(json.dumps({"state": "PASS",
@@ -153,7 +157,8 @@ def main():
             for candidate in directory.rglob("*"):
                 if candidate.is_file() and candidate.stat().st_size <= 8 * 1024 * 1024:
                     data = candidate.read_bytes()
-                    if access.encode() in data or secret.encode() in data:
+                    if (access.encode() in data or secret.encode() in data
+                            or ("AGE" + "-SECRET-KEY-").encode() in data):
                         raise RuntimeError("synthetic provider credential leaked")
         (base / "preservation.json").write_text(json.dumps({"state": "PASS",
             "workspace_and_marker_unchanged": True, "provider_credentials_absent_from_logs": True}))
@@ -178,6 +183,9 @@ if __name__ == "__main__":
         main()
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         # Never retain raw exception/provider text; even synthetic keys stay private.
-        (Path(os.environ["JOSH_ROOM_ACCEPTANCE_ROOT"]) / "provider-failed.json").write_text(
-            json.dumps({"state": "FAIL", "exception": type(error).__name__}))
+        base = Path(os.environ["JOSH_ROOM_ACCEPTANCE_ROOT"])
+        stage = json.loads((base / "provider-stage.json").read_text()) if (base / "provider-stage.json").exists() else {}
+        reason = str(error) if isinstance(error, RuntimeError) and re.fullmatch(r"[A-Za-z0-9 :_-]{1,100}", str(error)) else None
+        (base / "provider-failed.json").write_text(json.dumps({"state": "FAIL",
+            "exception": type(error).__name__, "boundary": reason, **stage}))
         raise SystemExit(1) from None
