@@ -253,3 +253,17 @@ def test_ignore_fingerprint_reads_exact_crlf_bytes(tmp_path):
     raw = b'# retained bytes\r\ngenerated/**\r\n'
     (tmp_path / '.josh-roomignore').write_bytes(raw)
     assert workspace_policy._read_ignore(tmp_path) == raw
+
+
+def test_leading_hash_escape_reloads_with_python_native_hash_and_comment_parity(tmp_path):
+    (tmp_path / '.josh-roomignore').write_text('\\#reports/**\n# ordinary-comment\n')
+    policy = load_capture_policy(tmp_path)
+    assert policy.is_excluded('#reports/future.txt')
+    assert not policy.is_excluded('nested/#reports/future.txt')
+    assert not policy.is_excluded('ordinary-comment')
+    root = Path(__file__).resolve().parents[1]
+    script = '''const p=require(process.argv[1]).loadCapturePolicy(process.argv[2]);
+console.log(JSON.stringify({sha256:p.sha256,excluded:p.isExcluded('#reports/future.txt'),
+anchored:!p.isExcluded('nested/#reports/future.txt'),comment:!p.isExcluded('ordinary-comment')}));'''
+    result = subprocess.run(['node', '-e', script, str(root / 'vscode-extension/dirty.js'), str(tmp_path)], check=True, capture_output=True, text=True)
+    assert json.loads(result.stdout) == {'sha256': policy.sha256, 'excluded': True, 'anchored': True, 'comment': True}
