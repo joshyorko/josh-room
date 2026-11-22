@@ -146,3 +146,43 @@ atomicity, T3's auth/effect-free database projection, Claude's native policy,
 R2 custody/live MinIO/S3 admission and native new turns remain blocked/unverified.
 All #190 providers stay `selectable: false` and general `restore: "blocked"`.
 The release hold is unchanged.
+
+## T3 API audit and qualified Claude native history follow-up
+
+This follow-up starts at `5ac1904901b57169a2796d55dd67b00bf7378509`.
+It adds a separately versioned Claude main-session history reference and explicit
+v2 host tool opt-in. Existing v1 grants remain codex-only. It does not enable
+T3 recovery, whole-profile restore, Save inclusion, or native-new-turn claims.
+
+| Check | Observed result |
+| --- | --- |
+| Installed T3 `.5098` isolated native project setup | PASS, fresh task-owned homes, no-turn project creation, read-only schema/zero-runtime counts. Auth/effect tables confirmed. No server, thread start/send, auth, model call, or raw row seed/edit. |
+| T3 native export/import contract | BLOCKED by upstream API. Official guide says no whole-thread export; supported provider import derives a new T3 ID and accepts no original T3 recovery identity. Source evidence only for import behavior. [Exact missing API](t3-native-recovery-audit.md). |
+| Claude provenance and safe SDK readers | PASS, installed CLI2.1.310 digest matches SDK0.3.310 native manifest. SDK list/info/messages discovered original synthetic IDs/history with guarded network/socket/subprocess entry points unused. [Versions and source](claude-native-recovery-audit.md). |
+| Closed Claude policy | PASS, 66 tests. Short canonical ASCII project encoding, original session/message IDs/cwd/version, timestamps, complete main linear ancestry, text-only messages and qualified cache counters. Unsupported rows/fields/tools/attachments/branches fail closed. |
+| Final focused native/admission/controller/privacy suite | PASS, 238 tests on btrfs. Includes actual optional SDK acceptance with `JOSH_ROOM_TEST_CLAUDE_SDK` set to the pinned external `sdk.mjs`, plus existing Codex default regression contracts. Codex native app-server acceptance was not repeated. |
+| Real-age Claude cold history pipeline | PASS, selected project-only native JSONL capture, provider-bound encryption, verify, anonymous-file materialization, exact raw-byte/ancestry preservation, completed-commit retry and cross-provider rejection. Credentials/settings excluded. |
+| Personal/work tool admission | PASS, real Git observation, synthetic current keyset, v2 explicit Claude grant and revoked-tool denial. Legacy v1 does not authorize Claude before any provider read. No upload operation. |
+| Actual native Claude discovery after cold materialization | PASS, SDK0.3.310 listSessions/getSessionInfo/getSessionMessages recovered original session/message IDs and text; wrong-cwd listing empty; guarded calls `[]`. No query, SessionStore, runtime resume or CLI child. SDK message view uses `session_id`; native parentUuid ancestry is checked in unchanged raw bytes. |
+| Actual CLI boundary | PASS, offline capabilities/all-selectable-false, Claude denied without host admission, explicit T3 API-gap refusal before native reads. |
+| Node extension tests | PASS, 375 passed, 2 existing skips. |
+| Ruff, whitespace, source/template parity and VSIX package | PASS. VSIX SHA256 `068636b518b9324a0a6a2fc40e10fc690d550881ce6310ab077a511ecf838d69`; no vendor SDK or auth file bundled. |
+| Independent security/comment review | PASS, 164 focused cases including SDK discovery; no new blocker/comment finding. |
+| Earlier integration iterations | FAIL, initial core integration had two stale test expectations; updated for explicit tool routing and qualified Claude support. Initial SDK pipeline had 125 passed/1 failed because the test assumed a non-public parentUuid return field; corrected to actual SDK session/message identities and separate raw ancestry verification, then PASS. |
+| Live provider admission, Windows/installed VSIX, real Claude/T3 runtime/new turn | NOT RUN and NOT CLAIMED. No existing auth or hosted/model/paid call used. Native continuation remains unverified for all providers. |
+
+Reproduce the focused run with `JOSH_ROOM_TEST_CLAUDE_SDK=<external SDK0.3.310/sdk.mjs>`
+and `TMPDIR=<private-btrfs-task-dir>`, then run the new Claude policy/acceptance
+files and affected native admission/core/CLI/materialization/lease/controller/
+repository/public-safety tests with `--basetemp` inside that directory. The SDK
+acceptance is explicitly skipped when its pinned external package is unavailable.
+No proprietary SDK source/binary is copied into Josh Room.
+
+The audited SDK SessionStore-backed resume loader is unsuitable: it creates named
+plaintext staging and copies auth/config. This implementation never invokes it.
+The safe file utility readers are distinct from runtime continuation. T3's missing
+inert original-identity export/import API needs an upstream change, not a user
+credential. No user-only prerequisite exists for this offline history slice;
+fresh supported native auth/account acceptance and approval for any paid turn
+belong to a future explicit continuation test. Every #190 selector remains false,
+and the release hold is unchanged.

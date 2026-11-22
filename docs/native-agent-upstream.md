@@ -9,9 +9,9 @@ no credential was copied, and no hosted model request was made for this audit.
 
 | Harness | Examined version | Supported upstream location / continuation surface | Josh Room acceptance gate |
 | --- | --- | --- | --- |
-| T3 Code | Installed `0.1.12-nightly.20261122.5085`; public source `a985332c447173750394c0875fb961f88c306730` | `--base-dir` / `T3CODE_HOME`; one server-wide home; `userdata/statev2.sqlite`; provider-specific continuation bindings | Dedicated-profile launch can be isolated. Whole-database capture is blocked: database includes authentication and runnable outbox state. Native cold continuation NOT PROVEN. |
+| T3 Code | Earlier `.5085`; current installed `0.1.12-nightly.20261122.5098` separately audited at public source `1d028248683f90f405b2d8e7b71682e3b67317ed` | `--base-dir` / `T3CODE_HOME`; one server-wide home; `userdata/statev2.sqlite`; provider-specific continuation bindings | Dedicated-profile launch can be isolated. Whole-database capture is blocked: database includes authentication and runnable outbox state. Native cold continuation NOT PROVEN. |
 | Codex CLI | Installed `0.171.0`; public source `cf3ff1530d821ec2d26452da4971d8e3e7d18d25` | `CODEX_HOME`; `sessions`, `archived_sessions`; `codex resume SESSION_ID`; `--all` disables cwd picker filtering | Synthetic native-file discovery and original-ID history selection verified through the installed standalone app-server. Runtime resume/new turn NOT PROVEN; T3-mediated continuity remains unqualified. |
-| Claude Code | Installed `2.1.310` | `CLAUDE_CONFIG_DIR` documented location contract; installed `claude --resume ID` / `--continue`; directory-associated history | Exact storage schema and safe capture allowlist NOT VERIFIED. Cold continuation NOT PROVEN, both direct and through T3. |
+| Claude Code | Installed `2.1.310` | `CLAUDE_CONFIG_DIR` documented location contract; installed `claude --resume ID` / `--continue`; directory-associated history | Narrow main linear text-only 2.1.310 native-file slice qualified via matching SDK0.3.310 offline readers. Runtime/new-turn and T3-mediated continuation NOT PROVEN. |
 | OpenCode | Public source `ee5fe34e136488a1839ac73bcca8321c51a31b75`; CLI package `2.3.0` | Explicit `OPENCODE_DB`; channel-aware SQLite filename; public session/storage APIs need version-specific qualification | Optional follow-up only. Current database credential service stores OAuth/API credential values; copying the database is unsafe. No installed synthetic cold-resume evidence. |
 | Antigravity | No installed/versioned native persistence contract qualified | Official documentation entry point inspected; no supported portable native storage/restore contract established | Optional follow-up only. No safe allowlist, versioned schema, licensing qualification or synthetic cold-resume evidence. |
 
@@ -163,3 +163,22 @@ a subsequent observed `turn/start` result is required for native-new-turn eviden
 Neither method was sent in this qualification. Paid turns remain approval-gated.
 There is no established distinct raw `source: t3` value; do not invent one to claim
 T3-mediated preservation.
+
+
+## T3 and Claude recovery follow-up
+
+The [current T3 audit](t3-native-recovery-audit.md) separates installed `.5098`
+no-turn evidence from earlier `.5085` startup tests. T3's native provider import
+preserves provider history but derives a new app identity; it cannot recover an
+arbitrary original T3 thread. The audit specifies the missing closed inert
+export/import API, including auth/effect exclusion, original IDs, revision fences,
+transactional collision/path checks and separately authorized continuation.
+
+The [Claude audit](claude-native-recovery-audit.md) pins SDK0.3.310 to the official
+CLI2.1.310 manifest, whose Linux digest matches the installed native binary.
+Filesystem readers list/get original synthetic sessions/messages without any
+network or process operation. A narrow native main linear text slice is now
+implemented independently of the SDK runtime. The unsafe SessionStore-backed
+resume loader is excluded because it stages plaintext and inherits auth/config.
+No proprietary SDK code or binary is redistributed. Native continuation remains
+unverified for both providers, and every Save selector stays unavailable.

@@ -59,7 +59,7 @@ def check(fixture, **changes):
 def test_admission_requires_host_grant_and_current_dimension_recipients(authorized):
     result = check(authorized)
     assert len(result.pop("authority_sha256")) == 64
-    assert result == {"admitted": True, "scope": "personal", "destination": "local-only", "key_generation": 1, "native_resume_verified": False}
+    assert result == {"admitted": True, "tool": "codex", "scope": "personal", "destination": "local-only", "key_generation": 1, "native_resume_verified": False}
     assert str(authorized.workspace) not in json.dumps(result)
     assert not list(authorized.references.iterdir())
 
@@ -268,3 +268,81 @@ def test_real_core_capture_and_verify_require_host_admission(authorized, monkeyp
     with pytest.raises(agents.NativeAgentError, match="admission"):
         agents.capture(root, output=authorized.references / "denied.age", recipients=recipients, **authorized.binding)
     assert not (authorized.references / "denied.age").exists()
+
+
+def test_legacy_grant_does_not_authorize_claude_implicitly(authorized, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("unapproved tool must be refused before provider keyset access")
+
+    monkeypatch.setattr(admission, "_current_keyset", forbidden)
+    with pytest.raises(admission.AdmissionError, match="tool-not-authorized"):
+        check(authorized, tool="claude")
+
+
+def test_v2_grant_authorizes_only_explicit_tool(authorized):
+    authorized.policy["format"] = admission.FORMAT_V2
+    authorized.grant["tools"] = ["claude"]
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    assert check(authorized, tool="claude")["tool"] == "claude"
+    with pytest.raises(admission.AdmissionError, match="tool-not-authorized"):
+        check(authorized, tool="codex")
+
+
+@pytest.mark.parametrize("tools", [[], ["t3"], ["claude", "claude"], ["unknown"], "claude"])
+def test_v2_tool_authority_is_closed_and_explicit(authorized, tools):
+    authorized.policy["format"] = admission.FORMAT_V2
+    authorized.grant["tools"] = tools
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    with pytest.raises(admission.AdmissionError, match="invalid-tools"):
+        check(authorized, tool="claude")
+
+
+@pytest.mark.parametrize("scope", ["personal", "work"])
+def test_v2_claude_gate_e2e(authorized, monkeypatch, tmp_path, scope):
+    from pathlib import Path
+
+    from josh_room import native_agents as agents
+    from josh_room.claude_native_history import CLAUDE_VERSION, project_key
+
+    if not shutil.which("age") or not shutil.which("age-keygen"):
+        pytest.skip("real age required")
+    keys, recipients = [], []
+    for index in range(2):
+        key = tmp_path / f"claude-synthetic-{index}.agekey"
+        subprocess.run(["age-keygen", "-o", str(key)], capture_output=True, check=True)
+        key.chmod(0o600)
+        recipients.append(subprocess.run(["age-keygen", "-y", str(key)], capture_output=True, check=True, text=True).stdout.strip())
+        keys.append(key)
+    authorized.policy["format"] = admission.FORMAT_V2
+    authorized.grant.update(tools=["claude"], recipients=recipients, profile=scope, scope=scope)
+    authorized.binding["profile"] = scope
+    authorized.keyset.operational_recipient = recipients[0]
+    authorized.keyset.recovery_recipients = (recipients[1],)
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(authorized.config_home))
+    root = Path(authorized.grant["profile_root"])
+    assert agents.configure(root, recipients=recipients, tool="claude", **authorized.binding)["admission"]["tool"] == "claude"
+    session = "11111111-1111-4111-8111-111111111111"
+    user = "22222222-2222-4222-8222-222222222222"
+    common = {"isSidechain": False, "userType": "external", "cwd": str(authorized.workspace), "sessionId": session, "version": CLAUDE_VERSION, "timestamp": "2026-11-22T16:00:00Z"}
+    rows = [{**common, "parentUuid": None, "uuid": user, "type": "user", "message": {"role": "user", "content": "synthetic question"}}, {**common, "parentUuid": user, "uuid": "33333333-3333-4333-8333-333333333333", "type": "assistant", "message": {"id": "msg_synthetic", "type": "message", "role": "assistant", "model": "claude-synthetic-offline", "content": [{"type": "text", "text": "synthetic answer"}], "stop_reason": "end_turn"}}]
+    relative = Path("projects") / project_key(str(authorized.workspace)) / f"{session}.jsonl"
+    original = root / "claude" / relative
+    original.parent.mkdir(mode=0o700, parents=True)
+    for parent in original.parents:
+        if parent.is_relative_to(root):
+            parent.chmod(0o700)
+    original.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    original.chmod(0o600)
+    reference = authorized.references / "claude.age"
+    assert agents.capture(root, output=reference, recipients=recipients, tool="claude", **authorized.binding)["ok"]
+    cold = tmp_path / "claude-cold"
+    authorized.grant["profile_root"] = str(cold)
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    agents.configure(cold, recipients=recipients, tool="claude", **authorized.binding)
+    assert agents.materialize_session(cold, source=reference, identity_paths=keys[:1], session_id=session, tool="claude", **authorized.binding)["native_resume_verified"] is False
+    assert (cold / "claude" / relative).read_bytes() == original.read_bytes()
+    authorized.grant["tools"] = ["codex"]
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    with pytest.raises(agents.NativeAgentError, match="tool-not-authorized"):
+        agents.verify(cold, source=reference, identity_paths=keys[:1], tool="claude", **authorized.binding)

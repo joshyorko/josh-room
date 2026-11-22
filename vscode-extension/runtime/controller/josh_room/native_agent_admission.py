@@ -25,6 +25,7 @@ from .policy_config import policy_config_dir
 from .private_paths import verify_private_path
 
 FORMAT = "josh-room.native-agent-admission.v1"
+FORMAT_V2 = "josh-room.native-agent-admission.v2"
 POLICY_FILE = "native-agent-admission.json"
 MAX_POLICY_BYTES = 64 * 1024
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -97,9 +98,14 @@ def _repository(raw):
     return RepositoryIdentity(**raw)
 
 
-def _grant(raw):
-    if not isinstance(raw, dict) or set(raw) != _FIELDS:
+def _grant(raw, version):
+    expected = _FIELDS | ({"tools"} if version == FORMAT_V2 else set())
+    if not isinstance(raw, dict) or set(raw) != expected:
         _fail("native-admission-invalid-policy")
+    if version == FORMAT_V2:
+        tools = raw["tools"]
+        if not isinstance(tools, list) or not tools or any(not isinstance(value, str) or value not in {"codex", "claude"} for value in tools) or len(set(tools)) != len(tools):
+            _fail("native-admission-invalid-tools")
     for name in ("dimension", "room", "profile"):
         if not isinstance(raw[name], str) or not _LABEL.fullmatch(raw[name]):
             _fail("native-admission-invalid-policy")
@@ -205,7 +211,7 @@ def _current_keyset(dimension):
     return keyset
 
 
-def require_admission(binding, recipients, *, profile_root, operation, destination=None, config_home=None):
+def require_admission(binding, recipients, *, profile_root, operation, destination=None, config_home=None, tool="codex"):
     """Revalidate a host grant and enrolled keyset before reading native content.
 
     ``destination`` names the encrypted local output for capture, or source for
@@ -213,6 +219,8 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
     Plan/status must not invoke it because keyset verification is a provider read.
     """
     try:
+        if tool not in {"codex", "claude"}:
+            _fail("native-admission-tool-unqualified")
         if operation not in {"configure", "launch", "capture", "verify", "restore", "materialize-session"}:
             _fail("native-admission-operation-denied")
         if not isinstance(binding, dict) or set(binding) != {"dimension", "room", "profile", "workspace"}:
@@ -223,9 +231,9 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
             _fail("native-admission-unsafe-policy")
         verify_private_path(directory, directory=True)
         policy = _read_private_json(directory / POLICY_FILE)
-        if not isinstance(policy, dict) or set(policy) != {"format", "grants"} or policy["format"] != FORMAT or not isinstance(policy["grants"], list) or not 1 <= len(policy["grants"]) <= 64:
+        if not isinstance(policy, dict) or set(policy) != {"format", "grants"} or policy["format"] not in {FORMAT, FORMAT_V2} or not isinstance(policy["grants"], list) or not 1 <= len(policy["grants"]) <= 64:
             _fail("native-admission-invalid-policy")
-        grants = [_grant(raw) for raw in policy["grants"]]
+        grants = [_grant(raw, policy["format"]) for raw in policy["grants"]]
         identities = [(grant["dimension"], grant["room"], grant["profile"], grant["workspace"]) for grant in grants]
         if len(identities) != len(set(identities)):
             _fail("native-admission-ambiguous-policy")
@@ -233,6 +241,9 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
         if len(matches) != 1:
             _fail("native-admission-not-authorized")
         grant = matches[0]
+        tools = grant["tools"] if policy["format"] == FORMAT_V2 else ["codex"]
+        if tool not in tools:
+            _fail("native-admission-tool-not-authorized")
         source = _canonical(profile_root, exists=False)
         if str(source) != grant["profile_root"]:
             _fail("native-admission-profile-root-mismatch")
@@ -259,9 +270,9 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
             _fail("native-admission-keyset-mismatch")
         if _recipients([keyset.operational_recipient, *keyset.recovery_recipients]) != _recipients(grant["recipients"]):
             _fail("native-admission-recipient-mismatch")
-        authority = {"format": FORMAT, "grant": grant, "physical_binding": keyset.binding, "key_generation": keyset.key_generation}
+        authority = {"format": policy["format"], "tool": tool, "grant": grant, "physical_binding": keyset.binding, "key_generation": keyset.key_generation}
         digest = hashlib.sha256(json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        return {"admitted": True, "scope": grant["scope"], "destination": "local-only", "key_generation": keyset.key_generation, "authority_sha256": digest, "native_resume_verified": False}
+        return {"admitted": True, "tool": tool, "scope": grant["scope"], "destination": "local-only", "key_generation": keyset.key_generation, "authority_sha256": digest, "native_resume_verified": False}
     except AdmissionError:
         raise
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.SubprocessError, BotoCoreError, ClientError):

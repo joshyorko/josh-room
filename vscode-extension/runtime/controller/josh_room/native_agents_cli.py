@@ -18,6 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--profile", required=True)
         command.add_argument("--workspace", type=Path, required=True)
         command.add_argument("--json", action="store_true")
+        if action in {"configure", "launch", "capture", "verify", "materialize-session"}:
+            command.add_argument("--tool", choices=("codex", "claude", "t3"), default="codex")
         if action == "launch":
             command.add_argument("--port", type=int, default=3773)
         if action in {"configure", "capture"}:
@@ -40,6 +42,8 @@ def dispatch(args):
     binding = {"dimension": args.dimension, "room": args.room, "profile": args.profile, "workspace": args.workspace}
     action = "status" if args.action == "plan" else args.action
     options = {}
+    if hasattr(args, "tool"):
+        options["tool"] = args.tool
     if action == "launch":
         options["port"] = args.port
     elif action == "configure":

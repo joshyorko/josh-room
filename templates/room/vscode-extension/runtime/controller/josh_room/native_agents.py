@@ -1,4 +1,4 @@
-"""Explicit dedicated native profiles and bounded, encrypted Codex history recovery.
+"""Explicit dedicated native profiles and bounded, encrypted native history recovery.
 
 This is not PCC evidence and never claims verified native continuation. T3's
 database remains blocked: its durable effect outbox can replay side effects.
@@ -33,6 +33,7 @@ from .private_paths import verify_private_path
 MAX_BYTES = 16 * 1024 * 1024
 MAX_FILES = 256
 FORMAT = "josh-room.native-history.v1"
+CLAUDE_FORMAT = "josh-room.native-claude-history.v1"
 POLICY = "native-profile.json"
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -103,9 +104,9 @@ def capabilities():
         "contract_version": 1,
         "native_resume_verified": False,
         "providers": {
-            "t3": {"capture": "blocked", "reason": "effect-outbox-and-schema-audit-required", "launch": "dedicated-linux-profile", "restore": "blocked", "selectable": False},
+            "t3": {"capture": "blocked", "reason": "native-thread-projection-import-unavailable", "launch": "dedicated-linux-profile", "restore": "blocked", "selectable": False},
             "codex": {"capture": "history-only", "reason": "new-turn-acceptance-not-run", "allowlist": "dedicated sessions rollout JSONL only", "restore": "blocked", "restore_reason": "crash-safe-materialization-unavailable", "materialize_session": "history-only-single-file", "selectable": False},
-            "claude": {"capture": "blocked", "reason": "native-policy-and-cold-resume-not-qualified", "restore": "blocked", "selectable": False},
+            "claude": {"capture": "history-only", "reason": "basic-linear-no-tools; native-new-turn-not-run", "allowlist": "main linear text-only Claude 2.1.310 JSONL", "archive_format": CLAUDE_FORMAT, "materialize_session": "history-only-single-file", "restore": "blocked", "selectable": False},
         },
         "storage": "explicit-local-encrypted-reference",
         "automatic_room_restore": False,
@@ -114,6 +115,62 @@ def capabilities():
         "capture_consistency": "linux-kernel-read-leases-and-inventory-fences",
         "release_blockers": ["crash-safe-materialization-unavailable", "native-new-turn-not-run"],
     }
+
+
+def _tool(tool):
+    if tool == "t3":
+        _fail("native-thread-projection-import-unavailable")
+    if tool not in {"codex", "claude"}:
+        _fail("unsupported-native-tool")
+    return tool
+
+
+def _native_format(tool):
+    return FORMAT if _tool(tool) == "codex" else CLAUDE_FORMAT
+
+
+def _claude_key(workspace):
+    from .claude_native_history import ClaudeHistoryError, project_key
+
+    try:
+        return project_key(workspace)
+    except ClaudeHistoryError as error:
+        _fail(str(error))
+
+
+def _native_path(relative, tool, workspace):
+    if tool == "codex":
+        return bool(_ROLLOUT.fullmatch(relative))
+    path = Path(relative)
+    return (len(path.parts) == 3 and path.parts[:2] == ("projects", _claude_key(workspace))
+            and re.fullmatch(rf"{_UUID}\.jsonl", path.name) is not None
+            and path.as_posix() == relative)
+
+
+def _validate_history(relative, data, workspace, tool):
+    if tool == "codex":
+        _validate_rollout(relative, data, workspace)
+        return
+    from .claude_native_history import ClaudeHistoryError, validate
+
+    scan = scan_content([data], adapter="claude-native", material_class=MaterialClass.SESSION_TRANSCRIPT, max_bytes=MAX_BYTES)
+    if scan.receipt.decision != Decision.ALLOW:
+        _fail("unsafe-native-content")
+    try:
+        rows = [_json(line) for line in data.splitlines()]
+        for row in rows:
+            _inspect_native_values(row)
+        validate(relative, rows, workspace)
+    except ClaudeHistoryError as error:
+        _fail(str(error))
+    except (ValueError, KeyError, TypeError):
+        _fail("invalid-claude-native-session")
+
+
+def _session_id(relative, payload, tool):
+    if tool == "codex":
+        return _json(payload.splitlines()[0])["payload"]["id"]
+    return Path(relative).name[:-6]
 
 
 def _linux():
@@ -212,23 +269,24 @@ def _initialize(root, binding, recipients):
     _write(root / "operation.lock", b"")
 
 
-def _admit(binding, recipients, *, root, operation, destination=None):
+def _admit(binding, recipients, *, root, operation, destination=None, tool="codex"):
     from .native_agent_admission import AdmissionError, require_admission
 
     try:
-        return require_admission(binding, recipients, profile_root=root, operation=operation, destination=destination)
+        return require_admission(binding, recipients, profile_root=root, operation=operation, destination=destination, tool=tool)
     except AdmissionError as error:
         _fail(str(error))
 
 
-def configure(root, *, recipients=None, **binding):
+def configure(root, *, recipients=None, tool="codex", **binding):
+    tool = _tool(tool)
     binding = _binding(**binding)
     root = _canonical(root, exists=False)
     if root.exists() or root.is_relative_to(Path(binding["workspace"])):
         _fail("profile-target-collision")
     verify_private_path(root.parent, directory=True)
     recipients = _recipients(recipients)
-    admission = _admit(binding, recipients, root=root, operation="configure")
+    admission = _admit(binding, recipients, root=root, operation="configure", tool=tool)
     _initialize(root, binding, recipients)
     return {"ok": True, "state": "configured", "admission": admission, **capabilities()}
 
@@ -259,7 +317,8 @@ def status(root, **binding):
     return {"ok": True, "state": state, "admission": "revalidation-required", **capabilities()}
 
 
-def launch(root, *, executable="t3", port=3773, **binding):
+def launch(root, *, executable="t3", port=3773, tool="codex", **binding):
+    tool = _tool(tool)
     binding = _binding(**binding)
     root = _load(root, binding)
     if type(port) is not int or not 1024 <= port <= 65535:
@@ -267,7 +326,7 @@ def launch(root, *, executable="t3", port=3773, **binding):
     executable = shutil.which(executable)
     if not executable:
         _fail("provider-missing")
-    _admit(binding, _json(_read(root / POLICY, 4096))["recipients"], root=root, operation="launch")
+    _admit(binding, _json(_read(root / POLICY, 4096))["recipients"], root=root, operation="launch", tool=tool)
     environment = dict(os.environ)
     environment.update(T3CODE_HOME=str(root / "t3"), CODEX_HOME=str(root / "codex"), CLAUDE_CONFIG_DIR=str(root / "claude"))
     with _lock(root) as lock_fd, sigterm_cancellation():
@@ -325,10 +384,11 @@ def _validate_rollout(path, data, workspace):
         _fail("invalid-native-session")
 
 
-def _inventory(root):
-    source = root / "codex"
+def _inventory(root, tool="codex", workspace=None):
+    tool = _tool(tool)
+    source = root / tool
     inventory = {}
-    sessions = source / "sessions"
+    sessions = source / "sessions" if tool == "codex" else source / "projects" / _claude_key(workspace)
     if not sessions.exists():
         _fail("native-history-missing")
     for visited, (directory, dirs, files) in enumerate(os.walk(sessions, followlinks=False), start=1):
@@ -337,13 +397,15 @@ def _inventory(root):
         parent = Path(directory)
         _canonical(parent)
         verify_private_path(parent, directory=True)
+        if tool == "claude" and dirs:
+            _fail("unsupported-native-path")
         for name in dirs:
             verify_private_path(parent / name, directory=True)
             _canonical(parent / name)
         for name in sorted(files):
             path = parent / name
             relative = path.relative_to(source).as_posix()
-            if not _ROLLOUT.fullmatch(relative):
+            if not _native_path(relative, tool, workspace):
                 _fail("unsupported-native-path")
             info = _file(path)
             inventory[relative] = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
@@ -354,32 +416,33 @@ def _inventory(root):
     return inventory
 
 
-def _entries(root, binding, barrier, expected):
-    if _inventory(root) != expected:
+def _entries(root, binding, barrier, expected, tool="codex"):
+    if _inventory(root, tool, binding["workspace"]) != expected:
         _fail("source-changed")
     entries = []
     for relative in sorted(expected):
-        data = barrier.read(root / "codex" / relative, MAX_BYTES)
-        _validate_rollout(relative, data, binding["workspace"])
+        data = barrier.read(root / tool / relative, MAX_BYTES)
+        _validate_history(relative, data, binding["workspace"], tool)
         entries.append({"path": relative, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "data": base64.b64encode(data).decode("ascii")})
-    if _inventory(root) != expected:
+    if _inventory(root, tool, binding["workspace"]) != expected:
         _fail("source-changed")
     return entries, expected
 
 
 @contextlib.contextmanager
-def _capture_barrier(root):
-    expected = _inventory(root)
+def _capture_barrier(root, tool="codex", workspace=None):
+    expected = _inventory(root, tool, workspace)
     try:
-        with read_barrier([(root / "codex" / relative, value) for relative, value in sorted(expected.items())]) as barrier:
-            if _inventory(root) != expected:
+        with read_barrier([(root / tool / relative, value) for relative, value in sorted(expected.items())]) as barrier:
+            if _inventory(root, tool, workspace) != expected:
                 _fail("source-changed")
             yield barrier, expected
     except QuiescenceError as error:
         _fail(str(error))
 
 
-def capture(root, *, output, recipients, **binding):
+def capture(root, *, output, recipients, tool="codex", **binding):
+    tool = _tool(tool)
     binding = _binding(**binding)
     root = _load(root, binding)
     output = _canonical(output, exists=False)
@@ -389,10 +452,10 @@ def capture(root, *, output, recipients, **binding):
     recipients = _recipients(recipients)
     if recipients != _json(_read(root / POLICY, 4096))["recipients"]:
         _fail("profile-recipient-mismatch")
-    admission = _admit(binding, recipients, root=root, operation="capture", destination=output)
-    with _lock(root), sigterm_cancellation(), _capture_barrier(root) as (barrier, expected):
-        entries, expected = _entries(root, binding, barrier, expected)
-        document = {"format": FORMAT, "binding": binding, "recipients": recipients, "provider": "codex", "mode": "history-only", "entries": entries}
+    admission = _admit(binding, recipients, root=root, operation="capture", destination=output, tool=tool)
+    with _lock(root), sigterm_cancellation(), _capture_barrier(root, tool, binding["workspace"]) as (barrier, expected):
+        entries, expected = _entries(root, binding, barrier, expected, tool)
+        document = {"format": _native_format(tool), "binding": binding, "recipients": recipients, "provider": tool, "mode": "history-only", "entries": entries}
         data = json.dumps(document, separators=(",", ":")).encode()
         fd, temporary = tempfile.mkstemp(prefix=".native-encrypted-", dir=output.parent)
         os.close(fd)
@@ -412,9 +475,9 @@ def capture(root, *, output, recipients, **binding):
                     _fail("native-encryption-failed")
                 handle.flush()
                 os.fsync(handle.fileno())
-            if _admit(binding, recipients, root=root, operation="capture", destination=output) != admission:
+            if _admit(binding, recipients, root=root, operation="capture", destination=output, tool=tool) != admission:
                 _fail("native-admission-changed")
-            if _inventory(root) != expected:
+            if _inventory(root, tool, binding["workspace"]) != expected:
                 _fail("source-changed")
             barrier.check()
             os.link(temporary, output)
@@ -424,7 +487,8 @@ def capture(root, *, output, recipients, **binding):
     return {"ok": True, "state": "history-available", "files": len(entries), "native_resume_verified": False}
 
 
-def _decode(source, identity_paths, binding):
+def _decode(source, identity_paths, binding, tool="codex"):
+    tool = _tool(tool)
     source = _canonical(source)
     verify_private_path(source.parent, directory=True)
     source_info = _file(source, MAX_BYTES * 2)
@@ -474,7 +538,7 @@ def _decode(source, identity_paths, binding):
                 terminate_owned_process(process)
     try:
         document = _json(data)
-        if set(document) != {"format", "binding", "recipients", "provider", "mode", "entries"} or document["format"] != FORMAT or document["provider"] != "codex" or document["mode"] != "history-only":
+        if set(document) != {"format", "binding", "recipients", "provider", "mode", "entries"} or document["format"] != _native_format(tool) or document["provider"] != tool or document["mode"] != "history-only":
             _fail("unsupported-recovery-format")
         recipients = _recipients(document["recipients"])
         if document["binding"] != binding:
@@ -488,7 +552,7 @@ def _decode(source, identity_paths, binding):
             if set(entry) != {"path", "sha256", "bytes", "data"}:
                 _fail("invalid-recovery-manifest")
             content = base64.b64decode(entry["data"], validate=True)
-            _validate_rollout(entry["path"], content, binding["workspace"])
+            _validate_history(entry["path"], content, binding["workspace"], tool)
             total += len(content)
             if total > MAX_BYTES or entry["path"] in decoded or type(entry["bytes"]) is not int or entry["bytes"] != len(content) or entry["sha256"] != hashlib.sha256(content).hexdigest():
                 _fail("invalid-recovery-manifest")
@@ -498,12 +562,13 @@ def _decode(source, identity_paths, binding):
         _fail("invalid-recovery-manifest")
 
 
-def verify(root, *, source, identity_paths, **binding):
+def verify(root, *, source, identity_paths, tool="codex", **binding):
+    tool = _tool(tool)
     binding = _binding(**binding)
     root = _load(root, binding)
     recipients = _json(_read(root / POLICY, 4096))["recipients"]
-    _admit(binding, recipients, root=root, operation="verify", destination=source)
-    entries, recovered_recipients = _decode(source, identity_paths, binding)
+    _admit(binding, recipients, root=root, operation="verify", destination=source, tool=tool)
+    entries, recovered_recipients = _decode(source, identity_paths, binding, tool)
     if recipients != recovered_recipients:
         _fail("profile-recipient-mismatch")
     return {"ok": True, "state": "history-available", "files": len(entries), "native_resume_verified": False}
@@ -514,59 +579,60 @@ def restore(root, *, source, identity_paths, **binding):
     _fail("crash-safe-materialization-unavailable")
 
 
-def _fresh_session_target(root, relative, *, allow_materialized=False):
+def _fresh_session_target(root, relative, *, allow_materialized=False, tool="codex"):
     allowed = set(Path(relative).parents) - {Path(".")}
-    for name in ("t3", "claude"):
+    for name in (name for name in ("t3", "codex", "claude") if name != tool):
         if any((root / name).iterdir()):
             _fail("native-profile-not-fresh")
-    for directory, dirs, files in os.walk(root / "codex", followlinks=False):
+    for directory, dirs, files in os.walk(root / tool, followlinks=False):
         for name in files:
-            if not allow_materialized or (Path(directory) / name).relative_to(root / "codex").as_posix() != relative:
+            if not allow_materialized or (Path(directory) / name).relative_to(root / tool).as_posix() != relative:
                 _fail("native-profile-not-fresh")
         for name in dirs:
             path = Path(directory) / name
             _canonical(path)
             verify_private_path(path, directory=True)
-            if path.relative_to(root / "codex") not in allowed:
+            if path.relative_to(root / tool) not in allowed:
                 _fail("native-profile-not-fresh")
 
 
-def materialize_session(root, *, source, identity_paths, session_id, **binding):
+def materialize_session(root, *, source, identity_paths, session_id, tool="codex", **binding):
     from .native_agent_materialization import MaterializationError, anonymous_file
 
+    tool = _tool(tool)
     binding = _binding(**binding)
     root = _load(root, binding)
     recipients = _json(_read(root / POLICY, 4096))["recipients"]
-    admission = _admit(binding, recipients, root=root, operation="materialize-session", destination=source)
+    admission = _admit(binding, recipients, root=root, operation="materialize-session", destination=source, tool=tool)
     if not isinstance(session_id, str) or str(uuid.UUID(session_id)) != session_id:
         _fail("invalid-native-session")
     with _lock(root), sigterm_cancellation():
-        entries, recovered_recipients = _decode(source, identity_paths, binding)
+        entries, recovered_recipients = _decode(source, identity_paths, binding, tool)
         if recipients != recovered_recipients:
             _fail("profile-recipient-mismatch")
         selected = [(path, data) for path, data in entries.items()
-                    if _json(data.splitlines()[0])["payload"]["id"] == session_id]
+                    if _session_id(path, data, tool) == session_id]
         if len(selected) != 1:
             _fail("native-session-missing-or-ambiguous")
         relative, payload = selected[0]
-        target = root / "codex" / relative
-        _fresh_session_target(root, relative, allow_materialized=True)
+        target = root / tool / relative
+        _fresh_session_target(root, relative, allow_materialized=True, tool=tool)
 
         def revalidate(*, allow_materialized=False):
-            if _admit(binding, recipients, root=root, operation="materialize-session", destination=source) != admission:
+            if _admit(binding, recipients, root=root, operation="materialize-session", destination=source, tool=tool) != admission:
                 _fail("native-admission-changed")
-            _fresh_session_target(root, relative, allow_materialized=allow_materialized)
+            _fresh_session_target(root, relative, allow_materialized=allow_materialized, tool=tool)
             for directory in (target.parent, *target.parent.parents):
                 if directory.is_relative_to(root) or directory == root.parent:
                     _fsync_directory(directory)
 
         if target.exists() or target.is_symlink():
-            with _capture_barrier(root) as (barrier, expected):
+            with _capture_barrier(root, tool, binding["workspace"]) as (barrier, expected):
                 if barrier.read(target, MAX_BYTES) != payload:
                     _fail("native-materialization-target-mismatch")
                 revalidate(allow_materialized=True)
                 os.fsync(barrier.sources[target])
-                if _inventory(root) != expected:
+                if _inventory(root, tool, binding["workspace"]) != expected:
                     _fail("source-changed")
                 barrier.check()
             return {"ok": True, "state": "history-materialized", "recovered_commit": True,
@@ -574,7 +640,7 @@ def materialize_session(root, *, source, identity_paths, session_id, **binding):
                     "scope": "single-session-history-only", "native_resume_verified": False}
 
         for parent in reversed(target.parent.parents):
-            if parent.is_relative_to(root / "codex") and not parent.exists():
+            if parent.is_relative_to(root / tool) and not parent.exists():
                 parent.mkdir(mode=0o700)
         target.parent.mkdir(mode=0o700, exist_ok=True)
         try:

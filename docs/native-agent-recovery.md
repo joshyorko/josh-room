@@ -1,7 +1,8 @@
 # Native agent recovery checkpoint
 
 This opt-in checkpoint isolates a Room-owned T3 process and preserves allowlisted
-Codex session files in an independently versioned age-encrypted local reference.
+Codex and qualified Claude session files in independently versioned age-encrypted
+local references.
 It does not yet establish native continuation across disposable machines.
 Normal Save and Enter do not enable, capture, or restore agent profiles.
 
@@ -11,7 +12,7 @@ Normal Save and Enter do not enable, capture, or restore agent profiles.
 | --- | --- | --- |
 | T3 Code | Dedicated process home and provider environment; database capture blocked | NOT RUN; unsafe database projection unresolved |
 | Codex CLI | Admitted native-file capture/verification and explicit single-session materialization; history-only, whole-profile restore blocked | NOT RUN; provider authentication and a real new-turn acceptance remain required |
-| Claude Code | Dedicated process environment only; capture blocked | NOT RUN; versioned safe capture policy unresolved |
+| Claude Code | Opt-in 2.1.310 main linear text-only native capture/verification/single-file materialization | NOT RUN; runtime/auth/account acceptance unqualified |
 | Antigravity | Research only | Unsupported |
 | OpenCode | Research only | Unsupported |
 
@@ -101,12 +102,17 @@ policy/config files must be regular owner-only files, with no links. The policy
 must remain outside the workspace and native profile. The command does not write
 this authority from workspace metadata or transcript content.
 
-The document has exactly `format: "josh-room.native-agent-admission.v1"` and
-`grants`, a bounded list. Each grant has these fields:
+The document has exactly `format` and `grants`, a bounded list. Original format
+`josh-room.native-agent-admission.v1` remains codex-only. To opt into Claude, use
+`josh-room.native-agent-admission.v2`; every grant must additionally include a
+nonempty unique `tools` list drawn from `codex` and `claude`. The selected tool must
+be explicitly listed. T3 recovery remains unqualified. Upgrading Josh Room never
+expands an old grant automatically. Each grant has these fields:
 
 | Field | Required binding |
 | --- | --- |
 | `dimension`, `room`, `profile` | Exact operator-authorized identifiers |
+| `tools`, v2 only | Explicit `codex` and/or `claude` opt-in; v1 implicitly permits only codex |
 | `workspace` | Canonical real Git top-level directory |
 | `profile_root` | Exact dedicated native root, outside workspace/reference roots |
 | `repository` | Exact normalized `host`, `namespace`, `name` matched against host-observed local Git origin |
@@ -193,3 +199,44 @@ Runtime resume/account compatibility and an observed new turn remain unverified.
 Fresh native authentication must be established separately; no auth material is
 recovered from the reference. Whole-profile restore, all #190 Save selections,
 T3/Claude native restore, and the release hold remain unchanged.
+
+
+## Qualified Claude native history slice
+
+Use `--tool claude` explicitly with configure, capture, verify, and
+materialize-session. Codex remains the default. Claude references use the separate
+`josh-room.native-claude-history.v1` envelope and are rejected by Codex operations.
+A v2 host grant must name Claude; original v1 grants remain codex-only.
+
+Only Claude Code 2.1.310 main-session JSONL under the selected native
+`projects/<encoded canonical workspace>/<session UUID>.jsonl` is accepted.
+Qualification is limited to canonical short ASCII workspace encodings of at most
+200 characters. Every row must retain the exact cwd, session ID, version,
+canonical message UUID, timestamp, external-user/main-session status, and a
+complete linear parent chain. Messages are text-only user/assistant records;
+the file must end with an assistant message. Qualified optional cache usage
+counters are preserved. Content is scanned before encryption and after decryption.
+
+Sidechains/subagents, tools/results, images/attachments, file-history snapshots,
+compaction/progress/queue records, unknown fields, non-text payloads, missing or
+branched ancestry, other versions and long-path hashing are unavailable. This
+conservative subset is not a claim that every daily Claude session is portable.
+Unsupported records fail the entire capture; they are not stripped or rewritten.
+Credentials/settings/auth roots and other projects are never recursively copied.
+
+Cold materialization retains original native bytes, session/message identity and
+on-disk ancestry. The matching SDK 0.3.310 discovered/read that history with all
+network, socket and subprocess APIs prohibited. The SDK message view returns
+original message IDs and `session_id`; raw `parentUuid` ancestry is verified in
+the unchanged native file, not invented as an SDK return field.
+
+Do not use the SDK's SessionStore-backed resume loader for this recovery path.
+The audited loader creates named plaintext staging and copies authentication/
+configuration from another root. Josh Room instead uses its admitted anonymous
+single-file transaction and only filesystem SDK readers in acceptance tests.
+No SDK code or binaries are distributed by Josh Room.
+
+See [Claude source/provenance and API audit](claude-native-recovery-audit.md).
+T3's [missing native recovery API](t3-native-recovery-audit.md) is a separate
+upstream blocker. No user credential or paid request resolves that API gap.
+Every #190 row remains unavailable and no native-new-turn claim is enabled.

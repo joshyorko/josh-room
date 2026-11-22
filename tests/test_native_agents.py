@@ -283,12 +283,12 @@ def test_source_replacement_after_lease_admission_is_rejected(profile, identitie
     target = rollout(root, binding)
     original_entries = agents._entries
 
-    def replace_before_read(root, binding, barrier, expected):
+    def replace_before_read(root, binding, barrier, expected, tool="codex"):
         replacement = target.with_name("replacement")
         replacement.write_bytes(target.read_bytes())
         replacement.chmod(0o600)
         os.replace(replacement, target)
-        return original_entries(root, binding, barrier, expected)
+        return original_entries(root, binding, barrier, expected, tool)
 
     monkeypatch.setattr(agents, "_entries", replace_before_read)
     output = tmp_path / "never-published.age"

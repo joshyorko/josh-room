@@ -266,10 +266,11 @@ completion.
 ## Opt-in agent session checkpoint
 
 The [native agent recovery checkpoint](docs/native-agent-recovery.md) provides
-host-admitted T3 process isolation and encrypted Codex session-file capture and
-verification. Explicit single-session Codex history materialization uses a Linux
+host-admitted T3 process isolation and encrypted Codex/qualified Claude native-file
+capture and verification. Explicit single-session Codex history materialization uses a Linux
 anonymous-inode transaction; whole-profile native restore remains blocked.
-Codex capture/materialization are history-only; T3 and Claude native capture remain blocked. Normal Save and Enter are unchanged.
+Codex and the narrow Claude linear-text slice are history-only. T3 capture remains
+blocked on a missing upstream identity-preserving recovery API. Normal Save and Enter are unchanged.
 
 ## Evidence and current limits
 

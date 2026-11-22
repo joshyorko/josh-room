@@ -27,7 +27,7 @@ def test_capabilities_bypasses_auth_and_runtime(monkeypatch, capsys):
     assert result["ok"] is True
     assert result["native_resume_verified"] is False
     assert result["providers"]["t3"]["capture"] == "blocked"
-    assert result["providers"]["claude"]["capture"] == "blocked"
+    assert result["providers"]["claude"]["capture"] == "history-only"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="native recovery is Linux-qualified only")
@@ -117,3 +117,11 @@ def test_materialization_uncertain_commit_is_reported_truthfully(monkeypatch, ca
     result = json.loads(capsys.readouterr().out)
     assert result["state"] == "commit-uncertain" and result["committed"] is True
     assert result["native_resume_verified"] is False
+
+
+def test_claude_cli_requires_explicit_tool_selector_and_keeps_save_unavailable(tmp_path):
+    flags = binding(tmp_path)
+    args = native_agents_cli.build_parser().parse_args(["capture", *flags, "--tool", "claude", "--output", str(tmp_path / "reference.age"), "--recipient", "age1" + "a" * 58, "--recipient", "age1" + "b" * 58])
+    assert args.tool == "claude"
+    support = native_agents.capabilities()["providers"]["claude"]
+    assert support["capture"] == "history-only" and support["selectable"] is False and support["restore"] == "blocked"
