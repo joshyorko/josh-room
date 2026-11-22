@@ -11,6 +11,10 @@
       this.resultsEl = document.getElementById('sql-results');
       this.runBtn = document.getElementById('btn-sql-run');
       this.downloadBtn = document.getElementById('btn-download-sqlite');
+      const initialPreset = dataLayer.descriptor.sql_presets?.[0];
+      if (initialPreset && this.inputEl.value === this.inputEl.defaultValue) {
+        this.inputEl.value = initialPreset.sql;
+      }
       this._bind();
     }
 
@@ -37,24 +41,21 @@
     }
 
     renderPresets(descriptor) {
+      const focusedId = this.presetsEl.contains(document.activeElement)
+        ? document.activeElement.getAttribute('data-preset-id') : null;
       this.presetsEl.textContent = '';
       const presets = (descriptor && descriptor.sql_presets) || [];
-      presets.forEach((preset, idx) => {
+      for (const preset of presets) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'hud-btn';
         btn.textContent = preset.name;
         btn.title = preset.description || preset.sql;
         btn.setAttribute('data-preset-id', preset.id);
-        btn.addEventListener('click', () => {
-          this.inputEl.value = preset.sql;
-          this.execute();
-        });
+        btn.addEventListener('click', () => this.execute(preset.sql));
         this.presetsEl.appendChild(btn);
-        if (idx === 0 && !this.inputEl.dataset.userEdited) {
-          this.inputEl.value = preset.sql;
-        }
-      });
+        if (preset.id === focusedId) btn.focus({ preventScroll: true });
+      }
     }
 
     execute(overrideSql) {
