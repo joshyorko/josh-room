@@ -1,6 +1,6 @@
 # Historical file recovery (draft)
 
-`josh-room recovery tree|inspect|extract ROOM --dimension DIMENSION --snapshot EXACT_ID --path RELATIVE --json`
+`josh-room recovery tree|inspect|diff|extract ROOM --dimension DIMENSION --snapshot EXACT_ID --path RELATIVE --json`
 uses the existing authenticated catalog/descriptor context, including ciphertext
 verification and Dimension credentials. `latest` is rejected. The selected
 Logical JAT must match its catalog, Dimension, encryption domain and repository.
@@ -11,7 +11,7 @@ Room hydration, migrations or marker updates.
 directory; the returned `next_offset` resumes that same immutable directory.
 Directories are read on demand via content-addressed tree blobs. There is no
 global workspace item ceiling, but each tree/blob must fit the existing bounded
-Restic capture (4 MiB). A larger directory fails closed rather than appearing
+Restic capture (4 MiB), with a 128 MiB aggregate read budget per request. A larger directory fails closed rather than appearing
 complete. Paging rereads the selected directory; this is not a persisted index.
 
 `inspect` reports a SHA-256 and size. Plaintext preview is withheld pending
@@ -49,3 +49,36 @@ Unicode directory recovered separately. This uses synthetic catalog authority
 and a real local encrypted Restic repository, not a live object-store credential
 or installed VSIX. Windows, wire-byte measurements, installed VSIX, native
 RCC/JAT and live R2/MinIO/S3 acceptance remain unproven. v1.0.0 remains on hold.
+
+## Comparison and native navigation
+
+`diff --compare-snapshot EXACT_OTHER_ID` compares the same path within the
+same authenticated Room/Dimension. File comparisons use verified SHA-256;
+directory comparisons use immutable Restic subtree identities (no recursive
+text diff). Added/removed/modified/unchanged are relative to the historical
+source. `diff --workspace EXPLICIT_ROOT` compares a file to an explicitly
+selected current workspace on Linux using no-follow directory handles and the
+current capture exclusions. Windows current-file comparison fails closed;
+A↔B comparison is platform-independent source logic but not Windows-qualified.
+No content is displayed, and text diffs remain `withheld-policy`.
+
+The native Logical JAT row offers **Browse Recovery Point…**. QuickPick keeps
+its initial Room/Dimension/point while paging, navigating, inspecting checksums,
+recovering to a Save Dialog destination, or comparing digests. Canceling a
+picker makes no extraction call. Untrusted workspaces can browse metadata but
+cannot recover or compare. Results open as JSON metadata, never executable
+historical documents. This is not yet the requested syntax preview/diff editor.
+
+Final validation: 135 focused Python tests passed with real Restic 0.19.1.
+The same synthetic six-byte recovery measured 2,412 blob bytes / 3 calls on the
+final run (tree metadata varies with synthetic file timestamps). The earlier
+2,552-byte observation is retained above; neither includes wire overhead or
+authentication. Security/controller suites: 115 passed; the real symlink case
+initially failed on host Restic 0.20.0, then passed with pinned 0.19.1.
+Node suite: 375 passed / 4 skipped / 1 failed due to missing system-Python
+botocore; the single failed case passed with the existing project venv on PATH.
+The four new native-navigation cases passed. The VSIX packaged and installed
+successfully into disposable isolated extension/user directories; installed
+controller help and source byte checks (package JSON ignores VS Code-added
+installation metadata) are separate from UI acceptance.
+No installed interactive QuickPick/diff or live provider acceptance is claimed.

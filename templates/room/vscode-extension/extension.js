@@ -5192,6 +5192,18 @@ function logicalSnapshotSummary(result) {
   ].join("\n");
 }
 
+async function browseRecoveryPoint(preselected) {
+  const context = await selectedLogicalSnapshot(preselected, "Browse Recovery Point");
+  if (!context) return "cancelled";
+  const dimensionId = explicitDimensionId(context);
+  const pinned = { ...context, dimension_id: dimensionId };
+  const dimension = context.dimension || { id: dimensionId, provider: context.provider };
+  return require("./recovery-actions").browseRecovery(vscode, pinned, (args) =>
+    runSelectedEncryption(nativeRegistry.dimensionArgs(args, dimensionId), activeWorkspace(), dimension, {
+      title: "Reading historical recovery point…", action: "historical file recovery",
+    }), activeWorkspace());
+}
+
 async function inspectLogicalSnapshot(preselected) {
   assertWorkspaceTrusted("inspect a logical JAT");
   const context = await selectedLogicalSnapshot(preselected, "Josh: Inspect Logical JAT");
@@ -5527,6 +5539,7 @@ function activateNative(context) {
   register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
   register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.browseRecoveryPoint", browseRecoveryPoint);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.exportPortableJat", exportPortableJat);
   register(context, "joshRoom.extractLogicalSnapshot", extractLogicalSnapshot);

@@ -60,3 +60,10 @@ An empty Secret Service lookup is normal before the first credential is stored.
 The native helper's silent no-match exit is recognized as reachable; locked,
 disconnected and other error results remain unavailable. Credentials still use
 the native secure store, never a plaintext fallback.
+
+## Recover a historical file without entering a Room
+
+The additive `recovery tree|inspect|diff|extract` commands require an exact
+historical point. See [historical recovery](historical-recovery.md) for absent
+destination safety, format capabilities, native navigation and current limits.
+Portable snapshots continue to use the existing explicit whole-Room workflow.

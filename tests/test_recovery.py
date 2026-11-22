@@ -5,12 +5,12 @@ import os
 from types import SimpleNamespace
 
 import pytest
+from test_room_store_lifecycle import _context, _descriptor
 
 from josh_room.logical_jat import LogicalJat
 from josh_room.recovery import Recovery
 from josh_room.restic_store import ResticStore
 from josh_room.room_store_lifecycle import RoomStoreLifecycleError
-from test_room_store_lifecycle import _context, _descriptor
 
 
 def synthetic(nodes, blobs=None):
@@ -125,3 +125,80 @@ def test_real_restic_three_pins(tmp_path):
         assert not (tmp_path / "subtree" / "large.bin").exists()
         print(json.dumps({"blob_bytes_read": result["blob_bytes_read"], "blob_calls": result["blob_calls"],
                           "selected_bytes": 6, "unrelated_bytes": 2 * 1024 * 1024, "pins": len(pins)}))
+
+
+def test_metadata_comparison_and_current_no_follow(tmp_path):
+    node, blobs = file()
+    first = synthetic([node], blobs)
+    other_node, other_blobs = file(data=b"new\n")
+    second = synthetic([other_node], other_blobs)
+    assert first.diff("old.txt", other=second)["change"] == "modified"
+    assert first.diff("old.txt", other=first)["change"] == "unchanged"
+    (tmp_path / "old.txt").write_bytes(b"old\n")
+    assert first.diff("old.txt", workspace=tmp_path)["change"] == "unchanged"
+    (tmp_path / "old.txt").unlink()
+    assert first.diff("old.txt", workspace=tmp_path)["change"] == "removed"
+    (tmp_path / "old.txt").symlink_to("missing")
+    with pytest.raises(RoomStoreLifecycleError):
+        first.diff("old.txt", workspace=tmp_path)
+
+
+def test_marker_and_late_cancel_leave_no_plaintext(tmp_path):
+    marker, blobs = file(name=".josh-room.json")
+    with pytest.raises(RoomStoreLifecycleError):
+        synthetic([marker], blobs).extract(".josh-room.json", tmp_path / "absent")
+    node, blobs = file()
+    recovery = synthetic([node], blobs)
+    token = SimpleNamespace(cancelled=False)
+    recovery.cancel = token
+    original = recovery.content
+    def cancel_after_read(row):
+        data = original(row)
+        token.cancelled = True
+        return data
+    recovery.content = cancel_after_read
+    with pytest.raises(RoomStoreLifecycleError):
+        recovery.extract("old.txt", tmp_path / "absent")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_promotion_race_preserves_competing_destination(tmp_path, monkeypatch):
+    import josh_room.recovery as module
+    from josh_room.room_store_operations import _rename_directory_noreplace
+    node, blobs = file()
+    def raced(source, target):
+        target.write_bytes(b"other actor")
+        _rename_directory_noreplace(source, target)
+    monkeypatch.setattr(module, "_rename_directory_noreplace", raced)
+    with pytest.raises(RuntimeError):
+        synthetic([node], blobs).extract("old.txt", tmp_path / "absent")
+    assert (tmp_path / "absent").read_bytes() == b"other actor"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["absent"]
+
+
+def test_cli_parser_dispatch_preserves_pin(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from josh_room import cli
+    node, blobs = file()
+    recovery = synthetic([node], blobs)
+    @contextmanager
+    def opened(args, instance, **kwargs):
+        assert kwargs == {"project_id": "source", "snapshot_id": "jat-source"}
+        yield recovery.context
+    monkeypatch.setattr(cli, "_open_room_store_context", opened)
+    args = cli.build_parser().parse_args(["recovery", "extract", "source", "--dimension", "archive",
+                                   "--snapshot", "jat-source", "--path", "old.txt",
+                                   "--destination", str(tmp_path / "extracted"), "--json"])
+    result = cli.dispatch(args, tmp_path)
+    assert result["status"] == "recovered"
+    assert (tmp_path / "extracted").read_bytes() == b"old\n"
+
+
+def test_dispatch_rejects_resolved_alias_and_latest(tmp_path):
+    from josh_room.recovery import run_recovery
+    node, blobs = file()
+    context = synthetic([node], blobs).context
+    for snapshot in ("latest", "different-point"):
+        with pytest.raises(RoomStoreLifecycleError):
+            run_recovery(context, SimpleNamespace(snapshot=snapshot))

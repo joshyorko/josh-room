@@ -12,9 +12,13 @@ import stat
 import tempfile
 from pathlib import Path
 
-from .private_paths import protect_private_directory
+from .private_paths import protect_private_directory, protect_private_file
 from .room_store_lifecycle import RoomStoreLifecycleError, _selected_logical_record
-from .room_store_operations import _portable_path_key, _relative_parts, _rename_directory_noreplace
+from .room_store_operations import (
+    _portable_path_key,
+    _relative_parts,
+    _rename_directory_noreplace,
+)
 
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 MAX_FILES = 10000
@@ -39,6 +43,8 @@ class Recovery:
         if snapshot.tree_id != self.workspace["tree_id"]:
             fail("recovery-tree-mismatch")
         self.identity = {
+            "provider": getattr(context.dimension, "provider", None),
+            "connection_id": getattr(context.dimension, "connection_id", None),
             "dimension_id": self.body["dimension_id"],
             "room_id": self.body["room_id"],
             "snapshot_id": record["snapshot_id"],
@@ -59,6 +65,8 @@ class Recovery:
         _, raw = self.store._capture(["cat", "blob", digest])
         self.calls += 1
         self.bytes_read += len(raw)
+        if self.bytes_read > 2 * MAX_BYTES:
+            fail("recovery-read-budget")
         if hashlib.sha256(raw).hexdigest() != digest:
             fail("recovery-integrity")
         return raw
@@ -94,6 +102,34 @@ class Recovery:
                 fail("recovery-path-absent")
             node = candidates[0]
         return node
+
+    def fingerprint(self, path):
+        try:
+            node = self.selected(path)
+        except RoomStoreLifecycleError as error:
+            if error.code == "recovery-path-absent":
+                return None
+            raise
+        if node.get("type") == "dir":
+            if not isinstance(node.get("subtree"), str) or not _DIGEST.fullmatch(node["subtree"]):
+                fail("recovery-integrity")
+            return {"type": "dir", "tree_id": node.get("subtree")}
+        data = self.content(node)
+        return {"type": "file", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+    def diff(self, path, other=None, workspace=None):
+        before = self.fingerprint(path)
+        if other is not None:
+            after = other.fingerprint(path)
+            target = other.identity
+        else:
+            after = current_fingerprint(workspace, path)
+            target = {"kind": "explicit-current-workspace"}
+        return self.receipt(path=path, before=before, after=after, compare_to=target,
+                            change="unchanged" if before == after else
+                            "added" if before is None else "removed" if after is None else "modified",
+                            compare_blob_bytes_read=other.bytes_read if other is not None else None,
+                            text_diff="withheld-policy")
 
     def receipt(self, **extra):
         return {"ok": True, **self.identity, "mode": "on-demand listing",
@@ -184,26 +220,74 @@ class Recovery:
                 else:
                     data = self.content(row)
                     with output.open("xb") as stream:
-                        os.chmod(output, 0o600)
+                        protect_private_file(output)
                         stream.write(data)
                         stream.flush()
                         os.fsync(stream.fileno())
                     digest = hashlib.sha256(data).hexdigest()
                     if hashlib.sha256(output.read_bytes()).hexdigest() != digest:
                         fail("recovery-integrity")
-                    digests.append({"path": relative.as_posix().removeprefix("selection/"), "sha256": digest})
+                    digests.append({"path": relative.as_posix().replace("selection", node["name"], 1), "sha256": digest})
             self.checkpoint()
             _rename_directory_noreplace(stage / "selection", target)
         return self.receipt(status="recovered", entries=len(plan), files=len(digests),
                             logical_bytes=total, verified_files=digests)
 
 
+def current_fingerprint(workspace, path):
+    """Explicit Linux current-root comparison with no-follow directory handles."""
+    from .workspace_policy import load_capture_policy
+    parts = _relative_parts(path)
+    if not workspace or os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
+        fail("recovery-current-unsupported")
+    root = Path(workspace).absolute()
+    handles = []
+    try:
+        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+        handles.append(descriptor)
+        for part in root.parts[1:]:
+            descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            handles.append(descriptor)
+        if load_capture_policy(root, directory_fd=descriptor).is_excluded(path):
+            fail("recovery-current-excluded")
+        for part in parts[:-1]:
+            descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            handles.append(descriptor)
+        descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+        handles.append(descriptor)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_BYTES:
+            fail("recovery-current-unsafe")
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, 65536):
+            size += len(chunk)
+            if size > MAX_BYTES:
+                fail("recovery-budget")
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            fail("recovery-current-changed")
+        return {"type": "file", "size": size, "sha256": digest.hexdigest()}
+    except FileNotFoundError:
+        return None
+    except OSError:
+        fail("recovery-current-unsafe")
+    finally:
+        for descriptor in reversed(handles):
+            os.close(descriptor)
+
+
 def run_recovery(context, args):
     if args.snapshot == "latest":
+        fail("recovery-exact-snapshot-required")
+    if context.selected_record is None or context.selected_record.get("snapshot_id") != args.snapshot:
         fail("recovery-exact-snapshot-required")
     recovery = Recovery(context)
     if args.recovery_command == "tree":
         return recovery.tree(args.path, args.offset, args.limit)
+    if args.recovery_command == "diff":
+        return recovery.diff(args.path, workspace=args.workspace)
     if args.recovery_command == "inspect":
         return recovery.inspect(args.path)
     return recovery.extract(args.path, args.destination, args.dry_run)

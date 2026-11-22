@@ -62,7 +62,8 @@
     "onCommand:joshRoom.jatExport",
     "onCommand:joshRoom.jatCopy",
     "onView:joshRoom.rooms",
-    "onCommand:joshRoom.splitWorkspace"
+    "onCommand:joshRoom.splitWorkspace",
+    "onCommand:joshRoom.browseRecoveryPoint"
   ],
   "main": "./extension.js",
   "extensionKind": [
@@ -284,6 +285,10 @@
       {
         "command": "joshRoom.splitWorkspace",
         "title": "Josh: Split Workspace into Rooms (Preview Only)"
+      },
+      {
+        "command": "joshRoom.browseRecoveryPoint",
+        "title": "Josh Room: Browse Recovery Point\u2026"
       }
     ],
     "viewsContainers": {
@@ -514,6 +519,11 @@
           "command": "joshRoom.deleteRecoveryPoint",
           "when": "view == joshRoom.rooms && (viewItem == jat || viewItem == logical-jat)",
           "group": "recovery@9"
+        },
+        {
+          "command": "joshRoom.browseRecoveryPoint",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "recovery@1"
         }
       ]
     }

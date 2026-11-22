@@ -588,7 +588,7 @@ def build_parser() -> argparse.ArgumentParser:
     _json_option(serve)
     recovery = commands.add_parser("recovery")
     recovery_commands = recovery.add_subparsers(dest="recovery_command", required=True)
-    for action in ("tree", "inspect", "extract"):
+    for action in ("tree", "inspect", "diff", "extract"):
         command = recovery_commands.add_parser(action)
         command.add_argument("project")
         command.add_argument("--dimension", required=True)
@@ -597,6 +597,10 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "tree":
             command.add_argument("--offset", type=int, default=0)
             command.add_argument("--limit", type=int, default=100)
+        if action == "diff":
+            comparison = command.add_mutually_exclusive_group(required=True)
+            comparison.add_argument("--compare-snapshot")
+            comparison.add_argument("--workspace", type=Path)
         if action == "extract":
             command.add_argument("--destination", type=Path, required=True)
             command.add_argument("--dry-run", action="store_true")
@@ -2512,6 +2516,16 @@ def dispatch(args, instance: Path) -> dict:
             raise ValueError("historical recovery requires an exact recovery point")
         with _open_room_store_context(args, instance, project_id=args.project,
                                       snapshot_id=args.snapshot) as context:
+            if args.recovery_command == "diff" and args.compare_snapshot:
+                from .recovery import Recovery
+                if args.compare_snapshot == "latest":
+                    raise ValueError("comparison requires an exact recovery point")
+                with _open_room_store_context(args, instance, project_id=args.project,
+                                              snapshot_id=args.compare_snapshot) as other:
+                    if (context.selected_record.get("snapshot_id") != args.snapshot
+                            or other.selected_record.get("snapshot_id") != args.compare_snapshot):
+                        raise ValueError("historical comparison identity mismatch")
+                    return Recovery(context).diff(args.path, other=Recovery(other))
             return run_recovery(context, args)
     if args.command == "room-store":
         config = private_config() or {}
