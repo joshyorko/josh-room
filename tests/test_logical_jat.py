@@ -284,9 +284,10 @@ def test_optional_authenticated_policy_provenance_preserves_legacy_descriptor_re
     _validator().validate(legacy)
     assert LogicalJat.from_dict(legacy).to_dict() == legacy
     current = copy.deepcopy(legacy)
-    current['source']['composition_policy'] = 'inherited-rules-v1'
-    _validator().validate(current)
-    assert LogicalJat.from_dict(current).to_dict() == current
+    for supported in ('inherited-rules-v1', 'inherited-rules-v2'):
+        current['source']['composition_policy'] = supported
+        _validator().validate(current)
+        assert LogicalJat.from_dict(current).to_dict() == current
     for unsupported in (None, True, 'latest', 'unverified'):
         current['source']['composition_policy'] = unsupported
         with pytest.raises((TypeError, ValueError)):

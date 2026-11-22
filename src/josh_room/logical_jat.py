@@ -252,7 +252,7 @@ def _validate(body: object) -> dict[str, Any]:
         _validate_component(components[name], name, workspace)
 
     source = _object(descriptor["source"], "source", set(), {"git_commit", "dirty", "composition_policy"})
-    if "composition_policy" in source and source["composition_policy"] != "inherited-rules-v1":
+    if "composition_policy" in source and source["composition_policy"] not in ("inherited-rules-v1", "inherited-rules-v2"):
         raise ValueError("unsupported inherited composition policy provenance")
     if "git_commit" in source and (
         not isinstance(source["git_commit"], str)
