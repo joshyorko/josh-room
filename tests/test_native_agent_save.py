@@ -116,9 +116,13 @@ def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypat
 def test_direct_history_save_rejects_unqualified_scope(tmp_path, monkeypatch, platform, provider, enabled):
     monkeypatch.setattr(save.sys, "platform", platform)
     monkeypatch.setattr(save, "SAVE_ADAPTER_QUALIFIED", enabled)
-    with pytest.raises(ValueError, match="not enabled|qualified native Linux MinIO"):
-        with save.open_scope(None, SimpleNamespace(provider=provider), None, "room", tmp_path, "a" * 64, "b" * 64):
-            pytest.fail("unqualified history Save opened storage")
+    with (
+        pytest.raises(ValueError, match="not enabled|qualified native Linux MinIO"),
+        save.open_scope(
+            None, SimpleNamespace(provider=provider), None, "room", tmp_path, "a" * 64, "b" * 64
+        ),
+    ):
+        pytest.fail("unqualified history Save opened storage")
 
 
 
