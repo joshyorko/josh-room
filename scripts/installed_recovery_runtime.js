@@ -3,6 +3,21 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
+function candidateExecPrefix(artifact, receiptFile) {
+  if (!/^sha256:[0-9a-f]{64}$/.test(artifact || "") || !receiptFile) throw new Error("RCC inherited streams require an artifact and receipt");
+  return ["--no-build", "env", "exec", "--artifact", artifact,
+    "--permissive-local", "--receipt-file", receiptFile, "--inherit-streams", "--"];
+}
+
+function verifyCandidateReceipt(filename, artifact, read = fs.readFileSync) {
+  let value;
+  try { value = JSON.parse(read(filename, "utf8")); } catch { throw new Error("RCC qualification execution receipt missing or invalid"); }
+  const digest = value?.artifactDigest ?? value?.artifact_digest;
+  const code = value?.exitCode ?? value?.exit_code;
+  if (digest !== artifact || code !== 0) throw new Error("RCC qualification execution receipt artifact or exit mismatch");
+  return { artifact: digest, exit_code: code, verified: true };
+}
+
 function candidateProcessOptions(base, rccHome, controllerRoot, environment) {
   for (const directory of [rccHome, controllerRoot]) {
     const relative = path.relative(base, directory);
@@ -29,6 +44,11 @@ function runCandidatePhase(phase, command, args, { env, cwd, record,
     elapsed_ms: Math.max(0, now() - started), exit_code: Number.isInteger(result.status) ? result.status : null,
     timed_out: result.error?.code === "ETIMEDOUT", stdout_bytes: Buffer.byteLength(stdout), stderr_bytes: Buffer.byteLength(stderr),
     progress_steps: [...stderr.matchAll(/Progress:\s*(\d{1,2})\/(\d{1,2})/g)].map(match => [Number(match[1]), Number(match[2])]).slice(-20),
+    failure_categories: [
+      ["missing-inherited-streams-receipt", /--receipt-file is required with --inherit-streams/],
+      ["python-module-not-found", /\bModuleNotFoundError\b/], ["python-import-error", /\bImportError\b/],
+      ["python-syntax-error", /\bSyntaxError\b/],
+    ].filter(([, pattern]) => pattern.test(stderr)).map(([name]) => name),
     progress_categories: ["acquir", "extract", "materializ", "relocat", "verif", "lock"]
       .filter(value => stderr.toLowerCase().includes(value)) });
   record(event);
@@ -61,11 +81,12 @@ function candidateRuntime(candidate, env) {
     || !path.isAbsolute(candidate.command || "")) throw new Error("Invalid explicit RCC qualification input");
   return {
     command: candidate.command,
-    args: (args, receiptFile) => ["--no-build", "env", "exec", "--artifact", candidate.artifact,
-      "--permissive-local", ...(receiptFile ? ["--receipt-file", receiptFile] : []), "--inherit-streams", "--json",
-      "--", "python", path.join(env.JOSH_ROOM_ACCEPTANCE_ROOT, "windows_recovery_controller.py"), ...args, "--json"],
+    args: (args, receiptFile) => [...candidateExecPrefix(candidate.artifact,
+      receiptFile || path.join(env.JOSH_ROOM_ACCEPTANCE_ROOT, "rcc-diagnostic-receipt.json")),
+      "python", path.join(env.JOSH_ROOM_ACCEPTANCE_ROOT, "windows_recovery_controller.py"), ...args, "--json"],
     env, controllerArtifact: candidate.artifact, mode: "managed",
     jatRoot: env.JOSH_ROOM_JAT_ROOT,
   };
 }
-module.exports = { applyInstalledRuntime, candidateRuntime, runCandidatePhase, candidateProcessOptions };
+module.exports = { applyInstalledRuntime, candidateRuntime, runCandidatePhase, candidateProcessOptions,
+  candidateExecPrefix, verifyCandidateReceipt };

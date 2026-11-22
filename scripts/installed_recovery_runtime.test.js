@@ -5,6 +5,7 @@ const { applyInstalledRuntime } = require("./installed_recovery_runtime");
 const { candidateRuntime } = require("./installed_recovery_runtime");
 const { runCandidatePhase } = require("./installed_recovery_runtime");
 const { candidateProcessOptions } = require("./installed_recovery_runtime");
+const { candidateExecPrefix, verifyCandidateReceipt } = require("./installed_recovery_runtime");
 
 test("Windows runtime override reaches canonical activated instances, not another extension", () => {
   const received = [];
@@ -109,4 +110,39 @@ test("candidate acquisition rejects paths outside its task root", () => {
     [path.join(base, "rcc"), path.resolve("foreign-controller")]]) {
     assert.throws(() => candidateProcessOptions(base, home, controller, {}), /owned fixture/);
   }
+});
+
+test("inherited RCC execution always supplies its required receipt before the child separator", () => {
+  const artifact = "sha256:" + "b".repeat(64);
+  const args = candidateExecPrefix(artifact, "owned-receipt.json");
+  assert.equal(args[args.indexOf("--receipt-file") + 1], "owned-receipt.json");
+  assert.ok(args.indexOf("--receipt-file") < args.indexOf("--"));
+  assert.ok(args.includes("--no-build"));
+  assert.throws(() => candidateExecPrefix(artifact), /require an artifact and receipt/);
+  const runtime = candidateRuntime({ command: pathAbsolute("rcc"), subject_sha: "a".repeat(40), artifact },
+    { JOSH_ROOM_ACCEPTANCE_ROOT: pathAbsolute("fixture") });
+  assert.ok(runtime.args(["status"]).includes("--receipt-file"));
+});
+
+test("probe receipt admission rejects missing, malformed, wrong-artifact and nonzero exit results", () => {
+  const artifact = "sha256:" + "b".repeat(64);
+  const read = value => () => JSON.stringify(value);
+  assert.deepEqual(verifyCandidateReceipt("owned", artifact, read({ artifactDigest: artifact, exitCode: 0 })),
+    { artifact, exit_code: 0, verified: true });
+  for (const value of [{ artifactDigest: "sha256:" + "c".repeat(64), exitCode: 0 },
+    { artifactDigest: artifact, exitCode: 1 }, { artifactDigest: artifact, exitCode: "0" }]) {
+    assert.throws(() => verifyCandidateReceipt("owned", artifact, read(value)), /artifact or exit mismatch/);
+  }
+  assert.throws(() => verifyCandidateReceipt("owned", artifact, () => { throw new Error("private missing path"); }), /receipt missing or invalid/);
+  assert.throws(() => verifyCandidateReceipt("owned", artifact, () => "private malformed content"), /receipt missing or invalid/);
+});
+
+test("probe failure retains only allowlisted error categories", () => {
+  const records = [];
+  assert.throws(() => runCandidatePhase("interpreter-probe", "rcc", [], {
+    record: event => records.push(event), invoke: () => ({ status: 1, stdout: "",
+      stderr: "private ambient value: --receipt-file is required with --inherit-streams" }),
+  }), /interpreter-probe failed/);
+  assert.deepEqual(records[1].failure_categories, ["missing-inherited-streams-receipt"]);
+  assert.doesNotMatch(JSON.stringify(records), /ambient|private/);
 });

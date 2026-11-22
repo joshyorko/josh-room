@@ -106,6 +106,36 @@ def sanitize_ui_stdin():
     print(json.dumps(public_cli_failure({"error": message}, forbidden=forbidden)))
 
 
+def _run_cli(base, args, candidate, *, run=subprocess.run):
+    receipt_path = None
+    if candidate:
+        artifact = candidate.get("artifact")
+        if not isinstance(artifact, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact):
+            raise RuntimeError("candidate CLI artifact is invalid")
+        receipt_path = base / "provider-runtime" / f"cli-rcc-{uuid.uuid4().hex}.json"
+        prefix = [candidate["command"], "--no-build", "env", "exec", "--artifact", artifact,
+                  "--permissive-local", "--receipt-file", str(receipt_path),
+                  "--inherit-streams", "--", "python"]
+    else:
+        prefix = [sys.executable]
+    result = run([*prefix, "-m", "josh_room", *args, "--json"],
+                 capture_output=True, timeout=120, check=False)
+    verified = None
+    if receipt_path is not None:
+        try:
+            value = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raise RuntimeError("candidate CLI execution receipt is missing or invalid") from None
+        if not isinstance(value, dict):
+            raise RuntimeError("candidate CLI execution receipt is invalid")
+        digest = value.get("artifactDigest", value.get("artifact_digest"))
+        code = value.get("exitCode", value.get("exit_code"))
+        if digest != artifact or type(code) is not int or code != result.returncode:
+            raise RuntimeError("candidate CLI execution receipt artifact or exit mismatch")
+        verified = {"artifact": digest, "exit_code": code, "verified": True}
+    return result, verified
+
+
 def main():
     if sys.platform != "win32":
         raise RuntimeError("native Windows is required")
@@ -159,17 +189,17 @@ def main():
 
     def cli(*args, expected=0):
         (base / "provider-stage.json").write_text(json.dumps({"stage": list(args[:2])}))
-        prefix = [candidate["command"], "--no-build", "env", "exec", "--artifact", candidate["artifact"],
-                  "--permissive-local", "--inherit-streams", "--", "python"] if candidate else [sys.executable]
-        result = subprocess.run([*prefix, "-m", "josh_room", *args, "--json"],
-                                capture_output=True, timeout=120, check=False)
+        result, verified = _run_cli(base, args, candidate)
         body = json.loads(result.stdout)
         if (result.returncode == 0) != (expected == 0):
             (base / "provider-cli-failed.json").write_text(json.dumps({
                 "stage": list(args[:2]), "exit_code": result.returncode,
                 **public_cli_failure(body, forbidden=(access, secret))}))
             raise RuntimeError("production CLI failed: " + " ".join(args[:2]))
-        progress["commands"].append({"command": list(args[:2]), "state": "PASS"})
+        command = {"command": list(args[:2]), "state": "PASS"}
+        if verified is not None:
+            command["rcc_receipt"] = verified
+        progress["commands"].append(command)
         (base / "provider-progress.json").write_text(json.dumps(progress))
         return body
 

@@ -11,7 +11,7 @@ const repository = path.resolve(__dirname, "..");
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const digest = data => crypto.createHash("sha256").update(data).digest("hex");
 const pins = require("./windows_recovery_dependencies.json");
-const { runCandidatePhase, candidateProcessOptions } = require("./installed_recovery_runtime");
+const { runCandidatePhase, candidateProcessOptions, candidateExecPrefix, verifyCandidateReceipt } = require("./installed_recovery_runtime");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 180000, ...options });
@@ -217,9 +217,11 @@ async function main() {
         ["env", "acquire", "--archive", candidateInput.archive, "--permissive-local", "--json"], { ...processOptions, env, record }));
       if ((acquired.artifactDigest || acquired.artifact_digest) !== candidateInput.artifact
         || acquired.verification?.valid !== true) throw new Error("RCC candidate acquisition failed verification");
-      const prefix = ["--no-build", "env", "exec", "--artifact", candidateInput.artifact, "--permissive-local", "--inherit-streams", "--"];
+      const probeReceipt = path.join(base, "interpreter-rcc-receipt.json");
+      const prefix = candidateExecPrefix(candidateInput.artifact, probeReceipt);
       const probe = JSON.parse(runCandidatePhase("interpreter-probe", rcc.executable, [...prefix, "python", "-c",
         "import json,sys,josh_room; print(json.dumps({'prefix':sys.prefix,'executable':sys.executable,'controller':josh_room.__file__}))"], { ...processOptions, env, record }));
+      receipt.rcc_probe_receipt = verifyCandidateReceipt(probeReceipt, candidateInput.artifact);
       if (!path.resolve(probe.executable).toLowerCase().startsWith(path.resolve(rccHome).toLowerCase() + path.sep)
         || !path.resolve(probe.controller).toLowerCase().startsWith(path.resolve(env.PYTHONPATH).toLowerCase() + path.sep)) {
         throw new Error("Candidate interpreter or controller origin mismatch");
@@ -232,7 +234,7 @@ async function main() {
         "JOSH_ROOM_CONTROLLER_ROOT", "JOSH_ROOM_CONTROLLER_ARTIFACT", "JOSH_ROOM_JAT_ROOT"].map(key => [key, env[key]]));
       await fsp.writeFile(path.join(base, "candidate-runtime.json"), JSON.stringify({ ...JSON.parse(env.JOSH_ROOM_ACCEPTANCE_RCC), env: runtimeEnv }));
       providerCommand = rcc.executable;
-      providerPrefix = [...prefix, "python"];
+      providerPrefix = [...candidateExecPrefix(candidateInput.artifact, path.join(base, "provider-rcc-receipt.json")), "python"];
     }
     const providerErrors = fs.openSync(path.join(base, "provider-errors.log"), "w");
     provider = spawn(providerCommand, [...providerPrefix, path.join(__dirname, "windows_recovery_provider.py")], {
@@ -375,11 +377,12 @@ async function main() {
         if (notification && fixtureEnv) {
           const candidateRuntime = fixtureEnv.JOSH_ROOM_ACCEPTANCE_RCC && JSON.parse(fixtureEnv.JOSH_ROOM_ACCEPTANCE_RCC);
           const sanitizeCommand = candidateRuntime?.command || python;
-          const sanitizePrefix = candidateRuntime ? ["--no-build", "env", "exec", "--artifact", candidateRuntime.artifact,
-            "--permissive-local", "--inherit-streams", "--", "python"] : [];
+          const sanitizeReceipt = path.join(base, "sanitize-rcc-receipt.json");
+          const sanitizePrefix = candidateRuntime ? [...candidateExecPrefix(candidateRuntime.artifact, sanitizeReceipt), "python"] : [];
           const sanitized = spawnSync(sanitizeCommand, [...sanitizePrefix, path.join(__dirname, "windows_recovery_provider.py"), "--sanitize-ui"], {
             env: fixtureEnv, input: notification, encoding: "utf8", timeout: 10000, maxBuffer: 65536,
           });
+          if (candidateRuntime && sanitized.status === 0) verifyCandidateReceipt(sanitizeReceipt, candidateRuntime.artifact);
           receipt.native_notification = sanitized.status === 0 ? JSON.parse(sanitized.stdout) : { diagnostic: "sanitizer unavailable" };
         }
       } catch { receipt.native_widget = { diagnostic: "unavailable" }; }

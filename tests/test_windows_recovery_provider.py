@@ -2,7 +2,10 @@
 import json
 import secrets
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from scripts import windows_recovery_provider as fixture
 from scripts.windows_recovery_provider import public_cli_failure
@@ -46,3 +49,60 @@ def test_ui_diagnostic_uses_native_target_values_only_in_memory(tmp_path, monkey
     assert "private native store" in result["error"]
     assert all(value not in result["error"] for value in values.values())
     assert list(tmp_path.iterdir()) == [ledger]
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_candidate_cli_receipt_binds_actual_positive_and_negative_exit(tmp_path, exit_code):
+    (tmp_path / "provider-runtime").mkdir()
+    candidate = {"command": "owned-rcc", "artifact": "sha256:" + "a" * 64}
+    receipts = []
+
+    def run(command, **options):
+        receipt = Path(command[command.index("--receipt-file") + 1])
+        assert receipt.parent == tmp_path / "provider-runtime"
+        assert command.index("--receipt-file") < command.index("--inherit-streams") < command.index("--")
+        assert options == {"capture_output": True, "timeout": 120, "check": False}
+        receipt.write_text(json.dumps({"artifactDigest": candidate["artifact"], "exitCode": exit_code}))
+        receipts.append(receipt)
+        return SimpleNamespace(returncode=exit_code, stdout=b"{}")
+
+    for _ in range(2):
+        result, verified = fixture._run_cli(tmp_path, ["recovery", "inspect"], candidate, run=run)
+        assert result.returncode == exit_code
+        assert verified == {"artifact": candidate["artifact"], "exit_code": exit_code, "verified": True}
+    assert receipts[0] != receipts[1]
+
+
+@pytest.mark.parametrize("kind", ["missing", "malformed", "artifact", "exit", "string-exit", "boolean-exit"])
+def test_candidate_cli_refuses_unverified_receipt(tmp_path, kind):
+    (tmp_path / "provider-runtime").mkdir()
+    candidate = {"command": "owned-rcc", "artifact": "sha256:" + "a" * 64}
+
+    def run(command, **_):
+        receipt = Path(command[command.index("--receipt-file") + 1])
+        value = {"artifactDigest": candidate["artifact"], "exitCode": 0}
+        if kind == "artifact":
+            value["artifactDigest"] = "sha256:" + "b" * 64
+        elif kind == "exit":
+            value["exitCode"] = 1
+        elif kind == "string-exit":
+            value["exitCode"] = "0"
+        elif kind == "boolean-exit":
+            value["exitCode"] = False
+        if kind != "missing":
+            receipt.write_text("{" if kind == "malformed" else json.dumps(value))
+        return SimpleNamespace(returncode=0, stdout=b"{}")
+
+    with pytest.raises(RuntimeError, match="execution receipt"):
+        fixture._run_cli(tmp_path, [], candidate, run=run)
+
+
+def test_source_cli_mode_keeps_existing_python_route(tmp_path):
+    def run(command, **options):
+        assert command == [fixture.sys.executable, "-m", "josh_room", "dimensions", "list", "--json"]
+        assert options["check"] is False
+        return SimpleNamespace(returncode=0, stdout=b"{}")
+
+    _, verified = fixture._run_cli(tmp_path, ["dimensions", "list"], None, run=run)
+    assert verified is None
+    assert list(tmp_path.iterdir()) == []

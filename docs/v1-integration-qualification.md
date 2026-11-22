@@ -307,6 +307,17 @@ before and after acquisition. Acquire and interpreter deadlines remain 180
 and 60 seconds; no solve, fallback or default-pin change is permitted. This
 environment alignment is a hypothesis under test, not a native acceptance pass.
 
+The subsequent `0ce17e3` harness run acquired the exact corrected archive in
+124,667 ms with exit zero. Its interpreter probe failed in 26 ms with exit one,
+before provider setup. Inspection of pinned RCC's execution contract identified
+an omitted required receipt file when inheriting streams; the old receipt did
+not retain stderr, so no verbatim diagnostic match is claimed. The next harness
+supplies owned receipts for the probe, fixture, sanitizer and every provider CLI
+call, then verifies the artifact and actual numeric child exit. Intended CLI
+denials retain their nonzero exits rather than being mistaken for harness
+failures. Interpreter origin checks, private storage, deadlines and no-build
+mode remain unchanged. Native provider/UI acceptance is still pending.
+
 The exact combined baseline `e67bc289059766db51c7320773305d6e47089e41`
 passed all ten ordinary checks, with two intentional publication skips and no
 unresolved review threads. Its independent recheck closed both remaining UI
