@@ -388,6 +388,12 @@ or invalid counts and wrong ancestry stop reconciliation; unknown added bytes ar
 never reported as zero. Payload comparisons frame each entry with its path, type,
 mode and byte length, so an empty file and empty directory are distinct. Existing
 immutable descriptors remain readable and are verified from restored payloads.
-Previously saved policies and snapshots are never rewritten; a child created by
-an older build retains its saved policy. Review and explicitly approve any missing
-exclusion rules before saving further content in such a child.
+New child descriptors authenticate `source.composition_policy=inherited-rules-v1`
+only after the rebased private-view proof. Generated leading `#` rules are escaped
+as `\#` and decoded identically by Python and the native dirty-state reader.
+Previously saved policies and snapshots are never rewritten. Historical descriptors
+without provenance remain readable/restorable, but child updates from those
+baselines refuse even a fresh operation ID. User-editable policy comments cannot
+supply provenance. Safe legacy-policy reconciliation is not implemented; retain
+the old recovery points and use an explicitly approved new capture rather than
+blindly upgrading a descriptor or retrying with another operation ID.

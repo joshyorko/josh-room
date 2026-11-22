@@ -95,8 +95,10 @@ function compileCapturePolicy(defaults = readDefaultCapturePolicy(), { ignoreTex
     if (Buffer.byteLength(ignoreText, "utf8") > MAX_IGNORE_BYTES) throw new Error("workspace ignore file exceeds 64 KiB");
     let userRuleCount = 0;
     for (const line of ignoreText.split("\n")) {
-      const rule = line.trim();
-      if (!rule || rule.startsWith("#")) continue;
+      let rule = line.trim();
+      if (!rule) continue;
+      if (rule.startsWith("\\#")) rule = rule.slice(1);
+      else if (rule.startsWith("#")) continue;
       if (rule.startsWith("!")) throw new Error("workspace ignore rules cannot reinclude paths");
       if (userRuleCount >= MAX_IGNORE_RULES) throw new Error("workspace ignore file has too many rules");
       userRuleCount += 1;

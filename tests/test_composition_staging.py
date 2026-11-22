@@ -230,3 +230,21 @@ def test_rebased_rule_language_matches_parent_at_nested_child_boundaries():
         derived = CapturePolicy('0' * 64, tuple(_parts(p) for p in _inherited_exclusions(parent, child)), None, 'source-only')
         for path in paths:
             assert derived.is_excluded(path) == parent.is_excluded(child + '/' + path), (rule, child, path)
+
+
+@pytest.mark.parametrize('present', [False, True])
+def test_inherited_leading_hash_is_serialized_as_rule_and_reloaded(tmp_path, present):
+    from josh_room.workspace_policy import load_capture_policy
+    source, dimension, assignments, _ = fixture(tmp_path)
+    (source / '.josh-roomignore').write_text('child/#reports/**\n')
+    if present:
+        (source / 'child/#reports').mkdir()
+        (source / 'child/#reports/private.txt').write_text('synthetic excluded report')
+    preview = capture_plan(source, dimension, '1' * 32, 'parent', assignments)
+    view = tmp_path / 'view'
+    _child_view(source, 'child', view, preview['request'])
+    assert '\\#reports/**' in (view / '.josh-roomignore').read_text().splitlines()
+    reloaded = load_capture_policy(view)
+    assert reloaded.is_excluded('#reports/future.txt')
+    assert not reloaded.is_excluded('nested/#reports/future.txt')
+    assert not (view / '#reports').exists()
