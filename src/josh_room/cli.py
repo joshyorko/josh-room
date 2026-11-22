@@ -553,7 +553,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--hauler-manifest", dest="hauler_manifests", type=Path, action="append", default=[])
         command.add_argument("--hauler-file", dest="hauler_files", nargs=2, action="append", default=[], metavar=("PATH", "NAME"))
         command.add_argument("--brew-installed-prefix", type=Path, help="explicit qualified installed Homebrew closure; not a Brewfile recipe")
-        command.add_argument("--brew-formula", help="one official installed libc-only formula without formula dependencies")
+        command.add_argument("--brew-formula", help="qualified installed Hello or jq with its declared library/runtime closure")
         command.add_argument("--brew-directory", type=Path, help="Brewfile-only recipe export directory; never installed binaries")
         command.add_argument("--component-selection", help="versioned explicit Save component selection JSON")
         command.add_argument("--brew-archive", type=Path, help="reuse a saved Homebrew recovery archive in the native Room Store")

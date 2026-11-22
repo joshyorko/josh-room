@@ -108,17 +108,22 @@ Homebrew has three distinct meanings:
   not been verified by this checkpoint.
 - **Prepared recovery archive:** existing validated `--brew-archive` semantics,
   independently of a Brewfile recipe. It does not establish installed binaries.
-- **Installed prefix/binaries:** conditional v1 support for the qualified Hello
-  2.12.3 build on Debian 12 x86_64, at `/home/linuxbrew/.linuxbrew` only. The
+- **Installed prefix/binaries:** conditional support for the qualified Hello build or the
+  declared jq/oniguruma/Homebrew-glibc runtime closure on Debian 12 x86_64, at `/home/linuxbrew/.linuxbrew` only. The
   chooser offers an explicit installed selection after offline platform discovery;
   Preview additionally checks owner-controlled source directories, receipt-declared
-  `homebrew/core` bottle provenance, no formula dependencies, the qualified ELF
-  digest and captured loader/libc digests. Other packages/runtime bytes fail closed.
-  It saves the selected keg's regular files plus the two source runtime files,
+  `homebrew/core` bottle provenance and a supported runtime graph. V1 Hello keeps
+  its qualified hashes. V2 jq follows installed jq→oniguruma metadata plus the
+  explicit installed Homebrew glibc prerequisite, checks ELF library/SONAME/search
+  and required/provided symbol versions, and stores only reached runtime files
+  and receipts. Linux headers are recorded as metadata-only, not restored as
+  header contents. Other package families and unresolved/foreign runtimes fail closed.
+  The selected format saves its declared regular files and source runtime files,
   file modes and SHA256 values in the existing `homebrew_recovery` archive slot.
-  Five contained relative aliases replace the observed external OS-loader alias;
+  Contained relative aliases replace the observed source loader alias;
   the preview/manifest records that normalization. No Homebrew repository, cache,
-  configuration, other formula or keg symlink is included. This restores the
+  configuration or unrelated formula is included. V2 permits only contained
+  sibling-basename library links plus fixed opt/bin/runtime aliases. This restores the
   qualified package closure, not the Homebrew manager or an arbitrary prefix.
   See [qualification and restore commands](homebrew-feasibility.md).
 

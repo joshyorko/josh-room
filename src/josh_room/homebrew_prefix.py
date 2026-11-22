@@ -248,6 +248,10 @@ def _link(name, target):
 
 def capture(prefix, formula):
     """Read an explicitly selected immutable keg and its exact libc/loader bytes."""
+    if formula == "jq":
+        from .homebrew_declared import capture as capture_declared
+
+        return capture_declared(prefix, formula)
     native = native_platform()
     if str(Path(prefix)) != PREFIX or not re.fullmatch(
         r"[a-z0-9][a-z0-9+.-]{0,63}", formula or ""
@@ -430,6 +434,13 @@ def capture(prefix, formula):
 
 def validate_manifest(value):
     if (
+        isinstance(value, dict)
+        and value.get("format") == "josh-room-homebrew-installed-v2"
+    ):
+        from .homebrew_declared import validate_manifest as validate_declared
+
+        return validate_declared(value)
+    if (
         not isinstance(value, dict)
         or set(value)
         != {
@@ -544,6 +555,7 @@ def validate_manifest(value):
         if resolved not in all_names:
             _fail("installed link is dangling")
     for name in all_names:
+        check_material(name)
         for parent in PurePosixPath(name).parents:
             if str(parent) in files or str(parent) in links:
                 _fail("installed manifest has a non-directory parent")
@@ -732,16 +744,21 @@ def _parse_archive(blob):
         ]
     ):
         _fail("installed receipt provenance digest mismatch")
-    _elf(
-        data[
-            "Cellar/"
-            + manifest["formula"]
-            + "/"
-            + manifest["version"]
-            + "/bin/"
-            + manifest["formula"]
-        ]
-    )
+    if manifest["format"] == "josh-room-homebrew-installed-v2":
+        from .homebrew_declared import validate_payload
+
+        validate_payload(manifest, data)
+    else:
+        _elf(
+            data[
+                "Cellar/"
+                + manifest["formula"]
+                + "/"
+                + manifest["version"]
+                + "/bin/"
+                + manifest["formula"]
+            ]
+        )
     return manifest, data
 
 
@@ -988,7 +1005,7 @@ def restore(archive, prefix, *, expected_manifest_sha256):
     return {
         "ok": True,
         "status": "restored",
-        "format": FORMAT,
+        "format": manifest["format"],
         "manifest_sha256": manifest_digest(manifest),
         "file_count": len(data),
         "logical_bytes": sum(map(len, data.values())),
@@ -1057,14 +1074,14 @@ def capabilities():
     except (OSError, PrefixError):
         return {
             "available": False,
-            "reason": "requires qualified Debian 12 x86_64, owner-controlled exact prefix and tested Hello/runtime hashes",
+            "reason": "requires qualified Debian 12 x86_64, owner-controlled exact prefix and supported Hello or declared jq runtime closure",
         }
     return {
         "available": True,
         "format": FORMAT,
         "platform": native,
         "prefix": PREFIX,
-        "reason": "conditional: tested Hello 2.12.3 and loader/libc hashes only; source admission checked in Preview",
+        "reason": "conditional: qualified Hello build or jq/oniguruma with installed Homebrew glibc; declared ELF/runtime admission checked in Preview",
     }
 
 
@@ -1134,7 +1151,7 @@ def export_archive(source, destination):
     return {
         "ok": True,
         "status": "exported",
-        "format": FORMAT,
+        "format": manifest["format"],
         "manifest_sha256": manifest_digest(manifest),
         "archive_sha256": digest.hexdigest(),
         "archive_size": copied,

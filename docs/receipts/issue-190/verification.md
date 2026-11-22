@@ -235,3 +235,54 @@ suite (99 tests). Repeat real installed/archive acceptance and a new independent
 review are required at the fix SHA; they are not inferred from those unit results.
 A malicious same-UID writer can modify user-owned files after any completed
 verification; this is not claimed to provide a separate OS-user security boundary.
+
+## Declared jq closure and installed native Save
+
+The useful-tool vertical now uses actual installed metadata and ELF dependency
+closure, not an executable hash allowlist. V2 supports the selected jq family,
+its declared Oniguruma dependency, an explicitly installed Homebrew glibc runtime,
+and Linux-headers receipt metadata only. Source and target are Debian12 x86_64
+at the identical absent target prefix; no host prefix was mounted or changed.
+
+PASS: normal installed CLI Preview→Save→same-state already-saved→stale-plan
+refusal→immutable Store export against pinned real MinIO/native disposable keyring.
+PASS: target offline CLI plan/confirmed restore from exactly that Store export,
+10 file digests/modes,12 contained links,38-entry topology and no unrelated files.
+Restored jq1.8.2 JSON aggregation/Oniguruma regex/libm sqrt passed, tracing confirmed
+captured prefix runtime libraries, and occupied-prefix refusal left bytes unchanged.
+
+PASS: actual packaged/installed registered `joshRoom.save` with native component
+chooser, exact-prefix confirmation and formula input, full package-role preview,
+Save→already-saved→Cancel. The same marker remained after repeat/cancel. The final
+saved point exported a typed component through normal Store lifecycle; read-only
+catalog verification retained all3 synthetic history points. This uses an explicit
+local-build-fallback installed-container-CLI runtime override and identical host
+source-path mount; provider/keyring/CLI are real. It does not qualify managed RCC.
+
+PASS:221 focused Python archive/components/native CLI/controller/material/public
+storage checks;264 Node chooser/extension tests with2SKIP;repository-wide Ruff and
+whitespace. The Windows focused job also includes v2 parser/refusal tests; exact
+new-head CI is recorded separately. Earlier e4be60c LinuxCI and native Windows
+private runtime+prefix/selection job passed. Coordinator independently inspected
+that security-fix SHA and ran99 prefix/material tests; specialist delegation was
+unavailable. That coordinator recheck does not cover new v2 source.
+
+Retained setup failures: source jq bottle requiredGLIBC2.38/2.39, baseOS2.36 could
+not execute it; a normal explicit Homebrewglibc install closed the source ABI.
+World-writable synthetic receipts were refused; exact fixture modes were secured
+without byte changes. The first native test driver sent input to an editor command
+instead of QuickInput and stopped at validation; corrected Chromium input delivery
+plus a fresh isolated profile/CDP namespace produced the passing run.
+
+See `homebrew-jq-runtime.json`, `installed-jq-save-preview.png`,
+`installed-jq-save-driver.cjs` and `homebrew-jq-target-driver.py` for exact artifact
+hashes, source/runtime metadata, commands and boundaries. UI driver additionally
+requires a task-owned container CLI wrapper with only nonsecret environment,
+real isolated provider/Secret Service and the task root mounted at its identical
+host path. It must not target a user provider or host prefix.
+
+NOT RUN/SKIP: managed RCC/JAT artifact acceptance for this feature, native
+Windows/macOS installed restore, other tools/graphs/CPU/kernel/distro combinations,
+NSS/locales/services, populated-prefix merge, full Homebrew manager and cold-host
+native reinstall. #188 remains unavailable/blocked in the chooser, with Codex
+history-only explicitly labeled; no auth or new-turn continuation is copied.

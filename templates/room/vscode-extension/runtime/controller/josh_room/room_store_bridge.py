@@ -1394,6 +1394,8 @@ def _build_operations(
     modes = component_selection["components"] if component_selection else None
     installed_capture = None
     if homebrew_installed is not None:
+        if not modes or modes["homebrew_recovery"] != "refresh":
+            raise ValueError("installed Homebrew capture requires explicit refresh selection")
         if homebrew_archive is not None or homebrew_directory is not None:
             raise ValueError("select one Homebrew recovery input")
         from .homebrew_prefix import capture
@@ -1946,6 +1948,12 @@ def preview_room_store(
                         platform=installed["platform"], prefix=installed["prefix"],
                         estimated_logical_bytes=sum(record["bytes"] for record in installed["files"].values()),
                     )
+                    if "packages" in installed:
+                        output["component_plan"]["homebrew_recovery"].update(
+                            restore_mode="same-platform-exact-prefix-bundled-runtime",
+                            packages=[{"name": name, "version": package["version"], "role": package["role"]}
+                                      for name, package in installed["packages"].items()],
+                        )
                 return output
             else:
                 catalog, _catalog_etag = _read_catalog(

@@ -1,0 +1,595 @@
+{
+  "format_version": 1,
+  "issue": 190,
+  "date": "2026-11-22",
+  "classification": "synthetic real installed CLI+real isolated provider/keyring+two-container exact-prefix restore; registered installed VSIX explicit container-wheel runtime override",
+  "implementation_sha256": {
+    "src/josh_room/homebrew_prefix.py": "29d5087bfea27bfb2cd66f0238f0d0d4539c372b6e0f81646a9adc9570ce25ac",
+    "src/josh_room/homebrew_declared.py": "2e74c0663f2b7a06503d8b877ba20acc32d487e9a2b4d9d47958a6e41737d665",
+    "src/josh_room/cli.py": "25d4006ffb3d1d5e9077aa2bae5058e9f3ff666b9416559dc77d6258e2653e7f",
+    "src/josh_room/room_store_bridge.py": "2ad7a1433c5d37a2ce3a6d6a252867fe66d8974763584369d93fd1ff65ee1db3",
+    "vscode-extension/component-picker.js": "adcae018de5e4953a090ed745933eaf0da14899ecfbc05e822485bc5c5fb5d86"
+  },
+  "wheel_sha256": "62b85558094740514d55bcaba9c3917ca3a943227b367847d4a7492beb3cb32a",
+  "vsix_sha256": "e4f82b6cfa52116c3607a15035faedbca783655ec197f1e600ec1c789d11bdcd",
+  "wheel_source_bytes_match": true,
+  "fixture": {
+    "source_container": "codex190-prefix-source-tools-20261122",
+    "ui_source_container": "codex190-jq-ui-source-20261122",
+    "ui_source_id": "aa4e84d81704f45fd8649731b4fc0a07b33caa4cfc23590a447cd9ce7178e1c8",
+    "ui_image": "sha256:606f9b1c9f07e3e2e7e1d44a636b4cf23b4a49d2d55856da65ecdd3730092e32",
+    "clean_target": "codex190-jq-target-20261122",
+    "clean_target_id": "85ddcce2ef427009768f15fbf57c3a7c6e6d607653b3d5e2c790c05c01a71ba9",
+    "target_image": "sha256:2d5ebe9eb2bdbffe8eb813b80b5e17bf72c730ab31082038cc908f127cd1d5b6",
+    "prefix": "/home/linuxbrew/.linuxbrew",
+    "original_home": "/home/linuxbrew",
+    "runtime_prerequisite": "Homebrew glibc2.39_2, declared separately from jq\u2192oniguruma metadata",
+    "metadata_only_declared_prerequisite": "linux-headers@6.8/6.8.12_1 receipt, no header payload",
+    "source_and_ui_runtime_file_bytes_equal": true,
+    "source_functional_output": {
+      "match": true,
+      "math": 9,
+      "sum": 6
+    },
+    "ui_functional_output": {
+      "match": true,
+      "math": 9,
+      "sum": 6
+    },
+    "provider_state_accessed": false,
+    "images_snapshotted_after_credentials": false,
+    "services_changed": false,
+    "target_initial_prefix_state": "absent at creation; parent owns later restore state"
+  },
+  "manifest": {
+    "directories": [
+      "Cellar",
+      "Cellar/glibc",
+      "Cellar/glibc/2.39_2",
+      "Cellar/glibc/2.39_2/lib",
+      "Cellar/jq",
+      "Cellar/jq/1.8.2",
+      "Cellar/jq/1.8.2/bin",
+      "Cellar/jq/1.8.2/lib",
+      "Cellar/linux-headers@6.8",
+      "Cellar/linux-headers@6.8/6.8.12_1",
+      "Cellar/oniguruma",
+      "Cellar/oniguruma/6.9.10",
+      "Cellar/oniguruma/6.9.10/lib",
+      "bin",
+      "lib",
+      "opt"
+    ],
+    "elf": {
+      "Cellar/glibc/2.39_2/lib/ld-linux-x86-64.so.2": {
+        "interpreter": null,
+        "needed": [],
+        "provides": [
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.34",
+          "GLIBC_2.35",
+          "GLIBC_2.4",
+          "GLIBC_PRIVATE",
+          "ld-linux-x86-64.so.2"
+        ],
+        "requires": {},
+        "search": [],
+        "soname": "ld-linux-x86-64.so.2"
+      },
+      "Cellar/glibc/2.39_2/lib/libc.so.6": {
+        "interpreter": "/home/linuxbrew/.linuxbrew/Cellar/glibc/2.39_2/lib/ld-linux-x86-64.so.2",
+        "needed": [
+          "ld-linux-x86-64.so.2"
+        ],
+        "provides": [
+          "GLIBC_2.10",
+          "GLIBC_2.11",
+          "GLIBC_2.12",
+          "GLIBC_2.13",
+          "GLIBC_2.14",
+          "GLIBC_2.15",
+          "GLIBC_2.16",
+          "GLIBC_2.17",
+          "GLIBC_2.18",
+          "GLIBC_2.2.5",
+          "GLIBC_2.2.6",
+          "GLIBC_2.22",
+          "GLIBC_2.23",
+          "GLIBC_2.24",
+          "GLIBC_2.25",
+          "GLIBC_2.26",
+          "GLIBC_2.27",
+          "GLIBC_2.28",
+          "GLIBC_2.29",
+          "GLIBC_2.3",
+          "GLIBC_2.3.2",
+          "GLIBC_2.3.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.30",
+          "GLIBC_2.31",
+          "GLIBC_2.32",
+          "GLIBC_2.33",
+          "GLIBC_2.34",
+          "GLIBC_2.35",
+          "GLIBC_2.36",
+          "GLIBC_2.38",
+          "GLIBC_2.39",
+          "GLIBC_2.4",
+          "GLIBC_2.5",
+          "GLIBC_2.6",
+          "GLIBC_2.7",
+          "GLIBC_2.8",
+          "GLIBC_2.9",
+          "GLIBC_ABI_DT_RELR",
+          "GLIBC_PRIVATE",
+          "libc.so.6"
+        ],
+        "requires": {
+          "ld-linux-x86-64.so.2": [
+            "GLIBC_2.2.5",
+            "GLIBC_2.3",
+            "GLIBC_PRIVATE"
+          ]
+        },
+        "search": [],
+        "soname": "libc.so.6"
+      },
+      "Cellar/glibc/2.39_2/lib/libm.so.6": {
+        "interpreter": null,
+        "needed": [
+          "libc.so.6",
+          "ld-linux-x86-64.so.2"
+        ],
+        "provides": [
+          "GLIBC_2.15",
+          "GLIBC_2.18",
+          "GLIBC_2.2.5",
+          "GLIBC_2.23",
+          "GLIBC_2.24",
+          "GLIBC_2.25",
+          "GLIBC_2.26",
+          "GLIBC_2.27",
+          "GLIBC_2.28",
+          "GLIBC_2.29",
+          "GLIBC_2.31",
+          "GLIBC_2.32",
+          "GLIBC_2.35",
+          "GLIBC_2.38",
+          "GLIBC_2.39",
+          "GLIBC_2.4",
+          "libm.so.6"
+        ],
+        "requires": {
+          "ld-linux-x86-64.so.2": [
+            "GLIBC_PRIVATE"
+          ],
+          "libc.so.6": [
+            "GLIBC_2.2.5",
+            "GLIBC_2.36",
+            "GLIBC_2.4",
+            "GLIBC_ABI_DT_RELR",
+            "GLIBC_PRIVATE"
+          ]
+        },
+        "search": [],
+        "soname": "libm.so.6"
+      },
+      "Cellar/jq/1.8.2/bin/jq": {
+        "interpreter": "/home/linuxbrew/.linuxbrew/lib/ld.so",
+        "needed": [
+          "libjq.so.1",
+          "libonig.so.5",
+          "libc.so.6"
+        ],
+        "provides": [],
+        "requires": {
+          "libc.so.6": [
+            "GLIBC_2.2.5",
+            "GLIBC_2.3",
+            "GLIBC_2.3.4",
+            "GLIBC_2.34",
+            "GLIBC_2.38"
+          ]
+        },
+        "search": [
+          "/home/linuxbrew/.linuxbrew/Cellar/jq/1.8.2/lib",
+          "/home/linuxbrew/.linuxbrew/opt/gcc/lib/gcc/current",
+          "/home/linuxbrew/.linuxbrew/opt/oniguruma/lib",
+          "/home/linuxbrew/.linuxbrew/lib"
+        ],
+        "soname": null
+      },
+      "Cellar/jq/1.8.2/lib/libjq.so.1.0.4": {
+        "interpreter": null,
+        "needed": [
+          "libm.so.6",
+          "libonig.so.5",
+          "libc.so.6",
+          "ld-linux-x86-64.so.2"
+        ],
+        "provides": [],
+        "requires": {
+          "ld-linux-x86-64.so.2": [
+            "GLIBC_2.3"
+          ],
+          "libc.so.6": [
+            "GLIBC_2.14",
+            "GLIBC_2.2.5",
+            "GLIBC_2.3",
+            "GLIBC_2.3.4",
+            "GLIBC_2.33",
+            "GLIBC_2.34",
+            "GLIBC_2.36",
+            "GLIBC_2.38",
+            "GLIBC_2.4",
+            "GLIBC_2.7"
+          ],
+          "libm.so.6": [
+            "GLIBC_2.2.5",
+            "GLIBC_2.23",
+            "GLIBC_2.29",
+            "GLIBC_2.35",
+            "GLIBC_2.38",
+            "GLIBC_2.39"
+          ]
+        },
+        "search": [
+          "/home/linuxbrew/.linuxbrew/Cellar/jq/1.8.2/lib",
+          "/home/linuxbrew/.linuxbrew/opt/gcc/lib/gcc/current",
+          "/home/linuxbrew/.linuxbrew/opt/oniguruma/lib",
+          "/home/linuxbrew/.linuxbrew/lib"
+        ],
+        "soname": "libjq.so.1"
+      },
+      "Cellar/oniguruma/6.9.10/lib/libonig.so.5.5.0": {
+        "interpreter": null,
+        "needed": [
+          "libc.so.6"
+        ],
+        "provides": [],
+        "requires": {
+          "libc.so.6": [
+            "GLIBC_2.14",
+            "GLIBC_2.2.5",
+            "GLIBC_2.3.4",
+            "GLIBC_2.4"
+          ]
+        },
+        "search": [
+          "/home/linuxbrew/.linuxbrew/Cellar/oniguruma/6.9.10/lib",
+          "/home/linuxbrew/.linuxbrew/opt/gcc/lib/gcc/current",
+          "/home/linuxbrew/.linuxbrew/lib"
+        ],
+        "soname": "libonig.so.5"
+      }
+    },
+    "files": {
+      "Cellar/glibc/2.39_2/INSTALL_RECEIPT.json": {
+        "bytes": 1282,
+        "mode": 420,
+        "sha256": "0cff822b66975c800337979905ac15576c2bec34a1bf0ffbb741d55bf8098d33"
+      },
+      "Cellar/glibc/2.39_2/lib/ld-linux-x86-64.so.2": {
+        "bytes": 244352,
+        "mode": 365,
+        "sha256": "b5b4f11e78d71ebb1a72f144c57af7316c958bf1303d5dae528599250fe612f3"
+      },
+      "Cellar/glibc/2.39_2/lib/libc.so.6": {
+        "bytes": 2434912,
+        "mode": 365,
+        "sha256": "7eb4cc476ece274b0b353331a9e8410c62766b28d773dbe0452dd5976c5e3404"
+      },
+      "Cellar/glibc/2.39_2/lib/libm.so.6": {
+        "bytes": 1138256,
+        "mode": 365,
+        "sha256": "62f8b41b793a1858b3760c62aa978b57e67cd0a2fa698fd77b684e3cab28dfd8"
+      },
+      "Cellar/jq/1.8.2/INSTALL_RECEIPT.json": {
+        "bytes": 1086,
+        "mode": 420,
+        "sha256": "3557a0aa8cb1b44f0207d636f3941212585cc543d5e70877ae551973db4959f2"
+      },
+      "Cellar/jq/1.8.2/bin/jq": {
+        "bytes": 42480,
+        "mode": 365,
+        "sha256": "e38b63aefcf56199bde16a4d5059aaa39397de67f20ac483c9eb5708fa8be32e"
+      },
+      "Cellar/jq/1.8.2/lib/libjq.so.1.0.4": {
+        "bytes": 448400,
+        "mode": 365,
+        "sha256": "3fa40a4662b8dfa45be9a9eb12bcf360cbccbdeeeebc5ffe9e695d473297a1d1"
+      },
+      "Cellar/linux-headers@6.8/6.8.12_1/INSTALL_RECEIPT.json": {
+        "bytes": 890,
+        "mode": 420,
+        "sha256": "a95ad4005f4aa466133971d0f111b1988eb4f96d227dfc6c5c8861232e3fda8e"
+      },
+      "Cellar/oniguruma/6.9.10/INSTALL_RECEIPT.json": {
+        "bytes": 927,
+        "mode": 420,
+        "sha256": "34c8bac7457b4c3015ef3bb75049fc2f6b6ec456c0dc26c598b69192177358d7"
+      },
+      "Cellar/oniguruma/6.9.10/lib/libonig.so.5.5.0": {
+        "bytes": 707632,
+        "mode": 365,
+        "sha256": "8b5f2804726c62e054f1c433eb82387b8caf48e2950bda86b8cc99ab1c806bba"
+      }
+    },
+    "format": "josh-room-homebrew-installed-v2",
+    "formula": "jq",
+    "links": {
+      "Cellar/jq/1.8.2/lib/libjq.so.1": "libjq.so.1.0.4",
+      "Cellar/oniguruma/6.9.10/lib/libonig.so.5": "libonig.so.5.5.0",
+      "bin/jq": "../Cellar/jq/1.8.2/bin/jq",
+      "lib/ld-linux-x86-64.so.2": "../Cellar/glibc/2.39_2/lib/ld-linux-x86-64.so.2",
+      "lib/ld.so": "../Cellar/glibc/2.39_2/lib/ld-linux-x86-64.so.2",
+      "lib/libc.so.6": "../Cellar/glibc/2.39_2/lib/libc.so.6",
+      "lib/libjq.so.1": "../Cellar/jq/1.8.2/lib/libjq.so.1",
+      "lib/libm.so.6": "../Cellar/glibc/2.39_2/lib/libm.so.6",
+      "lib/libonig.so.5": "../Cellar/oniguruma/6.9.10/lib/libonig.so.5",
+      "opt/glibc": "../Cellar/glibc/2.39_2",
+      "opt/jq": "../Cellar/jq/1.8.2",
+      "opt/oniguruma": "../Cellar/oniguruma/6.9.10"
+    },
+    "normalization": {
+      "restored_loader_link": "../Cellar/glibc/2.39_2/lib/ld-linux-x86-64.so.2",
+      "source_loader_link": "/home/linuxbrew/.linuxbrew/opt/glibc/bin/ld.so"
+    },
+    "packages": {
+      "glibc": {
+        "keg": "Cellar/glibc/2.39_2",
+        "receipt_sha256": "0cff822b66975c800337979905ac15576c2bec34a1bf0ffbb741d55bf8098d33",
+        "role": "loader-runtime-prerequisite",
+        "runtime_dependencies": [
+          {
+            "name": "linux-headers@6.8",
+            "version": "6.8.12_1"
+          }
+        ],
+        "version": "2.39_2"
+      },
+      "jq": {
+        "keg": "Cellar/jq/1.8.2",
+        "receipt_sha256": "3557a0aa8cb1b44f0207d636f3941212585cc543d5e70877ae551973db4959f2",
+        "role": "selected-runtime",
+        "runtime_dependencies": [
+          {
+            "name": "oniguruma",
+            "version": "6.9.10"
+          }
+        ],
+        "version": "1.8.2"
+      },
+      "linux-headers@6.8": {
+        "keg": "Cellar/linux-headers@6.8/6.8.12_1",
+        "receipt_sha256": "a95ad4005f4aa466133971d0f111b1988eb4f96d227dfc6c5c8861232e3fda8e",
+        "role": "declared-kernel-build-metadata-only",
+        "runtime_dependencies": [],
+        "version": "6.8.12_1"
+      },
+      "oniguruma": {
+        "keg": "Cellar/oniguruma/6.9.10",
+        "receipt_sha256": "34c8bac7457b4c3015ef3bb75049fc2f6b6ec456c0dc26c598b69192177358d7",
+        "role": "declared-runtime-library",
+        "runtime_dependencies": [],
+        "version": "6.9.10"
+      }
+    },
+    "platform": {
+      "ID": "debian",
+      "VERSION_ID": "12",
+      "arch": "x86_64",
+      "os": "linux"
+    },
+    "prefix": "/home/linuxbrew/.linuxbrew",
+    "receipt_sha256": "3557a0aa8cb1b44f0207d636f3941212585cc543d5e70877ae551973db4959f2",
+    "runtime": {
+      "ld-linux-x86-64.so.2": "Cellar/glibc/2.39_2/lib/ld-linux-x86-64.so.2",
+      "libc.so.6": "Cellar/glibc/2.39_2/lib/libc.so.6",
+      "libm.so.6": "Cellar/glibc/2.39_2/lib/libm.so.6"
+    },
+    "version": "1.8.2"
+  },
+  "source": {
+    "preview_plan": {
+      "estimated_logical_bytes": 5020217,
+      "manifest_sha256": "6dd09e290bf772b8d418d39340b0729b70f2fe7794824ff05eabfb2eed8978af",
+      "mode": "refresh",
+      "packages": [
+        {
+          "name": "jq",
+          "role": "selected-runtime",
+          "version": "1.8.2"
+        },
+        {
+          "name": "glibc",
+          "role": "loader-runtime-prerequisite",
+          "version": "2.39_2"
+        },
+        {
+          "name": "oniguruma",
+          "role": "declared-runtime-library",
+          "version": "6.9.10"
+        },
+        {
+          "name": "linux-headers@6.8",
+          "role": "declared-kernel-build-metadata-only",
+          "version": "6.8.12_1"
+        }
+      ],
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "restore_mode": "same-platform-exact-prefix-bundled-runtime",
+      "state": "pending"
+    },
+    "save_status": "saved",
+    "snapshot_id": "a24211c498814072b15474aec4092d30",
+    "repeat_status": "already-saved",
+    "repeat_same_snapshot": true,
+    "stale_plan": {
+      "error": "component-plan-stale",
+      "ok": false
+    },
+    "component_reference": {
+      "archive_sha256": "5409d7a7943b9bcda27e93b357ca4bfcc99f673738c94d4505766429c9e47e49",
+      "archive_size": 2036733,
+      "kind": "homebrew-recovery",
+      "member_basename": "homebrew-recovery.tar.zst",
+      "snapshot": {
+        "repository_format": 2,
+        "repository_id": "0be7f6d78f3bfa41dd1d35f7f7410c4852019d82b1763e94cc76a61522d9380c",
+        "snapshot_id": "21807e399dbde8a5d07d7977804e5bb11b35a85b557949f13dd65bedea6297fc",
+        "tree_id": "862dfd355a7e0af8e14d0f302d10f52fdaaf7a60acaa7c5bead435f8d889b865"
+      }
+    },
+    "export": {
+      "archive_sha256": "5409d7a7943b9bcda27e93b357ca4bfcc99f673738c94d4505766429c9e47e49",
+      "archive_size": 2036733,
+      "format": "josh-room-homebrew-installed-v2",
+      "manifest_sha256": "6dd09e290bf772b8d418d39340b0729b70f2fe7794824ff05eabfb2eed8978af",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "status": "exported"
+    },
+    "export_matches_component": true,
+    "pinned_jat_source_validation": "PASS"
+  },
+  "target": {
+    "prefix_initially_absent": true,
+    "network": "none",
+    "root_readonly": true,
+    "plan": {
+      "file_count": 10,
+      "logical_bytes": 5020217,
+      "manifest_sha256": "6dd09e290bf772b8d418d39340b0729b70f2fe7794824ff05eabfb2eed8978af",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "restore_mode": "same-platform-exact-prefix-bundled-libc",
+      "status": "ready"
+    },
+    "restore": {
+      "file_count": 10,
+      "format": "josh-room-homebrew-installed-v2",
+      "logical_bytes": 5020217,
+      "manifest_sha256": "6dd09e290bf772b8d418d39340b0729b70f2fe7794824ff05eabfb2eed8978af",
+      "ok": true,
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "restore_mode": "same-platform-exact-prefix-bundled-libc",
+      "status": "restored"
+    },
+    "files_verified": 10,
+    "links_verified": 12,
+    "topology_entries": 38,
+    "no_unrelated_files": true,
+    "all_file_modes_and_digests_match": true,
+    "version": "jq-1.8.2",
+    "functional": {
+      "sum": 6,
+      "match": true,
+      "math": 9
+    },
+    "bundled_runtime_loaded": true,
+    "loader_init_paths": [
+      "/home/linuxbrew/.linuxbrew/lib/ld.so",
+      "/home/linuxbrew/.linuxbrew/lib/libc.so.6",
+      "/home/linuxbrew/.linuxbrew/lib/libm.so.6",
+      "/home/linuxbrew/.linuxbrew/opt/oniguruma/lib/libonig.so.5",
+      "/home/linuxbrew/.linuxbrew/Cellar/jq/1.8.2/lib/libjq.so.1"
+    ],
+    "occupied_prefix_refused": {
+      "error": "installed-homebrew-unavailable",
+      "ok": false,
+      "reason": "installed restore requires an absent prefix; no overwrite or merge is permitted"
+    },
+    "after_refusal_bytes_unchanged": true
+  },
+  "installed_native": {
+    "runtime": "explicit local-build-fallback container installed-wheel override; host-identical source mount; NOT managed RCC artifact",
+    "provider": "verified real loopback MinIO",
+    "secretService": "isolated task-only production Secret Service",
+    "stages": [
+      {
+        "registeredCommand": "joshRoom.save",
+        "result": "saved",
+        "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic Ui Jq Dimension: Synthetic Prefix Folder: /tmp/codex-room190-prefix-20261122-VGoTKl/ui-jq-workspace Capture: Workspace plus the explicit component plan below Save Preview \u00b7 Logical entries: 2 Workspace scan: 61 B Restic data estimate: determined by Save Homebrew recovery will be checked during Save. hauler_content: omit \u2014 excluded homebrew_recovery: refresh \u2014 pending \u00b7 same-platform-exact-prefix-bundled-runtime \u00b7 debian 12 x86_64 \u00b7 /home/linuxbrew/.linuxbrew \u00b7 5020217 logical bytes \u00b7 jq@1.8.2 (selected-runtime), glibc@2.39_2 (loader-runtime-prerequisite), oniguruma@6.9.10 (declared-runtime-library), linux-headers@6.8@6.8.12_1 (declared-kernel-build-metadata-only) rcc_environment: omit \u2014 excluded",
+        "markerSnapshot": "232b84527f234cf7ba8d4263a998a1a1"
+      },
+      {
+        "registeredCommand": "joshRoom.save",
+        "result": "already-saved",
+        "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic Ui Jq Dimension: Synthetic Prefix Folder: /tmp/codex-room190-prefix-20261122-VGoTKl/ui-jq-workspace Capture: Workspace plus the explicit component plan below Save Preview \u00b7 Logical entries: 2 Workspace scan: 61 B Restic data estimate: determined by Save Homebrew recovery will be checked during Save. hauler_content: omit \u2014 excluded homebrew_recovery: refresh \u2014 pending \u00b7 same-platform-exact-prefix-bundled-runtime \u00b7 debian 12 x86_64 \u00b7 /home/linuxbrew/.linuxbrew \u00b7 5020217 logical bytes \u00b7 jq@1.8.2 (selected-runtime), glibc@2.39_2 (loader-runtime-prerequisite), oniguruma@6.9.10 (declared-runtime-library), linux-headers@6.8@6.8.12_1 (declared-kernel-build-metadata-only) rcc_environment: omit \u2014 excluded",
+        "markerSnapshot": "232b84527f234cf7ba8d4263a998a1a1"
+      },
+      {
+        "registeredCommand": "joshRoom.save",
+        "result": "cancelled",
+        "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic Ui Jq Dimension: Synthetic Prefix Folder: /tmp/codex-room190-prefix-20261122-VGoTKl/ui-jq-workspace Capture: Workspace plus the explicit component plan below Save Preview \u00b7 Logical entries: 2 Workspace scan: 54 B Restic data estimate: determined by Save Homebrew recovery will be checked during Save. hauler_content: omit \u2014 excluded homebrew_recovery: refresh \u2014 pending \u00b7 same-platform-exact-prefix-bundled-runtime \u00b7 debian 12 x86_64 \u00b7 /home/linuxbrew/.linuxbrew \u00b7 5020217 logical bytes \u00b7 jq@1.8.2 (selected-runtime), glibc@2.39_2 (loader-runtime-prerequisite), oniguruma@6.9.10 (declared-runtime-library), linux-headers@6.8@6.8.12_1 (declared-kernel-build-metadata-only) rcc_environment: omit \u2014 excluded",
+        "markerSnapshot": "232b84527f234cf7ba8d4263a998a1a1"
+      }
+    ],
+    "ok": true,
+    "sourceVersion": "0.1.52",
+    "initialSnapshot": "5197e8d2652c4375bf3bf7b9c9272be6",
+    "savedSnapshot": "232b84527f234cf7ba8d4263a998a1a1"
+  },
+  "retained_failures": [
+    "normal jq bottle failed against original Debian12 glibc2.36: requiredGLIBC2.38/2.39; explicit normal Homebrewglibc install fixed source runtime",
+    "world-writable synthetic installed receipts refused; only exact four fixtures secured644 with identical byte hashes",
+    "first native driver used editor type command instead of QuickInput input; it stopped at validation with no Save",
+    "reused VSCode profile did not start fresh test; final independent profile/CDP namespace used"
+  ],
+  "limits": [
+    "not managed RCC/controller/JAT artifact",
+    "wheel external pinned runtime assets manually supplied unchanged",
+    "only jq package family graph and exact Debian12/x86_64 prefix; not general work-jatt or complete Homebrew manager",
+    "Linuxheaders contents excluded; authoritative receipt recorded metadata-only",
+    "no populated-prefix merge/overwrite",
+    "no other CPU/kernel/distro/macOS/Windows installed restore or NSS/locales/services qualification",
+    "no cold-host native reinstallation",
+    "independent security delegation unavailable; e4be60c coordinator review covers earlier fix, not v2; new review needed"
+  ],
+  "installed_native_export": {
+    "archive_sha256": "8963218e00c187603458ec8dd95912224510a125e9bd6edbc7c192de92638fb9",
+    "archive_size": 2036731,
+    "format": "josh-room-homebrew-installed-v2",
+    "manifest_sha256": "a475236633f9891c493e2fc0506058c0725b9fb4ec5cd088d0fa442d164a79e6",
+    "ok": true,
+    "platform": {
+      "ID": "debian",
+      "VERSION_ID": "12",
+      "arch": "x86_64",
+      "os": "linux"
+    },
+    "prefix": "/home/linuxbrew/.linuxbrew",
+    "status": "exported"
+  },
+  "installed_native_history": {
+    "latest": "232b84527f234cf7ba8d4263a998a1a1",
+    "snapshot_count": 3,
+    "final_marker_matches_latest": true
+  }
+}

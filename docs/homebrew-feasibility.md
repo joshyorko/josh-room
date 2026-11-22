@@ -132,3 +132,50 @@ cross-distro portability, macOS, Windows or the published managed RCC artifact.
 Work-JATT's broader installed tools remain unqualified. Retain the separate recipe
 fallback and approve native reinstallation separately when the installed format
 is unavailable; cold-host native reinstallation has not been tested here.
+
+## Declared jq runtime closure (v2)
+
+The second format reuses the same `homebrew_recovery` archive component. It admits
+only the jq package family, with installed jq→oniguruma metadata and an explicitly
+installed Homebrew glibc runtime. Package bytes have no fixture-specific hash
+allowlist: the closed manifest records every source file digest/mode and receipt,
+then independently validates the actual ELF dependency/search/SONAME graph and
+required/provided symbol versions. Unknown package families, extra/unreachable
+ELFs, foreign/shadowed libraries, scripts, special files, hardlinks, sensitive
+paths/content and unsupported link shapes are refused. Source provenance is
+receipt-declared, not a cryptographic upstream attestation.
+
+A real source failure is retained: the jq 1.8.2 bottle required GLIBC 2.38/2.39,
+while Debian 12 supplied glibc 2.36. Installing the normal Homebrew glibc 2.39_2
+package in the disposable source made jq work without manual links or loader
+environment overrides. V2 captures that source loader/libc/libm, libjq and
+Oniguruma; it does not borrow the target OS runtime. The glibc receipt's declared
+`linux-headers@6.8` dependency is recorded with its installed receipt/version and
+an explicit metadata-only role. Header contents are not runtime ELF dependencies
+and are excluded. This is a runnable package closure, not a complete Homebrew
+manager, development SDK or package installation directory replica.
+
+Actual normal installed CLI Preview→Save→repeat→stale-plan refusal→immutable
+component export passed against isolated real MinIO/Secret Service. A second
+clean offline Debian 12 x86_64 container restored the exact exported archive:
+10 files (5,020,217 bytes), 12 links and 38 topology entries, every file digest/mode
+matching and no unrelated files. Restored jq 1.8.2 passed JSON aggregation,
+Oniguruma regex and libm sqrt. Loader tracing used captured prefix libraries only;
+a second restore refused the occupied prefix without changing bytes. See the
+[jq receipt](receipts/issue-190/homebrew-jq-runtime.json).
+
+The packaged installed native Save command also selected jq, showed the complete
+package/runtime/metadata-only plan, saved, returned already-saved on explicit
+repeat selection, and cancelled without advancing the marker. This uses an
+explicit local-build-fallback runtime pointing to the installed container CLI
+with the host source path mounted identically. Provider, keyring and controller
+operations are real; managed RCC artifact selection is not exercised.
+
+V2 retains exact-prefix and Debian 12 x86_64 admission. The tested versions are
+jq 1.8.2, oniguruma 6.9.10, glibc 2.39_2 and Linux-headers metadata 6.8.12_1.
+This does not qualify other tools, package graphs, CPU/kernel combinations,
+services, NSS/locales, cross-distro portability or arbitrary work-jatt recovery.
+The existing prefix must still be absent. Workspace Enter does not automatically
+modify a host prefix: installed-runtime restore remains the separately explicit
+plan/confirmed offline command above. A normal Brewfile/native reinstall remains
+a separate fallback and has not been cold-host verified here.
