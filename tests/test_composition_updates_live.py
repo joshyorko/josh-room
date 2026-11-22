@@ -340,15 +340,22 @@ def test_lost_backup_reply_recovers_nonzero_accounting_and_refuses_wrong_parent(
         assert len(store.snapshots()) == 4
 
 
-def test_legacy_lossy_baseline_refuses_fresh_operation_without_any_publication(runtime, monkeypatch):
+@pytest.mark.parametrize('provenance', [None, 'inherited-rules-v1'])
+def test_legacy_lossy_baseline_refuses_fresh_operation_without_any_publication(runtime, monkeypatch, provenance):
     from josh_room import composition_lifecycle
 
     r = runtime
     (r.source / '.josh-roomignore').write_text('a/reports/**\n')
     original = composition_lifecycle._capture
     def old_capture(*args, **kwargs):
+        from josh_room.logical_jat import LogicalJat
         kwargs.pop('inherited_policy', None)
-        return original(*args, **kwargs)
+        descriptor, scan = original(*args, **kwargs)
+        if provenance:
+            body = descriptor.to_dict()
+            body['source']['composition_policy'] = provenance
+            descriptor = LogicalJat.from_dict(body)
+        return descriptor, scan
     # Reproduce the old actual capture format: no rule semantics for paths not
     # present yet, and no authenticated descriptor provenance.
     with monkeypatch.context() as legacy:
@@ -381,7 +388,7 @@ def test_verified_provenance_and_hash_rule_survive_fresh_child_save(runtime):
     _, target, child = entered(r)
     envelope, _ = r.authority.read()
     records = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots']
-    assert r.authority.descriptor(records[child['snapshot_id']]).to_dict()['source']['composition_policy'] == 'inherited-rules-v1'
+    assert r.authority.descriptor(records[child['snapshot_id']]).to_dict()['source']['composition_policy'] == 'inherited-rules-v2'
     (target / 'a/#reports').mkdir()
     (target / 'a/#reports/private.txt').write_text('synthetic must never upload')
     (target / 'a/file.txt').write_text('approved provenance source edit')
@@ -389,7 +396,7 @@ def test_verified_provenance_and_hash_rule_survive_fresh_child_save(runtime):
     result = update(r, target, child, operation='fresh-verified', approval=plan['approval_sha256'])
     envelope, _ = r.authority.read()
     record = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots'][result['snapshot_id']]
-    assert r.authority.descriptor(record).to_dict()['source']['composition_policy'] == 'inherited-rules-v1'
+    assert r.authority.descriptor(record).to_dict()['source']['composition_policy'] == 'inherited-rules-v2'
     with r.factory(envelope['secret']) as store:
         store.open_existing()
         proof = r.private / 'verified-hash-rule-proof'
@@ -398,3 +405,91 @@ def test_verified_provenance_and_hash_rule_survive_fresh_child_save(runtime):
     assert not (proof / '#reports').exists()
     assert (proof / 'file.txt').read_text() == 'approved provenance source edit'
     assert '\\#reports/**' in (proof / '.josh-roomignore').read_text().splitlines()
+
+
+def test_marked_policy_edit_refuses_before_staging_and_keeps_fresh_noop_retry_safe(runtime, monkeypatch):
+    from josh_room import composition_updates
+    r = runtime
+    (r.source / '.josh-roomignore').write_text('a/reports/**\n')
+    _, target, child = entered(r)
+    noop = update(r, target, child, operation='initial-noop')
+    assert not noop['changed']
+    assert update(r, target, child, operation='initial-noop', approval=noop['approval_sha256'])['status'] == 'unchanged'
+    policy = target / 'a/.josh-roomignore'
+    original = policy.read_text()
+    assert 'reports/**' in original.splitlines()
+    policy.write_text('\n'.join(line for line in original.splitlines() if line != 'reports/**') + '\n')
+    (target / 'a/reports').mkdir()
+    (target / 'a/reports/private.txt').write_text('synthetic never-authorized report')
+    writes = r.transport.writes
+    prior, _ = r.authority.read()
+    views = set(r.private.glob('child-update-view-*'))
+    with monkeypatch.context() as refusal:
+        refusal.setattr(composition_updates, '_copy_paths', lambda *_args, **_kwargs: pytest.fail('staging must not start'))
+        refusal.setattr(r, 'factory', lambda *_: pytest.fail('backup/proof runtime must not open'))
+        with pytest.raises(ValueError, match='policy differs from authenticated baseline'):
+            update(r, target, child, operation='fresh-after-removing-rule')
+    assert r.transport.writes == writes and r.authority.read()[0] == prior
+    assert set(r.private.glob('child-update-view-*')) == views
+    assert context_status(target / 'a')['snapshot_id'] == child['snapshot_id']
+    # Restoring exact policy bytes permits a fresh no-op, not capture of the
+    # newly excluded local report. Every future write still binds that policy.
+    policy.write_text(original)
+    restored = update(r, target, child, operation='restored-policy-noop')
+    assert not restored['changed']
+    assert update(r, target, child, operation='restored-policy-noop', approval=restored['approval_sha256'])['status'] == 'unchanged'
+    assert r.transport.writes == writes
+    (target / 'a/file.txt').write_text('approved same-policy edit')
+    plan = update(r, target, child, operation='unchanged-policy-update')
+    saved = update(r, target, child, operation='unchanged-policy-update', approval=plan['approval_sha256'])
+    assert saved['marker_verified']
+    assert update(r, target, child, operation='unchanged-policy-update', approval=plan['approval_sha256'])['snapshot_id'] == saved['snapshot_id']
+    current, _ = r.authority.read()
+    records = current['state']['dimension_catalog']['projects'][child['room_id']]['snapshots']
+    old = r.authority.descriptor(records[child['snapshot_id']]).to_dict()
+    new = r.authority.descriptor(records[saved['snapshot_id']]).to_dict()
+    assert old['capture_policy_sha256'] == new['capture_policy_sha256']
+    assert new['source']['composition_policy'] == 'inherited-rules-v2'
+    with r.factory(current['secret']) as store:
+        store.open_existing()
+        assert len(store.snapshots()) == 4
+        for record, expected, name in ((old, 'child a original\n', 'old-policy-proof'), (new, 'approved same-policy edit', 'new-policy-proof')):
+            proof = r.private / name
+            store.restore(record['workspace']['snapshot_id'], proof)
+            assert (proof / 'file.txt').read_text() == expected
+            assert not (proof / 'reports').exists()
+
+
+@pytest.mark.parametrize('point', ['capture', 'descriptor'])
+def test_policy_change_before_publication_preserves_old_pin_and_verified_payload(runtime, monkeypatch, point):
+    from josh_room import composition_updates
+    r = runtime
+    (r.source / '.josh-roomignore').write_text('a/reports/**\n')
+    _, target, child = entered(r)
+    (target / 'a/file.txt').write_text('approved unchanged-policy payload')
+    plan = update(r, target, child)
+    policy = target / 'a/.josh-roomignore'
+    def change():
+        policy.write_text('\n'.join(line for line in policy.read_text().splitlines() if line != 'reports/**') + '\n')
+    original_capture, original_descriptor = composition_updates._capture, r.authority.put_descriptor
+    def capture(*args, **kwargs):
+        result = original_capture(*args, **kwargs)
+        if point == 'capture':
+            change()
+        return result
+    def descriptor(value):
+        result = original_descriptor(value)
+        if point == 'descriptor':
+            change()
+        return result
+    monkeypatch.setattr(composition_updates, '_capture', capture)
+    monkeypatch.setattr(r.authority, 'put_descriptor', descriptor)
+    with pytest.raises(ValueError, match='policy differs from authenticated baseline'):
+        update(r, target, child, approval=plan['approval_sha256'])
+    current, _ = r.authority.read()
+    assert current['state']['dimension_catalog']['projects'][child['room_id']]['latest'] == child['snapshot_id']
+    assert current['state']['child_updates']['update']['phase'] == 'reserved'
+    assert context_status(target / 'a')['snapshot_id'] == child['snapshot_id']
+    with r.factory(current['secret']) as store:
+        store.open_existing()
+        assert len(store.snapshots()) == 4

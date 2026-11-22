@@ -84,9 +84,18 @@ Neither retries nor history are silently upgraded. Tagged snapshot retries recov
 real persisted byte counts and verify actual payload ancestry before publication.
 
 Every child update also requires authenticated `source.composition_policy` equal
-to `inherited-rules-v1` on its exact baseline before any staging or publication.
+to `inherited-rules-v2` on its exact baseline before any staging or publication.
 This is independent of operation ID and hash version. New initial captures stamp
 it only after proving the rebased policy view; verified updates retain it. Legacy
 descriptors remain readable/restorable but cannot authorize new child writes.
 Editing an ignore-file comment cannot supply provenance. Legacy-policy
 reconciliation is not implemented and never happens implicitly.
+
+The live effective policy digest must exactly equal the authenticated baseline
+before staging, for fresh operations and no-ops alike. It is checked again before
+capture and descriptor/catalog publication; the private view and restored output
+must preserve that same digest. All policy edits, including comments, require
+unsupported explicit reconciliation and cannot silently acquire provenance. The
+experimental `inherited-rules-v1` marker remains readable/restorable but no longer
+authorizes updates: earlier builds could stamp a changed policy. Only new v2
+generated captures or verified unchanged-policy v2 updates can supply the proof.

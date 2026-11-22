@@ -109,7 +109,18 @@ def _read_regular(fd, name, limit=65536):
         os.close(opened)
 
 
-def _child_view(workspace, private, namespace, room, baseline, accepted):
+def _baseline_policy(workspace, expected, *, directory_fd=None):
+    fd = _directory(workspace) if directory_fd is None else os.dup(directory_fd)
+    try:
+        policy = load_capture_policy(workspace, directory_fd=fd)
+        if policy.sha256 != expected:
+            raise ValueError('child policy differs from authenticated baseline; policy reconciliation is unsupported')
+        return policy
+    finally:
+        os.close(fd)
+
+
+def _child_view(workspace, private, namespace, room, baseline, accepted, expected_policy):
     """Stage only admitted records through one held source directory descriptor."""
     workspace = Path(os.path.abspath(workspace))
     fd = _directory(workspace)
@@ -121,7 +132,7 @@ def _child_view(workspace, private, namespace, room, baseline, accepted):
         guard = json.loads(_read_regular(fd, '.josh-room-split.json'))
         if set(guard) != {'namespace', 'room_id', 'snapshot_id'} or guard['namespace'] != namespace or guard['room_id'] != room or guard['snapshot_id'] not in accepted:
             raise ValueError('child namespace guard differs')
-        policy = load_capture_policy(workspace, directory_fd=fd)
+        policy = _baseline_policy(workspace, expected_policy, directory_fd=fd)
         if policy.capture_mode != 'source-only' or not policy.is_excluded('.josh-room-split.json'):
             raise ValueError('child policy must preserve the source-only namespace fence')
         scan = scan_workspace_for_status(workspace)
@@ -226,7 +237,9 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
         raise ValueError('legacy child baseline lacks verified inherited-rule provenance; safe policy reconciliation is required before any update')
     if Path(workspace).resolve() == private.resolve() or Path(workspace).resolve() in private.resolve().parents:
         raise ValueError('private runtime must be outside child source')
-    view, plan = _child_view(workspace, private, namespace, room, baseline, accepted)
+    expected_policy = previous.to_dict()['capture_policy_sha256']
+    view, plan = _child_view(workspace, private, namespace, room, baseline, accepted, expected_policy)
+    _baseline_policy(view, expected_policy)
     marker = context_status(workspace)
     if marker.get('dimension_id') != dimension.dimension_id or marker.get('encryption_domain_id') != authority.binding['encryption_domain_id']:
         raise ValueError('child marker authority differs')
@@ -245,6 +258,7 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
                     'request': request, 'changed': changed, 'snapshot_id': output if changed else baseline}
         if approval != digest:
             raise ValueError('child Save approval is stale')
+        _baseline_policy(workspace, expected_policy)
         if not changed and old is None:
             try:
                 _bind_child(workspace, dimension, namespace, room, baseline, plan, authority)
@@ -263,14 +277,19 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             def claim():
                 nonlocal envelope, etag
                 envelope, etag = _claim(authority, envelope, etag, plan)
+            _baseline_policy(workspace, expected_policy)
+            _baseline_policy(view, expected_policy)
             descriptor, scan = _capture(view, store, private, plan, dimension,
                 authority.binding['encryption_domain_id'], claim=claim, parent=previous, inherited_policy=INHERITED_POLICY)
             value = descriptor.to_dict()
+            if value['capture_policy_sha256'] != expected_policy or value['source'].get('composition_policy') != INHERITED_POLICY:
+                raise ValueError('captured policy differs from authenticated inherited baseline')
             if value['parent_logical_jat_id'] != baseline or value['workspace']['parent_snapshot_id'] != record['workspace_snapshot_id']:
                 raise ValueError('child update lineage differs')
             verified = _proof(store, descriptor, private)
             if _content_digest(verified) != plan['content_sha256']:
                 raise ValueError('saved child bytes differ from approved inventory')
+            _baseline_policy(workspace, expected_policy)
             ref = authority.put_descriptor(descriptor)
             body = state.to_dict()
             catalog = Catalog.from_body(body['dimension_catalog']).add_logical_snapshot(room, 'Child Room', descriptor, ref, scan.signature)
@@ -278,6 +297,7 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
             body['child_updates'][operation_id].update(phase='committed', pin={'room_id': room, 'logical_jat_id': output, 'descriptor_sha256': ref.sha256})
             body['revision'] += 1
             state = CompositionSafetyState.from_dict(body)
+            _baseline_policy(workspace, expected_policy)
             envelope, etag = _commit(authority, envelope, etag, state)
         else:
             _, committed = _descriptor(authority, state, room, output)
