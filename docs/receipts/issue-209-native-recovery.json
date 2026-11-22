@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "source_sha": "a112b891bcc429e688b870498decc23c067e3347",
+  "registered_command": "joshRoom.browseRecoveryPoint",
+  "real_provider": "loopback-minio",
+  "real_native_secret_service": true,
+  "controller_runtime": "source-Python local-build-fallback override; NOT immutable RCC artifact",
+  "recovered_bytes": 6,
+  "sha256": "b640e840b19d378660b32fb51ae18d67dccb4a8596a29e7bd72c1b2ae5928f41",
+  "workspace_files_unchanged": 4,
+  "room_marker_unchanged": true,
+  "staging_left": 0,
+  "receipt": {
+    "blob_bytes_read": 1215,
+    "blob_calls": 2,
+    "connection_id": "recovery-fixture-connection",
+    "dimension_id": "recovery-fixture",
+    "entries": 1,
+    "files": 1,
+    "integrity": "sha256-verified-tree-and-content-blobs",
+    "logical_bytes": 6,
+    "logical_jat_id": "e91920d56f3542fea7101cccf1103bcf",
+    "mode": "on-demand listing",
+    "network_bytes_transferred": null,
+    "ok": true,
+    "provider": "minio",
+    "room_id": "synthetic-room",
+    "snapshot_id": "e91920d56f3542fea7101cccf1103bcf",
+    "status": "recovered",
+    "tree_id": "13db4bc90a81921fa5fa7933c4d094bd09d7f03dc6f2fcc85816825ff5237d8e",
+    "verified_files": [
+      {
+        "path": "changed.txt",
+        "sha256": "b640e840b19d378660b32fb51ae18d67dccb4a8596a29e7bd72c1b2ae5928f41"
+      }
+    ],
+    "workspace_snapshot_id": "80e7738f9ac6c07835bde420dbe5ba634d076c78cbed31ae573906931566d07e"
+  }
+}

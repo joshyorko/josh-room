@@ -111,3 +111,28 @@ Text diffs are still withheld; the comparison surface is JSON metadata.
 The initial disposable D-Bus probe found no `org.freedesktop.secrets` service.
 A bounded task-owned container setup is being evaluated independently; the
 user's real keyring and credentials are never used for this acceptance.
+
+## Registered command with real synthetic provider/keyring
+
+A subsequent Linux trial passed the actual installed
+`joshRoom.browseRecoveryPoint` command through normal Dimension discovery,
+age-encrypted catalog/descriptor validation, real loopback MinIO, and a
+network-isolated native Secret Service container. Native browse, current-file
+digest comparison and Save Dialog recovery all passed. All four current
+workspace files, including the Room marker, retained their pre-recovery
+hashes, and no staging directory remained. The selected first recovery point
+was preserved. This supersedes the earlier injected-catalog limitation for
+this trial, but **not** the runtime limitation: the existing runtime test hook
+selected source Python/installed controller in `local-build-fallback` mode.
+Immutable RCC packaging remains unproven. The first attempts exposed and
+corrected harness lifetime (MinIO child exited) and runtime-mode (host age
+correctly rejected in managed mode) mistakes; neither failed attempt is counted
+as a pass.
+
+See the [sanitized native receipt](receipts/issue-209-native-recovery.json) and
+[reusable isolated acceptance recipe](recovery-acceptance.md). The parameterized
+provider setup script was then rerun in a second fresh keyring/socket/port
+namespace and successfully enrolled another three real encrypted snapshots.
+No real credentials, host keyring, source Room mutations or release actions
+were used. Windows qualification follows the existing CI lanes; native
+Windows recovery acceptance, wire-byte counts and text diff policy remain open.
