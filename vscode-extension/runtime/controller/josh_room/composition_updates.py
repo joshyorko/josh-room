@@ -16,6 +16,7 @@ from pathlib import Path
 from .catalog import Catalog, corroborate_logical_snapshot
 from .composition import MANIFEST, parse_manifest, portable_path, validate_manifest
 from .composition_lifecycle import (
+    CONTENT_DIGEST_ALGORITHM,
     _admitted_source,
     _capture,
     _commit,
@@ -144,6 +145,7 @@ def _child_view(workspace, private, namespace, room, baseline, accepted):
             'source_records_sha256': plan_digest(evidence_records),
             'source_signature': scan.signature, 'capture_policy_sha256': policy.sha256,
             'capture_mode': 'source-only', 'content_sha256': _content_digest(view),
+            'content_digest_algorithm': CONTENT_DIGEST_ALGORITHM,
         }
     finally:
         os.close(fd)
@@ -209,6 +211,8 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
     if not _child_origin(state, room):
         raise ValueError('Room is not a child in this namespace')
     old = state.to_dict().get('child_updates', {}).get(operation_id)
+    if old and old['plan'].get('content_digest_algorithm') != CONTENT_DIGEST_ALGORITHM:
+        raise ValueError('legacy child update digest requires reconciliation; immutable history was not changed')
     output = 'jat-' + _slot(namespace, 'child-update:' + operation_id)
     if old and (old['plan']['room_id'], old['plan']['expected_logical_jat_id'], old['plan']['logical_jat_id']) != (room, baseline, output):
         raise ValueError('operation ID already binds another child update')

@@ -62,6 +62,9 @@
               "source_identity"
             ],
             "properties": {
+              "content_digest_algorithm": {
+                "const": "sha256-framed-v2"
+              },
               "source_path_sha256": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$"

@@ -223,3 +223,118 @@ def test_update_and_refresh_crash_retry_reuse_output(runtime, monkeypatch, point
     with r.factory(envelope['secret']) as store:
         store.open_existing()
         assert len(store.snapshots()) == 5
+
+
+def test_future_created_inherited_exclusions_survive_child_update(runtime):
+    r = runtime
+    (r.source / '.josh-roomignore').write_text('a/reports/**\n')
+    _, target, child = entered(r)
+    (target / 'a/reports').mkdir()
+    (target / 'a/reports/private.txt').write_text('synthetic never-approved report')
+    noop = update(r, target, child, operation='excluded-only')
+    assert not noop['changed']
+    assert update(r, target, child, operation='excluded-only', approval=noop['approval_sha256'])['status'] == 'unchanged'
+    (target / 'a/file.txt').write_text('approved changed source')
+    plan = update(r, target, child)
+    result = update(r, target, child, approval=plan['approval_sha256'])
+    envelope, _ = r.authority.read()
+    record = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots'][result['snapshot_id']]
+    with r.factory(envelope['secret']) as store:
+        store.open_existing()
+        entries = list(store.entries(record['workspace_snapshot_id']))
+        assert not any(e.path == 'reports' or e.path.startswith('reports/') for e in entries)
+        proof = r.private / 'future-rule-proof'
+        store.restore(record['workspace_snapshot_id'], proof)
+    assert (proof / 'file.txt').read_text() == 'approved changed source'
+    assert not (proof / 'reports').exists()
+    assert (target / 'a/reports/private.txt').read_text() == 'synthetic never-approved report'
+
+
+@pytest.mark.parametrize('initial', ['file', 'directory'])
+def test_empty_entry_type_change_is_saved_and_real_restore_preserves_type(runtime, initial):
+    r = runtime
+    entry = r.source / 'a/empty'
+    if initial == 'file':
+        entry.touch(mode=0o700)
+    else:
+        entry.mkdir(mode=0o700)
+    _, target, child = entered(r)
+    first = update(r, target, child, operation='before-noop')
+    assert not first['changed']
+    assert update(r, target, child, operation='before-noop', approval=first['approval_sha256'])['status'] == 'unchanged'
+    entry = target / 'a/empty'
+    if initial == 'file':
+        entry.unlink()
+        entry.mkdir(mode=0o700)
+    else:
+        entry.rmdir()
+        entry.touch(mode=0o700)
+    plan = update(r, target, child)
+    assert plan['changed'] and plan['request']['plan']['content_digest_algorithm'] == 'sha256-framed-v2'
+    saved = update(r, target, child, approval=plan['approval_sha256'])
+    assert saved['status'] == 'saved' and saved['snapshot_id'] != child['snapshot_id']
+    now = {**child, 'snapshot_id': saved['snapshot_id']}
+    noop = update(r, target, now, operation='after-noop')
+    assert not noop['changed']
+    assert update(r, target, now, operation='after-noop', approval=noop['approval_sha256'])['status'] == 'unchanged'
+    envelope, _ = r.authority.read()
+    record = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots'][saved['snapshot_id']]
+    with r.factory(envelope['secret']) as store:
+        store.open_existing()
+        proof = r.private / 'entry-type-proof'
+        store.restore(record['workspace_snapshot_id'], proof)
+        assert len(store.snapshots()) == 4
+    assert (proof / 'empty').is_file() == (initial == 'directory')
+    assert (proof / 'empty').is_dir() == (initial == 'file')
+    assert (proof / 'empty').stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize('lost_reply', [False, True])
+def test_lost_backup_reply_recovers_nonzero_accounting_and_refuses_wrong_parent(runtime, monkeypatch, lost_reply):
+    import random
+    from dataclasses import replace
+
+    from josh_room.restic_store import ResticStore
+    r = runtime
+    _, target, child = entered(r)
+    (target / 'a/file.txt').write_bytes(random.Random(198).randbytes(65536))
+    plan = update(r, target, child)
+    original_backup, original_snapshot = ResticStore.backup, ResticStore.snapshot
+    captured = []
+    class ProcessLoss(BaseException):
+        pass
+    def backup(store, *args, **kwargs):
+        summary = original_backup(store, *args, **kwargs)
+        captured.append(summary)
+        if lost_reply:
+            raise ProcessLoss()
+        return summary
+    monkeypatch.setattr(ResticStore, 'backup', backup)
+    if lost_reply:
+        with pytest.raises(ProcessLoss):
+            update(r, target, child, approval=plan['approval_sha256'])
+        assert captured[0].data_added > 0 and captured[0].data_added_packed > 0
+    def wrong_parent(store, snapshot_id):
+        snapshot = original_snapshot(store, snapshot_id)
+        if captured and snapshot_id == captured[0].snapshot_id:
+            return replace(snapshot, parent_snapshot_id='f' * 64)
+        return snapshot
+    monkeypatch.setattr(ResticStore, 'snapshot', wrong_parent)
+    with pytest.raises(ValueError, match='ancestry'):
+        update(r, target, child, approval=plan['approval_sha256'])
+    envelope, _ = r.authority.read()
+    assert envelope['state']['child_updates']['update']['phase'] == 'reserved'
+    assert envelope['state']['dimension_catalog']['projects'][child['room_id']]['latest'] == child['snapshot_id']
+    assert context_status(target / 'a')['snapshot_id'] == child['snapshot_id']
+    monkeypatch.setattr(ResticStore, 'snapshot', original_snapshot)
+    monkeypatch.setattr(ResticStore, 'backup', original_backup)
+    result = update(r, target, child, approval=plan['approval_sha256'])
+    envelope, _ = r.authority.read()
+    record = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots'][result['snapshot_id']]
+    descriptor = r.authority.descriptor(record).to_dict()['workspace']
+    assert descriptor['data_added'] == captured[0].data_added > 0
+    assert descriptor['data_added_packed'] == captured[0].data_added_packed > 0
+    with r.factory(envelope['secret']) as store:
+        store.open_existing()
+        assert descriptor['parent_snapshot_id'] == store.snapshot(descriptor['snapshot_id']).parent_snapshot_id
+        assert len(store.snapshots()) == 4

@@ -72,6 +72,33 @@ def test_v2_schema_resolves_closed_v1_shapes_and_update_ledger():
     validator = jsonschema.Draft202012Validator(schema, registry=registry)
     _, body = reserved()
     validator.validate(body)
+    body['child_updates']['update']['plan']['content_digest_algorithm'] = 'sha256-framed-v2'
+    body['child_updates']['update']['plan_sha256'] = plan_digest(body['child_updates']['update']['plan'])
+    validator.validate(body)
     body['child_updates']['update']['unknown'] = True
     with pytest.raises(jsonschema.ValidationError):
         validator.validate(body)
+
+
+def test_digest_algorithm_is_versioned_without_rewriting_legacy_history():
+    _, legacy = reserved()
+    assert 'content_digest_algorithm' not in CompositionSafetyState.from_dict(legacy).to_dict()['child_updates']['update']['plan']
+    current = copy.deepcopy(legacy)
+    update = current['child_updates']['update']
+    update['plan']['content_digest_algorithm'] = 'sha256-framed-v2'
+    update['plan_sha256'] = plan_digest(update['plan'])
+    assert CompositionSafetyState.from_dict(current).to_dict() == current
+    update['plan']['content_digest_algorithm'] = 'sha256-unframed-v1'
+    update['plan_sha256'] = plan_digest(update['plan'])
+    with pytest.raises(ValueError, match='algorithm'):
+        CompositionSafetyState.from_dict(current)
+
+
+def test_legacy_reserved_update_refuses_resume_before_payload_or_authority_writes(tmp_path):
+    from types import SimpleNamespace
+
+    from josh_room.composition_updates import save_child
+    _, legacy = reserved()
+    authority = SimpleNamespace(namespace='1' * 32, read=lambda: ({'state': legacy}, 'etag'))
+    with pytest.raises(ValueError, match='legacy child update digest requires reconciliation'):
+        save_child(tmp_path, None, '1' * 32, 'child', 'jat-child', 'update', authority, None, tmp_path)

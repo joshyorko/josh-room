@@ -195,7 +195,12 @@ class CompositionSafetyState:
                 _identifier(key)
                 _object(update, 'plan plan_sha256 phase pin')
                 plan = update['plan']
-                _object(plan, 'room_id logical_jat_id expected_logical_jat_id source_path_sha256 source_records_sha256 source_identity source_signature capture_policy_sha256 content_sha256 capture_mode')
+                fields = 'room_id logical_jat_id expected_logical_jat_id source_path_sha256 source_records_sha256 source_identity source_signature capture_policy_sha256 content_sha256 capture_mode'
+                if isinstance(plan, dict) and 'content_digest_algorithm' in plan:
+                    fields += ' content_digest_algorithm'
+                    if plan['content_digest_algorithm'] != 'sha256-framed-v2':
+                        raise ValueError('unsupported child content digest algorithm')
+                _object(plan, fields)
                 for field in ('room_id', 'logical_jat_id', 'expected_logical_jat_id'):
                     _identifier(plan[field])
                 for field in ('source_path_sha256', 'source_records_sha256', 'source_signature', 'capture_policy_sha256', 'content_sha256'):

@@ -72,3 +72,13 @@ namespace, including initial capture. Reaching a bound refuses further writes;
 history is never trimmed. No-op checks restore the authenticated baseline and read
 payloads; they avoid new catalog entries, descriptors and snapshots, not all
 provider reads or temporary repository locking.
+
+New child-update approvals identify `sha256-framed-v2`: path, entry type, mode,
+byte length and file bytes are framed before hashing. Existing immutable
+descriptors have no such digest field; they remain readable and their restored
+payloads are compared using the new algorithm. Old ledger entries without an
+algorithm remain readable and immutable, but cannot be resumed with their old
+approval digest. An uncommitted old entry requires reconciliation; a completed
+entry may be followed by a newly approved operation at its exact saved baseline.
+Neither retries nor history are silently upgraded. Tagged snapshot retries recover
+real persisted byte counts and verify actual payload ancestry before publication.
