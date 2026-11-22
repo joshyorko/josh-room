@@ -1,11 +1,10 @@
 # Native history in the shared Save chooser
 
-The reviewed bounded adapter is enabled for an explicit **Linux/MinIO source
-pilot** on the integration branch. Only independently admitted existing Codex
-and Claude profiles can appear; nothing is selected by default. S3, R2, Windows,
-macOS, composition and work scopes remain unavailable in the shared chooser.
-This enables the forthcoming installed trial; it does not claim its success,
-immutable runtime acceptance, general native resume or release readiness.
+The new shared Save picker is **disabled in the v1 candidate** by owner scope
+direction. Its expanded fault/rollback matrix is deferred. Existing explicit
+history capture, inspect and restore commands remain available under their
+existing admission and safety requirements. Historical pilot evidence is
+retained; it does not enable the picker or authorize release.
 
 `native_agent_save.py` orchestrates ordinary Save. The separate
 `native_agent_save_producer.py` owns native capture, admission, encrypted durable
@@ -137,11 +136,10 @@ Admission requires ordinary Linux MinIO/S3 custody, an already opened/bound
 Room Store and an existing exact-Room v3 host grant. New Room does not create a
 grant. Missing authority, R2, Windows and composition namespaces are unavailable.
 The global native capabilities remain selectable false and Save integration
-false. The separately reviewed adapter flag now enables only the Linux/MinIO
-source pilot; the opened backend and each current profile grant must still
-admit capture. It is not installed qualification. The candidate must not be
-promoted before actual integrated acceptance passes; failed pilot evidence
-must remain an open gate.
+false. The shared Save adapter flag is false and its CLI execution boundary
+refuses before opening storage. Internal fixture tests explicitly enable the
+deferred adapter; they do not enable shipped behavior. Its expanded pilot matrix
+is not a v1 release gate. Existing capture/restore safety checks remain required.
 Chooser admission compares the independently reopened grant with the exact
 resolved opaque profile reference; replacing a valid grant omits the stale row.
 

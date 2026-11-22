@@ -18,8 +18,8 @@ SELECTION_FORMAT = "josh-room.save-agent-selection.v1"
 PLAN_FORMAT = "josh-room.save-agent-plan.v2"
 MAX_PLAN_BYTES = 16384
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
-# Reviewed Linux/MinIO source pilot; installed qualification is recorded separately.
-SAVE_ADAPTER_QUALIFIED = True
+# The v1 candidate preserves explicit recovery commands; shared Save is deferred.
+SAVE_ADAPTER_QUALIFIED = False
 
 
 def _fail():
@@ -225,6 +225,8 @@ def open_scope(
     *,
     reviewed_id=None,
 ):
+    if not SAVE_ADAPTER_QUALIFIED:
+        raise ValueError("agent history Save integration is not enabled")
     from . import room_store_bridge as bridge
     from .composition import require_uncomposed_workspace
     from .native_agent_save_producer import TargetScope

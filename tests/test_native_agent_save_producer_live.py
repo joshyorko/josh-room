@@ -16,12 +16,17 @@ import pytest
 
 from josh_room import cli as controller
 from josh_room import native_agent_reference as references
+from josh_room.native_agent_save import SAVE_ADAPTER_QUALIFIED
 from josh_room.minio import MinioBackend
 from josh_room.native_agent_reference_cli import _context
 from josh_room.r2 import R2PublicationError
 
 pytest_plugins = ["test_native_agent_reference_live"]
-pytestmark = [pytest.mark.integration, pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux native custody")]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux native custody"),
+    pytest.mark.skipif(not SAVE_ADAPTER_QUALIFIED, reason="History Save integration deferred from the v1 candidate"),
+]
 
 
 def test_real_save_two_tool_history_and_exact_uncertain_retry(live, monkeypatch):
