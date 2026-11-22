@@ -3152,10 +3152,10 @@ async function jatRestore() {
 }
 
 const JAT_SERVE_MODES = [
-  { label: "Auto", description: "Let JAT choose the compatible projection", mode: "auto" },
-  { label: "Files", description: "Direct downloads / file artifacts", mode: "files" },
-  { label: "Registry", description: "OCI images and charts", mode: "registry" },
-  { label: "Files + Registry", description: "Expose both from the same capsule", mode: "both" },
+  { label: "Auto", description: "JAT chooses the projection. Files may be served on all network interfaces.", mode: "auto" },
+  { label: "Files", description: "Serve file downloads on all network interfaces", mode: "files" },
+  { label: "Registry", description: "OCI images and charts on localhost", mode: "registry" },
+  { label: "Files + Registry", description: "Serve files on all network interfaces and the registry on localhost", mode: "both" },
 ];
 
 async function jatServe() {

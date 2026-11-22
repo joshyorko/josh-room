@@ -5570,10 +5570,10 @@ test("Serve JAT offers the four projection modes and launches the mode-specific 
     "auto", "files", "registry", "both",
   ]);
   assert.deepEqual(extension.__test__.JAT_SERVE_MODES.map((item) => item.description), [
-    "Let JAT choose the compatible projection",
-    "Direct downloads / file artifacts",
-    "OCI images and charts",
-    "Expose both from the same capsule",
+    "JAT chooses the projection. Files may be served on all network interfaces.",
+    "Serve file downloads on all network interfaces",
+    "OCI images and charts on localhost",
+    "Serve files on all network interfaces and the registry on localhost",
   ]);
 
   vscode.openDialogResponses.push([{ fsPath: haul }]);

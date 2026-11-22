@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -580,6 +581,8 @@ def run_serve(
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError("Serve port must be between 0 (automatic) and 65535")
     require_serve_startup(jat_root)
+    if mode != "registry":
+        print("Hauler may serve file artifacts on all network interfaces.", file=sys.stderr, flush=True)
     options = ["--fileserver-port", str(fileserver_port), "--registry-port", str(registry_port)]
     if startup_file is not None:
         options += ["--startup-file", str(startup_file)]

@@ -184,8 +184,8 @@ Automatic endpoint reporting requires the matching qualified JAT runtime;
 current released JAT pins lacking that contract fail clearly instead of guessing
 fixed ports. **Unpatched Hauler 2.1.1 already supports artifact serving.** Its
 fileserver listens on all interfaces, while its displayed `127.0.0.1` URL is the
-local connection address. Startup and status explicitly show that listener
-scope; the registry remains localhost-only. Hauler's optional future bind-host
+local connection address. The mode picker and CLI disclose possible network exposure before startup.
+The startup receipt and status report the actual listener scope; the registry remains localhost-only. Hauler's optional future bind-host
 feature is not required. No dependency pin is promoted by this PR. See
 [native serving](docs/room-store-export.md#native-serving-endpoints) for the
 receipt/runtime qualification gate. Room View's separate read-only observability
