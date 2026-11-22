@@ -147,8 +147,9 @@ def main():
         recipient = subprocess.run(["age-keygen", "-y"], input=identity,
                                    capture_output=True, check=True).stdout.decode().strip()
         del identity
+        existing_handoff = base / "provider-runtime/existing-operational.identity"
         cli("encryption", "initialize", "--dimension", "recovery-fixture",
-            "--recovery-recipient", recipient)
+            "--recovery-recipient", recipient, "--material-handoff", str(existing_handoff))
         workspace = base / "provider-workspace"
         (workspace / "nested").mkdir()
         (workspace / "nested/配置.txt").write_bytes(b"synthetic nested\n")
@@ -166,7 +167,11 @@ def main():
         # Prove the installed CLI reads the exact point and refuses overwrite.
         arguments = ["synthetic-room", "--dimension", "recovery-fixture", "--snapshot", pins[0],
                      "--path", "code.py"]
-        old = cli("recovery", "inspect", *arguments, "--include-text")
+        os.environ["JOSH_ROOM_ENCRYPTION_MATERIAL"] = str(existing_handoff)
+        try:
+            old = cli("recovery", "inspect", *arguments, "--include-text")
+        finally:
+            os.environ.pop("JOSH_ROOM_ENCRYPTION_MATERIAL", None)
         expected = 'def greeting():\n\treturn "first 你好"\n'.encode()
         if old.get("sha256") != hashlib.sha256(expected).hexdigest():
             raise RuntimeError("installed CLI historical digest mismatch")
@@ -186,6 +191,7 @@ def main():
         (base / "provider-ready.json").write_text(json.dumps({"state": "PASS",
             "storage": "real-loopback-MinIO", "custody": status.backend,
             "controller": "installed-source-Python-fallback-not-immutable-RCC",
+            "encryption_domain_id": domain, "key_generation": 1, "existing_private_handoff_cli": True,
             "pins": pins, "cli_no_clobber": True, "native_secret_roundtrips": 4}))
         deadline = time.monotonic() + 600
         while not (base / "stop-provider").exists():

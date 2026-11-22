@@ -171,6 +171,7 @@ async function main() {
     await fsp.mkdir(driver);
     await fsp.copyFile(path.join(__dirname, "windows_recovery_ui_driver.js"), path.join(driver, "extension.js"));
     await fsp.copyFile(path.join(__dirname, "installed_recovery_runtime.js"), path.join(driver, "installed_recovery_runtime.js"));
+    await fsp.copyFile(path.join(__dirname, "windows_recovery_controller.py"), path.join(base, "windows_recovery_controller.py"));
     await fsp.writeFile(path.join(driver, "package.json"), JSON.stringify({ name: "recovery-fixture",
       publisher: "synthetic", version: "0.0.1", engines: { vscode: "^1.90.0" },
       main: "extension.js", activationEvents: ["onStartupFinished"], contributes: { commands: [
@@ -250,6 +251,11 @@ async function main() {
     receipt.recovered_sha256 = digest(expected);
     receipt.cancelled_without_extra_writes = true;
     receipt.cancelled_exact_pin = cancelled.pin;
+    const proofs = (await fsp.readFile(path.join(base, "existing-handoff-probes.jsonl"), "utf8"))
+      .trim().split("\n").map(line => JSON.parse(line));
+    if (!["tree", "diff", "extract"].every(action => proofs.some(proof => proof.action === action
+      && proof.native_private_existing_handoff && proof.cli_exit_status === 0))) throw new Error("Registered existing handoff proof incomplete");
+    receipt.registered_existing_private_handoffs = { state: "PASS", operations: ["tree", "diff", "extract"], verified_calls: proofs.length };
   } catch (error) {
     failure = error; receipt.failed_boundary = error.message;
     if (cdp) {
@@ -300,6 +306,11 @@ async function main() {
         // Only sanitized exception type/boundary; never copy raw provider or editor logs.
         receipt.provider_error_log_bytes = (await fsp.stat(path.join(base, "provider-errors.log"))).size;
       }
+    }
+    const handoffProbes = path.join(base, "existing-handoff-probes.jsonl");
+    if (fs.existsSync(handoffProbes)) {
+      const records = (await fsp.readFile(handoffProbes, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
+      await fsp.writeFile(path.join(evidence, "existing-handoff-evidence.json"), JSON.stringify({ records }, null, 2));
     }
     receipt.state = failure ? "FAIL" : "PASS";
     await fsp.writeFile(path.join(evidence, "installed-windows-recovery.json"), JSON.stringify(receipt, null, 2));

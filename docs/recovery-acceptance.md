@@ -176,6 +176,23 @@ the actual `joshRoom.browseRecoveryPoint`; it does not replace pickers, provider
 calls, CLI results or recovery callbacks. Loopback Electron CDP sends real key
 input to native QuickPick, command palette and the simple Save Dialog.
 
+For the existing-handoff trial, the fixture enrolls a real protected operational
+handoff through the installed controller, then seeds the installed extension's
+actual SecretStorage using its production cache helpers (exposed under the
+existing test API). The original file is removed before Browse. Each registered
+recovery invocation must receive a new existing handoff from that real cache.
+The Windows producer uses the built-in Windows PowerShell ACL APIs to protect
+the owned empty directory and file before writing identity bytes; unavailable
+native preparation fails without a chmod fallback. No identity bytes enter
+PowerShell arguments or output. The controller's shared native verifier checks
+the resulting owner/SYSTEM DACL before admission.
+
+The source-runtime adapter wraps the actual installed `python -m josh_room`
+entry point with a guard which independently verifies the existing file and
+parent ACLs and records only action/exit-status metadata. It refuses missing
+handoffs. This preserves provider, keyset, ciphertext and recipient binding in
+the real CLI, and makes fresh-vault fallback insufficient for UI acceptance.
+
 The intended acceptance covers the pinned tree, current comparison in an
 actual native readonly diff tab, exact tab/Unicode text preservation, rejected
 native editor typing, one-file extraction to an absent destination and picker

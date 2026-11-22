@@ -11,7 +11,7 @@ test("Windows runtime override reaches canonical activated instances, not anothe
     unrelated: entry("C:\\other\\extension.js") };
   const runtime = { mode: "local-build-fallback" };
   assert.equal(applyInstalledRuntime("C:\\fixture\\extensions\\josh-room", runtime,
-    { cache, realpath: value => value, platform: "win32" }), 2);
+    { cache, realpath: value => value, platform: "win32" }).length, 2);
   assert.equal(received.length, 2);
   assert.ok(received.every(([, value]) => value === runtime));
 });

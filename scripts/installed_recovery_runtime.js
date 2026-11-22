@@ -9,16 +9,16 @@ function applyInstalledRuntime(extensionPath, runtime, { cache = require.cache,
     return platform === "win32" ? actual.toLowerCase() : actual;
   };
   const expected = canonical(path.join(extensionPath, "extension.js"));
-  let matched = 0;
+  const matched = [];
   for (const loaded of Object.values(cache)) {
     if (!loaded?.filename || loaded.filename.split(/[\\/]/).pop().toLowerCase() !== "extension.js") continue;
     let actual;
     try { actual = canonical(loaded.filename); } catch { continue; }
     if (actual !== expected || typeof loaded.exports?.__test__?.setRuntimeForTests !== "function") continue;
     loaded.exports.__test__.setRuntimeForTests(runtime);
-    matched++;
+    matched.push(loaded.exports.__test__);
   }
-  if (!matched) throw new Error("Activated installed runtime hook was not found");
+  if (!matched.length) throw new Error("Activated installed runtime hook was not found");
   return matched;
 }
 module.exports = { applyInstalledRuntime };

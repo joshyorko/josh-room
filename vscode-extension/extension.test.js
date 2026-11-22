@@ -5912,6 +5912,31 @@ test("selected encryption material uses a private bounded handoff and cleans up 
   assert.equal(process.env.JOSH_ROOM_ENCRYPTION_MATERIAL, undefined);
 });
 
+test("Windows handoff fails before material or controller execution without native ACL authority", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-acl-denial-"));
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  const previousTemp = process.env.TMPDIR;
+  const previousSystem = process.env.SystemRoot;
+  const { vscode, statusItem } = createVscodeMock(root);
+  const spawnHarness = createSpawnHarness(() => assert.fail("controller must not receive unsafe material"));
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async () => undefined } });
+  try {
+    process.env.TMPDIR = root;
+    delete process.env.SystemRoot;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    await assert.rejects(extension.__test__.runSelectedEncryption(["projects", "list"], root,
+      { id: "synthetic", provider: "minio" }, { encryptionMaterial: { identity: "synthetic-private-material" } }), /ACL helper unavailable/);
+    assert.deepEqual(fs.readdirSync(root), []);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    if (previousTemp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previousTemp;
+    if (previousSystem === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = previousSystem;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("selected encryption handoff is removed after failure, cancellation, and timeout", async () => {
   const cases = [
     { name: "failure", response: { stdout: JSON.stringify({ ok: false, error: "synthetic failure" }), code: 2 } },

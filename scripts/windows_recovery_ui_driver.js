@@ -13,9 +13,9 @@ exports.activate = async context => {
   const target = vscode.extensions.getExtension("joshyorko.josh-room");
   if (!target) throw new Error("Candidate VSIX was not installed");
   await target.activate();
-  const runtimeModuleCount = applyInstalledRuntime(target.extensionPath, {
+  const runtimeApis = applyInstalledRuntime(target.extensionPath, {
     command: process.env.JOSH_ROOM_ACCEPTANCE_PYTHON,
-    args: args => ["-m", "josh_room", ...args, "--json"],
+    args: args => [path.join(base, "windows_recovery_controller.py"), ...args, "--json"],
     env: { PYTHONPATH: path.join(target.extensionPath, "runtime/controller"),
       JOSH_ROOM_CONFIG_DIR: path.join(base, "provider-config"),
       XDG_STATE_HOME: path.join(base, "provider-state"),
@@ -23,6 +23,18 @@ exports.activate = async context => {
       XDG_RUNTIME_DIR: path.join(base, "provider-runtime") },
     mode: "local-build-fallback",
   });
+  const enrolled = JSON.parse(fs.readFileSync(path.join(base, "provider-ready.json"), "utf8"));
+  const selectedDimension = { id: "recovery-fixture", provider: "minio",
+    encryption_domain_id: enrolled.encryption_domain_id, key_generation: enrolled.key_generation };
+  const handoff = path.join(base, "provider-runtime/existing-operational.identity");
+  let seeded = 0;
+  for (const api of runtimeApis) {
+    await api.cacheEncryptionMaterial({ ...selectedDimension, encryption_material: handoff }, selectedDimension);
+    const cached = await api.readEncryptionMaterial(selectedDimension);
+    if (cached?.identity?.trim() === fs.readFileSync(handoff, "utf8").trim()) seeded++;
+  }
+  if (!seeded) throw new Error("Real native SecretStorage enrollment failed");
+  fs.unlinkSync(handoff);
   const pins = JSON.parse(fs.readFileSync(path.join(base, "provider-pins.json"), "utf8"));
   let invocation = 0;
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.start", async () => {
@@ -30,15 +42,15 @@ exports.activate = async context => {
     write("ui-command-started.json", { invocation: current, pin: pins[0] });
     const probe = setTimeout(() => {
       const children = process._getActiveHandles().filter(handle => Array.isArray(handle.spawnargs)
-        && handle.spawnargs.includes("josh_room"));
+        && handle.spawnargs.some(value => value === "josh_room" || String(value).endsWith("windows_recovery_controller.py")));
       write("ui-process-state.json", { invocation: current, native_controller_children: children.map(child => {
-        const offset = child.spawnargs.indexOf("josh_room");
+        const offset = child.spawnargs.findIndex(value => value === "josh_room" || String(value).endsWith("windows_recovery_controller.py"));
         return { pid: child.pid, command: child.spawnargs.slice(offset + 1, offset + 3) };
       }) });
     }, 5000);
     try {
       const result = await vscode.commands.executeCommand("joshRoom.browseRecoveryPoint", {
-        id: "synthetic-room", dimension: { id: "recovery-fixture", provider: "minio" }, snapshot_id: pins[0],
+        id: "synthetic-room", dimension: selectedDimension, snapshot_id: pins[0],
       });
       write("ui-command-finished.json", { result, pin: pins[0], invocation: current });
     } catch (error) {
@@ -82,5 +94,5 @@ exports.activate = async context => {
   }));
   write("ui-driver-ready.json", { state: "PASS", installed_extension: true,
     runtime: "source-Python-fallback-not-immutable-RCC", command: "joshRoom.browseRecoveryPoint",
-    activated_runtime_modules_matched: runtimeModuleCount });
+    activated_runtime_modules_matched: runtimeApis.length, real_secret_storage_cache_seeded: seeded });
 };
