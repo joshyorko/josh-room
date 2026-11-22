@@ -173,6 +173,31 @@ def plan_digest(value):
     ).hexdigest()
 
 
+def _with_reviewed(scope, reviewed_id):
+    if reviewed_id is None:
+        return scope
+    from . import room_store_bridge as bridge
+
+    context = scope.context
+    record = context.catalog.resolve_snapshot(context.project_id, reviewed_id)
+    descriptor = bridge._load_descriptor(
+        context.backend,
+        context.instance,
+        context.material,
+        context.project_id,
+        record,
+        context.private_dir,
+    )
+    return dataclasses.replace(
+        scope,
+        reviewed_context=dataclasses.replace(
+            context,
+            selected_record=record,
+            selected_descriptor=descriptor,
+        ),
+    )
+
+
 @contextmanager
 def open_scope(
     instance,
@@ -196,27 +221,8 @@ def open_scope(
         instance, dimension, material, project_id=None
     ) as opened:
         context = dataclasses.replace(opened, project_id=room)
-        reviewed = None
-        if reviewed_id is not None:
-            record = context.catalog.resolve_snapshot(room, reviewed_id)
-            descriptor = bridge._load_descriptor(
-                context.backend,
-                context.instance,
-                context.material,
-                room,
-                record,
-                context.private_dir,
-            )
-            reviewed = dataclasses.replace(
-                context, selected_record=record, selected_descriptor=descriptor
-            )
-        yield TargetScope(
-            context,
-            Path(workspace),
-            policy_sha256,
-            signature,
-            reviewed_context=reviewed,
-        )
+        scope = TargetScope(context, Path(workspace), policy_sha256, signature)
+        yield _with_reviewed(scope, reviewed_id)
 
 
 def preview(
@@ -336,7 +342,6 @@ def save(
         workspace,
         plan["capture_policy_sha256"],
         plan["workspace_signature"],
-        reviewed_id=reviewed_id,
     ) as scope:
         reconciliation = reconcile_attempt(scope, selection, plan)
         state = reconciliation["state"]
@@ -361,6 +366,10 @@ def save(
             )
         receipt = None
         try:
+            # A durable committed candidate is authoritative independently of
+            # the former reviewed parent, which may have since been removed.
+            if exact_id is None:
+                scope = _with_reviewed(scope, reviewed_id)
             with prepare_batch(scope, selection, plan) as attempt:
                 attempt.check()
                 if exact_id is None:

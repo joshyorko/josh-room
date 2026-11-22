@@ -17,6 +17,7 @@ from josh_room import native_agent_reference as references
 from josh_room import native_agent_save_producer as producer
 from josh_room import native_agents as native
 from josh_room.cancellation import CLICancelled
+from josh_room.catalog import Catalog
 from josh_room.r2 import R2PublicationError
 
 pytest_plugins = ["test_native_agent_reference"]
@@ -340,12 +341,16 @@ def test_second_upload_failure_keeps_both_reserved_candidates_and_no_sidecar(cas
     assert result["state"] == "agent-uncertain" and not case.store.controls
     assert not any(entry["state"] == "created" for entry in result["entries"])
     assert len(references._pending_objects(case.context)[0]) == 2
-    assert sum(entry["data_uploaded"] > 0 for entry in result["entries"]) == 1
+    assert sum(isinstance(entry["data_uploaded"], int) and entry["data_uploaded"] > 0 for entry in result["entries"]) == 1
+    assert sum(entry["data_uploaded"] is None for entry in result["entries"]) == 1
     assert sum(entry["upload_uncertain"] for entry in result["entries"]) == 1
+    pending_before = references._pending_objects(case.context)[1]
+    assert len(pending_before) == 1
     monkeypatch.setattr(case.store, "put_bytes", put)
     with _prepared(case, plan) as attempt:
         final = producer.publish_batch(case.context, attempt)
     assert final["ok"] and len(references._load(case.context)[0]["entries"]) == 2
+    assert references._pending_objects(case.context) == (set(), [])
 
 
 def test_cas_race_never_rebases_over_unselected_history(case, monkeypatch):
@@ -383,3 +388,93 @@ def test_journal_pending_path_is_closed_not_arbitrary_unlink(case):
         attempt._persist()
     result = producer.reconcile_attempt(case.scope, case.selection, plan)
     assert result["state"] == "blocked" and not case.store.writes
+
+
+def test_accepted_upload_failed_readback_remains_nullable_through_stale_retry(case, monkeypatch):
+    plan = producer.preview_batch(case.scope, case.selection)
+    get = case.store.get_bytes
+    count = 0
+
+    def fail_second_readback(key, **kwargs):
+        nonlocal count
+        count += 1
+        if count == 2:
+            assert key in case.store.objects  # Accepted PUT, unreadable response.
+            raise OSError("synthetic accepted upload readback failure")
+        return get(key, **kwargs)
+
+    with _prepared(case, plan) as attempt:
+        monkeypatch.setattr(case.store, "get_bytes", fail_second_readback)
+        result = _existing_save(attempt, case)
+    assert len(case.store.objects) == 2 and not case.store.controls
+    first, second = result["entries"]
+    assert first["data_uploaded"] > 0 and first["upload_uncertain"] is False
+    assert second["data_uploaded"] is None and second["upload_uncertain"] is True
+    _append(case)
+    blocked = producer.reconcile_attempt(case.scope, case.selection, plan)
+    assert blocked["state"] == "blocked" and blocked["workspace_committed"] is True
+    assert blocked["entries"][0]["data_uploaded"] == first["data_uploaded"]
+    assert blocked["entries"][1]["data_uploaded"] is None
+    case.native_file.write_bytes(case.payload)
+    monkeypatch.setattr(case.store, "get_bytes", get)
+    with _prepared(case, plan) as attempt:
+        final = producer.publish_batch(case.context, attempt)
+    assert final["ok"] and all(isinstance(entry["data_uploaded"], int) for entry in final["entries"])
+    assert references._pending_objects(case.context) == (set(), [])
+    assert len(case.store.objects) == 2  # Same immutable encrypted candidates.
+
+
+def test_retry_never_discards_a_mismatched_pending_receipt_or_its_objects(case, monkeypatch):
+    plan = producer.preview_batch(case.scope, case.selection)
+    put = case.store.put_bytes
+    count = 0
+
+    def fail_second(key, body):
+        nonlocal count
+        count += 1
+        if count == 2:
+            raise OSError("synthetic upload interruption")
+        return put(key, body)
+
+    with _prepared(case, plan) as attempt:
+        monkeypatch.setattr(case.store, "put_bytes", fail_second)
+        assert not _existing_save(attempt, case)["ok"]
+        pending = case.context.instance / "agent-reference-receipts" / attempt.ledger["pending_receipt"]
+    monkeypatch.setattr(case.store, "put_bytes", put)
+    unrelated = b"synthetic unrelated retained ciphertext"
+    digest = hashlib.sha256(unrelated).hexdigest()
+    protected = case.store.put_bytes("objects/sha256/" + digest, unrelated)
+    body = json.loads(pending.read_bytes())
+    body["objects"].append(dataclasses.asdict(protected))
+    pending.write_text(json.dumps(body))
+    retained = pending.read_bytes()
+    before = case.store.writes.copy()
+    with _prepared(case, plan) as attempt:
+        result = producer.publish_batch(case.context, attempt)
+    assert not result["ok"] and result["error"] == "native-save-pending-receipt-mismatch"
+    assert pending.read_bytes() == retained and case.store.writes == before
+    assert case.store.objects[protected.key] == unrelated and not case.store.controls
+
+
+def test_recorded_committed_b_retries_without_removed_reviewed_a(case):
+    plan = producer.preview_batch(case.scope, case.selection)
+    with _prepared(case, plan) as attempt:
+        actual = _new_workspace(case, attempt)
+        attempt.workspace_outcome("uncertain", logical_jat_id="history-new")
+    body = copy_catalog = json.loads(json.dumps(actual.catalog.body))
+    del body["projects"]["demo"]["snapshots"]["history-first"]
+    catalog = Catalog.from_body(copy_catalog)
+    actual = dataclasses.replace(actual, catalog=catalog)
+    case.contexts.pop(("demo", "history-first"))
+    case.contexts[("demo", "history-new")] = actual
+    case.store.conditional_catalog_put(references._encrypt(references._canonical_json(catalog.body), case.recipients),
+                                       case.store.catalog_etag)
+    metadata_scope = dataclasses.replace(case.scope, reviewed_context=None)
+    reconciled = producer.reconcile_attempt(metadata_scope, case.selection, plan)
+    assert reconciled["workspace_committed"] is True and reconciled["logical_jat_id"] == "history-new"
+    with producer.prepare_batch(metadata_scope, case.selection, plan) as attempt:
+        attempt.workspace_outcome("committed", logical_jat_id="history-new")
+        final = producer.publish_batch(actual, attempt)
+    assert final["ok"] and final["logical_jat_id"] == "history-new"
+    assert len(references._load(actual)[0]["entries"]) == 2
+    assert ("demo", "history-first") not in case.contexts

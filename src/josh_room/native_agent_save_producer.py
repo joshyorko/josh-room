@@ -447,7 +447,7 @@ class PreparedBatch:
             kind = outcome["outcome"] if complete and outcome is not None else ("uncertain" if uncertain else "prepared-unpublished")
             entries.append({**member["item"], "capture_id": None if outcome is None else outcome["capture_id"],
                 "content_sha256": approved["content_sha256"], "state": kind,
-                "data_uploaded": self.ledger["uploaded"].get(tool, 0),
+                "data_uploaded": None if tool in self.ledger["upload_uncertain"] else self.ledger["uploaded"].get(tool, 0),
                 "upload_uncertain": tool in self.ledger["upload_uncertain"]})
         result = {"ok": complete, "state": state, "attempt_id": self.plan["attempt_id"],
                   "logical_jat_id": self.ledger["logical_jat_id"], "history_only": True,
@@ -509,9 +509,14 @@ def prepare_batch(scope, selection, plan):
                 "pending_receipt": None, "receipt": None, "created_at": datetime.now(UTC).isoformat(),
                 "uploaded": {}, "upload_uncertain": []}
             _write_ledger(scope, root, ledger)
-        elif (ledger["proposal"] is None and ledger["phase"] != "complete"
-                and _plan(scope, facts, members, reserved=plan) != plan):
-            _fail("native-save-plan-stale")
+        elif ledger["proposal"] is None and ledger["phase"] != "complete":
+            if ledger["candidate"] is not None:
+                # The callback's real B, not the old reviewed A, is the only
+                # retry target once B's catalog commitment is corroborated.
+                recorded = PreparedBatch(scope, plan, members, check, root, ledger)
+                recorded._exact(scope.context, require_marker=False)
+            elif _plan(scope, facts, members, reserved=plan) != plan:
+                _fail("native-save-plan-stale")
         attempt = PreparedBatch(scope, plan, members, check, root, ledger)
         _payloads(attempt)
         if ledger["phase"] == "preparing":
@@ -621,6 +626,24 @@ def _finish(attempt, context, outcomes, *, fence):
     return result
 
 
+def _pending_for_attempt(attempt, context, objects):
+    previous = attempt.ledger["pending_receipt"]
+    if previous is not None:
+        directory = context.instance / "agent-reference-receipts"
+        path = directory / previous
+        if path.exists():
+            verify_private_path(directory, directory=True)
+            document = native._json(native._read(path, references.MAX_CONTROL))
+            expected = {"format": "josh-room.agent-reference-pending.v1", "id": previous[:-5],
+                        "scope_sha256": references._scope_digest(context), "operation": "capture", "objects": objects}
+            if document != expected:
+                _fail("native-save-pending-receipt-mismatch")
+            return path
+    # A missing receipt is re-established from the encrypted durable candidate
+    # before another upload. An existing mismatched receipt is never discarded.
+    return references._pending(context, objects, "capture")
+
+
 def publish_batch(exact_context, attempt):
     context = None
     try:
@@ -650,7 +673,7 @@ def publish_batch(exact_context, attempt):
         attempt.ledger["proposal"] = {"document": updated, "base_sha256": _digest([document, etag])}
         objects = [attempt.ledger["payloads"][member["item"]["tool"]] for member, outcome in zip(attempt.members, outcomes, strict=True)
                    if outcome["outcome"] == "created"]
-        pending = references._pending(context, objects, "capture")
+        pending = _pending_for_attempt(attempt, context, objects)
         attempt.ledger.update(phase="uploading", pending_receipt=pending.name)
         attempt._persist()
         for member, outcome in zip(attempt.members, outcomes, strict=True):
@@ -764,7 +787,8 @@ def reconcile_attempt(scope, selection, plan):
                           else None if existing is None else existing["capture_id"])
             entries.append({"tool": item["tool"], "profile_ref": item["profile_ref"], "capture_id": capture_id,
                 "content_sha256": item["content_sha256"], "state": "prepared-unpublished",
-                "data_uploaded": 0 if ledger is None else ledger["uploaded"].get(item["tool"], 0),
+                "data_uploaded": (None if ledger is not None and item["tool"] in ledger["upload_uncertain"]
+                                  else 0 if ledger is None else ledger["uploaded"].get(item["tool"], 0)),
                 "upload_uncertain": ledger is not None and item["tool"] in ledger["upload_uncertain"]})
         return {"ok": False, "state": "blocked", "attempt_id": plan["attempt_id"], "logical_jat_id": logical_id,
                 "workspace_committed": True if context is not None else None, "history_only": True,

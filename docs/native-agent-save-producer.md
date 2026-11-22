@@ -91,6 +91,11 @@ The public aggregate uses `entries` with `tool`, `profile_ref`, `capture_id`,
 `native_resume_verified:false` and `reconciliation_required`. No tool is reported
 created before successful batch CAS/fence. Workspace commitment is not rolled
 back when agents remain prepared/unpublished or uncertain.
+`data_uploaded` is a nonnegative confirmed count or null when that tool's upload
+outcome is unknown; null must not be rendered or summed as zero. Other tools'
+confirmed counts remain intact. These are retained-data counts, not billing or
+wire-transfer claims. An interrupted retry verifies/reuses its exact pending
+receipt; successful publication clears it without forgetting earlier candidates.
 
 Before any retry that might invoke workspace Save, call
 `reconcile_attempt(scope, selection, plan)`. It first locates/decrypts the durable
@@ -100,6 +105,9 @@ stale native data or admission must not hide an independently verified committed
 workspace or trigger a duplicate Save. A blocked receipt can retain
 `workspace_committed:true` and that exact ID without authorizing agent publication.
 An unresolvable/revoked selector returns blocked, never absent permission.
+Once candidate B is independently corroborated, preparation and exact retry do
+not need the old reviewed point A to remain in the catalog. No newer point may
+replace B.
 
 Verified matching reserved IDs/payloads reconcile publication uncertainty without
 new events. Otherwise retries retain the original proposal/ETag/IDs and reject

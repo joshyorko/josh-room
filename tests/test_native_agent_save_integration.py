@@ -14,6 +14,9 @@ from josh_room import native_agent_reference as references
 from josh_room import native_agent_save as adapter
 from josh_room import native_agent_save_producer as producer
 from josh_room import room_store_bridge as bridge
+from josh_room.cancellation import CLICancelled
+
+_OPEN_SCOPE = adapter.open_scope
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="Linux producer custody"
@@ -35,6 +38,17 @@ def pipeline(request, monkeypatch):
 
     monkeypatch.setattr(adapter, "open_scope", scope)
     monkeypatch.setattr(bridge, "open_existing_room_store", exact)
+    monkeypatch.setattr(
+        adapter,
+        "_with_reviewed",
+        lambda scope, reviewed_id: (
+            scope
+            if reviewed_id is None
+            else dataclasses.replace(
+                scope, reviewed_context=case.contexts[("demo", reviewed_id)]
+            )
+        ),
+    )
     return case
 
 
@@ -139,6 +153,60 @@ def test_real_batch_bound_to_new_candidate_and_retry_reuses_exact_ids(pipeline):
     assert retry["ok"] and retry["snapshot_id"] == "history-new"
     assert {entry["capture_id"] for entry in retry["agent_result"]["entries"]} == ids
     assert len(case.store.writes) == before
+
+
+def test_retry_committed_candidate_after_reviewed_parent_removal_never_requires_parent_or_new_save(
+    pipeline, monkeypatch
+):
+    case = pipeline
+    plan = producer.preview_batch(case.scope, case.selection)
+    assert plan["reviewed_point"]["logical_jat_id"] == "history-first"
+    with (
+        pytest.raises(CLICancelled),
+        producer.prepare_batch(case.scope, case.selection, plan) as attempt,
+    ):
+        exact = _new_workspace(case, attempt)
+        attempt.workspace_outcome("committed", logical_jat_id="history-new")
+        raise CLICancelled()
+    catalog, _, _ = exact.catalog.remove_snapshot("demo", "history-first")
+    exact = dataclasses.replace(exact, catalog=catalog)
+    case.contexts[("demo", "history-new")] = exact
+    del case.contexts[("demo", "history-first")]
+    case.store.conditional_catalog_put(
+        references._encrypt(references._canonical_json(catalog.body), case.recipients),
+        case.store.catalog_etag,
+    )
+
+    @contextmanager
+    def opened(*_args, project_id=None, snapshot_id="latest"):
+        if project_id is None:
+            yield dataclasses.replace(
+                exact, project_id=None, selected_record=None, selected_descriptor=None
+            )
+        else:
+            assert snapshot_id == "history-new"
+            yield exact
+
+    monkeypatch.setattr(adapter, "open_scope", _OPEN_SCOPE)
+    monkeypatch.setattr(bridge, "open_existing_room_store", opened)
+    monkeypatch.setattr(
+        adapter,
+        "_with_reviewed",
+        lambda scope, reviewed_id: (
+            scope
+            if reviewed_id is None
+            else pytest.fail("removed parent must not be loaded")
+        ),
+    )
+    result = run(
+        case, plan, lambda _: pytest.fail("must not create a second workspace point")
+    )
+    assert result["ok"] is True and result["snapshot_id"] == "history-new"
+    assert {entry["capture_id"] for entry in result["agent_result"]["entries"]} == {
+        entry["new_point_capture_id"] for entry in plan["entries"]
+    }
+    assert not list((case.context.instance / "agent-reference-receipts").glob("*"))
+    assert set(case.contexts) == {("demo", "history-new")}
 
 
 @pytest.mark.parametrize("fail_ledger", [False, True])

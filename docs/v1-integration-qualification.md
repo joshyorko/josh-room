@@ -151,9 +151,17 @@ native-custody proof includes six historical payloads, zero-write no-op,
 independently re-encrypted copy/export and complete removal. Installed explicit
 capture/restore used the disclosed source-controller fallback. Those receipts
 do not prove the new Save adapter or immutable controller acceptance. The
-existing producer and Save owner are implementing that adapter under the
-reviewed batch/attempt contract; all agent Save selectors remain disabled until
-qualification. #220's Windows installed chain remains a separate active lane.
+existing producer and Save owner checkpointed that adapter at `0b0c54a` under
+the reviewed batch/attempt contract; all agent Save selectors remain disabled.
+Independent source review requested six corrections covering cancellation,
+exact-point retry, unsupported local flags, pending receipts and byte reporting.
+The correction batch includes real-age exact-B retry after reviewed-A removal,
+zero remaining pending receipts, nullable unknown upload counts and stricter
+native partial-result binding. Focused checks passed 60 adapter/producer cases,
+seven CLI boundary cases and 310 chooser/extension cases with two opt-in skips;
+unchanged real-Restic callback tests were not repeated. Independent recheck,
+new-head CI and real-provider adapter acceptance remain required. #220's
+Windows installed chain remains a separate active lane.
 
 ## Compatibility and rollback
 

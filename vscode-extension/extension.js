@@ -1395,7 +1395,8 @@ async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin
     outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
     return result;
   } catch (error) {
-    if (cancellationToken?.isCancellationRequested || isCancellationError(error)) {
+    const agentPartial = error.result?.ok === false && error.result.error === "agent-save-partial";
+    if ((cancellationToken?.isCancellationRequested || isCancellationError(error)) && !agentPartial) {
       throw cancellationError();
     }
     if (error.result) {
@@ -2252,12 +2253,10 @@ function agentPartialWorkspace(receipt, source, dimension) {
   const result = receipt.workspace_result;
   if (result?.ok !== true || !["saved", "saved-but-dirty", "already-saved"].includes(result.status)) return undefined;
   const marker = currentRoom(source);
-  if (!marker || marker.dimension_id !== dimension || marker.dimension_id !== result.dimension_id
-    || marker.project_id !== result.project_id || marker.snapshot_id !== result.snapshot_id
-    || marker.workspace_path_sha256 !== realWorkspacePathSha256(source)
-    || marker.workspace_signature !== result.workspace_signature
-    || marker.capture_policy_sha256 !== result.capture_policy_sha256) return undefined;
-  return result;
+  try {
+    return marker?.dimension_id === dimension && nativeSaveBindingMatches(result, marker, source, loadCapturePolicy(source))
+      ? result : undefined;
+  } catch (_) { return undefined; }
 }
 
 async function saveRoom(options = {}) {

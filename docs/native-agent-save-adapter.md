@@ -77,6 +77,18 @@ it cannot choose latest, create a replacement point after an unknown CAS, or
 duplicate an already retained history event. If no workspace is corroborated,
 the UI remains unknown. Dismissing the warning does not automatically retry.
 
+Reconciliation opens the Room scope without first loading the former reviewed
+parent. A later removal of parent A cannot prevent independent corroboration
+of the already journaled committed candidate B. Only an attempt that still
+needs workspace Save resolves the reviewed parent before preparation. Retry
+does not substitute the catalog's current latest point.
+
+Partial-result UI admission reuses the full Save binding validator, including
+the encryption domain, signature algorithm and freshly loaded capture policy.
+The registered Save command and managed private-result receipt tests cover a
+late cancellation request without discarding a typed partial result or its
+original attempt ID. Missing/unverified outcomes remain unknown.
+
 ## Current limits and verification
 
 Admission requires ordinary Linux MinIO/S3 custody, an already opened/bound

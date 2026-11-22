@@ -736,6 +736,43 @@ test("extension consumes the private controller result receipt when RCC suppress
   assert.deepEqual(result, { ok: true, operation: "status" });
 });
 
+for (const receiptExit of [0, 130]) test(`managed Save retains typed partial across cancellation boundary, receipt=${receiptExit}`, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-managed-agent-partial-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  const artifact = "sha256:" + "b".repeat(64);
+  const plan = { format: "josh-room.save-agent-plan.v1", attempt_id: "1".repeat(64),
+    target_scope_sha256: "2".repeat(64), workspace_content_sha256: "3".repeat(64), capture_policy_sha256: "4".repeat(64),
+    workspace_signature: "5".repeat(64), reviewed_point: null, digest: "6".repeat(64),
+    entries: [{ tool: "codex", profile_ref: "7".repeat(64), content_sha256: "8".repeat(64), authority_sha256: "9".repeat(64), new_point_capture_id: "a".repeat(64), existing_point: null }] };
+  const workspace = { ok: true, status: "saved", snapshot_id: "exact-point", project_id: "synthetic-room", data_added_bytes: 0 };
+  const partial = { ok: false, error: "agent-save-partial", attempt_id: plan.attempt_id, candidate_logical_jat_id: "exact-point",
+    workspace_result: workspace, cancelled: true, reconciliation_required: true,
+    agent_result: { ok: false, state: "uncertain", entries: [{ tool: "codex", capture_id: "a".repeat(64), data_uploaded: 13 }] } };
+  const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
+  let privateResult;
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
+    assert.deepEqual(JSON.parse(args[args.indexOf("--agent-plan") + 1]), plan);
+    fs.writeFileSync(args[args.indexOf("--receipt-file") + 1], JSON.stringify({ artifactDigest: artifact, exitCode: receiptExit }));
+    privateResult = options.env.JOSH_ROOM_RESULT_FILE;
+    fs.writeFileSync(privateResult, JSON.stringify(partial));
+    token.isCancellationRequested = true;
+    return { code: receiptExit, stdout: "" };
+  });
+  const extension = loadExtension(vscode, spawnHarness.spawn);
+  extension.__test__.setRuntimeForTests({ command: "/test/rcc", args: (args, receipt) => [...args, "--artifact", artifact, "--receipt-file", receipt],
+    env: {}, controllerArtifact: artifact, jatRoot: root });
+  await assert.rejects(extension.__test__.runJoshRoom(["snapshot", "create", "synthetic-room", "--agent-plan", JSON.stringify(plan)], root, token), error => {
+    assert.equal(error.result.error, "agent-save-partial");
+    assert.equal(error.result.attempt_id, plan.attempt_id);
+    assert.deepEqual(error.result.workspace_result, workspace);
+    assert.equal(error.result.cancelled, true);
+    assert.equal(error.result.agent_result.entries[0].data_uploaded, 13);
+    return true;
+  });
+  assert.equal(fs.existsSync(privateResult), false);
+});
+
 test("failed Save exposes its operation stage and reason", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-diagnostic-test-"));
   const { vscode } = createVscodeMock(root);
@@ -1571,9 +1608,9 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
     snapshots: [{ snapshot_id: "jat-1" }],
   };
   dimension.rooms = [project];
-  const { vscode, statusItem, infoCalls, warningCalls, watcherCallbacks } = createVscodeMock(root);
+  const { vscode, statusItem, infoCalls, warningCalls, watcherCallbacks, commandCallbacks, progressCalls } = createVscodeMock(root);
   let secretReads = 0;
-  const spawnHarness = createSpawnHarness(({ args }) => {
+  const spawnHarness = createSpawnHarness(({ args, options }) => {
     if (args[0] === "auth" && args[1] === "status") return { stdout: JSON.stringify({ ok: true, state: "connected" }) };
     if (args[0] === "workspace" && args[1] === "init") return { stdout: JSON.stringify({ ok: true, state: "created" }) };
     if (args[0] === "workspace-check") return { stdout: JSON.stringify({ ok: true, complete: true, findings: [] }) };
@@ -1588,7 +1625,9 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
     }
     if (args[0] === "snapshot" && args[1] === "create") {
       onSave?.(args, { root, project, dimension, vscode });
-      return { stdout: JSON.stringify(typeof saveResult === "function" ? saveResult() : saveResult), code: (typeof saveResult === "function" ? undefined : saveResult?.ok === false ? 1 : 0) };
+      const receipt = typeof saveResult === "function" ? saveResult() : saveResult;
+      if (receipt?.error === "agent-save-partial") fs.writeFileSync(options.env.JOSH_ROOM_RESULT_FILE, JSON.stringify(receipt));
+      return { stdout: JSON.stringify(receipt), code: receipt?.ok === false ? 1 : 0 };
     }
     if (args[0] === "status") {
       return { stdout: JSON.stringify(typeof statusResult === "function" ? statusResult() : statusResult || { ok: false, state: "unknown" }) };
@@ -1612,7 +1651,7 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
   vscode.openDialogResponses.push([{ fsPath: root }]);
   vscode.quickPickResponses.push({ label: "Demo Room", project });
   vscode.quickPickResponses.push([]);
-  return { vscode, extension, project, dimension, statusItem, infoCalls, warningCalls, watcherCallbacks, spawnHarness,
+  return { vscode, extension, project, dimension, statusItem, infoCalls, warningCalls, watcherCallbacks, commandCallbacks, progressCalls, spawnHarness,
     get secretReads() { return secretReads; } };
 }
 
@@ -1631,7 +1670,7 @@ const nativePreview = (overrides = {}) => ({
   ...overrides,
 });
 
-for (const retry of [false, true]) test(`history partial retains workspace baseline; exact retry=${retry}`, async t => {
+for (const cancelled of [false, true]) for (const retry of [false, true]) test(`history partial retains workspace baseline; exact retry=${retry}; cancelled=${cancelled}`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-agent-partial-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const profile = { tool: "codex", profile_ref: "1".repeat(64), scope: "personal", admitted: true };
@@ -1644,19 +1683,23 @@ for (const retry of [false, true]) test(`history partial retains workspace basel
     project_id: "demo-room", snapshot_id: "jat-1", workspace_signature: "b".repeat(64),
     signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: agentPlan.capture_policy_sha256, data_added_bytes: 0 };
   const agentResult = { ok: false, attempt_id: agentPlan.attempt_id, entries: [{ tool: "codex", state: "uncertain", data_uploaded: 13 }] };
-  const partial = { ok: false, error: "agent-save-partial", attempt_id: agentPlan.attempt_id, workspace_result: workspace, agent_result: agentResult };
+  const partial = { ok: false, error: "agent-save-partial", attempt_id: agentPlan.attempt_id, workspace_result: workspace, agent_result: agentResult, cancelled };
   let creates = 0;
   const fixture = createNativeSaveFixture(root, {
     preview: nativePreview({ agent_plan: agentPlan, component_plan_token: "3".repeat(64) }),
     agentStatus: { ok: true, agent_save: { contract_version: 1, mode: "history-only", available: true, profiles: [profile] } },
-    onSave: () => { creates += 1; },
+    onSave: () => { creates += 1; if (cancelled && creates === 1) setImmediate(() => { fixture.progressCalls.at(-1).token.isCancellationRequested = true; }); },
     saveResult: () => creates === 1 ? partial : { ...workspace, agent_result: { ...agentResult, ok: true, entries: [{ tool: "codex", state: "created", data_uploaded: 13 }] } },
   });
   fixture.vscode.quickPickResponses[1] = [{ id: "agent_codex", tool: "codex" }];
   fixture.vscode.quickPickResponses.push({ profile });
   fixture.vscode.infoResponses.push("Save");
   if (retry) fixture.vscode.warningResponses.push("Retry Exact Attempt");
-  assert.equal(await fixture.extension.__test__.saveRoom(), retry ? "already-saved" : "agent-save-partial");
+  const subscriptions = [];
+  fixture.extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions,
+    secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic" }) : undefined } });
+  t.after(() => { for (const entry of subscriptions) entry.dispose?.(); });
+  assert.equal(await fixture.commandCallbacks.get("joshRoom.saveFolderAs")(), retry ? "already-saved" : "agent-save-partial");
   assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "clean");
   const saves = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] === "create");
   assert.equal(saves.length, retry ? 2 : 1);
@@ -1677,6 +1720,21 @@ test("uncorroborated partial cannot mark the workspace saved", t => {
     ok: true, status: "saved", dimension_id: "backup", project_id: "demo-room", snapshot_id: "different-point",
     workspace_signature: "b".repeat(64), capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256,
   } }, root, "backup"), undefined);
+});
+
+for (const mismatch of ["domain", "algorithm", "current-policy"]) test(`partial workspace requires full fresh binding: ${mismatch}`, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-agent-partial-fresh-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, createSpawnHarness(() => ({})).spawn);
+  writeStatMarker(root);
+  const result = { ok: true, status: "saved", dimension_id: "backup", encryption_domain_id: "domain-a",
+    project_id: "demo-room", snapshot_id: "jat-1", workspace_signature: "b".repeat(64),
+    signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256 };
+  if (mismatch === "domain") result.encryption_domain_id = "different-domain";
+  else if (mismatch === "algorithm") result.signature_algorithm = "unknown";
+  else fs.writeFileSync(path.join(root, ".josh-roomignore"), "new-exclusion/\n");
+  assert.equal(extension.__test__.agentPartialWorkspace({ ok: false, error: "agent-save-partial", workspace_result: result }, root, "backup"), undefined);
 });
 
 test("native Save previews the Room Store and reports logical, scanned, and Restic bytes separately", async () => {

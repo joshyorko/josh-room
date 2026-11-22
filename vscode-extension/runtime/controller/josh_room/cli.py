@@ -2687,6 +2687,11 @@ def dispatch(args, instance: Path) -> dict:
                 **capture_options,
                 **({"jat_root": _jat_root()} if capture_options else {}),
             )
+        if any(
+            getattr(args, name, None) is not None
+            for name in ("agent_selection", "agent_plan")
+        ):
+            raise ValueError("agent history Save requires a native Room Store backend")
         if getattr(args, "component_selection", None) is not None:
             raise ValueError("explicit component selection requires a native Room Store backend")
         if args.snapshot_command == "preview":
@@ -3744,7 +3749,24 @@ def emit(result: dict, json_mode: bool) -> None:
     if json_mode:
         print(json.dumps(_bounded_json_result(result), sort_keys=True))
     elif result.get("ok") and result.get("status") == "already-saved":
-        print("Already saved — 0 bytes uploaded")
+        agent_result = result.get("agent_result")
+        entries = agent_result.get("entries") if isinstance(agent_result, dict) else None
+        if agent_result is None:
+            print("Already saved — 0 bytes uploaded")
+        elif isinstance(entries, list) and entries and all(
+            isinstance(entry, dict)
+            and type(entry.get("data_uploaded")) is int
+            and entry["data_uploaded"] >= 0
+            and not entry.get("upload_uncertain")
+            for entry in entries
+        ):
+            uploaded = sum(entry["data_uploaded"] for entry in entries)
+            if uploaded:
+                print(f"Workspace already saved — {uploaded} bytes uploaded for agent history")
+            else:
+                print("Already saved — 0 bytes uploaded")
+        else:
+            print("Workspace already saved — agent history upload size unknown")
     elif result.get("ok") and "deleted_paths" in result:
         print(f"Preview: {result.get('current_entry_count', 0)} entries, {result.get('scanned_bytes', 0)} bytes scanned")
         if result.get("rcc_capture_pending"):
