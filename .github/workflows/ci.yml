@@ -129,6 +129,8 @@ jobs:
   windows-installed-recovery:
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      JOSH_ROOM_ACCEPTANCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:

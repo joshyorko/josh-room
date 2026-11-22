@@ -135,6 +135,9 @@ VSIX, installs it in a fresh profile, verifies every installed package byte
 (excluding installation metadata), and runs
 `scripts/windows_recovery_installed.js`. This is independent of release,
 staging and publication workflows. It does not change the product runtime.
+Installation invokes the archive's official `bin/code.cmd` wrapper: recent VS
+Code archives place app resources under a revision directory. The harness must
+not assume the older `resources/app/out/cli.js` location.
 
 Dependencies are exact official Windows MinIO, age and VS Code archives with
 SHA-256 pins in `scripts/windows_recovery_dependencies.json`. Each acquisition

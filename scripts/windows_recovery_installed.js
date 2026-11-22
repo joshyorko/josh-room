@@ -14,7 +14,9 @@ const pins = require("./windows_recovery_dependencies.json");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 180000, ...options });
-  if (result.error || result.status !== 0) throw new Error(`Acceptance dependency failed: ${path.basename(command)}`);
+  if (result.error || result.status !== 0) {
+    throw new Error(`Acceptance dependency failed: ${path.basename(command)} (exit ${result.status}, ${result.error?.code || result.signal || "no-signal"})`);
+  }
   return result.stdout.trim();
 }
 async function download(pin, destination) {
@@ -97,7 +99,9 @@ async function main() {
   let editor, provider, cdp;
   let failure = null;
   const receipt = { state: "FAIL", source_sha: process.env.GITHUB_SHA || "local",
+    pr_head_sha: process.env.JOSH_ROOM_ACCEPTANCE_HEAD_SHA || "local",
     runtime: "installed-source-Python-fallback-not-immutable-RCC", storage: "real-loopback-MinIO",
+    storage_and_native_custody_state: "NOT RUN",
     platform: process.platform, dependencies: pins, unproven: ["immutable RCC feature artifact", "other providers"] };
   try {
     const tools = path.join(base, "tools");
@@ -110,7 +114,6 @@ async function main() {
       run("tar", ["-xf", archive, "-C", path.join(tools, name)]);
     }
     const code = path.join(tools, "vscode/Code.exe");
-    const cli = path.join(tools, "vscode/resources/app/out/cli.js");
     const candidate = path.join(base, "candidate.vsix");
     run("npm.cmd", ["run", "package", "--", "--out", candidate], {
       cwd: path.join(repository, "vscode-extension"), shell: true,
@@ -118,8 +121,10 @@ async function main() {
     receipt.vsix_sha256 = digest(await fsp.readFile(candidate));
     const profile = path.join(base, "profile");
     const extensions = path.join(base, "extensions");
-    run(code, [cli, "--user-data-dir", profile, "--extensions-dir", extensions,
-      "--install-extension", candidate, "--force"], { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+    run("pwsh", ["-NoProfile", "-NonInteractive", "-File",
+      path.join(__dirname, "install_windows_acceptance_vsix.ps1"),
+      "-CodeRoot", path.join(tools, "vscode"), "-Profile", profile,
+      "-Extensions", extensions, "-Candidate", candidate]);
     const installed = path.join(extensions, (await fsp.readdir(extensions)).find(name => name.startsWith("joshyorko.josh-room-")));
     // Compare every packaged source byte, excluding only installation metadata.
     const unpack = path.join(base, "unpack");
@@ -158,6 +163,7 @@ async function main() {
       if (provider.exitCode !== null) throw new Error("Native provider setup failed");
       return fs.existsSync(path.join(base, "provider-ready.json"));
     }, "production Dimension/keyset/snapshots", 240000);
+    receipt.storage_and_native_custody_state = "PASS";
     const driver = path.join(base, "driver");
     await fsp.mkdir(driver);
     await fsp.copyFile(path.join(__dirname, "windows_recovery_ui_driver.js"), path.join(driver, "extension.js"));
