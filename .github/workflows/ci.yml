@@ -169,6 +169,74 @@ jobs:
           path: ${{ runner.temp }}/windows-installed-recovery-evidence/*.json
           if-no-files-found: error
 
+  windows-immutable-recovery-cb860f7:
+    # Explicit unpublished qualification input, never a product/default runtime pin.
+    # Owner applies this label before pushing the acceptance-only checkpoint.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'qualify-windows-rcc-cb860f7')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    env:
+      CANDIDATE_SUBJECT: cb860f7f9387aea1561ab1cefa2bc15cf6936325
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Retrieve existing exact-subject inputs without solve or product rebuild
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'immutable-recovery-inputs'
+          New-Item -ItemType Directory -Path $root | Out-Null
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $inputs = @(
+            @{ Id = '14773761702'; Name = 'controller'; Sha = '36b35a45eb8fc6fae2feae497bf3d95ae6d2e30a318ff72459c462f24a5116ba' },
+            @{ Id = '14773811481'; Name = 'product'; Sha = '6d7ce30b898b0aaacd371f270506347bed0ef29c6ba48fc061a7d2dc038b62d8' }
+          )
+          foreach ($inputAsset in $inputs) {
+            $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($inputAsset.Id)"
+            $metadata = Invoke-RestMethod -Uri $uri -Headers $headers -TimeoutSec 30
+            if ($metadata.expired -or $metadata.workflow_run.head_sha -ne $env:CANDIDATE_SUBJECT) { throw 'Subject artifact expired or belongs to another source.' }
+            $archive = Join-Path $root "$($inputAsset.Name).zip"
+            Invoke-WebRequest -Uri "$uri/zip" -Headers $headers -OutFile $archive -TimeoutSec 120
+            if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne $inputAsset.Sha) { throw 'Subject artifact ZIP digest mismatch.' }
+            Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $root $inputAsset.Name)
+          }
+          $pin = Get-Content (Join-Path $root 'controller/josh-room-controller-windows-amd64.json') | ConvertFrom-Json
+          if ($pin.source -ne $env:CANDIDATE_SUBJECT -or $pin.artifact_digest -ne 'sha256:db8ddadffdc5e3653ebe1d1f39a0bdd3b6cc28dc5a3b5673b543073572022b2a' -or !$pin.verified_no_build) { throw 'Candidate RCCA subject receipt mismatch.' }
+          $candidate = @{
+            subject_sha = $env:CANDIDATE_SUBJECT
+            vsix = (Join-Path $root 'product/win32-x64/candidate.vsix')
+            vsix_sha256 = '50b02d20e39b379bde2e396f60884d1adfd92dd219daa9a2e37dacddfabde8b4'
+            archive = (Join-Path $root 'controller/josh-room-controller-windows-amd64.rcca')
+            archive_sha256 = '75f6c0a82e13c80d62ec0e9b54a4aa930b3907e67b52096cfed047eeba3770d8'
+            artifact = $pin.artifact_digest
+          }
+          $candidatePath = Join-Path $root 'candidate.json'
+          $candidate | ConvertTo-Json | Set-Content $candidatePath -Encoding utf8NoBOM
+          "JOSH_ROOM_ACCEPTANCE_RCC_CANDIDATE=$candidatePath" >> $env:GITHUB_ENV
+          "JOSH_ROOM_ACCEPTANCE_HEAD_SHA=${{ github.event.pull_request.head.sha }}" >> $env:GITHUB_ENV
+          "JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE=$(Join-Path $env:RUNNER_TEMP 'immutable-recovery-evidence')" >> $env:GITHUB_ENV
+      - name: Qualify installed native recovery through the immutable candidate
+        shell: pwsh
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          node --test scripts/installed_recovery_runtime.test.js
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate adapter contract failed.' }
+          node scripts/windows_recovery_installed.js
+          if ($LASTEXITCODE -ne 0) { throw 'Immutable installed recovery failed; inspect sanitized receipt.' }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-immutable-recovery-cb860f7
+          path: ${{ runner.temp }}/immutable-recovery-evidence/*.json
+          if-no-files-found: error
+
   managed-runtime-consumer:
     strategy:
       fail-fast: false

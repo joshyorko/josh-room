@@ -242,6 +242,17 @@ feature acceptance. Final combined installed qualification remains required.
 
 ## Compatibility and rollback
 
+The opt-in `windows-immutable-recovery-cb860f7` ordinary CI job consumes the
+already retained Windows VSIX and RCCA for the frozen cb860f7 subject. Its
+qualification label enables only this explicit test input; it is not a product
+or default runtime pin. Both upstream ZIP digests, the subject SHA, VSIX and
+RCCA digests are checked. The harness imports the existing archive and executes
+with no-build artifact mode, using installed controller bytes and checking the
+interpreter's private RCC origin. The previous source-Python path remains a
+separate mode and ordinary tests are unchanged. No JAT job gates this trial.
+Its acceptance harness commit can differ from its immutable product subject;
+the receipt must retain both. Native execution is pending until that job runs.
+
 The exact combined baseline `e67bc289059766db51c7320773305d6e47089e41`
 passed all ten ordinary checks, with two intentional publication skips and no
 unresolved review threads. Its independent recheck closed both remaining UI

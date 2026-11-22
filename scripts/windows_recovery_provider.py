@@ -111,6 +111,9 @@ def main():
         raise RuntimeError("native Windows is required")
     base = Path(os.environ["JOSH_ROOM_ACCEPTANCE_ROOT"]).resolve(strict=True)
     protect_private_directory(base)
+    candidate = json.loads(os.environ["JOSH_ROOM_ACCEPTANCE_RCC"]) if os.environ.get("JOSH_ROOM_ACCEPTANCE_RCC") else None
+    if candidate and not Path(sys.executable).resolve().is_relative_to(Path(os.environ["ROBOCORP_HOME"]).resolve()):
+        raise RuntimeError("fixture is not running inside owned immutable RCC")
     profile = "recovery-fixture-" + uuid.uuid4().hex
     domain = str(uuid.uuid4())
     targets = [(profile, field) for field in ("access-key-id", "secret-access-key")]
@@ -133,7 +136,7 @@ def main():
     for name in ("provider-config", "provider-state", "provider-cache", "provider-runtime",
                  "minio-data", "provider-workspace"):
         directory = base / name
-        directory.mkdir()
+        directory.mkdir(exist_ok=bool(candidate and name == "provider-runtime"))
         protect_private_directory(directory)
     os.environ.update({"JOSH_ROOM_CONFIG_DIR": str(base / "provider-config"),
                        "XDG_STATE_HOME": str(base / "provider-state"),
@@ -156,7 +159,9 @@ def main():
 
     def cli(*args, expected=0):
         (base / "provider-stage.json").write_text(json.dumps({"stage": list(args[:2])}))
-        result = subprocess.run([sys.executable, "-m", "josh_room", *args, "--json"],
+        prefix = [candidate["command"], "--no-build", "env", "exec", "--artifact", candidate["artifact"],
+                  "--permissive-local", "--inherit-streams", "--", "python"] if candidate else [sys.executable]
+        result = subprocess.run([*prefix, "-m", "josh_room", *args, "--json"],
                                 capture_output=True, timeout=120, check=False)
         body = json.loads(result.stdout)
         if (result.returncode == 0) != (expected == 0):
@@ -209,6 +214,10 @@ def main():
                 f'def greeting():\n\treturn "{content} 你好"\n'.encode())
             pins.append(cli("snapshot", "create", "synthetic-room", "--dimension",
                 "recovery-fixture", "--backend", "minio", "--source", str(workspace))["snapshot_id"])
+        unavailable = cli("snapshot", "agent-save-status", "synthetic-room", "--dimension",
+                          "recovery-fixture", "--backend", "minio", "--source", str(workspace))
+        if unavailable.get("agent_save", {}).get("available") is not False:
+            raise RuntimeError("Windows history Save pilot was unexpectedly available")
         cli("dimensions", "list")
         hierarchy = cli("dimensions", "list", "--with-hierarchy", "--dimension", "recovery-fixture")
         if pins[0] not in json.dumps(hierarchy):
@@ -240,7 +249,8 @@ def main():
         (base / "provider-pins.json").write_text(json.dumps(pins))
         (base / "provider-ready.json").write_text(json.dumps({"state": "PASS",
             "storage": "real-loopback-MinIO", "custody": status.backend,
-            "controller": "installed-source-Python-fallback-not-immutable-RCC",
+            "controller": "unpublished-immutable-RCC-candidate-installed-controller" if candidate else "installed-source-Python-fallback-not-immutable-RCC",
+            "history_save_pilot": "unavailable-on-Windows",
             "encryption_domain_id": domain, "key_generation": 1, "existing_private_handoff_cli": True,
             "pins": pins, "cli_no_clobber": True, "native_secret_roundtrips": 4}))
         deadline = time.monotonic() + 600

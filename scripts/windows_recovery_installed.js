@@ -91,7 +91,14 @@ async function connect(port) {
 async function main() {
   if (process.platform !== "win32") throw new Error("Native Windows acceptance only");
   const python = process.env.JOSH_ROOM_ACCEPTANCE_PYTHON;
-  if (!python) throw new Error("Existing project Python required");
+  const candidateFile = process.env.JOSH_ROOM_ACCEPTANCE_RCC_CANDIDATE;
+  const candidateInput = candidateFile ? JSON.parse(await fsp.readFile(candidateFile, "utf8")) : null;
+  if (!python && !candidateInput) throw new Error("Existing project Python or explicit RCC candidate required");
+  if (candidateInput && (!/^[0-9a-f]{40}$/.test(candidateInput.subject_sha || "")
+    || !/^sha256:[0-9a-f]{64}$/.test(candidateInput.artifact || "")
+    || ![candidateInput.vsix_sha256, candidateInput.archive_sha256].every(x => /^[0-9a-f]{64}$/.test(x || "")))) {
+    throw new Error("Invalid explicit candidate subject or input hashes");
+  }
   const base = await fsp.mkdtemp(path.join(os.tmpdir(), "josh-room-installed-recovery-"));
   const evidence = process.env.JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE;
   if (!evidence) throw new Error("Explicit sanitized evidence directory required");
@@ -115,9 +122,18 @@ async function main() {
     }
     const code = path.join(tools, "vscode/Code.exe");
     const candidate = path.join(base, "candidate.vsix");
-    run("npm.cmd", ["run", "package", "--", "--out", candidate], {
-      cwd: path.join(repository, "vscode-extension"), shell: true,
-    });
+    if (candidateInput) {
+      if (digest(await fsp.readFile(candidateInput.vsix)) !== candidateInput.vsix_sha256
+        || digest(await fsp.readFile(candidateInput.archive)) !== candidateInput.archive_sha256) throw new Error("Candidate input checksum mismatch");
+      await fsp.copyFile(candidateInput.vsix, candidate);
+      receipt.subject_sha = candidateInput.subject_sha;
+      receipt.runtime = "unpublished-immutable-RCC-candidate-installed-controller";
+      receipt.unproven = ["published default runtime bootstrap", "other providers", "integrated release acceptance"];
+    } else {
+      run("npm.cmd", ["run", "package", "--", "--out", candidate], {
+        cwd: path.join(repository, "vscode-extension"), shell: true,
+      });
+    }
     receipt.vsix_sha256 = digest(await fsp.readFile(candidate));
     const profile = path.join(base, "profile");
     const extensions = path.join(base, "extensions");
@@ -157,16 +173,53 @@ async function main() {
     fixtureEnv = env;
     delete env.JOSH_ROOM_RESULT_FILE;
     delete env.JOSH_ROOM_CREDENTIAL_FILE;
+    let providerCommand = python;
+    let providerPrefix = [];
+    if (candidateInput) {
+      await fsp.mkdir(path.join(base, "provider-runtime"));
+      const runtime = require(path.join(installed, "runtime.js"));
+      const context = { globalStorageUri: { fsPath: path.join(base, "managed") } };
+      const rcc = await runtime.ensureManagedRcc(context, runtime.readManifest());
+      const rccHome = runtime.privatePaths(context).rccHome;
+      if (!rccHome.startsWith(base + path.sep)) throw new Error("Candidate RCC storage escaped owned fixture");
+      Object.assign(env, { ROBOCORP_HOME: rccHome, RCC_HOLOTREE_MODE: "private",
+        JOSH_ROOM_RCC_EXE: rcc.executable, JOSH_ROOM_RCC_HOME: rccHome,
+        JOSH_ROOM_CONTROLLER_ROOT: env.PYTHONPATH, JOSH_ROOM_CONTROLLER_ARTIFACT: candidateInput.artifact,
+        JOSH_ROOM_JAT_ROOT: path.join(base, "empty-jat-log-root") });
+      const acquired = runtime.parseJsonOutput(run(rcc.executable,
+        ["env", "acquire", "--archive", candidateInput.archive, "--permissive-local", "--json"], { env }));
+      if ((acquired.artifactDigest || acquired.artifact_digest) !== candidateInput.artifact
+        || acquired.verification?.valid !== true) throw new Error("RCC candidate acquisition failed verification");
+      const prefix = ["--no-build", "env", "exec", "--artifact", candidateInput.artifact, "--permissive-local", "--inherit-streams", "--"];
+      const probe = JSON.parse(run(rcc.executable, [...prefix, "python", "-c",
+        "import json,sys,josh_room; print(json.dumps({'prefix':sys.prefix,'executable':sys.executable,'controller':josh_room.__file__}))"], { env }));
+      if (!path.resolve(probe.executable).toLowerCase().startsWith(path.resolve(rccHome).toLowerCase() + path.sep)
+        || !path.resolve(probe.controller).toLowerCase().startsWith(path.resolve(env.PYTHONPATH).toLowerCase() + path.sep)) {
+        throw new Error("Candidate interpreter or controller origin mismatch");
+      }
+      env.JOSH_ROOM_ACCEPTANCE_RCC = JSON.stringify({ command: rcc.executable, artifact: candidateInput.artifact,
+        subject_sha: candidateInput.subject_sha });
+      receipt.rcc_candidate = { artifact: candidateInput.artifact, archive_sha256: candidateInput.archive_sha256,
+        rcc_sha256: await runtime.sha256File(rcc.executable), interpreter_inside_private_RCC: true, installed_controller: true };
+      const runtimeEnv = Object.fromEntries(["ROBOCORP_HOME", "RCC_HOLOTREE_MODE", "JOSH_ROOM_RCC_EXE", "JOSH_ROOM_RCC_HOME",
+        "JOSH_ROOM_CONTROLLER_ROOT", "JOSH_ROOM_CONTROLLER_ARTIFACT", "JOSH_ROOM_JAT_ROOT"].map(key => [key, env[key]]));
+      await fsp.writeFile(path.join(base, "candidate-runtime.json"), JSON.stringify({ ...JSON.parse(env.JOSH_ROOM_ACCEPTANCE_RCC), env: runtimeEnv }));
+      providerCommand = rcc.executable;
+      providerPrefix = [...prefix, "python"];
+    }
     const providerErrors = fs.openSync(path.join(base, "provider-errors.log"), "w");
-    provider = spawn(python, [path.join(__dirname, "windows_recovery_provider.py")], {
+    provider = spawn(providerCommand, [...providerPrefix, path.join(__dirname, "windows_recovery_provider.py")], {
       env, stdio: ["ignore", "ignore", providerErrors],
     });
     fs.closeSync(providerErrors);
     await until(async () => {
       if (provider.exitCode !== null) throw new Error("Native provider setup failed");
       return fs.existsSync(path.join(base, "provider-ready.json"));
-    }, "production Dimension/keyset/snapshots", 240000);
+    }, "production Dimension/keyset/snapshots", candidateInput ? 480000 : 240000);
     receipt.storage_and_native_custody_state = "PASS";
+    const providerReady = JSON.parse(await fsp.readFile(path.join(base, "provider-ready.json")));
+    if (providerReady.history_save_pilot !== "unavailable-on-Windows") throw new Error("Windows history Save availability was not verified");
+    receipt.history_save_pilot = "unavailable-on-Windows-actual-CLI-status-not-Save-UI";
     const inputDenials = JSON.parse(await fsp.readFile(path.join(base, "explicit-input-denials.json")));
     if (inputDenials.state !== "PASS" || inputDenials.records.length !== 4) throw new Error("Direct installed CLI input denials incomplete");
     receipt.direct_installed_cli_missing_deleted_handoff_denials = "PASS";
@@ -293,7 +346,11 @@ async function main() {
         }))()`);
         const notification = await cdp.evaluate(`[...document.querySelectorAll('.notification-list-item')].map(node=>node.innerText).join(' ').slice(0,16000)`);
         if (notification && fixtureEnv) {
-          const sanitized = spawnSync(python, [path.join(__dirname, "windows_recovery_provider.py"), "--sanitize-ui"], {
+          const candidateRuntime = fixtureEnv.JOSH_ROOM_ACCEPTANCE_RCC && JSON.parse(fixtureEnv.JOSH_ROOM_ACCEPTANCE_RCC);
+          const sanitizeCommand = candidateRuntime?.command || python;
+          const sanitizePrefix = candidateRuntime ? ["--no-build", "env", "exec", "--artifact", candidateRuntime.artifact,
+            "--permissive-local", "--inherit-streams", "--", "python"] : [];
+          const sanitized = spawnSync(sanitizeCommand, [...sanitizePrefix, path.join(__dirname, "windows_recovery_provider.py"), "--sanitize-ui"], {
             env: fixtureEnv, input: notification, encoding: "utf8", timeout: 10000, maxBuffer: 65536,
           });
           receipt.native_notification = sanitized.status === 0 ? JSON.parse(sanitized.stdout) : { diagnostic: "sanitizer unavailable" };

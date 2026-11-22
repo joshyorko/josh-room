@@ -4,7 +4,7 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { applyInstalledRuntime } = require("./installed_recovery_runtime");
+const { applyInstalledRuntime, candidateRuntime } = require("./installed_recovery_runtime");
 const base = process.env.JOSH_ROOM_ACCEPTANCE_ROOT;
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const write = (name, value) => fs.writeFileSync(path.join(base, name), JSON.stringify(value));
@@ -13,7 +13,7 @@ exports.activate = async context => {
   const target = vscode.extensions.getExtension("joshyorko.josh-room");
   if (!target) throw new Error("Candidate VSIX was not installed");
   await target.activate();
-  const runtimeApis = applyInstalledRuntime(target.extensionPath, {
+  let runtime = {
     command: process.env.JOSH_ROOM_ACCEPTANCE_PYTHON,
     args: args => [path.join(base, "windows_recovery_controller.py"), ...args, "--json"],
     env: { PYTHONPATH: path.join(target.extensionPath, "runtime/controller"),
@@ -22,7 +22,14 @@ exports.activate = async context => {
       XDG_CACHE_HOME: path.join(base, "provider-cache"),
       XDG_RUNTIME_DIR: path.join(base, "provider-runtime") },
     mode: "local-build-fallback",
-  });
+  };
+  const candidateFile = path.join(base, "candidate-runtime.json");
+  if (fs.existsSync(candidateFile)) {
+    const candidate = JSON.parse(fs.readFileSync(candidateFile, "utf8"));
+    runtime = candidateRuntime(candidate, { ...runtime.env, ...candidate.env, JOSH_ROOM_ACCEPTANCE_ROOT: base,
+      JOSH_ROOM_EXTENSION_MODE: "1", JOSH_ROOM_EXTENSION_VERSION: target.packageJSON.version });
+  }
+  const runtimeApis = applyInstalledRuntime(target.extensionPath, runtime);
   const enrolled = JSON.parse(fs.readFileSync(path.join(base, "provider-ready.json"), "utf8"));
   const selectedDimension = { id: "recovery-fixture", provider: "minio",
     encryption_domain_id: enrolled.encryption_domain_id, key_generation: enrolled.key_generation };
@@ -113,6 +120,7 @@ exports.activate = async context => {
     }
   }));
   write("ui-driver-ready.json", { state: "PASS", installed_extension: true,
-    runtime: "source-Python-fallback-not-immutable-RCC", command: "joshRoom.browseRecoveryPoint",
+    runtime: runtime.controllerArtifact ? "unpublished-immutable-RCC-candidate-installed-controller" : "source-Python-fallback-not-immutable-RCC",
+    artifact: runtime.controllerArtifact, command: "joshRoom.browseRecoveryPoint",
     activated_runtime_modules_matched: runtimeApis.length, real_secret_storage_cache_seeded: seeded });
 };

@@ -21,4 +21,17 @@ function applyInstalledRuntime(extensionPath, runtime, { cache = require.cache,
   if (!matched.length) throw new Error("Activated installed runtime hook was not found");
   return matched;
 }
-module.exports = { applyInstalledRuntime };
+function candidateRuntime(candidate, env) {
+  if (!/^[0-9a-f]{40}$/.test(candidate.subject_sha || "")
+    || !/^sha256:[0-9a-f]{64}$/.test(candidate.artifact || "")
+    || !path.isAbsolute(candidate.command || "")) throw new Error("Invalid explicit RCC qualification input");
+  return {
+    command: candidate.command,
+    args: (args, receiptFile) => ["--no-build", "env", "exec", "--artifact", candidate.artifact,
+      "--permissive-local", ...(receiptFile ? ["--receipt-file", receiptFile] : []), "--inherit-streams", "--json",
+      "--", "python", path.join(env.JOSH_ROOM_ACCEPTANCE_ROOT, "windows_recovery_controller.py"), ...args, "--json"],
+    env, controllerArtifact: candidate.artifact, mode: "managed",
+    jatRoot: env.JOSH_ROOM_JAT_ROOT,
+  };
+}
+module.exports = { applyInstalledRuntime, candidateRuntime };
