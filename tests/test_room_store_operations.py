@@ -963,6 +963,7 @@ def test_real_local_restic_save_noop_incremental_restore_vertical(tmp_path):
         workspace_signature,
         signature_algorithm,
     ):
+        assert "composition_policy" not in descriptor.to_dict()["source"]
         assert expected_etag == state["etag"]
         assert signature_algorithm == "josh-room-stat-v1"
         assert len(workspace_signature) == 64

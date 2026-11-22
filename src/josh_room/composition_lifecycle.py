@@ -304,6 +304,7 @@ def _commit(authority, envelope, etag, state):
 
 
 CONTENT_DIGEST_ALGORITHM = "sha256-framed-v2"
+INHERITED_POLICY = "inherited-rules-v1"
 
 
 def _content_digest(root):
@@ -333,7 +334,7 @@ def _content_digest(root):
     return digest.hexdigest()
 
 
-def _capture(root, store, private, slot, dimension, domain, *, claim, parent=None):
+def _capture(root, store, private, slot, dimension, domain, *, claim, parent=None, inherited_policy=None):
     from .room_store_bridge import _room_version, _source_platform
     producer_version, producer_platform = _room_version(), _source_platform()
     policy = load_capture_policy(root)
@@ -412,6 +413,10 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
         value["workspace"]["parent_snapshot_id"] = parent.to_dict()["workspace"][
             "snapshot_id"
         ]
+    if inherited_policy is not None:
+        if inherited_policy != INHERITED_POLICY:
+            raise ValueError("unsupported inherited policy provenance")
+        value["source"]["composition_policy"] = inherited_policy
     return LogicalJat.from_dict(value), before
 
 
@@ -605,14 +610,11 @@ def _build_child_view(source, child, target, request, source_fd):
         for line in original_ignore.splitlines()
         if not line.strip().startswith("# josh-room capture-mode:")
     ]
-    lines.extend(
-        [
-            "# josh-room capture-mode: source-only",
-            ".josh-room-split.json",
-            *_inherited_exclusions(root_policy, child),
-            *[path + "/**" for path in exclusions],
-        ]
-    )
+    rules = [".josh-room-split.json", *_inherited_exclusions(root_policy, child),
+             *[path + "/**" for path in exclusions]]
+    # Only generated patterns need escaping; original comments retain their role.
+    lines.extend(["# josh-room capture-mode: source-only",
+                  *["\\" + rule if rule.startswith("#") else rule for rule in rules]])
     (target / ".josh-roomignore").write_text("\n".join(lines) + "\n")
     _finish_view(target, allowed | {".josh-roomignore"}, modes)
     after = _scan_workspace(
@@ -807,6 +809,7 @@ def save_composition(
                 dimension,
                 authority.binding["encryption_domain_id"],
                 claim=lambda slot=slot: claim(slot),
+                inherited_policy=INHERITED_POLICY,
             )
             ref = authority.put_descriptor(descriptor)
             state = record_child(
