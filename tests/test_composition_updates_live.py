@@ -1,5 +1,8 @@
 """Actual Restic/age update+refresh; durable synthetic S3 transport only."""
 import copy
+import os
+import shutil
+import subprocess
 
 import pytest
 from test_composition_live_tools import NAMESPACE, save
@@ -10,6 +13,37 @@ from josh_room.workspace_state import context_status
 
 pytest_plugins = ('test_composition_live_tools',)
 pytestmark = pytest.mark.integration
+
+
+def test_source_only_multi_repo_capture_excludes_child_git_history(runtime):
+    if shutil.which('git') is None:
+        pytest.skip('requires real Git for synthetic multi-repository capture')
+    r = runtime
+    template = r.private / 'empty-git-template'
+    template.mkdir()
+    env = {**{key: value for key, value in os.environ.items() if not key.startswith('GIT_')},
+           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+           'GIT_CONFIG_COUNT': '0', 'GIT_TEMPLATE_DIR': str(template),
+           'GIT_AUTHOR_NAME': 'Synthetic', 'GIT_COMMITTER_NAME': 'Synthetic',
+           'GIT_AUTHOR_EMAIL': 'synthetic@example.invalid', 'GIT_COMMITTER_EMAIL': 'synthetic@example.invalid'}
+    for name in ('a', 'b'):
+        repo = r.source / name
+        subprocess.run(['git', '-C', str(repo), 'init', '-q'], env=env, check=True)
+        (repo / 'past.txt').write_text('synthetic history-only bytes')
+        subprocess.run(['git', '-C', str(repo), 'add', '.'], env=env, check=True)
+        subprocess.run(['git', '-C', str(repo), 'commit', '-qm', 'synthetic history'], env=env, check=True)
+        (repo / 'past.txt').unlink()
+    result = save(r)
+    envelope, _ = r.authority.read()
+    with r.factory(envelope['secret']) as store:
+        store.open_existing()
+        for project in envelope['state']['dimension_catalog']['projects'].values():
+            record = project['snapshots'][project['latest']]
+            entries = list(store.entries(record['workspace_snapshot_id']))
+            assert not any('.git' in entry.path.split('/') or entry.path.endswith('past.txt') for entry in entries)
+            if record['snapshot_id'] == result['parent_snapshot_id']:
+                assert not any(entry.path in ('a', 'b') or entry.path.startswith(('a/', 'b/')) for entry in entries)
+    assert (r.source / 'a/.git').is_dir() and (r.source / 'b/.git').is_dir()
 
 
 def entered(r):
