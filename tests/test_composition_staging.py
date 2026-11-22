@@ -213,3 +213,20 @@ def test_capture_refuses_unexpected_actual_parent_before_descriptor_publication(
     with pytest.raises(ValueError, match='ancestry'):
         _capture(source, store, tmp_path, {'logical_jat_id': 'jat-output', 'room_id': 'child'},
                  dimension, dimension.encryption_domain_id, claim=lambda: None)
+
+
+def test_rebased_rule_language_matches_parent_at_nested_child_boundaries():
+    from itertools import product
+
+    from josh_room.composition_lifecycle import _inherited_exclusions
+    from josh_room.workspace_policy import CapturePolicy, _parts
+    rules = ['a/reports/**', '*/reports/**', '**/reports/**', 'projects/*/reports/**',
+             'projects/**/a/*.txt', '**/cache', 'a/**/cache', 'report?.txt', '**/*.tmp']
+    paths = ['/'.join(parts) for n in (1, 2, 3) for parts in product(('a', 'reports', 'cache', 'new.txt', 'new.tmp'), repeat=n)]
+    for rule, child in product(rules, ('a', 'projects/a', 'projects/b/a')):
+        parent = CapturePolicy('0' * 64, (_parts(rule),), None, 'source-only')
+        if parent.is_excluded(child):
+            continue
+        derived = CapturePolicy('0' * 64, tuple(_parts(p) for p in _inherited_exclusions(parent, child)), None, 'source-only')
+        for path in paths:
+            assert derived.is_excluded(path) == parent.is_excluded(child + '/' + path), (rule, child, path)
