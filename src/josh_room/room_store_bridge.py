@@ -458,6 +458,10 @@ def _managed_runtime_assets() -> tuple[Path, Path]:
     module = Path(__file__).resolve()
     candidates = (
         (
+            module.parent / "_runtime" / "restic-manifest.json",
+            module.parent / "_runtime" / "install_restic.py",
+        ),
+        (
             module.parents[2] / "restic-manifest.json",
             module.parents[1] / "install_restic.py",
         ),

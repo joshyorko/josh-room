@@ -32,5 +32,9 @@ artifacts = [
   "src/josh_room/view/assets/room-view-template.html",
 ]
 
+[tool.hatch.build.targets.wheel.force-include]
+"vscode-extension/runtime/restic-manifest.json" = "josh_room/_runtime/restic-manifest.json"
+"scripts/install_restic.py" = "josh_room/_runtime/install_restic.py"
+
 [tool.ruff]
 extend-exclude = ["src/josh_room/_vendor"]
