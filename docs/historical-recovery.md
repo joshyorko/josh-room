@@ -222,9 +222,34 @@ extension logs/progress, and metadata fallback removes payloads. Admission is
 bounded pattern-based protection, not a claim to detect every possible secret.
 
 Focused follow-up verification: 148 Python PASS/4 native-Windows SKIPPED on
-Linux, including real pinned Restic; 380 Node PASS/4 SKIPPED. Regressions cover
+Linux, including real pinned Restic; 381 Node PASS/4 SKIPPED. Regressions cover
 preview→actual CLI serialization→native provider bytes, Unicode/whitespace,
 credential/binary/oversize/omitted/tampered denial, digest fallback, untrusted
 preview denial, readonly opaque URIs, close cleanup, and no runtime receipt,
 log or progress payload. Updated native Windows text tests remain a separate
 exact-head CI result; earlier Windows evidence does not prove these changes.
+
+## Installed native text acceptance
+
+At implementation source `c67784314fc3e5f3d99b1302d78b01e5e870b06d`, the
+installed registered Browse command, real synthetic MinIO and disposable native
+Secret Service opened the actual native `vscode.diff` editor for both old↔current
+and point A↔exact point B. Python syntax, tabs and Unicode matched the decoded
+source bytes and separately reported digests. Opaque provider URIs contained
+no original path. An actual mouse-focused edit attempt produced the native
+read-only-editor rejection, with no inserted probe and zero dirty editors.
+All five workspace/marker hashes stayed unchanged. Twenty-seven isolated VS
+Code log files contained neither source preview bytes nor reversible envelopes;
+no comparison file was created. The source-Python/local-build-fallback runtime
+override remains explicit; no immutable RCC artifact claim is made.
+
+The [native text receipt](receipts/issue-209-native-text-diff.json) retains only
+source/package identity, digests and booleans. The [Windows text job](https://github.com/joshyorko/josh-room/actions/runs/45036353694/job/137250858200)
+passed **17 tests, 0 skipped**, including real pinned-Restic recovery and the
+new text/serialization cases; [its receipt](receipts/issue-209-windows-text.json)
+links the uploaded pin/JUnit artifact. Windows installed UI/provider/keyring
+acceptance is still separate. A static public-artifact CI check initially
+flagged the synthetic negative key-shaped test literal; the fixture now
+constructs that invalid test value at runtime without weakening the scanner.
+The affected safety/text regressions passed 15 cases. No real identity or
+credential was used, printed, logged, or committed.

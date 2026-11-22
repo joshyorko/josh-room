@@ -1,0 +1,36 @@
+{
+  "source_sha": "c67784314fc3e5f3d99b1302d78b01e5e870b06d",
+  "status": "passed",
+  "platform": "Linux x64",
+  "vscode": "1.148.0-insider",
+  "vscode_revision": "0d15d4d60248e35fac1a3fe234d74ed780e15691",
+  "vsix_sha256": "caffcfeb18fe5f6bbf961db48db468118eb8dafd7cfcaa94e1c8afe8919f303b",
+  "registered_command": "joshRoom.browseRecoveryPoint",
+  "provider": "real loopback-only MinIO",
+  "keyring": "disposable native Secret Service",
+  "runtime": "installed-source Python via existing local-build-fallback override; NOT immutable RCC artifact",
+  "compared": [
+    "historical point to current workspace",
+    "historical point A to exact point B"
+  ],
+  "syntax": "python",
+  "tab_and_unicode_preserved": true,
+  "decoded_bytes_match_reported_digests": true,
+  "historical_sha256": "e23ef05ffaac27f4b3089c1db88c4059049847f821e7480c520ad940f24bc20e",
+  "current_sha256": "3256f311746aeeb7013b140b1b316cc926eaf4b34886338397f244bff4565b74",
+  "point_b_sha256": "03c68517e10884bb8f6286b4ee79a8c42d589f7570ebe5212597f2eaabb0e056",
+  "provider_uri_scheme": "josh-room-recovery",
+  "original_path_in_provider_uri": false,
+  "read_only_edit_probe_rejected": true,
+  "dirty_editors_after_probe": 0,
+  "workspace_and_marker_files_unchanged": 5,
+  "isolated_logs_scanned": 27,
+  "preview_plaintext_or_reversible_envelope_in_logs": false,
+  "comparison_files_created": 0,
+  "retained_content": "none; digests and booleans only",
+  "not_proven": [
+    "immutable managed RCC artifact",
+    "installed Windows UI/provider/keyring",
+    "wire transfer metrics"
+  ]
+}

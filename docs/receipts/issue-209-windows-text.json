@@ -1,0 +1,21 @@
+{
+  "source_sha": "c67784314fc3e5f3d99b1302d78b01e5e870b06d",
+  "status": "passed",
+  "platform": "Windows x64",
+  "restic_version": "0.19.1",
+  "job": "https://github.com/joshyorko/josh-room/actions/runs/45036353694/job/137250858200",
+  "artifact": "https://github.com/joshyorko/josh-room/actions/runs/45036353694/artifacts/14759803049",
+  "artifact_sha256": "6c1280962e0618999a55cf28882ca35a452efba36363d742f1cf2a8c113bd3c7",
+  "command": "uv run pytest tests/test_recovery_windows.py tests/test_recovery_text.py -q -s --junitxml=<runner-temp>/recovery-windows.xml",
+  "passed": 17,
+  "failed": 0,
+  "skipped": 0,
+  "elapsed_seconds": 15.14,
+  "scope": "native Windows handle/ACL/no-clobber and real encrypted Restic plus text admission/serialization/current-reader tests",
+  "not_proven": [
+    "installed Windows VSIX native UI",
+    "Windows live provider/keyring",
+    "immutable source RCC artifact",
+    "wire transfer bytes"
+  ]
+}

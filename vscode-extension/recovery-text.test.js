@@ -83,3 +83,34 @@ test("digest fallback strips admitted peer payload and trust denial makes no pre
   await assert.rejects(browseRecovery(vscode, pin, async args => { calls.push(args); return { room_id: "room", dimension_id: "archive", snapshot_id: "old", entries: [], next_offset: null }; }), /Trust/);
   assert.ok(calls.every(args => !args.includes("--include-text")));
 });
+
+test("actual CLI serialization denies sensitive binary and oversized envelopes before native rendering", async () => {
+  const root = path.resolve(__dirname, "..");
+  const executable = path.join(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  const candidates = [
+    { path: ".env", bytes: Buffer.from("HELLO=world") },
+    { path: "config.json", bytes: Buffer.from('{"password":"synthetic-denial-fixture"}') },
+    { path: "binary.txt", bytes: Buffer.from([0, 1, 255]) },
+    { path: "large.txt", bytes: Buffer.alloc(2049, "a") },
+  ];
+  const child = spawnSync(fs.existsSync(executable) ? executable : "python3", ["-c", [
+    "import json,sys,base64,hashlib",
+    "from josh_room.recovery_text import text_preview",
+    "from josh_room.cli import _bounded_json_result",
+    "out=[]",
+    "for item in json.load(sys.stdin):",
+    " data=base64.b64decode(item['body'])",
+    " out.append(_bounded_json_result({'text_preview':text_preview(item['path'],data),'sha256':hashlib.sha256(data).hexdigest()}))",
+    "print(json.dumps(out))",
+  ].join("\n")], { cwd: root, env: { ...process.env, PYTHONPATH: path.join(root, "src") },
+    input: JSON.stringify(candidates.map(row => ({ path: row.path, body: row.bytes.toString("base64") }))), encoding: "utf8" });
+  assert.equal(child.status, 0, child.stderr);
+  const results = JSON.parse(child.stdout);
+  assert.deepEqual(results.map(row => row.text_preview.state), ["sensitive-path", "sensitive-content", "binary", "oversized"]);
+  const fixture = mock();
+  for (const result of results) {
+    assert.equal(await showTextPreview(fixture.vscode, result, "synthetic.txt", "point"), false);
+    assert.equal(Object.hasOwn(result.text_preview, "data"), false);
+  }
+  assert.equal(fixture.calls.length, 0);
+});
