@@ -1,0 +1,89 @@
+{
+  "issue": 198,
+  "pull_request": "https://github.com/joshyorko/josh-room/pull/218",
+  "base_pull_request": 216,
+  "tested_product_source_sha": "801c79af97867748218cb8e77e35667e4bd43a29",
+  "release_hold": true,
+  "platform": "linux-x64",
+  "vsix_sha256": "8d07508d14fe45a3f13e8e9c1629806a5fe02c8e872652a384d12638f6a3cb8e",
+  "controller_module_sha256": "dc3189bc8cf6d0c82e3695b89a610412be5527d6745d95f8c48c0da7b9ddb12f",
+  "installed_source_parity": true,
+  "runtime": "explicit existing Python/installed controller-source override; local-build-fallback; NOT immutable RCC",
+  "workspace_trust": "owned synthetic fixture with trust disabled; native untrusted-workspace behavior not qualified",
+  "tools": {
+    "python": "3.12.14",
+    "restic": "0.19.1",
+    "age": "1.3.2",
+    "node": "26.13.1",
+    "vsce": "4.0.0",
+    "vscode_insiders": "1.148.0-insider/0d15d4d60248e35fac1a3fe234d74ed780e15691",
+    "minio": "RELEASE.2025-09-07T16-13-09Z"
+  },
+  "minio_binary_sha256": "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f",
+  "keyring_image_sha256": "1743f427f05d5a5d978c0c78031162c0f86da89365de7f6369dfe6f142a6fd5f",
+  "keyring_isolation": "task-owned network-none, cap-drop ALL, no-new-privileges; no host home/keyring mount",
+  "registered_commands": [
+    "joshRoom.save",
+    "joshRoom.saveChild",
+    "joshRoom.refreshCatalogPins"
+  ],
+  "provider": "task-owned loopback MinIO; generated credentials only in memory/native disposable keyring",
+  "observations": {
+    "ok": true,
+    "native_parent_pin": "jat-423c146e8ab65fefae9391d5d97f5fbc",
+    "native_child_pin": "jat-a92c6db72b885897b36438b87d23e095",
+    "native_child_noop_same_pin": true,
+    "fresh_native_pin_hydration": true,
+    "old_parent_old_child_bytes": true,
+    "source_file_set_and_bytes_unchanged": true,
+    "legacy_inventory_unchanged": true,
+    "working_parent_marker_manifest_unchanged": true,
+    "historical_parent_versions_verified": 4,
+    "namespace_snapshot_count": 9,
+    "current_controller_committed_retries_verified": true,
+    "controller_module_sha256": "dc3189bc8cf6d0c82e3695b89a610412be5527d6745d95f8c48c0da7b9ddb12f"
+  },
+  "screenshots": {
+    "native-child-approval.png": "38ad43a5826e712ec97296a1f50f60f3a1f30e7b263f7106583efa28c3a2aab7",
+    "native-child-noop-approval.png": "d055a279cf55c1d5b16d441b2d8bd7e140b3815ca5129e8bdd90da9c71123bb6",
+    "native-child-saved.png": "303c79e0a0088186cbde6e585e883f209569928f55198ca7598449d8a6e8c56d",
+    "native-parent-approval.png": "94f9ff18bf91ba11d059ae03b877d0b56bdd1d17fd7538c25b6e7405f5f5812c",
+    "native-parent-saved.png": "c47b3a53e70267a88cf2005551aafdd7db5d141e2b028c83c68f0b512efc2b62"
+  },
+  "tests": {
+    "broad_python": "2362 passed, 6 skipped, 27 integration deselected, 47 subtests at product801c79a; later multi-repo case separately run",
+    "focused_python": "146 passed, 47 subtests",
+    "restic_age_runs": [
+      "6 passed in369.81s (expanded historical/crash/no-op at4d1aadc product core)",
+      "2 passed in130.01s (CLI dispatch plus pre-backup claim refusal at4d1aadc)",
+      "1 passed in38.49s (remote commit/local source change at801c79a)",
+      "3 passed in165.13s (committed child/parent + partial local marker retries at801c79a)",
+      "1 passed in21.82s (isolated real synthetic multi-repo source-only/Git separation; product801c79a)"
+    ],
+    "node": "276 passed,4 skipped; product JavaScript unchanged from4d1aadc to801c79a",
+    "actual_cli_provider": "PASS initial capture, child update/retry/no-op, explicit refresh/retry/no-op, historical exact-pin hydration",
+    "installed_registered_actions": "PASS normal guarded-child Save, dedicated no-op Save, explicit parent refresh; full pins visible",
+    "post_native_cli": "PASS all four parent generations,9 snapshots/9 records,no extra captures on no-op/retry,source/legacy/working parent unchanged",
+    "secretlint": {
+      "files": 34,
+      "findings": 0,
+      "hits": [],
+      "version": "10.2.2"
+    }
+  },
+  "remaining_unproven": [
+    "independent review",
+    "native Windows namespace flow",
+    "immutable managed RCC execution",
+    "remote R2/S3",
+    "large workspace resource envelope",
+    "unload/deletion authority"
+  ],
+  "implementation_limits": [
+    "source-only/component-free",
+    "bounded128 child updates/32 parent operations per namespace",
+    "no automatic pre-backup claim takeover",
+    "stale baselines/changed reserved requests require reconciliation",
+    "working parent files are not rewritten; restore returned new parent pin into absent target"
+  ]
+}

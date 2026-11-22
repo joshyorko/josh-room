@@ -1,8 +1,7 @@
-"""Candidate-v4 metadata transitions for synthetic transaction qualification.
+"""Monotonic metadata transitions for isolated namespace capture and fixtures.
 
-No provider adapter, migration, capture, workspace edit or admission API lives
-here. A caller-supplied CAS store is not evidence of exclusive authority.
-Production composition Save remains blocked.
+Physical authority and immutable payload verification belong to the lifecycle;
+these transitions alone do not admit legacy repository migration.
 """
 from __future__ import annotations
 
@@ -221,6 +220,24 @@ def _require_extension(previous, candidate):
         if not 0 <= phases.index(new['phase']) - phases.index(old['phase']) <= 1:
             raise ValueError('candidate cannot skip or reverse phases')
         changed += old != new
+    old_updates = previous.get('child_updates', {})
+    new_updates = candidate.get('child_updates', {})
+    if previous['contract'] != candidate['contract'] and not (
+        previous['contract'] == 'composition-safety-v1' and candidate['contract'] == 'composition-safety-v2'
+    ):
+        raise ValueError('composition contract cannot be downgraded')
+    for key, old in old_updates.items():
+        new = new_updates.get(key)
+        if new is None or old['plan'] != new['plan'] or old['plan_sha256'] != new['plan_sha256']:
+            raise ValueError('child update binding cannot change')
+        if old['phase'] == 'committed' and old != new:
+            raise ValueError('committed child update is immutable')
+        if old != new and (old['phase'], new['phase']) != ('reserved', 'committed'):
+            raise ValueError('invalid child update transition')
+        changed += old != new
+    new_update_keys = new_updates.keys() - old_updates.keys()
+    if any(new_updates[key]['phase'] != 'reserved' for key in new_update_keys):
+        raise ValueError('new child update must be reserved')
     added = candidate['operations'].keys() - previous['operations'].keys()
-    if changed + len(added) != 1 or any(candidate['operations'][key]['phase'] != 'reserved' for key in added):
+    if changed + len(added) + len(new_update_keys) != 1 or any(candidate['operations'][key]['phase'] != 'reserved' for key in added):
         raise ValueError('one operation transition is required per CAS')

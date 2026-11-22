@@ -69,7 +69,9 @@
     "onView:joshRoom.rooms",
     "onCommand:joshRoom.splitWorkspace",
     "onCommand:joshRoom.saveCatalog",
-    "onCommand:joshRoom.enterChild"
+    "onCommand:joshRoom.enterChild",
+    "onCommand:joshRoom.saveChild",
+    "onCommand:joshRoom.refreshCatalogPins"
   ],
   "main": "./extension.js",
   "extensionKind": [
@@ -324,6 +326,14 @@
       {
         "command": "joshRoom.enterChild",
         "title": "Josh: Enter Child Room"
+      },
+      {
+        "command": "joshRoom.saveChild",
+        "title": "Josh: Save Child Room"
+      },
+      {
+        "command": "joshRoom.refreshCatalogPins",
+        "title": "Josh: Refresh Catalog Child Pins"
       }
     ],
     "viewsContainers": {

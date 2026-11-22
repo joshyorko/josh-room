@@ -1136,3 +1136,5038 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       authFree: ["status", "agents"].includes(args[0])
         || (args[0] === "composition" && ["plan", "inventory", "reconcile", "capture-plan"].includes(args[1]))
         || (options.localConfigurationOnly && args[0] === "dimensions" && !args.includes("--with-hierarchy")),
+    });
+    encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
+  } catch (error) {
+    encryptionCleanup();
+    credentialsCleanup();
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
+    throw error;
+  }
+  return new Promise((resolve, reject) => {
+    environment.JOSH_ROOM_RESULT_FILE = resultPath;
+    const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(sanitizeProgressEvent(event)))];
+    if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
+      const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
+      const streamJat = (line, severity = "info") => {
+        const safeLine = sanitizeRuntimeLine(line);
+        outputChannel?.[severity](safeLine);
+        const stage = stageForLog(safeLine);
+        if (stage) progressReporter?.event({ stage: "jat", message: stage });
+      };
+      followers.push(
+        followLogFile(path.join(jatRoot, "output", "stdout.log"), (line) => streamJat(line)),
+        followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => streamJat(line, "warn")),
+      );
+    }
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (cleanup.timer) clearTimeout(cleanup.timer);
+      for (const follower of followers) follower.dispose();
+      fs.rmSync(progressDirectory, { recursive: true, force: true });
+      credentialsCleanup();
+      encryptionCleanup();
+    };
+    let child;
+    try {
+      if (["rooms", "snapshots"].includes(args[0]) && args[1] === "remove") {
+        const dimensionIndex = args.indexOf("--dimension");
+        if (dimensionIndex < 0 || !args[dimensionIndex + 1]) throw new Error("Deletion requires an explicit Dimension.");
+        const marker = deletionWorkspaceMarker(cwd);
+        if (sameRoomBinding(marker, { id: args[2], dimension_id: args[dimensionIndex + 1] })) {
+          throw new Error("Cannot delete from the active Room. Switch or unlink this workspace first.");
+        }
+      }
+      child = childProcess.spawn(runtime.command, runtime.args(args, receiptPath), {
+        cwd: args[0] === "composition" ? path.join(__dirname, "runtime", "controller") : cwd,
+        env: environment,
+        detached: true,
+        stdio: [stdinPayload === undefined && !options.inventoryHandler ? "ignore" : "pipe", "pipe", "pipe"],
+      });
+    } catch (error) {
+      cleanup();
+      reject(error);
+      return;
+    }
+    progressReporter?.event({ stage: "controller", message: "Starting Josh Room controller" });
+    if (options.inventoryHandler) {
+      let buffer = "";
+      let pending;
+      let sessionClosed = false;
+      child.stdin.on("error", () => pending?.reject(new Error("Inventory input closed")));
+      child.stdout.on("data", (chunk) => {
+        buffer += chunk.toString();
+        if (buffer.length > 65536) {
+          pending?.reject(new Error("Inventory response exceeded page budget"));
+          terminateChild(child);
+          return;
+        }
+        let newline;
+        while ((newline = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (!pending) continue;
+          const current = pending;
+          pending = undefined;
+          try {
+            const value = JSON.parse(line);
+            if (value?.ok === false) {
+              const error = new Error("Inventory refused stale, unsafe or unavailable input");
+              error.recoverable = value.recoverable === true;
+              current.reject(error);
+            }
+            else current.resolve(value);
+          } catch (_) { current.reject(new Error("Invalid inventory response")); }
+        }
+      });
+      child.on("close", () => { sessionClosed = true; pending?.reject(new Error("Inventory session closed")); });
+      const request = (body) => new Promise((resolve, reject) => {
+        if (sessionClosed) return reject(new Error("Inventory session closed"));
+        if (pending) return reject(new Error("Concurrent inventory request"));
+        const frame = JSON.stringify(body) + "\n";
+        if (Buffer.byteLength(frame, "utf8") > 120000) {
+          const error = new Error("Inventory request exceeds frame budget");
+          error.recoverable = true;
+          return reject(error);
+        }
+        pending = { resolve, reject };
+        child.stdin.write(frame);
+      });
+      options.inventoryHandler(request).then(() => child.stdin.end('{"action":"close"}\n'), (error) => {
+        options.inventoryError = error;
+        child.stdin.end();
+      });
+    }
+    if (stdinPayload !== undefined) child.stdin.end(stdinPayload);
+    let stdout = "";
+    let stderr = "";
+    let cancelled = Boolean(cancellationToken?.isCancellationRequested);
+    const append = (current, chunk) => (current + chunk.toString()).slice(-1024 * 1024);
+    const streamBuffers = { stdout: "", stderr: "" };
+    const stream = (name, chunk) => {
+      if (name !== "stderr") return;
+      const current = streamBuffers[name] + chunk.toString();
+      const lines = current.split(/\r?\n/);
+      streamBuffers[name] = lines.pop() || "";
+      for (const line of lines) {
+        const sanitized = sanitizeRuntimeLine(line);
+        if (!sanitized) continue;
+        outputChannel?.appendLine(`${new Date().toISOString()} RCC ${name}: ${sanitized}`);
+        progressReporter?.event({ stage: "controller", message: sanitized });
+      }
+    };
+    child.stdout.on("data", (chunk) => { stdout = append(stdout, chunk); stream("stdout", chunk); });
+    child.stderr.on("data", (chunk) => { stderr = append(stderr, chunk); stream("stderr", chunk); });
+    const cancellation = cancellationToken?.onCancellationRequested(() => {
+      cancelled = true;
+      cleanup();
+      terminateChild(child);
+    });
+    child.on("error", (error) => {
+      cancellation?.dispose();
+      cleanup();
+      reject(cancelled ? cancellationError() : error);
+    });
+    child.on("close", (code) => {
+      cancellation?.dispose();
+      let result;
+      const managedController = runtime.mode !== "local-build-fallback" && Boolean(runtime.controllerArtifact);
+      let receipt;
+      let receiptPresent = false;
+      try {
+        receiptPresent = fs.existsSync(receiptPath);
+        if (receiptPresent) receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
+      } catch (error) {
+        outputChannel?.warn(`Unable to read RCC receipt: ${error.message}`);
+      }
+      const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
+      const receiptExitValue = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
+      const receiptExit = receiptExitValue;
+      const receiptArtifact = receiptObject && (receiptObject.artifactDigest ?? receiptObject.artifact_digest);
+      const receiptValid = receiptObject
+        && typeof receiptExitValue === "number"
+        && Number.isFinite(receiptExitValue)
+        && Number.isFinite(code)
+        && receiptExitValue === code
+        && (!runtime.controllerArtifact || receiptArtifact === runtime.controllerArtifact);
+      try {
+        if (fs.existsSync(resultPath)) result = parseControllerOutput(fs.readFileSync(resultPath, "utf8"));
+      } catch (error) {
+        outputChannel?.warn(`Unable to read controller result receipt: ${sanitizeControllerText(error.message)}`);
+      }
+      if ((managedController && !receiptPresent) || (receiptPresent && !receiptValid)) {
+        const detail = !receiptPresent
+          ? "RCC did not produce a controller receipt"
+          : controllerErrorText(receiptObject?.error) || controllerErrorText(receiptObject?.message)
+            || controllerErrorText(receiptObject?.compatibility)
+            || (runtime.controllerArtifact && receiptArtifact !== runtime.controllerArtifact
+              ? "RCC returned a controller receipt for an unexpected artifact"
+              : "RCC returned an invalid controller receipt");
+        cleanup();
+        const failure = new Error(String(detail));
+        if (Number.isFinite(receiptExit)) failure.receipt_exit_status = receiptExit;
+        failure.stdout = sanitizeControllerText(stdout);
+        failure.stderr = sanitizeControllerText(stderr);
+        if (Number.isFinite(code)) failure.controller_exit_status = code;
+        reject(failure);
+        return;
+      }
+      if (receiptPresent && receiptExit !== 0) {
+        cleanup();
+        if (result && result.ok === false && args[0] === "workspace-check") {
+          resolve({ stdout: JSON.stringify(redactResultDiagnostics(result)), stderr, runtime, controllerExitStatus: code });
+        } else if (result && result.ok === false) {
+          reject(controllerFailure(result, { controllerExitStatus: code, controllerStderr: stderr }));
+        } else {
+          const failure = new Error(controllerErrorText(receiptObject?.error) || `RCC controller exited with status ${code}`);
+          failure.receipt_exit_status = receiptExit;
+          failure.controller_exit_status = code;
+          failure.stdout = sanitizeControllerText(stdout);
+          failure.stderr = sanitizeControllerText(stderr);
+          reject(failure);
+        }
+        return;
+      }
+      cleanup();
+      if (options.inventoryError) { reject(options.inventoryError); return; }
+      if (cancelled || cancellationToken?.isCancellationRequested) {
+        reject(cancellationError());
+        return;
+      }
+      if (result) {
+        resolve({ stdout: JSON.stringify(result), stderr, runtime, controllerExitStatus: code });
+        return;
+      }
+      if (code === 0) {
+        resolve({ stdout, stderr, runtime });
+      } else {
+        const error = new Error(`Josh Room exited with status ${code}`);
+        try {
+          error.result = redactResultDiagnostics(parseControllerOutput(stdout));
+        } catch (_parseError) {
+          // Non-JSON failures use the sanitized bounded stream fields below.
+        }
+        error.stdout = sanitizeControllerText(stdout);
+        error.stderr = sanitizeControllerText(stderr);
+        error.controller_exit_status = code;
+        error.command = runtime.command;
+        error.args = runtime.args(args);
+        error.resultPath = resultPath;
+        reject(error);
+      }
+    });
+    if (options.timeoutMs > 0) {
+      cleanup.timer = setTimeout(() => {
+        cancelled = true;
+        cleanup();
+        terminateChild(child);
+      }, options.timeoutMs);
+      cleanup.timer.unref?.();
+    }
+  });
+}
+
+async function runJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options = {}) {
+  outputChannel?.info(`START · controller ${sanitizeControllerArgv(args).join(" ")}`);
+  try {
+    const execution = await executeJoshRoom(args, cwd, cancellationToken, progressReporter, stdinPayload, options);
+    const { stdout, runtime } = execution;
+    const result = parseControllerOutput(stdout);
+    // `status` and `workspace-check` return authoritative validation results, including failures.
+    if (!result.ok && !["status", "workspace-check"].includes(args[0])) {
+      throw controllerFailure(result, {
+        controllerExitStatus: execution.controllerExitStatus,
+        controllerStderr: execution.stderr,
+      });
+    }
+    if (runtime?.markLocalReady) await runtime.markLocalReady();
+    outputChannel?.info(`DONE · ${result.project_id || result.operation || args[0]}`);
+    return result;
+  } catch (error) {
+    if (cancellationToken?.isCancellationRequested || isCancellationError(error)) {
+      throw cancellationError();
+    }
+    if (error.result) {
+      if (args[0] === "workspace-check") return redactResultDiagnostics(error.result);
+      if (args[0] === "status") {
+        outputChannel?.info(`DONE · status (${error.result.state || "unknown"})`);
+        return error.result;
+      }
+      throw controllerFailure(error.result, {
+        controllerExitStatus: error.controller_exit_status,
+        controllerStderr: error.stderr,
+      });
+    }
+    const output = error.stdout || error.stderr;
+    if (output) {
+      let result;
+      try {
+        result = parseControllerOutput(output);
+      } catch (parseError) {
+        outputChannel?.error(sanitizeControllerText(error.message || String(error)));
+        outputChannel?.show(true);
+        throw error;
+      }
+      if (args[0] === "status") {
+        outputChannel?.info(`DONE · status (${result.state || "unknown"})`);
+        return result;
+      }
+      if (args[0] === "workspace-check") return redactResultDiagnostics(result);
+      throw controllerFailure(result, {
+        controllerExitStatus: error.controller_exit_status,
+        controllerStderr: error.stderr,
+      });
+    }
+    outputChannel?.error(sanitizeControllerText(error.message || String(error)));
+    outputChannel?.show(true);
+    throw error;
+  }
+}
+
+function runOperation(title, args, cwd, { cancellable = true, stdin, encryptionMaterial, dimension, timeoutMs, cancellationToken, progressReporter } = {}) {
+  if (progressReporter) return runJoshRoom(args, cwd, cancellationToken, progressReporter, stdin, { encryptionMaterial, timeoutMs });
+  const operationId = ++activeOperationId;
+  const displayTitle = title.replace(/…$/, "");
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title, cancellable },
+    async (progress, token) => {
+      const reporter = createVisualReporter(displayTitle, operationKind(args), progress, operationId);
+      try {
+        const result = await runJoshRoom(args, cwd, token, reporter, stdin, {
+          encryptionMaterial: encryptionMaterial || (dimension && await readEncryptionMaterial(dimension)),
+          timeoutMs,
+        });
+        reporter.finish();
+        return result;
+      } catch (error) {
+        reporter.fail(error);
+        throw error;
+      }
+    },
+  );
+}
+
+function createVisualReporter(title, kind, progress, operationId = ++activeOperationId) {
+  const tracker = createProgressTracker(kind);
+  let lastPercent = 0;
+  let latestState;
+  let frame = 0;
+  const startedAt = Date.now();
+  let animation;
+  const updateStatus = () => {
+    if (!latestState) return;
+    const animated = formatProgressDisplay(title, kind, latestState, frame, Date.now() - startedAt);
+    frame += 1;
+    const tooltip = new vscode.MarkdownString();
+    tooltip.appendCodeblock(animated.tooltip);
+    tooltip.appendMarkdown("\nFull details: **Output → Josh Room**");
+    setStatus(animated.statusText, tooltip);
+  };
+  const stopAnimation = () => {
+    if (animation) clearInterval(animation);
+    animation = undefined;
+  };
+  const publish = (event) => {
+    event = sanitizeProgressEvent(event);
+    const state = tracker.update(event);
+    latestState = state;
+    const display = formatProgressDisplay(title, kind, state, 0, Date.now() - startedAt);
+    const increment = state.percent === undefined ? undefined : Math.max(0, state.percent - lastPercent);
+    if (state.percent !== undefined) lastPercent = state.percent;
+    progress.report({ message: display.notification, ...(increment ? { increment } : {}) });
+    updateStatus();
+    if (state.percent === 100) stopAnimation();
+    else if (!animation) {
+      animation = setInterval(updateStatus, 140);
+      animation.unref?.();
+    }
+    outputChannel?.info(display.logLine);
+  };
+  return {
+    event: (event) => publish(event.stage === "complete" ? { ...event, stage: "subtask-complete" } : event),
+    finish: () => {
+      publish({ stage: "complete", message: "Complete" });
+      stopAnimation();
+      if (activeOperationId === operationId) {
+        setStatus(`$(pass-filled) ${title} 100%`, "Completed successfully");
+        setTimeout(() => {
+          if (activeOperationId === operationId) refreshRoomStatus();
+        }, 2500);
+      }
+    },
+    fail: (error) => {
+      stopAnimation();
+      if (isCancellationError(error)) {
+        if (activeOperationId === operationId) setStatus("$(archive) Josh Room", `${title} cancelled`);
+        return;
+      }
+      const rawMessage = sanitizeControllerText(error?.message || String(error));
+      const message = userFacingError(error);
+      outputChannel?.error(`FAILED · ${title} · ${rawMessage}`);
+      if (activeOperationId === operationId) setStatus(`$(error) ${title} failed`, message);
+    },
+    dispose: stopAnimation,
+  };
+}
+
+class RoomsProvider {
+  constructor() {
+    this.rooms = undefined;
+    this.state = "initial";
+    this.emitter = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this.emitter.event;
+  }
+
+  getTreeItem(item) {
+    if (item.kind !== "room") {
+      const labels = {
+        load: "Load Rooms",
+        loading: "Loading Rooms…",
+        empty: "No saved Rooms",
+        error: "Couldn't load Rooms — click to retry",
+      };
+      const treeItem = new vscode.TreeItem(labels[item.kind], vscode.TreeItemCollapsibleState.None);
+      treeItem.iconPath = new vscode.ThemeIcon(
+        item.kind === "loading" ? "sync~spin" : item.kind === "error" ? "error" : "cloud-download",
+      );
+      treeItem.command = { command: "joshRoom.refresh", title: "Load Rooms" };
+      return treeItem;
+    }
+    const current = sameRoomBinding(currentRoom(activeWorkspace()), item);
+    const saved = current && roomStatus.kind === "clean" && workspaceBindingTrusted;
+    const treeItem = new vscode.TreeItem(item.display_name, vscode.TreeItemCollapsibleState.None);
+    treeItem.description = current ? saved ? "Current • Saved" : "Current • Needs save" : "";
+    treeItem.tooltip = current
+      ? saved ? `${item.display_name} is saved` : `${item.display_name} has workspace changes to save`
+      : item.display_name;
+    treeItem.contextValue = "room";
+    treeItem.iconPath = new vscode.ThemeIcon(current ? roomStatus.kind === "clean" ? "home" : "circle-filled" : "archive");
+    if (!current) {
+      treeItem.command = { command: "joshRoom.enter", title: "Enter Room", arguments: [item] };
+    }
+    return treeItem;
+  }
+
+  getChildren() {
+    if (this.state === "loading") return [{ kind: "loading" }];
+    if (this.state === "error") return [{ kind: "error" }];
+    if (this.state === "initial") return [{ kind: "load" }];
+    if (!this.rooms?.length) return [];
+    return this.rooms.map((room) => ({ ...room, kind: "room" }));
+  }
+
+  async refresh() {
+    this.state = "loading";
+    setStatus("$(sync~spin) Josh Room", "Loading Rooms…");
+    this.emitter.fire(undefined);
+    try {
+      const catalog = await loadCatalog(activeWorkspace(), "Refreshing Rooms…");
+      this.rooms = catalog.projects;
+      this.state = "ready";
+      await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", this.rooms.length === 0);
+      setStatus(`$(archive) ${this.rooms.length} Room${this.rooms.length === 1 ? "" : "s"}`);
+      refreshRoomStatus();
+      this.emitter.fire(undefined);
+    } catch (error) {
+      this.state = "error";
+      await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", false);
+      setStatus("$(error) Josh Room", "Couldn't load Rooms — click to retry");
+      this.emitter.fire(undefined);
+      throw error;
+    }
+  }
+}
+
+class JatToolsProvider {
+  getTreeItem(item) {
+    const treeItem = new vscode.TreeItem(item.label, vscode.TreeItemCollapsibleState.None);
+    treeItem.description = item.description;
+    treeItem.iconPath = new vscode.ThemeIcon(item.icon);
+    treeItem.command = { command: item.command, title: item.label };
+    return treeItem;
+  }
+
+  getChildren() {
+    return [
+      { label: "Pack Folder into JAT", description: "Build", icon: "package", command: "joshRoom.jatBuild" },
+      { label: "Inspect JAT", description: "Inventory", icon: "search", command: "joshRoom.jatInspect" },
+      { label: "Extract from JAT", description: "One reference", icon: "go-to-file", command: "joshRoom.jatExtract" },
+      { label: "Restore Workspace", description: "Restore", icon: "folder-library", command: "joshRoom.jatRestore" },
+      { label: "Serve JAT…", description: "Auto · Files · Registry · Both", icon: "server-process", command: "joshRoom.jatServe" },
+      { label: "Export Images…", description: "containerd", icon: "archive", command: "joshRoom.jatExport" },
+      { label: "Copy / Seed…", description: "registry · dir", icon: "copy", command: "joshRoom.jatCopy" },
+    ];
+  }
+}
+
+async function loadCatalog(cwd, title = "Loading your Rooms…") {
+  return runOperation(title, ["projects", "list", "--backend", "r2"], cwd);
+}
+
+function currentRoom(cwd) {
+  try {
+    const marker = JSON.parse(fs.readFileSync(path.join(cwd, ".josh-room.json"), "utf8"));
+    return isRoomMarker(marker) ? marker : undefined;
+  } catch (_error) {
+    return undefined;
+  }
+}
+
+function roomBindingDimensionId(item) {
+  const project = item && item.project && typeof item.project === "object" ? item.project : item;
+  const dimension = (item && item.dimension) || (project && project.dimension);
+  return (dimension && (dimension.id || dimension.dimension_id))
+    || (project && (project.dimension_id || project.dimensionId))
+    || (item && item.dimension_id);
+}
+
+function sameRoomBinding(marker, item) {
+  const project = roomProject(item);
+  const snapshotId = snapshotIdentity(item);
+  return Boolean(marker && project
+    && marker.project_id === project.id
+    && marker.dimension_id === roomBindingDimensionId(item)
+    && (!snapshotId || marker.snapshot_id === snapshotId));
+}
+
+function refreshRoomStatus() {
+  let marker;
+  try {
+    marker = currentRoom(activeWorkspace());
+  } catch (_error) {
+    marker = undefined;
+  }
+  if (!marker) {
+    statusItem.command = "workbench.view.extension.josh-room";
+    setStatus("$(archive) Josh Room");
+    return;
+  }
+  if (roomStatus.kind === "clean" && workspaceBindingTrusted) {
+    statusItem.command = "workbench.view.extension.josh-room";
+    setStatus(`$(check) ${marker.display_name} — Saved`, "This Room matches the last successful Save in this session.");
+    return;
+  }
+  if (roomStatus.kind === "unknown" || roomStatus.kind === "reconciling") {
+    statusItem.command = "joshRoom.save";
+    setStatus(
+      `$(question) ${marker.display_name} — Status unknown · Save`,
+      "This workspace has not been proven clean in this session. Save performs an authoritative check.",
+    );
+  } else if (roomStatus.kind === "saved-but-still-dirty") {
+    statusItem.command = "joshRoom.save";
+    setStatus(
+      `$(warning) ${marker.display_name} — Saved, changes remain · Save`,
+      "The Room was saved while workspace changes were still arriving. Save again to capture them.",
+    );
+  } else {
+    statusItem.command = "joshRoom.save";
+    setStatus(
+      `$(circle-filled) ${marker.display_name} — Save`,
+      workspaceBindingTrusted
+        ? "Workspace changed. Click to save this Room."
+        : "Workspace binding is not trusted. Link or Repair this Room before trusting it.",
+    );
+  }
+}
+
+function setRoomState(kind, { bindingTrusted } = {}) {
+  if (kind !== "clean") trustedSaveReceipt = undefined;
+  if (bindingTrusted !== undefined) workspaceBindingTrusted = bindingTrusted;
+  if (roomStatus.kind === kind) {
+    roomsProvider?.emitter.fire(undefined);
+    refreshRoomStatus();
+    return;
+  }
+  roomStatus = Object.freeze({ kind });
+  if (kind === "clean") cleanEventGeneration = workspaceEventGeneration;
+  else cleanEventGeneration = -1;
+  roomsProvider?.emitter.fire(undefined);
+  refreshRoomStatus();
+}
+
+function setRoomDirty(dirty) {
+  if (dirty) setRoomState("dirty");
+  else if (workspaceBindingTrusted) setRoomState("clean");
+  else setRoomState("unknown");
+}
+
+// The controller writes .josh-room.json through a root-level mkstemp file
+// (prefix ".josh-room.", 8 random characters) and renames it into place.
+const CONTROLLER_MARKER_TEMP = /^\.josh-room\.[a-z0-9_]{8}$/;
+
+function relativeWorkspacePath(uri) {
+  let root;
+  try {
+    root = activeWorkspace();
+  } catch (_error) {
+    return undefined;
+  }
+  const relative = path.relative(root, uri.fsPath);
+  if (path.resolve(uri.fsPath) === path.join(root, ".josh-roomignore")) return ".josh-roomignore";
+  if (CONTROLLER_MARKER_TEMP.test(relative)) return undefined;
+  return shouldMarkDirty(relative, workspaceCapturePolicy) ? relative : undefined;
+}
+
+function isCapturePolicyUri(root, uri) {
+  return Boolean(uri?.fsPath && path.resolve(uri.fsPath) === path.join(root, ".josh-roomignore"));
+}
+
+function handleCapturePolicyChange(root) {
+  workspaceEventGeneration += 1;
+  try {
+    workspaceCapturePolicy = loadCapturePolicy(root);
+  } catch (error) {
+    workspaceCapturePolicy = undefined;
+    workspaceBaseline = undefined;
+    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${error.message}`);
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  if (workspaceBaseline) workspaceBaseline.capturePolicy = workspaceCapturePolicy;
+  setRoomState("dirty", { bindingTrusted: true });
+}
+
+async function markWorkspaceChange(uri) {
+  let root;
+  try {
+    root = activeWorkspace();
+  } catch (_error) {
+    return;
+  }
+  if (isCapturePolicyUri(root, uri)) {
+    handleCapturePolicyChange(root);
+    return;
+  }
+  const relative = relativeWorkspacePath(uri);
+  if (!relative) return;
+  workspaceEventGeneration += 1;
+  setRoomState("dirty");
+}
+
+async function startDirtyTracking(context) {
+  const generation = ++dirtyTrackingGeneration;
+  workspaceWatcher?.dispose();
+  capturePolicyWatcher?.dispose();
+  workspaceWatcher = undefined;
+  capturePolicyWatcher = undefined;
+  workspaceBaseline = undefined;
+  workspaceCapturePolicy = undefined;
+  dirtyBuffers.clear();
+  let root;
+  try {
+    root = activeWorkspace();
+  } catch (_error) {
+    return;
+  }
+  if (!currentRoom(root)) {
+    setRoomDirty(false);
+    return;
+  }
+  workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
+  const compare = (uri) => markWorkspaceChange(uri);
+  workspaceWatcher.onDidChange(compare);
+  workspaceWatcher.onDidCreate(compare);
+  workspaceWatcher.onDidDelete(compare);
+  context.subscriptions.push(workspaceWatcher);
+  try {
+    workspaceCapturePolicy = loadCapturePolicy(root);
+    workspaceBaseline = new WorkspaceBaseline(root, { capturePolicy: workspaceCapturePolicy });
+  } catch (error) {
+    workspaceCapturePolicy = undefined;
+    workspaceBaseline = undefined;
+    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${error.message}`);
+    setRoomDirty(true);
+    return;
+  }
+  setStatus("$(sync~spin) Indexing saved Room", "Preparing exact change detection…");
+  await workspaceBaseline.capture();
+  if (generation !== dirtyTrackingGeneration) return;
+  setRoomDirty(false);
+  refreshRoomStatus();
+}
+
+function roomStorePreviewText(preview) {
+  const currentEntries = Number.isSafeInteger(preview.current_entry_count) ? preview.current_entry_count : "unknown";
+  const previousEntries = Number.isSafeInteger(preview.previous_entry_count) ? preview.previous_entry_count : undefined;
+  const initial = previousEntries === 0 ? "Initial full capture" : "Save Preview";
+  const scanned = formatHaulerSize(preview.scanned_bytes) || "unknown";
+  const resticAdded = preview.restic_data_added_bytes === null || preview.restic_data_added_bytes === undefined
+    ? "determined by Save"
+    : formatHaulerSize(preview.restic_data_added_bytes) || "unknown";
+  const lines = [
+    `${initial} · Logical entries: ${currentEntries}`,
+    `Workspace scan: ${scanned}`,
+    `Restic data estimate: ${resticAdded}`,
+  ];
+  if (preview.deleted_paths?.length) lines.push(`${preview.deleted_paths.length} deleted entries`);
+  if (preview.rcc_capture_pending) lines.push("RCC environment capture runs during Save.");
+  if (preview.hauler_capture_pending) lines.push("Selected OCI and Hauler content will be checked during Save.");
+  if (preview.homebrew_capture_pending) lines.push("Homebrew recovery will be checked during Save.");
+  return lines.join("\n");
+}
+
+function assertValidRoomStorePreview(preview) {
+  const digest = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+  if (!preview || preview.ok !== true
+    || !Number.isSafeInteger(preview.scanned_bytes) || preview.scanned_bytes < 0
+    || !Number.isSafeInteger(preview.previous_entry_count) || preview.previous_entry_count < 0
+    || !Number.isSafeInteger(preview.current_entry_count) || preview.current_entry_count < 0
+    || (preview.restic_data_added_bytes !== null
+      && (!Number.isSafeInteger(preview.restic_data_added_bytes) || preview.restic_data_added_bytes < 0))
+    || !Array.isArray(preview.deleted_paths) || !preview.deleted_paths.every((item) => typeof item === "string")
+    || (preview.deletion_confirmation_token !== null
+      && preview.deletion_confirmation_token !== undefined
+      && (typeof preview.deletion_confirmation_token !== "string" || !preview.deletion_confirmation_token))
+    || typeof preview.rcc_capture_pending !== "boolean"
+    || preview.signature_algorithm !== "josh-room-stat-v1"
+    || !digest(preview.workspace_signature)
+    || !digest(preview.capture_policy_sha256)) {
+    throw new Error("Room Store Save Preview returned an invalid receipt.");
+  }
+}
+
+async function approveRoomStorePreview(preview, { name, source, allImages, dimension } = {}) {
+  const target = name ? `Room: ${name}\nDimension: ${dimension || "selected storage"}\nFolder: ${source}\nCapture: ${preview.component_plan ? "Workspace plus the explicit component plan below" : allImages ? "Workspace and all tagged local OCI images" : "Workspace only"}\n\n` : "";
+  const message = target + roomStorePreviewText(preview) + "\n" + require("./component-picker").planText(preview);
+  if (preview.deletion_confirmation_token) {
+    const action = await vscode.window.showWarningMessage(
+      `${message}\n\nDeleted paths:\n${preview.deleted_paths.map((item) => JSON.stringify(item)).join("\n")}\n\nThis deletion plan needs confirmation before Save.`,
+      { modal: true },
+      "Confirm Save",
+      "Cancel",
+    );
+    return action === "Confirm Save" ? preview.deletion_confirmation_token : undefined;
+  }
+  const action = await vscode.window.showInformationMessage(message, "Save", "Cancel");
+  return action === "Save" ? "" : undefined;
+}
+
+async function approveStaleWorktreeRepair(result, source, dimension, encryptionMaterial) {
+  const records = Array.isArray(result?.repair_records) ? result.repair_records : [];
+  if (!records.length) return false;
+  const details = records.map((record) => `${record.repository}\n  ${record.administrative_path} → ${record.worktree_path}`).join("\n");
+  const action = await vscode.window.showWarningMessage(
+    `Save found stale Git worktree records in ${result.repair_repository || "the selected workspace"}.\n\n${details}\n\nClean stale worktree records and retry Save?`,
+    { modal: true },
+    "Clean stale worktree records and retry",
+    "Cancel",
+  );
+  if (action !== "Clean stale worktree records and retry") return false;
+  await runSelectedEncryption(
+    ["workspace", "worktree-repair", "--workspace", source, "--approve", "--proposal-digest", result.proposal_digest],
+    source,
+    dimension,
+    { title: "Cleaning stale Git worktree records…", action: "repair stale Git worktree records", encryptionMaterial },
+  );
+  return true;
+}
+
+function nativeSaveBindingMatches(result, marker, source, policy) {
+  if (!result || !marker || marker.format_version !== 3 || !policy) return false;
+  let canonicalPath;
+  try { canonicalPath = fs.realpathSync(source); } catch (_error) { return false; }
+  const canonicalPathSha = crypto.createHash("sha256").update(canonicalPath).digest("hex");
+  return marker.signature_algorithm === "josh-room-stat-v1"
+    && result.dimension_id === marker.dimension_id
+    && result.encryption_domain_id === marker.encryption_domain_id
+    && result.project_id === marker.project_id
+    && result.signature_algorithm === marker.signature_algorithm
+    && typeof result.workspace_signature === "string"
+    && result.workspace_signature === marker.workspace_signature
+    && result.capture_policy_sha256 === marker.capture_policy_sha256
+    && marker.capture_policy_sha256 === policy.sha256
+    && marker.workspace_path_sha256 === canonicalPathSha
+    && result.snapshot_id === marker.snapshot_id;
+}
+
+function trustedLocalSaveReceipt(source, cwd) {
+  if (roomStatus.kind !== "clean" || !workspaceBindingTrusted || !workspaceBaseline
+    || cleanEventGeneration !== workspaceEventGeneration || !trustedSaveReceipt) return undefined;
+  let canonicalSource;
+  let canonicalCwd;
+  let canonicalBaseline;
+  let policy;
+  try {
+    canonicalSource = fs.realpathSync(source);
+    canonicalCwd = fs.realpathSync(cwd);
+    canonicalBaseline = fs.realpathSync(workspaceBaseline.root);
+    policy = loadCapturePolicy(source);
+  } catch (_error) {
+    trustedSaveReceipt = undefined;
+    return undefined;
+  }
+  if (canonicalSource !== canonicalCwd || canonicalBaseline !== canonicalSource) return undefined;
+  if (trustedSaveReceipt.canonical_source_path !== canonicalSource
+    || trustedSaveReceipt.event_generation !== workspaceEventGeneration
+    || trustedSaveReceipt.capture_policy_sha256 !== policy.sha256) {
+    trustedSaveReceipt = undefined;
+    return undefined;
+  }
+  const marker = currentRoom(source);
+  const canonicalPathSha = crypto.createHash("sha256").update(canonicalSource).digest("hex");
+  if (!marker || marker.format_version !== 3
+    || marker.workspace_path_sha256 !== canonicalPathSha
+    || marker.capture_policy_sha256 !== policy.sha256
+    || marker.workspace_signature !== trustedSaveReceipt.workspace_signature
+    || marker.signature_algorithm !== trustedSaveReceipt.signature_algorithm
+    || marker.project_id !== trustedSaveReceipt.project_id
+    || marker.dimension_id !== trustedSaveReceipt.dimension_id
+    || marker.encryption_domain_id !== trustedSaveReceipt.encryption_domain_id
+    || marker.snapshot_id !== trustedSaveReceipt.snapshot_id) {
+    trustedSaveReceipt = undefined;
+    return undefined;
+  }
+  if (workspaceCapturePolicy?.sha256 !== policy.sha256) {
+    workspaceCapturePolicy = policy;
+    workspaceBaseline.capturePolicy = policy;
+  }
+  return trustedSaveReceipt;
+}
+
+async function nativeSaveReceiptStillMatches(source, receipt) {
+  let status;
+  try { status = await runJoshRoom(["status"], source); } catch (_error) { return false; }
+  return status?.ok === true && status.state === "clean"
+    && status.path_matches === true && status.signature_matches === true && status.policy_matches === true
+    && status.workspace_signature === receipt.workspace_signature
+    && status.signature_algorithm === receipt.signature_algorithm
+    && status.capture_policy_sha256 === receipt.capture_policy_sha256;
+}
+
+function finishRoomStoreSave(result, source, saveEventGeneration, allImages) {
+  let canonicalSource;
+  let canonicalWorkspace;
+  try {
+    canonicalSource = fs.realpathSync(source);
+    canonicalWorkspace = fs.realpathSync(activeWorkspace());
+  } catch (_error) {
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  if (canonicalSource !== canonicalWorkspace) return;
+  let policy;
+  try {
+    policy = workspaceCapturePolicy || loadCapturePolicy(source);
+  } catch (_error) {
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  const marker = currentRoom(source);
+  const bindingMatches = nativeSaveBindingMatches(result, marker, source, policy);
+  if (result.status === "saved-but-dirty" || dirtyBuffers.size > 0 || saveEventGeneration !== workspaceEventGeneration) {
+    setRoomState("saved-but-still-dirty", { bindingTrusted: bindingMatches });
+    return;
+  }
+  if (!bindingMatches) {
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  workspaceCapturePolicy = policy;
+  workspaceBaseline = new WorkspaceBaseline(source, {
+    savedFingerprint: marker.workspace_signature,
+    currentFingerprint: result.workspace_signature,
+    capturePolicy: policy,
+  });
+  workspaceBaseline.reset({
+    savedFingerprint: marker.workspace_signature,
+    currentFingerprint: result.workspace_signature,
+  });
+  workspaceBindingTrusted = true;
+  dirtyBuffers.clear();
+  setRoomState("clean", { bindingTrusted: true });
+  if (allImages || result.has_external_components) {
+    trustedSaveReceipt = undefined;
+    return;
+  }
+  trustedSaveReceipt = Object.freeze({
+    canonical_source_path: canonicalSource,
+    project_id: marker.project_id,
+    dimension_id: marker.dimension_id,
+    encryption_domain_id: marker.encryption_domain_id,
+    snapshot_id: marker.snapshot_id,
+    workspace_signature: marker.workspace_signature,
+    signature_algorithm: marker.signature_algorithm,
+    capture_policy_sha256: marker.capture_policy_sha256,
+    event_generation: workspaceEventGeneration,
+    all_images: Boolean(allImages),
+    display_name: marker.display_name,
+  });
+}
+
+async function editWorkspaceExclusions(source) {
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(source, ".josh-roomignore")));
+  await vscode.window.showTextDocument(document);
+  const action = await vscode.window.showInformationMessage(
+    "Edit exclusions, then save the file and choose Continue. Excluded files stay local but are not backed up.",
+    "Continue",
+  );
+  if (action !== "Continue" || document.isDirty) return false;
+  trustedSaveReceipt = undefined;
+  return true;
+}
+
+async function initializeRoomExclusions(source) {
+  const onboarding = vscode.workspace.getConfiguration?.("joshRoom.onboarding");
+  const editor = onboarding?.get?.("editor", "vscode") || "vscode";
+  const configuredFiles = onboarding?.get?.("files", ["tasks.json", "launch.json", "extensions.json", "settings.json"]);
+  const editorFiles = Array.isArray(configuredFiles) ? configuredFiles : [];
+  const initArgs = ["workspace", "init", "--workspace", source, "--editor", editor];
+  if (!editorFiles.length) initArgs.push("--no-editor-files");
+  else for (const file of editorFiles) initArgs.push("--editor-file", file);
+  const initialized = await runOperation("Initializing Room onboarding…", initArgs, source,
+    { action: "initialize Room onboarding" });
+  trustedSaveReceipt = undefined;
+  workspaceEventGeneration += 1;
+  cleanEventGeneration = -1;
+  if (workspaceBaseline && path.resolve(source) === path.resolve(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "")) {
+    workspaceBaseline = undefined;
+    setRoomState("dirty");
+  }
+  const onboardingSummary = initialized.onboarding;
+  const created = onboardingSummary?.artifacts
+    ? Object.entries(onboardingSummary.artifacts).filter(([, state]) => state === "created").map(([name]) => name)
+    : [];
+  const omissions = onboardingSummary?.omitted
+    ? Object.entries(onboardingSummary.omitted).map(([name, reason]) => `${name}: ${reason}`) : [];
+  const conflicts = Object.entries(onboardingSummary?.artifacts || {})
+    .filter(([, state]) => state !== "created" && state !== "already-present")
+    .map(([name, state]) => `${name}: ${state}`);
+  const description = created.length ? `Created: ${created.join(", ")}. ` : "";
+  const skipped = omissions.length ? `Skipped: ${omissions.join(", ")}. ` : "";
+  const coverage = onboardingSummary?.discovery;
+  const counts = coverage?.observed;
+  const discoveryCounts = counts ? `${counts.components_admitted} of ${counts.components_observed} observed components; ${counts.directories_visited} directories visited. ` : "";
+  const discoveryReasons = [...new Set((coverage?.omissions || []).map(item => item.code))];
+  const discoveryNotice = coverage?.complete === false
+    ? `Onboarding discovery is partial. ${discoveryCounts}${discoveryReasons.length ? `Limits: ${discoveryReasons.slice(0, 3).join(", ")}${discoveryReasons.length > 3 ? ", …" : ""}. ` : ""}Review the guide's Discovery limits and evidence before use; undiscovered scopes remain unknown. `
+    : coverage?.complete === true ? "Onboarding discovery completed within its documented scope. "
+      : "Onboarding discovery coverage is unknown. ";
+  const action = await vscode.window.showInformationMessage(
+    `${description}${skipped}${conflicts.length ? `Conflicts: ${conflicts.join(", ")}. ` : ""}${discoveryNotice}Room onboarding is in the selected source. Existing files are preserved; recommendations do not install extensions or run tasks.`,
+    "Continue", "Edit exclusions", ...(initialized.capture_mode !== "source-only" ? ["Use source-only"] : []), "Cancel",
+  );
+  if (action === "Use source-only") {
+    const approved = await vscode.window.showWarningMessage(
+      "Use source-only capture? Git history and staging state will not be backed up. Excluded worktree files are also omitted. Original repositories remain untouched.",
+      { modal: true }, "Use source-only",
+    );
+    if (approved !== "Use source-only") return false;
+    await runOperation("Selecting source-only capture…", ["workspace", "exclude", "--workspace", source,
+      "--expected-token", initialized.policy_edit_sha256, "--source-only"], source, { action: "select source-only capture" });
+    return true;
+  }
+  if (action === "Edit exclusions") return editWorkspaceExclusions(source);
+  return action === "Continue";
+}
+
+function displayWorkspaceReport(result) {
+  outputChannel?.appendLine(`Workspace scan: ${result.ok ? "valid" : "blocked"}; coverage ${result.complete === false ? "incomplete" : "complete"}`);
+  for (const finding of result.findings || []) {
+    outputChannel?.appendLine(`${finding.code}: ${(finding.paths || []).join(", ")} — ${sanitizeControllerText(finding.message)}`);
+    if (finding.linked_worktree) {
+      const worktree = finding.linked_worktree;
+      const state = worktree.safety === "safe-to-remove"
+        ? "clean; no commits ahead of its configured upstream"
+        : worktree.safety === "unique-local-work"
+          ? "contains uncommitted or unpushed work"
+          : "safety could not be determined";
+      const workdir = sanitizeControllerText(worktree.workdir || "");
+      const location = workdir || "<workdir>";
+      outputChannel?.appendLine(`Linked worktree ${location}: ${state}`);
+      const command = workdir
+        ? `git worktree remove -- ${shellQuote(workdir)}`
+        : "git worktree remove <workdir>";
+      outputChannel?.appendLine(`Remedy: ${command}`);
+    }
+  }
+  if (result.stop_reason) outputChannel?.appendLine(`Scan stopped: ${result.stop_reason}`);
+}
+
+async function reviewWorkspaceBeforeSave(source) {
+  for (;;) {
+    const result = await runOperation("Scanning selected workspace…", ["workspace-check", "--workspace", source], source,
+      { action: "scan selected workspace" });
+    displayWorkspaceReport(result);
+    if (result.ok && result.complete !== false) return true;
+    const candidates = [...new Set((result.findings || []).map((row) => row.exclusion_candidate).filter(Boolean))].sort();
+    const hasGit = (result.findings || []).some((row) => row.code === "git-storage");
+    const action = await vscode.window.showWarningMessage(
+      hasGit
+        ? "Linked worktrees or Git storage dependencies block capture. Excluded worktree files stay local but are not backed up. Excluding a checkout alone may leave main-repository administrative records."
+        : "Workspace validation found blockers or incomplete coverage. Review the report and exclusions before saving.",
+      "Open report", "Edit exclusions", ...(candidates.length ? ["Review exclusions"] : []),
+      ...(hasGit && result.capture_mode !== "source-only" ? ["Use source-only"] : []), "Cancel",
+    );
+    if (!action || action === "Cancel") return false;
+    if (action === "Open report") { outputChannel?.show(true); continue; }
+    if (action === "Edit exclusions") {
+    await runOperation("Initializing Room exclusions…", ["workspace", "init", "--policy-only", "--workspace", source], source,
+      { action: "initialize Room exclusions" });
+      if (!await editWorkspaceExclusions(source)) return false;
+      continue;
+    }
+    let rules = [];
+    const sourceOnly = action === "Use source-only";
+    if (!sourceOnly) {
+      const picked = await vscode.window.showQuickPick(candidates.map((relative) => ({
+        label: relative, description: "Unsupported linked checkout; files will not be backed up", picked: false,
+      })), { title: "Review exact worktree exclusions", canPickMany: true, ignoreFocusOut: true });
+      if (!picked?.length) return false;
+      rules = picked.map((item) => item.label);
+    }
+    const consequence = sourceOnly
+      ? "Use source-only capture? Git history and staging state will not be backed up. Existing exclusions and excluded worktree files remain omitted. Original repositories stay untouched."
+      : `Append these exact exclusions?\n${rules.map((rule) => `${rule}/**`).join("\n")}\nTheir local files remain untouched but will not be backed up. Git administrative dependencies may still block capture.`;
+    const approved = await vscode.window.showWarningMessage(consequence, { modal: true }, "Apply and rescan");
+    if (approved !== "Apply and rescan") return false;
+    const args = ["workspace", "exclude", "--workspace", source, "--expected-token", result.policy_edit_sha256];
+    for (const rule of rules) args.push("--rule", rule);
+    if (sourceOnly) args.push("--source-only");
+    await runOperation("Applying approved exclusions…", args, source, { action: "apply reviewed exclusions" });
+    trustedSaveReceipt = undefined;
+  }
+}
+
+async function checkWorkspace() {
+  assertWorkspaceTrusted("check the workspace");
+  const workspace = activeWorkspace();
+  const result = await runOperation("Checking workspace…", ["workspace-check", "--workspace", workspace], workspace, { action: "check the workspace" });
+  displayWorkspaceReport(result);
+  const detail = result.ok ? `Workspace valid · ${result.entry_count} entries` : `${result.code || "workspace-invalid"}: ${result.error || "workspace validation failed"}`;
+  const remediation = result.ok ? "" : sanitizeControllerText(result.remediation || "");
+  const message = [sanitizeControllerText(detail), remediation].filter(Boolean).join(". ");
+  outputChannel?.appendLine(`Workspace check: ${message}`);
+  if (result.ok) await vscode.window.showInformationMessage(message);
+  else await vscode.window.showErrorMessage(message);
+  return result;
+}
+const sessionCaptureChoices = new Map();
+
+function captureChoiceKey(source, dimension, project) {
+  return JSON.stringify([path.resolve(source), dimension, project]);
+}
+
+async function splitWorkspace() {
+  assertWorkspaceTrusted("preview a workspace split");
+  const folders = await vscode.window.showOpenDialog({
+    title: "Josh: Split Workspace into Rooms (Preview Only)",
+    defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
+    canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
+    openLabel: "Preview this folder",
+  });
+  if (!folders?.length) return "cancelled";
+  const source = folders[0].fsPath;
+  let outcome = "cancelled";
+  await executeJoshRoom(["composition", "inventory", "--workspace", source], source,
+    undefined, undefined, undefined, {
+      inventoryHandler: async (request) => {
+        outcome = await require("./inventory-picker").pickInventory(vscode, request);
+      },
+    });
+  return outcome;
+}
+
+async function newRoom() {
+  assertWorkspaceTrusted("create a Room");
+  const choice = await vscode.window.showQuickPick([
+    { label: "Save one Room", id: "ordinary" },
+    { label: "Configure Catalog Room", id: "catalog" },
+  ], { title: "New Room", placeHolder: "Save one Room is the default" });
+  if (!choice) return "cancelled";
+  return choice.id === "catalog" ? saveCatalogRoom() : saveRoom({ forceCreate: true });
+}
+
+async function saveCatalogRoom() {
+  assertWorkspaceTrusted("save a Catalog Room");
+  const argsFor = (selection, command) => ["composition", command, "--workspace", selection.root,
+    "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
+    "--parent-room", selection.parentRoom, "--expected-domain", selection.dimension.encryption_domain_id, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`])];
+  return require("./catalog-actions").saveCatalog(vscode, {
+    dimensions: async (root) => dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true })),
+    plan: (selection) => runJoshRoom(argsFor(selection, "capture-plan"), selection.root),
+    save: (selection, approval) => runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"], selection.root,
+      selection.dimension, { title: "Saving Catalog Room…", action: "save a Catalog Room" }),
+  });
+}
+
+async function enterChildRoom() {
+  assertWorkspaceTrusted("enter a child Room");
+  const root = activeWorkspace();
+  return require("./catalog-actions").enterChild(vscode, {
+    root, marker: currentRoom(root),
+    enter: async ({ namespace, child, marker }) => {
+      const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
+      const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
+      if (!dimension) throw new Error("The parent Dimension is not configured.");
+      return runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
+        "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
+      dimension, { title: "Entering pinned child Room…", action: "enter a child Room" });
+    },
+    open: (target) => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(target), false),
+  });
+}
+
+async function updateCompositionRoom(kind) {
+  assertWorkspaceTrusted("update a namespace Room");
+  const root = activeWorkspace();
+  const marker = currentRoom(root);
+  if (!marker?.composition_namespace) throw new Error("Open a namespace Room first.");
+  const isChild = fs.existsSync(path.join(root, ".josh-room-split.json"));
+  if ((kind === "child") !== isChild) throw new Error("Select the child Save or parent pin refresh action for this Room.");
+  if (kind === "child" && (vscode.workspace.textDocuments || []).some((document) => {
+    if (!document.isDirty || document.uri?.scheme !== "file") return false;
+    const relative = path.relative(root, document.uri.fsPath);
+    return relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  })) throw new Error("Save the child Room's editor files before capturing its disk content.");
+  if (!extensionContext?.workspaceState) throw new Error("The extension operation store is unavailable.");
+  const key = `composition.${kind}.${marker.composition_namespace}.${marker.project_id}`;
+  const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
+  const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
+  if (!dimension) throw new Error("The namespace Dimension is not configured.");
+  const invoke = (ticket, apply) => {
+    const command = kind === "child" ? (apply ? "save-child" : "plan-child-save") : (apply ? "refresh-parent-pins" : "plan-parent-refresh");
+    const args = ["composition", command, "--dimension", marker.dimension_id, "--namespace", ticket.namespace, "--operation-id", ticket.operationId,
+      ...(kind === "child" ? ["--room", ticket.room, "--child-snapshot", ticket.baseline, "--workspace", root]
+        : ["--parent-room", ticket.room, "--parent-snapshot", ticket.baseline, "--set-child", `${ticket.child}=${ticket.pin}`]),
+      ...(apply ? ["--approve", ticket.approval] : [])];
+    return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
+  };
+  return require("./catalog-actions").updateRoom(vscode, { marker, kind, pending: extensionContext.workspaceState.get(key),
+    remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
+}
+
+async function saveRoom(options = {}) {
+  assertWorkspaceTrusted("save a Room");
+  const cwd = activeWorkspace();
+  if (currentRoom(cwd)?.composition_namespace) {
+    if (options.current && fs.existsSync(path.join(cwd, ".josh-room-split.json"))) return updateCompositionRoom("child");
+    throw new Error("This Room belongs to a composition namespace. Use explicit parent pin refresh; ordinary Save cannot update it.");
+  }
+  const currentMarker = options.current ? currentRoom(cwd) : undefined;
+  if (options.current && !currentMarker) {
+    await vscode.window.showInformationMessage("Open a Room first, or use Save Folder As Room.");
+    return "cancelled";
+  }
+  if (currentMarker) {
+    const pathSha = realWorkspacePathSha256(cwd);
+    if (!pathSha || currentMarker.workspace_path_sha256 !== pathSha) {
+      throw new Error("The current Room is not bound to this folder. Link or Repair it before saving.");
+    }
+  }
+  const folders = currentMarker ? [{ fsPath: cwd }] : await vscode.window.showOpenDialog({
+    title: "Josh: Save Room",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Save this folder",
+  });
+  if (!folders?.length) return "cancelled";
+  const source = folders[0].fsPath;
+  for (const name of [".josh-room-composition.json", ".josh-room-split.json"]) {
+    try {
+      fs.lstatSync(path.join(source, name));
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw new Error("Composition admission cannot be checked safely.");
+    }
+    throw new Error("Composed Save is blocked until retention and publication are admitted.");
+  }
+  // Component admission precedes any no-op probe. The backend compares the
+  // actual resolved component identities, including refreshed external bytes.
+  let imageChoice;
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const projects = nativeRegistry.flattenDimensionRooms(catalog);
+  const marker = currentRoom(source);
+  const boundProject = currentMarker && projects.find((project) => sameRoomBinding(currentMarker, project));
+  if (currentMarker && !boundProject) {
+    throw new Error("The current Room was not found in its Dimension. Refresh storage or repair its binding before saving.");
+  }
+  const selected = currentMarker ? { project: boundProject } : options.forceCreate
+    ? { create: true }
+    : await vscode.window.showQuickPick([
+      { label: "$(add) Create a new Room…", create: true },
+      ...projects.map((project) => ({
+        label: roomLabel(project),
+        description: sameRoomBinding(marker, project) ? "Current Room" : "Save a new latest snapshot",
+        project,
+      })),
+    ], { title: "Josh: Save Room", placeHolder: "Create or update a Room", ignoreFocusOut: true });
+  if (!selected) return "cancelled";
+  let name = selected.project?.display_name;
+  let targetDimension;
+  if (selected.create) {
+    name = await vscode.window.showInputBox({
+      title: "Josh: Save Room",
+      prompt: "Name this Room",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a Room name.",
+    });
+  }
+  if (!name) return "cancelled";
+  let targetDimensionId = dimensionId(selected.project);
+  if (selected.create) {
+    targetDimension = await chooseDimension(catalog, "Where should this Room be saved?");
+    if (!targetDimension) return "cancelled";
+    targetDimensionId = dimensionId(targetDimension);
+  } else if (selected.project?.dimension) {
+    targetDimension = selected.project.dimension;
+  }
+  if (targetDimensionId) selectedDimensionId = targetDimensionId;
+  if (selected.project) {
+    const existing = path.join(path.dirname(cwd), selected.project.id);
+    if (existing !== source && sameRoomBinding(currentRoom(existing), selected.project)) {
+      const action = await vscode.window.showInformationMessage(
+        `“${selected.project.display_name}” already has a working folder.`,
+        "Open Room",
+      );
+      if (action === "Open Room") {
+        await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(existing), false);
+      }
+      return "opened";
+    }
+    if (!sameRoomBinding(marker, selected.project)) {
+      const confirmed = await vscode.window.showWarningMessage(
+        `Replace the latest “${selected.project.display_name}” snapshot with the contents of ${source}? The previous snapshot remains recoverable.`,
+        { modal: true },
+        "Replace Latest",
+      );
+      if (confirmed !== "Replace Latest") return "cancelled";
+    }
+  }
+  if (selected.create && !await initializeRoomExclusions(source)) return "cancelled";
+  if (!await reviewWorkspaceBeforeSave(source)) return "cancelled";
+  const targetProvider = nativeRegistry.providerKey(
+    targetDimension?.provider || selected.project?.provider || selected.project?.dimension?.provider,
+  );
+  if (targetProvider === "r2"
+    && targetDimension
+    && catalog.auth_state
+    && catalog.auth_state !== "connected") {
+    const connected = await connectCloudflare({ dimension: targetDimension });
+    if (connected !== "connected") return connected;
+  }
+  let encryptionMaterial;
+  if (usesNativeEncryption(targetProvider)) {
+    encryptionMaterial = await readEncryptionMaterial(targetDimension || { id: targetDimensionId, provider: targetProvider });
+    if (!encryptionMaterial) {
+      const authStatus = await runJoshRoom(
+        ["encryption", "status", "--dimension", targetDimensionId], cwd, undefined, undefined,
+      );
+      const encryptionReady = authStatus.state === "ready"
+        || (authStatus.state === undefined && authStatus.encryption_state === undefined);
+      if (!encryptionReady) {
+        const connected = await connectEncryption({
+          dimension: targetDimension || { id: targetDimensionId, provider: targetProvider },
+        });
+        if (connected !== "initialized") return connected;
+        encryptionMaterial = await readEncryptionMaterial(targetDimension || { id: targetDimensionId, provider: targetProvider });
+      }
+    }
+  }
+  const choiceKey = captureChoiceKey(source, targetDimensionId, selected.project?.id || name);
+  imageChoice = await require("./component-picker").pickComponents(vscode, source, sessionCaptureChoices.get(choiceKey) || require("./component-picker").storedChoice(extensionContext?.globalState, choiceKey), () => runJoshRoom(["snapshot", "homebrew-capabilities"], source));
+  if (!imageChoice) return "cancelled";
+  const buildArgs = nativeRegistry.dimensionArgs(
+    ["snapshot", "create", name, "--source", source, "--backend", targetProvider],
+    targetDimensionId || selectedDimensionId,
+  );
+  buildArgs.push(...imageChoice.args);
+  // This hint only skips the local no-op probe. Save still validates the full
+  // workspace and Restic remains the content authority.
+  if (workspaceBindingTrusted && workspaceBaseline
+    && ["dirty", "saved-but-still-dirty"].includes(roomStatus.kind)
+    && fs.realpathSync(source) === fs.realpathSync(cwd)) {
+    buildArgs.push("--editor-dirty");
+  }
+  let preview;
+  let deletionConfirmationToken;
+  const nativeSave = usesNativeEncryption(targetProvider) || (targetProvider === "r2" && targetDimension && !targetDimension.synthetic);
+  if (nativeSave) {
+    const previewArgs = nativeRegistry.dimensionArgs(
+      ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
+      targetDimensionId || selectedDimensionId,
+    );
+    previewArgs.push(...imageChoice.args);
+    preview = await runSelectedEncryption(
+      previewArgs,
+      source,
+      targetDimension || { id: targetDimensionId, provider: targetProvider },
+      { title: "Checking workspace…", action: "preview a Room Store Save", encryptionMaterial },
+    );
+    assertValidRoomStorePreview(preview);
+    deletionConfirmationToken = await approveRoomStorePreview(preview, { name, source, allImages: imageChoice.allImages, dimension: targetDimension?.display_name || targetDimensionId });
+    if (deletionConfirmationToken === undefined) return "cancelled";
+    if (preview.component_plan_token) buildArgs.push("--component-plan-token", preview.component_plan_token);
+    if (deletionConfirmationToken) buildArgs.push("--confirm-deletion", deletionConfirmationToken);
+  }
+  if (nativeSave && extensionContext) {
+    // Native Save establishes the baseline but not the watchers. Install them
+    // before Save so later terminal or external edits leave the Saved state.
+    let savesActiveFolder = false;
+    try { savesActiveFolder = fs.realpathSync(source) === fs.realpathSync(cwd); } catch (_error) { savesActiveFolder = false; }
+    if (savesActiveFolder) {
+      workspaceCapturePolicy = loadCapturePolicy(cwd);
+      dirtyBuffers.clear();
+      for (const document of vscode.workspace.textDocuments || []) {
+        const relative = relativeWorkspacePath(document.uri);
+        if (relative && document.isDirty) dirtyBuffers.add(relative);
+      }
+      ensureWorkspaceWatched(extensionContext, cwd);
+    }
+  }
+  const saveEventGeneration = workspaceEventGeneration;
+  const result = nativeSave
+    ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
+      title: `Saving ${name}…`,
+      action: "save a Room",
+      encryptionMaterial,
+    })
+    : await runOperation(`Saving ${name}…`, buildArgs, source);
+  if (nativeSave) {
+    if (!["saved", "saved-but-dirty", "already-saved"].includes(result.status)) {
+      throw new Error("Room Store Save returned an unsupported receipt.");
+    }
+    const logicalEntries = Number.isSafeInteger(preview?.current_entry_count) ? preview.current_entry_count : "unknown";
+    const scanned = formatHaulerSize(result.scanned_bytes ?? preview?.scanned_bytes) || "unknown";
+    const added = formatHaulerSize(result.data_added_bytes) || "unknown";
+    outputChannel?.appendLine(`Save receipt · Logical entries: ${logicalEntries} · Workspace scan: ${scanned} · Restic data added: ${added}`);
+    for (const key of ["status", "dimension_id", "encryption_domain_id", "project_id", "snapshot_id", "workspace_snapshot_id", "workspace_parent_snapshot_id", "workspace_signature", "signature_algorithm", "capture_policy_sha256", "ciphertext_sha256", "ciphertext_size", "has_external_components"]) {
+      if (result[key] !== undefined && result[key] !== null) outputChannel?.appendLine(`${key}: ${sanitizeControllerText(result[key])}`);
+    }
+    let action;
+    if (dirtyBuffers.size > 0) {
+      action = await vscode.window.showWarningMessage("The Room was saved from disk, but unsaved editor changes remain. Save the files and save the Room again.", "Show Details");
+    } else if (result.status === "already-saved") {
+      action = await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded", "Show Details");
+    } else if (result.status === "saved-but-dirty" || saveEventGeneration !== workspaceEventGeneration) {
+      action = await vscode.window.showWarningMessage(`Saved “${name}”, but workspace changes remain.`, "Show Details");
+    } else {
+      action = await vscode.window.showInformationMessage(`Saved “${name}”.`, "Show Details");
+    }
+    if (action === "Show Details") outputChannel?.show(true);
+    if (result.component_receipt) {
+      for (const [name, receipt] of Object.entries(result.component_receipt)) outputChannel?.appendLine(`${name}: ${receipt.status}`);
+    }
+    finishRoomStoreSave(result, source, saveEventGeneration, imageChoice.allImages);
+  } else {
+    const size = Number.isFinite(result.ciphertext_size)
+      ? `${(result.ciphertext_size / (1024 * 1024)).toFixed(1)} MiB`
+      : "unknown size";
+    await vscode.window.showInformationMessage(`Saved “${name}” (encrypted snapshot object: ${size}).`);
+  }
+  const savedMarker = currentRoom(source);
+  if (savedMarker && savedMarker.dimension_id === targetDimensionId && savedMarker.project_id === (selected.project?.id || result.project_id)) {
+    sessionCaptureChoices.set(choiceKey, imageChoice);
+    try {
+      await require("./component-picker").rememberChoice(extensionContext?.globalState, choiceKey, imageChoice);
+    } catch (_error) {
+      outputChannel?.warn("Room saved; component defaults could not be remembered.");
+    }
+  }
+  if (!nativeSave && path.resolve(source) === path.resolve(cwd)) {
+    await startDirtyTracking(extensionContext);
+  }
+  try {
+    await roomsProvider?.reload();
+  } catch (_error) {
+    await vscode.window.showWarningMessage("Room saved, but storage refresh did not finish. Use Refresh to reload the list; you do not need to save again.");
+  }
+  return dirtyBuffers.size > 0 || saveEventGeneration !== workspaceEventGeneration || result.status === "saved-but-dirty"
+    ? "saved-but-dirty" : nativeSave ? result.status : "saved";
+}
+
+async function enterRoom(preferredProject) {
+  assertWorkspaceTrusted("enter a Room");
+  const cwd = activeWorkspace();
+  const preferred = roomProject(preferredProject);
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
+  const selected = preferred
+    ? { label: roomLabel(preferred), projectId: preferred.id, project: preferred, snapshotId: preferredSnapshotId }
+    : await (async () => {
+      const catalog = await loadCatalog(cwd);
+      const projects = nativeRegistry.flattenDimensionRooms(catalog);
+      return vscode.window.showQuickPick(
+        projects.map((project) => ({ label: roomLabel(project), projectId: project.id, project })),
+        { title: "Josh: Enter Room", placeHolder: "What do you want to work on?", ignoreFocusOut: true },
+      );
+    })();
+  if (!selected) return "cancelled";
+  const selectedDimensionId = dimensionId(selected.project);
+  const provider = nativeRegistry.providerKey(selected.project.provider || selected.project.dimension?.provider);
+  if (!selected.projectId || !selectedDimensionId || !["local", "r2", "minio", "s3"].includes(provider)) {
+    throw new Error("Choose a trusted Provider, Dimension, Room, and JAT recovery point.");
+  }
+  if (!/^[a-z0-9-]+$/.test(selected.projectId) || !/^[a-z0-9][a-z0-9._-]*$/.test(selectedDimensionId)) {
+    throw new Error("Provider, Dimension, or Room identity is unsafe for workspace materialization.");
+  }
+  selected.dimensionId = selectedDimensionId;
+  const existing = findMaterialization(cwd, selectedDimensionId, selected.projectId);
+  if (existing) {
+    rememberMaterialization(existing);
+    if (!selected.snapshotId || existing.marker.snapshot_id === selected.snapshotId) {
+      if (path.resolve(existing.path) === path.resolve(cwd)) {
+        await vscode.window.showInformationMessage(`“${selected.label}” is already open.`);
+        return "current";
+      }
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Opening existing ${selected.label}…`, cancellable: false },
+        () => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(existing.path), false),
+      );
+      return "opened";
+    }
+    const switched = await switchMaterialization(cwd, selected, existing, provider);
+    if (switched !== "switched") return switched;
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(existing.path), false);
+    return "opened";
+  }
+  let history;
+  let snapshotId = selected.snapshotId || "latest";
+  if (!selected.snapshotId) {
+    const historyArgs = nativeRegistry.dimensionArgs(
+      ["snapshots", "list", selected.projectId, "--backend", provider], selectedDimensionId,
+    );
+    history = usesNativeEncryption(provider)
+      ? await runSelectedEncryption(historyArgs, cwd, selected.project?.dimension || { id: selectedDimensionId, provider }, {
+        title: `Loading ${selected.label} recovery points…`, action: "read a Room",
+      })
+      : await runOperation(`Loading ${selected.label} recovery points…`, historyArgs, cwd);
+    snapshotId = "latest";
+    if (history.snapshots.length > 1) {
+      const snapshot = await vscode.window.showQuickPick(
+        history.snapshots
+          .map((item) => ({
+            label: item.snapshot_id === history.latest ? "Latest snapshot" : "Previous snapshot",
+            description: item.created_at || item.snapshot_id,
+            snapshotId: item.snapshot_id,
+          }))
+          .sort((left, right) => left.snapshotId === history.latest ? -1 : right.snapshotId === history.latest ? 1 : 0),
+        { title: `Josh: Enter ${selected.label}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
+      );
+      if (!snapshot) return "cancelled";
+      snapshotId = snapshot.snapshotId;
+    }
+  }
+  const destination = newMaterializationDestination(cwd, selectedDimensionId, selected.projectId);
+  if (fs.existsSync(destination)) {
+    throw new Error(`Refusing to replace an unexplained existing folder: ${destination}`);
+  }
+  const restoreArgs = nativeRegistry.dimensionArgs([
+      "hydrate",
+      selected.projectId,
+      "--snapshot",
+      snapshotId,
+      "--destination",
+      destination,
+      "--backend",
+      provider,
+      "--ide",
+      "terminal",
+    ], selectedDimensionId);
+  if (usesNativeEncryption(provider)) {
+    await runSelectedEncryption(restoreArgs, cwd, selected.project?.dimension || { id: selectedDimensionId, provider }, {
+      title: `Restoring ${selected.label}…`, action: "restore a Room",
+    });
+  } else {
+    await runOperation(`Restoring ${selected.label}…`, restoreArgs, cwd);
+  }
+  const materialization = corroboratedMaterialization(destination, selectedDimensionId, selected.projectId);
+  if (materialization) rememberMaterialization(materialization);
+  await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
+  return "opened";
+}
+
+async function removeRoom(preferredProject) {
+  return removeSnapshot(preferredProject);
+}
+
+function deletionWorkspaceMarker(cwd) {
+  assertWorkspaceTrusted("delete a Room or recovery point");
+  try {
+    const stat = fs.lstatSync(path.join(cwd, ".josh-room.json"));
+    const marker = stat.isFile() && !stat.isSymbolicLink() ? currentRoom(cwd) : undefined;
+    if (marker && marker.workspace_path_sha256 === realWorkspacePathSha256(cwd)) return marker;
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+  }
+  throw new Error("The workspace binding is invalid. Link or Repair this workspace before deleting Rooms or recovery points.");
+}
+
+async function deleteRoom(preferredProject) {
+  const cwd = activeWorkspace();
+  const marker = deletionWorkspaceMarker(cwd);
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const preferred = roomProject(preferredProject);
+  const candidates = nativeRegistry.flattenDimensionRooms(catalog);
+  const selected = preferred
+    ? candidates.find((room) => room.id === preferred.id && explicitDimensionId(room) === explicitDimensionId(preferredProject))
+    : await vscode.window.showQuickPick(candidates.map((project) => ({ label: roomLabel(project), project })), { title: "Josh: Delete Room", ignoreFocusOut: true });
+  if (preferred && !selected) {
+    await vscode.window.showErrorMessage("The selected Room is stale or belongs to another Dimension. Refresh and select it again.");
+    return "stale-target";
+  }
+  const project = roomProject(selected?.project || selected);
+  if (!project || !project.id || !explicitDimensionId(project)) return "cancelled";
+  if (sameRoomBinding(marker, project)) {
+    await vscode.window.showWarningMessage("Cannot delete the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  const provider = nativeRegistry.providerKey(project.provider || project.dimension?.provider || "r2");
+  const dimension = project.dimension || { id: dimensionId(project), provider };
+  const historyArgs = nativeRegistry.dimensionArgs(["snapshots", "list", project.id, "--backend", provider], dimensionId(project));
+  const history = await runSelectedEncryption(historyArgs, cwd, dimension, { title: `Loading ${roomLabel(project)} recovery points…`, action: "delete a Room" });
+  if (!Number.isInteger(history.revision) || !Array.isArray(history.snapshots)) throw new Error("The controller did not provide a revision-bound Room inventory; deletion is blocked.");
+  const count = Array.isArray(history.snapshots) ? history.snapshots.length : 0;
+  const answer = await vscode.window.showWarningMessage(`Permanently delete Room “${project.display_name || project.id}” (${project.id}) in Dimension “${dimensionId(project)}” and all ${count} recovery point${count === 1 ? "" : "s"}? This action is irreversible.`, { modal: true }, "Delete Room");
+  if (answer !== "Delete Room") return "cancelled";
+  if (sameRoomBinding(deletionWorkspaceMarker(cwd), project)) {
+    await vscode.window.showWarningMessage("Cannot delete the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  const args = nativeRegistry.dimensionArgs(["rooms", "remove", project.id, "--backend", provider, "--expected-revision", String(history.revision), "--expected-snapshots", history.snapshots.map((snapshot) => snapshot.snapshot_id).join(",")], dimensionId(project));
+  const operation = await destructiveOperation(args, cwd, dimension, `Deleting Room ${project.id}…`, "delete a Room");
+  if (!deletionCommitted(operation)) return reportDeleteOutcome(operation, "Room");
+  const outcome = await reportDeleteOutcome(operation, "Room");
+  try { await roomsProvider?.reload(); }
+  catch (error) {
+    await vscode.window.showErrorMessage(`Room deletion committed, but catalog refresh failed (${userFacingError(error)}). Use Josh Room: Refresh to reload the catalog.`);
+  }
+  return outcome;
+}
+
+async function deleteRecoveryPoint(item) {
+  const project = roomProject(item);
+  const snapshotId = snapshotIdentity(item);
+  if (!project?.id || !explicitDimensionId(item) || !snapshotId) return "blocked";
+  return removeSnapshot({ ...project, snapshot_id: snapshotId, snapshot: { snapshot_id: snapshotId } });
+}
+
+async function removeSnapshot(preferredProject) {
+  const cwd = activeWorkspace();
+  const marker = deletionWorkspaceMarker(cwd);
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const projects = nativeRegistry.flattenDimensionRooms(catalog);
+  const preferred = roomProject(preferredProject);
+  const freshPreferred = preferred && explicitDimensionId(preferredProject)
+    ? projects.find((project) => project.id === preferred.id && explicitDimensionId(project) === explicitDimensionId(preferredProject))
+    : undefined;
+  if (preferred && !freshPreferred) {
+    await vscode.window.showErrorMessage("The selected Room is no longer present in that Dimension. Refresh Rooms and choose again.");
+    return "stale-target";
+  }
+  const selectedRoom = freshPreferred
+    ? { label: roomLabel(freshPreferred), project: freshPreferred }
+    : await vscode.window.showQuickPick(
+      projects.map((project) => ({ label: roomLabel(project), project })),
+      { title: "Josh: Delete Snapshot", placeHolder: "Choose a Room", ignoreFocusOut: true },
+    );
+  if (!selectedRoom) return "cancelled";
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
+  if (marker && marker.project_id === selectedRoom.project.id && marker.dimension_id === explicitDimensionId(selectedRoom.project)) {
+    await vscode.window.showWarningMessage("Cannot delete a recovery point from the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  if (preferredSnapshotId && activeSnapshot(marker, selectedRoom.project, preferredSnapshotId)) {
+    await vscode.window.showWarningMessage(
+      "Cannot delete the active JAT while this workspace is linked to it. Enter another recovery point first.",
+    );
+    return "blocked";
+  }
+  const provider = nativeRegistry.providerKey(selectedRoom.project.provider || selectedRoom.project.dimension?.provider || "r2");
+  const dimension = selectedRoom.project.dimension || { id: dimensionId(selectedRoom.project), provider };
+  const historyArgs = nativeRegistry.dimensionArgs(["snapshots", "list", selectedRoom.project.id, "--backend", provider], dimensionId(selectedRoom.project));
+  const history = await runSelectedEncryption(historyArgs, cwd, dimension, { title: `Loading ${selectedRoom.label} recovery points…`, action: "delete a recovery point" });
+  if (!Number.isInteger(history.revision) || !Array.isArray(history.snapshots)) throw new Error("The controller did not provide a revision-bound recovery-point inventory; deletion is blocked.");
+  const selectedSnapshot = preferredSnapshotId
+    ? history.snapshots.find((snapshot) => snapshot.snapshot_id === preferredSnapshotId)
+      ? { label: "Selected recovery point", snapshot: history.snapshots.find((snapshot) => snapshot.snapshot_id === preferredSnapshotId) }
+      : undefined
+    : await vscode.window.showQuickPick(
+      history.snapshots
+      .map((snapshot) => ({
+        label: snapshot.snapshot_id === history.latest ? "$(star-full) Latest snapshot" : "$(history) Previous snapshot",
+        description: snapshot.created_at ? new Date(snapshot.created_at).toLocaleString() : "Date unavailable",
+        detail: snapshot.snapshot_id,
+        snapshot,
+      }))
+      .sort((left) => left.snapshot.snapshot_id === history.latest ? -1 : 1),
+      {
+        title: `Delete a ${selectedRoom.label} snapshot`,
+        placeHolder: "Choose exactly one snapshot",
+        ignoreFocusOut: true,
+      },
+    );
+  if (!selectedSnapshot) {
+    if (preferredSnapshotId) {
+      await vscode.window.showErrorMessage(`The selected recovery point “${preferredSnapshotId}” is stale or belongs to another Dimension. Refresh and select it again.`);
+      return "stale-target";
+    }
+    return "cancelled";
+  }
+  if (activeSnapshot(marker, selectedRoom.project, selectedSnapshot.snapshot.snapshot_id)) {
+    await vscode.window.showWarningMessage(
+      "Cannot delete the active JAT while this workspace is linked to it. Enter another recovery point first.",
+    );
+    return "blocked";
+  }
+  const consequence = history.snapshots.length === 1
+    ? " This is the final snapshot and also deletes the Room."
+    : selectedSnapshot.snapshot.snapshot_id === history.latest
+    ? " The newest remaining snapshot will become Latest."
+    : "";
+  const confirmed = await vscode.window.showWarningMessage(
+    `Permanently delete recovery point “${selectedSnapshot.snapshot.snapshot_id}” from Room “${selectedRoom.project.display_name || selectedRoom.project.id}” in Dimension “${dimensionId(selectedRoom.project)}”?${consequence}`,
+    { modal: true },
+    "Delete Snapshot",
+  );
+  if (confirmed !== "Delete Snapshot") return "cancelled";
+  if (sameRoomBinding(deletionWorkspaceMarker(cwd), selectedRoom.project)) {
+    await vscode.window.showWarningMessage("Cannot delete a recovery point from the active Room. Switch or unlink this workspace first.");
+    return "blocked";
+  }
+  const args = nativeRegistry.dimensionArgs(["snapshots", "remove", selectedRoom.project.id, selectedSnapshot.snapshot.snapshot_id, "--backend", provider, "--expected-revision", String(history.revision), "--expected-snapshots", history.snapshots.map((snapshot) => snapshot.snapshot_id).join(",")], dimensionId(selectedRoom.project));
+  const result = await destructiveOperation(args, cwd, dimension, `Removing ${selectedRoom.label} recovery point…`, "delete a recovery point");
+  if (!deletionCommitted(result)) return reportDeleteOutcome(result, "recovery point");
+  const outcome = await reportDeleteOutcome(result, "recovery point");
+  try { await roomsProvider?.reload(); }
+  catch (error) {
+    await vscode.window.showErrorMessage(`Recovery point deletion committed, but catalog refresh failed (${userFacingError(error)}). Use Josh Room: Refresh to reload the catalog.`);
+  }
+  return outcome;
+}
+
+async function serveRoom(preferredProject, { startRegistry = startRegistryTerminal } = {}) {
+  assertWorkspaceTrusted("serve a Room");
+  const cwd = activeWorkspace();
+  const marker = currentRoom(cwd);
+  const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
+  const projects = nativeRegistry.flattenDimensionRooms(catalog);
+  const project = await chooseServeProject(projects, marker, preferredProject);
+  if (!project) return "cancelled";
+  const dimension = dimensionId(project);
+  const provider = nativeRegistry.providerKey(project.provider || project.dimension?.provider);
+  if (!project.id || !dimension || !["local", "r2", "minio", "s3"].includes(provider)) {
+    throw new Error("Choose a trusted Provider, Dimension, Room, and JAT recovery point.");
+  }
+  const historyTitle = `Loading ${project.display_name} recovery points…`;
+  const historyArgs = nativeRegistry.dimensionArgs(["snapshots", "list", project.id], dimension);
+  const history = usesNativeEncryption(provider)
+    ? await runSelectedEncryption(historyArgs, cwd, project.dimension || { id: dimension, provider }, {
+      title: historyTitle,
+      action: "read Room recovery points",
+    })
+    : await runOperation(historyTitle, historyArgs, cwd);
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
+  const markerSnapshotId = marker && [2, 3].includes(marker.format_version) && marker.snapshot_id;
+  if (preferredSnapshotId && !history.snapshots.some((item) => item.snapshot_id === preferredSnapshotId)) {
+    throw new Error("The selected JAT is not available in the selected Room.");
+  }
+  let snapshotId = preferredSnapshotId || (markerSnapshotId && history.snapshots.some(
+    (item) => item.snapshot_id === markerSnapshotId,
+  ) ? markerSnapshotId : history.latest);
+  if (!preferredSnapshotId && snapshotId === history.latest && history.snapshots.length > 1 && snapshotId !== markerSnapshotId) {
+    const selected = await vscode.window.showQuickPick(
+      history.snapshots.map((item) => ({
+        label: item.snapshot_id === history.latest ? "Latest snapshot" : "Previous snapshot",
+        description: item.created_at || item.snapshot_id,
+        snapshotId: item.snapshot_id,
+      })),
+      { title: `Serve content from ${project.display_name}`, placeHolder: "Choose a recovery point", ignoreFocusOut: true },
+    );
+    if (!selected) return "cancelled";
+    snapshotId = selected.snapshotId;
+  }
+  if (!/^[a-z0-9-]+$/.test(project.id) || !/^[a-z0-9-]+$/.test(snapshotId)
+    || !/^[a-z0-9][a-z0-9._-]*$/.test(dimension)) {
+    throw new Error("Provider, Dimension, Room, or snapshot identity is unsafe for terminal execution.");
+  }
+  const selectedRecord = history.snapshots.find((item) => (item.snapshot_id || item.id) === snapshotId);
+  const preferredRecord = preferredProject?.snapshot;
+  if ((selectedRecord?.payload_kind || preferredRecord?.payload_kind) === "room-store-v1") {
+    const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
+      title: `Serve ${project.display_name} logical JAT`,
+      placeHolder: "Choose projection (Files, Registry, Both, or Auto; ports selected by JAT)",
+      ignoreFocusOut: true,
+    });
+    if (!chosen) return "cancelled";
+    let encryptionMaterial;
+    if (usesNativeEncryption(provider)) {
+      const status = await runJoshRoom(["encryption", "status", "--dimension", dimension], cwd);
+      encryptionMaterial = await readEncryptionMaterial({ ...(project.dimension || {}), ...status });
+    }
+    const args = nativeRegistry.dimensionArgs(
+      ["snapshot", "serve", project.id, "--snapshot", snapshotId, "--mode", chosen.mode],
+      dimension,
+    );
+    return startRegistry({
+      cwd,
+      title: `Serving ${project.display_name} logical JAT`,
+      terminalName: `JAT: ${project.display_name}`,
+      args,
+      mode: chosen.mode,
+      encryptionMaterial,
+      retry: () => vscode.commands.executeCommand("joshRoom.serve", {
+        ...project,
+        snapshot_id: snapshotId,
+        snapshot: selectedRecord || preferredRecord,
+      }),
+    });
+  }
+  let encryptionMaterial;
+  if (usesNativeEncryption(provider)) {
+    const status = await runJoshRoom(["encryption", "status", "--dimension", dimension], cwd);
+    encryptionMaterial = await readEncryptionMaterial({ ...(project.dimension || {}), ...status });
+  }
+  return startRegistry({
+    cwd,
+    title: `Serving ${project.display_name}`,
+    terminalName: `Serve: ${project.display_name}`,
+    args: ["serve", project.id, "--snapshot", snapshotId, "--backend", provider, "--dimension", dimension],
+    encryptionMaterial,
+    retry: () => vscode.commands.executeCommand("joshRoom.serve", project),
+  });
+}
+
+function shellQuote(value, platform = process.platform) {
+  const text = String(value);
+  if (platform === "win32") return '"' + text.replaceAll('"', '\\"') + '"';
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+function shellJoin(values, platform = process.platform) {
+  return values.map((value) => shellQuote(value, platform)).join(" ");
+}
+
+function buildTerminalLaunch(runtime, args, environment, platform = process.platform, receiptFile) {
+  return {
+    command: shellJoin([runtime.command, ...runtime.args(args, receiptFile)], platform),
+    environment: { ...environment },
+  };
+}
+
+function buildServeTerminalLaunch(runtime, args, environment, receiptFile, completionFile, platform = process.platform) {
+  const argv = [runtime.command, ...runtime.args(args, receiptFile)];
+  if (platform === "win32") {
+    const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+    const script = `$joshServeExit = 1; try { & ${argv.map(quote).join(" ")}; $joshServeExit = $LASTEXITCODE } finally { [System.IO.File]::WriteAllText(${quote(completionFile)}, [string]$joshServeExit) }`;
+    return {
+      command: `& ${["powershell.exe", "-NoLogo", "-NoProfile", "-Command", script].map(quote).join(" ")}`,
+      shellPath: "powershell.exe",
+      shellArgs: ["-NoLogo", "-NoProfile"],
+      environment: { ...environment },
+    };
+  }
+  const completion = `printf '%s\\n' "$?" > ${shellQuote(completionFile, platform)}`;
+  const script = `trap ${shellQuote(completion, platform)} 0; trap 'exit 130' INT; trap 'exit 143' TERM; ${shellJoin(argv, platform)}`;
+  return {
+    command: shellJoin(["/bin/sh", "-c", script], platform),
+    shellPath: "/bin/sh",
+    shellArgs: [],
+    environment: { ...environment },
+  };
+}
+
+function isSafeRestoreName(value) {
+  const name = String(value ?? "").trim();
+  return Boolean(
+    name
+      && name !== "."
+      && name !== ".."
+      && !name.includes("\0")
+      && !/[\\/]/.test(name)
+      && !path.posix.isAbsolute(name)
+      && !path.win32.isAbsolute(name)
+      && !/^[A-Za-z]:/.test(name),
+  );
+}
+
+function terminateChild(child, platform = process.platform) {
+  if (platform === "win32") {
+    child.kill("SIGTERM");
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch (_error) {
+    child.kill("SIGTERM");
+  }
+}
+
+function formatHaulerSize(size) {
+  if (typeof size !== "number" || !Number.isFinite(size) || size < 0) return undefined;
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size;
+  let unit = "B";
+  for (const candidate of units) {
+    if (value < 1024) break;
+    value /= 1024;
+    unit = candidate;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+}
+
+function resultPayloads(result, fallbackPath) {
+  if (Array.isArray(result?.payloads) && result.payloads.length) return result.payloads;
+  if (result?.payload_path) return [{ path: result.payload_path, size: result.payload_size, sha256: result.sha256 }];
+  return fallbackPath ? [{ path: fallbackPath }] : [];
+}
+
+function payloadReceipt(payloads) {
+  return payloads
+    .map((output) => {
+      const size = formatHaulerSize(output.size);
+      const digest = typeof output.sha256 === "string" && output.sha256.length >= 16 ? ` sha256 ${output.sha256.slice(0, 16)}…` : "";
+      return `${output.path}${size ? ` (${size})` : ""}${digest}`;
+    })
+    .join(", ");
+}
+
+function isHaulerChunkSize(value) {
+  return /^[1-9][0-9]*(?:[KMGT](?:B)?)?$/i.test(String(value || "").trim());
+}
+
+function isSafeCopyTarget(value, scheme) {
+  const target = String(value || "").trim();
+  if (!target.startsWith(scheme) || /\s/.test(target)) return false;
+  const remainder = target.slice(scheme.length);
+  return Boolean(remainder) && !remainder.includes("@") && !remainder.includes("?") && !remainder.includes("#");
+}
+
+async function chooseHaul(cwd, title, openLabel = "Use this haul") {
+  const files = await vscode.window.showOpenDialog({
+    title,
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { "JAT Hauler archive": ["zst", "tar"] },
+    openLabel,
+  });
+  return files?.length ? files[0].fsPath : undefined;
+}
+
+function inventoryQuickPickItems(inventory) {
+  return (Array.isArray(inventory) ? inventory : [])
+    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference)
+    .map((entry) => ({
+      label: `$(package) ${entry.reference}`,
+      description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
+      entry,
+    }));
+}
+
+async function jatBuild() {
+  const cwd = activeWorkspace();
+  const folders = await vscode.window.showOpenDialog({
+    title: "JAT: Pack Folder into JAT",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Pack this folder",
+  });
+  if (!folders?.length) return "cancelled";
+  const source = folders[0].fsPath;
+  const output = await vscode.window.showSaveDialog({
+    title: "Save portable JAT haul",
+    defaultUri: vscode.Uri.file(path.join(path.dirname(source), `${path.basename(source)}.haul.tar.zst`)),
+    filters: { "JAT Hauler archive": ["zst"] },
+  });
+  if (!output) return "cancelled";
+  const imageChoice = await vscode.window.showQuickPick([
+    { label: "Workspace only", allImages: false },
+    { label: "Workspace + all tagged local OCI images", allImages: true },
+  ], { title: "Include local OCI images?", ignoreFocusOut: true });
+  if (!imageChoice) return "cancelled";
+  const advanced = await vscode.window.showQuickPick([
+    { label: "images.txt image list (Hauler-native sync)", id: "imagesFile" },
+    { label: "Hauler manifest (advanced declarative composition)", id: "manifests" },
+    { label: "Chunked haul (split into sized chunks)", id: "chunk" },
+    { label: "Slim build (exclude signatures, attestations, SBOMs)", id: "slim" },
+  ], {
+    title: "Advanced capture inputs",
+    placeHolder: "Optional — press Esc to keep the simple one-click pack",
+    canPickMany: true,
+    ignoreFocusOut: true,
+  });
+  const advancedIds = new Set((Array.isArray(advanced) ? advanced : []).map((item) => item.id));
+  const args = ["jat", "build", "--source", source, "--output", output.fsPath];
+  if (imageChoice.allImages) args.push("--all-images");
+  if (advancedIds.has("imagesFile")) {
+    const lists = await vscode.window.showOpenDialog({
+      title: "Choose images.txt consumed by Hauler",
+      defaultUri: vscode.Uri.file(source),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      filters: { "Image list": ["txt"] },
+      openLabel: "Use this image list",
+    });
+    if (!lists) return "cancelled";
+    for (const list of lists) args.push("--images-file", list.fsPath);
+  }
+  if (advancedIds.has("manifests")) {
+    const manifests = await vscode.window.showOpenDialog({
+      title: "Choose Hauler manifests (Files / Images / Charts)",
+      defaultUri: vscode.Uri.file(source),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: true,
+      filters: { "Hauler manifest": ["yaml", "yml"] },
+      openLabel: "Use these manifests",
+    });
+    if (!manifests) return "cancelled";
+    for (const manifest of manifests) args.push("--hauler-manifest", manifest.fsPath);
+  }
+  if (advancedIds.has("chunk")) {
+    const chunkSize = await vscode.window.showInputBox({
+      title: "Chunked haul size",
+      prompt: "Split the haul into chunks of this size (e.g. 500M, 1G)",
+      placeHolder: "500M",
+      ignoreFocusOut: true,
+      validateInput: (value) => isHaulerChunkSize(value) ? undefined : "Use a positive byte count with an optional K/KM/M/MB/G/GB/T/TB unit, e.g. 500M.",
+    });
+    if (!chunkSize) return "cancelled";
+    args.push("--chunk-size", chunkSize.trim());
+  }
+  if (advancedIds.has("slim")) {
+    const slimChoice = await vscode.window.showWarningMessage(
+      "Slim build excludes cosign signatures, attestations, SBOMs, and other referrer extras from remote acquisition. Keep full supply-chain extras by default?",
+      { modal: true },
+      "Use slim build",
+      "Keep full extras",
+    );
+    if (!slimChoice) return "cancelled";
+    if (slimChoice === "Use slim build") args.push("--exclude-extras");
+  }
+  const result = await runOperation(`Packing ${path.basename(source)}…`, args, cwd);
+  const payloads = resultPayloads(result, output.fsPath);
+  const action = await vscode.window.showInformationMessage(
+    payloads.length > 1
+      ? `Created ${payloads.length} chunk files starting at ${payloads[0].path}.`
+      : `Created ${payloads[0]?.path || output.fsPath}.`,
+    "Show Logs",
+  );
+  if (action === "Show Logs") outputChannel?.show(true);
+  return "built";
+}
+
+async function jatInspect() {
+  const cwd = activeWorkspace();
+  const haul = await chooseHaul(cwd, "JAT: Inspect Haul");
+  if (!haul) return "cancelled";
+  return showJatInventory(haul, cwd);
+}
+
+async function showJatInventory(haul, cwd) {
+  const result = await runOperation(`Inspecting ${path.basename(haul)}…`, ["jat", "inspect", "--haul", haul], cwd);
+  const anchors = result.anchors && typeof result.anchors === "object"
+    ? Object.entries(result.anchors).filter(([, present]) => present).map(([kind]) => kind)
+    : [];
+  const items = inventoryQuickPickItems(result.inventory);
+  if (!items.length) {
+    const action = await vscode.window.showInformationMessage(
+      `JAT inspect found no content references in ${path.basename(haul)}.`,
+      "Show Logs",
+    );
+    if (action === "Show Logs") outputChannel?.show(true);
+    return "empty";
+  }
+  const selected = await vscode.window.showQuickPick(items, {
+    title: `JAT inventory · ${items.length} ${items.length === 1 ? "reference" : "references"}`,
+    placeHolder: `JAT anchors: ${anchors.length ? anchors.join(", ") : "none"} — select a reference for details`,
+    ignoreFocusOut: true,
+  });
+  if (!selected) return "inspected";
+  const detail = [
+    selected.entry.type || "content",
+    selected.entry.platform,
+    formatHaulerSize(selected.entry.size),
+    selected.entry.digest,
+  ].filter(Boolean).join(" · ");
+  const action = await vscode.window.showInformationMessage(
+    `${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
+    "Copy Reference",
+    "Extract…",
+  );
+  if (action === "Copy Reference") {
+    await vscode.env.clipboard.writeText(selected.entry.reference);
+    await vscode.window.showInformationMessage(`Copied ${selected.entry.reference}.`);
+  } else if (action === "Extract…") {
+    return jatExtract({ haul, reference: selected.entry.reference });
+  }
+  return "inspected";
+}
+
+async function jatExtract(preselection) {
+  const cwd = activeWorkspace();
+  const haul = preselection?.haul || await chooseHaul(cwd, "JAT: Extract from JAT");
+  if (!haul) return "cancelled";
+  let reference = typeof preselection?.reference === "string" ? preselection.reference : undefined;
+  if (!reference) {
+    const inspected = await runOperation(`Inspecting ${path.basename(haul)}…`, ["jat", "inspect", "--haul", haul], cwd);
+    const items = inventoryQuickPickItems(inspected.inventory);
+    if (!items.length) {
+      await vscode.window.showInformationMessage(`JAT inspect found no extractable references in ${path.basename(haul)}.`);
+      return "empty";
+    }
+    const selected = await vscode.window.showQuickPick(items, {
+      title: "Extract which reference?",
+      placeHolder: "Content comes from the JAT inspect inventory — nothing is restored to a workspace",
+      ignoreFocusOut: true,
+    });
+    if (!selected) return "cancelled";
+    reference = selected.entry.reference;
+  }
+  const parents = await vscode.window.showOpenDialog({
+    title: "Choose extract parent folder",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Extract here",
+  });
+  if (!parents?.length) return "cancelled";
+  const defaultName = `${path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "")}-extract`;
+  const name = await vscode.window.showInputBox({
+    title: "JAT: Extract from JAT",
+    prompt: "New destination folder name (created only if absent)",
+    value: defaultName,
+    ignoreFocusOut: true,
+    validateInput: (value) => isSafeRestoreName(value) ? undefined : "Enter one folder name without path separators.",
+  });
+  if (!name) return "cancelled";
+  const destination = path.join(parents[0].fsPath, name);
+  if (fs.existsSync(destination)) throw new Error(`Destination already exists: ${destination}`);
+  const result = await runOperation(
+    `Extracting ${reference}…`,
+    ["jat", "extract", "--haul", haul, "--reference", reference, "--destination", destination],
+    cwd,
+  );
+  const payloads = resultPayloads(result, destination);
+  const action = await vscode.window.showInformationMessage(
+    `Extracted ${reference} to ${payloadReceipt(payloads) || destination}.`,
+    "Show Logs",
+  );
+  if (action === "Show Logs") outputChannel?.show(true);
+  return "extracted";
+}
+
+async function jatRestore() {
+  const cwd = activeWorkspace();
+  const files = await vscode.window.showOpenDialog({
+    title: "JAT: Restore Haul",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    filters: { "JAT Hauler archive": ["zst"] },
+    openLabel: "Restore this haul",
+  });
+  if (!files?.length) return "cancelled";
+  const haul = files[0].fsPath;
+  const parents = await vscode.window.showOpenDialog({
+    title: "Choose restore parent folder",
+    defaultUri: vscode.Uri.file(cwd),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Restore here",
+  });
+  if (!parents?.length) return "cancelled";
+  const defaultName = path.basename(haul).replace(/\.tar\.zst$|\.zst$/i, "") + "-restored";
+  const name = await vscode.window.showInputBox({
+    title: "JAT: Restore Haul",
+    prompt: "New destination folder name",
+    value: defaultName,
+    ignoreFocusOut: true,
+    validateInput: (value) => isSafeRestoreName(value) ? undefined : "Enter one folder name without path separators.",
+  });
+  if (!name) return "cancelled";
+  const destination = path.join(parents[0].fsPath, name);
+  if (fs.existsSync(destination)) throw new Error(`Destination already exists: ${destination}`);
+  await runOperation(
+    `Restoring ${path.basename(haul)}…`,
+    ["jat", "restore", "--haul", haul, "--destination", destination],
+    cwd,
+  );
+  const action = await vscode.window.showInformationMessage(`Restored to ${destination}.`, "Open Folder");
+  if (action === "Open Folder") {
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
+  }
+  return "restored";
+}
+
+const JAT_SERVE_MODES = [
+  { label: "Auto", description: "JAT chooses the projection. Files may be served on all network interfaces.", mode: "auto" },
+  { label: "Files", description: "Serve file downloads on all network interfaces", mode: "files" },
+  { label: "Registry", description: "OCI images and charts on localhost", mode: "registry" },
+  { label: "Files + Registry", description: "Serve files on all network interfaces and the registry on localhost", mode: "both" },
+];
+
+async function jatServe() {
+  const cwd = activeWorkspace();
+  const haul = await chooseHaul(cwd, "JAT: Serve Haul", "Serve this haul");
+  if (!haul) return "cancelled";
+  const chosen = await vscode.window.showQuickPick(JAT_SERVE_MODES, {
+    title: "JAT: Serve Haul",
+    placeHolder: "How should JAT expose this capsule?",
+    ignoreFocusOut: true,
+  });
+  if (!chosen) return "cancelled";
+  return startRegistryTerminal({
+    cwd,
+    title: `Serving ${path.basename(haul)}`,
+    terminalName: "JAT Hauler Serve",
+    args: ["jat", "serve", "--haul", haul, "--mode", chosen.mode],
+    mode: chosen.mode,
+    retry: () => vscode.commands.executeCommand("joshRoom.jatServe"),
+  });
+}
+
+async function jatExport() {
+  const cwd = activeWorkspace();
+  const haul = await chooseHaul(cwd, "JAT: Export Images…");
+  if (!haul) return "cancelled";
+  const base = path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "");
+  const output = await vscode.window.showSaveDialog({
+    title: "Save containerd image archive",
+    defaultUri: vscode.Uri.file(path.join(path.dirname(haul), `${base}-images.tar`)),
+    filters: { "containerd archive": ["tar"] },
+  });
+  if (!output) return "cancelled";
+  const result = await runOperation(
+    `Exporting images from ${path.basename(haul)}…`,
+    ["jat", "export", "--haul", haul, "--output", output.fsPath],
+    cwd,
+  );
+  const payloads = resultPayloads(result, output.fsPath);
+  const action = await vscode.window.showInformationMessage(
+    `Exported containerd archive — ${payloadReceipt(payloads)}.`,
+    "Show Logs",
+  );
+  if (action === "Show Logs") outputChannel?.show(true);
+  return "exported";
+}
+
+async function jatCopy() {
+  const cwd = activeWorkspace();
+  const haul = await chooseHaul(cwd, "JAT: Copy / Seed…");
+  if (!haul) return "cancelled";
+  const kind = await vscode.window.showQuickPick([
+    { label: "Registry", description: "Seed a remote registry (registry://…) — retry-capable transfer", scheme: "registry://" },
+    { label: "Directory", description: "Project into a local directory (dir://…)", scheme: "dir://" },
+  ], {
+    title: "JAT: Copy / Seed",
+    placeHolder: "Choose a destination type supported by JAT — credentials are never stored by Josh Room",
+    ignoreFocusOut: true,
+  });
+  if (!kind) return "cancelled";
+  let target;
+  if (kind.scheme === "registry://") {
+    target = await vscode.window.showInputBox({
+      title: "JAT: Copy / Seed",
+      prompt: "Registry target (authenticate with hauler login or a credential helper — never in this target)",
+      placeHolder: "registry://registry.example.test:5000",
+      ignoreFocusOut: true,
+      validateInput: (value) => isSafeCopyTarget(value, "registry://") ? undefined : "Use registry://host[:port][/path] without credentials, spaces, query, or fragment.",
+    });
+  } else {
+    const folders = await vscode.window.showOpenDialog({
+      title: "Choose seed destination directory",
+      defaultUri: vscode.Uri.file(cwd),
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: "Seed this directory",
+    });
+    target = folders?.length ? `dir://${folders[0].fsPath}` : undefined;
+  }
+  if (!target) return "cancelled";
+  const result = await runOperation(
+    `Seeding ${kind.label.toLowerCase()} from ${path.basename(haul)}…`,
+    ["jat", "copy", "--haul", haul, "--to", target],
+    cwd,
+  );
+  const transfer = result.transfer && typeof result.transfer === "object" ? result.transfer : {};
+  const action = await vscode.window.showInformationMessage(
+    `Seeded ${transfer.destination || target}${transfer.transport ? ` (${transfer.transport})` : ""}.`,
+    "Show Logs",
+  );
+  if (action === "Show Logs") outputChannel?.show(true);
+  return "copied";
+}
+
+async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry, encryptionMaterial }) {
+  const runtime = await runtimeFor(cwd, args);
+  const environment = { ...runtime.env };
+  const credentialsCleanup = await writeRuntimeCredentials(environment);
+  let encryptionCleanup = () => {};
+  try {
+    encryptionCleanup = await writeEncryptionHandoff(environment, encryptionMaterial);
+  } catch (error) {
+    credentialsCleanup();
+    throw error;
+  }
+  const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
+  const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
+  fs.chmodSync(progressDirectory, 0o700);
+  const progressPath = path.join(progressDirectory, "events.jsonl");
+  const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
+  fs.writeFileSync(progressPath, "", { mode: 0o600 });
+  environment.JOSH_ROOM_PROGRESS_FILE = progressPath;
+  const startupPath = path.join(progressDirectory, "serve-startup.json");
+  const resultPath = path.join(progressDirectory, "controller-result.json");
+  const completionPath = path.join(progressDirectory, "command-exit.txt");
+  environment.JOSH_ROOM_RESULT_FILE = resultPath;
+  const serveArgs = [...args, "--fileserver-port", "0", "--registry-port", "0", "--startup-file", startupPath];
+  const launch = buildServeTerminalLaunch(runtime, serveArgs, environment, receiptPath, completionPath);
+  let terminal;
+  try {
+    terminal = vscode.window.createTerminal({ name: terminalName, cwd, env: launch.environment, shellPath: launch.shellPath, shellArgs: launch.shellArgs });
+  } catch (error) {
+    credentialsCleanup();
+    encryptionCleanup();
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
+    throw error;
+  }
+  const followers = [];
+  let latestLog = "";
+  let progressReporter;
+  let progressActive = false;
+  const stream = (line, severity = "info") => {
+    const safeLine = sanitizeRuntimeLine(line);
+    latestLog = safeLine;
+    outputChannel?.[severity](safeLine);
+    const stage = stageForLog(safeLine);
+    if (stage && progressActive) progressReporter?.event({ stage: "jat", message: stage });
+  };
+  followers.push(
+    followProgressFile(progressPath, (event) => {
+      const safeEvent = sanitizeProgressEvent(event);
+      latestLog = safeEvent.message;
+      if (progressActive) progressReporter?.event(safeEvent);
+    }),
+    followLogFile(path.join(jatRoot, "output", "stdout.log"), (line) => stream(line)),
+    followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
+  );
+  let stopped = false;
+  let terminalEnded = false;
+  let shellExecution;
+  const stopFollowing = () => {
+    if (stopped) return;
+    stopped = true;
+    for (const follower of followers) follower.dispose();
+    shellExecution?.dispose();
+    progressReporter?.dispose();
+    credentialsCleanup();
+    encryptionCleanup();
+    fs.rmSync(progressDirectory, { recursive: true, force: true });
+  };
+  const controllerReceiptError = () => {
+    if (!runtime.controllerArtifact) return undefined;
+    try {
+      if (!fs.existsSync(receiptPath)) return new Error("RCC did not produce a controller receipt");
+      const receipt = parseControllerOutput(fs.readFileSync(receiptPath, "utf8"));
+      const receiptObject = receipt && typeof receipt === "object" && !Array.isArray(receipt) ? receipt : undefined;
+      const receiptArtifact = receiptObject && (receiptObject.artifactDigest ?? receiptObject.artifact_digest);
+      const receiptExit = receiptObject && (receiptObject.exitCode ?? receiptObject.exit_code ?? receiptObject.exit);
+      if (!receiptObject || receiptArtifact !== runtime.controllerArtifact || typeof receiptExit !== "number" || !Number.isFinite(receiptExit) || receiptExit !== 0) {
+        return new Error("Managed controller receipt does not match the selected artifact");
+      }
+    } catch (error) {
+      return new Error(`Managed controller receipt is invalid: ${error.message}`);
+    }
+    return undefined;
+  };
+  const terminalClosed = vscode.window.onDidCloseTerminal((closed) => {
+    if (closed !== terminal) return;
+    const receiptError = controllerReceiptError();
+    stopFollowing();
+    terminalClosed.dispose();
+    if (receiptError) outputChannel?.error(`REGISTRY · ${receiptError.message}`);
+    else outputChannel?.info("REGISTRY · Stopped");
+    refreshRoomStatus();
+  });
+  shellExecution = vscode.window.onDidEndTerminalShellExecution?.((event) => {
+    if (event.terminal === terminal) terminalEnded = true;
+  });
+  outputChannel?.info(`START · ${title}`);
+  outputChannel?.info(`LOGS · ${path.join(jatRoot, "output")}`);
+  setStatus("$(sync~spin) Starting serve endpoints", title);
+  terminal.show(true);
+  try {
+    const outcome = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title,
+        cancellable: false,
+      },
+      async (progress) => {
+        progressReporter = createVisualReporter(title, "serve", progress);
+        progressActive = true;
+        progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
+        terminal.sendText(launch.command, true);
+        try {
+          const checkStopped = () => {
+            if (stopped) throw new Error("Serve terminal closed before readiness");
+            const completed = readServeJson(resultPath, 65536);
+            if (completed) throw new Error(sanitizeRuntimeLine(completed.diagnostic || completed.error || "Serve controller exited before readiness"));
+            if (fs.existsSync(receiptPath)) throw controllerReceiptError() || new Error("Serve controller exited before readiness");
+            if (fs.existsSync(completionPath)) throw new Error("Serve command exited before readiness; see terminal output for the runtime failure");
+            if (terminalEnded) throw new Error("Serve command exited before reporting endpoints; update the acquired runtime if it lacks startup support");
+          };
+          const serve = await waitForServeStartup(startupPath, { mode, checkStopped });
+          checkStopped();
+          const catalog = serve.registry_url ? await probeRegistry(serve.registry_url) : null;
+          checkStopped();
+          return { ...serve, catalog };
+        } finally {
+          progressActive = false;
+        }
+      },
+    );
+    const fileserverUrl = outcome.fileserver_url;
+    const registryUrl = outcome.registry_url;
+    const fileserverScope = outcome.fileserver_bind === "all-interfaces" ? "all interfaces" : "localhost only";
+    if (outcome.mode === "files") {
+      setStatus(`$(server-process) Files :${new URL(fileserverUrl).port} (${fileserverScope})`, title);
+      outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}; ${fileserverScope}) · ${title}`);
+      const filesAction = await vscode.window.showInformationMessage(
+        `JAT is serving files at ${fileserverUrl}, listening on ${fileserverScope}. Close the ${terminalName} terminal to stop.`,
+        "Copy Fileserver URL",
+        "Show Logs",
+      );
+      if (filesAction === "Copy Fileserver URL") {
+        await vscode.env.clipboard.writeText(fileserverUrl);
+        await vscode.window.showInformationMessage(`Copied ${fileserverUrl}.`);
+      } else if (filesAction === "Show Logs") {
+        outputChannel?.show(true);
+      }
+      return "started";
+    }
+    const catalog = outcome.catalog;
+    const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
+    const count = repositories.length;
+    const servingFiles = outcome.mode === "both";
+    progressReporter?.event({ stage: "complete", message: "Serve endpoints ready" });
+    setStatus(`$(server-process) Registry :${new URL(registryUrl).port}${servingFiles ? ` / Files :${new URL(fileserverUrl).port} (${fileserverScope})` : ""}`, `${count} repositories · ${title}`);
+    outputChannel?.info(`READY · ${registryUrl} · ${count} ${count === 1 ? "repository" : "repositories"}`);
+    if (servingFiles) outputChannel?.info(`READY · JAT fileserver (${fileserverUrl}; ${fileserverScope})`);
+    const action = await vscode.window.showInformationMessage(
+      servingFiles
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl} (registry listening on localhost only) and files at ${fileserverUrl} (fileserver listening on ${fileserverScope}).`
+        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl}.`,
+      "Show Images",
+      "Copy Registry URL",
+      ...(servingFiles ? ["Copy Fileserver URL"] : []),
+      "Show Logs",
+    );
+    if (action === "Show Images") {
+      if (!repositories.length) {
+        await vscode.window.showInformationMessage("This haul contains no registry repositories.");
+      } else {
+        await vscode.window.showQuickPick(
+          repositories.map((repository) => ({
+            label: `$(package) ${repository}`,
+            description: `${new URL(registryUrl).host}/${repository}`,
+          })),
+          { title: "Images served by JAT", placeHolder: "Registry contents" },
+        );
+      }
+    } else if (action === "Copy Fileserver URL") {
+      await vscode.env.clipboard.writeText(fileserverUrl);
+    } else if (action === "Copy Registry URL") {
+      await vscode.env.clipboard.writeText(registryUrl);
+      await vscode.window.showInformationMessage(`Copied ${registryUrl}.`);
+    } else if (action === "Show Logs") {
+      outputChannel?.show(true);
+    }
+    return "started";
+  } catch (error) {
+    stopFollowing();
+    terminal.dispose();
+    terminalClosed.dispose();
+    progressActive = false;
+    const detail = sanitizeRuntimeLine(error.message || latestLog || String(error));
+    progressReporter?.fail(error);
+    outputChannel?.error(`JAT serve failed: ${detail}`);
+    setStatus("$(error) JAT serve failed", detail);
+    const action = await vscode.window.showErrorMessage(
+      `JAT serve failed to start: ${detail.slice(0, 240)}`,
+      "Show Logs",
+      "Retry",
+    );
+    if (action === "Show Logs") outputChannel?.show(true);
+    if (action === "Retry") {
+      terminal.dispose();
+      await retry();
+    }
+    return "failed";
+  }
+}
+
+function register(context, command, operation) {
+  context.subscriptions.push(vscode.commands.registerCommand(command, async (...args) => {
+    try {
+      return await operation(...args);
+    } catch (error) {
+      if (isCancellationError(error)) return "cancelled";
+      await vscode.window.showErrorMessage(userFacingError(error));
+      return "failed";
+    }
+  }));
+}
+
+function activate(context) {
+  extensionContext = context;
+  outputChannel = vscode.window.createOutputChannel("Josh Room", { log: true });
+  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusItem.command = "workbench.view.extension.josh-room";
+  setStatus("$(archive) Josh Room");
+  statusItem.show();
+  roomsProvider = new RoomsProvider();
+  const roomsView = vscode.window.createTreeView("joshRoom.rooms", { treeDataProvider: roomsProvider });
+  const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", { treeDataProvider: new JatToolsProvider() });
+  context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
+  if (context.secrets?.onDidChange) {
+    context.subscriptions.push(context.secrets.onDidChange((event) => {
+      if (!event?.key || event.key.startsWith(ENCRYPTION_SECRET_PREFIX) || event.key.startsWith(RECOVERY_SECRET_PREFIX)) {
+        roomsProvider.roots = undefined;
+        roomsProvider.emitter.fire(undefined);
+        refreshRoomStatus();
+      }
+    }));
+  }
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
+    const relative = relativeWorkspacePath(event.document.uri);
+    if (!relative || !workspaceBaseline) return;
+    if (event.document.isDirty) dirtyBuffers.add(relative);
+    else dirtyBuffers.delete(relative);
+    setRoomDirty(workspaceBaseline.dirty.size > 0 || dirtyBuffers.size > 0);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
+    const relative = relativeWorkspacePath(document.uri);
+    if (!relative) return;
+    dirtyBuffers.delete(relative);
+    markWorkspaceChange(document.uri);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
+    const relative = relativeWorkspacePath(document.uri);
+    if (!relative) return;
+    dirtyBuffers.delete(relative);
+    markWorkspaceChange(document.uri);
+  }));
+  register(context, "joshRoom.save", () => saveRoom({ current: true }));
+  register(context, "joshRoom.saveFolderAs", () => saveRoom());
+  register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
+  register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
+  register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
+  register(context, "joshRoom.checkWorkspace", checkWorkspace);
+  register(context, "joshRoom.new", () => newRoom());
+  register(context, "joshRoom.enter", enterRoom);
+  register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
+  register(context, "joshRoom.deleteRoom", deleteRoom);
+  register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
+  register(context, "joshRoom.refresh", () => roomsProvider.refresh());
+  register(context, "joshRoom.showLogs", () => outputChannel?.show(true));
+  register(context, "joshRoom.clearLocalFallback", clearLocalFallback);
+  register(context, "joshRoom.jatBuild", jatBuild);
+  register(context, "joshRoom.jatInspect", jatInspect);
+  register(context, "joshRoom.jatExtract", jatExtract);
+  register(context, "joshRoom.jatRestore", jatRestore);
+  register(context, "joshRoom.jatServe", jatServe);
+  register(context, "joshRoom.jatExport", jatExport);
+  register(context, "joshRoom.jatCopy", jatCopy);
+  startDirtyTracking(context).catch((error) => {
+    outputChannel.warn(`Unable to index saved Room: ${error.message}`);
+    setRoomDirty(true);
+  });
+  roomsProvider.refresh().catch((error) => {
+    outputChannel.appendLine(`error: ${error.message || String(error)}`);
+  });
+}
+
+module.exports = { activate };
+module.exports.__test__ = {
+  saveCatalogRoom,
+  enterChildRoom,
+  splitWorkspace,
+  enterRoom,
+  checkWorkspace,
+  resetNativeBaseline,
+  saveRoom,
+  initializeRoomExclusions,
+  reviewWorkspaceBeforeSave,
+  getRoomStatusForTests: () => roomStatus,
+  setSelectedDimensionId(value) {
+    selectedDimensionId = value;
+  },
+  setStatusItem(value) {
+    statusItem = value;
+  },
+  setOutputChannelForTests(value) {
+    outputChannel = value;
+  },
+  startDirtyTracking,
+};
+
+const nativeRegistry = require("./registry");
+let selectedDimensionId;
+let lastKnownCatalog;
+
+function dimensionList(catalog) {
+  if (Array.isArray(catalog && catalog.dimensions)) return catalog.dimensions;
+  if (catalog && catalog.dimensions && typeof catalog.dimensions === "object") {
+    return Object.entries(catalog.dimensions).map(([id, value]) =>
+      Object.assign({}, value || {}, { id: (value && value.id) || id }));
+  }
+  return [];
+}
+
+function dimensionId(item) {
+  return (item && item.dimension && (item.dimension.id || item.dimension.dimension_id))
+    || (item && (item.dimension_id || item.id))
+    || selectedDimensionId;
+}
+
+function explicitDimensionId(item) {
+  const project = item && item.project && typeof item.project === "object" ? item.project : item;
+  const dimension = (item && item.dimension) || (project && project.dimension);
+  return (dimension && (dimension.id || dimension.dimension_id))
+    || (project && (project.dimension_id || project.dimensionId))
+    || (item && item.dimension_id);
+}
+
+function snapshotIdentity(item) {
+  const snapshot = item && item.snapshot;
+  return (item && (item.snapshot_id || item.snapshotId))
+    || (snapshot && (snapshot.snapshot_id || snapshot.id));
+}
+
+function activeSnapshot(marker, project, snapshotId) {
+  return Boolean(marker && project && snapshotId
+    && marker.project_id === project.id
+    && marker.dimension_id === explicitDimensionId(project)
+    && marker.snapshot_id === snapshotId);
+}
+
+function roomProject(item) {
+  const project = item && item.project && typeof item.project === "object" ? item.project : item;
+  if (!project) return undefined;
+  const dimension = (item && item.dimension) || project.dimension;
+  const id = project.id || project.project_id || (item && item.id);
+  return {
+    ...project,
+    id,
+    project_id: project.project_id || id,
+    dimension_id: project.dimension_id || (dimension && (dimension.id || dimension.dimension_id)),
+    dimension,
+  };
+}
+
+function roomLabel(item) {
+  const project = roomProject(item);
+  if (!project) return undefined;
+  const name = project.display_name || project.name || project.id;
+  const dimension = project.dimension || (item && item.dimension);
+  const dimensionName = project.dimension_display_name
+    || (dimension && (dimension.display_name || dimension.name || dimension.id || dimension.dimension_id))
+    || project.dimension_id;
+  return dimensionName ? `${name} · ${dimensionName}` : name;
+}
+
+async function chooseServeProject(projects, marker, preferredProject) {
+  const preferred = roomProject(preferredProject);
+  if (preferred && explicitDimensionId(preferredProject)) {
+    const selected = projects.find((project) => project.id === preferred.id
+      && explicitDimensionId(project) === explicitDimensionId(preferredProject));
+    if (selected) return selected;
+  }
+  if (marker && [2, 3].includes(marker.format_version) && marker.dimension_id && marker.snapshot_id) {
+    const selected = projects.find((project) => project.id === marker.project_id
+      && explicitDimensionId(project) === marker.dimension_id
+      && Array.isArray(project.snapshots)
+      && project.snapshots.some((snapshot) => snapshot.snapshot_id === marker.snapshot_id));
+    if (selected) return selected;
+  }
+  const choice = await vscode.window.showQuickPick(
+    projects.map((project) => ({ label: roomLabel(project), project })),
+    { title: "Josh: Serve Room Content\u2026", placeHolder: "Choose a Room", ignoreFocusOut: true },
+  );
+  return choice && choice.project;
+}
+
+async function chooseDimension(catalog, title) {
+  const dimensions = dimensionList(catalog);
+  if (!dimensions.length) throw new Error("No storage is configured. Add Storage first.");
+  const preferred = selectedDimensionId
+    && dimensions.find((item) => (item.id || item.dimension_id) === selectedDimensionId);
+  if (preferred || dimensions.length === 1) {
+    const selected = preferred || dimensions[0];
+    selectedDimensionId = selected.id || selected.dimension_id;
+    return selected;
+  }
+  const choice = await vscode.window.showQuickPick(
+    dimensions.map((dimension) => ({
+      label: dimension.display_name || dimension.name || dimension.id || dimension.dimension_id,
+      description: nativeRegistry.providerLabel(dimension.provider),
+      dimension,
+    })),
+    { title: title || "Where should this Room be saved?", placeHolder: "Choose a storage destination", ignoreFocusOut: true },
+  );
+  if (!choice) return undefined;
+  selectedDimensionId = choice.dimension.id || choice.dimension.dimension_id;
+  return choice.dimension;
+}
+
+async function chooseExplicitDimension(title) {
+  const catalog = await loadCatalog(activeWorkspace(), "Loading storage…");
+  const dimensions = dimensionList(catalog);
+  if (!dimensions.length) throw new Error("No storage is configured. Add Storage first.");
+  const choice = await vscode.window.showQuickPick(dimensions.map((dimension) => ({
+    label: dimension.display_name || dimension.name || dimension.id || dimension.dimension_id,
+    description: `${nativeRegistry.providerLabel(dimension.provider)} · ${dimension.id || dimension.dimension_id}`,
+    dimension,
+  })), { title, placeHolder: "Choose a Dimension", ignoreFocusOut: true });
+  return choice?.dimension;
+}
+
+async function chooseExplicitConnection(title) {
+  const catalog = await loadCatalog(activeWorkspace(), "Loading storage…");
+  const connections = nativeRegistry.buildProviderTree(catalog).flatMap((provider) => provider.children || []);
+  if (!connections.length) throw new Error("No storage connection is configured. Add Storage first.");
+  const choice = await vscode.window.showQuickPick(connections.map((connection) => ({
+    label: connection.label, description: nativeRegistry.providerLabel(connection.provider), connection,
+  })), { title, placeHolder: "Choose a storage connection", ignoreFocusOut: true });
+  return choice?.connection;
+}
+
+async function connectCloudflare(item, { timeoutMs = 600000, purpose } = {}) {
+  const cwd = activeWorkspace();
+  let dimension = item && item.dimension ? item.dimension : item;
+  if (purpose === "encryption" || usesNativeEncryption(dimension?.provider)) {
+    throw new Error("MinIO and S3 encryption are initialized by Josh Room; Cloudflare is R2-only.");
+  }
+  if (!dimension) {
+    const catalog = await loadCatalog(cwd, "Loading storage...");
+    dimension = dimensionList(catalog).find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
+  }
+  const targetDimensionId = dimension && (dimension.id || dimension.dimension_id) || "r2";
+  if (!targetDimensionId) throw new Error("Choose an R2 Dimension before connecting Cloudflare.");
+  selectedDimensionId = targetDimensionId;
+  return authorizeCloudflareBroker(cwd, { timeoutMs, targetDimensionId });
+}
+
+function hasLegacyR2Scopes(value) {
+  try {
+    const url = new URL(value);
+    const scopes = new Set((url.searchParams.get("scope") || "").split(/\s+/).filter(Boolean));
+    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password
+      && scopes.size === 2 && scopes.has("workers-r2.read") && scopes.has("workers-r2.write");
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function authorizeCloudflareBroker(cwd, { timeoutMs = 600000, targetDimensionId, legacySourceHandoff } = {}) {
+  let authPurpose = legacySourceHandoff ? "encryption" : "r2";
+  let legacyR2Source = false;
+  const title = legacySourceHandoff ? "Retrieving legacy source identity" : "Connecting Cloudflare";
+  const dimensionArgs = targetDimensionId ? ["--dimension", targetDimensionId] : [];
+  activeAuthAttempt?.cancel();
+  const attempt = {
+    controller: undefined,
+    cancel() {
+      this.controller?.cancel();
+    },
+  };
+  activeAuthAttempt = attempt;
+  try {
+    return await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `${title}...`,
+        cancellable: true,
+      },
+      async (progress, parentToken) => {
+        const controller = createCancellationController(parentToken);
+        attempt.controller = controller;
+        const reporter = createVisualReporter(title, operationKind(["auth", "start"]), progress);
+        let sessionId;
+        try {
+          let started = await runJoshRoom(
+            ["auth", "start", ...dimensionArgs, "--purpose", authPurpose], cwd, controller.token, reporter,
+          );
+          let authorizationUrl = started.authorization_url || started.authorizationUrl;
+          sessionId = started.session_id || started.sessionId;
+          if (controller.token.isCancellationRequested) throw cancellationError();
+          if (started.invalid_metadata) throw new Error("The authorization broker returned invalid protocol metadata.");
+          if (!authorizationUrl || !sessionId) {
+            throw new Error("Cloudflare connection did not return an authorization session.");
+          }
+          if (legacySourceHandoff && started.purpose !== "encryption") {
+            if (started.purpose !== undefined || started.capabilities !== undefined || !hasLegacyR2Scopes(authorizationUrl)) {
+              throw new Error("The configured authorization broker did not advertise encryption-only legacy identity retrieval. Check the broker version before retrying.");
+            }
+            const consent = await vscode.window.showWarningMessage(
+              "Your existing authorization broker uses the legacy R2 sign-in flow to return the old identity. "
+                + "It requests R2 read/write permission. Josh Room will use this grant only to retrieve the legacy source identity; "
+                + "it will not perform storage operations, change your R2 connection, or initialize MinIO encryption.",
+              { modal: true }, "Authorize Legacy Broker",
+            );
+            if (consent !== "Authorize Legacy Broker" || controller.token.isCancellationRequested) throw cancellationError();
+            await runJoshRoom(["auth", "cancel", sessionId, "--preserve-runtime-session"], cwd, undefined, reporter);
+            sessionId = undefined;
+            if (controller.token.isCancellationRequested) throw cancellationError();
+            authPurpose = "r2";
+            legacyR2Source = true;
+            started = await runJoshRoom(["auth", "start", "--purpose", authPurpose], cwd, controller.token, reporter);
+            sessionId = started.session_id || started.sessionId;
+            authorizationUrl = started.authorization_url || started.authorizationUrl;
+            if (controller.token.isCancellationRequested) throw cancellationError();
+            if (started.invalid_metadata || !sessionId || !hasLegacyR2Scopes(authorizationUrl) || (started.purpose !== undefined && started.purpose !== "r2")) {
+              throw new Error("The legacy broker did not provide the expected R2 source authorization session.");
+            }
+          }
+          const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
+          if (opened === false) {
+            throw new Error("Could not open Cloudflare authorization in your local browser.");
+          }
+
+          if (controller.token.isCancellationRequested) throw cancellationError();
+          const result = await runJoshRoom(
+            ["auth", "wait", sessionId, ...dimensionArgs,
+              "--purpose", authPurpose,
+              ...(legacySourceHandoff ? ["--legacy-source-handoff", legacySourceHandoff] : []),
+              ...(legacyR2Source ? ["--legacy-r2-source"] : []),
+              "--timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000)))],
+            cwd, controller.token, reporter,
+          );
+          if (controller.token.isCancellationRequested) throw cancellationError();
+          if (result.status === "authorized") {
+            if (legacySourceHandoff) {
+              readPrivateRecoveryFile(legacySourceHandoff, "legacy source identity");
+            } else {
+              if (roomsProvider) await roomsProvider.setCatalog(await loadCatalog(cwd, "Refreshing Dimensions and Rooms..."));
+              void vscode.window.showInformationMessage("Cloudflare connected. Your Rooms are ready.");
+            }
+            reporter.finish();
+            return "connected";
+          }
+          throw new Error(`Cloudflare authorization ${result.status || "failed"}`);
+        } catch (error) {
+          const cancelled = controller.token.isCancellationRequested || isCancellationError(error);
+          if (cancelled) {
+            outputChannel?.info("Cloudflare authorization cancelled; stale attempt invalidated.");
+          } else if (sessionId) {
+            outputChannel?.warn("Cloudflare authorization failed; invalidating the pending attempt.");
+          }
+          if (sessionId) {
+            await runJoshRoom(["auth", "cancel", sessionId, ...(legacySourceHandoff ? ["--preserve-runtime-session"] : [])], cwd)
+              .catch((cancelError) => outputChannel?.warn(`Unable to invalidate Cloudflare authorization: ${userFacingError(cancelError)}`));
+          }
+          if (cancelled) {
+            if (!legacySourceHandoff) await runJoshRoom(
+              ["auth", "status", ...dimensionArgs], cwd,
+            ).catch((statusError) => outputChannel?.warn(`Unable to reconcile cancelled Cloudflare authorization: ${userFacingError(statusError)}`));
+            return "cancelled";
+          }
+          reporter.fail(error);
+          throw error;
+        } finally {
+          reporter.dispose();
+          controller.dispose();
+        }
+      },
+    );
+  } finally {
+    if (activeAuthAttempt === attempt) activeAuthAttempt = undefined;
+  }
+}
+
+async function prepareRecoveryHandoff(cwd, provider = "minio") {
+  const encryptionLabel = nativeEncryptionLabel(provider);
+  const stored = await extensionContext?.secrets?.get?.(INSTALLATION_RECOVERY_SECRET);
+  if (stored) return materializeRecoveryValue(stored);
+  const choice = await vscode.window.showQuickPick([
+    { label: "Import Existing Recovery Key", action: "import" },
+    { label: "Create Recovery Key", action: "create" },
+  ], {
+    title: "Josh: Recovery Identity",
+    placeHolder: "Choose an existing offline key or create one",
+    ignoreFocusOut: true,
+  });
+  if (!choice) return undefined;
+  if (choice.action === "import") {
+    const selected = (await vscode.window.showOpenDialog({
+      title: `Choose recovery identity for ${encryptionLabel} encryption`,
+      defaultUri: vscode.Uri.file(cwd),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      openLabel: "Use recovery identity",
+    }))?.[0]?.fsPath;
+    if (!selected) return undefined;
+    return { path: selected, value: readPrivateRecoveryFile(selected), cleanup: () => {} };
+  }
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-recovery-create-"));
+  fs.chmodSync(directory, 0o700);
+  const generated = path.join(directory, "recovery.identity");
+  let handedOff = false;
+  try {
+    await runOperation(
+      "Creating recovery identity…",
+      ["encryption", "recovery", "generate", "--output", generated],
+      cwd,
+      { action: "create a recovery identity" },
+    );
+    const value = readPrivateRecoveryFile(generated);
+    const backup = await vscode.window.showSaveDialog({
+      title: "Back Up Recovery Identity",
+      defaultUri: vscode.Uri.file(path.join(os.homedir(), "josh-room-recovery.identity")),
+      filters: { "Age identity": ["identity", "txt"] },
+    });
+    if (!backup) return undefined;
+    writeRecoveryBackup(backup.fsPath, value, cwd);
+    const acknowledged = await vscode.window.showInformationMessage(
+      `Recovery identity backup saved. Continue to create the ${encryptionLabel} encryption domain?`,
+      { modal: true },
+      "Continue",
+    );
+    if (acknowledged !== "Continue") throw new Error("recovery identity backup must be acknowledged before initialization");
+    if (!extensionContext?.secrets?.store) throw new Error("SecretStorage is required for the recovery identity");
+    await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, value);
+    handedOff = true;
+    return { path: generated, value, cleanup: () => fs.rmSync(directory, { recursive: true, force: true }) };
+  } finally {
+    if (!handedOff) fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+async function connectEncryption(item, options = {}) {
+  assertWorkspaceTrusted("initialize storage encryption");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for encryption");
+  if (!item) return "cancelled";
+  const cwd = activeWorkspace();
+  const dimension = item?.dimension || item;
+  const encryptionLabel = nativeEncryptionLabel(dimension?.provider);
+  const dimensionIdValue = dimension?.id || dimension?.dimension_id || selectedDimensionId;
+  if (!dimensionIdValue || !usesNativeEncryption(dimension?.provider)) {
+    throw new Error("Choose a MinIO or S3 Dimension before initializing encryption.");
+  }
+  if (!extensionContext?.secrets?.store) throw new Error("SecretStorage is required for storage encryption");
+  const prepared = options.recoveryHandoff
+    ? { path: options.recoveryHandoff, value: readPrivateRecoveryFile(options.recoveryHandoff), cleanup: () => {} }
+    : await prepareRecoveryHandoff(cwd, dimension.provider);
+  if (!prepared) return "cancelled";
+  try {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-operational-"));
+    fs.chmodSync(directory, 0o700);
+    const materialHandoff = path.join(directory, "operational.identity");
+    try {
+      const result = await runOperation(
+        `Initializing ${encryptionLabel} encryption…`,
+        ["encryption", "initialize", "--dimension", dimensionIdValue, "--recovery-handoff", prepared.path, "--material-handoff", materialHandoff],
+        cwd,
+        { cancellable: true },
+      );
+      const domain = result.encryption_domain_id || dimension.encryption_domain_id;
+      const generation = result.key_generation || dimension.key_generation;
+      if (!result.encryption_material && fs.existsSync(materialHandoff)) result.encryption_material = materialHandoff;
+      if (!result.encryption_material && domain && generation) {
+        const runtimeRoot = process.env.XDG_RUNTIME_DIR || os.tmpdir();
+        const candidate = path.join(runtimeRoot, "josh-room", "session", "encryption", domain, `generation-${generation}.identity`);
+        if (fs.existsSync(candidate)) result.encryption_material = candidate;
+      }
+      await cacheEncryptionMaterial(result, { ...dimension, id: dimensionIdValue });
+      if (domain) await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, prepared.value);
+      if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), prepared.value);
+      selectedDimensionId = dimensionIdValue;
+      roomsProvider && await roomsProvider.reload();
+      void vscode.window.showInformationMessage(`${encryptionLabel} encryption is ready.`);
+      return "initialized";
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  } finally {
+    prepared.cleanup();
+  }
+}
+
+async function runSelectedEncryption(args, cwd, dimension, options = {}) {
+  assertWorkspaceTrusted(options.action || "read or change a trusted Room");
+  const selected = dimension?.dimension || dimension;
+  const provider = nativeRegistry.providerKey(selected?.provider);
+  if (!usesNativeEncryption(provider)) return runOperation(options.title || "Running Josh Room operation…", args, cwd, options);
+  let material = options.encryptionMaterial || await readEncryptionMaterial(selected);
+  if (!material && selected?.id) {
+    const status = await runJoshRoom(["encryption", "status", "--dimension", selected.id], cwd);
+    material = await readEncryptionMaterial({ ...selected, ...status });
+  }
+  // SecretStorage is an optional cache. The controller validates and resolves
+  // the selected bucket keyset, including after migration or on a fresh host.
+  return runOperation(options.title || "Running Josh Room operation…", args, cwd, {
+    ...options,
+    dimension: selected,
+    encryptionMaterial: material,
+  });
+}
+
+function selectedDimension(item) {
+  return item?.dimension || item;
+}
+
+async function destructiveOperation(args, cwd, dimension, title, action) {
+  const selected = dimension?.dimension || dimension;
+  const provider = nativeRegistry.providerKey(selected?.provider);
+  if (usesNativeEncryption(provider)) return runSelectedEncryption(args, cwd, selected, { title, action });
+  // R2 authority and age material belong to the controller's existing
+  // Cloudflare/device session. MinIO and S3 use the native keyset handoff.
+  return runOperation(title, args, cwd);
+}
+
+function deletionCommitted(result) {
+  if (!result || result.ok === false) return false;
+  if (result.status !== undefined) {
+    return ["success", "removed", "complete", "cleanup-pending", "restic-cleanup-pending"].includes(result.status);
+  }
+  return typeof result.project_id === "string"
+    && (Number.isSafeInteger(result.snapshot_count) && result.snapshot_count >= 0
+      || typeof result.room_removed === "boolean" && typeof result.snapshot_id === "string");
+}
+
+async function reportDeleteOutcome(result, target) {
+  // Informational notifications resolve on dismissal. They must never hold
+  // the authoritative catalog reload after an already-committed mutation.
+  if (result?.status === "catalog-reference-remains") {
+    void vscode.window.showWarningMessage(`The ${target} catalog update did not remove every reference. No success is reported; inspect the Room Store and retry after reconciliation.`);
+    return "incomplete";
+  }
+  if (!deletionCommitted(result)) {
+    void vscode.window.showWarningMessage(`The controller did not confirm ${target} deletion. Refresh and inspect the operation receipt before retrying.`);
+    return "incomplete";
+  }
+  if (result?.status === "cleanup-pending" || result?.status === "restic-cleanup-pending" || result?.cleanup_pending || result?.reconciliation_required) {
+    void vscode.window.showWarningMessage(`The ${target} deletion was committed, but cleanup remains pending. The catalog changed; review the operation receipt and reconcile storage before retrying.`);
+    return "cleanup-pending";
+  }
+  void vscode.window.showInformationMessage(result?.room_removed
+    ? `Final recovery point deleted. “${target}” Room is gone.`
+    : result?.latest_promoted
+      ? `Recovery point deleted. Latest is now ${result.latest}.`
+      : `${target} deleted.`);
+  return "removed";
+}
+
+async function prepareLegacySourceHandoff(cwd, provider = "minio") {
+  const choices = provider === "s3"
+    ? [{ label: "Use a local identity backup", source: "file", description: "Choose an existing old source identity file" }]
+    : [
+      { label: "Authorize Cloudflare-managed legacy identity", source: "broker", description: "Retrieve the old identity from the existing authorization broker" },
+      { label: "Use a local identity backup", source: "file", description: "Choose an existing old source identity file" },
+    ];
+  const choice = await vscode.window.showQuickPick(choices, {
+    title: "Josh: Legacy Source Identity",
+    placeHolder: "Where is the identity that encrypted this legacy catalog?",
+    ignoreFocusOut: true,
+  });
+  if (!choice) return undefined;
+  if (choice.source === "file") {
+    const selected = (await vscode.window.showOpenDialog({
+      title: `Choose the old source identity that encrypted this ${nativeEncryptionLabel(provider)} catalog`,
+      canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+      openLabel: "Use old source identity",
+    }))?.[0]?.fsPath;
+    return selected ? materializeRecoveryValue(readPrivateRecoveryFile(selected, "old source identity")) : undefined;
+  }
+  if (choice.source !== "broker") throw new Error("Choose a supported legacy identity source.");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-legacy-source-"));
+  fs.chmodSync(directory, 0o700);
+  const filename = path.join(directory, "source.identity");
+  const cleanup = () => fs.rmSync(directory, { recursive: true, force: true });
+  let ready = false;
+  try {
+    if (await authorizeCloudflareBroker(cwd, { legacySourceHandoff: filename }) !== "connected") return undefined;
+    ready = true;
+    return { path: filename, cleanup };
+  } finally {
+    if (!ready) cleanup();
+  }
+}
+
+async function migrateEncryption(item, { resume = false } = {}) {
+  assertWorkspaceTrusted("migrate encryption");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for migration");
+  if (!item) return "cancelled";
+  const cwd = activeWorkspace();
+  const dimension = selectedDimension(item);
+  const encryptionLabel = nativeEncryptionLabel(dimension.provider);
+  const id = dimension?.id || dimension?.dimension_id;
+  if (!id || !usesNativeEncryption(dimension.provider)) {
+    throw new Error("Choose a MinIO or S3 Dimension before migrating encryption.");
+  }
+  const status = await runOperation(`Checking ${encryptionLabel} encryption…`, ["encryption", "status", "--dimension", id], cwd);
+  if (status.state === "uninitialized") throw new Error(`This ${encryptionLabel} bucket has no legacy catalog. Use Initialize Encryption instead.`);
+  // An already published cutover only needs destination authority. The CLI
+  // validates this state before requiring an old source key.
+  if (resume || status.state === "ready") {
+    try {
+      const existing = await runOperation("Checking encryption migration…", ["encryption", resume ? "resume" : "migrate", "--dimension", id], cwd);
+      if (existing.status === "committed" || existing.journal_status === "committed") {
+        await roomsProvider?.reload();
+        return "committed";
+      }
+    } catch (error) {
+      const code = error.result?.error_code || error.result?.error?.code;
+      if (code !== "legacy-source-identity-required") throw error;
+    }
+  }
+  const source = await prepareLegacySourceHandoff(cwd, dimension.provider);
+  if (!source) return "cancelled";
+  let recovery;
+  try {
+    if (!status.encryption_domain_id) {
+      const prepared = await prepareRecoveryHandoff(cwd, dimension.provider);
+      if (!prepared) return "cancelled";
+      try { recovery = materializeRecoveryValue(prepared.value); }
+      finally { prepared.cleanup(); }
+    }
+    const handoffs = ["--dimension", id, "--source-identity", source.path];
+    if (recovery) handoffs.push("--recovery-handoff", recovery.path);
+    const plan = await runOperation(`Planning ${encryptionLabel} encryption migration…`, ["encryption", "migrate", ...handoffs], cwd);
+    if (plan.status === "committed" || plan.journal_status === "committed") {
+      await roomsProvider?.reload();
+      return "committed";
+    }
+    if (plan.read_only !== true || plan.requires_confirmation !== true
+      || typeof plan.source_catalog_etag !== "string" || !plan.source_catalog_etag) {
+      throw new Error("A read-only migration preview with a source catalog version is required before confirmation.");
+    }
+    const adoption = plan.dimension_adoption_required === true;
+    if (adoption && (typeof plan.source_storage_binding !== "string" || !/^[a-f0-9]{64}$/.test(plan.source_storage_binding)
+      || typeof plan.source_dimension !== "string" || !plan.source_dimension
+      || plan.source_dimension === id || plan.destination_dimension !== id
+      || typeof plan.source_bucket !== "string" || !plan.source_bucket || plan.source_bucket !== plan.destination_bucket
+      || typeof plan.source_endpoint_authority !== "string" || !plan.source_endpoint_authority || plan.source_endpoint_authority !== plan.destination_endpoint_authority)) {
+      throw new Error("A verified Dimension adoption mapping and storage binding are required before confirmation.");
+    }
+    const adoptionNotice = adoption
+      ? `Adopt catalog Dimension ${plan.source_dimension} as ${id} in bucket ${plan.destination_bucket} at ${plan.destination_endpoint_authority}. `
+        + "The original Dimension identity is retained in the migration journal. "
+      : "";
+    const count = (value) => Number.isSafeInteger(value) && value >= 0 ? String(value) : "unknown";
+    const confirmed = await vscode.window.showWarningMessage(
+      `Migrate the legacy encryption domain for ${dimension.display_name || id}? `
+        + adoptionNotice
+        + `${count(plan.room_count)} Rooms, ${count(plan.snapshot_count)} JATs, ${count(plan.object_count)} unique encrypted objects. `
+        + `${formatHaulerSize(plan.total_bytes) || "Unknown size"}; temporary disk: ${formatHaulerSize(plan.temporary_disk_bytes) || "unknown"}. `
+        + "This replaces the outer encryption and catalog. Existing JAT payloads remain unchanged.",
+      { modal: true }, "Migrate",
+    );
+    if (confirmed !== "Migrate") return "cancelled";
+    const result = await runOperation(`Migrating ${encryptionLabel} encryption…`, ["encryption", "resume", ...handoffs,
+      "--expected-catalog-etag", plan.source_catalog_etag,
+      ...(adoption ? ["--expected-source-binding", plan.source_storage_binding] : [])], cwd);
+    if (recovery && extensionContext?.secrets?.store) {
+      await extensionContext.secrets.store(INSTALLATION_RECOVERY_SECRET, recovery.value);
+      const domain = result.encryption_domain_id || result.destination_encryption_domain_id;
+      if (domain) await extensionContext.secrets.store(recoverySecretKey(domain), recovery.value);
+    }
+    await roomsProvider?.reload();
+    return result.status || result.journal_status || "migrated";
+  } finally {
+    recovery?.cleanup();
+    source.cleanup();
+  }
+}
+
+async function resumeEncryption(item) {
+  return migrateEncryption(item, { resume: true });
+}
+
+async function exportRecovery(item) {
+  assertWorkspaceTrusted("export recovery material");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for recovery export");
+  if (!item) return "cancelled";
+  const dimension = selectedDimension(item);
+  const domain = dimension?.encryption_domain_id || dimension?.encryptionDomainId;
+  if (!domain || !usesNativeEncryption(dimension.provider)) {
+    throw new Error("Choose a ready MinIO or S3 Dimension before exporting recovery material.");
+  }
+  const output = await vscode.window.showSaveDialog({
+    title: `Export ${nativeEncryptionLabel(dimension.provider)} recovery identity`,
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), "josh-room-recovery.identity")),
+    filters: { "Age identity": ["identity", "txt"] },
+  });
+  if (!output) return "cancelled";
+  const recovery = await extensionContext?.secrets?.get?.(recoverySecretKey(domain));
+  if (!recovery) throw new Error("Recovery material is unavailable for the selected Dimension.");
+  writeRecoveryBackup(output.fsPath, String(recovery).endsWith("\n") ? String(recovery) : `${recovery}\n`, activeWorkspace());
+  await vscode.window.showInformationMessage(`Recovery identity exported to ${output.fsPath}.`);
+  return "exported";
+}
+
+async function importRecovery(item) {
+  assertWorkspaceTrusted("import recovery material");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension for recovery import");
+  if (!item) return "cancelled";
+  const dimension = selectedDimension(item);
+  const recovery = (await vscode.window.showOpenDialog({
+    title: `Choose ${nativeEncryptionLabel(dimension.provider)} recovery identity`,
+    defaultUri: vscode.Uri.file(activeWorkspace()),
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    openLabel: "Use recovery identity",
+  }))?.[0]?.fsPath;
+  if (!recovery) return "cancelled";
+  return connectEncryption(dimension, { recoveryHandoff: recovery });
+}
+
+async function runDimensionRoomStoreOperation(action, item, extraArgs, title) {
+  const dimension = selectedDimension(item);
+  const dimensionIdValue = dimension?.id || dimension?.dimension_id;
+  const provider = nativeRegistry.providerKey(dimension?.provider);
+  if (!dimensionIdValue || !["minio", "s3", "r2"].includes(provider)) {
+    throw new Error("Choose a configured MinIO, S3, or R2 Dimension for Room Store lifecycle operations.");
+  }
+  const args = nativeRegistry.dimensionArgs(["room-store", action, ...extraArgs], dimensionIdValue);
+  return runSelectedEncryption(args, activeWorkspace(), dimension, {
+    title,
+    action: `${action} the Room Store`,
+  });
+}
+
+async function verifyRoomStore(item) {
+  assertWorkspaceTrusted("verify a Room Store");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension to verify");
+  if (!item) return "cancelled";
+  const scope = await vscode.window.showQuickPick([
+    { label: "Repository metadata", description: "Check repository structure and indexes without reading every stored pack.", scope: "metadata" },
+    { label: "Read a sample", description: "Read a chosen percentage of stored data.", scope: "subset" },
+    { label: "Read all data", description: "Read every stored pack; this can take a long time.", scope: "all" },
+  ], { title: "Josh: Verify Room Store", placeHolder: "Choose verification scope", ignoreFocusOut: true });
+  if (!scope) return "cancelled";
+  const args = [];
+  if (scope.scope === "subset") {
+    const percentage = await vscode.window.showInputBox({
+      title: "Room Store sample verification",
+      prompt: "Percent of stored data to read (1–100%)",
+      value: "5%",
+      ignoreFocusOut: true,
+      validateInput: (value) => /^(?:[1-9]|[1-9][0-9]|100)%$/.test(value.trim())
+        ? undefined : "Enter a whole percentage from 1% to 100%.",
+    });
+    if (!percentage) return "cancelled";
+    args.push("--read-data-subset", percentage.trim());
+  } else if (scope.scope === "all") {
+    const action = await vscode.window.showWarningMessage(
+      "Read all Room Store data? This reads every stored pack from the selected Dimension and can take a long time. It does not change stored data.",
+      { modal: true },
+      "Read all data",
+      "Cancel",
+    );
+    if (action !== "Read all data") return "cancelled";
+    args.push("--read-data");
+  }
+  const result = await runDimensionRoomStoreOperation("verify", item, args, "Verifying Room Store…");
+  if (result.status !== "verified") throw new Error("Room Store Verify returned an invalid receipt.");
+  const scopeText = result.read_data ? "all stored data" : result.read_data_subset || "repository metadata";
+  await vscode.window.showInformationMessage(`Room Store verification completed · Scope: ${scopeText}.`);
+  return "verified";
+}
+
+async function optimizeRoomStore(item) {
+  assertWorkspaceTrusted("optimize a Room Store");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension to optimize");
+  if (!item) return "cancelled";
+  const dimension = selectedDimension(item);
+  const label = dimension?.display_name || dimension?.name || dimension?.id || "selected Dimension";
+  const plan = await runDimensionRoomStoreOperation("optimize", item, [], `Planning Room Store optimization for ${label}…`);
+  if (plan.status !== "planned" || plan.dry_run !== true) {
+    throw new Error("Room Store Optimize did not return a dry-run plan; no prune was requested.");
+  }
+  const confirmed = await vscode.window.showWarningMessage(
+    `Permanently remove unreferenced Restic data from ${label}? Confirmed Optimize prunes repository data that no longer appears in the Room Store catalog. Once removed, that data cannot be restored. Verify the catalog and your recovery points before continuing. The first phase only planned this operation; nothing has been removed yet.`,
+    { modal: true },
+    "Optimize and prune",
+    "Cancel",
+  );
+  if (confirmed !== "Optimize and prune") return "planned";
+  const result = await runDimensionRoomStoreOperation(
+    "optimize", item, ["--confirm"], `Pruning unreferenced Room Store data in ${label}…`,
+  );
+  if (result.status !== "completed" || result.dry_run !== false) {
+    throw new Error("Room Store Optimize returned an invalid prune receipt.");
+  }
+  await vscode.window.showInformationMessage(`Room Store Optimize completed for ${label}.`);
+  return "optimized";
+}
+
+async function reconcileRoomStore(item) {
+  assertWorkspaceTrusted("reconcile a Room Store");
+  if (!item) item = await chooseExplicitDimension("Choose a Dimension to reconcile");
+  if (!item) return "cancelled";
+  const dimension = selectedDimension(item);
+  const label = dimension?.display_name || dimension?.name || dimension?.id || "selected Dimension";
+  const result = await runDimensionRoomStoreOperation("reconcile", item, [], `Reconciling Room Store in ${label}…`);
+  if (result.destructive_cleanup_performed !== false) {
+    throw new Error("Room Store Reconcile did not confirm that no cleanup occurred.");
+  }
+  const count = (value) => Array.isArray(value) ? value.length : 0;
+  await vscode.window.showInformationMessage([
+    `Room Store reachability reconciled · Catalog revision ${result.catalog_revision ?? "unknown"}.`,
+    `Catalog references: ${count(result.catalog_referenced)} · Descriptor references: ${count(result.descriptor_referenced)} · Component-only: ${count(result.component_only)}.`,
+    `Restic-only orphans: ${count(result.restic_only_orphans)} · Missing from Restic: ${count(result.missing_from_restic)} · Legacy objects: ${count(result.legacy_objects)}.`,
+    "No cleanup was performed.",
+  ].join("\n"));
+  return "reconciled";
+}
+
+async function configureStorageBucket({ provider, connectionId, dimensionId, connectionMetadata = {}, credentials, cwd }) {
+  let bucketResult;
+  const commandOptions = credentials === undefined ? {} : { stdin: credentials };
+  try {
+    bucketResult = await runOperation(
+      `Loading ${provider === "r2" ? "Cloudflare R2" : "MinIO"} buckets...`,
+      providerTools.bucketCommand("list", { provider, connectionId, dimensionId }),
+      cwd,
+      commandOptions,
+    );
+  } catch (error) {
+    if (error.result?.error_code === "bucket-list-forbidden") {
+      outputChannel?.warn(`${provider} bucket listing unavailable: ${error.message}`);
+      bucketResult = { ok: false, ...error.result, forbidden: true };
+    } else {
+      outputChannel?.error(`${provider} bucket listing unavailable: ${error.message}`);
+      throw error;
+    }
+  }
+  const bucketChoice = await vscode.window.showQuickPick(providerTools.bucketChoices({ ...bucketResult, provider }), {
+    title: `Josh: Choose a ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Bucket`,
+    placeHolder: "Create a dedicated Josh Room bucket or choose an existing bucket",
+    ignoreFocusOut: true,
+  });
+  if (!bucketChoice) return "cancelled";
+  let bucket = bucketChoice.bucket;
+  const target = {
+    provider,
+    connectionId,
+    dimensionId,
+  };
+  if (bucketChoice.create) {
+    bucket = await vscode.window.showInputBox({
+      title: `Josh: Create ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Bucket`,
+      prompt: "New bucket name (dedicated to Josh Room)",
+      value: bucketChoice.bucket || "josh-room",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
+    });
+    if (!bucket) return "cancelled";
+    await runOperation(
+      `Creating ${provider === "r2" ? "Cloudflare R2" : "MinIO"} bucket...`,
+      providerTools.bucketCommand("create", { ...target, bucket: bucket.trim() }),
+      cwd,
+      commandOptions,
+    );
+  } else if (bucketChoice.manual) {
+    bucket = await vscode.window.showInputBox({
+      title: `Josh: Add ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Storage`,
+      prompt: "Bucket name",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a bucket.",
+    });
+    if (!bucket) return "cancelled";
+  }
+  bucket = bucket.trim();
+  await runOperation(
+    `Checking ${provider === "r2" ? "Cloudflare R2" : "MinIO"} bucket access...`,
+    providerTools.bucketCommand("check", { ...target, bucket }),
+    cwd,
+    commandOptions,
+  );
+  const connectionRef = connectionId ? connectionId : dimensionId;
+  const dimensionIdValue = `${provider}-${connectionRef}-${bucket}`
+    .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const dimensionArgs = [
+    "dimensions", "add", dimensionIdValue, "--display-name", bucket,
+    "--provider", provider, "--bucket", bucket,
+  ];
+  if (provider === "minio") dimensionArgs.push("--connection", connectionId);
+  else dimensionArgs.push(
+    "--endpoint", bucketResult.endpoint || connectionMetadata.endpoint || "",
+    "--credential-profile", bucketResult.credential_profile || "oauth-runtime",
+    "--region", bucketResult.region || "auto",
+  );
+  await runOperation(`Adding ${provider === "r2" ? "Cloudflare R2" : "MinIO"} Dimension...`, dimensionArgs, cwd, commandOptions);
+  selectedDimensionId = dimensionIdValue;
+  if (roomsProvider) await roomsProvider.reload();
+  await vscode.window.showInformationMessage(
+    `Connected ${provider === "r2" ? "Cloudflare R2" : "MinIO"} bucket ${bucket}. ${provider === "minio" ? "Credentials were handed to the secure backend." : "Cloudflare authorization remains local to this Room."}`,
+  );
+  return "added";
+}
+
+async function selectS3Bucket() {
+  const bucket = await vscode.window.showInputBox({
+    title: "Josh: Add Amazon S3 / S3-compatible Storage",
+    prompt: "Existing bucket name",
+    ignoreFocusOut: true,
+    validateInput: (value) => value.trim() ? undefined : "Enter an existing bucket.",
+  });
+  if (!bucket) return "cancelled";
+  return bucket.trim();
+}
+
+async function configureS3Bucket({ connectionId, cwd, bucket }) {
+  const selectedBucket = bucket || await selectS3Bucket();
+  if (!selectedBucket || selectedBucket === "cancelled") return "cancelled";
+  await runOperation(
+    "Checking S3 bucket access...",
+    providerTools.bucketCommand("check", { provider: "s3", connectionId, bucket: selectedBucket }),
+    cwd,
+  );
+  const dimensionIdValue = `s3-${connectionId}-${selectedBucket}`
+    .toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  await runOperation("Adding Amazon S3 / S3-compatible Dimension...", [
+    "dimensions", "add", dimensionIdValue,
+    "--display-name", selectedBucket,
+    "--provider", "s3",
+    "--connection", connectionId,
+    "--bucket", selectedBucket,
+  ], cwd);
+  selectedDimensionId = dimensionIdValue;
+  if (roomsProvider) await roomsProvider.reload();
+  await vscode.window.showInformationMessage(`Connected S3 bucket ${selectedBucket}. Credentials remain in the secure backend.`);
+  return "added";
+}
+
+function s3AddressingChoices(selected = false) {
+  return [
+    { label: "Virtual-host style (default)", pathStyle: false },
+    { label: "Path-style", pathStyle: true },
+  ].map((choice) => ({ ...choice, description: choice.pathStyle === selected ? "Current selection" : undefined }));
+}
+
+async function chooseS3Addressing(selected = false, title = "Josh: S3 Addressing Style") {
+  const choice = await vscode.window.showQuickPick(s3AddressingChoices(selected), {
+    title,
+    placeHolder: "Choose how the S3-compatible endpoint addresses buckets",
+    ignoreFocusOut: true,
+  });
+  return choice ? Boolean(choice.pathStyle) : undefined;
+}
+
+function s3CustomEndpoint(endpoint) {
+  return endpoint && !/^https:\/\/s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com(?:\.cn)?\/?$/i.test(endpoint) ? endpoint : "";
+}
+
+function awsS3Endpoint(region) {
+  return `https://s3.${region}.amazonaws.com${region.startsWith("cn-") ? ".cn" : ""}`;
+}
+
+async function addStorage() {
+  assertWorkspaceTrusted("add storage");
+  const cwd = activeWorkspace();
+  const providerChoice = await vscode.window.showQuickPick([
+    { label: "Cloudflare R2", provider: "r2" },
+    { label: "MinIO", provider: "minio" },
+    { label: "Amazon S3 / S3-compatible", provider: "s3" },
+  ], { title: "Josh: Add Storage", placeHolder: "Choose a storage provider", ignoreFocusOut: true });
+  if (!providerChoice) return "cancelled";
+  if (providerChoice.provider === "r2") {
+    const connected = await connectCloudflare();
+    return connected === "connected" ? configureStorageBucket({ provider: "r2", dimensionId: "r2", cwd }) : connected;
+  }
+  if (providerChoice.provider === "s3") {
+    let existingConnections = [];
+    try {
+      existingConnections = providerTools.connectionRecords(
+        await runOperation("Loading storage connections...", providerTools.connectionCommand("list"), cwd),
+      ).filter((connection) => nativeRegistry.providerKey(connection.provider) === "s3");
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+    }
+    const reuseChoice = existingConnections.length > 0
+      ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
+        label: connection.display_name || connection.name || connection.id,
+        description: `${connection.region || "Region unavailable"} · ${connection.id || connection.connection_id}`,
+        detail: connection.endpoint,
+        connection,
+      })).concat([{ label: "$(add) New S3 Connection…", create: true }]), {
+        title: "Josh: Choose an S3 Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
+      })
+      : undefined;
+    if (existingConnections.length > 0 && !reuseChoice) return "cancelled";
+    if (reuseChoice && !reuseChoice.create) {
+      const connection = reuseChoice.connection || reuseChoice;
+      const connectionId = connection.id || connection.connection_id;
+      if (!connectionId) throw new Error("S3 connection did not return a connection id.");
+      return configureS3Bucket({ connectionId, cwd });
+    }
+
+    const connectionName = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage",
+      prompt: "Connection name",
+      placeHolder: "Personal backups",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Name this account connection.",
+    });
+    if (!connectionName) return "cancelled";
+    const region = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage",
+      prompt: "Region",
+      value: "us-east-1",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an AWS region.",
+    });
+    if (!region) return "cancelled";
+    const endpointInput = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage",
+      prompt: "Custom HTTPS endpoint (leave blank for Amazon S3)",
+      placeHolder: "https://...",
+      ignoreFocusOut: true,
+      validateInput: (value) => !value.trim() || /^https:\/\//i.test(value.trim())
+        ? undefined : "Use an HTTPS endpoint. S3 endpoints do not allow HTTP, including loopback.",
+    });
+    if (endpointInput === undefined) return "cancelled";
+    const endpoint = endpointInput.trim() || undefined;
+    const pathStyle = endpoint ? await chooseS3Addressing(false, "Josh: Add S3 Connection") : false;
+    if (pathStyle === undefined) return "cancelled";
+    const bucket = await selectS3Bucket();
+    if (!bucket || bucket === "cancelled") return "cancelled";
+    const accessKey = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage", prompt: "Access key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an access key.",
+    });
+    if (!accessKey) return "cancelled";
+    const secretKey = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage", prompt: "Secret key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a secret key.",
+    });
+    if (!secretKey) return "cancelled";
+    const sessionToken = await vscode.window.showInputBox({
+      title: "Josh: Add Amazon S3 / S3-compatible Storage", prompt: "Session token (optional)", password: true, ignoreFocusOut: true,
+    });
+    if (sessionToken === undefined) return "cancelled";
+    const credentials = {
+      "access-key-id": accessKey,
+      "secret-access-key": secretKey,
+      ...(sessionToken.trim() ? { "session-token": sessionToken } : {}),
+    };
+    const created = await runOperation("Connecting Amazon S3 / S3-compatible Storage...", providerTools.connectionCommand("create", {
+      provider: "s3", region: region.trim(), endpoint, pathStyle,
+    }), cwd, { stdin: JSON.stringify({ display_name: connectionName.trim(), ...credentials }) });
+    const connection = created.connection || created;
+    const connectionId = typeof connection === "string" ? connection : connection.id || connection.connection_id;
+    if (!connectionId) throw new Error("S3 connection did not return a connection id.");
+    const profile = typeof connection === "object" && connection.credential_profile
+      ? connection.credential_profile : `josh-room-${connectionId}`;
+    await rememberExtensionCredentials(profile, credentials);
+    return configureS3Bucket({
+      connectionId,
+      cwd,
+      bucket,
+    });
+  }
+  let endpoint;
+  let credentials;
+  let returnedConnectionId;
+  let connectionMetadata;
+  let existingConnections = [];
+  try {
+      existingConnections = providerTools.connectionRecords(
+      await runOperation("Loading storage connections...", providerTools.connectionCommand("list"), cwd),
+    ).filter((connection) => nativeRegistry.providerKey(connection.provider) === "minio");
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
+    existingConnections = [];
+  }
+  const reuseChoice = existingConnections.length > 0
+    ? await vscode.window.showQuickPick(existingConnections.map((connection) => ({
+      label: connection.display_name || connection.name || connection.id,
+      description: connection.id || connection.connection_id,
+      detail: connection.endpoint,
+      connection,
+    })).concat([{ label: "$(add) New MinIO Connection…", create: true }]), {
+      title: "Josh: Choose a MinIO Connection", placeHolder: "Reuse a connection or create one", ignoreFocusOut: true,
+    })
+    : undefined;
+  if (existingConnections.length > 0 && !reuseChoice) return "cancelled";
+  if (reuseChoice && !reuseChoice.create) {
+    const connection = reuseChoice.connection || reuseChoice;
+    endpoint = connection.endpoint;
+    returnedConnectionId = connection.id || connection.connection_id;
+    connectionMetadata = connection;
+  } else {
+    endpoint = await vscode.window.showInputBox({
+      title: "Josh: Add MinIO Storage", prompt: "Endpoint URL", placeHolder: "https://...", ignoreFocusOut: true,
+      validateInput: (value) => value.trim().startsWith("http://")
+        || value.trim().startsWith("https://") ? undefined : "Enter an http(s) endpoint.",
+    });
+    if (!endpoint) return "cancelled";
+    const accessKey = await vscode.window.showInputBox({
+      title: "Josh: Add MinIO Storage", prompt: "Access key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an access key.",
+    });
+    if (!accessKey) return "cancelled";
+    const secretKey = await vscode.window.showInputBox({
+      title: "Josh: Add MinIO Storage", prompt: "Secret key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a secret key.",
+    });
+    if (!secretKey) return "cancelled";
+    credentials = JSON.stringify({ "access-key-id": accessKey, "secret-access-key": secretKey });
+    const created = await runOperation("Connecting MinIO...", providerTools.connectionCommand("create", {
+      provider: "minio", endpoint: endpoint.trim(),
+    }), cwd, { stdin: credentials });
+    const connection = created.connection || created;
+    returnedConnectionId = typeof connection === "string" ? connection : connection.id || connection.connection_id;
+    connectionMetadata = typeof connection === "object" ? connection : {};
+    if (credentials) {
+      const parsedCredentials = JSON.parse(credentials);
+      const profile = typeof connection === "object" && connection.credential_profile
+        ? connection.credential_profile
+        : `josh-room-${returnedConnectionId}`;
+      await rememberExtensionCredentials(profile, parsedCredentials);
+    }
+  }
+  if (!returnedConnectionId) throw new Error("MinIO connection did not return a connection id.");
+  return configureStorageBucket({
+    provider: "minio",
+    connectionId: returnedConnectionId,
+    connectionMetadata: { ...connectionMetadata, endpoint: endpoint.trim(), credential_profile: connectionMetadata.credential_profile || `josh-room-${returnedConnectionId}` },
+    credentials,
+    cwd,
+  });
+}
+
+async function connectStorage(item) {
+  if (!item) item = await chooseExplicitConnection("Choose a connection to connect");
+  if (!item) return "cancelled";
+  assertWorkspaceTrusted("connect storage");
+  const connection = item?.connection || item;
+  if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
+    return connectCloudflare(item);
+  }
+  if (!connection?.id && !connection?.connection_id) return addStorage();
+  return editConnection(item, { reconnect: true });
+}
+
+async function editConnection(item, { reconnect = false } = {}) {
+  if (!item) item = await chooseExplicitConnection("Choose a connection to edit");
+  if (!item) return "cancelled";
+  assertWorkspaceTrusted("edit storage connection");
+  const connection = item?.connection || item;
+  if (nativeRegistry.providerKey(item?.provider || connection?.provider) === "r2") {
+    return connectCloudflare(item);
+  }
+  const connectionId = connection?.id || connection?.connection_id;
+  if (!connectionId) return addStorage();
+  const provider = nativeRegistry.providerKey(item?.provider || connection?.provider);
+  if (provider === "s3") {
+    const region = await vscode.window.showInputBox({
+      title: reconnect ? "Josh: Reconnect S3" : "Josh: Edit S3 Connection",
+      prompt: "Region",
+      value: connection.region || "us-east-1",
+      ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an AWS region.",
+    });
+    if (!region) return "cancelled";
+    const endpointInput = await vscode.window.showInputBox({
+      title: reconnect ? "Josh: Reconnect S3" : "Josh: Edit S3 Connection",
+      prompt: "Custom HTTPS endpoint (leave blank for Amazon S3)",
+      value: s3CustomEndpoint(connection.endpoint),
+      placeHolder: "https://...",
+      ignoreFocusOut: true,
+      validateInput: (value) => !value.trim() || /^https:\/\//i.test(value.trim())
+        ? undefined : "Use an HTTPS endpoint. S3 endpoints do not allow HTTP, including loopback.",
+    });
+    if (endpointInput === undefined) return "cancelled";
+    const endpoint = endpointInput.trim() || awsS3Endpoint(region.trim());
+    const pathStyle = await chooseS3Addressing(
+      Boolean(connection.path_style ?? connection.pathStyle),
+      reconnect ? "Josh: Reconnect S3" : "Josh: Edit S3 Connection",
+    );
+    if (pathStyle === undefined) return "cancelled";
+    const accessKey = await vscode.window.showInputBox({
+      title: "Josh: S3 Connection", prompt: "Access key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter an access key.",
+    });
+    if (!accessKey) return "cancelled";
+    const secretKey = await vscode.window.showInputBox({
+      title: "Josh: S3 Connection", prompt: "Secret key", password: true, ignoreFocusOut: true,
+      validateInput: (value) => value.trim() ? undefined : "Enter a secret key.",
+    });
+    if (!secretKey) return "cancelled";
+    const sessionToken = await vscode.window.showInputBox({
+      title: "Josh: S3 Connection", prompt: "Session token (optional)", password: true, ignoreFocusOut: true,
+    });
+    if (sessionToken === undefined) return "cancelled";
+    const credentials = {
+      "access-key-id": accessKey,
+      "secret-access-key": secretKey,
+      ...(sessionToken.trim() ? { "session-token": sessionToken } : {}),
+    };
+    await runOperation(reconnect ? "Reconnecting S3..." : "Updating S3 connection...", providerTools.connectionCommand(
+      reconnect ? "reconnect" : "update",
+      { provider: "s3", connectionId, endpoint, region: region.trim(), pathStyle },
+    ), activeWorkspace(), { stdin: JSON.stringify(credentials) });
+    await rememberExtensionCredentials(
+      connection.credential_profile || `josh-room-${connectionId}`,
+      credentials,
+    );
+    if (roomsProvider) await roomsProvider.reload();
+    return reconnect ? "connected" : "updated";
+  }
+  const endpoint = await vscode.window.showInputBox({
+    title: reconnect ? "Josh: Reconnect MinIO" : "Josh: Edit Connection",
+    prompt: "Endpoint URL", value: connection.endpoint || "", ignoreFocusOut: true,
+    validateInput: (value) => value.trim().startsWith("http://") || value.trim().startsWith("https://")
+      ? undefined : "Enter an http(s) endpoint.",
+  });
+  if (!endpoint) return "cancelled";
+  const accessKey = await vscode.window.showInputBox({ title: "Josh: MinIO Connection", prompt: "Access key", password: true, ignoreFocusOut: true });
+  if (!accessKey) return "cancelled";
+  const secretKey = await vscode.window.showInputBox({ title: "Josh: MinIO Connection", prompt: "Secret key", password: true, ignoreFocusOut: true });
+  if (!secretKey) return "cancelled";
+  await runOperation(reconnect ? "Reconnecting MinIO..." : "Updating MinIO connection...", [
+    ...providerTools.connectionCommand(reconnect ? "reconnect" : "update", {
+      provider: "minio", connectionId, endpoint: endpoint.trim(),
+    }),
+  ], activeWorkspace(), { stdin: JSON.stringify({ "access-key-id": accessKey, "secret-access-key": secretKey }) });
+  await rememberExtensionCredentials(
+    connection.credential_profile || `josh-room-${connectionId}`,
+    { "access-key-id": accessKey, "secret-access-key": secretKey },
+  );
+  if (roomsProvider) await roomsProvider.reload();
+  return reconnect ? "connected" : "updated";
+}
+
+async function disconnectStorage(item) {
+  assertWorkspaceTrusted("disconnect storage");
+  if (!item) item = await chooseExplicitConnection("Choose a connection to disconnect");
+  if (!item) return "cancelled";
+  const connection = item?.connection || item;
+  const provider = nativeRegistry.providerKey(item?.provider || connection?.provider);
+  const connectionId = connection?.id || connection?.connection_id;
+  selectedDimensionId = undefined;
+  if (provider === "r2") {
+    await runOperation("Disconnecting Cloudflare locally...", ["auth", "logout", "--purpose", "r2"], activeWorkspace());
+  } else if (connectionId) {
+    await runOperation("Disconnecting locally...", providerTools.connectionCommand("disconnect", { connectionId }), activeWorkspace());
+  }
+  if (roomsProvider) await roomsProvider.reload();
+  await vscode.window.showInformationMessage("Disconnected locally. Remote buckets and JAT history were not changed.");
+  return "disconnected";
+}
+
+function selectDimension(item) {
+  const dimension = item && item.dimension ? item.dimension : item;
+  if (!dimension) return "cancelled";
+  selectedDimensionId = dimension.id || dimension.dimension_id;
+  return "selected";
+}
+
+async function loadNativeCatalog(cwd, title) {
+  try {
+    const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd);
+    const dimensions = dimensionList(catalog);
+    for (const dimension of dimensions) {
+      if (Array.isArray(dimension.projects) || Array.isArray(dimension.rooms)) continue;
+      try {
+        const projects = await runOperation(title || "Loading your Rooms...",
+          nativeRegistry.dimensionArgs(["projects", "list", "--backend", dimension.provider || "r2"],
+            dimension.id || dimension.dimension_id), cwd);
+        dimension.projects = projects.projects || [];
+      } catch (error) {
+        outputChannel && outputChannel.warn("Unable to load Rooms for Dimension " + dimension.id + ": " + error.message);
+        dimension.projects = [];
+      }
+    }
+    return Object.assign({}, catalog, { dimensions });
+  } catch (_error) {
+    return legacyLoadCatalog(cwd, title);
+  }
+}
+
+class HierarchyRoomsProvider {
+  constructor() {
+    this.roots = undefined;
+    this.state = "initial";
+    this.emitter = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this.emitter.event;
+  }
+
+  getTreeItem(item) {
+    if (item.kind === "runtime") {
+      const treeItem = new vscode.TreeItem(item.label, vscode.TreeItemCollapsibleState.None);
+      treeItem.description = item.description || "";
+      treeItem.iconPath = new vscode.ThemeIcon(item.busy ? "sync~spin" : item.failed ? "error" : "cloud-download");
+      treeItem.command = item.busy
+        ? { command: "joshRoom.showLogs", title: "Show runtime progress" }
+        : { command: "joshRoom.prepare", title: item.label };
+      return treeItem;
+    }
+    const emptyKind = ["load", "loading", "empty", "error", "cancelled"].includes(item.kind);
+    if (item.kind === "dimension-error") {
+      const treeItem = new vscode.TreeItem(
+        item.label || "Could not load bucket — Retry",
+        vscode.TreeItemCollapsibleState.None,
+      );
+      treeItem.description = item.description || "";
+      treeItem.contextValue = "dimension-error";
+      treeItem.iconPath = new vscode.ThemeIcon("error");
+      const action = item.error?.action;
+      const command = action === "edit"
+        ? "joshRoom.editConnection"
+        : action === "reconnect" ? "joshRoom.reconnectStorage"
+          : action === "authorize" ? "joshRoom.connectEncryption"
+            : action === "migrate" ? "joshRoom.migrateEncryption"
+              : action === "resume" ? "joshRoom.resumeEncryption" : "joshRoom.prepare";
+      treeItem.command = {
+        command,
+        title: item.label || "Retry",
+        ...(command === "joshRoom.prepare" ? {} : { arguments: [
+          action === "edit" || action === "reconnect" ? item.connection : item.dimension,
+        ] }),
+      };
+      return treeItem;
+    }
+    if (emptyKind) {
+      const labels = {
+        load: "Load Storage",
+        loading: "Loading Storage...",
+        empty: "No storage connected",
+        error: "Could not load storage - click to retry",
+        cancelled: "Storage loading cancelled — Retry",
+      };
+      const treeItem = new vscode.TreeItem(labels[item.kind], vscode.TreeItemCollapsibleState.None);
+      treeItem.iconPath = new vscode.ThemeIcon(item.kind === "loading" ? "sync~spin" : item.kind === "error" ? "error" : "cloud-download");
+      treeItem.command = { command: item.kind === "empty" ? "joshRoom.addStorage" : item.kind === "loading" ? "joshRoom.showLogs" : "joshRoom.prepare", title: labels[item.kind] };
+      return treeItem;
+    }
+    const hasChildren = Array.isArray(item.children) && item.children.length > 0;
+    const state = hasChildren
+      ? ["provider", "dimension", "connection"].includes(item.kind)
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.Collapsed
+      : vscode.TreeItemCollapsibleState.None;
+    const treeItem = new vscode.TreeItem(item.label || item.id, state);
+    treeItem.id = item.kind === "jat"
+      ? JSON.stringify([item.kind, dimensionId(item), item.project?.id || item.project?.project_id, item.id])
+      : [item.kind, dimensionId(item), item.id].filter(Boolean).join(":");
+    const syntheticDimension = item.kind === "dimension" && item.dimension?.synthetic;
+    treeItem.contextValue = item.kind === "connection"
+      ? item.state === "expired" ? "provider-connection-expired"
+        : item.state === "connected" ? "provider-connection-connected" : "provider-connection"
+      : item.kind === "jat" ? item.snapshot?.payload_kind === "room-store-v1" ? "logical-jat" : "jat"
+      : syntheticDimension ? "dimension-synthetic"
+        : item.kind === "dimension" && item.encryption_state === "ready" && item.provider === "minio" ? "dimension-minio-ready"
+          : item.kind === "dimension" && item.encryption_state === "ready" && item.provider === "s3" ? "dimension-s3-ready"
+          : item.kind === "dimension" && item.encryption_state ? `dimension-${item.encryption_state}` : item.kind;
+    treeItem.description = item.description || "";
+    treeItem.iconPath = new vscode.ThemeIcon(
+      item.kind === "provider" ? "cloud"
+        : item.kind === "dimension" ? "database"
+          : item.kind === "connection" ? item.state === "connected" ? "pass-filled" : item.state === "expired" || item.state === "disconnected" ? "warning" : "plug"
+            : item.kind === "room" ? "archive" : "history",
+    );
+    if (item.kind === "dimension") {
+      treeItem.command = item.action
+        ? { ...item.action, arguments: [item] }
+        : { command: "joshRoom.selectDimension", title: "Select Storage", arguments: [item] };
+    }
+    if (item.kind === "connection" && item.state !== "connected") {
+      const command = item.state === "expired" || item.state === "disconnected"
+        ? "joshRoom.reconnectStorage"
+        : "joshRoom.connectStorage";
+      const title = item.state === "expired" || item.state === "disconnected" ? "Reconnect" : "Connect";
+      treeItem.command = { command, title, arguments: [item] };
+    }
+    if (item.kind === "room") {
+      let current;
+      try { current = currentRoom(activeWorkspace()); } catch (_error) {}
+      if (sameRoomBinding(current, item)) {
+        treeItem.contextValue = "current-room";
+        const state = roomStatus.kind === "clean" && workspaceBindingTrusted ? "Saved"
+          : roomStatus.kind === "saved-but-still-dirty" ? "Saved, changes remain"
+            : dirtyBuffers.size ? "Unsaved editor changes"
+              : roomStatus.kind === "dirty" ? "Changes on disk" : "Status unknown";
+        treeItem.description = `Current · ${state}`;
+      } else {
+        treeItem.command = { command: "joshRoom.enter", title: "Enter Room", arguments: [item] };
+      }
+    }
+    if (item.kind === "jat") {
+      let current;
+      try { current = currentRoom(activeWorkspace()); } catch (_error) {}
+      const states = [];
+      if (item.id === item.project?.latest) states.push("Latest");
+      if (sameRoomBinding(current, item)) states.push("Open");
+      states.push(item.snapshot?.payload_kind === "room-store-v1" ? "Logical" : "Portable");
+      treeItem.description = states.join(" · ");
+      treeItem.command = { command: "joshRoom.enter", title: "Enter JAT", arguments: [item] };
+    }
+    const resource = item.kind === "jat"
+      ? [item.dimension?.display_name || item.dimension?.id, item.project?.display_name || item.project?.name,
+        item.project?.id || item.project?.project_id, treeItem.label]
+      : [treeItem.label];
+    treeItem.tooltip = [...resource, treeItem.description, item.id].filter(Boolean).join(" · ");
+    treeItem.accessibilityInformation = { label: [treeItem.label, treeItem.description].filter(Boolean).join(" · ") };
+    return treeItem;
+  }
+
+  getChildren(item) {
+    if (item) return item.children || [];
+    if (runtimeLifecycle.state !== "RUNTIME_READY") {
+      const idle = runtimeLifecycle.state === "UNINITIALIZED";
+      if (idle) return [];
+      const cancelled = runtimeLifecycle.state === "CANCELLED";
+      const failed = runtimeLifecycle.state === "FAILED";
+      return [{
+        kind: "runtime",
+        label: idle ? "Load Storage / Prepare Runtime" : cancelled ? "Runtime preparation cancelled — Retry"
+          : failed ? "Josh Room runtime unavailable — Retry" : "Preparing Josh Room runtime…",
+        description: runtimeLifecycle.message,
+        failed,
+        busy: !idle && !cancelled && !failed,
+      }];
+    }
+    if (this.state === "loading") return [{ kind: "loading" }];
+    if (this.state === "error") return [{ kind: "error" }];
+    if (this.state === "cancelled") return [{ kind: "cancelled" }];
+    if (this.state === "initial") return [{ kind: "load" }];
+    return this.roots || [];
+  }
+
+  async setCatalog(catalog) {
+    lastKnownCatalog = catalog;
+    this.roots = nativeRegistry.buildProviderTree(catalog || {});
+    this.state = "ready";
+    await vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", this.roots.length === 0);
+    this.emitter.fire(undefined);
+  }
+
+  async refresh() {
+    if (lastKnownCatalog) {
+      await this.setCatalog(lastKnownCatalog);
+    } else {
+      this.state = "initial";
+    }
+    this.emitter.fire(undefined);
+    return lastKnownCatalog;
+  }
+
+  async reload() {
+    assertWorkspaceTrusted("load storage");
+    if (this.loading) return this.loading;
+    const cwd = activeWorkspace();
+    this.state = "loading";
+    this.emitter.fire(undefined);
+    this.loading = vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Loading Josh Room storage…", cancellable: true },
+      async (progress, cancellationToken) => {
+        const progressReporter = createVisualReporter("Loading Josh Room storage", operationKind(["dimensions", "list"]), progress);
+        try {
+          const catalog = await loadCatalog(cwd, "Loading Josh Room storage…", { cancellationToken, progressReporter });
+          if (cancellationToken.isCancellationRequested) throw cancellationError();
+          await this.setCatalog(catalog);
+          progressReporter.finish();
+          return catalog;
+        } catch (error) {
+          this.state = isCancellationError(error) ? "cancelled" : "error";
+          if (!isCancellationError(error)) progressReporter.fail(error);
+          else setStatus("$(archive) Josh Room", "Storage loading cancelled — select Retry");
+          this.emitter.fire(undefined);
+          throw error;
+        } finally {
+          progressReporter.dispose();
+        }
+      },
+    );
+    try {
+      return await this.loading;
+    } finally {
+      this.loading = undefined;
+    }
+  }
+}
+
+const legacyLoadCatalog = loadCatalog;
+loadCatalog = loadNativeCatalog;
+const legacyCurrentRoom = currentRoom;
+currentRoom = function nativeCurrentRoom(cwd) {
+  const marker = legacyCurrentRoom(cwd);
+  if (marker) return marker;
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(cwd, ".josh-room.json"), "utf8"));
+    return isRoomMarker(value) ? value : undefined;
+  } catch (_error) {
+    return undefined;
+  }
+};
+
+let workspaceBindingTrusted = false;
+let workspaceRenameSubscription;
+let watchedWorkspaceRoot;
+
+// Install the filesystem and capture-policy watchers that feed Room change
+// state. Baselines and Room state are owned by the caller.
+function watchWorkspace(context, root) {
+  workspaceWatcher?.dispose();
+  capturePolicyWatcher?.dispose();
+  workspaceRenameSubscription?.dispose();
+  const compare = (uri) => {
+    if (isCapturePolicyUri(root, uri)) handleCapturePolicyChange(root);
+    else markWorkspaceChange(uri);
+  };
+  workspaceWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*"));
+  workspaceWatcher.onDidChange(compare);
+  workspaceWatcher.onDidCreate(compare);
+  workspaceWatcher.onDidDelete(compare);
+  context.subscriptions.push(workspaceWatcher);
+  capturePolicyWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, ".josh-roomignore"));
+  capturePolicyWatcher.onDidChange(compare);
+  capturePolicyWatcher.onDidCreate(compare);
+  capturePolicyWatcher.onDidDelete(compare);
+  context.subscriptions.push(capturePolicyWatcher);
+  workspaceRenameSubscription = vscode.workspace.onDidRenameFiles((event) => {
+    for (const file of event.files || []) {
+      compare(file.oldUri);
+      compare(file.newUri);
+    }
+  });
+  context.subscriptions.push(workspaceRenameSubscription);
+  watchedWorkspaceRoot = root;
+}
+
+function ensureWorkspaceWatched(context, root) {
+  if (workspaceWatcher && capturePolicyWatcher && watchedWorkspaceRoot === root) return;
+  watchWorkspace(context, root);
+}
+
+const legacyStartDirtyTracking = startDirtyTracking;
+startDirtyTracking = async function nativeStartDirtyTracking(context) {
+  const root = activeWorkspace();
+  const marker = currentRoom(root);
+  selectedDimensionId = marker && marker.dimension_id;
+  if (!marker) return legacyStartDirtyTracking(context);
+  const generation = ++dirtyTrackingGeneration;
+  watchWorkspace(context, root);
+  const eventGenerationAtStart = workspaceEventGeneration;
+  const savedFingerprint = [3, 4].includes(marker.format_version)
+    ? marker.workspace_signature
+    : marker.workspace_fingerprint;
+  workspaceBindingTrusted = false;
+  try {
+    workspaceCapturePolicy = loadCapturePolicy(root);
+    workspaceBaseline = new WorkspaceBaseline(root, {
+      savedFingerprint,
+      capturePolicy: workspaceCapturePolicy,
+    });
+  } catch (error) {
+    workspaceCapturePolicy = undefined;
+    workspaceBaseline = undefined;
+    outputChannel?.warn(`Workspace capture policy is invalid; change state is unknown: ${sanitizeControllerText(error.message)}`);
+    setRoomState("unknown", { bindingTrusted: false });
+  }
+  for (const document of vscode.workspace.textDocuments || []) {
+    const relative = relativeWorkspacePath(document.uri);
+    if (relative && document.isDirty) dirtyBuffers.add(relative);
+  }
+  if (!workspaceBaseline) {
+    setRoomState("unknown", { bindingTrusted: false });
+    return;
+  }
+  let status;
+  try {
+    status = await runJoshRoom(["status"], root);
+  } catch (error) {
+    outputChannel?.warn("Auth-free Room status unavailable: " + sanitizeControllerText(error.message));
+  }
+  if (generation !== dirtyTrackingGeneration) return;
+  const currentFingerprint = status && (
+    status.workspace_signature || status.current_workspace_signature
+    || status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
+  );
+  const localPathSha = realWorkspacePathSha256(root);
+  const v3BindingMatches = [3, 4].includes(marker.format_version) && Boolean(localPathSha)
+    && Boolean(status?.path_matches)
+    && status?.workspace_path_sha256 === marker.workspace_path_sha256
+    && marker.workspace_path_sha256 === localPathSha
+    && status?.signature_algorithm === marker.signature_algorithm
+    && status?.capture_policy_sha256 === marker.capture_policy_sha256
+    && marker.capture_policy_sha256 === workspaceCapturePolicy.sha256;
+  workspaceBindingTrusted = [3, 4].includes(marker.format_version)
+    ? v3BindingMatches
+    : Boolean(status?.ok && status?.path_matches && status?.state === "clean" && status?.fingerprint_matches !== false);
+  await workspaceBaseline.capture({ savedFingerprint, currentFingerprint: currentFingerprint || savedFingerprint });
+  if (generation !== dirtyTrackingGeneration) return;
+  const eventArrived = workspaceEventGeneration !== eventGenerationAtStart || dirtyBuffers.size > 0;
+  if (eventArrived) {
+    setRoomState("dirty", { bindingTrusted: workspaceBindingTrusted });
+  } else if (!status || status.state === "unknown" || !workspaceBindingTrusted) {
+    setRoomState("unknown", { bindingTrusted: false });
+  } else if ([3, 4].includes(marker.format_version)) {
+    const signatureChanged = status.state === "changed"
+      || status.signature_matches === false
+      || status.policy_matches === false
+      || currentFingerprint !== marker.workspace_signature;
+    setRoomState(signatureChanged ? "dirty" : "unknown", { bindingTrusted: workspaceBindingTrusted });
+  } else {
+    const isClean = status.ok && status.state === "clean" && !workspaceBaseline.dirty.size;
+    setRoomState(isClean ? "clean" : "dirty", { bindingTrusted: workspaceBindingTrusted });
+  }
+};
+
+module.exports.__test__.startDirtyTracking = startDirtyTracking;
+
+async function resetNativeBaseline(result) {
+  if (!workspaceBaseline) return;
+  const marker = currentRoom(activeWorkspace());
+  if ([3, 4].includes(marker?.format_version)) {
+    const policy = workspaceCapturePolicy;
+    const pathSha = realWorkspacePathSha256(activeWorkspace());
+    const bindingTrusted = Boolean(policy && pathSha
+      && marker.workspace_path_sha256 === pathSha
+      && marker.capture_policy_sha256 === policy.sha256
+      && marker.signature_algorithm === "josh-room-stat-v1"
+      && result?.workspace_signature === marker.workspace_signature
+      && result?.capture_policy_sha256 === marker.capture_policy_sha256);
+    workspaceBaseline.reset({
+      savedFingerprint: marker.workspace_signature,
+      currentFingerprint: marker.workspace_signature,
+    });
+    dirtyBuffers.clear();
+    setRoomState("unknown", { bindingTrusted });
+    return;
+  }
+  let fingerprint = result && (result.workspace_fingerprint || result.current_workspace_fingerprint);
+  if (!fingerprint && workspaceBaseline.fingerprintProvider) {
+    try {
+      fingerprint = await workspaceBaseline.fingerprintProvider();
+    } catch (error) {
+      outputChannel && outputChannel.warn("Unable to refresh authoritative Room status: " + error.message);
+    }
+  }
+  const savedFingerprint = result && result.saved_workspace_fingerprint
+    || marker && marker.workspace_fingerprint
+    || fingerprint;
+  workspaceBindingTrusted = true;
+  await workspaceBaseline.capture({ savedFingerprint, currentFingerprint: fingerprint || savedFingerprint });
+  dirtyBuffers.clear();
+  setRoomDirty(false);
+  refreshRoomStatus();
+}
+
+function routeItemArgs(args, item) {
+  return nativeRegistry.dimensionArgs(args, dimensionId(item));
+}
+
+async function explicitRoomContext(preferredProject, title) {
+  const catalog = await loadCatalog(activeWorkspace(), title);
+  const projects = nativeRegistry.flattenDimensionRooms(catalog);
+  const preferred = roomProject(preferredProject);
+  const preferredDimensionId = explicitDimensionId(preferredProject);
+  const preferredSnapshotId = snapshotIdentity(preferredProject);
+  if (preferred && preferredDimensionId) {
+    const catalogProject = projects.find((project) => project.id === preferred.id
+      && explicitDimensionId(project) === preferredDimensionId);
+    const catalogSnapshotIds = catalogProject && (catalogProject.snapshots || catalogProject.jats || [])
+      .map((snapshot) => snapshot.snapshot_id || snapshot.id);
+    const snapshotId = preferredSnapshotId || latestSnapshotId(catalogProject);
+    if (catalogProject && snapshotId && (!preferredSnapshotId || catalogSnapshotIds.includes(snapshotId))) {
+      return { ...catalogProject, project_id: catalogProject.id, snapshot_id: snapshotId };
+    }
+  }
+  const choices = projects.flatMap((project) => {
+    const snapshots = Array.isArray(project.snapshots) ? project.snapshots
+      : Array.isArray(project.jats) ? project.jats : [];
+    return snapshots.map((snapshot) => ({
+      label: `${roomLabel(project)} · ${snapshot.display_name || snapshot.name || snapshot.snapshot_id}`,
+      description: snapshot.created_at || snapshot.snapshot_id,
+      project,
+      snapshot,
+      snapshotId: snapshot.snapshot_id || snapshot.id,
+    }));
+  });
+  const choice = await vscode.window.showQuickPick(
+    choices,
+    { title, placeHolder: "Choose a trusted Room recovery point", ignoreFocusOut: true },
+  );
+  if (!choice) return undefined;
+  const project = roomProject(choice.project || choice);
+  const dimension = explicitDimensionId(choice) || explicitDimensionId(project);
+  const snapshotId = snapshotIdentity(choice) || latestSnapshotId(project);
+  if (!project?.id || !dimension || !snapshotId) {
+    throw new Error("Choose a trusted Dimension, Room, and JAT recovery point.");
+  }
+  return { ...project, project_id: project.id, dimension_id: dimension, snapshot_id: snapshotId };
+}
+
+function latestSnapshotId(project) {
+  if (project.latest) return project.latest;
+  const snapshots = Array.isArray(project.snapshots) ? project.snapshots
+    : Array.isArray(project.jats) ? project.jats : [];
+  return snapshots[0] && (snapshots[0].snapshot_id || snapshots[0].id);
+}
+
+function contextSnapshot(context) {
+  const snapshots = Array.isArray(context?.snapshots) ? context.snapshots
+    : Array.isArray(context?.jats) ? context.jats : [];
+  return snapshots.find((snapshot) => (snapshot.snapshot_id || snapshot.id) === context.snapshot_id);
+}
+
+async function selectedLogicalSnapshot(preselected, title, { selectedRowOnly = false } = {}) {
+  if (selectedRowOnly) {
+    const project = roomProject(preselected);
+    const dimension = explicitDimensionId(preselected);
+    const snapshotId = snapshotIdentity(preselected);
+    const snapshot = preselected?.snapshot || (project?.snapshots || project?.jats || [])
+      .find((entry) => (entry.snapshot_id || entry.id) === snapshotId);
+    if (!project?.id || !dimension || !snapshotId || snapshotId === "latest"
+        || snapshot?.payload_kind !== "room-store-v1") {
+      await vscode.window.showInformationMessage("Choose a specific logical JAT recovery-point row in Josh Rooms for agent recovery.");
+      return undefined;
+    }
+    return { ...project, project_id: project.id, dimension_id: dimension, snapshot_id: snapshotId };
+  }
+  const context = await explicitRoomContext(preselected, title);
+  if (!context) return undefined;
+  if (contextSnapshot(context)?.payload_kind !== "room-store-v1") {
+    throw new Error("Select a logical Room Store JAT for this action.");
+  }
+  return context;
+}
+
+function logicalSnapshotActionArgs(action, context, extra = []) {
+  const projectId = context?.project_id || context?.id;
+  const snapshotId = context?.snapshot_id;
+  const dimension = explicitDimensionId(context);
+  if (!projectId || !snapshotId || !dimension) {
+    throw new Error("Select a trusted Room, Dimension, and JAT.");
+  }
+  return nativeRegistry.dimensionArgs(
+    ["snapshot", action, projectId, ...extra, "--snapshot", snapshotId],
+    dimension,
+  );
+}
+
+async function runLogicalSnapshotAction(action, context, extra, title) {
+  const cwd = activeWorkspace();
+  const dimension = context.dimension || { id: explicitDimensionId(context), provider: context.provider };
+  const args = logicalSnapshotActionArgs(action, context, extra);
+  return runSelectedEncryption(args, cwd, dimension, {
+    title,
+    action: `${action} a logical JAT`,
+  });
+}
+
+function logicalSnapshotSummary(result) {
+  const components = result.components && typeof result.components === "object"
+    ? Object.entries(result.components).filter(([, value]) => value).map(([name]) => name)
+    : [];
+  return [
+    `Logical JAT ${String(result.logical_jat_id || "").slice(0, 16)}`,
+    `Workspace: ${formatHaulerSize(result.logical_bytes) || "unknown size"}`,
+    `Restic data added: ${formatHaulerSize(result.data_added_bytes) || "unknown"}`,
+    `Components: ${components.length ? components.join(", ") : "none"}`,
+  ].join("\n");
+}
+
+async function inspectLogicalSnapshot(preselected) {
+  assertWorkspaceTrusted("inspect a logical JAT");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Inspect Logical JAT");
+  if (!context) return "cancelled";
+  const result = await runLogicalSnapshotAction(
+    "inspect", context, [], `Inspecting ${context.display_name || context.project_id}…`,
+  );
+  const action = await vscode.window.showInformationMessage(logicalSnapshotSummary(result), "Show Logs");
+  if (action === "Show Logs") outputChannel?.show(true);
+  return "inspected";
+}
+
+async function agentSessionsStatus(preselected) {
+  assertWorkspaceTrusted("inspect agent sessions");
+  const project = roomProject(preselected);
+  const dimension = explicitDimensionId(preselected);
+  if (!project?.id || !dimension) {
+    await vscode.window.showInformationMessage("Choose a Room in Josh Rooms to view Agent Sessions.");
+    return "unavailable";
+  }
+  const cwd = activeWorkspace();
+  const contextArgs = ["--dimension", dimension, "--room", project.id, "--workspace", cwd];
+  const result = await runJoshRoom(["agents", "room-status", ...contextArgs, "--json"], cwd);
+  const profiles = (Array.isArray(result.profiles) ? result.profiles : []).filter((profile) =>
+    /^[0-9a-f]{64}$/.test(profile.profile_ref || "")
+    && ["personal", "work", "oss", "homelab"].includes(profile.scope)
+    && profile.state === "configured"
+    && Array.isArray(profile.tools)
+    && profile.tools.some((tool) => ["codex", "claude"].includes(tool)));
+  const summary = [
+    agentSessionsSummary(result.capabilities || {}),
+    "Original T3 app-thread restoration is unavailable. This discovery does not import history or assign a new T3 ID.",
+    profiles.length ? `${profiles.length} configured local profile${profiles.length === 1 ? "" : "s"}. Discovery is read-only.`
+      : "No configured host-authorized profile matches this Room and workspace. Busy or unavailable profiles cannot be discovered here.",
+  ].join("\n");
+  const action = await vscode.window.showInformationMessage(
+    summary, { modal: true }, ...(profiles.length ? ["Discover native history"] : []),
+  );
+  if (action !== "Discover native history") return "inspected";
+  let profile = profiles[0];
+  if (profiles.length > 1) {
+    const picked = await vscode.window.showQuickPick(profiles.map((entry) => ({
+      label: `${entry.scope} profile ${entry.profile_ref.slice(0, 8)}`,
+      description: "Native history only",
+      profile_ref: entry.profile_ref,
+    })), { title: "Josh: Agent Sessions", placeHolder: "Choose a configured local profile" });
+    if (!picked) return "cancelled";
+    profile = profiles.find((entry) => entry.profile_ref === picked.profile_ref);
+    if (!profile) throw new Error("Choose a currently configured agent profile.");
+  }
+  const tools = [...new Set(profile.tools.filter((tool) => ["codex", "claude"].includes(tool)))];
+  let tool = tools[0];
+  if (tools.length > 1) {
+    const picked = await vscode.window.showQuickPick(tools.map((entry) => ({
+      label: entry === "codex" ? "Codex CLI" : "Claude Code",
+      description: "Native history only",
+      tool: entry,
+    })), { title: "Josh: Discover Native History", placeHolder: "Choose a provider history source" });
+    if (!picked) return "cancelled";
+    if (!tools.includes(picked.tool)) throw new Error("Choose an authorized history source.");
+    tool = picked.tool;
+  }
+  const discovery = await runJoshRoom([
+    "agents", "discover", ...contextArgs, "--profile-ref", profile.profile_ref, "--tool", tool, "--json",
+  ], cwd);
+  if (discovery.tool !== tool || discovery.scope !== profile.scope
+      || discovery.native_resume_verified !== false || discovery.original_t3_identity_restored !== false) {
+    throw new Error("Session discovery returned an unsupported history receipt.");
+  }
+  const sessions = (Array.isArray(discovery.sessions) ? discovery.sessions : []).filter((session) =>
+    session.tool === tool
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(session.provider_session_id || "")
+    && session.cwd_matches === true
+    && session.native_resume_verified === false
+    && session.t3_import?.state === "requires-verified-owned-server"
+    && session.t3_import?.original_t3_identity_restored === false
+    && session.t3_import?.new_t3_thread_id === null);
+  if (!sessions.length) {
+    await vscode.window.showInformationMessage("No qualified native history was found. No T3 import was performed; native continuation remains unverified.");
+    return "discovered";
+  }
+  const selected = await vscode.window.showQuickPick(sessions.map((session) => ({
+    label: `${tool === "codex" ? "Codex" : "Claude"} ${session.provider_session_id}`,
+    description: "Native-provider history only",
+    detail: "Workspace matches. No T3 import was performed. Original T3 identity is not restored; continuation is unverified.",
+    provider_session_id: session.provider_session_id,
+  })), { title: "Josh: Native Session History", placeHolder: "Inspect a session identity" });
+  if (!selected) return "discovered";
+  const session = sessions.find((entry) => entry.provider_session_id === selected.provider_session_id);
+  if (!session) throw new Error("Choose a discovered native session.");
+  await vscode.window.showInformationMessage([
+    `Provider session: ${session.provider_session_id}`,
+    "Workspace matches the approved Room.",
+    "No T3 import was performed. A supported provider-history import creates a new T3 app-thread ID; it does not restore the original T3 identity.",
+    "Native continuation is unverified. Save and Enter do not include agent state.",
+  ].join("\n"), { modal: true });
+  return "discovered";
+}
+
+function agentSessionsSummary(result) {
+  const providers = result.providers || {};
+  const labels = { t3: "T3 Code", codex: "Codex CLI", claude: "Claude Code" };
+  const states = new Set(["blocked", "history-only"]);
+  const lines = Object.entries(labels).map(([key, label]) => {
+    const state = providers[key]?.capture;
+    return `${label}: ${states.has(state) ? state : "unavailable"}; restore blocked`;
+  });
+  return [...lines, "Native continuation is unverified. Recovery is opt-in through josh-room agents. Save and Enter do not include agent state."].join("\n");
+}
+
+function agentRecoveryArgs(action, context, extra = []) {
+  const dimension = explicitDimensionId(context);
+  if (!dimension || !context?.project_id || !context.snapshot_id || context.snapshot_id === "latest") {
+    throw new Error("Choose a specific Room recovery point for agent history.");
+  }
+  return ["agents", action, "--dimension", dimension, "--room", context.project_id,
+    "--snapshot", context.snapshot_id, ...extra, "--json"];
+}
+
+function assertHistoryReferenceReceipt(result) {
+  if (result?.ok !== true || result.history_only !== true || result.native_resume_verified !== false
+      || result.original_t3_identity_restored === true) {
+    throw new Error("Agent recovery returned an unsupported history receipt.");
+  }
+}
+
+async function agentRecoveryStatus(preselected) {
+  assertWorkspaceTrusted("inspect agent recovery references");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Agent Recovery", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-status", context), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (!["reference-absent", "history-reference"].includes(result.state) || !Array.isArray(result.entries)) {
+    throw new Error("Agent recovery returned an unsupported reference status.");
+  }
+  await vscode.window.showInformationMessage([
+    `Recovery point: ${context.snapshot_id}`,
+    result.state === "reference-absent" ? "No agent history reference is attached to this recovery point."
+      : `${result.entries.length} encrypted native-history reference${result.entries.length === 1 ? "" : "s"}.`,
+    "History only. Native continuation and original T3 app-thread restoration are unverified.",
+    "Room Save and Enter do not include agent state.",
+  ].join("\n"), { modal: true });
+  return "inspected";
+}
+
+async function chooseAgentRecoveryProfile(context) {
+  const cwd = activeWorkspace();
+  const result = await runJoshRoom(["agents", "room-status", "--dimension", explicitDimensionId(context),
+    "--room", context.project_id, "--workspace", cwd, "--json"], cwd);
+  const profiles = (Array.isArray(result.profiles) ? result.profiles : []).filter((profile) =>
+    /^[0-9a-f]{64}$/.test(profile.profile_ref || "") && profile.room_reference_allowed === true
+    && ["personal", "oss", "homelab"].includes(profile.scope) && profile.state === "configured"
+    && Array.isArray(profile.tools) && profile.tools.some((tool) => ["codex", "claude"].includes(tool)));
+  if (!profiles.length) {
+    await vscode.window.showInformationMessage("No configured profile has explicit Room history-reference permission for this Room and workspace.");
+    return undefined;
+  }
+  let profile = profiles[0];
+  if (profiles.length > 1) {
+    const selected = await vscode.window.showQuickPick(profiles.map((entry) => ({
+      label: `${entry.scope} profile ${entry.profile_ref.slice(0, 8)}`,
+      description: "Encrypted history reference only", profile_ref: entry.profile_ref,
+    })), { title: "Josh: Agent Recovery", placeHolder: "Choose an explicitly authorized profile" });
+    if (!selected) return undefined;
+    profile = profiles.find((entry) => entry.profile_ref === selected.profile_ref);
+    if (!profile) throw new Error("Choose a currently authorized recovery profile.");
+  }
+  const tools = [...new Set(profile.tools.filter((tool) => ["codex", "claude"].includes(tool)))];
+  let tool = tools[0];
+  if (tools.length > 1) {
+    const selected = await vscode.window.showQuickPick(tools.map((entry) => ({
+      label: entry === "codex" ? "Codex CLI" : "Claude Code", tool: entry,
+      description: "Native history only",
+    })), { title: "Josh: Agent Recovery", placeHolder: "Choose a native history format" });
+    if (!selected) return undefined;
+    if (!tools.includes(selected.tool)) throw new Error("Choose an authorized native history format.");
+    tool = selected.tool;
+  }
+  return { profile, tool, extra: ["--workspace", cwd, "--profile-ref", profile.profile_ref, "--tool", tool] };
+}
+
+async function captureAgentRecovery(preselected) {
+  assertWorkspaceTrusted("capture an encrypted agent history reference");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Capture Agent History", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const selection = await chooseAgentRecoveryProfile(context);
+  if (!selection) return "cancelled";
+  const confirmed = await vscode.window.showInformationMessage(
+    `Capture encrypted native history for recovery point ${context.snapshot_id}? The controller requires this exact saved workspace. This does not enable native continuation or Room Save inclusion.`,
+    { modal: true }, "Capture History Reference",
+  );
+  if (confirmed !== "Capture History Reference") return "cancelled";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-capture", context, selection.extra), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (result.state !== "history-reference") throw new Error("Agent capture returned an unsupported reference state.");
+  await vscode.window.showInformationMessage("Encrypted native-history reference captured for the selected recovery point. Native continuation remains unverified.");
+  return "captured";
+}
+
+async function restoreAgentRecovery(preselected) {
+  assertWorkspaceTrusted("restore one native agent history file");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Restore Agent History", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const selection = await chooseAgentRecoveryProfile(context);
+  if (!selection) return "cancelled";
+  const verified = await runJoshRoom(agentRecoveryArgs("recovery-verify", context, selection.extra), activeWorkspace());
+  assertHistoryReferenceReceipt(verified);
+  const sessions = (Array.isArray(verified.sessions) ? verified.sessions : []).filter((session) =>
+    session.tool === selection.tool && session.cwd_matches === true
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(session.provider_session_id || ""));
+  if (!sessions.length) {
+    await vscode.window.showInformationMessage("No verified native history matches the approved workspace and selected recovery point.");
+    return "unavailable";
+  }
+  const selected = await vscode.window.showQuickPick(sessions.map((session) => ({
+    label: `${selection.tool === "codex" ? "Codex" : "Claude"} ${session.provider_session_id}`,
+    description: "Restore one native history file", provider_session_id: session.provider_session_id,
+  })), { title: "Josh: Restore Agent History", placeHolder: "Choose a verified native session" });
+  if (!selected) return "cancelled";
+  const session = sessions.find((entry) => entry.provider_session_id === selected.provider_session_id);
+  if (!session) throw new Error("Choose a verified native session.");
+  const confirmed = await vscode.window.showWarningMessage(
+    "Restore one native history file into the approved profile. Existing files will not be overwritten. This does not resume a model or restore the original T3 app-thread identity.",
+    { modal: true }, "Restore Native History",
+  );
+  if (confirmed !== "Restore Native History") return "cancelled";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-restore", context,
+    [...selection.extra, "--session-id", session.provider_session_id]), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (result.state !== "history-materialized") throw new Error("Agent restore returned an unsupported materialization state.");
+  await vscode.window.showInformationMessage("Native history file restored. No model was resumed; native continuation remains unverified.");
+  return "restored";
+}
+
+async function exportPortableJat(preselected) {
+  assertWorkspaceTrusted("export a portable JAT");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Export Portable JAT");
+  if (!context) return "cancelled";
+  const basename = String(context.display_name || context.project_id)
+    .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "room";
+  const output = await vscode.window.showSaveDialog({
+    title: "Save Portable JAT",
+    defaultUri: vscode.Uri.file(path.join(activeWorkspace(), `${basename}.haul.tar.zst`)),
+    filters: { "Portable JAT": ["zst"] },
+  });
+  if (!output) return "cancelled";
+  try {
+    fs.lstatSync(output.fsPath);
+    throw new Error("The selected export file already exists. Choose a new output path.");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const result = await runLogicalSnapshotAction(
+    "export", context, ["--output", output.fsPath], `Exporting ${context.display_name || context.project_id} as Portable JAT…`,
+  );
+  if (result.status !== "exported" || !Number.isSafeInteger(result.output_size) || result.output_size < 0) {
+    throw new Error("Portable JAT export returned an invalid receipt.");
+  }
+  const verified = Array.isArray(result.verified_components) ? result.verified_components.join(", ") : "none";
+  const digest = typeof result.output_sha256 === "string" ? ` · sha256 ${result.output_sha256.slice(0, 16)}…` : "";
+  await vscode.window.showInformationMessage(
+    `Exported Portable JAT ${path.basename(output.fsPath)} · ${formatHaulerSize(result.output_size) || "unknown size"} · Verified components: ${verified}${digest}`,
+  );
+  return "exported";
+}
+
+function logicalReferenceChoices(result) {
+  const references = result.components?.hauler_content?.references;
+  if (!Array.isArray(references)) return [];
+  return references.flatMap((entry) => {
+    const reference = typeof entry === "string" ? entry : entry?.reference || entry?.digest;
+    if (typeof reference !== "string" || !reference) return [];
+    return [{
+      label: `$(package) ${reference}`,
+      description: typeof entry === "object" ? [entry.kind, entry.media_type].filter(Boolean).join(" · ") : "",
+      reference,
+    }];
+  });
+}
+
+async function extractLogicalSnapshot(preselected) {
+  assertWorkspaceTrusted("extract from a logical JAT");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Extract from Logical JAT");
+  if (!context) return "cancelled";
+  const inspected = await runLogicalSnapshotAction(
+    "inspect", context, [], `Reading ${context.display_name || context.project_id} references…`,
+  );
+  const references = logicalReferenceChoices(inspected);
+  if (!references.length) {
+    await vscode.window.showInformationMessage("This logical JAT has no extractable Hauler references.");
+    return "empty";
+  }
+  const selected = await vscode.window.showQuickPick(references, {
+    title: "Extract from Logical JAT",
+    placeHolder: "Choose one reference; the source JAT remains unchanged",
+    ignoreFocusOut: true,
+  });
+  if (!selected) return "cancelled";
+  const parents = await vscode.window.showOpenDialog({
+    title: "Choose extract parent folder",
+    defaultUri: vscode.Uri.file(activeWorkspace()),
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Extract here",
+  });
+  if (!parents?.length) return "cancelled";
+  const name = await vscode.window.showInputBox({
+    title: "Extract from Logical JAT",
+    prompt: "New destination folder name (created only if absent)",
+    value: "logical-jat-extract",
+    ignoreFocusOut: true,
+    validateInput: (value) => isSafeRestoreName(value) ? undefined : "Enter one folder name without path separators.",
+  });
+  if (!name) return "cancelled";
+  const destination = path.join(parents[0].fsPath, name);
+  try {
+    fs.lstatSync(destination);
+    throw new Error("The selected extract destination already exists. Choose a new folder name.");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const result = await runLogicalSnapshotAction(
+    "extract", context, [selected.reference, "--destination", destination], `Extracting ${selected.reference}…`,
+  );
+  const action = await vscode.window.showInformationMessage(`Extracted ${selected.reference} into ${name}.`, "Open Folder");
+  if (action === "Open Folder") {
+    await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(destination), false);
+  }
+  return result.ok ? "extracted" : "failed";
+}
+
+function requiresLegacyLinkVerification(context, marker) {
+  const snapshot = contextSnapshot(context);
+  const fingerprint = snapshot && snapshot.workspace_fingerprint;
+  return marker?.format_version === 1
+    || !fingerprint
+    || !/^[0-9a-f]{64}$/.test(fingerprint)
+    || fingerprint === "0".repeat(64);
+}
+
+async function verifyLegacyLink(cwd, context) {
+  const verificationRoot = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-link-verify-"));
+  try {
+    await runOperation("Verifying saved JAT...", nativeRegistry.dimensionArgs([
+      "hydrate", context.project_id, "--snapshot", context.snapshot_id,
+      "--destination", verificationRoot, "--ide", "terminal",
+    ], context.dimension_id), cwd);
+    const [trusted, current] = await Promise.all([
+      runJoshRoom(["status", "--workspace", verificationRoot], cwd),
+      runJoshRoom(["status", "--workspace", cwd], cwd),
+    ]);
+    const trustedFingerprint = trusted.current_workspace_fingerprint
+      || trusted.current_fingerprint || trusted.workspace_fingerprint;
+    const currentFingerprint = current.current_workspace_fingerprint
+      || current.current_fingerprint || current.workspace_fingerprint;
+    if (!trustedFingerprint || !currentFingerprint || trustedFingerprint !== currentFingerprint) {
+      await vscode.window.showWarningMessage(
+        "This folder does not match that saved Room. Enter the Room instead, or save this folder as a new Room.",
+        "Enter", "Save as New",
+      );
+      return { ok: false, mismatch: true };
+    }
+    return { ok: true, fingerprint: trustedFingerprint };
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
+    outputChannel?.warn("Legacy Link verification failed: " + error.message);
+    await vscode.window.showErrorMessage(
+      "Josh Room could not verify that saved JAT. Enter the Room instead, or save this folder as a new Room.",
+    );
+    return { ok: false, failed: true };
+  } finally {
+    fs.rmSync(verificationRoot, { recursive: true, force: true });
+  }
+}
+
+async function linkRoom(preferredProject) {
+  assertWorkspaceTrusted("link a Room");
+  const cwd = activeWorkspace();
+  const context = await explicitRoomContext(preferredProject, "Josh: Link Existing Folder");
+  if (!context) return "cancelled";
+  const marker = currentRoom(cwd);
+  let verifiedFingerprint;
+  if (requiresLegacyLinkVerification(context, marker)) {
+    const verification = await verifyLegacyLink(cwd, context);
+    if (!verification.ok) return verification.mismatch ? "mismatch" : "verification-failed";
+    verifiedFingerprint = verification.fingerprint;
+  }
+  const args = ["link", "--project", context.project_id, "--snapshot", context.snapshot_id];
+  if (verifiedFingerprint) args.push("--workspace-fingerprint", verifiedFingerprint);
+  const routed = routeItemArgs(args, context);
+  const result = usesNativeEncryption(context.provider || context.dimension?.provider)
+    ? await runSelectedEncryption(routed, cwd, context.dimension || context, { title: "Linking saved Room…", action: "link a Room" })
+    : await runOperation("Linking saved Room...", routed, cwd);
+  await resetNativeBaseline(result);
+  if (roomsProvider) await roomsProvider.refresh();
+  return "linked";
+}
+
+async function repairRoom(preferredProject) {
+  assertWorkspaceTrusted("repair a Room");
+  const cwd = activeWorkspace();
+  const context = await explicitRoomContext(preferredProject, "Josh: Repair Room Ledger");
+  if (!context) return "cancelled";
+  const args = ["repair", "--project", context.project_id, "--snapshot", context.snapshot_id];
+  const routed = routeItemArgs(args, context);
+  const result = usesNativeEncryption(context.provider || context.dimension?.provider)
+    ? await runSelectedEncryption(routed, cwd, context.dimension || context, { title: "Repairing Room ledger…", action: "repair a Room" })
+    : await runOperation("Repairing Room ledger...", routed, cwd);
+  await resetNativeBaseline(result);
+  if (roomsProvider) await roomsProvider.refresh();
+  return "repaired";
+}
+
+function snapshotCopyArgs(source, target) {
+  const sourceDimension = dimensionId(source);
+  const targetDimension = dimensionId(target) || sourceDimension;
+  const args = ["snapshot", "copy"];
+  if (source && source.kind === "jat") {
+    args.push(source.project && source.project.id);
+    args.push(source.id || source.snapshot && source.snapshot.snapshot_id);
+  } else {
+    args.push("--source", source && source.path);
+  }
+  if (sourceDimension) args.push("--dimension", sourceDimension);
+  if (targetDimension) args.push("--destination-dimension", targetDimension);
+  if (target && target.kind === "room") args.push("--destination-project", target.id);
+  return args;
+}
+
+class RoomDragAndDropController {
+  constructor() {
+    this.dragMimeTypes = ["application/vnd.code.tree.joshRoom"];
+    this.dropMimeTypes = ["application/vnd.code.tree.joshRoom", "text/uri-list"];
+  }
+
+  handleDrag(source, dataTransfer) {
+    dataTransfer.set("application/vnd.code.tree.joshRoom", new vscode.DataTransferItem(JSON.stringify(source)));
+  }
+
+  async handleDrop(target, dataTransfer) {
+    let source;
+    const tree = dataTransfer.get("application/vnd.code.tree.joshRoom");
+    if (tree) {
+      source = JSON.parse(await tree.asString());
+      if (Array.isArray(source)) source = source[0];
+    } else {
+      const uri = dataTransfer.get("text/uri-list");
+      if (!uri) return;
+      const first = (await uri.asString()).split(/\r?\n/).find((line) => line.trim() && !line.trim().startsWith("#"));
+      if (!first) return;
+      const value = first.trim();
+      let sourcePath;
+      try {
+        sourcePath = decodeURIComponent(new URL(value).pathname);
+      } catch (_error) {
+        sourcePath = decodeURIComponent(value.replace(/^file:\/\//, ""));
+      }
+      source = { kind: "folder", path: sourcePath };
+    }
+    let destination = target || await chooseDimension(
+      await loadCatalog(activeWorkspace()), "Copy JAT to Dimension",
+    );
+    if (!destination) return "cancelled";
+    if (!target || target.kind === "dimension") {
+      const roomName = await vscode.window.showInputBox({
+        title: "Copy JAT to Room",
+        prompt: "Destination Room id or name",
+        placeHolder: "room-name",
+        validateInput: (value) => value.trim() ? undefined : "Enter a Room id or name.",
+      });
+      if (!roomName) return "cancelled";
+      destination = Object.assign({}, destination, { destination_room: roomName.trim() });
+    }
+    const result = await runOperation("Copying saved JAT...", snapshotCopyArgs(source, destination), activeWorkspace());
+    if (roomsProvider) await roomsProvider.refresh();
+    await vscode.window.showInformationMessage("Copied " + (source.label || source.path) + " as a new JAT.");
+    return result;
+  }
+}
+
+module.exports.snapshotCopyArgs = snapshotCopyArgs;
+snapshotCopyArgs = nativeRegistry.snapshotCopyArgs;
+
+function activateNative(context) {
+  extensionContext = context;
+  outputChannel = vscode.window.createOutputChannel("Josh Room", { log: true });
+  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusItem.command = "workbench.view.extension.josh-room";
+  setStatus("$(archive) Josh Room");
+  statusItem.show();
+  roomsProvider = new HierarchyRoomsProvider();
+  void vscode.commands.executeCommand("setContext", "joshRoom.roomsEmpty", true);
+  const roomsView = vscode.window.createTreeView("joshRoom.rooms", {
+    treeDataProvider: roomsProvider,
+    dragAndDropController: new RoomDragAndDropController(),
+  });
+  const jatToolsView = vscode.window.createTreeView("joshRoom.jatTools", {
+    treeDataProvider: new JatToolsProvider(),
+  });
+  context.subscriptions.push(outputChannel, statusItem, roomsView, jatToolsView);
+  if (context.secrets?.onDidChange) {
+    context.subscriptions.push(context.secrets.onDidChange((event) => {
+      if (!event?.key || event.key.startsWith(ENCRYPTION_SECRET_PREFIX) || event.key.startsWith(RECOVERY_SECRET_PREFIX)) {
+        roomsProvider.roots = undefined;
+        roomsProvider.emitter.fire(undefined);
+        refreshRoomStatus();
+      }
+    }));
+  }
+  context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((event) => {
+    const relative = relativeWorkspacePath(event.document.uri);
+    if (!relative) return;
+    workspaceEventGeneration += 1;
+    if (event.document.isDirty) dirtyBuffers.add(relative);
+    else dirtyBuffers.delete(relative);
+    if (event.document.isDirty) setRoomState("dirty");
+  }));
+  context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
+    const relative = relativeWorkspacePath(document.uri);
+    if (!relative) return;
+    dirtyBuffers.delete(relative);
+    if (workspaceBaseline) markWorkspaceChange(document.uri);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidCloseTextDocument((document) => {
+    const relative = relativeWorkspacePath(document.uri);
+    if (!relative) return;
+    dirtyBuffers.delete(relative);
+    if (workspaceBaseline) markWorkspaceChange(document.uri);
+  }));
+  register(context, "joshRoom.save", () => saveRoom({ current: true }));
+  register(context, "joshRoom.saveFolderAs", () => saveRoom());
+  register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
+  register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
+  register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
+  register(context, "joshRoom.checkWorkspace", checkWorkspace);
+  register(context, "joshRoom.new", () => newRoom());
+  register(context, "joshRoom.addStorage", addStorage);
+  register(context, "joshRoom.connectCloudflare", connectCloudflare);
+  register(context, "joshRoom.reconnectCloudflare", connectCloudflare);
+  register(context, "joshRoom.connectEncryption", connectEncryption);
+  register(context, "joshRoom.initializeEncryption", connectEncryption);
+  register(context, "joshRoom.migrateEncryption", migrateEncryption);
+  register(context, "joshRoom.resumeEncryption", resumeEncryption);
+  register(context, "joshRoom.exportRecovery", exportRecovery);
+  register(context, "joshRoom.importRecovery", importRecovery);
+  register(context, "joshRoom.connectStorage", connectStorage);
+  register(context, "joshRoom.reconnectStorage", (item) => connectStorage(item));
+  register(context, "joshRoom.editConnection", editConnection);
+  register(context, "joshRoom.disconnectStorage", disconnectStorage);
+  register(context, "joshRoom.selectDimension", selectDimension);
+  register(context, "joshRoom.editStorageSettings", editStorageSettings);
+  register(context, "joshRoom.enter", enterRoom);
+  register(context, "joshRoom.link", linkRoom);
+  register(context, "joshRoom.repair", repairRoom);
+  register(context, "joshRoom.remove", removeRoom);
+  register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
+  register(context, "joshRoom.deleteRoom", deleteRoom);
+  register(context, "joshRoom.serve", serveRoom);
+  register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
+  register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
+  register(context, "joshRoom.agentSessionsStatus", agentSessionsStatus);
+  register(context, "joshRoom.agentRecoveryStatus", agentRecoveryStatus);
+  register(context, "joshRoom.captureAgentRecovery", captureAgentRecovery);
+  register(context, "joshRoom.restoreAgentRecovery", restoreAgentRecovery);
+  register(context, "joshRoom.exportPortableJat", exportPortableJat);
+  register(context, "joshRoom.extractLogicalSnapshot", extractLogicalSnapshot);
+  register(context, "joshRoom.verifyRoomStore", verifyRoomStore);
+  register(context, "joshRoom.optimizeRoomStore", optimizeRoomStore);
+  register(context, "joshRoom.reconcileRoomStore", reconcileRoomStore);
+  register(context, "joshRoom.refresh", () => roomsProvider.reload());
+  register(context, "joshRoom.prepare", () => roomsProvider.reload());
+  register(context, "joshRoom.showLogs", () => outputChannel.show(true));
+  register(context, "joshRoom.clearLocalFallback", clearLocalFallback);
+  register(context, "joshRoom.jatBuild", jatBuild);
+  register(context, "joshRoom.jatInspect", jatInspect);
+  register(context, "joshRoom.jatExtract", jatExtract);
+  register(context, "joshRoom.jatRestore", jatRestore);
+  register(context, "joshRoom.jatServe", jatServe);
+  register(context, "joshRoom.jatExport", jatExport);
+  register(context, "joshRoom.jatCopy", jatCopy);
+  // Activation only registers native UI. Runtime, storage, auth, and key
+  // reads begin after an explicit command or tree load action.
+}
+
+module.exports.activate = activateNative;
+
+function dimensionLoadFailure(error) {
+  const result = error && error.result || {};
+  const diagnostic = controllerErrorText(result.error) || error?.message || "unknown storage error";
+  const code = result.error_code || result.error?.code || "dimension-load-failed";
+  if (/resumable|resume/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Encryption migration resumable — Resume",
+      description: "Resume the selected Dimension's encryption migration.",
+      action: "resume",
+      state: result.encryption_state || result.state || "resumable",
+    };
+  }
+  if (/legacy|migration-required|encryption-migration/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Encryption migration required — Migrate",
+      description: "Migrate the legacy encrypted catalog before using this Dimension.",
+      action: "migrate",
+      state: result.encryption_state || result.state || "legacy",
+    };
+  }
+  if (/encryption-authorization-required/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Encryption authorization required — Authorize",
+      description: "Authorize Josh Room encryption before reading this Room catalog.",
+      action: "authorize",
+    };
+  }
+  if (/bucket|accessdenied|forbidden/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Bucket access denied — Edit connection",
+      description: "Edit the provider connection or choose another bucket.",
+      action: "edit",
+    };
+  }
+  if (/auth|credential|unauthoriz|expired/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Authentication failed — Reconnect",
+      description: "Reconnect this provider connection to load the bucket.",
+      action: "reconnect",
+    };
+  }
+  if (/catalog|decrypt|age|fingerprint/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Catalog unavailable — Details",
+      description: "The bucket is reachable, but its Room catalog could not be verified.",
+      action: "details",
+    };
+  }
+  if (/network|unavailable|timeout|endpoint|connection|refused/i.test(code + " " + diagnostic)) {
+    return {
+      code,
+      label: "Server unavailable — Retry",
+      description: "The provider endpoint could not be reached.",
+      action: "retry",
+    };
+  }
+  return {
+    code,
+    label: "Could not load bucket — Retry",
+    description: "Refresh this storage or edit its provider connection.",
+    action: "retry",
+  };
+}
+
+async function loadDimensionHierarchy(cwd, dimension, title, options) {
+  const id = dimension.id || dimension.dimension_id;
+  const listed = await runOperation(
+    title || "Loading your Rooms...",
+    nativeRegistry.dimensionArgs(["dimensions", "list", "--with-hierarchy"], id),
+    cwd,
+    options,
+  );
+  const records = dimensionList(listed);
+  const hierarchy = records.find((candidate) => (candidate.id || candidate.dimension_id) === id) || records[0];
+  if (!hierarchy || (!Object.prototype.hasOwnProperty.call(hierarchy, "rooms")
+    && !Object.prototype.hasOwnProperty.call(hierarchy, "projects"))) {
+    throw new Error("complete Dimension hierarchy was not returned");
+  }
+  return Object.assign({}, dimension, hierarchy, { catalog_complete: true });
+}
+
+async function loadNativeCatalogWithSnapshots(cwd, title, options = {}) {
+  const catalog = await runOperation(title || "Loading your Rooms...", ["dimensions", "list"], cwd, options);
+  const dimensions = dimensionList(catalog);
+  let connections = catalog.connections;
+  let connectionLookupFailed = false;
+  if (!connections && (!dimensions.length || dimensions.some((dimension) => dimension.connection_id || dimension.connectionId))) {
+    try {
+      const listedConnections = await runOperation(title || "Loading your Rooms...", providerTools.connectionCommand("list"), cwd, options);
+      connections = listedConnections.connections || connections;
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      connectionLookupFailed = true;
+      outputChannel && outputChannel.warn("Unable to load provider connections: " + error.message);
+    }
+  }
+  const providerConnections = providerTools.connectionRecords({ connections });
+  const r2Dimension = dimensions.find((candidate) => nativeRegistry.providerKey(candidate.provider) === "r2");
+  const legacyCatalog = !dimensions.length && (catalog.dimension_id || Array.isArray(catalog.projects));
+  const offerSyntheticR2 = !dimensions.length && !legacyCatalog && !connectionLookupFailed && !providerConnections.length;
+  const authDimensionId = r2Dimension && (r2Dimension.id || r2Dimension.dimension_id)
+    || (offerSyntheticR2 ? "r2" : undefined);
+  const authState = authDimensionId ? await runOperation(
+    title || "Loading your Rooms...",
+    ["auth", "status", "--dimension", authDimensionId],
+    cwd,
+    { ...options, cancellable: false },
+  ).catch((error) => {
+    if (isCancellationError(error)) throw error;
+    outputChannel && outputChannel.warn("Cloudflare connection state unavailable: " + error.message);
+    return { state: "missing", encryption_state: "missing", r2_state: "missing" };
+  }) : { state: "missing", encryption_state: "missing", r2_state: "missing" };
+  const r2State = authState.r2_state || authState.state || "missing";
+  const encryptionState = authState.encryption_state || authState.state || "missing";
+  const hasR2 = dimensions.some((dimension) => nativeRegistry.providerKey(dimension.provider) === "r2");
+  if (!hasR2 && offerSyntheticR2) {
+    dimensions.push({
+      id: "r2",
+      display_name: "Default",
+      provider: "r2",
+      synthetic: true,
+      connection_state: r2State,
+    });
+  }
+  const connectionStates = new Map(providerConnections.map((connection) => [
+    connection.id || connection.connection_id,
+    connection.auth_state === "disconnected" || connection.connection_state === "disconnected"
+      ? "disconnected"
+      : connection.auth_state === "expired" || connection.connection_state === "expired"
+        ? "expired"
+        : undefined,
+  ]));
+  const loaded = [];
+  for (const original of dimensions) {
+    const id = original.id || original.dimension_id;
+    if (!id) {
+      outputChannel && outputChannel.warn("Skipping a Dimension without dimension_id.");
+      continue;
+    }
+    const dimension = Object.assign({}, original);
+    const provider = nativeRegistry.providerKey(dimension.provider);
+    const connectionState = connectionStates.get(dimension.connection_id || dimension.connectionId);
+    if (connectionState) dimension.connection_state = connectionState;
+    if (dimension.connection_state && dimension.connection_state !== "connected") {
+      loaded.push(dimension);
+      continue;
+    }
+    if (provider === "r2") {
+      dimension.connection_state = r2State || dimension.connection_state || "connected";
+      if (dimension.connection_state !== "connected") {
+        loaded.push(dimension);
+        continue;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(dimension, "rooms")
+      || Object.prototype.hasOwnProperty.call(dimension, "projects")) {
+      loaded.push(dimension);
+      continue;
+    }
+    try {
+      loaded.push(await loadDimensionHierarchy(cwd, dimension, title, options));
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      const failure = dimensionLoadFailure(error);
+      outputChannel && outputChannel.warn("Unable to load Dimension " + id + ": " + (controllerErrorText(error.result?.error) || error.message));
+      const result = error && error.result && typeof error.result === "object" ? error.result : {};
+      const propagated = {};
+      for (const key of ["encryption_state", "encryption_domain_id", "key_generation", "error_code", "authorization_required", "authorization_purpose", "journal_status"]) {
+        if (Object.prototype.hasOwnProperty.call(result, key)) propagated[key] = result[key];
+      }
+      const state = result.encryption_state || result.state || failure.state || "error";
+      loaded.push(Object.assign(dimension, propagated, { state, load_error: { ...failure, state } }));
+    }
+  }
+  const loadedCatalog = Object.assign({}, catalog, {
+    dimensions: loaded,
+    ...(connections ? { connections } : {}),
+    offer_synthetic_r2: offerSyntheticR2,
+    auth_state: authState.r2_room_store_state || r2State,
+    encryption_state: encryptionState,
+    projects: nativeRegistry.flattenDimensionRooms({ ...catalog, dimensions: loaded }),
+  });
+  lastKnownCatalog = loadedCatalog;
+  return loadedCatalog;
+}
+
+loadNativeCatalog = loadNativeCatalogWithSnapshots;
+loadCatalog = loadNativeCatalogWithSnapshots;
+
+async function editStorageSettings(item) {
+  assertWorkspaceTrusted("edit storage settings");
+  const selected = item && item.dimension ? item.dimension : item;
+  const catalog = selected ? undefined : await loadCatalog(activeWorkspace(), "Loading storage...");
+  const dimension = selected || await chooseDimension(catalog, "Edit Settings");
+  if (!dimension) return "cancelled";
+  if (dimension.synthetic && nativeRegistry.providerKey(dimension.provider) === "r2") {
+    await vscode.window.showInformationMessage(
+      "Default Cloudflare storage is managed by OAuth. Use Connect Cloudflare instead.",
+    );
+    return "cancelled";
+  }
+  let connection = item?.connection || dimension.connection;
+  if (!connection && dimension.connection_id) {
+    const resolvedCatalog = catalog || await loadCatalog(activeWorkspace(), "Loading storage...");
+    connection = providerTools.dimensionConnection(dimension, providerTools.connectionRecords(resolvedCatalog));
+  }
+  return editConnection({ connection: connection || dimension, provider: (connection || dimension).provider });
+}
+
+Object.assign(module.exports.__test__, {
+  JAT_SERVE_MODES,
+  JatToolsProvider,
+  jatBuild,
+  jatInspect,
+  jatExtract,
+  jatServe,
+  jatExport,
+  jatCopy,
+  inspectLogicalSnapshot,
+  agentSessionsStatus,
+  agentSessionsSummary,
+  agentRecoveryStatus,
+  captureAgentRecovery,
+  restoreAgentRecovery,
+  exportPortableJat,
+  extractLogicalSnapshot,
+  verifyRoomStore,
+  optimizeRoomStore,
+  reconcileRoomStore,
+  logicalReferenceChoices,
+  chooseHaul,
+  inventoryQuickPickItems,
+  isHaulerChunkSize,
+  isSafeCopyTarget,
+  resultPayloads,
+  chooseServeProject,
+  addStorage,
+  connectCloudflare,
+  connectEncryption,
+  runSelectedEncryption,
+  migrateEncryption,
+  resumeEncryption,
+  exportRecovery,
+  importRecovery,
+  encryptionSecretKey,
+  recoverySecretKey,
+  installationRecoverySecretKey,
+  connectStorage,
+  disconnectStorage,
+  editStorageSettings,
+  editConnection,
+  HierarchyRoomsProvider,
+  linkRoom,
+  loadCatalog,
+  repairRoom,
+  removeSnapshot,
+  deleteRecoveryPoint,
+  deleteRoom,
+  RoomDragAndDropController,
+  roomLabel,
+  runJoshRoom,
+  runOperation,
+  chooseLocalFallback,
+  localRuntimeState,
+  initializeManagedRuntime,
+  ensureJatForState,
+  operationNeedsJat,
+  clearLocalFallback,
+  buildTerminalLaunch,
+  buildServeTerminalLaunch,
+  isSafeRestoreName,
+  terminateChild,
+  serveRoom,
+  selectDimension,
+  setRuntimeForTests(value) {
+    testRuntime = value;
+  },
+  setExtensionContextForTests(value) {
+    extensionContext = value;
+    managedRuntimePromise = undefined;
+    managedJatPromise = undefined;
+    runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
+  },
+  setRuntimeReadinessForTests(value) {
+    runtimeReadinessOverride = value;
+    managedRuntimePromise = undefined;
+    managedJatPromise = undefined;
+    runtimeLifecycle = { state: "UNINITIALIZED", message: "Preparing Josh Room runtime…" };
+  },
+  setRoomsProvider(value) {
+    roomsProvider = value;
+  },
+});

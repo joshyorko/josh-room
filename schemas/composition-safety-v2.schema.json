@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://josh-room.invalid/schemas/composition-safety-v2.schema.json",
+  "title": "Append-only namespace child updates and parent pins",
+  "$comment": "Structural schema. CompositionSafetyState additionally validates exact slots, baselines, pins, overlaps and monotonic history. No legacy repository admission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "contract",
+    "scope",
+    "revision",
+    "dimension_catalog",
+    "operations",
+    "child_updates"
+  ],
+  "properties": {
+    "format_version": {
+      "$ref": "composition-safety-v1.schema.json#/properties/format_version"
+    },
+    "contract": {
+      "const": "composition-safety-v2"
+    },
+    "scope": {
+      "$ref": "composition-safety-v1.schema.json#/properties/scope"
+    },
+    "revision": {
+      "$ref": "composition-safety-v1.schema.json#/properties/revision"
+    },
+    "dimension_catalog": {
+      "$ref": "composition-safety-v1.schema.json#/properties/dimension_catalog"
+    },
+    "operations": {
+      "$ref": "composition-safety-v1.schema.json#/properties/operations"
+    },
+    "child_updates": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plan",
+          "plan_sha256",
+          "phase",
+          "pin"
+        ],
+        "properties": {
+          "plan": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source_path_sha256",
+              "source_records_sha256",
+              "source_signature",
+              "capture_policy_sha256",
+              "content_sha256",
+              "room_id",
+              "logical_jat_id",
+              "expected_logical_jat_id",
+              "capture_mode",
+              "source_identity"
+            ],
+            "properties": {
+              "content_digest_algorithm": {
+                "const": "sha256-framed-v2"
+              },
+              "source_path_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "source_records_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "source_signature": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "capture_policy_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "content_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "room_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "logical_jat_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "expected_logical_jat_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "capture_mode": {
+                "const": "source-only"
+              },
+              "source_identity": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "plan_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "phase": {
+            "enum": [
+              "reserved",
+              "committed"
+            ]
+          },
+          "pin": {
+            "anyOf": [
+              {
+                "$ref": "composition-safety-v1.schema.json#/$defs/pin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      }
+    }
+  }
+}

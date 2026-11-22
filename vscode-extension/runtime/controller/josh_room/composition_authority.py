@@ -126,7 +126,7 @@ class CompositionAuthority:
             raise ValueError("composition authority binding differs")
         if (
             not isinstance(body["capture_claims"], dict)
-            or len(body["capture_claims"]) > 33
+            or len(body["capture_claims"]) > 192
         ):
             raise ValueError("invalid composition capture claims")
         if (

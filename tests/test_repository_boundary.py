@@ -89,6 +89,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.splitWorkspace",
         "joshRoom.saveCatalog",
         "joshRoom.enterChild",
+        "joshRoom.saveChild",
+        "joshRoom.refreshCatalogPins",
         "joshRoom.addStorage",
         "joshRoom.connectCloudflare",
         "joshRoom.reconnectCloudflare",
@@ -112,3 +114,326 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.agentRecoveryStatus",
         "joshRoom.captureAgentRecovery",
         "joshRoom.restoreAgentRecovery",
+        "joshRoom.verifyRoomStore", "joshRoom.optimizeRoomStore", "joshRoom.reconcileRoomStore",
+    }
+    assert package["extensionKind"] == ["workspace"]
+    assert package["capabilities"]["untrustedWorkspaces"]["supported"] is False
+    extension = (ROOT / "vscode-extension/extension.js").read_text()
+    assert "josh-room" in extension
+    assert "projects" in extension and "hydrate" in extension and "snapshot" in extension
+    assert "showQuickPick" in extension and "showInputBox" in extension and "showWarningMessage" in extension
+    assert "already has a working folder" in extension
+    assert "Replace Latest" in extension
+    assert "Delete Snapshot" in extension and "also deletes the Room" in extension
+    assert "Opening existing" in extension
+    assert '"--snapshot"' in extension
+    assert "showOpenDialog" in extension and '"--source"' in extension
+    assert "registerTaskProvider" not in extension
+    assert "createTreeView" in extension and "createOutputChannel" in extension
+    assert "childProcess.spawn" in extension and "onCancellationRequested" in extension
+    assert "SIGTERM" in extension
+    assert "No saved Rooms" in extension and "Couldn't load Rooms" in extension
+    assert "is already open" in extension
+    assert "forceCreate" in extension
+    assert "createStatusBarItem" in extension and "sync~spin" in extension
+    assert "createFileSystemWatcher" in extension and "onDidChangeTextDocument" in extension and "Needs save" in extension
+    assert "onStartupFinished" in package["activationEvents"]
+    assert "createTerminal" in extension and "runtime.command" in extension
+    assert "Include local OCI images" in extension and '"--all-images"' in extension
+    assert "onTaskType:josh-room" not in package["activationEvents"]
+    assert "taskDefinitions" not in package["contributes"]
+    assert package["contributes"]["viewsContainers"]["activitybar"][0]["id"] == "josh-room"
+    assert package["contributes"]["views"]["josh-room"][0]["id"] == "joshRoom.rooms"
+    assert package["contributes"]["viewsWelcome"][0]["view"] == "joshRoom.rooms"
+    assert {view["id"] for view in package["contributes"]["views"]["josh-room"]} == {"joshRoom.rooms", "joshRoom.jatTools"}
+    assert "Pack Folder into JAT" in extension and "Restore Workspace" in extension and "Serve JAT…" in extension
+    assert "joshRoom.jatInspect" in extension and "joshRoom.jatCopy" in extension
+    jat_command_ids = {
+        "joshRoom.jatBuild", "joshRoom.jatInspect", "joshRoom.jatExtract", "joshRoom.jatRestore",
+        "joshRoom.jatServe", "joshRoom.jatExport", "joshRoom.jatCopy",
+    }
+    assert jat_command_ids <= commands
+    assert "Use Dimension" not in extension
+    assert "Open Dimension" not in extension
+
+
+def test_vsix_owns_the_runtime_bootstrap_contract():
+    package = json.loads((ROOT / "vscode-extension/package.json").read_text())
+    runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
+    extension = (ROOT / "vscode-extension/extension.js").read_text()
+
+    lock = json.loads((ROOT / "release-lock.json").read_text())
+    assert package["version"] == lock["candidate_version"]
+    assert package["scripts"]["package"] == "npx --yes @vscode/vsce@4.0.0 package --no-dependencies"
+    template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
+    assert template_package["scripts"]["package"] == package["scripts"]["package"]
+    assert (ROOT / "vscode-extension/.vscodeignore").is_file()
+    vscodeignore = (ROOT / "vscode-extension/.vscodeignore").read_text()
+    assert "runtime/controller/**/__pycache__/**" in vscodeignore
+    assert "runtime/controller/**/*.pyc" in vscodeignore
+    assert runtime["extension_version"] == package["version"]
+    from josh_room.room_store_components import RCC_VERSION
+
+    assert runtime["rcc"]["version"] == RCC_VERSION == "v18.19.11"
+    assert runtime["rcc"]["platforms"]["linux-x64"]["asset"] == "rcc-linux64"
+    assert runtime["jat"]["environment_artifact"]["digest"].startswith("sha256:")
+    assert "ensureManagedRcc" in extension and "ensureJatRuntime" in extension
+    assert 'childProcess.spawn("josh-room"' not in extension
+    assert "runtime.command" in extension and "runtime.args(args)" in extension
+
+
+def test_real_vsix_contains_the_owned_runtime_contract(tmp_path):
+    output = tmp_path / "josh-room.vsix"
+    result = subprocess.run(
+        ["npm", "run", "package", "--", "--out", str(output)],
+        cwd=ROOT / "vscode-extension",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"vsce package failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+        assert "extension/runtime.js" in names
+        assert "extension/runtime/manifest.json" in names
+        assert "extension/runtime/restic-manifest.json" in names
+        assert "extension/runtime/controller/install_restic.py" in names
+        assert "extension/runtime/controller/robot.yaml" in names
+        assert "extension/runtime/controller/conda.yaml" in names
+        assert any(name.startswith("extension/runtime/controller/josh_room/") and name.endswith(".py") for name in names)
+        assert not any("__pycache__" in name or name.endswith((".pyc", ".test.js")) for name in names)
+        assert not any(name.startswith("extension/runtime/controller/output/") for name in names)
+        package = json.loads(archive.read("extension/package.json"))
+        manifest = json.loads(archive.read("extension/runtime/manifest.json"))
+        assert manifest["extension_version"] == package["version"]
+        assert manifest["jat"]["environment_artifact"]["digest"].startswith("sha256:")
+
+
+def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
+    package = json.loads((ROOT / "vscode-extension/package.json").read_text())
+    recipe = (ROOT / "vscode-extension/runtime/controller/robot.yaml").read_text()
+    assert "shell: python -m josh_room\n" in recipe
+    assert "python -m josh_room.cli" not in recipe
+    remove_menu = next(item for item in package["contributes"]["menus"]["view/item/context"] if item["command"] == "joshRoom.remove")
+    assert remove_menu["group"].startswith("inline")
+    assert (ROOT / "vscode-extension/media/room.svg").is_file()
+    bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
+    assert f"joshyorko.josh-room-{package['version']}" in bootstrap
+    template_package = json.loads((ROOT / "templates/room/vscode-extension/package.json").read_text())
+    assert template_package["contributes"] == package["contributes"]
+    assert "showQuickPick" in (ROOT / "templates/room/vscode-extension/extension.js").read_text()
+
+
+def test_vscode_extension_root_and_template_copies_are_byte_identical():
+    for name in (
+        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js", "inventory-picker.js",
+        "runtime/manifest.json", "runtime/controller/robot.yaml", "runtime/controller/conda.yaml",
+        "runtime/controller/environment_linux_amd64_freeze.yaml", "media/room.svg",
+    ):
+        assert (ROOT / "vscode-extension" / name).read_bytes() == (
+            ROOT / "templates/room/vscode-extension" / name
+        ).read_bytes()
+    root_controller = ROOT / "vscode-extension/runtime/controller"
+    template_controller = ROOT / "templates/room/vscode-extension/runtime/controller"
+    # This pre-existing JAT-owned module is intentionally outside Task 4's write scope.
+    baseline_controller_mismatches = {Path("josh_room/jat.py")}
+    for module in root_controller.rglob("*.py"):
+        relative = module.relative_to(root_controller)
+        if relative in baseline_controller_mismatches:
+            continue
+        assert (template_controller / relative).read_bytes() == module.read_bytes()
+
+
+def test_oauth_room_requires_no_host_setup_mount():
+    readme = (ROOT / "README.md").read_text()
+    setup = (ROOT / "docs/R2-SETUP.md").read_text()
+    template = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
+    assert "no host enrollment" in readme
+    assert "Normal use requires no host setup" in setup
+    assert '"mounts"' not in template
+    assert '"initializeCommand"' not in template
+
+
+def test_root_devcontainer_is_the_personal_room_and_matches_template():
+    assert (ROOT / ".devcontainer/devcontainer.json").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/devcontainer.json"
+    ).read_bytes()
+    assert (ROOT / ".devcontainer/bootstrap.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/bootstrap.sh"
+    ).read_bytes()
+    assert not (ROOT / ".vscode/tasks.json").exists()
+    assert not (ROOT / "templates/room/.vscode/tasks.json").exists()
+
+
+def test_devcontainer_does_not_publish_host_runtime_paths():
+    root_config = json.loads((ROOT / ".devcontainer/devcontainer.json").read_text())
+    template_config = json.loads((ROOT / "templates/room/.devcontainer/devcontainer.json").read_text())
+    for config in (root_config, template_config):
+        assert config["remoteEnv"] == {"JOSH_ROOM_INSTANCE": "/home/vscode/.local/state/josh-room"}
+        assert "ROBOCORP_HOME" not in config["remoteEnv"]
+        assert "JOSH_ROOM_JAT_ROOT" not in config["remoteEnv"]
+
+
+def test_devcontainer_opens_clean_room_not_controller_source():
+    config = json.loads((ROOT / ".devcontainer/devcontainer.json").read_text())
+    assert config["workspaceFolder"] == "/workspaces/room"
+    assert "${localWorkspaceFolderBasename}" not in config["onCreateCommand"]
+    assert "/workspaces/room/.devcontainer/prepare-workspace.sh" in config["onCreateCommand"]
+    assert "/home/vscode/.local/share/josh-room/controller/.devcontainer/bootstrap.sh" == config["postCreateCommand"].removeprefix("bash ")
+    prepare = (ROOT / ".devcontainer/prepare-workspace.sh").read_text()
+    assert "JOSH_ROOM_CONTROLLER_ROOT" in prepare
+    assert (ROOT / ".devcontainer/prepare-workspace.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/prepare-workspace.sh"
+    ).read_bytes()
+
+
+def test_prepare_workspace_relocates_controller_and_leaves_clean_room(tmp_path):
+    room = tmp_path / "room"
+    controller = tmp_path / "controller"
+    (room / ".devcontainer").mkdir(parents=True)
+    (room / "src/josh_room").mkdir(parents=True)
+    (room / ".devcontainer/prepare-workspace.sh").write_bytes(
+        (ROOT / ".devcontainer/prepare-workspace.sh").read_bytes()
+    )
+    (room / "src/josh_room/__init__.py").write_text("")
+    (room / "README.md").write_text("controller source")
+
+    subprocess.run(
+        ["bash", str(room / ".devcontainer/prepare-workspace.sh"), str(room)],
+        env={"PATH": "/usr/bin:/bin", "JOSH_ROOM_CONTROLLER_ROOT": str(controller)},
+        check=True,
+    )
+
+    assert (controller / "README.md").read_text() == "controller source"
+    assert not any(room.iterdir())
+
+
+def test_template_workflow_validates_inputs_without_publishing():
+    workflow = (ROOT / ".github/workflows/publish-template.yml").read_text()
+    assert 'paths:' in workflow
+    assert '"templates/room/**"' in workflow
+    assert "packages: write" not in workflow
+    assert "docker/login-action@" not in workflow
+    assert "devcontainer templates publish" not in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "jq -e" in workflow
+    assert "docker build" not in workflow
+    assert "build-image" not in workflow
+
+
+def test_ci_installs_real_age_tooling_before_tests():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    import yaml
+
+    steps = yaml.safe_load(workflow)["jobs"]["test"]["steps"]
+    index = next(i for i, step in enumerate(steps) if step.get("name") == "Install age CLI")
+    install = steps[index]["run"]
+    assert "https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-linux-amd64.tar.gz" in install
+    assert "7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50" in install
+    assert "set -euo pipefail" in install
+    assert install.index("sha256sum --check") < install.index("tar -xzf") < install.index("install -m 0755")
+    assert '"$stage/age/age" "$stage/age/age-keygen"' in install
+    assert 'test "$(age --version)" = v1.2.1' in install
+    assert 'test "$(age-keygen --version)" = v1.2.1' in install
+    assert "apt-get" not in install
+    assert index < next(i for i, step in enumerate(steps) if "uv run pytest" in step.get("run", ""))
+
+
+def test_personal_template_has_no_host_runtime_assumption():
+    config = (ROOT / "templates/room/.devcontainer/devcontainer.json").read_text()
+    bootstrap = (ROOT / "templates/room/.devcontainer/bootstrap.sh").read_text()
+    assert "/run/user/1000" not in config
+    assert "/run/user" not in config
+    assert "prepare-kubernetes-secret" not in config
+    assert "RUNTIME_SECRET_NAME" not in bootstrap
+
+
+def test_kubernetes_secret_authority_is_narrow_and_automatic():
+    prepare = (ROOT / ".devcontainer/prepare-kubernetes-secret.sh").read_text()
+    assert "mint_r2_temp.py" in prepare
+    assert "parent-secret" in prepare
+    assert "TTL_SECONDS=21600" in prepare
+    assert "resourceNames" in prepare
+    assert "kubectl" in prepare and "apply -f" in prepare
+    assert "--from-literal" not in prepare
+    assert "DEVPOD_ADDITIONAL_ENV" not in prepare
+    assert (ROOT / ".devcontainer/prepare-kubernetes-secret.sh").read_bytes() == (
+        ROOT / "templates/room/.devcontainer/prepare-kubernetes-secret.sh"
+    ).read_bytes()
+
+
+def test_candidate_runtime_tuple_and_published_release_are_consumed_by_both_entries():
+    lock = json.loads((ROOT / "release-lock.json").read_text())
+    runtime = json.loads((ROOT / "vscode-extension/runtime/manifest.json").read_text())
+    assert lock["format_version"] == 1
+    assert lock["candidate_version"] == runtime["extension_version"]
+    assert lock["optional_golden_host"]["image"].endswith("@" + lock["optional_golden_host"]["digest"])
+    assert len(lock["josh_room"]["git_sha"]) == 40
+    assert lock["josh_room"]["git_sha"] == FEATURE_MERGE_SHA
+    promotion = json.loads((ROOT / "release-promotion.json").read_text())
+    assert promotion["version"] == lock["josh_room"]["version"] == "0.1.32"
+    assert promotion == {"version": lock["josh_room"]["version"], "sha256": PROMOTED_VSIX_SHA256}
+    assert len(lock["jat"]["git_sha"]) == 40
+    artifact = lock["jat"]["environment_artifact"]
+    assert artifact["archive_url"].endswith("/jat-runtime-linux-amd64.rcca")
+    assert artifact["release_tag"] == artifact["archive_url"].split("/releases/download/", 1)[1].split("/", 1)[0]
+    assert re.fullmatch(r"v\d+\.\d+\.\d+-jat-runtime", artifact["release_tag"])
+    assert runtime["jat"]["git_sha"] == lock["jat"]["git_sha"]
+    for platform in ("linux-x64", "win32-x64"):
+        assert f"/releases/download/{artifact['release_tag']}/" in runtime["jat"]["environment_artifacts"][platform]["archive"]["url"]
+    assert len(artifact["archive_sha256"]) == 64
+    assert artifact["archive_size"] > 0
+    assert artifact["rcc_artifact_digest"].startswith("sha256:")
+    assert artifact["rcc_version"] == runtime["jat"]["rcc"]["version"]
+    assert runtime["jat"]["rcc"] == lock["jat"]["rcc"]
+    assert lock["rcc"]["version"] == "v18.19.11"
+    assert lock["rcc"]["source_sha"] == "953eda18d3d1f4a286c17709f282315a2ed16a16"
+    assert lock["rcc"]["managed_asset"] == "rcc-linux64"
+    assert len(lock["rcc"]["managed_asset_sha256"]) == 64
+    for config_path in (
+        ROOT / ".devcontainer/devcontainer.json",
+        ROOT / "templates/room/.devcontainer/devcontainer.json",
+    ):
+        assert json.loads(config_path.read_text())["image"] == lock["optional_golden_host"]["image"]
+    bootstrap = (ROOT / ".devcontainer/bootstrap.sh").read_text()
+    assert "Optional golden-host extension copy complete" in bootstrap
+    assert "brew" not in bootstrap.lower()
+    assert "action-server" not in bootstrap
+    assert "josh-room.git@main" not in bootstrap
+    manifest = json.loads((ROOT / "templates/room/devcontainer-template.json").read_text())
+    assert manifest["version"] == lock["template"]["version"]
+
+
+def test_issue_50_public_documentation_states_dimension_encryption_boundary():
+    agents = (ROOT / "AGENTS.md").read_text()
+    readme = (ROOT / "README.md").read_text()
+    minio = (ROOT / "docs/MINIO-SETUP.md").read_text()
+    r2 = (ROOT / "docs/R2-SETUP.md").read_text()
+    architecture = (ROOT / "docs/architecture.md").read_text()
+    docs = f"{agents}\n{readme}\n{minio}\n{r2}\n{architecture}"
+    docs = " ".join(docs.split()).lower()
+    minio = " ".join(minio.split()).lower()
+    r2 = " ".join(r2.split()).lower()
+
+    assert "r2 and minio are concrete provider backends" in docs
+    assert "physical bucket" in docs and "one encryption domain" in docs
+    assert "keyset enrollment and catalog reads do not require" in docs
+    assert "cloudflare" in docs
+    assert "cloudflare" in r2 and "r2-only authority" in r2
+    assert "operational" in minio and "identity" in minio
+    assert "bucket-credential trust decision" in minio
+    assert "recovery private identity" in docs and "never stored" in docs
+    assert "provider credentials and encryption material are separate" in docs
+    assert "never" in docs and "argv" in docs and "receipts" in docs
+    assert "outer trusted envelope" in minio
+    assert "never rebuilds or restores jat payloads" in minio
+    assert "explicit approval" in minio and "production migration" in minio
+    for forbidden in ("web ui", "webview", "daemon", "generic provider framework", "automatic bucket administration"):
+        assert forbidden in docs
+    assert "do not add web ui" in docs or "does not add web ui" in docs
+    assert "jat changes" in docs and "minio infrastructure changes" in docs
+    assert "runtime" in docs and "ci" in docs and "live" in docs
+    assert "real credentials" in docs and "private paths" in docs
+    assert "Cloudflare R2 is the private production blob backend" not in agents
+    assert "Do not add web UI, extension" not in agents

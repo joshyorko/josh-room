@@ -7518,3 +7518,4 @@ test("agent recovery rejects forged profile and session picker values", async ()
   session.quickPickResponses.push({ provider_session_id: "22222222-2222-4222-8222-222222222222" });
   await assert.rejects(session.extension.__test__.restoreAgentRecovery(session.row), /verified native session/);
   assert.equal(session.harness.calls.length, 2);
+});

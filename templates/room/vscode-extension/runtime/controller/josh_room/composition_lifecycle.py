@@ -357,7 +357,8 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
             )
     else:
         claim()
-        summary = store.backup(root, excludes=excludes, tags=tag)
+        summary = store.backup(root, parent=parent.to_dict()['workspace']['snapshot_id'] if parent else None,
+                               excludes=excludes, tags=tag)
         snapshot = store.snapshot(summary.snapshot_id)
     expected_parent = parent.to_dict()['workspace']['snapshot_id'] if parent else None
     if snapshot.parent_snapshot_id != expected_parent:

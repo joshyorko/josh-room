@@ -2,12 +2,12 @@
 
 Ordinary full-Room Save remains the default. The explicit catalog mode now has
 separate CLI capture and entry operations backed by age-encrypted namespace
-state and an isolated Restic repository. Existing ordinary Save refuses catalog
-metadata and split guards, including materialized namespace children: it must
-not accidentally save them to the legacy repository. No unload or migration of
+state and an isolated Restic repository. Full-Room Save refuses namespace
+metadata; guarded children use the dedicated namespace Save path. Namespace
+content cannot fall through to the legacy writer. No unload or migration of
 existing Rooms is supported. The discovery previews below remain read-only.
 
-## First writable vertical: Linux, one approved operation per namespace
+## Writable capture: Linux, one initial approved capture per namespace
 
 Use an already initialized MinIO/S3/R2 Dimension with a configured encryption
 domain and root provider endpoint (no endpoint path aliases). Generate a fresh
@@ -77,12 +77,15 @@ It verifies the final child's marker and policy/signature. A matching clean
 materialization can be reopened; dirty/differently bound content or links are
 refused. `latest` is never a fallback. A versioned v4 path-bound marker retains namespace membership even if a guard
 is removed; clean reopen additionally checks the exact local guard. A split guard prevents ordinary Save
-from writing an entered child into the legacy store. Updating a materialized child
-inside its existing namespace is a later operation; this increment does not
-claim that ordinary Save updates the composition pin. No automatic unload,
+from writing an entered child into the legacy store. Save in a guarded child
+uses its dedicated namespace writer. Updating that child never implicitly
+updates a parent's composition pin. The additive
+[child Save and explicit parent pin refresh](composition-updates.md) extend a
+saved namespace while preserving all historical pins. No automatic unload,
 activation/terminal hydration, or selected-file restore is added.
 
-Native commands are `Josh: Save Catalog Room` and `Josh: Enter Child Room`.
+Native commands are `Josh: Save Catalog Room`, `Josh: Enter Child Room`,
+`Josh: Save Child Room`, and `Josh: Refresh Catalog Child Pins`.
 New Room offers Save one Room first, or explicit Catalog configuration. Catalog
 configuration selects a source, child folders and optional parent-owned
 files/folders with native dialogs, then shows the source-only/local-only review.
