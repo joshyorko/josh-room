@@ -939,13 +939,15 @@ def status(instance, dimension, material, room, workspace):
                         profile_ref=candidate["profile_ref"],
                         tool=tool,
                     )
-                    _grant(
+                    admitted_grant, _binding, _admission = _grant(
                         scope.context,
                         grant["profile"],
                         tool,
                         str(Path(workspace).resolve()),
                         "room-capture",
                     )
+                    if admitted_grant != grant:
+                        continue
                 except (OSError, RuntimeError, ValueError):
                     continue
                 result["agent_save"]["profiles"].append(

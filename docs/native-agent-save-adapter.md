@@ -142,6 +142,8 @@ source pilot; the opened backend and each current profile grant must still
 admit capture. It is not installed qualification. The candidate must not be
 promoted before actual integrated acceptance passes; failed pilot evidence
 must remain an open gate.
+Chooser admission compares the independently reopened grant with the exact
+resolved opaque profile reference; replacing a valid grant omits the stale row.
 
 Focused checks live in `tests/test_native_agent_save.py`,
 `tests/test_native_agent_save_integration.py`,

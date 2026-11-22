@@ -86,9 +86,9 @@ def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypat
     assert save.status(None, SimpleNamespace(provider="minio"), None, "room", tmp_path)["agent_save"]["available"] is False
 
 
-@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize("grant_state", ["denied", "matching", "replaced"])
 @pytest.mark.parametrize("scope", ["personal", "work", "unknown"])
-def test_history_chooser_pilot_requires_each_current_profile_grant(tmp_path, monkeypatch, admitted, scope):
+def test_history_chooser_pilot_requires_each_current_profile_grant(tmp_path, monkeypatch, grant_state, scope):
     from josh_room import (
         native_agent_discovery,
         native_agent_reference,
@@ -108,17 +108,20 @@ def test_history_chooser_pilot_requires_each_current_profile_grant(tmp_path, mon
     candidate = {"room_reference_allowed": True, "tools": ["codex", "claude", "t3"],
                  "profile_ref": "c" * 64, "scope": scope}
     monkeypatch.setattr(native_agent_discovery, "room_status", lambda **_: {"profiles": [candidate]})
-    monkeypatch.setattr(native_agent_discovery, "resolve_profile", lambda **_: {"profile": "synthetic-profile"})
+    resolved = {"profile": "synthetic-profile", "scope": scope}
+    monkeypatch.setattr(native_agent_discovery, "resolve_profile", lambda **_: dict(resolved))
     calls = []
 
     def grant(context, profile, tool, workspace, operation):
         calls.append((context, profile, tool, workspace, operation))
-        if not admitted:
+        if grant_state == "denied":
             raise ValueError("stale synthetic grant")
+        current = {**resolved, "scope": "homelab"} if grant_state == "replaced" else dict(resolved)
+        return current, None, None
 
     monkeypatch.setattr(native_agent_reference, "_grant", grant)
     result = save.status(None, SimpleNamespace(provider="minio", dimension_id="synthetic"), None, "room", tmp_path)["agent_save"]
-    allowed = admitted and scope == "personal"
+    allowed = grant_state == "matching" and scope == "personal"
     assert result["available"] is allowed
     assert [item["tool"] for item in result["profiles"]] == (["codex", "claude"] if allowed else [])
     assert [call[2] for call in calls] == (["codex", "claude"] if scope == "personal" else [])
