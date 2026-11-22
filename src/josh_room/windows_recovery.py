@@ -19,7 +19,7 @@ _SHARE_READ = 1
 _SHARE_WRITE = 2
 
 
-def current_fingerprint_windows(workspace, relative):
+def current_fingerprint_windows(workspace, relative, *, include_text=False):
     """Hold every ancestor against rename and the file against write/delete.
 
     UNC/device paths, reparse points, hardlinks and unavailable native guarantees
@@ -104,6 +104,7 @@ def current_fingerprint_windows(workspace, relative):
         buffer = ctypes.create_string_buffer(65536)
         digest = hashlib.sha256()
         consumed = 0
+        captured = bytearray()
         while True:
             count = ctypes.c_uint32()
             if not api.kernel.ReadFile(
@@ -115,10 +116,17 @@ def current_fingerprint_windows(workspace, relative):
             consumed += count.value
             if consumed > size:
                 fail("recovery-current-changed")
-            digest.update(buffer.raw[: count.value])
+            chunk = buffer.raw[: count.value]
+            digest.update(chunk)
+            if include_text and size <= 2048:
+                captured.extend(chunk)
         if consumed != size:
             fail("recovery-current-changed")
-        return {"type": "file", "size": consumed, "sha256": digest.hexdigest()}
+        result = {"type": "file", "size": consumed, "sha256": digest.hexdigest()}
+        if include_text:
+            from .recovery_text import text_preview
+            result["text_preview"] = text_preview(relative, bytes(captured)) if size <= 2048 else {"state": "oversized"}
+        return result
     except OSError:
         fail("recovery-current-unsafe")
     finally:

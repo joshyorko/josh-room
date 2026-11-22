@@ -175,6 +175,9 @@ try:
     pins = []
     for content in (b"first\n", b"second\n", b"third\n"):
         (workspace / "changed.txt").write_bytes(content)
+        (workspace / "code.py").write_bytes(
+            ('def greeting():\n\treturn "' + content.decode().strip() + ' 你好"\n').encode()
+        )
         pins.append(
             cli(
                 "snapshot",

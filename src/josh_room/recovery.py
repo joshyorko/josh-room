@@ -117,19 +117,65 @@ class Recovery:
         data = self.content(node)
         return {"type": "file", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
-    def diff(self, path, other=None, workspace=None):
+    def preview(self, path):
+        from .recovery_text import MAX_TEXT_BYTES, text_preview
+        from .workspace_policy import (
+            CapturePolicy,
+            _parts,
+            _read_defaults,
+            _user_patterns,
+        )
+        try:
+            node = self.selected(path)
+        except RoomStoreLifecycleError as error:
+            if error.code == "recovery-path-absent":
+                return {"state": "absent"}
+            raise
+        if node.get("type") != "file":
+            return {"state": "not-file"}
+        try:
+            _raw, defaults = _read_defaults()
+            ignore = None
+            try:
+                ignore = self.content(self.selected(".josh-roomignore"), budget=65536)
+            except RoomStoreLifecycleError as error:
+                if error.code != "recovery-path-absent":
+                    return {"state": "capture-policy-unavailable"}
+            patterns = tuple(_parts(item) for item in defaults["exclude"]) + _user_patterns(ignore)
+            if CapturePolicy("", patterns, None).is_excluded(path):
+                return {"state": "excluded"}
+        except (ValueError, RuntimeError):
+            return {"state": "capture-policy-unavailable"}
+        if type(node.get("size")) is not int or node["size"] > MAX_TEXT_BYTES:
+            return {"state": "oversized"}
+        return text_preview(path, self.content(node, budget=MAX_TEXT_BYTES))
+
+    def diff(self, path, other=None, workspace=None, include_text=False):
         before = self.fingerprint(path)
+        previews = {}
+        if include_text:
+            previews["before_text_preview"] = self.preview(path)
         if other is not None:
             after = other.fingerprint(path)
             target = other.identity
+            if include_text:
+                previews["after_text_preview"] = other.preview(path)
         else:
-            after = current_fingerprint(workspace, path)
+            try:
+                after = current_fingerprint(workspace, path, include_text=include_text)
+            except RoomStoreLifecycleError as error:
+                if not include_text or error.code != "recovery-current-excluded":
+                    raise
+                after = {"status": "excluded", "text_preview": {"state": "excluded"}}
+            if include_text:
+                previews["after_text_preview"] = (after.pop("text_preview") if after is not None else {"state": "absent"})
             target = {"kind": "explicit-current-workspace"}
         return self.receipt(path=path, before=before, after=after, compare_to=target,
-                            change="unchanged" if before == after else
+                            change="unknown" if after is not None and after.get("status") == "excluded" else "unchanged" if before == after else
                             "added" if before is None else "removed" if after is None else "modified",
                             compare_blob_bytes_read=other.bytes_read if other is not None else None,
-                            text_diff="withheld-policy")
+                            text_diff=("available" if previews and all(row["state"] in {"available", "absent"} for row in previews.values()) else "digest-only") if include_text else "withheld-policy",
+                            **previews)
 
     def receipt(self, **extra):
         return {"ok": True, **self.identity, "mode": "on-demand listing",
@@ -166,13 +212,14 @@ class Recovery:
             fail("recovery-integrity")
         return bytes(data)
 
-    def inspect(self, path):
+    def inspect(self, path, include_text=False):
         node = self.selected(path)
         data = self.content(node)
         # Content display is deliberately withheld until trust/sensitivity admission
         # is implemented. Digests and type/size are safe for binary and text alike.
         return self.receipt(path=path, type="file", size=len(data),
-                            sha256=hashlib.sha256(data).hexdigest(), preview="withheld-policy")
+                            sha256=hashlib.sha256(data).hexdigest(), preview="withheld-policy",
+                            **({"text_preview": self.preview(path)} if include_text else {}))
 
     def extract(self, path, destination, dry_run=False):
         if path == ".":
@@ -234,13 +281,13 @@ class Recovery:
                             logical_bytes=total, verified_files=digests)
 
 
-def current_fingerprint(workspace, path):
+def current_fingerprint(workspace, path, *, include_text=False):
     """Explicit current-root comparison with native no-follow guarantees."""
     from .workspace_policy import load_capture_policy
     parts = _relative_parts(path)
     if os.name == "nt":
         from .windows_recovery import current_fingerprint_windows
-        return current_fingerprint_windows(workspace, path)
+        return current_fingerprint_windows(workspace, path, include_text=include_text)
     if not workspace or os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
         fail("recovery-current-unsupported")
     root = Path(workspace).absolute()
@@ -262,16 +309,23 @@ def current_fingerprint(workspace, path):
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_BYTES:
             fail("recovery-current-unsafe")
         digest = hashlib.sha256()
+        captured = bytearray()
         size = 0
         while chunk := os.read(descriptor, 65536):
             size += len(chunk)
             if size > MAX_BYTES:
                 fail("recovery-budget")
             digest.update(chunk)
+            if include_text and info.st_size <= 2048:
+                captured.extend(chunk)
         after = os.fstat(descriptor)
         if (info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             fail("recovery-current-changed")
-        return {"type": "file", "size": size, "sha256": digest.hexdigest()}
+        result = {"type": "file", "size": size, "sha256": digest.hexdigest()}
+        if include_text:
+            from .recovery_text import text_preview
+            result["text_preview"] = text_preview(path, bytes(captured)) if size <= 2048 else {"state": "oversized"}
+        return result
     except FileNotFoundError:
         return None
     except OSError:
@@ -290,7 +344,7 @@ def run_recovery(context, args):
     if args.recovery_command == "tree":
         return recovery.tree(args.path, args.offset, args.limit)
     if args.recovery_command == "diff":
-        return recovery.diff(args.path, workspace=args.workspace)
+        return recovery.diff(args.path, workspace=args.workspace, include_text=args.include_text)
     if args.recovery_command == "inspect":
-        return recovery.inspect(args.path)
+        return recovery.inspect(args.path, include_text=args.include_text)
     return recovery.extract(args.path, args.destination, args.dry_run)

@@ -597,6 +597,8 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "tree":
             command.add_argument("--offset", type=int, default=0)
             command.add_argument("--limit", type=int, default=100)
+        if action in {"inspect", "diff"}:
+            command.add_argument("--include-text", action="store_true")
         if action == "diff":
             comparison = command.add_mutually_exclusive_group(required=True)
             comparison.add_argument("--compare-snapshot")
@@ -808,6 +810,8 @@ def _write_runtime_result(result):
     target_value = os.environ.get("JOSH_ROOM_RESULT_FILE")
     if not target_value:
         return
+    from .recovery_text import without_text_envelopes
+    result = without_text_envelopes(result)
     target = Path(target_value)
     if target.is_symlink():
         raise RuntimeError("runtime result path must not be a symlink")
@@ -2525,7 +2529,7 @@ def dispatch(args, instance: Path) -> dict:
                     if (context.selected_record.get("snapshot_id") != args.snapshot
                             or other.selected_record.get("snapshot_id") != args.compare_snapshot):
                         raise ValueError("historical comparison identity mismatch")
-                    return Recovery(context).diff(args.path, other=Recovery(other))
+                    return Recovery(context).diff(args.path, other=Recovery(other), include_text=args.include_text)
             return run_recovery(context, args)
     if args.command == "room-store":
         config = private_config() or {}

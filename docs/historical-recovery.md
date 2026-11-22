@@ -14,8 +14,9 @@ global workspace item ceiling, but each tree/blob must fit the existing bounded
 Restic capture (4 MiB), with a 128 MiB aggregate read budget per request. A larger directory fails closed rather than appearing
 complete. Paging rereads the selected directory; this is not a persisted index.
 
-`inspect` reports a SHA-256 and size. Plaintext preview is withheld pending
-capture/sensitivity/trust-policy admission. Browsing does not read file content.
+`inspect` reports a SHA-256 and size by default. Explicit `--include-text`
+requests a complete admitted UTF-8 preview of at most 2 KiB, with digest-only
+fallback for excluded, sensitive, binary or larger files. Browsing does not read file content.
 Filenames are returned only to the authenticated caller, never written into a
 new remote index. The existing Restic cache remains governed by its private
 runtime lifecycle.
@@ -62,14 +63,16 @@ current capture exclusions. Windows current-file comparison uses native handles 
 and hardlinks, hold ancestors against rename, and deny file writers/deletion.
 UNC/device paths and unavailable native guarantees still fail closed.
 Native Windows qualification is reported separately from source support.
-No content is displayed, and text diffs remain `withheld-policy`.
+Without `--include-text`, the existing digest-only JSON contract is unchanged.
+With it, admitted text is available for native read-only comparison.
 
 The native Logical JAT row offers **Browse Recovery Point…**. QuickPick keeps
 its initial Room/Dimension/point while paging, navigating, inspecting checksums,
 recovering to a Save Dialog destination, or comparing digests. Canceling a
 picker makes no extraction call. Untrusted workspaces can browse metadata but
-cannot recover or compare. Results open as JSON metadata, never executable
-historical documents. This is not yet the requested syntax preview/diff editor.
+cannot recover, preview text or compare. Admitted text opens in the native
+read-only source/diff editor; other results retain the JSON metadata fallback.
+Historical content is never executed or served.
 
 Final validation: 135 focused Python tests passed with real Restic 0.19.1.
 The same synthetic six-byte recovery measured 2,412 blob bytes / 3 calls on the
@@ -108,7 +111,8 @@ binary) matched the pre-recovery inventory. Zero staging directories remained.
 Canceling the subsequent picker ended the session without another write.
 These are native **installed helper** results, not production row-command,
 managed RCC/controller, provider ciphertext-authority or keyring acceptance.
-Text diffs are still withheld; the comparison surface is JSON metadata.
+At that earlier source, text diffs were withheld and comparison used JSON
+metadata. The bounded text follow-up below supersedes that limitation.
 
 The initial disposable D-Bus probe found no `org.freedesktop.secrets` service.
 A bounded task-owned container setup is being evaluated independently; the
@@ -177,3 +181,50 @@ headless Windows recovery gate, not Windows live-provider/keyring or installed
 native VSIX UI acceptance. The [sanitized receipt](receipts/issue-209-windows-recovery.json)
 links the uploaded pin/JUnit evidence and records its artifact digest. Wire
 bytes remain unmeasured and are not inferred from plaintext blob counts.
+
+## Bounded historical text preview and native diff
+
+The former `withheld-policy` result was an implementation placeholder, not a
+repository-wide prohibition. This slice reuses existing capture defaults and
+captured `.josh-roomignore` exclusions, material-security credential path
+classes/content patterns, CLI credential-key and identity sanitization, and
+Workspace Trust. It adds no policy file, private-data prerequisite or new
+blanket approval. Snapshot preview uses defaults plus the captured ignore file
+when present; it does not invent a missing historical policy index.
+
+`inspect --include-text` and `diff --include-text` opt in to full-file UTF-8 text
+of at most 2,048 bytes per side. Admission precedes encoding. Sensitive paths,
+credential assignments, shared content matches, non-UTF-8/control-byte files,
+excluded paths and oversized files return explicit states and metadata/digests,
+not partial text. Excluded current files are not read and report unknown
+comparison coverage. A↔B and historical↔current use the same boundary. The
+ordinary inspect/digest API remains unchanged when the flag is absent.
+
+The admitted envelope is base64 UTF-8 so existing JSON sanitization cannot
+collapse indentation, CRLF, spaces or Unicode; it stays within the existing
+4,096-character scalar/64 KiB result budgets. Encoding is not security: the
+extension decodes it only after canonical encoding, byte-size and SHA-256
+checks against the separately reported historical/current digest. Missing,
+malformed, oversized, sensitive or mismatching envelopes retain digest fallback.
+
+Native **Preview text** and comparison actions use an opaque random URI and
+read-only `TextDocumentContentProvider`, then the normal `vscode.diff` editor.
+Only a safe filename extension is used for syntax association; provider,
+Dimension, Room IDs, original paths and content do not enter the URI. The
+provider retains at most 32 small buffers in memory and drops them when their
+documents close. It creates no compare files or workspace artifacts, webview,
+server, filesystem daemon or executable preview.
+
+Text requests are pipe-only in the extension; no runtime result-file path is
+passed. The CLI independently strips reversible envelopes from any requested
+runtime receipt. Existing stdout suppression prevents preview data entering
+extension logs/progress, and metadata fallback removes payloads. Admission is
+bounded pattern-based protection, not a claim to detect every possible secret.
+
+Focused follow-up verification: 148 Python PASS/4 native-Windows SKIPPED on
+Linux, including real pinned Restic; 380 Node PASS/4 SKIPPED. Regressions cover
+preview→actual CLI serialization→native provider bytes, Unicode/whitespace,
+credential/binary/oversize/omitted/tampered denial, digest fallback, untrusted
+preview denial, readonly opaque URIs, close cleanup, and no runtime receipt,
+log or progress payload. Updated native Windows text tests remain a separate
+exact-head CI result; earlier Windows evidence does not prove these changes.

@@ -13,9 +13,14 @@ async function browseRecovery(vscode, context, run, workspace) {
       || result.room_id !== pin.project_id) throw new Error("Historical recovery identity changed.");
     return result;
   };
+  const textViews = require("./recovery-text");
   const show = async (result) => {
+    result = textViews.metadataOnly(result);
     const document = await vscode.workspace.openTextDocument({ language: "json", content: JSON.stringify(result, null, 2) });
     await vscode.window.showTextDocument(document, { preview: true });
+  };
+  const showComparison = async (result, selected) => {
+    if (!await textViews.showTextPreview(vscode, result, selected, `${pin.snapshot_id} · ${selected}`)) await show(result);
   };
   let path = ".";
   let offset = 0;
@@ -35,25 +40,27 @@ async function browseRecovery(vscode, context, run, workspace) {
     if (chosen.action === "parent") { path = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "."; offset = 0; continue; }
     const directory = chosen.entry.type === "dir";
     const actions = directory ? ["Browse", "Recover selection…", "Compare with recovery point…"]
-      : ["Inspect checksum", "Recover selection…", "Compare with current workspace", "Compare with recovery point…"];
+      : ["Preview text", "Inspect checksum", "Recover selection…", "Compare with current workspace", "Compare with recovery point…"];
     const action = await vscode.window.showQuickPick(actions, { title: chosen.path });
     if (!action) continue;
     if (action === "Browse") { path = chosen.path; offset = 0; continue; }
     if (action === "Inspect checksum") { await show(await invoke("inspect", chosen.path)); continue; }
     if (!vscode.workspace.isTrusted) throw new Error("Trust this workspace before recovery or comparison.");
-    if (action === "Recover selection…") {
+    if (action === "Preview text") {
+      await showComparison(await invoke("inspect", chosen.path, ["--include-text"]), chosen.path);
+    } else if (action === "Recover selection…") {
       const destination = await vscode.window.showSaveDialog({ title: "Recover to a new, absent destination", saveLabel: "Recover selection" });
       if (!destination) continue;
       if (destination.scheme !== "file") throw new Error("Recovery requires a local filesystem destination.");
       await show(await invoke("extract", chosen.path, ["--destination", destination.fsPath]));
     } else if (action === "Compare with current workspace") {
       if (!workspace) throw new Error("Open an explicit workspace to compare.");
-      await show(await invoke("diff", chosen.path, ["--workspace", workspace]));
+      await showComparison(await invoke("diff", chosen.path, ["--workspace", workspace, "--include-text"]), chosen.path);
     } else {
       const other = await vscode.window.showInputBox({ title: "Exact recovery point ID to compare", ignoreFocusOut: true });
       if (!other) continue;
       if (other === "latest") throw new Error("Comparison requires an exact recovery point.");
-      await show(await invoke("diff", chosen.path, ["--compare-snapshot", other]));
+      await showComparison(await invoke("diff", chosen.path, ["--compare-snapshot", other, "--include-text"]), chosen.path);
     }
   }
 }

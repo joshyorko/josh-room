@@ -7143,3 +7143,27 @@ for (const name of [".josh-room-composition.json", ".josh-room-split.json"]) {
     assert.equal(mock.quickPickCalls.length, 0);
   });
 }
+
+test("recovery text stays pipe-only and absent from runtime files logs and progress", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-text-transport-"));
+  try {
+    const fixture = createVscodeMock(root);
+    const content = "synthetic preview\n  indentation\n";
+    const payload = Buffer.from(content).toString("base64");
+    const result = { ok: true, text_preview: { state: "available", encoding: "base64-utf8", data: payload } };
+    const spawnHarness = createSpawnHarness(({ options }) => {
+      assert.equal(options.env.JOSH_ROOM_RESULT_FILE, undefined);
+      return { stdout: JSON.stringify(result) };
+    });
+    const extension = loadExtension(fixture.vscode, spawnHarness.spawn);
+    extension.__test__.setStatusItem(fixture.statusItem);
+    extension.__test__.setOutputChannelForTests({
+      info: line => fixture.logLines.push(line), warn: line => fixture.logLines.push(line),
+      error: line => fixture.logLines.push(line), appendLine: line => fixture.logLines.push(line),
+    });
+    assert.deepEqual(await extension.__test__.runJoshRoom(["recovery", "inspect", "room", "--include-text"], root), result);
+    assert.doesNotMatch(JSON.stringify([fixture.logLines, fixture.progressReports]), new RegExp(payload));
+    assert.ok(!JSON.stringify(fixture.logLines).includes(content));
+    assert.deepEqual(fs.readdirSync(root), []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

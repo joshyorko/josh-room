@@ -1143,7 +1143,12 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     throw error;
   }
   return new Promise((resolve, reject) => {
-    environment.JOSH_ROOM_RESULT_FILE = resultPath;
+    if (args[0] === "recovery" && args.includes("--include-text")) {
+      // Text preview is pipe-only; never put reversible content in runtime receipts.
+      delete environment.JOSH_ROOM_RESULT_FILE;
+    } else {
+      environment.JOSH_ROOM_RESULT_FILE = resultPath;
+    }
     const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(sanitizeProgressEvent(event)))];
     if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
       const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
