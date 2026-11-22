@@ -43,6 +43,18 @@ def _become_subreaper():
         raise OSError(ctypes.get_errno(), "Serve child adoption unavailable")
 
 
+def _reap_owned_children():
+    # A single /proc traversal is not stable while an intermediary exits.
+    # As subreaper, ECHILD is the kernel proof that no owned descendants remain.
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            terminate_owned_descendants(os.getpid())
+
+
 def main():
     child = None
     pidfd = None
@@ -77,7 +89,7 @@ def main():
         if child is not None and child.poll() is None:
             terminate_owned_process(child)
         if child is not None:
-            terminate_owned_descendants(os.getpid())
+            _reap_owned_children()
         if pidfd is not None:
             os.close(pidfd)
         if lifetime is not None:

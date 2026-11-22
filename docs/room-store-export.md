@@ -113,7 +113,9 @@ lifetime pipe owned only by the Room CLI. The guard blocks on that pipe and
 the RCC pidfd; controller disappearance closes the pipe and terminates the
 owned RCC/JAT descendants, including detached listeners. The guard is a Linux
 child subreaper, so an RCC exit also adopts and stops its surviving descendants
-before releasing output pipes. It exits with the
+before releasing output pipes. Shutdown rechecks and reaps until the kernel
+reports no children; a single changing process-tree snapshot is not sufficient.
+It exits with the
 operation and creates no persistent service, state file or polling task.
 Linux without pidfd support fails before starting a listener. On Windows, the
 dedicated Serve CLI joins an anonymous kill-on-close Job Object before spawning

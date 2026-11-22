@@ -123,7 +123,7 @@ def test_lifetime_eof_during_spawn_cleans_started_process(monkeypatch):
 
         monkeypatch.setattr(serve_process_guard.subprocess, "Popen", spawn)
         monkeypatch.setattr(serve_process_guard, "_become_subreaper", lambda: None)
-        monkeypatch.setattr(serve_process_guard, "terminate_owned_descendants", lambda _: None)
+        monkeypatch.setattr(serve_process_guard, "_reap_owned_children", lambda: None)
         monkeypatch.setattr(sys, "argv", ["guard", str(read_fd), "--", "synthetic-rcc"])
         assert serve_process_guard.main() == 130
         assert child.poll() is not None
@@ -171,3 +171,77 @@ def test_rcc_exit_reaps_existing_detached_listener_and_releases_output_pipes(tmp
         assert not _alive(child)
         with pytest.raises(ConnectionRefusedError):
             socket.create_connection(("127.0.0.1", port), timeout=1).close()
+
+
+def test_existing_listener_reparented_during_cleanup_cannot_escape_subreaper(tmp_path):
+    ready = tmp_path / "reparented"
+    middle = """
+import os, subprocess, sys, time
+from pathlib import Path
+Path(sys.argv[2] + '.middle').write_text(str(os.getpid()))
+subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], start_new_session=True)
+while not Path(sys.argv[2] + '.middle-stop').exists(): time.sleep(.001)
+"""
+    rcc = """
+import subprocess, sys, time
+from pathlib import Path
+subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]], start_new_session=True)
+while not Path(sys.argv[3] + '.rcc-stop').exists(): time.sleep(.001)
+sys.exit(23)
+"""
+    wrapper = f"""
+import json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, {str(Path(serve_process_guard.__file__).resolve().parents[1])!r})
+from josh_room import cancellation, serve_process_guard
+original = cancellation._task_children
+ready = Path({str(ready)!r})
+def children(pid):
+    result = original(pid)
+    if pid == os.getpid() and not Path(str(ready) + '.seam').exists():
+        listener, _ = json.loads(ready.read_text())
+        Path(str(ready) + '.middle-stop').touch()
+        deadline = time.monotonic() + 3
+        while True:
+            raw = Path(f'/proc/{{listener}}/stat').read_text()
+            if int(raw[raw.rfind(')') + 2:].split()[1]) == os.getpid(): break
+            assert time.monotonic() < deadline
+            time.sleep(.001)
+        Path(str(ready) + '.seam').touch()
+    return result
+cancellation._task_children = children
+raise SystemExit(serve_process_guard.main())
+"""
+    read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+    process = subprocess.Popen(
+        [sys.executable, "-I", "-c", wrapper, str(read_fd), "--", sys.executable,
+         "-c", rcc, middle, _LISTENER, str(ready)],
+        pass_fds=(read_fd,), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    os.close(read_fd)
+    listener = None
+    intermediary = None
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists():
+            assert process.poll() is None and time.monotonic() < deadline
+            time.sleep(.01)
+        listener, port = json.loads(ready.read_text())
+        intermediary = int(Path(str(ready) + ".middle").read_text())
+        _assert_serving(port)
+        Path(str(ready) + ".rcc-stop").touch()
+        assert process.wait(timeout=5) == 23
+        assert Path(str(ready) + ".seam").exists()
+        process.communicate(timeout=1)
+        assert not _alive(listener)
+        with pytest.raises(ConnectionRefusedError):
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
+    finally:
+        os.close(write_fd)
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+        for pid in (listener, intermediary):
+            if pid is not None and _alive(pid):
+                os.kill(pid, signal.SIGKILL)
+        process.communicate(timeout=2)

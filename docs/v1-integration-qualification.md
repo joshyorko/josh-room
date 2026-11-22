@@ -81,6 +81,14 @@ on every exit. Both ordinary RCC exit and RCC SIGKILL regressions now preserve
 the wrapper status, stop the listener and release Room's output pipes. Native
 matching-runtime repetition and independent recheck remain required.
 
+The matching-runtime repetition passed, but a subsequent independent scheduling
+probe found an existing listener could reparent during the one-pass descendant
+scan. The next correction rechecks and reaps until the kernel reports no
+children. Its deterministic regression schedules that exact intermediary exit,
+without a cleanup-time fork, and checks both listener closure and output EOF.
+The full focused guard/JAT/cancellation selection passed 75 tests. Final
+independent recheck and exact-head CI remain pending.
+
 Focused correction checks passed 63 JAT tests, 35 recovery tests and six native
 action tests. The final namespace regression passed with real age and pinned
 Restic 0.19.1 over synthetic S3 transport, including historical updates,
