@@ -1,0 +1,49 @@
+{
+  "format": "josh-room.coordinator-windows-handoff-evidence.v1",
+  "source_head": "5e05954ead917d7a4b8af18300e2fa6801a848ae",
+  "tested_merge": "45dc08848906d8eed7614ee50497269739919f4b",
+  "integrated_head": "e67bc289059766db51c7320773305d6e47089e41",
+  "provenance": "Coordinator summary of the source-lane author's artifact-backed handoff. The source job success was independently observed; artifact bytes and native execution were not independently repeated by the coordinator.",
+  "temporary_author_receipt": "Removed during the source lane's completed cleanup; durable GitHub artifact retained.",
+  "runtime": "installed-source Python fallback; not immutable RCC feature acceptance",
+  "run_id": 45068423905,
+  "job_id": 137349700818,
+  "job_status_observed": "success",
+  "artifact_id": 14772661532,
+  "reported_artifact_sha256": "818396568caa57ba2411f17961b21780f8184744ea8b439d6e76ee38255debf9",
+  "reported_vsix_sha256": "a460cda85ed8ccdd24003c8e2c55288985dfab4fb6e5dd244720d4d83737bc1f",
+  "installed_file_parity_reported": 115,
+  "direct_installed_cli_negatives": {
+    "passed_reported": 4,
+    "operations": ["inspect", "extract"],
+    "inputs": ["missing", "deleted before subprocess launch"],
+    "qualification_wrapper_bypassed": true,
+    "admission_error_expected": true,
+    "identity_or_destination_regeneration": false,
+    "runtime_workspace_remote_inventory_and_native_vault_unchanged_reported": true,
+    "actual_process_mid_read_deletion_claimed": false
+  },
+  "positive_registered_native_chain_reported": {
+    "browse_readonly_diff_user_typing_denied": true,
+    "unicode_whitespace_and_opaque_uris": true,
+    "selective_extract_and_cancel": true,
+    "existing_private_handoff_calls": 6,
+    "marker_unrelated_files_preserved": true,
+    "owned_vault_targets_removed": 4
+  },
+  "native_suite_reported": {
+    "passed": 29,
+    "posix_only_skipped": 5,
+    "includes_deleted_after_keyset_read_regression": true,
+    "artifact_id": 14771599128,
+    "reported_artifact_sha256": "d279154e79701e8fa2339b99c9394bf453b28b590f0e100a024bbfb43bcc271b"
+  },
+  "open_gates": [
+    "exact combined installed candidate",
+    "immutable RCC feature artifact",
+    "qualified narrow agent Save pilot",
+    "historical package restore and rollback",
+    "matching published JAT and final pins"
+  ],
+  "release_hold": true
+}

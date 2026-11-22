@@ -1,8 +1,11 @@
 # Native history in the shared Save chooser
 
-The bounded adapter is implemented for review. Its qualification flag is
-**false**, so all agent rows remain unavailable in normal Save. This document
-does not claim installed or live-provider acceptance for the adapter.
+The reviewed bounded adapter is enabled for an explicit **Linux/MinIO source
+pilot** on the integration branch. Only independently admitted existing Codex
+and Claude profiles can appear; nothing is selected by default. S3, R2, Windows,
+macOS, composition and work scopes remain unavailable in the shared chooser.
+This enables the forthcoming installed trial; it does not claim its success,
+immutable runtime acceptance, general native resume or release readiness.
 
 `native_agent_save.py` orchestrates ordinary Save. The separate
 `native_agent_save_producer.py` owns native capture, admission, encrypted durable

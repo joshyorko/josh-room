@@ -66,6 +66,62 @@ def components():
 
 
 @pytest.mark.parametrize(
+    ("platform", "provider"),
+    [("win32", "minio"), ("darwin", "minio"), ("linux", "s3"), ("linux", "r2")],
+)
+def test_history_chooser_pilot_refuses_unqualified_platforms_and_providers(
+    tmp_path, monkeypatch, platform, provider
+):
+    monkeypatch.setattr(save.sys, "platform", platform)
+    monkeypatch.setattr(save, "open_scope", lambda *a, **k: pytest.fail("unqualified admission"))
+    assert save.status(None, SimpleNamespace(provider=provider), None, "room", tmp_path) == {
+        "ok": True,
+        "agent_save": {"contract_version": 1, "mode": "history-only", "available": False, "profiles": []},
+    }
+
+
+def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypatch):
+    monkeypatch.setattr(save, "SAVE_ADAPTER_QUALIFIED", False)
+    monkeypatch.setattr(save, "open_scope", lambda *a, **k: pytest.fail("disabled admission"))
+    assert save.status(None, SimpleNamespace(provider="minio"), None, "room", tmp_path)["agent_save"]["available"] is False
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize("scope", ["personal", "work", "unknown"])
+def test_history_chooser_pilot_requires_each_current_profile_grant(tmp_path, monkeypatch, admitted, scope):
+    from josh_room import native_agent_discovery, native_agent_reference
+    from josh_room import room_store_operations, workspace_policy
+
+    monkeypatch.setattr(save.sys, "platform", "linux")
+    monkeypatch.setattr(workspace_policy, "load_capture_policy", lambda *_: SimpleNamespace(sha256="a" * 64))
+    monkeypatch.setattr(room_store_operations, "scan_workspace_for_status", lambda *_: SimpleNamespace(signature="b" * 64))
+
+    @contextmanager
+    def opened(*_):
+        yield SimpleNamespace(context="opened-current-authority")
+
+    monkeypatch.setattr(save, "open_scope", opened)
+    candidate = {"room_reference_allowed": True, "tools": ["codex", "claude", "t3"],
+                 "profile_ref": "c" * 64, "scope": scope}
+    monkeypatch.setattr(native_agent_discovery, "room_status", lambda **_: {"profiles": [candidate]})
+    monkeypatch.setattr(native_agent_discovery, "resolve_profile", lambda **_: {"profile": "synthetic-profile"})
+    calls = []
+
+    def grant(context, profile, tool, workspace, operation):
+        calls.append((context, profile, tool, workspace, operation))
+        if not admitted:
+            raise ValueError("stale synthetic grant")
+
+    monkeypatch.setattr(native_agent_reference, "_grant", grant)
+    result = save.status(None, SimpleNamespace(provider="minio", dimension_id="synthetic"), None, "room", tmp_path)["agent_save"]
+    allowed = admitted and scope == "personal"
+    assert result["available"] is allowed
+    assert [item["tool"] for item in result["profiles"]] == (["codex", "claude"] if allowed else [])
+    assert [call[2] for call in calls] == (["codex", "claude"] if scope == "personal" else [])
+    assert all(call[0] == "opened-current-authority" and call[4] == "room-capture" for call in calls)
+
+
+@pytest.mark.parametrize(
     "change", ["unknown", "version", "duplicate", "too-many", "path", "tool", "empty"]
 )
 def test_selection_is_bounded_closed_and_never_accepts_private_paths(change):

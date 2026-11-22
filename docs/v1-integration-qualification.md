@@ -242,6 +242,22 @@ feature acceptance. Final combined installed qualification remains required.
 
 ## Compatibility and rollback
 
+The exact combined baseline `e67bc289059766db51c7320773305d6e47089e41`
+passed all ten ordinary checks, with two intentional publication skips and no
+unresolved review threads. Its independent recheck closed both remaining UI
+retry findings and the bounded Windows handoff merge: 23 Node and five Python
+cases passed independently. Parent merged checks passed 330 Node tests with
+two opt-in skips and 81 Python tests with three native Windows skips.
+
+The next source-only pilot enables the shared history chooser only on Linux
+MinIO and only after existing profile/current-keyset admission. S3 remains
+unavailable because the recorded real-provider trial qualified MinIO. The
+general producer/native-resume capability remains false. The next exact green
+pilot source must be frozen before building its one installed candidate; no
+injected selector, runtime source override or prior package can qualify that
+candidate. Failed installed acceptance must remain a failed gate, not be
+converted into a qualification claim by this source flag.
+
 [The bounded source probe](receipts/v1-source-compatibility.json) compares
 immutable main source `23c80716b8a646cbf74f6eacb04eb639af87c9c2` (extension
 metadata 0.1.52) and integration source `1ebb277`. Six decoder/schema checks

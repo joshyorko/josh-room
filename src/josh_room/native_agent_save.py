@@ -18,8 +18,8 @@ SELECTION_FORMAT = "josh-room.save-agent-selection.v1"
 PLAN_FORMAT = "josh-room.save-agent-plan.v2"
 MAX_PLAN_BYTES = 16384
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
-# Parent qualification must precede changing this narrow UI availability gate.
-SAVE_ADAPTER_QUALIFIED = False
+# Reviewed Linux/MinIO source pilot; installed qualification is recorded separately.
+SAVE_ADAPTER_QUALIFIED = True
 
 
 def _fail():
@@ -908,7 +908,7 @@ def status(instance, dimension, material, room, workspace):
     if (
         not SAVE_ADAPTER_QUALIFIED
         or sys.platform != "linux"
-        or dimension.provider not in {"minio", "s3"}
+        or dimension.provider != "minio"
     ):
         return result
     from .native_agent_discovery import resolve_profile, room_status
@@ -924,7 +924,9 @@ def status(instance, dimension, material, room, workspace):
         for candidate in room_status(
             dimension=dimension.dimension_id, room=room, workspace=workspace
         )["profiles"]:
-            if not candidate.get("room_reference_allowed"):
+            if not candidate.get("room_reference_allowed") or candidate.get("scope") not in {
+                "personal", "oss", "homelab"
+            }:
                 continue
             for tool in candidate["tools"]:
                 if tool not in {"codex", "claude"}:
