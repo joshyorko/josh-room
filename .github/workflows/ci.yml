@@ -126,6 +126,40 @@ jobs:
             ${{ runner.temp }}/recovery-windows.xml
           if-no-files-found: error
 
+  windows-installed-recovery:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv sync --group dev
+      - name: Qualify installed registered recovery with native Windows custody
+        shell: pwsh
+        run: |
+          node scripts/verify_node_version.js --minimum $env:NODE_VERSION --source-sha $env:GITHUB_SHA --report (Join-Path $env:RUNNER_TEMP "windows-recovery-node.json")
+          if ($LASTEXITCODE -ne 0) { throw "Patched Node runtime verification failed" }
+          $python = uv run python -c "import sys; print(sys.executable)"
+          if ($LASTEXITCODE -ne 0) { throw "Project Python unavailable" }
+          $env:JOSH_ROOM_ACCEPTANCE_PYTHON = $python.Trim()
+          $env:JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE = Join-Path $env:RUNNER_TEMP "windows-installed-recovery-evidence"
+          node scripts/windows_recovery_installed.js
+          if ($LASTEXITCODE -ne 0) { throw "Installed Windows qualification failed; inspect sanitized receipt" }
+      - name: Upload sanitized installed recovery evidence only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installed-recovery-evidence
+          path: ${{ runner.temp }}/windows-installed-recovery-evidence/*.json
+          if-no-files-found: error
+
   managed-runtime-consumer:
     strategy:
       fail-fast: false

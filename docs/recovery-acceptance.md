@@ -128,6 +128,59 @@ matches the first pin, and no `.room-recovery-*` staging remains. Cancel the
 next picker and verify no additional extraction. Record native screens and
 sanitized receipts; do not publish raw keyring/config-runtime files or logs.
 
+## Native Windows installed qualification
+
+The ordinary `CI / windows-installed-recovery` job builds a separate candidate
+VSIX, installs it in a fresh profile, verifies every installed package byte
+(excluding installation metadata), and runs
+`scripts/windows_recovery_installed.js`. This is independent of release,
+staging and publication workflows. It does not change the product runtime.
+
+Dependencies are exact official Windows MinIO, age and VS Code archives with
+SHA-256 pins in `scripts/windows_recovery_dependencies.json`. Each acquisition
+has a two-minute deadline and no download retry loop. Restic uses the installed
+controller's existing verified installer and manifest. The fixture creates an
+owned loopback MinIO server, a synthetic Dimension and keyset, and three actual
+snapshots through the installed controller CLI. No storage emulator is used.
+
+On the ephemeral Windows runner, generated provider credentials, operational
+identity and Room Store secret use production Windows Credential Manager APIs.
+The fixture predeclares unique target names, checks they do not exist, verifies
+roundtrips, and deletes only those targets in `finally`. It never enumerates or
+changes unrelated credentials. Task directories have the production private ACL
+applied. Provider keys remain in memory/native custody; the generated recovery
+identity is discarded after deriving its public recipient.
+
+A small development driver selects the installed controller source using the
+existing `local-build-fallback` test hook. **This explicitly does not qualify an
+immutable RCC feature artifact.** It registers harness entry points which call
+the actual `joshRoom.browseRecoveryPoint`; it does not replace pickers, provider
+calls, CLI results or recovery callbacks. Loopback Electron CDP sends real key
+input to native QuickPick, command palette and the simple Save Dialog.
+
+The intended acceptance covers the pinned tree, current comparison in an
+actual native readonly diff tab, exact tab/Unicode text preservation, rejected
+editor writes, one-file extraction to an absent destination and picker
+cancellation. Separate actual CLI overwrite denial verifies existing target
+bytes. A complete before/after workspace inventory includes the Room marker
+and unrelated synthetic files. Only sanitized JSON evidence is uploaded; raw
+profile, runtime, server data, logs and credentials are removed. Missing
+dependencies or native UI fail closed and leave a failure receipt, never a
+fixture substitute or a passing Windows UI claim.
+
+To reproduce on a disposable native Windows runner with existing project
+dependencies, set `JOSH_ROOM_ACCEPTANCE_PYTHON` to its Python executable and
+`JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE` to an absent/owned evidence directory,
+then run `node scripts/windows_recovery_installed.js`. Never use a production
+profile or a shared Windows vault. Linux execution intentionally refuses this
+qualification rather than simulating Windows custody or UI.
+
+Until its exact-head CI receipt is available, this job is **implemented but
+Windows installed acceptance is NOT RUN**. The pre-existing Windows recovery
+tests prove pinned Restic/current-file/extraction guards, not this installed
+provider/native UI chain. Other providers and immutable runtime promotion
+remain separate gates.
+
 ## Cleanup and remaining gates
 
 Close only the isolated VS Code process, stop the observed MinIO session and
