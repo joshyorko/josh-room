@@ -200,16 +200,22 @@ async function main() {
       await cdpLive.evalJs(`(() => {
         window.__JOSH_ROOM_VIEW_DEBUG__.openEvidenceTab();
       })()`);
-      await sleep(500);
-      const liveCheck = await cdpLive.evalJs(`(() => ({
-        mode: window.__JOSH_ROOM_VIEW_DEBUG__.mode,
-        webglActive: window.__JOSH_ROOM_VIEW_DEBUG__.webglActive,
-        itemCount: window.__JOSH_ROOM_VIEW_DEBUG__.itemCount,
-        exportBtnVisible: !document.getElementById('btn-export-live')?.hidden,
-        pdfCanvases: document.querySelectorAll('#tab-evidence .pdf-page-slot canvas').length,
-        sqlNodesRows: window.__JOSH_ROOM_VIEW_DEBUG__.runSql('SELECT COUNT(*) AS n FROM nodes').rowCount,
-        sqlLinksRows: window.__JOSH_ROOM_VIEW_DEBUG__.runSql('SELECT COUNT(*) AS n FROM links').rowCount,
-      }))()`);
+      const liveCheck = await cdpLive.evalJs(`(async () => {
+        const pdfCanvases = () => document.querySelectorAll('#tab-evidence .pdf-page-slot canvas').length;
+        const deadline = performance.now() + 5000;
+        while (!pdfCanvases() && performance.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        return {
+          mode: window.__JOSH_ROOM_VIEW_DEBUG__.mode,
+          webglActive: window.__JOSH_ROOM_VIEW_DEBUG__.webglActive,
+          itemCount: window.__JOSH_ROOM_VIEW_DEBUG__.itemCount,
+          exportBtnVisible: !document.getElementById('btn-export-live')?.hidden,
+          pdfCanvases: pdfCanvases(),
+          sqlNodesRows: window.__JOSH_ROOM_VIEW_DEBUG__.runSql('SELECT COUNT(*) AS n FROM nodes').rowCount,
+          sqlLinksRows: window.__JOSH_ROOM_VIEW_DEBUG__.runSql('SELECT COUNT(*) AS n FROM links').rowCount,
+        };
+      })()`);
       const ok = (
         liveCheck.mode === 'live' &&
         liveCheck.webglActive &&
