@@ -1902,3 +1902,41 @@ def test_save_preview_preserves_workspace_validation_diagnostic(tmp_path, monkey
     assert caught.value.result["diagnostic"] == (
         "Git storage is not self-contained; linked worktrees are unsupported"
     )
+
+
+def test_explicit_selection_omits_rcc_and_preserves_historical_descriptor(tmp_path, monkeypatch):
+    from josh_room.component_selection import COMPONENTS
+
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "synthetic.txt").write_text("synthetic workspace")
+    request = {"format_version": 1, "components": dict.fromkeys(COMPONENTS, "keep")}
+    first = bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert first["status"] == "saved"
+    # A newly present robot must not override an explicit omit or invoke RCC.
+    (workspace / "robot.yaml").write_text("synthetic: invalid-robot\n")
+    request["components"]["rcc_environment"] = "omit"
+    preview = bridge.preview_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert preview["component_plan"]["rcc_environment"]["state"] == "excluded"
+    assert preview["rcc_capture_pending"] is False
+    second = bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert second["status"] == "saved"
+    assert second["component_receipt"]["rcc_environment"]["status"] == "excluded"
+    third = bridge.save_room_store(tmp_path / "instance", dimension, "synthetic-room", workspace, material, components=[], component_selection=request)
+    assert third["status"] == "already-saved"
+    assert third["component_selection_sha256"] == preview["component_selection_sha256"]
+    assert first["snapshot_id"] != second["snapshot_id"]
+
+
+def test_component_preview_token_refuses_new_latest_before_capture(tmp_path, monkeypatch):
+    from josh_room.component_selection import COMPONENTS
+    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    (workspace / 'notes.txt').write_text('synthetic one')
+    request = {'format_version': 1, 'components': dict.fromkeys(COMPONENTS, 'keep')}
+    preview = bridge.preview_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request)
+    bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request)
+    with pytest.raises(bridge.RoomStoreBridgeError, match='stale'):
+        bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request, component_plan_token=preview['component_plan_token'])

@@ -67,3 +67,66 @@ Known capture, cancellation, deletion-confirmation, and publication errors keep
 their existing receipts. A stage is not evidence of completed capture or
 publication; validate the controller RCC receipt and any inner capture receipt
 separately.
+
+## Native Save component chooser (draft checkpoint)
+
+New Room, Save Current Room and Save Folder As Room share one native multi-select.
+Workspace is always included under the reviewed capture policy. Optional rows
+request `keep`, `refresh`, or `omit` for the three existing closed descriptor
+slots. Unchecking a row omits its reference only from the new recovery point;
+immutable previous descriptors remain recoverable. Existing components default
+to keep; RCC refreshes from root robot.yaml when selected. Choices currently last
+only for this extension session, keyed by source, Dimension and Room. Durable
+host-profile selection persistence is not yet implemented.
+
+Preview and create receive the same version-1 `--component-selection` JSON:
+
+```json
+{"format_version":1,"components":{"rcc_environment":"refresh","homebrew_recovery":"keep","hauler_content":"keep"}}
+```
+
+Unknown slots, modes and versions fail closed. Explicit selections bypass local
+workspace-only no-op caches; the backend resolves component identities before
+comparing against the previous descriptor. Preview reports pending/reused/absent/
+excluded, and the receipt reports actual descriptor references. `captured-or-reused`
+means the resolver verified the selected material but does not distinguish a
+content-addressed reuse from a new component backup. Estimated workspace bytes
+are not total component bytes or a promised upload size. Preview does not run
+installers or RCC capture. Selection is not authorization: existing host policy,
+Dimension encryption, workspace validation and provider checks still apply.
+
+Homebrew has three distinct meanings:
+
+- **Brewfile-only recipe directory:** choose a folder containing exactly one
+  regular, non-symlink, non-hardlinked Brewfile, at most 1 MiB. The controller
+  packages these inert bytes privately, then uses existing JAT validation and
+  the `homebrew_recovery` lifecycle. Extra files are rejected; use a prepared
+  recovery archive for a fuller existing JAT export. This never runs Ruby,
+  `brew bundle`, installers, or restore scripts. Native reinstallation is a
+  separate user-approved operation; versions and cold-host reinstallation have
+  not been verified by this checkpoint.
+- **Prepared recovery archive:** existing validated `--brew-archive` semantics,
+  independently of a Brewfile recipe. It does not establish installed binaries.
+- **Installed prefix/binaries:** unavailable. Prefix, Cellar, repository and cache
+  are distinct; a raw Cellar transplant does not establish relocatability, ABI,
+  dependency/link completeness, collision safety or provenance. Fresh same-OS,
+  architecture and exact-prefix execution, hardlink/reparse containment and
+  no-clobber restoration remain required before enabling capture. No arbitrary
+  prefix or cache is traversed by this feature.
+
+OCI refresh currently supports all tagged images or an explicit Hauler manifest;
+selected-image and additional-file UI details remain pending (the CLI supports
+them). RCC artifacts remain platform bound. Agent state is unavailable in this
+main-based controller. Draft #210's Codex capability is history-only with missing
+Dimension admission; T3 and Claude capture are blocked. No auth state is copied,
+no second agent picker is added, and no unqualified provider becomes selectable.
+Full #188 capability/admission integration remains a separate acceptance gate.
+
+Preview tokens bind the Room, Dimension, source path, prior logical snapshot,
+capture policy, selection and explicit external input bytes. Save checks a
+supplied token before preparation, after component resolution, and before
+publication. OCI tags are resolved during Save rather than pinned by preview.
+Installed VSIX interaction and Windows/macOS remain unqualified. Those limits
+must remain visible in PR evidence; it is not completion of issue #190 or release
+qualification. Logical JAT v1 gains no new slots; existing copy/export/verify/
+remove reachability continues to operate on the three validated component types.

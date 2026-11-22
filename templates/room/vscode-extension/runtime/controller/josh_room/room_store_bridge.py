@@ -1382,9 +1382,41 @@ def _build_operations(
     active_runtime_root: Path | None = None,
     authority_session: Any | None = None,
     hauler_selection: Mapping[str, Any] | None = None,
+    component_selection: Mapping[str, Any] | None = None,
+    homebrew_directory: Path | None = None,
     homebrew_archive: Path | None = None,
     jat_root: Path | None = None,
+    component_plan_token: str | None = None,
 ):
+    from .component_selection import selection_request
+    component_selection = selection_request(component_selection)
+    modes = component_selection["components"] if component_selection else None
+    if homebrew_directory is not None:
+        if homebrew_archive is not None:
+            raise ValueError("select one Homebrew recovery input")
+        from .room_store_homebrew import recipe_bytes
+        recipe_bytes(homebrew_directory)
+
+    if modes:
+        if (homebrew_archive is not None or homebrew_directory is not None) and modes["homebrew_recovery"] != "refresh":
+            raise ValueError("Homebrew input requires refresh selection")
+        if hauler_selection is not None and modes["hauler_content"] != "refresh":
+            raise ValueError("Hauler input requires refresh selection")
+        if modes["homebrew_recovery"] == "refresh" and homebrew_archive is None and homebrew_directory is None:
+            raise ValueError("Homebrew refresh requires a prepared archive")
+        if modes["hauler_content"] == "refresh" and hauler_selection is None:
+            raise ValueError("Hauler refresh requires explicit content")
+    original_archive = homebrew_archive
+
+    def check_component_plan(latest):
+        if component_plan_token is None:
+            return
+        from .component_selection import plan_token
+        from .workspace_policy import load_capture_policy
+        actual = plan_token(component_selection, dimension=dimension.dimension_id, project=project_id, workspace=workspace, policy_sha256=load_capture_policy(workspace, active_runtime_root=active_runtime_root).sha256, archive=original_archive, directory=homebrew_directory, hauler=hauler_selection, prior_snapshot=latest.to_dict()["logical_jat_id"] if latest else None)
+        if actual != component_plan_token:
+            raise RoomStoreBridgeError("component preview is stale", code="component-plan-stale")
+
     domain_id = _scope(dimension, material)
     repository = _repository_locator(dimension)
     cache_dir = _cache_directory(dimension)
@@ -1473,6 +1505,7 @@ def _build_operations(
         workspace_signature: str,
         signature_algorithm: str,
     ) -> None:
+        check_component_plan(state.get("latest_descriptor"))
         if signature_algorithm != "josh-room-stat-v1":
             raise _CatalogPublicationError(False)
         if state["catalog"] is None or state["etag"] != expected_etag:
@@ -1516,7 +1549,13 @@ def _build_operations(
     prepared_rcc: RccComponentPreparation | None = None
 
     def prepare_components(latest_descriptor):
-        nonlocal prepared_rcc
+        nonlocal prepared_rcc, homebrew_archive
+        check_component_plan(latest_descriptor)
+        if homebrew_directory is not None:
+            from .room_store_homebrew import prepare_recipe_archive
+            homebrew_archive = prepare_recipe_archive(homebrew_directory, runtime_dir / "homebrew-recovery.tar.zst")
+        if modes and modes["rcc_environment"] != "refresh":
+            return
         prior_rcc = (
             latest_descriptor.to_dict()["components"]["rcc_environment"]
             if latest_descriptor is not None else None
@@ -1541,7 +1580,9 @@ def _build_operations(
             else {name: None for name in _COMPONENTS}
         )
         prior_rcc = prior_components["rcc_environment"]
-        if (workspace / "robot.yaml").exists() or prior_rcc is not None:
+        if modes and modes["rcc_environment"] != "refresh":
+            rcc_component = prior_rcc if modes["rcc_environment"] == "keep" else None
+        elif (workspace / "robot.yaml").exists() or prior_rcc is not None:
             try:
                 rcc_component = capture_rcc_component(
                     workspace=workspace,
@@ -1560,6 +1601,9 @@ def _build_operations(
         else:
             rcc_component = component_value["rcc_environment"]
         resolved = {**component_value, "rcc_environment": rcc_component}
+        if modes:
+            for name in ("homebrew_recovery", "hauler_content"):
+                resolved[name] = prior_components[name] if modes[name] == "keep" else None
         managed_adapter = None
 
         def adapter():
@@ -1602,6 +1646,7 @@ def _build_operations(
             raise RoomStoreOperationsError(
                 "selected native component capture is unavailable"
             )
+        check_component_plan(latest_descriptor)
         return resolved
 
     def write_marker(
@@ -1802,12 +1847,16 @@ def preview_room_store(
     required_components: Sequence[str] = (),
     authority_session: Any | None = None,
     hauler_selection: Mapping[str, Any] | None = None,
+    component_selection: Mapping[str, Any] | None = None,
+    homebrew_directory: Path | None = None,
     homebrew_archive: Path | None = None,
 ) -> dict:
     """Preview an explicit Save, preparing local tools without remote writes."""
     from .composition import require_uncomposed_workspace
 
     require_uncomposed_workspace(source)
+    from .component_selection import selection_digest, selection_plan, selection_request
+    component_selection = selection_request(component_selection)
     component_value = _components(components)
     _check_required_components(component_value, required_components)
     selected_material, authority_session = _resolve_material(
@@ -1847,6 +1896,10 @@ def preview_room_store(
                 if active_runtime and active_runtime.is_dir()
                 else None,
                 authority_session=authority_session,
+                component_selection=component_selection,
+                hauler_selection=hauler_selection,
+                homebrew_directory=homebrew_directory,
+                homebrew_archive=homebrew_archive,
             )
             if snapshot_id == "latest":
                 preview = operations.preview()
@@ -1855,7 +1908,14 @@ def preview_room_store(
                     preview, rcc_capture_pending=_rcc_capture_pending(workspace, latest)
                 )
                 output.update(hauler_capture_pending=hauler_selection is not None,
-                              homebrew_capture_pending=homebrew_archive is not None)
+                              homebrew_capture_pending=homebrew_archive is not None or homebrew_directory is not None)
+                if component_selection:
+                    prior = latest.to_dict()["components"] if latest else {}
+                    output["component_selection_sha256"] = selection_digest(component_selection)
+                    from .component_selection import plan_token
+                    output["component_plan_token"] = plan_token(component_selection, dimension=dimension.dimension_id, project=project_id, workspace=workspace, policy_sha256=output["capture_policy_sha256"], archive=homebrew_archive, directory=homebrew_directory, hauler=hauler_selection, prior_snapshot=latest.to_dict()["logical_jat_id"] if latest else None)
+                    output["component_plan"] = selection_plan(component_selection, prior, rcc_present=(workspace / "robot.yaml").is_file(), homebrew=homebrew_archive is not None or homebrew_directory is not None, hauler=hauler_selection is not None)
+                    output["rcc_capture_pending"] = output["component_plan"]["rcc_environment"]["state"] == "pending"
                 return output
             else:
                 catalog, _catalog_etag = _read_catalog(
@@ -1921,14 +1981,19 @@ def save_room_store(
     required_components: Sequence[str] = (),
     authority_session: Any | None = None,
     hauler_selection: Mapping[str, Any] | None = None,
+    component_selection: Mapping[str, Any] | None = None,
+    homebrew_directory: Path | None = None,
     homebrew_archive: Path | None = None,
     jat_root: Path | None = None,
     preflight_scan: Any = None,
+    component_plan_token: str | None = None,
 ) -> dict:
     from .composition import require_uncomposed_workspace
     from .local_save_receipt import invalidate, read_noop, write_verified_receipt
 
     require_uncomposed_workspace(source)
+    from .component_selection import selection_digest, selection_request
+    component_selection = selection_request(component_selection)
 
     if cancellation is not None and cancellation.cancelled:
         raise CLICancelled
@@ -1939,6 +2004,9 @@ def save_room_store(
         and not required_components
         and hauler_selection is None
         and homebrew_archive is None
+        and homebrew_directory is None
+        and component_selection is None
+        and component_plan_token is None
         and rcc_runtime is None
         and confirmation_token is None
         and authority_session is None
@@ -1993,8 +2061,11 @@ def save_room_store(
                 else None,
                 authority_session=authority_session,
                 hauler_selection=hauler_selection,
+                homebrew_directory=homebrew_directory,
                 homebrew_archive=homebrew_archive,
+                component_selection=component_selection,
                 jat_root=jat_root,
+                component_plan_token=component_plan_token,
             )
             stage = "operation-save"
             result: SaveResult = operations.save(
@@ -2030,6 +2101,12 @@ def save_room_store(
                     for name in ("homebrew_recovery", "hauler_content")
                 )),
             }
+            if component_selection and descriptor:
+                output["component_selection_sha256"] = selection_digest(component_selection)
+                output["component_receipt"] = {name: {
+                    "status": "excluded" if mode == "omit" else "absent" if descriptor.to_dict()["components"][name] is None else "reused" if mode == "keep" or result.status == "already-saved" else "captured-or-reused",
+                    "reference": descriptor.to_dict()["components"][name],
+                } for name, mode in component_selection["components"].items()}
             object_ref = state.get("object_ref")
             if object_ref is not None:
                 output["object_key"] = object_ref.key

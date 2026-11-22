@@ -530,6 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-deletion",
         help="confirm the exact mass-deletion plan returned by snapshot preview",
     )
+    snapshot_create.add_argument("--component-plan-token", help="validate reviewed component inputs and target")
     _json_option(snapshot_create)
     snapshot_preview = snapshot_commands.add_parser("preview")
     snapshot_preview.add_argument("project")
@@ -542,6 +543,8 @@ def build_parser() -> argparse.ArgumentParser:
     for command in (snapshot_create, snapshot_preview):
         command.add_argument("--hauler-manifest", dest="hauler_manifests", type=Path, action="append", default=[])
         command.add_argument("--hauler-file", dest="hauler_files", nargs=2, action="append", default=[], metavar=("PATH", "NAME"))
+        command.add_argument("--brew-directory", type=Path, help="Brewfile-only recipe export directory; never installed binaries")
+        command.add_argument("--component-selection", help="versioned explicit Save component selection JSON")
         command.add_argument("--brew-archive", type=Path, help="reuse a saved Homebrew recovery archive in the native Room Store")
     for action in ("inspect", "export", "serve", "extract"):
         snapshot_action = snapshot_commands.add_parser(action)
@@ -2407,7 +2410,7 @@ def dispatch(args, instance: Path) -> dict:
                     components=components,
                     **capture_options,
                 )
-                if (Path(source) / "robot.yaml").is_file():
+                if not capture_options.get("component_selection") and (Path(source) / "robot.yaml").is_file():
                     result["rcc_capture_pending"] = True
                 return result
             return save_room_store(
@@ -2420,6 +2423,7 @@ def dispatch(args, instance: Path) -> dict:
                 display_name=display_name,
                 confirmation_token=getattr(args, "confirm_deletion", None),
                 preflight_scan=getattr(args, "_local_workspace_evidence", None),
+                component_plan_token=getattr(args, "component_plan_token", None),
                 rcc_runtime=(
                     os.environ.get("JOSH_ROOM_RCC_EXE")
                     if os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1"
@@ -2429,6 +2433,8 @@ def dispatch(args, instance: Path) -> dict:
                 **capture_options,
                 **({"jat_root": _jat_root()} if capture_options else {}),
             )
+        if getattr(args, "component_selection", None) is not None:
+            raise ValueError("explicit component selection requires a native Room Store backend")
         if args.snapshot_command == "preview":
             raise ValueError("snapshot preview is available for native Room Store saves")
         recipients = _recipients()
@@ -2799,14 +2805,21 @@ def _native_capture_options(args) -> dict:
     files = [(Path(path), name) for path, name in (getattr(args, "hauler_files", ()) or ())]
     if images and all_images:
         raise ValueError("select explicit local images or all local images, not both")
-    options = {}
+    from .component_selection import selection_request
+    request = selection_request(getattr(args, "component_selection", None))
+    options = {"component_selection": request} if request is not None else {}
     if images or all_images or manifests or files:
         options["hauler_selection"] = {"images": images, "all_images": all_images, "manifests": manifests, "files": files}
     homebrew = getattr(args, "brew_archive", None)
-    if homebrew is None:
+    if homebrew is None and request is None:
         configured = (private_config() or {}).get("homebrew_recovery")
         if isinstance(configured, dict) and configured.get("archive"):
             homebrew = Path(configured["archive"])
+    directory = getattr(args, "brew_directory", None)
+    if directory is not None:
+        if homebrew is not None:
+            raise ValueError("select a Homebrew archive or recipe directory")
+        options["homebrew_directory"] = directory
     if homebrew is not None:
         options["homebrew_archive"] = homebrew
     return options

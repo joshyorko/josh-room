@@ -1827,8 +1827,8 @@ function assertValidRoomStorePreview(preview) {
 }
 
 async function approveRoomStorePreview(preview, { name, source, allImages, dimension } = {}) {
-  const target = name ? `Room: ${name}\nDimension: ${dimension || "selected storage"}\nFolder: ${source}\nCapture: ${allImages ? "Workspace and all tagged local OCI images" : "Workspace only"}\n\n` : "";
-  const message = target + roomStorePreviewText(preview);
+  const target = name ? `Room: ${name}\nDimension: ${dimension || "selected storage"}\nFolder: ${source}\nCapture: ${preview.component_plan ? "Workspace plus the explicit component plan below" : allImages ? "Workspace and all tagged local OCI images" : "Workspace only"}\n\n` : "";
+  const message = target + roomStorePreviewText(preview) + "\n" + require("./component-picker").planText(preview);
   if (preview.deletion_confirmation_token) {
     const action = await vscode.window.showWarningMessage(
       `${message}\n\nDeleted paths:\n${preview.deleted_paths.map((item) => JSON.stringify(item)).join("\n")}\n\nThis deletion plan needs confirmation before Save.`,
@@ -2200,39 +2200,9 @@ async function saveRoom(options = {}) {
     }
     throw new Error("Composed Save is blocked until retention and publication are admitted.");
   }
-  const imageChoices = [
-    { label: "Workspace only", allImages: false },
-    { label: "Workspace + all tagged local OCI images", allImages: true },
-  ];
-  let imageChoice = currentMarker && sessionCaptureChoices.get(captureChoiceKey(source, currentMarker.dimension_id, currentMarker.project_id));
-  const cachedReceipt = options.forceCreate ? undefined : trustedLocalSaveReceipt(source, cwd);
-  if (cachedReceipt) {
-    if (!imageChoice) imageChoice = await vscode.window.showQuickPick(imageChoices, {
-      title: "Include local OCI images?",
-      ignoreFocusOut: true,
-    });
-    if (!imageChoice) return "cancelled";
-    // VS Code intentionally suppresses some .git events. Event silence is
-    // never evidence that a recovery point contains the current Git objects.
-    if (trustedLocalSaveReceipt(source, cwd) === cachedReceipt
-      && Boolean(imageChoice.allImages) === cachedReceipt.all_images
-      && await nativeSaveReceiptStillMatches(source, cachedReceipt)) {
-      const action = await vscode.window.showInformationMessage(
-        "Already saved — 0 bytes uploaded",
-        "Done",
-        ...(currentMarker ? [] : ["Choose another Room"]),
-      );
-      if (action !== "Choose another Room"
-        && await nativeSaveReceiptStillMatches(source, cachedReceipt)
-        && trustedLocalSaveReceipt(source, cwd) === cachedReceipt) {
-        refreshRoomStatus();
-        return "already-saved";
-      }
-      trustedSaveReceipt = undefined;
-    } else {
-      trustedSaveReceipt = undefined;
-    }
-  }
+  // Component admission precedes any no-op probe. The backend compares the
+  // actual resolved component identities, including refreshed external bytes.
+  let imageChoice;
   const catalog = await loadCatalog(cwd, "Loading saved Rooms…");
   const projects = nativeRegistry.flattenDimensionRooms(catalog);
   const marker = currentRoom(source);
@@ -2322,18 +2292,14 @@ async function saveRoom(options = {}) {
       }
     }
   }
-  if (!imageChoice) {
-    imageChoice = await vscode.window.showQuickPick(imageChoices, {
-      title: "Include local OCI images?",
-      ignoreFocusOut: true,
-    });
-    if (!imageChoice) return "cancelled";
-  }
+  const choiceKey = captureChoiceKey(source, targetDimensionId, selected.project?.id || name);
+  imageChoice = await require("./component-picker").pickComponents(vscode, source, sessionCaptureChoices.get(choiceKey));
+  if (!imageChoice) return "cancelled";
   const buildArgs = nativeRegistry.dimensionArgs(
     ["snapshot", "create", name, "--source", source, "--backend", targetProvider],
     targetDimensionId || selectedDimensionId,
   );
-  if (imageChoice.allImages) buildArgs.push("--all-images");
+  buildArgs.push(...imageChoice.args);
   // This hint only skips the local no-op probe. Save still validates the full
   // workspace and Restic remains the content authority.
   if (workspaceBindingTrusted && workspaceBaseline
@@ -2349,7 +2315,7 @@ async function saveRoom(options = {}) {
       ["snapshot", "preview", name, "--source", source, "--backend", targetProvider],
       targetDimensionId || selectedDimensionId,
     );
-    if (imageChoice.allImages) previewArgs.push("--all-images");
+    previewArgs.push(...imageChoice.args);
     preview = await runSelectedEncryption(
       previewArgs,
       source,
@@ -2359,6 +2325,7 @@ async function saveRoom(options = {}) {
     assertValidRoomStorePreview(preview);
     deletionConfirmationToken = await approveRoomStorePreview(preview, { name, source, allImages: imageChoice.allImages, dimension: targetDimension?.display_name || targetDimensionId });
     if (deletionConfirmationToken === undefined) return "cancelled";
+    if (preview.component_plan_token) buildArgs.push("--component-plan-token", preview.component_plan_token);
     if (deletionConfirmationToken) buildArgs.push("--confirm-deletion", deletionConfirmationToken);
   }
   if (nativeSave && extensionContext) {
@@ -2406,6 +2373,9 @@ async function saveRoom(options = {}) {
       action = await vscode.window.showInformationMessage(`Saved “${name}”.`, "Show Details");
     }
     if (action === "Show Details") outputChannel?.show(true);
+    if (result.component_receipt) {
+      for (const [name, receipt] of Object.entries(result.component_receipt)) outputChannel?.appendLine(`${name}: ${receipt.status}`);
+    }
     finishRoomStoreSave(result, source, saveEventGeneration, imageChoice.allImages);
   } else {
     const size = Number.isFinite(result.ciphertext_size)
@@ -2415,7 +2385,7 @@ async function saveRoom(options = {}) {
   }
   const savedMarker = currentRoom(source);
   if (savedMarker && savedMarker.dimension_id === targetDimensionId && savedMarker.project_id === (selected.project?.id || result.project_id)) {
-    sessionCaptureChoices.set(captureChoiceKey(source, savedMarker.dimension_id, savedMarker.project_id), imageChoice);
+    sessionCaptureChoices.set(choiceKey, imageChoice);
   }
   if (!nativeSave && path.resolve(source) === path.resolve(cwd)) {
     await startDirtyTracking(extensionContext);
