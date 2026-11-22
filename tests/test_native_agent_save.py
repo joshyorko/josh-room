@@ -501,7 +501,6 @@ def test_cli_preview_json_create_roundtrip_retains_reviewed_plan_and_stale_ids_r
     from josh_room import cli
 
     calls = []
-    monkeypatch.setattr(cli, "_room_identity", lambda _value: ("room", "Room"))
     monkeypatch.setattr(
         cli, "_effective_dimension", lambda _args: SimpleNamespace(provider="minio")
     )
@@ -536,7 +535,7 @@ def test_cli_preview_json_create_roundtrip_retains_reviewed_plan_and_stale_ids_r
 
     monkeypatch.setattr(cli, "save_room_store", create)
     base = [
-        "room",
+        "Room",
         "--source",
         str(tmp_path),
         "--backend",
@@ -551,6 +550,7 @@ def test_cli_preview_json_create_roundtrip_retains_reviewed_plan_and_stale_ids_r
     wire = json.loads(
         json.dumps(cli._bounded_json_result(cli.dispatch(preview_args, tmp_path)))
     )
+    assert wire["project_id"] == "room"
     create_args = build_parser().parse_args(
         [
             "snapshot",

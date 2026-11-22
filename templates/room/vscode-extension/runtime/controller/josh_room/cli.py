@@ -2669,6 +2669,8 @@ def dispatch(args, instance: Path) -> dict:
                 )
                 if not capture_options.get("component_selection") and (Path(source) / "robot.yaml").is_file():
                     result["rcc_capture_pending"] = True
+                if result.get("agent_plan") is not None:
+                    result["project_id"] = project_id
                 return result
             return save_room_store(
                 instance,

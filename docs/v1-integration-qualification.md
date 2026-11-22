@@ -210,6 +210,16 @@ The dedicated regression covers both cases and refusal to initialize an empty
 bucket from an existing-input request. Native Windows ACL integration and direct
 installed missing-handoff refusal are being qualified separately on #220.
 
+Independent recheck at `3cd2c4c` passed 29 selected Python cases and 15 Node
+cases (two runtime-dependent skips), confirming the backend corrections. It
+found two remaining native retry-offer defects: a newly created Room had no
+selected catalog project, and a marker with a different policy digest could
+qualify. Agent previews now expose the CLI-resolved public Room ID; both create
+and update use that reviewed ID, and retry also requires the marker's policy
+digest to match. Registered create/update regressions cover known and unknown
+commitment, cancellation and exact retry. This is a UI receipt correction;
+agent Save availability remains false pending final integrated qualification.
+
 ## Compatibility and rollback
 
 [The bounded source probe](receipts/v1-source-compatibility.json) compares

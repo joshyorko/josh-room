@@ -1833,7 +1833,8 @@ function assertValidRoomStorePreview(preview) {
     || typeof preview.rcc_capture_pending !== "boolean"
     || preview.signature_algorithm !== "josh-room-stat-v1"
     || !digest(preview.workspace_signature)
-    || !digest(preview.capture_policy_sha256)) {
+    || !digest(preview.capture_policy_sha256)
+    || (preview.agent_plan && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(preview.project_id || ""))) {
     throw new Error("Room Store Save Preview returned an invalid receipt.");
   }
 }
@@ -2250,6 +2251,7 @@ async function updateCompositionRoom(kind) {
 
 function agentPartialMatchesReview(receipt, plan, source, dimension, project, domain) {
   if (receipt?.ok !== false || receipt.error !== "agent-save-partial" || plan?.format !== "josh-room.save-agent-plan.v2"
+    || typeof project !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(project)
     || !/^[a-f0-9]{64}$/.test(plan.attempt_id || "") || receipt.attempt_id !== plan.attempt_id
     || !/^[a-f0-9]{32}$/.test(plan.workspace_candidate_id || "")
     || ![plan.workspace_candidate_id, plan.reviewed_point?.logical_jat_id].filter(Boolean).includes(receipt.candidate_logical_jat_id)) return false;
@@ -2261,6 +2263,7 @@ function agentPartialMatchesReview(receipt, plan, source, dimension, project, do
     if (!metadata.isFile() || metadata.isSymbolicLink()) return false;
     const marker = currentRoom(source);
     return Boolean(marker && domain && marker.encryption_domain_id === domain && marker.dimension_id === dimension && marker.project_id === project
+      && marker.capture_policy_sha256 === plan.capture_policy_sha256
       && [plan.workspace_candidate_id, plan.reviewed_point?.logical_jat_id].filter(Boolean).includes(marker.snapshot_id)
       && marker.workspace_path_sha256 === realWorkspacePathSha256(source) && !marker.composition_namespace);
   } catch (_) { return false; }
@@ -2474,7 +2477,7 @@ async function saveRoom(options = {}) {
       : await runOperation(`Saving ${name}…`, buildArgs, source);
       break;
     } catch (error) {
-      if (!nativeSave || !agentPartialMatchesReview(error.result, preview?.agent_plan, source, targetDimensionId, selected.project?.id, targetDimension?.encryption_domain_id)) throw error;
+      if (!nativeSave || !agentPartialMatchesReview(error.result, preview?.agent_plan, source, targetDimensionId, preview?.project_id, targetDimension?.encryption_domain_id)) throw error;
       const workspaceResult = agentPartialWorkspace(error.result, source, targetDimensionId);
       agentPartial = error.result;
       result = workspaceResult;
