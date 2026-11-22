@@ -75,9 +75,10 @@ Workspace is always included under the reviewed capture policy. Optional rows
 request `keep`, `refresh`, or `omit` for the three existing closed descriptor
 slots. Unchecking a row omits its reference only from the new recovery point;
 immutable previous descriptors remain recoverable. Existing components default
-to keep; RCC refreshes from root robot.yaml when selected. Choices currently last
-only for this extension session, keyed by source, Dimension and Room. Durable
-host-profile selection persistence is not yet implemented.
+to keep; RCC refreshes from root robot.yaml when selected. Non-secret mode choices persist in VS Code host global state, under a hashed
+source/Dimension/Room key. Paths to external content and credentials are never
+persisted. Refreshing external content always requires a new explicit source
+selection; remembered modes do not confer authorization.
 
 Preview and create receive the same version-1 `--component-selection` JSON:
 
@@ -114,9 +115,8 @@ Homebrew has three distinct meanings:
   no-clobber restoration remain required before enabling capture. No arbitrary
   prefix or cache is traversed by this feature.
 
-OCI refresh currently supports all tagged images or an explicit Hauler manifest;
-selected-image and additional-file UI details remain pending (the CLI supports
-them). RCC artifacts remain platform bound. Agent state is unavailable in this
+OCI refresh supports all tagged images, explicit image references, an explicit
+Hauler manifest or an explicitly selected additional file. RCC artifacts remain platform bound. Agent state is unavailable in this
 main-based controller. Draft #210's Codex capability is history-only with missing
 Dimension admission; T3 and Claude capture are blocked. No auth state is copied,
 no second agent picker is added, and no unqualified provider becomes selectable.

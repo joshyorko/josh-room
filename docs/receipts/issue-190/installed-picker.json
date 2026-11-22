@@ -1,0 +1,19 @@
+{
+  "installed": true,
+  "source": "0.1.52",
+  "platform": "linux",
+  "architecture": "x64",
+  "renderedNativePicker": true,
+  "unavailableRowsRendered": true,
+  "defaultKeepSelection": {
+    "format_version": 1,
+    "components": {
+      "rcc_environment": "keep",
+      "homebrew_recovery": "keep",
+      "hauler_content": "keep"
+    }
+  },
+  "cancellationPassed": true,
+  "fullSave": "NOT RUN: no qualified synthetic provider/managed runtime in isolated profile",
+  "nativeBinaryRestore": "NOT RUN"
+}

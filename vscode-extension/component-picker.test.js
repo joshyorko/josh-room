@@ -31,3 +31,16 @@ test('cancellation does not return a partial capture request', async () => {
 test('preview discloses keep and pending without claiming successful capture', () => {
   assert.equal(planText({ component_plan: { rcc_environment: { mode: 'refresh', state: 'pending' } } }), 'rcc_environment: refresh — pending');
 });
+test('host defaults persist modes only and reject malformed saved requests', async () => {
+  const { storedChoice, rememberChoice } = require('./component-picker');
+  const saved = new Map();
+  const state = { get: key => saved.get(key), update: async (key, value) => saved.set(key, value) };
+  const choice = await pickComponents(mock([[]]), '/synthetic/absent');
+  choice.args.push('--brew-archive', '/synthetic/private-path');
+  await rememberChoice(state, 'synthetic-binding', choice);
+  assert.deepEqual(storedChoice(state, 'synthetic-binding').request, choice.request);
+  assert.equal(JSON.stringify([...saved]).includes('private-path'), false);
+  assert.equal(storedChoice(state, 'other-binding'), undefined);
+  saved.set([...saved.keys()][0], { request: { format_version: 1, components: { auth: 'refresh' } } });
+  assert.equal(storedChoice(state, 'synthetic-binding'), undefined);
+});
