@@ -29,7 +29,7 @@ def profile(tmp_path, identities, monkeypatch):
 
 
 def rollout(root, binding, *, text="synthetic turn"):
-    target = root / "codex/sessions/2026/11/22/rollout-synthetic-session.jsonl"
+    target = root / "codex/sessions/2026/11/22/rollout-2026-11-22T15-00-00-019aaa00-0000-7000-8000-000000000001.jsonl"
     current = target.parent
     parents = []
     while not current.exists():
@@ -37,7 +37,7 @@ def rollout(root, binding, *, text="synthetic turn"):
         current = current.parent
     for path in reversed(parents):
         path.mkdir(mode=0o700)
-    rows = [{"type": "session_meta", "payload": {"id": "019aaa00-0000-7000-8000-000000000001", "cwd": str(binding["workspace"]), "cli_version": "0.171.0"}}, {"type": "event_msg", "payload": {"message": text}}]
+    rows = [{"timestamp": "2026-11-22T15:00:00Z", "type": "session_meta", "payload": {"id": "019aaa00-0000-7000-8000-000000000001", "timestamp": "2026-11-22T15:00:00Z", "cwd": str(binding["workspace"]), "originator": "codex_cli_rs", "cli_version": "0.171.0", "source": "cli"}}, {"timestamp": "2026-11-22T15:00:00Z", "type": "event_msg", "payload": {"type": "user_message", "message": text, "images": None, "local_images": []}}]
     target.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     target.chmod(0o600)
     return target
@@ -337,7 +337,7 @@ def test_new_native_file_during_encryption_prevents_publication(profile, identit
     original = agents.subprocess.Popen
 
     def new_file(*args, **kwargs):
-        added = target.with_name("rollout-additional.jsonl")
+        added = target.with_name("rollout-2026-11-22T15-00-00-22222222-2222-4222-8222-222222222222.jsonl")
         added.write_bytes(target.read_bytes())
         added.chmod(0o600)
         return original(*args, **kwargs)
@@ -428,3 +428,36 @@ agents.materialize_session(Path(sys.argv[1]),source=Path(sys.argv[2]),identity_p
             child.wait(timeout=5)
         child.stdout.close()
         child.stderr.close()
+
+
+@pytest.mark.parametrize("change", ["outer-timestamp", "metadata-timestamp", "originator", "filename-identity", "filename-date", "ordinal-negative", "ordinal-bool", "ordinal-overflow", "nan", "infinite-exponent"])
+def test_capture_rejects_unparseable_native_codex_contract(profile, identities, tmp_path, change):
+    root, binding = profile
+    target = rollout(root, binding)
+    rows = [json.loads(row) for row in target.read_text().splitlines()]
+    if change == "outer-timestamp":
+        rows[1].pop("timestamp")
+    elif change == "metadata-timestamp":
+        rows[0]["payload"].pop("timestamp")
+    elif change == "originator":
+        rows[0]["payload"].pop("originator")
+    elif change == "filename-identity":
+        moved = target.with_name(target.name.replace("019aaa00", "029aaa00"))
+        target.rename(moved)
+        target = moved
+    elif change == "filename-date":
+        moved = target.with_name(target.name.replace("15-00-00", "25-00-00"))
+        target.rename(moved)
+        target = moved
+    elif change in {"nan", "infinite-exponent"}:
+        rows[1]["payload"]["synthetic_number"] = float("nan")
+    else:
+        rows[1]["ordinal"] = {"ordinal-negative": -1, "ordinal-bool": True, "ordinal-overflow": 2**64}[change]
+    serialized = "\n".join(json.dumps(row) for row in rows) + "\n"
+    if change == "infinite-exponent":
+        serialized = serialized.replace("NaN", "1e9999")
+    target.write_text(serialized)
+    output = tmp_path / "not-published.age"
+    with pytest.raises(agents.NativeAgentError):
+        agents.capture(root, output=output, recipients=identities[1], **binding)
+    assert not output.exists()

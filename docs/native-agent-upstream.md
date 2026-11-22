@@ -10,7 +10,7 @@ no credential was copied, and no hosted model request was made for this audit.
 | Harness | Examined version | Supported upstream location / continuation surface | Josh Room acceptance gate |
 | --- | --- | --- | --- |
 | T3 Code | Installed `0.1.12-nightly.20261122.5085`; public source `a985332c447173750394c0875fb961f88c306730` | `--base-dir` / `T3CODE_HOME`; one server-wide home; `userdata/statev2.sqlite`; provider-specific continuation bindings | Dedicated-profile launch can be isolated. Whole-database capture is blocked: database includes authentication and runnable outbox state. Native cold continuation NOT PROVEN. |
-| Codex CLI | Installed `0.171.0`; public source `cf3ff1530d821ec2d26452da4971d8e3e7d18d25` | `CODEX_HOME`; `sessions`, `archived_sessions`; `codex resume SESSION_ID`; `--all` disables cwd picker filtering | Native import/capture allowlist and cold continuation NOT PROVEN, both direct and through T3. |
+| Codex CLI | Installed `0.171.0`; public source `cf3ff1530d821ec2d26452da4971d8e3e7d18d25` | `CODEX_HOME`; `sessions`, `archived_sessions`; `codex resume SESSION_ID`; `--all` disables cwd picker filtering | Synthetic native-file discovery and original-ID history selection verified through the installed standalone app-server. Runtime resume/new turn NOT PROVEN; T3-mediated continuity remains unqualified. |
 | Claude Code | Installed `2.1.310` | `CLAUDE_CONFIG_DIR` documented location contract; installed `claude --resume ID` / `--continue`; directory-associated history | Exact storage schema and safe capture allowlist NOT VERIFIED. Cold continuation NOT PROVEN, both direct and through T3. |
 | OpenCode | Public source `ee5fe34e136488a1839ac73bcca8321c51a31b75`; CLI package `2.3.0` | Explicit `OPENCODE_DB`; channel-aware SQLite filename; public session/storage APIs need version-specific qualification | Optional follow-up only. Current database credential service stores OAuth/API credential values; copying the database is unsafe. No installed synthetic cold-resume evidence. |
 | Antigravity | No installed/versioned native persistence contract qualified | Official documentation entry point inspected; no supported portable native storage/restore contract established | Optional follow-up only. No safe allowlist, versioned schema, licensing qualification or synthetic cold-resume evidence. |
@@ -121,3 +121,45 @@ versioned session storage/export/import/continuation contract and license terms;
 prove credentials and machine identity can be omitted; test synthetic cold
 restore and a new real turn. Without those prerequisites, retain unsupported
 status and do not back up opaque home/database trees.
+
+
+## Qualified Codex 0.171.0 persisted-history selection
+
+The installed binary accepted a genuinely native synthetic session after encrypted
+capture and cold single-file materialization. Its stdio API listed the original
+UUID and returned both retained user/assistant items by that same identity. The
+result was `notLoaded`. This is native history discovery and selection, not runtime
+resume, authentication acceptance, or a new provider turn.
+
+The acceptance uses `initialize`, `initialized`, `thread/list`, then
+`thread/read` with `includeTurns: true`. Explicit cwd filtering is verified; a
+second cwd returns no thread. Cold discovery permits JSONL scanning with
+`useStateDbOnly: false`, and uses `currentAccountOnly: false` because the fixture
+has no account. Do not use `includedThreadIds` for the initial cold discovery:
+that option forces indexed lookup before the new JSONL has been discovered.
+An isolated account-free fixture is not permission to bypass account restrictions
+for user profiles.
+
+The native file name must encode its timestamp and thread UUID, with matching date
+directories; a reverted rollout may append a second rollout UUID. Every native
+record requires an outer timestamp. Session metadata requires its original ID,
+timestamp, cwd, originator, and CLI version. Nullable `ordinal` values are unsigned
+64-bit numbers when present. The capture validator now enforces these contracts,
+accepts valid ordinals, and rejects NaN/Infinity/non-finite numbers. Earlier minimal
+fixture bytes were byte-recovery evidence, not native-parser acceptance.
+
+These contracts are pinned to the official
+[rollout file parser](https://github.com/openai/codex/blob/cf3ff1530d821ec2d26452da4971d8e3e7d18d25/codex-rs/rollout/src/rollout_file_name.rs#L39)
+and [session metadata](https://github.com/openai/codex/blob/cf3ff1530d821ec2d26452da4971d8e3e7d18d25/codex-rs/protocol/src/protocol.rs#L3568).
+The source pin is research evidence, not a verified build SHA for the installed
+binary. Its own generated JSON schemas separately confirmed the request fields.
+
+The [read handler](https://github.com/openai/codex/blob/cf3ff1530d821ec2d26452da4971d8e3e7d18d25/codex-rs/app-server/src/request_processors/thread_processor.rs#L3243)
+projects persisted history. The
+[resume handler](https://github.com/openai/codex/blob/cf3ff1530d821ec2d26452da4971d8e3e7d18d25/codex-rs/app-server/src/request_processors/thread_processor.rs#L4053)
+also performs an account/auth check and starts a runtime. The next distinct gate
+is original-ID `thread/resume` with separately established supported native auth;
+a subsequent observed `turn/start` result is required for native-new-turn evidence.
+Neither method was sent in this qualification. Paid turns remain approval-gated.
+There is no established distinct raw `source: t3` value; do not invent one to claim
+T3-mediated preservation.

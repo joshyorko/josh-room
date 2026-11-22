@@ -10,6 +10,7 @@ import base64
 import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import selectors
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from .cancellation import sigterm_cancellation, terminate_owned_process
@@ -33,7 +35,12 @@ MAX_FILES = 256
 FORMAT = "josh-room.native-history.v1"
 POLICY = "native-profile.json"
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-_ROLLOUT = re.compile(r"sessions/[0-9]{4}/[0-9]{2}/[0-9]{2}/rollout-[A-Za-z0-9_-]{1,180}\.jsonl\Z")
+_UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_ROLLOUT = re.compile(
+    r"sessions/(?P<year>[0-9]{4})/(?P<month>[0-9]{2})/(?P<day>[0-9]{2})/rollout-"
+    r"(?P=year)-(?P=month)-(?P=day)T[0-9]{2}-[0-9]{2}-[0-9]{2}-"
+    rf"(?P<thread>{_UUID})(?:_{_UUID})?\.jsonl\Z"
+)
 CODEX_VERSION = "0.171.0"
 
 
@@ -58,9 +65,16 @@ def _unique_object(pairs):
     return result
 
 
+def _finite_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        _fail("invalid-json-number")
+    return number
+
+
 def _json(data):
     try:
-        return json.loads(data, object_pairs_hook=_unique_object)
+        return json.loads(data, object_pairs_hook=_unique_object, parse_constant=lambda _: _fail("invalid-json-constant"), parse_float=_finite_float)
     except RecursionError:
         _fail("json-nesting-limit")
 
@@ -278,17 +292,31 @@ def _validate_rollout(path, data, workspace):
         _fail("unsafe-native-content")
     try:
         rows = data.splitlines()
+        match = _ROLLOUT.fullmatch(path)
+        datetime.strptime(Path(path).name[8:27], "%Y-%m-%dT%H-%M-%S")
         first = _json(rows[0])
         if not isinstance(first, dict) or first.get("type") != "session_meta" or not isinstance(first.get("payload"), dict):
             _fail("invalid-native-session")
         if first["payload"]["cwd"] != workspace:
             _fail("path-mismatch")
+        originator = first["payload"].get("originator")
+        if not isinstance(originator, str) or not 1 <= len(originator) <= 256:
+            _fail("invalid-native-session")
+        metadata_time = first["payload"].get("timestamp")
+        if not isinstance(metadata_time, str) or datetime.fromisoformat(metadata_time).utcoffset() is None:
+            _fail("invalid-native-session")
         identity = first["payload"].get("id")
-        if not isinstance(identity, str) or str(uuid.UUID(identity)) != identity or first["payload"].get("cli_version") != CODEX_VERSION:
+        if not isinstance(identity, str) or str(uuid.UUID(identity)) != identity or match["thread"] != identity or first["payload"].get("cli_version") != CODEX_VERSION:
             _fail("invalid-native-session")
         for index, row in enumerate(rows):
             item = _json(row)
-            if not isinstance(item, dict) or set(item) - {"timestamp", "type", "payload"} or item.get("type") not in {"session_meta", "event_msg", "response_item", "turn_context", "compacted"} or not isinstance(item.get("payload"), dict):
+            if not isinstance(item, dict) or set(item) - {"timestamp", "ordinal", "type", "payload"} or item.get("type") not in {"session_meta", "event_msg", "response_item", "turn_context", "compacted"} or not isinstance(item.get("payload"), dict):
+                _fail("invalid-native-session")
+            stamp = item.get("timestamp")
+            if not isinstance(stamp, str) or datetime.fromisoformat(stamp).utcoffset() is None:
+                _fail("invalid-native-session")
+            ordinal = item.get("ordinal")
+            if ordinal is not None and (type(ordinal) is not int or not 0 <= ordinal < 2**64):
                 _fail("invalid-native-session")
             if index and item["type"] == "session_meta":
                 _fail("invalid-native-session")

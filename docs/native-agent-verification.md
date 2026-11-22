@@ -108,3 +108,41 @@ work is disk-backed transaction qualification, per-provider native import/select
 acceptance, and owner-approved real new-turn tests after native authentication
 is established separately. R2 custody and live MinIO/S3 admission remain untested.
 Release hold remains unchanged.
+
+## Disk-backed and native Codex discovery follow-up
+
+This follow-up starts at `0aa59c21fee62343b75508aeeff1dabdae5f0a77`.
+The task directory was created on `/var/tmp` only after `stat -f` verified btrfs;
+`/tmp` is tmpfs. Disk checks showed ample free data/metadata space. All new test
+fixtures, logs, synthetic identities and protocol schemas stayed in that one
+private disk task directory and were removed after qualification.
+
+| Check | Observed result |
+| --- | --- |
+| Native admission/core/CLI/lease/materialization subset on btrfs, prior head | PASS, 100 tests, including actual SIGKILL-before/after-link and retry. |
+| Final affected native/parser/controller/public-safety tests on btrfs | PASS, 159 tests. Command: `TMPDIR=<private-btrfs-task-dir> python -m pytest tests/test_native_agents.py tests/test_native_agents_cli.py tests/test_native_agent_admission.py tests/test_native_agent_quiescence.py tests/test_native_agent_materialization.py tests/test_native_codex_acceptance.py tests/test_native_cli_contract.py tests/test_controller_artifact.py tests/test_repository_boundary.py tests/test_public_storage_safety.py -q --basetemp <private-btrfs-task-dir>/pytest-disk-final`. |
+| Unsupported-filesystem refusal | PASS, injected kernel unsupported-operation error; no named plaintext fallback or target file. This is denial-logic coverage, not qualification on another real filesystem. |
+| Installed native Codex discovery/read-selection | PASS, Codex 0.171.0 app-server found the cold-materialized original UUID at its native path and returned both original synthetic user/assistant items. Wrong-cwd listing returned no thread. Source bytes unchanged; status `notLoaded`. |
+| Final native case with strict configuration | PASS, repeated after forcing `cli_auth_credentials_store="file"` in an empty isolated home and enabling `--strict-config`. An owned loopback provider guard observed zero connections through process shutdown. No user auth, login/resume/turn method, or hosted model request. |
+| Reproducibility | `tests/test_native_codex_acceptance.py` uses a real installed pinned binary and real age encryption/materialization; host admission is mocked synthetic authority. It skips if Codex/age is absent or Codex version differs. No user profile is opened. |
+| Native format corrections | PASS, required native timestamp/UUID file names, filename/metadata ID binding, row and metadata timestamps, originator; optional nullable u64 ordinal accepted. Missing fields, ID/date mismatch, malformed ordinals and non-finite JSON rejected before publication. |
+| Ruff, whitespace, source/template parity and VSIX package | PASS. Packaged controller byte parity verified; VSIX SHA256 `4e0e1722458474537319b31a269ad2b998e265243298f0558f0889fd0a912b32`. |
+| Independent security/contract/comment review | PASS. Accepted improvements reject non-finite JSON and check the zero-connection guard after full process shutdown. No other blocker or comment finding. |
+| Physical power-loss, runtime resume, real new turn, provider account compatibility | NOT RUN and NOT CLAIMED. SIGKILL/file-namespace consistency and persisted-history selection do not establish these gates. |
+| Full suite, new Windows/installed VSIX/live-provider admission qualification | NOT RUN for this follow-up. Earlier-head CI/results are not attributed to this head. No paid calls. |
+
+The current capture policy corrects earlier loose draft fixtures that were only
+byte-recovery evidence. It does not rewrite malformed historical ciphertext or
+invent a native session from generic transcript text. The accepted fixture uses
+actual versioned metadata, native event rows and the provider's real filename.
+The installed binary's generated protocol schemas and
+[pinned official source](native-agent-upstream.md#qualified-codex-01710-persisted-history-selection)
+confirm the list/read versus resume distinction. The binary build SHA is unverified.
+
+The minimal next runtime gate is original-ID `thread/resume` with separately
+established supported native auth and account compatibility, then an observed
+new `turn/start` result under that same identity. Neither was invoked. Whole-home
+atomicity, T3's auth/effect-free database projection, Claude's native policy,
+R2 custody/live MinIO/S3 admission and native new turns remain blocked/unverified.
+All #190 providers stay `selectable: false` and general `restore: "blocked"`.
+The release hold is unchanged.

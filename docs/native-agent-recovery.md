@@ -165,10 +165,31 @@ in an otherwise fresh profile is verified under read leases and acknowledged wit
 `recovered_commit: true`. Different existing content is preserved and rejected.
 
 This is a single-file namespace transaction, not a multi-file/home transaction,
-forensic block erasure, or native-resume acceptance. SIGKILL behavior was exercised
-on Linux 7.3.1 x86_64 with tmpfs. Disk-backed filesystems and actual power-loss
-recovery are unqualified. A local tmpfs profile is volatile and must not be treated
+forensic block erasure, or native-resume acceptance. SIGKILL/retry behavior was exercised
+on Linux 7.3.1 x86_64 with both tmpfs and verified disk-backed btrfs. Actual
+physical power-loss recovery remains unqualified. A local tmpfs profile is volatile and must not be treated
 as durable storage. The independent encrypted reference remains the recovery unit.
 Every provider still reports `restore: "blocked"` and `selectable: false` for
 issue #190; Codex additionally reports its separate history-only
 `materialize_session` capability. No Save/Enter integration is enabled.
+
+
+## Native discovery acceptance and remaining continuation gate
+
+Codex 0.171.0 discovered and selected the cold-materialized synthetic session
+through its own app-server, retaining the original UUID, workspace, native path,
+and user/assistant history. The process used isolated empty homes, no account/auth
+store, and a custom loopback-only provider. An owned provider guard observed zero
+connections throughout process lifetime. Only persisted-history methods were sent;
+the thread remained `notLoaded`.
+
+The stricter source contract requires the native timestamp/UUID filename,
+mandatory metadata and row timestamps, and valid optional ordinals. Older malformed
+draft fixtures are now rejected without modifying their encrypted references.
+See [the pinned upstream protocol](native-agent-upstream.md#qualified-codex-01710-persisted-history-selection)
+and [reproducible acceptance evidence](native-agent-verification.md#disk-backed-and-native-codex-discovery-follow-up).
+
+Runtime resume/account compatibility and an observed new turn remain unverified.
+Fresh native authentication must be established separately; no auth material is
+recovered from the reference. Whole-profile restore, all #190 Save selections,
+T3/Claude native restore, and the release hold remain unchanged.

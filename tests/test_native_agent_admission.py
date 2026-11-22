@@ -250,10 +250,10 @@ def test_real_core_capture_and_verify_require_host_admission(authorized, monkeyp
     monkeypatch.setenv("XDG_CONFIG_HOME", str(authorized.config_home))
     root = Path(authorized.grant["profile_root"])
     assert agents.configure(root, recipients=recipients, **authorized.binding)["admission"]["admitted"]
-    target = root / "codex/sessions/2026/11/22/rollout-demo.jsonl"
+    target = root / "codex/sessions/2026/11/22/rollout-2026-11-22T15-00-00-11111111-1111-4111-8111-111111111111.jsonl"
     for directory in [root / "codex/sessions", root / "codex/sessions/2026", root / "codex/sessions/2026/11", target.parent]:
         directory.mkdir(mode=0o700)
-    write(target, {"type": "session_meta", "payload": {"id": "11111111-1111-4111-8111-111111111111", "cwd": str(authorized.workspace), "cli_version": agents.CODEX_VERSION}})
+    write(target, {"timestamp": "2026-11-22T15:00:00Z", "type": "session_meta", "payload": {"id": "11111111-1111-4111-8111-111111111111", "timestamp": "2026-11-22T15:00:00Z", "cwd": str(authorized.workspace), "originator": "codex_cli_rs", "cli_version": agents.CODEX_VERSION, "source": "cli"}})
     reference = authorized.references / "retained.age"
     assert agents.capture(root, output=reference, recipients=recipients, **authorized.binding)["ok"]
     assert agents.verify(root, source=reference, identity_paths=keys[:1], **authorized.binding)["ok"]
