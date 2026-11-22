@@ -1133,7 +1133,7 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     environment = managedRuntime.mergeRuntimeEnvironment(process.env, { ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath });
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
-      authFree: ["status", "composition"].includes(args[0]),
+      authFree: ["status", "composition", "agents"].includes(args[0]),
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
@@ -5204,13 +5204,91 @@ async function inspectLogicalSnapshot(preselected) {
   return "inspected";
 }
 
-async function agentSessionsStatus() {
-  assertWorkspaceTrusted("inspect agent session capabilities");
-  const result = await runJoshRoom(["agents", "capabilities", "--json"], activeWorkspace());
-  await vscode.window.showInformationMessage(
-    agentSessionsSummary(result), { modal: true },
+async function agentSessionsStatus(preselected) {
+  assertWorkspaceTrusted("inspect agent sessions");
+  const project = roomProject(preselected);
+  const dimension = explicitDimensionId(preselected);
+  if (!project?.id || !dimension) {
+    await vscode.window.showInformationMessage("Choose a Room in Josh Rooms to view Agent Sessions.");
+    return "unavailable";
+  }
+  const cwd = activeWorkspace();
+  const contextArgs = ["--dimension", dimension, "--room", project.id, "--workspace", cwd];
+  const result = await runJoshRoom(["agents", "room-status", ...contextArgs, "--json"], cwd);
+  const profiles = (Array.isArray(result.profiles) ? result.profiles : []).filter((profile) =>
+    /^[0-9a-f]{64}$/.test(profile.profile_ref || "")
+    && ["personal", "work", "oss", "homelab"].includes(profile.scope)
+    && profile.state === "configured"
+    && Array.isArray(profile.tools)
+    && profile.tools.some((tool) => ["codex", "claude"].includes(tool)));
+  const summary = [
+    agentSessionsSummary(result.capabilities || {}),
+    "Original T3 app-thread restoration is unavailable. This discovery does not import history or assign a new T3 ID.",
+    profiles.length ? `${profiles.length} configured local profile${profiles.length === 1 ? "" : "s"}. Discovery is read-only.`
+      : "No configured host-authorized profile matches this Room and workspace. Busy or unavailable profiles cannot be discovered here.",
+  ].join("\n");
+  const action = await vscode.window.showInformationMessage(
+    summary, { modal: true }, ...(profiles.length ? ["Discover native history"] : []),
   );
-  return "inspected";
+  if (action !== "Discover native history") return "inspected";
+  let profile = profiles[0];
+  if (profiles.length > 1) {
+    const picked = await vscode.window.showQuickPick(profiles.map((entry) => ({
+      label: `${entry.scope} profile ${entry.profile_ref.slice(0, 8)}`,
+      description: "Native history only",
+      profile_ref: entry.profile_ref,
+    })), { title: "Josh: Agent Sessions", placeHolder: "Choose a configured local profile" });
+    if (!picked) return "cancelled";
+    profile = profiles.find((entry) => entry.profile_ref === picked.profile_ref);
+    if (!profile) throw new Error("Choose a currently configured agent profile.");
+  }
+  const tools = [...new Set(profile.tools.filter((tool) => ["codex", "claude"].includes(tool)))];
+  let tool = tools[0];
+  if (tools.length > 1) {
+    const picked = await vscode.window.showQuickPick(tools.map((entry) => ({
+      label: entry === "codex" ? "Codex CLI" : "Claude Code",
+      description: "Native history only",
+      tool: entry,
+    })), { title: "Josh: Discover Native History", placeHolder: "Choose a provider history source" });
+    if (!picked) return "cancelled";
+    if (!tools.includes(picked.tool)) throw new Error("Choose an authorized history source.");
+    tool = picked.tool;
+  }
+  const discovery = await runJoshRoom([
+    "agents", "discover", ...contextArgs, "--profile-ref", profile.profile_ref, "--tool", tool, "--json",
+  ], cwd);
+  if (discovery.tool !== tool || discovery.scope !== profile.scope
+      || discovery.native_resume_verified !== false || discovery.original_t3_identity_restored !== false) {
+    throw new Error("Session discovery returned an unsupported history receipt.");
+  }
+  const sessions = (Array.isArray(discovery.sessions) ? discovery.sessions : []).filter((session) =>
+    session.tool === tool
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(session.provider_session_id || "")
+    && session.cwd_matches === true
+    && session.native_resume_verified === false
+    && session.t3_import?.state === "requires-verified-owned-server"
+    && session.t3_import?.original_t3_identity_restored === false
+    && session.t3_import?.new_t3_thread_id === null);
+  if (!sessions.length) {
+    await vscode.window.showInformationMessage("No qualified native history was found. No T3 import was performed; native continuation remains unverified.");
+    return "discovered";
+  }
+  const selected = await vscode.window.showQuickPick(sessions.map((session) => ({
+    label: `${tool === "codex" ? "Codex" : "Claude"} ${session.provider_session_id}`,
+    description: "Native-provider history only",
+    detail: "Workspace matches. No T3 import was performed. Original T3 identity is not restored; continuation is unverified.",
+    provider_session_id: session.provider_session_id,
+  })), { title: "Josh: Native Session History", placeHolder: "Inspect a session identity" });
+  if (!selected) return "discovered";
+  const session = sessions.find((entry) => entry.provider_session_id === selected.provider_session_id);
+  if (!session) throw new Error("Choose a discovered native session.");
+  await vscode.window.showInformationMessage([
+    `Provider session: ${session.provider_session_id}`,
+    "Workspace matches the approved Room.",
+    "No T3 import was performed. A supported provider-history import creates a new T3 app-thread ID; it does not restore the original T3 identity.",
+    "Native continuation is unverified. Save and Enter do not include agent state.",
+  ].join("\n"), { modal: true });
+  return "discovered";
 }
 
 function agentSessionsSummary(result) {

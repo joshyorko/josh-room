@@ -204,7 +204,7 @@
       },
       {
         "command": "joshRoom.agentSessionsStatus",
-        "title": "Josh: Agent Sessions Status",
+        "title": "Josh: Agent Sessions…",
         "icon": "$(comment-discussion)"
       },
       {

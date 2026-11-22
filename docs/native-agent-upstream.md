@@ -167,6 +167,14 @@ T3-mediated preservation.
 
 ## T3 and Claude recovery follow-up
 
+The [authenticated provider-history import acceptance](t3-provider-import-acceptance.md)
+now qualifies the existing T3 scan/import surface for both cold-materialized
+synthetic native formats, with original provider UUIDs and new derived T3 IDs.
+This supersedes earlier source-only import evidence, not the original T3 identity
+gap. Providers were explicitly unavailable; loopback control was authenticated
+and external networking was blocked. Room's UI exposes status/discovery only;
+production automatic import and native continuation remain unavailable.
+
 The [current T3 audit](t3-native-recovery-audit.md) separates installed `.5098`
 no-turn evidence from earlier `.5085` startup tests. T3's native provider import
 preserves provider history but derives a new app identity; it cannot recover an

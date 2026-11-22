@@ -346,3 +346,7 @@ def test_v2_claude_gate_e2e(authorized, monkeypatch, tmp_path, scope):
     write(authorized.directory / admission.POLICY_FILE, authorized.policy)
     with pytest.raises(agents.NativeAgentError, match="tool-not-authorized"):
         agents.verify(cold, source=reference, identity_paths=keys[:1], tool="claude", **authorized.binding)
+
+
+def test_explicit_discovery_uses_authority_without_reference_destination(authorized):
+    assert check(authorized, operation="discover", destination=None)["admitted"] is True

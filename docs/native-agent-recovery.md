@@ -63,9 +63,25 @@ in the foreground; stop it before capture. `capture` and `verify` require curren
 Dimension admission and an explicitly approved encrypted local reference.
 `restore` always reports `crash-safe-materialization-unavailable`.
 
-The VS Code Room context menu exposes **Agent Sessions Status**. It uses the same
-controller capability contract. It does not add another Save chooser or offer an
-unverified Continue action. Issue #190 owns the shared native-component chooser.
+The VS Code Room context menu exposes **Agent Sessions…**. It reports profiles
+matching the selected Dimension, Room and active canonical workspace, then offers
+explicit read-only Codex/Claude history discovery. `agents room-status` returns
+opaque profile selectors and metadata without reading conversations or keysets.
+`agents discover` revalidates the host grant and current keyset, tool scope,
+recipients, stopped-profile lock and native-file consistency. Revoked selectors,
+busy profiles and mismatched workspaces fail closed. Private profile roots and
+conversation previews are not sent to VS Code. Discovery performs no T3 import,
+assigns no new app-thread ID and offers no Continue action. Issue #190 owns the
+shared native-component chooser; every provider remains unselectable there.
+
+T3's supported provider-history scan/import was separately qualified against
+cold-materialized synthetic Codex and Claude files using a fresh authenticated
+local server. It preserves the provider-native UUID but derives a **new** T3
+app-thread ID. Both messages, exact cwd, retry behavior and zero runnable effects
+passed with external egress blocked. This is an imported-history/native-provider
+fallback, not original T3-thread restoration or a proven new turn. Automatic
+production import still requires a verified owned server and a supported startup
+policy. See the [acceptance conditions and parser limits](t3-provider-import-acceptance.md).
 
 ## Draft-only safety limits
 

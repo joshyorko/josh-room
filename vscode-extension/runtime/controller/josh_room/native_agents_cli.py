@@ -10,6 +10,15 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="action", required=True)
     capabilities = commands.add_parser("capabilities")
     capabilities.add_argument("--json", action="store_true")
+    for action in ("room-status", "discover"):
+        command = commands.add_parser(action)
+        command.add_argument("--dimension", required=True)
+        command.add_argument("--room", required=True)
+        command.add_argument("--workspace", type=Path, required=True)
+        command.add_argument("--json", action="store_true")
+        if action == "discover":
+            command.add_argument("--profile-ref", required=True)
+            command.add_argument("--tool", choices=("codex", "claude"), required=True)
     for action in ("plan", "status", "configure", "launch", "capture", "verify", "restore", "materialize-session"):
         command = commands.add_parser(action)
         command.add_argument("--profile-root", type=Path, required=True)
@@ -39,6 +48,13 @@ def dispatch(args):
 
     if args.action == "capabilities":
         return {"ok": True, **native_agents.capabilities()}
+    if args.action in {"room-status", "discover"}:
+        from . import native_agent_discovery
+
+        options = {"dimension": args.dimension, "room": args.room, "workspace": args.workspace}
+        if args.action == "discover":
+            return native_agent_discovery.discover(**options, profile_ref=args.profile_ref, tool=args.tool)
+        return native_agent_discovery.room_status(**options)
     binding = {"dimension": args.dimension, "room": args.room, "profile": args.profile, "workspace": args.workspace}
     action = "status" if args.action == "plan" else args.action
     options = {}

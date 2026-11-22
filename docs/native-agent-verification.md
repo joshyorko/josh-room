@@ -186,3 +186,26 @@ credential. No user-only prerequisite exists for this offline history slice;
 fresh supported native auth/account acceptance and approval for any paid turn
 belong to a future explicit continuation test. Every #190 selector remains false,
 and the release hold is unchanged.
+
+## Authenticated T3 fallback import and Room discovery checkpoint
+
+2026-11-22, Linux, source changes atop
+`59e5e6b9e08b9986bed9fbc0285203383e15609e`. This section supersedes earlier
+source-only T3 provider-import evidence; original-T3 recovery remains blocked.
+
+| Check | Result |
+| --- | --- |
+| Installed T3 `.5098` authenticated scan/import | PASS, 2/2 real age cold-materialization cases, Codex and Claude. Provider UUID, new derived T3 ID, exact cwd, both messages, stopped/idle state, wrong-root refusal, retry idempotence, unchanged native bytes. Seven runnable/effect tables zero. [Exact conditions](t3-provider-import-acceptance.md). |
+| Network/auth boundary | PASS, fresh user/network namespace with loopback only; supported two-minute local control token in memory/stdin. No existing credentials, external/provider egress, non-version provider invocation or model turn. Task-private auth/server state removed. Providers deliberately unavailable. |
+| Focused Python/controller suite | PASS, 230 passed, 3 skipped in 2.86s. Skips: two opt-in T3 cases separately exercised above and the optional Claude SDK reader. |
+| Full VSIX Node suite | PASS, 381 passed, 2 existing skips in 4.34s. Includes Room context, discovery, missing/busy profiles, redaction and no VSIX credential handoff for agents. Windows environment behavior is simulated, not native Windows acceptance. |
+| Independent security review | PASS, no blockers; 56 discovery/admission Python cases and 6 targeted Node cases. Stale/revoked selectors, tool/recipient scope, lock/cancellation and metadata-only output reviewed. |
+| Local VSIX packaging | PASS, vsce 4.0.0; all canonical Python modules and extension source byte-identical in package. No auth stores or vendor SDK. SHA-256 `bb4c543325314ff30e98ed3cc4dd8a5c5c461064b5ae2588cc1d8118c84ab11d`. |
+| Native Windows / installed VSIX UI | NOT RUN. Node function/package checks do not establish installed rendering or native Windows filesystem support. |
+
+Room Agent Sessions now offers status and explicit metadata-only history
+discovery. It does not invoke the importer. Production import remains blocked
+pending verified owned-server/process/environment and startup-policy checks;
+project-wide import is not a single-session operation. Original T3 app identity,
+healthy-provider continuation and an actual native new turn remain unverified.
+All #190 Save selectors remain false. No merge, release or publication occurred.
