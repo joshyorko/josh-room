@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).parents[1]
 
 
@@ -20,7 +19,7 @@ def test_installed_wheel_resolves_its_own_restic_assets(tmp_path):
         pytest.skip("uv is required to build the real CLI wheel")
     built = subprocess.run(
         [uv, "build", "--wheel", "--out-dir", str(tmp_path / "dist")],
-        cwd=ROOT, capture_output=True, text=True, timeout=120,
+        check=False, cwd=ROOT, capture_output=True, text=True, timeout=120,
     )
     assert built.returncode == 0, built.stderr
     wheel, = (tmp_path / "dist").glob("*.whl")
@@ -53,7 +52,7 @@ for platform in ('linux-x64', 'win32-x64'):
     assert pin['binary'] == ('restic.exe' if platform == 'win32-x64' else 'restic')
 assert callable(module.install_restic)
 """, str(installed)],
-        cwd=tmp_path,
+        check=False, cwd=tmp_path,
         env={**os.environ, "PYTHONPATH": str(installed), "PYTHONNOUSERSITE": "1",
              "PYTHONDONTWRITEBYTECODE": "1"},
         capture_output=True, text=True, timeout=30,
