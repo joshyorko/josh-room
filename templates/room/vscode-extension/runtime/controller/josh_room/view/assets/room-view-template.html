@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;97f56566b735de95ee8d05145afcc161f6e4377577935cb258ec62c2a8579f3c&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;0484eeb3410f0f36bcc0addaf12f90f33dde148d4e366aac4fc065a6f343ae67&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -16408,15 +16408,17 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.cache = new Map();
     }
 
-    clear() {
-      for (const entry of this.cache.values()) {
+    retainLabels(labelKeys) {
+      for (const [key, entry] of this.cache) {
+        if (labelKeys.has(entry.labelKey)) continue;
         entry.tex.dispose();
+        this.cache.delete(key);
       }
-      this.cache.clear();
     }
 
     getTexture(title, subtitle, themeKey, highlighted) {
-      const key = `${themeKey}|${highlighted ? '1' : '0'}|${title}|${subtitle || ''}`;
+      const labelKey = JSON.stringify([themeKey, title, subtitle || '']);
+      const key = (highlighted ? '1' : '0') + labelKey;
       if (this.cache.has(key)) return this.cache.get(key);
       const t = THEMES[themeKey] || THEMES.night;
       const canvas = document.createElement('canvas');
@@ -16462,7 +16464,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       tex.magFilter = this.THREE.LinearFilter;
       tex.anisotropy = this.maxAnisotropy;
       tex.needsUpdate = true;
-      const entry = { tex, aspect: canvas.width / canvas.height };
+      const entry = { labelKey, tex, aspect: canvas.width / canvas.height };
       this.cache.set(key, entry);
       return entry;
     }
@@ -16949,6 +16951,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       dom.addEventListener('wheel', onWheel, { passive: false });
       dom.addEventListener('contextmenu', (ev) => ev.preventDefault());
       window.addEventListener('resize', () => this.resize());
+      window.addEventListener('pagehide', (event) => {
+        if (!event.persisted) {
+          this._clearLabelMeshes();
+          this.labelAtlas.retainLabels(new Set());
+        }
+      });
     }
 
     _orbitCamera(dx, dy) {
@@ -17043,7 +17051,6 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.poolBaseMat.blending = blend;
       this.poolBaseMat.needsUpdate = true;
 
-      this.labelAtlas.clear();
       if (this.layout) {
         this._applyThemeToWorldMaterials();
       }
@@ -17178,16 +17185,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const child = this.worldGroup.children.pop();
         child.traverse(disposeObj);
       }
-      while (this.labelGroup.children.length) {
-        const child = this.labelGroup.children.pop();
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) child.material.dispose();
-      }
       this.pickables = [];
       this.pedestalVisuals.clear();
       this.wireVisuals = [];
       this.instancedRefs = {};
-      this.labelPool = [];
     }
 
     _buildWorldGeometry(layout) {
@@ -17662,17 +17663,24 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this._applyLightingAndDimming();
     }
 
-    _rebuildLabelPool(layout) {
-      const THREE = this.THREE;
+    _clearLabelMeshes() {
       while (this.labelGroup.children.length) {
-        const c = this.labelGroup.children.pop();
+        const c = this.labelGroup.children[this.labelGroup.children.length - 1];
+        this.labelGroup.remove(c);
         if (c.geometry) c.geometry.dispose();
         if (c.material) c.material.dispose();
       }
       this.labelPool = [];
+    }
+
+    _rebuildLabelPool(layout) {
+      const THREE = this.THREE;
+      this._clearLabelMeshes();
+      const labelKeys = new Set();
 
       const addLabelEntry = (node, title, subtitle, priority, worldW, yPos, zOffset, tiltDeg = -56) => {
         const texEntry = this.labelAtlas.getTexture(title, subtitle, this.themeKey, false);
+        labelKeys.add(texEntry.labelKey);
         const h = worldW / texEntry.aspect;
         const geo = new THREE.PlaneGeometry(worldW, h);
         const mat = new THREE.MeshBasicMaterial({
@@ -17722,6 +17730,8 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const mText = b.item.metric != null ? `${b.item.metric}${unit}` : '';
         addLabelEntry(b, b.label, mText, 30, 1.65, b.y + b.height + 0.46, 0.0, -40);
       }
+      // Keep both variants of current labels, including shared and temporarily hidden ones.
+      this.labelAtlas.retainLabels(labelKeys);
     }
 
     _updateFloorLabels() {

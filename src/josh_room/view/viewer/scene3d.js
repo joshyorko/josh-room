@@ -313,15 +313,17 @@
       this.cache = new Map();
     }
 
-    clear() {
-      for (const entry of this.cache.values()) {
+    retainLabels(labelKeys) {
+      for (const [key, entry] of this.cache) {
+        if (labelKeys.has(entry.labelKey)) continue;
         entry.tex.dispose();
+        this.cache.delete(key);
       }
-      this.cache.clear();
     }
 
     getTexture(title, subtitle, themeKey, highlighted) {
-      const key = `${themeKey}|${highlighted ? '1' : '0'}|${title}|${subtitle || ''}`;
+      const labelKey = JSON.stringify([themeKey, title, subtitle || '']);
+      const key = (highlighted ? '1' : '0') + labelKey;
       if (this.cache.has(key)) return this.cache.get(key);
       const t = THEMES[themeKey] || THEMES.night;
       const canvas = document.createElement('canvas');
@@ -367,7 +369,7 @@
       tex.magFilter = this.THREE.LinearFilter;
       tex.anisotropy = this.maxAnisotropy;
       tex.needsUpdate = true;
-      const entry = { tex, aspect: canvas.width / canvas.height };
+      const entry = { labelKey, tex, aspect: canvas.width / canvas.height };
       this.cache.set(key, entry);
       return entry;
     }
@@ -854,6 +856,12 @@
       dom.addEventListener('wheel', onWheel, { passive: false });
       dom.addEventListener('contextmenu', (ev) => ev.preventDefault());
       window.addEventListener('resize', () => this.resize());
+      window.addEventListener('pagehide', (event) => {
+        if (!event.persisted) {
+          this._clearLabelMeshes();
+          this.labelAtlas.retainLabels(new Set());
+        }
+      });
     }
 
     _orbitCamera(dx, dy) {
@@ -948,7 +956,6 @@
       this.poolBaseMat.blending = blend;
       this.poolBaseMat.needsUpdate = true;
 
-      this.labelAtlas.clear();
       if (this.layout) {
         this._applyThemeToWorldMaterials();
       }
@@ -1083,16 +1090,10 @@
         const child = this.worldGroup.children.pop();
         child.traverse(disposeObj);
       }
-      while (this.labelGroup.children.length) {
-        const child = this.labelGroup.children.pop();
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) child.material.dispose();
-      }
       this.pickables = [];
       this.pedestalVisuals.clear();
       this.wireVisuals = [];
       this.instancedRefs = {};
-      this.labelPool = [];
     }
 
     _buildWorldGeometry(layout) {
@@ -1567,17 +1568,24 @@
       this._applyLightingAndDimming();
     }
 
-    _rebuildLabelPool(layout) {
-      const THREE = this.THREE;
+    _clearLabelMeshes() {
       while (this.labelGroup.children.length) {
-        const c = this.labelGroup.children.pop();
+        const c = this.labelGroup.children[this.labelGroup.children.length - 1];
+        this.labelGroup.remove(c);
         if (c.geometry) c.geometry.dispose();
         if (c.material) c.material.dispose();
       }
       this.labelPool = [];
+    }
+
+    _rebuildLabelPool(layout) {
+      const THREE = this.THREE;
+      this._clearLabelMeshes();
+      const labelKeys = new Set();
 
       const addLabelEntry = (node, title, subtitle, priority, worldW, yPos, zOffset, tiltDeg = -56) => {
         const texEntry = this.labelAtlas.getTexture(title, subtitle, this.themeKey, false);
+        labelKeys.add(texEntry.labelKey);
         const h = worldW / texEntry.aspect;
         const geo = new THREE.PlaneGeometry(worldW, h);
         const mat = new THREE.MeshBasicMaterial({
@@ -1627,6 +1635,8 @@
         const mText = b.item.metric != null ? `${b.item.metric}${unit}` : '';
         addLabelEntry(b, b.label, mText, 30, 1.65, b.y + b.height + 0.46, 0.0, -40);
       }
+      // Keep both variants of current labels, including shared and temporarily hidden ones.
+      this.labelAtlas.retainLabels(labelKeys);
     }
 
     _updateFloorLabels() {
