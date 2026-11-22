@@ -22,3 +22,13 @@ test("native ACL failure and missing OS authority never fall back", async () => 
     done(new Error("synthetic failure"));
   } }), /preparation failed/);
 });
+
+test("native ACL diagnostics retain only stage, exception class and HRESULT", async () => {
+  await assert.rejects(prepareWindowsHandoff("C:\\owned", { systemRoot: "C:\\Windows", execute(_exe, _args, _options, done) {
+    done(new Error("failure"), "", "JR_HANDOFF:file-apply:UnauthorizedAccessException:-2147024891 C:\\private\\material.identity S-1-5-21-123");
+  } }), error => {
+    assert.match(error.message, /file-apply\/UnauthorizedAccessException\/-2147024891/);
+    assert.ok(!error.message.includes("C:\\private") && !error.message.includes("S-1-5"));
+    return true;
+  });
+});

@@ -154,6 +154,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Project Python unavailable" }
           $env:JOSH_ROOM_ACCEPTANCE_PYTHON = $python.Trim()
           $env:JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE = Join-Path $env:RUNNER_TEMP "windows-installed-recovery-evidence"
+          node scripts/windows_handoff_probe.js
+          if ($LASTEXITCODE -ne 0) { throw "Native pre-write ACL dependency failed before downloads" }
           node scripts/windows_recovery_installed.js
           if ($LASTEXITCODE -ne 0) { throw "Installed Windows qualification failed; inspect sanitized receipt" }
       - name: Upload sanitized installed recovery evidence only

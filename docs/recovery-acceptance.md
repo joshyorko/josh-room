@@ -186,6 +186,9 @@ the owned empty directory and file before writing identity bytes; unavailable
 native preparation fails without a chmod fallback. No identity bytes enter
 PowerShell arguments or output. The controller's shared native verifier checks
 the resulting owner/SYSTEM DACL before admission.
+A native empty-file preflight runs before provider/editor downloads and reports
+only the failing stage, exception class and HRESULT; it retains no paths,
+account SIDs or identity material.
 
 The source-runtime adapter wraps the actual installed `python -m josh_room`
 entry point with a guard which independently verifies the existing file and
