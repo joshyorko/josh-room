@@ -72,7 +72,7 @@ async function connect(port) {
     });
   };
   const text = async value => { await key("a", "KeyA", 65, 2); await send("Input.insertText", { text: value }); };
-  const widget = () => evaluate(`(() => {const w=[...document.querySelectorAll('.quick-input-widget')].find(x=>x.offsetParent!==null);return w ? {text:w.innerText,rows:[...w.querySelectorAll('.monaco-list-row')].map(x=>x.innerText)}:null})()`);
+  const widget = () => evaluate(`(() => {const w=[...document.querySelectorAll('.quick-input-widget')].find(x=>x.offsetParent!==null);return w ? {text:w.innerText,rows:[...w.querySelectorAll('.monaco-list-row')].map(x=>x.innerText),activeRows:w.querySelectorAll('.monaco-list-row.focused').length,input:w.querySelector('input')?.value,busy:[...w.querySelectorAll('.monaco-progress-container.infinite,.monaco-progress-container.discrete')].some(x=>x.offsetParent!==null)}:null})()`);
   const choose = async label => {
     await until(async () => (await widget())?.rows.some(value => value.includes(label)), `native choice ${label}`);
     await text(label);
@@ -222,12 +222,32 @@ async function main() {
     await cdp.command("Recovery fixture verify diff");
     await until(() => fs.existsSync(path.join(base, "ui-diff.json")), "native diff verification");
     if (JSON.parse(await fsp.readFile(path.join(base, "ui-diff.json"))).state !== "PASS") throw new Error("Native readonly text diff failed");
+    receipt.native_readonly_diff = "PASS";
     await startBrowse(2);
     await cdp.choose("code.py");
     await cdp.choose("Recover selection…");
     const destination = path.join(base, "recovered-one-file");
-    await until(async () => (await cdp.widget())?.text.includes("Recover to a new"), "native save dialog");
+    await until(async () => {
+      const widget = await cdp.widget();
+      return widget?.text.includes("Recover to a new") && !widget.busy && widget.rows.length > 0;
+    }, "native save dialog initial listing");
+    // The simple dialog navigates directories asynchronously. Settle its parent
+    // listing first; otherwise Enter may only navigate, without accepting a file.
+    const parent = path.dirname(destination) + path.sep;
+    const samePath = (left, right) => typeof left === "string"
+      && path.normalize(left).toLowerCase() === path.normalize(right).toLowerCase();
+    await cdp.text(parent);
+    await until(async () => {
+      const widget = await cdp.widget();
+      return samePath(widget?.input, parent) && !widget.busy
+        && widget.rows.some(row => row.includes("provider-workspace"));
+    }, "native save dialog destination parent");
     await cdp.text(destination);
+    await until(async () => {
+      const widget = await cdp.widget();
+      return samePath(widget?.input, destination) && !widget.busy && widget.activeRows === 0;
+    }, "native save dialog absent filename");
+    receipt.native_save_dialog_parent_navigation = "PASS";
     await cdp.key("Enter", "Enter", 13);
     await until(() => fs.existsSync(destination), "selective extraction through registered command");
     const expected = Buffer.from('def greeting():\n\treturn "first 你好"\n');
