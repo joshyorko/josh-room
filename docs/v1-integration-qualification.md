@@ -1,21 +1,10 @@
-# v1 integration qualification
+# Major release integration qualification
 
-## Owner scope freeze
-
-The combined feature scope is frozen. The new shared agent-history Save picker
-and its direct Save adapter are off in the v1 candidate; their expanded
-fault-injection/rollback matrix is deferred rather than a release gate. Existing
-explicit capture, inspect and restore behavior and its safety requirements remain
-unchanged. Historical pilot results below do not enable the deferred feature.
-
-The immediate remaining execution is the already identified Windows harness
-receipt-argument repair against the explicit immutable RCC candidate. No new
-feature branch or broader qualification gate is authorized. JAT is an independent
-upstream release lane: Room testing does not gate its publication. Once the
-matching immutable JAT is actually published, pin it and perform the required
-installed Linux/Windows Hauler acceptance. This does not authorize upstream
-publication, premature pin changes, or Room merge/tag/publication; Room remains
-on owner HOLD.
+The requested shared agent-history Save chooser remains in the combined release
+scope. Its tested Linux/MinIO path offers explicitly admitted existing Codex or
+Claude profiles; other modes remain unavailable. The narrow prior installed
+qualification is not proof for a different package. Keep the existing exact
+Windows recovery evidence and required pinned-JAT Hauler acceptance separate.
 
 Target v1.0.0 remains on owner release hold. Draft
 [#221](https://github.com/joshyorko/josh-room/pull/221) combines the Room

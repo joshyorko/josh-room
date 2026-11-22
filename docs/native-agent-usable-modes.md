@@ -1,8 +1,8 @@
 # Native recovery modes for owner review
 
-2026-11-22. General native capability selectors remain **false**. The new
-[shared Save adapter](native-agent-save-adapter.md) is **off in the v1 candidate**;
-its expanded qualification matrix is deferred by owner scope direction.
+2026-11-22. General native capability selectors remain **false**. The separately
+reviewed [shared Save adapter](native-agent-save-adapter.md) enables only an
+explicit Linux/MinIO source pilot, with installed qualification pending.
 Existing opt-out Rooms and closed logical-JAT/PCC/Hauler schemas are unchanged.
 No main merge or release is authorized.
 
@@ -13,7 +13,7 @@ No main merge or release is authorized.
 | Claude after a qualified tool-free new turn | [Closed policy/archive v2](claude-recapture-v2.md) retains all 14 observed native rows without rewriting/dropping. Real original-ID loopback turn → second immutable capture at the same Room point → second fresh-profile cold restore passed, retaining the first capture and zero-write no-op. | Storage/admission in this native cycle are fixtures; live custody/installed evidence is separate. Unknown/delta traces, tool work, hooks/config/credential carriers and broader Claude formats remain refused. Hosted/account compatibility is unqualified. |
 | T3 imported history/native-provider fallback | Explicit owned-server scan/import preserves provider-native UUID/history with a **new derived T3 app ID**. Two separate [contained Codex prototypes](t3-contained-codex-continuation.md) also completed one native loopback-backend turn each, with normal adapter declarations and zero tool calls. | Claude-through-T3, hosted/account compatibility, installed durable-Room-to-T3 continuation and general ongoing recapture remain unqualified. The former blanket empty-tools prerequisite is [superseded](t3-synthetic-continuation-restriction.md); production import guards remain unchanged. |
 | Original T3 app-thread restoration | Unsupported. No T3 auth-bearing database or runnable outbox is copied. | **Required for this identity claim:** upstream inert identity-preserving export/import API with auth/effect exclusion, collision/path checks and continuation acceptance. Provider import deliberately creates a new app ID. |
-| Automatic Room Save/Enter inclusion | New shared Save integration is disabled in the v1 candidate. Existing explicit capture/restore commands are unchanged; Enter does not automatically restore native history. | Expanded picker fault/rollback qualification is deferred, not a v1 gate. No native process/model/auth launch, automatic grant, persisted opt-in or broader platform/provider claim. |
+| Automatic Room Save/Enter inclusion | Unavailable by default. The shared chooser offers an explicit Linux/MinIO history-only source pilot using independently admitted existing profiles; Enter does not automatically restore native history. | Actual installed pilot and immutable runtime acceptance remain pending. No native process/model/auth launch, automatic grant, persisted opt-in or broader platform/provider claim. |
 | Release/runtime promotion | Source/package/installed parity and source-override acceptance are recorded. Owner release hold remains. | Immutable controller artifact and any release/promotion require their separate qualification and owner approval. This PR remains draft. |
 | OpenCode / Antigravity | Research only, separate follow-ups #211/#212. | No safe native recovery/continuation implementation or availability claim. These optional providers do not substitute for the primary three. |
 

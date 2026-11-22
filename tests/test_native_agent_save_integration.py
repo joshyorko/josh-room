@@ -25,7 +25,6 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def pipeline(request, monkeypatch):
-    monkeypatch.setattr(adapter, "SAVE_ADAPTER_QUALIFIED", True)
     case = request.getfixturevalue("producer_case")
 
     @contextmanager

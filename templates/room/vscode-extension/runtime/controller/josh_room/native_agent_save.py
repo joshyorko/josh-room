@@ -18,8 +18,8 @@ SELECTION_FORMAT = "josh-room.save-agent-selection.v1"
 PLAN_FORMAT = "josh-room.save-agent-plan.v2"
 MAX_PLAN_BYTES = 16384
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
-# The v1 candidate preserves explicit recovery commands; shared Save is deferred.
-SAVE_ADAPTER_QUALIFIED = False
+# Proof-backed Linux/MinIO history-only chooser; native resume is not implied.
+SAVE_ADAPTER_QUALIFIED = True
 
 
 def _fail():
@@ -227,13 +227,13 @@ def open_scope(
 ):
     if not SAVE_ADAPTER_QUALIFIED:
         raise ValueError("agent history Save integration is not enabled")
+    if sys.platform != "linux" or dimension.provider != "minio":
+        raise ValueError("agent Save requires qualified native Linux MinIO custody")
     from . import room_store_bridge as bridge
     from .composition import require_uncomposed_workspace
     from .native_agent_save_producer import TargetScope
 
     require_uncomposed_workspace(workspace)
-    if sys.platform != "linux" or dimension.provider not in {"minio", "s3"}:
-        raise ValueError("agent Save requires qualified native Linux MinIO/S3 custody")
     with bridge.open_existing_room_store(
         instance, dimension, material, project_id=None
     ) as opened:
