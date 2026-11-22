@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;f2114283080d4d120b754f28b79f1e90dcd9fb15a31cb9feea48194e2e79cda4&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;97f56566b735de95ee8d05145afcc161f6e4377577935cb258ec62c2a8579f3c&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -15068,6 +15068,26 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.sensitivity = initialPayload.sensitivity;
       this.meta = initialPayload.meta || {};
       this._blobCache = new Map();
+      this._indexAttachments();
+      this._refreshSequence = 0;
+      this._appliedRefresh = 0;
+    }
+
+    _indexAttachments() {
+      const next = new Map();
+      for (const owner of [...(this.state.items || []), ...(this.state.nodes || [])]) {
+        for (const ref of owner.attachments || []) {
+          const key = JSON.stringify([owner.id, ref.name]);
+          const cached = this._blobCache.get(key);
+          next.set(key, cached && cached.digest === ref.digest && cached.mediaType === ref.media_type
+            ? cached
+            : { digest: ref.digest, mediaType: ref.media_type });
+        }
+      }
+      for (const [key, cached] of this._blobCache) {
+        if (cached.entry && next.get(key) !== cached) URL.revokeObjectURL(cached.entry.url);
+      }
+      this._blobCache = next;
     }
 
     _liveHeaders() {
@@ -15089,20 +15109,30 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
 
     async refreshLive() {
       if (this.mode !== 'live') return false;
+      const sequence = ++this._refreshSequence;
       const resp = await fetch(`/state.json${this._liveQuerySuffix()}`, {
         cache: 'no-store',
         headers: this._liveHeaders(),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const payload = await resp.json();
+      if (sequence < this._appliedRefresh) return false;
+      if (this.SQL) {
+        const db = hydrateLiveSqlite(this.SQL, payload.descriptor, payload.state, payload.sensitivity);
+        try {
+          this.rawSqliteBytes = db.export();
+        } catch (err) {
+          db.close();
+          throw err;
+        }
+        if (this.db) this.db.close();
+        this.db = db;
+      }
+      this._appliedRefresh = sequence;
       this.descriptor = payload.descriptor;
       this.state = payload.state;
       this.sensitivity = payload.sensitivity;
-      if (this.SQL) {
-        if (this.db) this.db.close();
-        this.db = hydrateLiveSqlite(this.SQL, this.descriptor, this.state, this.sensitivity);
-        this.rawSqliteBytes = this.db.export();
-      }
+      this._indexAttachments();
       return true;
     }
 
@@ -15169,15 +15199,30 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     async getAttachmentBlobUrl(itemId, name) {
-      const key = `${encodeURIComponent(itemId)}/${encodeURIComponent(name)}`;
-      if (this._blobCache.has(key)) return this._blobCache.get(key);
-      const data = await this.loadAttachmentBytes(itemId, name);
-      if (!data) return null;
-      const blob = new Blob([data.bytes], { type: data.mediaType });
-      const url = URL.createObjectURL(blob);
-      const entry = { url, mediaType: data.mediaType, size: data.bytes.byteLength };
-      this._blobCache.set(key, entry);
-      return entry;
+      const key = JSON.stringify([itemId, name]);
+      const cached = this._blobCache.get(key);
+      if (!cached) return null;
+      if (cached.entry) return cached.entry;
+      if (cached.pending) return cached.pending;
+      cached.pending = this.loadAttachmentBytes(itemId, name).then(async data => {
+        if (!data) return null;
+        if (this.mode === 'live') {
+          // The name-addressed route may already serve a newer version than state.json.
+          const hash = await crypto.subtle.digest('SHA-256', data.bytes);
+          const hex = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+          if (hex !== cached.digest) return null;
+        }
+        if (this._blobCache.get(key) !== cached) return null;
+        const blob = new Blob([data.bytes], { type: data.mediaType });
+        const url = URL.createObjectURL(blob);
+        cached.entry = { url, mediaType: data.mediaType, size: data.bytes.byteLength };
+        return cached.entry;
+      });
+      try {
+        return await cached.pending;
+      } finally {
+        cached.pending = null;
+      }
     }
 
     runReadOnlySql(sqlText) {
@@ -19779,6 +19824,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.resultsEl = document.getElementById('sql-results');
       this.runBtn = document.getElementById('btn-sql-run');
       this.downloadBtn = document.getElementById('btn-download-sqlite');
+      const initialPreset = dataLayer.descriptor.sql_presets?.[0];
+      if (initialPreset && this.inputEl.value === this.inputEl.defaultValue) {
+        this.inputEl.value = initialPreset.sql;
+      }
       this._bind();
     }
 
@@ -19805,24 +19854,21 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     renderPresets(descriptor) {
+      const focusedId = this.presetsEl.contains(document.activeElement)
+        ? document.activeElement.getAttribute('data-preset-id') : null;
       this.presetsEl.textContent = '';
       const presets = (descriptor && descriptor.sql_presets) || [];
-      presets.forEach((preset, idx) => {
+      for (const preset of presets) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'hud-btn';
         btn.textContent = preset.name;
         btn.title = preset.description || preset.sql;
         btn.setAttribute('data-preset-id', preset.id);
-        btn.addEventListener('click', () => {
-          this.inputEl.value = preset.sql;
-          this.execute();
-        });
+        btn.addEventListener('click', () => this.execute(preset.sql));
         this.presetsEl.appendChild(btn);
-        if (idx === 0 && !this.inputEl.dataset.userEdited) {
-          this.inputEl.value = preset.sql;
-        }
-      });
+        if (preset.id === focusedId) btn.focus({ preventScroll: true });
+      }
     }
 
     execute(overrideSql) {
