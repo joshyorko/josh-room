@@ -8,6 +8,7 @@ import pytest
 from test_room_store_lifecycle import _context, _descriptor
 
 from josh_room.logical_jat import LogicalJat
+from josh_room.private_paths import protect_private_file
 from josh_room.recovery import Recovery
 from josh_room.restic_store import ResticStore
 from josh_room.room_store_lifecycle import RoomStoreLifecycleError
@@ -98,11 +99,12 @@ def test_real_restic_three_pins(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "nested").mkdir()
+    (workspace / ".josh-room.json").write_bytes(b'{"synthetic":true}\n')
     (workspace / "nested" / "配置.txt").write_bytes(b"nested synthetic")
     (workspace / "large.bin").write_bytes(os.urandom(2 * 1024 * 1024))
     password = tmp_path / "password"
     password.write_text("synthetic-test-only")
-    password.chmod(0o600)
+    protect_private_file(password)
     with ResticStore(repository=tmp_path / "repo", cache_dir=tmp_path / "cache",
                      password_file=password, executable=executable) as store:
         info = store.initialize()
@@ -120,6 +122,11 @@ def test_real_restic_three_pins(tmp_path):
         result = recovery.extract("changed.txt", tmp_path / "selected")
         assert (tmp_path / "selected").read_bytes() == b"first\n"
         assert (workspace / "changed.txt").read_bytes() == b"third\n"
+        assert (workspace / ".josh-room.json").read_bytes() == b'{"synthetic":true}\n'
+        assert recovery.diff("changed.txt", workspace=workspace)["change"] == "modified"
+        with pytest.raises((ValueError, RuntimeError, OSError)):
+            recovery.extract("changed.txt", tmp_path / "selected")
+        assert (tmp_path / "selected").read_bytes() == b"first\n"
         recovery.extract("nested", tmp_path / "subtree")
         assert (tmp_path / "subtree" / "配置.txt").read_bytes() == b"nested synthetic"
         assert not (tmp_path / "subtree" / "large.bin").exists()
@@ -170,7 +177,7 @@ def test_promotion_race_preserves_competing_destination(tmp_path, monkeypatch):
         target.write_bytes(b"other actor")
         _rename_directory_noreplace(source, target)
     monkeypatch.setattr(module, "_rename_directory_noreplace", raced)
-    with pytest.raises(RuntimeError):
+    with pytest.raises((RuntimeError, OSError)):
         synthetic([node], blobs).extract("old.txt", tmp_path / "absent")
     assert (tmp_path / "absent").read_bytes() == b"other actor"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["absent"]

@@ -58,8 +58,10 @@ directory comparisons use immutable Restic subtree identities (no recursive
 text diff). Added/removed/modified/unchanged are relative to the historical
 source. `diff --workspace EXPLICIT_ROOT` compares a file to an explicitly
 selected current workspace on Linux using no-follow directory handles and the
-current capture exclusions. Windows current-file comparison fails closed;
-A↔B comparison is platform-independent source logic but not Windows-qualified.
+current capture exclusions. Windows current-file comparison uses native handles that reject reparse points
+and hardlinks, hold ancestors against rename, and deny file writers/deletion.
+UNC/device paths and unavailable native guarantees still fail closed.
+Native Windows qualification is reported separately from source support.
 No content is displayed, and text diffs remain `withheld-policy`.
 
 The native Logical JAT row offers **Browse Recovery Point…**. QuickPick keeps
@@ -134,5 +136,29 @@ See the [sanitized native receipt](receipts/issue-209-native-recovery.json) and
 provider setup script was then rerun in a second fresh keyring/socket/port
 namespace and successfully enrolled another three real encrypted snapshots.
 No real credentials, host keyring, source Room mutations or release actions
-were used. Windows qualification follows the existing CI lanes; native
-Windows recovery acceptance, wire-byte counts and text diff policy remain open.
+were used. Windows recovery now has a focused non-release CI lane with checksum-pinned
+Restic 0.19.1, real encrypted three-point file/Unicode-subtree extraction,
+current-file comparison, hardlink/junction/writer denial, and no-clobber races.
+Its result remains pending until the exact-head job completes. Wire-byte counts
+and text diff policy remain open.
+
+## Native Windows comparison boundary
+
+Local-drive comparison opens every ancestor using `CreateFileW` with
+`FILE_FLAG_OPEN_REPARSE_POINT` and no delete sharing; all handles remain held
+until the content read completes. Reparse attributes are rejected before the
+next component is opened. The final regular, single-link file is opened for
+read with read sharing only, denying existing/new writers and deletion. Size
+and bounded SHA-256 are read from that handle. Missing native APIs, UNC/device
+paths, directories, hardlinks and reparse points fail closed. Capture exclusions
+are applied while the root and existing ignore file are locked. The code adds
+no overwrite/current-workspace restore path. Atomic selected extraction reuses
+the existing native Windows no-overwrite rename and private ACL staging.
+
+The `windows-recovery` job in ordinary CI installs the checked-in pinned
+Windows Restic binary, then runs `tests/test_recovery_windows.py` and uploads
+the pin receipt and JUnit evidence. A missing executable is a test failure,
+not a skipped native vertical. Catalog authority in that job remains a
+synthetic fixture; Restic, NTFS handles, private ACLs, junction denial, current
+comparison, selected writes and no-clobber promotion are actual Windows
+operations. This does not prove Windows provider/keyring or installed VSIX UI.

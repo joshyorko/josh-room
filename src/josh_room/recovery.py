@@ -235,9 +235,12 @@ class Recovery:
 
 
 def current_fingerprint(workspace, path):
-    """Explicit Linux current-root comparison with no-follow directory handles."""
+    """Explicit current-root comparison with native no-follow guarantees."""
     from .workspace_policy import load_capture_policy
     parts = _relative_parts(path)
+    if os.name == "nt":
+        from .windows_recovery import current_fingerprint_windows
+        return current_fingerprint_windows(workspace, path)
     if not workspace or os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
         fail("recovery-current-unsupported")
     root = Path(workspace).absolute()

@@ -90,6 +90,42 @@ jobs:
           PYTHONPATH: vscode-extension/runtime/controller
         run: python scripts/verify_private_runtime.py
 
+  windows-recovery:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv sync --group dev
+      - name: Install checksum-pinned Windows Restic
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP "recovery-restic"
+          $receipt = uv run python scripts/install_restic.py --manifest vscode-extension/runtime/restic-manifest.json --destination $destination --platform win32-x64
+          if ($LASTEXITCODE -ne 0) { throw "Pinned Restic installation failed" }
+          $pin = $receipt | ConvertFrom-Json
+          "JOSH_ROOM_TEST_RESTIC=$($pin.executable)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $receipt | Set-Content (Join-Path $env:RUNNER_TEMP "recovery-restic.json")
+      - name: Verify native pinned recovery and no-clobber boundaries
+        shell: pwsh
+        run: uv run pytest tests/test_recovery_windows.py -q -s --junitxml="$env:RUNNER_TEMP/recovery-windows.xml"
+      - name: Upload native recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-recovery-evidence
+          path: |
+            ${{ runner.temp }}/recovery-restic.json
+            ${{ runner.temp }}/recovery-windows.xml
+          if-no-files-found: error
+
   managed-runtime-consumer:
     strategy:
       fail-fast: false
