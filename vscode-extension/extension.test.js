@@ -5038,6 +5038,23 @@ test("activation registers every JAT capability command", () => {
   }
 });
 
+test("agent session status is registered lazily and never claims native continuation", () => {
+  const { vscode, statusItem, commandCallbacks } = createVscodeMock(__dirname);
+  const extension = loadExtension(vscode, () => { throw new Error("activation must not spawn"); });
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({ extensionPath: __dirname, globalStorageUri: { fsPath: __dirname }, subscriptions: [], secrets: { get: async () => { throw new Error("activation must not read secrets"); } } });
+  assert.equal(typeof commandCallbacks.get("joshRoom.agentSessionsStatus"), "function");
+  const summary = extension.__test__.agentSessionsSummary({ providers: {
+    t3: { capture: "blocked" }, codex: { capture: "history-only" }, claude: { capture: "blocked" },
+  } });
+  assert.match(summary, /T3 Code: blocked/);
+  assert.match(summary, /Codex CLI: history-only/);
+  assert.match(summary, /Claude Code: blocked/);
+  assert.match(summary, /Native continuation is unverified/);
+  assert.match(summary, /Save and Enter do not include agent state/);
+});
+
 test("native logical JAT and Dimension lifecycle commands are contributed and registered", () => {
   for (const manifestPath of ["vscode-extension/package.json", "templates/room/vscode-extension/package.json"]) {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifestPath), "utf8"));
@@ -7368,3 +7385,237 @@ finally:
   require("node:child_process").execFileSync("python3", ["-c", script, launch.command, started, completion], { timeout: 8000 });
   assert.ok(fs.existsSync(completion));
 });
+
+function agentSessionsFixture({ profiles, sessions, discoveryOverrides } = {}) {
+  const fixture = createVscodeMock(__dirname);
+  const scope = { id: "demo-room", dimension_id: "synthetic-dimension" };
+  const profile = { profile_ref: "a".repeat(64), scope: "personal", tools: ["codex"], state: "configured" };
+  const session = {
+    provider_session_id: "11111111-1111-4111-8111-111111111111", tool: "codex", cwd_matches: true,
+    native_resume_verified: false,
+    t3_import: { state: "requires-verified-owned-server", new_t3_thread_id: null, original_t3_identity_restored: false },
+    preview: "private-transcript-sentinel", profile_root: "/private/profile-root-sentinel",
+  };
+  const spawnHarness = createSpawnHarness(({ args }) => {
+    assert.equal(args[0], "agents");
+    if (args[1] === "room-status") return { stdout: JSON.stringify({
+      ok: true, state: "room-status", profiles: profiles || [profile],
+      capabilities: { providers: { t3: { capture: "blocked" }, codex: { capture: "history-only" }, claude: { capture: "history-only" } } },
+      native_resume_verified: false, original_t3_identity_restored: false,
+    }) };
+    if (args[1] === "discover") return { stdout: JSON.stringify({
+      ok: true, state: "history-discovered", tool: "codex", scope: "personal", sessions: sessions || [session],
+      native_resume_verified: false, original_t3_identity_restored: false, ...discoveryOverrides,
+    }) };
+    throw new Error("Unexpected agent operation");
+  });
+  const extension = loadExtension(fixture.vscode, spawnHarness.spawn);
+  extension.__test__.setRuntimeForTests({ command: "/synthetic/controller", args: (args) => args, env: {} });
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async () => { throw new Error("agents must not read extension credentials"); } } });
+  return { ...fixture, extension, spawnHarness, scope, profile, session };
+}
+
+test("Room Agent Sessions requires explicit Room context without runtime or catalog reads", async () => {
+  const fixture = agentSessionsFixture();
+  assert.equal(await fixture.extension.__test__.agentSessionsStatus(), "unavailable");
+  assert.deepEqual(fixture.spawnHarness.calls, []);
+  assert.match(fixture.infoCalls[0][0], /Choose a Room in Josh Rooms/);
+});
+
+test("Room Agent Sessions status is scoped, read-only, and does not discover after dismissal", async () => {
+  const fixture = agentSessionsFixture();
+  assert.equal(await fixture.extension.__test__.agentSessionsStatus({ project: fixture.scope }), "inspected");
+  assert.equal(fixture.spawnHarness.calls.length, 1);
+  const call = fixture.spawnHarness.calls[0];
+  assert.deepEqual(call.args, ["agents", "room-status", "--dimension", "synthetic-dimension", "--room", "demo-room", "--workspace", __dirname, "--json"]);
+  assert.equal(call.options.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
+  assert.match(fixture.infoCalls[0][0], /Original T3 app-thread restoration is unavailable/);
+  assert.match(fixture.infoCalls[0][0], /Save and Enter do not include agent state/);
+  assert.deepEqual(fixture.quickPickCalls, []);
+});
+
+test("Room Agent Sessions discovers native identities without private roots, previews, or imports", async () => {
+  const fixture = agentSessionsFixture();
+  fixture.infoResponses.push("Discover native history");
+  fixture.quickPickResponses.push({ provider_session_id: fixture.session.provider_session_id });
+  assert.equal(await fixture.extension.__test__.agentSessionsStatus(fixture.scope), "discovered");
+  assert.equal(fixture.spawnHarness.calls.length, 2);
+  const discovery = fixture.spawnHarness.calls[1];
+  assert.deepEqual(discovery.args, ["agents", "discover", "--dimension", "synthetic-dimension", "--room", "demo-room", "--workspace", __dirname, "--profile-ref", "a".repeat(64), "--tool", "codex", "--json"]);
+  assert.equal(discovery.options.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
+  const visible = JSON.stringify([fixture.infoCalls, fixture.quickPickCalls, fixture.logLines]);
+  assert.doesNotMatch(visible, /private-transcript-sentinel|private\/profile-root-sentinel|--profile-root/);
+  assert.match(fixture.infoCalls.at(-1)[0], /No T3 import was performed/);
+  assert.match(fixture.infoCalls.at(-1)[0], /new T3 app-thread ID/);
+  assert.match(fixture.infoCalls.at(-1)[0], /does not restore the original T3 identity/);
+  assert.match(fixture.infoCalls.at(-1)[0], /Native continuation is unverified/);
+  assert.equal(fixture.spawnHarness.calls.some((call) => call.args.some((arg) => /import|resume|turn|catalog/.test(arg))), false);
+});
+
+test("Room Agent Sessions uses opaque profile choices and cancels before discovery", async () => {
+  const profile = { profile_ref: "a".repeat(64), scope: "personal", tools: ["codex"], state: "configured" };
+  const fixture = agentSessionsFixture({ profiles: [profile, { ...profile, profile_ref: "b".repeat(64), scope: "work", profile_root: "/private/never-display" }] });
+  fixture.infoResponses.push("Discover native history");
+  assert.equal(await fixture.extension.__test__.agentSessionsStatus(fixture.scope), "cancelled");
+  assert.equal(fixture.spawnHarness.calls.length, 1);
+  assert.deepEqual(fixture.quickPickCalls[0].items.map((item) => item.label), ["personal profile aaaaaaaa", "work profile bbbbbbbb"]);
+  assert.doesNotMatch(JSON.stringify(fixture.quickPickCalls), /private\/never-display/);
+});
+
+test("Room Agent Sessions chooses only an authorized tool and refuses busy profiles", async () => {
+  const profile = { profile_ref: "a".repeat(64), scope: "personal", tools: ["codex", "claude"], state: "configured" };
+  const fixture = agentSessionsFixture({ profiles: [profile] });
+  fixture.infoResponses.push("Discover native history");
+  assert.equal(await fixture.extension.__test__.agentSessionsStatus(fixture.scope), "cancelled");
+  assert.equal(fixture.spawnHarness.calls.length, 1);
+  assert.deepEqual(fixture.quickPickCalls[0].items.map((item) => item.label), ["Codex CLI", "Claude Code"]);
+  const busy = agentSessionsFixture({ profiles: [{ ...profile, state: "busy" }] });
+  assert.equal(await busy.extension.__test__.agentSessionsStatus(busy.scope), "inspected");
+  assert.equal(busy.infoCalls[0].includes("Discover native history"), false);
+  assert.match(busy.infoCalls[0][0], /Busy or unavailable profiles/);
+});
+
+test("Room Agent Sessions passes the chosen opaque profile and rejects continuation claims", async () => {
+  const profile = { profile_ref: "a".repeat(64), scope: "personal", tools: ["codex"], state: "configured" };
+  const fixture = agentSessionsFixture({ profiles: [profile, { ...profile, profile_ref: "b".repeat(64) }] });
+  fixture.infoResponses.push("Discover native history");
+  fixture.quickPickResponses.push({ profile_ref: "b".repeat(64) });
+  assert.equal(await fixture.extension.__test__.agentSessionsStatus(fixture.scope), "discovered");
+  const args = fixture.spawnHarness.calls[1].args;
+  assert.equal(args[args.indexOf("--profile-ref") + 1], "b".repeat(64));
+  const unsupported = agentSessionsFixture({ discoveryOverrides: { native_resume_verified: true } });
+  unsupported.infoResponses.push("Discover native history");
+  await assert.rejects(unsupported.extension.__test__.agentSessionsStatus(unsupported.scope), /unsupported history receipt/);
+  assert.deepEqual(unsupported.quickPickCalls, []);
+});
+
+function agentRecoveryFixture({ profiles, receiptOverrides, sessions } = {}) {
+  const mock = createVscodeMock(__dirname);
+  const profile = { profile_ref: "a".repeat(64), scope: "personal", state: "configured",
+    tools: ["codex"], room_reference_allowed: true, profile_root: "/private/never-show" };
+  const session = { provider_session_id: "11111111-1111-4111-8111-111111111111",
+    tool: "codex", cwd_matches: true, preview: "private-history-never-show" };
+  const point = "older-recovery-point";
+  const project = { id: "demo-room", dimension_id: "backup", latest: "newer-recovery-point",
+    snapshots: [{ snapshot_id: point, payload_kind: "room-store-v1" }] };
+  const row = { project, snapshot: project.snapshots[0], snapshot_id: point };
+  const receipt = { ok: true, history_only: true, native_resume_verified: false,
+    original_t3_identity_restored: false, ...receiptOverrides };
+  const harness = createSpawnHarness(({ args }) => {
+    assert.equal(args[0], "agents", "agent recovery must not load catalog through the VSIX credential path");
+    if (args[1] === "room-status") return { stdout: JSON.stringify({ ok: true, profiles: profiles || [profile] }) };
+    if (args[1] === "recovery-status") return { stdout: JSON.stringify({ ...receipt,
+      state: "history-reference", entries: [{ profile: "personal", tool: "codex", scope: "personal" }] }) };
+    if (args[1] === "recovery-capture") return { stdout: JSON.stringify({ ...receipt, state: "history-reference" }) };
+    if (args[1] === "recovery-verify") return { stdout: JSON.stringify({ ...receipt, sessions: sessions || [session] }) };
+    if (args[1] === "recovery-restore") return { stdout: JSON.stringify({ ...receipt, state: "history-materialized" }) };
+    throw new Error("Unexpected agent recovery operation");
+  });
+  const extension = loadExtension(mock.vscode, harness.spawn);
+  extension.__test__.setRuntimeForTests({ command: "/synthetic/controller", args: (args) => args, env: {} });
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async () => {
+    throw new Error("agent recovery must not copy VSIX credentials");
+  } } });
+  return { ...mock, extension, harness, profile, session, row, point, receipt };
+}
+
+test("agent recovery commands are registered lazily on logical JAT rows", () => {
+  const mock = createVscodeMock(__dirname);
+  const extension = loadExtension(mock.vscode, () => { throw new Error("activation must not spawn"); });
+  extension.__test__.setStatusItem(mock.statusItem);
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({ extensionPath: __dirname, globalStorageUri: { fsPath: __dirname }, subscriptions: [],
+    secrets: { get: async () => { throw new Error("activation must not read secrets"); } } });
+  for (const id of ["joshRoom.agentRecoveryStatus", "joshRoom.captureAgentRecovery", "joshRoom.restoreAgentRecovery"]) {
+    assert.equal(typeof mock.commandCallbacks.get(id), "function");
+    assert.ok(extensionPackageJson.activationEvents.includes(`onCommand:${id}`));
+    assert.ok(extensionPackageJson.contributes.menus["view/item/context"]
+      .some((entry) => entry.command === id && entry.when === "view == joshRoom.rooms && viewItem == logical-jat"));
+  }
+});
+
+test("agent recovery requires an explicit logical history row without catalog fallback", async () => {
+  const fixture = agentRecoveryFixture();
+  for (const item of [undefined, fixture.row.project, { ...fixture.row, snapshot_id: "latest" },
+    { ...fixture.row, snapshot: { payload_kind: "legacy-jat-hauler-v1" } }]) {
+    assert.equal(await fixture.extension.__test__.agentRecoveryStatus(item), "unavailable");
+  }
+  assert.deepEqual(fixture.harness.calls, []);
+  assert.deepEqual(fixture.quickPickCalls, []);
+});
+
+test("agent recovery status binds the selected older point and stays metadata-only", async () => {
+  const fixture = agentRecoveryFixture();
+  assert.equal(await fixture.extension.__test__.agentRecoveryStatus(fixture.row), "inspected");
+  assert.deepEqual(fixture.harness.calls[0].args, ["agents", "recovery-status", "--dimension", "backup",
+    "--room", "demo-room", "--snapshot", fixture.point, "--json"]);
+  assert.match(fixture.infoCalls[0][0], /History only/);
+  assert.match(fixture.infoCalls[0][0], /continuation.*unverified/);
+  assert.match(fixture.infoCalls[0][0], /Save and Enter do not include agent state/);
+  assert.deepEqual(fixture.quickPickCalls, []);
+});
+
+test("agent recovery capture requires explicit reference opt-in before mutation", async () => {
+  for (const changed of [{ room_reference_allowed: false }, { scope: "work" }, { state: "busy" }]) {
+    const profile = { profile_ref: "a".repeat(64), scope: "personal", state: "configured",
+      tools: ["codex"], room_reference_allowed: true, ...changed };
+    const fixture = agentRecoveryFixture({ profiles: [profile] });
+    assert.equal(await fixture.extension.__test__.captureAgentRecovery(fixture.row), "cancelled");
+    assert.deepEqual(fixture.harness.calls.map((call) => call.args[1]), ["room-status"]);
+    assert.match(fixture.infoCalls[0][0], /explicit Room history-reference permission/);
+  }
+});
+
+test("agent recovery capture sends only an opaque profile selector after confirmation", async () => {
+  const fixture = agentRecoveryFixture();
+  fixture.infoResponses.push("Capture History Reference");
+  assert.equal(await fixture.extension.__test__.captureAgentRecovery(fixture.row), "captured");
+  assert.deepEqual(fixture.harness.calls[1].args, ["agents", "recovery-capture", "--dimension", "backup",
+    "--room", "demo-room", "--snapshot", fixture.point, "--workspace", __dirname,
+    "--profile-ref", fixture.profile.profile_ref, "--tool", "codex", "--json"]);
+  assert.equal(fixture.harness.calls[1].options.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
+  assert.doesNotMatch(JSON.stringify([fixture.harness.calls.map((call) => call.args), fixture.infoCalls]), /private\/never-show/);
+  const cancelled = agentRecoveryFixture();
+  assert.equal(await cancelled.extension.__test__.captureAgentRecovery(cancelled.row), "cancelled");
+  assert.equal(cancelled.harness.calls.length, 1);
+});
+
+test("agent recovery restore verifies the selected history then restores only its chosen UUID", async () => {
+  const fixture = agentRecoveryFixture();
+  fixture.quickPickResponses.push({ provider_session_id: fixture.session.provider_session_id });
+  fixture.warningResponses.push("Restore Native History");
+  assert.equal(await fixture.extension.__test__.restoreAgentRecovery(fixture.row), "restored");
+  assert.deepEqual(fixture.harness.calls.map((call) => call.args[1]), ["room-status", "recovery-verify", "recovery-restore"]);
+  const args = fixture.harness.calls[2].args;
+  assert.equal(args[args.indexOf("--snapshot") + 1], fixture.point);
+  assert.equal(args[args.indexOf("--session-id") + 1], fixture.session.provider_session_id);
+  assert.match(fixture.warningCalls[0][0], /Existing files will not be overwritten/);
+  assert.match(fixture.warningCalls[0][0], /does not resume a model/);
+  assert.doesNotMatch(JSON.stringify([fixture.quickPickCalls, fixture.infoCalls, fixture.warningCalls]), /private-history-never-show|private\/never-show/);
+});
+
+test("agent recovery restore cancellation and unsupported receipts never materialize", async () => {
+  const cancelled = agentRecoveryFixture();
+  assert.equal(await cancelled.extension.__test__.restoreAgentRecovery(cancelled.row), "cancelled");
+  assert.equal(cancelled.harness.calls.length, 2);
+  const denied = agentRecoveryFixture();
+  denied.quickPickResponses.push({ provider_session_id: denied.session.provider_session_id });
+  assert.equal(await denied.extension.__test__.restoreAgentRecovery(denied.row), "cancelled");
+  assert.equal(denied.harness.calls.length, 2);
+  const unsupported = agentRecoveryFixture({ receiptOverrides: { native_resume_verified: true } });
+  await assert.rejects(unsupported.extension.__test__.restoreAgentRecovery(unsupported.row), /unsupported history receipt/);
+  assert.equal(unsupported.harness.calls.length, 2);
+  assert.deepEqual(unsupported.quickPickCalls, []);
+});
+
+test("agent recovery rejects forged profile and session picker values", async () => {
+  const profile = { profile_ref: "a".repeat(64), scope: "personal", state: "configured",
+    tools: ["codex"], room_reference_allowed: true };
+  const profiles = agentRecoveryFixture({ profiles: [profile, { ...profile, profile_ref: "b".repeat(64) }] });
+  profiles.quickPickResponses.push({ profile_ref: "c".repeat(64) });
+  await assert.rejects(profiles.extension.__test__.captureAgentRecovery(profiles.row), /currently authorized/);
+  assert.equal(profiles.harness.calls.length, 1);
+  const session = agentRecoveryFixture();
+  session.quickPickResponses.push({ provider_session_id: "22222222-2222-4222-8222-222222222222" });
+  await assert.rejects(session.extension.__test__.restoreAgentRecovery(session.row), /verified native session/);
+  assert.equal(session.harness.calls.length, 2);

@@ -185,6 +185,7 @@ def _serve_options(args):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="josh-room")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("agents", help="inspect and manage opt-in isolated native agent profiles")
     workspace = commands.add_parser("workspace", help="inspect or repair workspace metadata")
     workspace_commands = workspace.add_subparsers(dest="workspace_command", required=True)
     for action in ("init", "exclude"):
@@ -719,6 +720,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["agents"]:
+        from .native_agents_cli import main as agents_main
+
+        return agents_main(argv[1:])
     if argv[:1] == ["composition"]:
         args = build_parser().parse_args(argv)
         try:
