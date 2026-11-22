@@ -169,17 +169,17 @@ jobs:
           path: ${{ runner.temp }}/windows-installed-recovery-evidence/*.json
           if-no-files-found: error
 
-  windows-immutable-recovery-cb860f7:
+  windows-immutable-recovery-022ddef:
     # Explicit unpublished qualification input, never a product/default runtime pin.
     # Owner applies this label before pushing the acceptance-only checkpoint.
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'qualify-windows-rcc-cb860f7')
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'qualify-windows-rcc-022ddef')
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
       contents: read
       actions: read
     env:
-      CANDIDATE_SUBJECT: cb860f7f9387aea1561ab1cefa2bc15cf6936325
+      CANDIDATE_SUBJECT: 022ddefd1218d73a836b2e81d37f1b954e4f4373
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
@@ -200,8 +200,8 @@ jobs:
           New-Item -ItemType Directory -Path $root | Out-Null
           $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
           $inputs = @(
-            @{ Id = '14773761702'; Name = 'controller'; Sha = '36b35a45eb8fc6fae2feae497bf3d95ae6d2e30a318ff72459c462f24a5116ba' },
-            @{ Id = '14773811481'; Name = 'product'; Sha = '6d7ce30b898b0aaacd371f270506347bed0ef29c6ba48fc061a7d2dc038b62d8' }
+            @{ Id = '14775243343'; Name = 'controller'; Sha = '2cd4f293a7753858cd30cb48097d48542b7974426c5a11127dc4c6444f8e788b' },
+            @{ Id = '14774839605'; Name = 'product'; Sha = 'd1e26a9564d44cea48fc0b843c4c8b953285ff09a68095099b7110b24f7be473' }
           )
           foreach ($inputAsset in $inputs) {
             $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($inputAsset.Id)"
@@ -213,13 +213,13 @@ jobs:
             Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $root $inputAsset.Name)
           }
           $pin = Get-Content (Join-Path $root 'controller/josh-room-controller-windows-amd64.json') | ConvertFrom-Json
-          if ($pin.source -ne $env:CANDIDATE_SUBJECT -or $pin.artifact_digest -ne 'sha256:db8ddadffdc5e3653ebe1d1f39a0bdd3b6cc28dc5a3b5673b543073572022b2a' -or !$pin.verified_no_build) { throw 'Candidate RCCA subject receipt mismatch.' }
+          if ($pin.source -ne $env:CANDIDATE_SUBJECT -or $pin.artifact_digest -ne 'sha256:756b529af1dda6a5da65cda69684d294e7ef6056a5922160e7d4f894f5511192' -or !$pin.verified_no_build) { throw 'Candidate RCCA subject receipt mismatch.' }
           $candidate = @{
             subject_sha = $env:CANDIDATE_SUBJECT
             vsix = (Join-Path $root 'product/win32-x64/candidate.vsix')
-            vsix_sha256 = '50b02d20e39b379bde2e396f60884d1adfd92dd219daa9a2e37dacddfabde8b4'
+            vsix_sha256 = '5306c503c202559f3809c292ba400ab21db7eb345e090efff429675d1e9d218b'
             archive = (Join-Path $root 'controller/josh-room-controller-windows-amd64.rcca')
-            archive_sha256 = '75f6c0a82e13c80d62ec0e9b54a4aa930b3907e67b52096cfed047eeba3770d8'
+            archive_sha256 = '971e529bceb0d57eb694a497fc8b3569f80ff85c8f70c45d3c32453a64b28c4d'
             artifact = $pin.artifact_digest
           }
           $candidatePath = Join-Path $root 'candidate.json'
@@ -238,7 +238,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: windows-immutable-recovery-cb860f7
+          name: windows-immutable-recovery-022ddef
           path: ${{ runner.temp }}/immutable-recovery-evidence/*.json
           if-no-files-found: error
 

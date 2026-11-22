@@ -11,7 +11,7 @@ const repository = path.resolve(__dirname, "..");
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const digest = data => crypto.createHash("sha256").update(data).digest("hex");
 const pins = require("./windows_recovery_dependencies.json");
-const { runCandidatePhase } = require("./installed_recovery_runtime");
+const { runCandidatePhase, candidateProcessOptions } = require("./installed_recovery_runtime");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", timeout: 180000, ...options });
@@ -187,18 +187,39 @@ async function main() {
         JOSH_ROOM_RCC_EXE: rcc.executable, JOSH_ROOM_RCC_HOME: rccHome,
         JOSH_ROOM_CONTROLLER_ROOT: env.PYTHONPATH, JOSH_ROOM_CONTROLLER_ARTIFACT: candidateInput.artifact,
         JOSH_ROOM_JAT_ROOT: path.join(base, "empty-jat-log-root") });
+      const processOptions = candidateProcessOptions(base, rccHome, env.PYTHONPATH, env);
+      Object.assign(env, processOptions.env);
+      receipt.rcc_process_scope = { home_private: true, mamba_root_private: true,
+        temp_private: path.dirname(env.TEMP) === base && env.TMP === env.TEMP,
+        cwd_installed_controller: true, archive_deadline_ms: 180000 };
       const record = event => {
         receipt.rcc_phases ||= {};
-        receipt.rcc_phases[event.phase] = event;
+        // Bounded local metadata only. RCC archive import is quiet until it
+        // returns; retain cache-directory growth even when stdout is empty.
+        const locations = { content: path.join(rccHome, "artifacts", "v1", "content"),
+          materializations: path.join(rccHome, "artifacts", "v1", "materializations"),
+          hololib: path.join(rccHome, "hololib"), holotree: path.join(rccHome, "holotree") };
+        const storage = {};
+        for (const [name, directory] of Object.entries(locations)) {
+          try {
+            const entries = fs.readdirSync(directory, { withFileTypes: true });
+            storage[name] = { exists: true, root_entries: entries.length };
+          } catch (error) {
+            storage[name] = { exists: false, missing: error.code === "ENOENT" };
+          }
+        }
+        const previous = receipt.rcc_phases[event.phase];
+        receipt.rcc_phases[event.phase] = { ...event, storage,
+          storage_before: previous?.storage_before || previous?.storage || storage };
         fs.writeFileSync(path.join(evidence, "installed-windows-recovery.json"), JSON.stringify(receipt, null, 2));
       };
       const acquired = runtime.parseJsonOutput(runCandidatePhase("acquire-archive", rcc.executable,
-        ["env", "acquire", "--archive", candidateInput.archive, "--permissive-local", "--json"], { env, record }));
+        ["env", "acquire", "--archive", candidateInput.archive, "--permissive-local", "--json"], { ...processOptions, env, record }));
       if ((acquired.artifactDigest || acquired.artifact_digest) !== candidateInput.artifact
         || acquired.verification?.valid !== true) throw new Error("RCC candidate acquisition failed verification");
       const prefix = ["--no-build", "env", "exec", "--artifact", candidateInput.artifact, "--permissive-local", "--inherit-streams", "--"];
       const probe = JSON.parse(runCandidatePhase("interpreter-probe", rcc.executable, [...prefix, "python", "-c",
-        "import json,sys,josh_room; print(json.dumps({'prefix':sys.prefix,'executable':sys.executable,'controller':josh_room.__file__}))"], { env, record }));
+        "import json,sys,josh_room; print(json.dumps({'prefix':sys.prefix,'executable':sys.executable,'controller':josh_room.__file__}))"], { ...processOptions, env, record }));
       if (!path.resolve(probe.executable).toLowerCase().startsWith(path.resolve(rccHome).toLowerCase() + path.sep)
         || !path.resolve(probe.controller).toLowerCase().startsWith(path.resolve(env.PYTHONPATH).toLowerCase() + path.sep)) {
         throw new Error("Candidate interpreter or controller origin mismatch");
@@ -207,7 +228,7 @@ async function main() {
         subject_sha: candidateInput.subject_sha });
       receipt.rcc_candidate = { artifact: candidateInput.artifact, archive_sha256: candidateInput.archive_sha256,
         rcc_sha256: await runtime.sha256File(rcc.executable), interpreter_inside_private_RCC: true, installed_controller: true };
-      const runtimeEnv = Object.fromEntries(["ROBOCORP_HOME", "RCC_HOLOTREE_MODE", "JOSH_ROOM_RCC_EXE", "JOSH_ROOM_RCC_HOME",
+      const runtimeEnv = Object.fromEntries(["HOME", "MAMBA_ROOT_PREFIX", "ROBOCORP_HOME", "RCC_HOLOTREE_MODE", "JOSH_ROOM_RCC_EXE", "JOSH_ROOM_RCC_HOME",
         "JOSH_ROOM_CONTROLLER_ROOT", "JOSH_ROOM_CONTROLLER_ARTIFACT", "JOSH_ROOM_JAT_ROOT"].map(key => [key, env[key]]));
       await fsp.writeFile(path.join(base, "candidate-runtime.json"), JSON.stringify({ ...JSON.parse(env.JOSH_ROOM_ACCEPTANCE_RCC), env: runtimeEnv }));
       providerCommand = rcc.executable;

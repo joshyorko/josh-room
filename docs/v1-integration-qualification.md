@@ -283,7 +283,29 @@ with no-build artifact mode, using installed controller bytes and checking the
 interpreter's private RCC origin. The previous source-Python path remains a
 separate mode and ordinary tests are unchanged. No JAT job gates this trial.
 Its acceptance harness commit can differ from its immutable product subject;
-the receipt must retain both. Native execution is pending until that job runs.
+the receipt must retain both. The `022ddef` harness run failed before provider
+setup: archive acquisition reached its 180-second deadline without output.
+The interpreter probe did not run. This identifies the failed phase, not its
+root cause; the failed receipt remains retained.
+
+The next explicit job, `windows-immutable-recovery-022ddef`, consumes the
+already-built corrected `022ddef` Windows subject rather than rebuilding it.
+Controller artifact `14775243343` and product artifact `14774839605` were
+downloaded and checked against their GitHub ZIP digests. The Windows VSIX is
+`5306c503c202559f3809c292ba400ab21db7eb345e090efff429675d1e9d218b`;
+its 152 files differ from the frozen Linux checkout only by CRLF conversion.
+No other source or manifest difference was found; raw cross-platform byte
+identity is not claimed. The RCCA is
+`971e529bceb0d57eb694a497fc8b3569f80ff85c8f70c45d3c32453a64b28c4d`,
+with environment
+`sha256:756b529af1dda6a5da65cda69684d294e7ef6056a5922160e7d4f894f5511192`.
+
+The acquisition harness now matches the successful artifact qualifier's
+task-owned HOME, Mamba root and installed-controller working directory, while
+retaining private temporary storage. It records bounded cache-directory counts
+before and after acquisition. Acquire and interpreter deadlines remain 180
+and 60 seconds; no solve, fallback or default-pin change is permitted. This
+environment alignment is a hypothesis under test, not a native acceptance pass.
 
 The exact combined baseline `e67bc289059766db51c7320773305d6e47089e41`
 passed all ten ordinary checks, with two intentional publication skips and no

@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { applyInstalledRuntime } = require("./installed_recovery_runtime");
 const { candidateRuntime } = require("./installed_recovery_runtime");
 const { runCandidatePhase } = require("./installed_recovery_runtime");
+const { candidateProcessOptions } = require("./installed_recovery_runtime");
 
 test("Windows runtime override reaches canonical activated instances, not another extension", () => {
   const received = [];
@@ -81,4 +82,31 @@ test("RCC probe has a separate short deadline and returns actual output only on 
   assert.equal(output, '{"origin":"actual"}');
   assert.equal(records[1].state, "PASS");
   assert.throws(() => runCandidatePhase("solve", "rcc.exe", [], { record: () => {} }), /Invalid RCC/);
+});
+
+test("candidate acquisition replaces inherited HOME and MAMBA scope and uses installed controller cwd", () => {
+  const path = require("node:path");
+  const base = path.resolve("owned");
+  const home = path.join(base, "managed", "rcc");
+  const controller = path.join(base, "extension", "runtime", "controller");
+  const parent = { HOME: "foreign", MAMBA_ROOT_PREFIX: "foreign-mamba", ROBOCORP_HOME: "foreign-rcc",
+    RCC_HOLOTREE_MODE: "shared", TEMP: path.join(base, "provider-runtime"), TMP: path.join(base, "provider-runtime") };
+  const actual = candidateProcessOptions(base, home, controller, parent);
+  assert.equal(actual.cwd, controller);
+  assert.equal(actual.env.HOME, path.dirname(home));
+  assert.equal(actual.env.MAMBA_ROOT_PREFIX, path.join(home, "mamba"));
+  assert.equal(actual.env.ROBOCORP_HOME, home);
+  assert.equal(actual.env.RCC_HOLOTREE_MODE, "private");
+  assert.equal(actual.env.TEMP, parent.TEMP);
+  assert.equal(actual.env.TMP, parent.TMP);
+  assert.equal(parent.HOME, "foreign");
+});
+
+test("candidate acquisition rejects paths outside its task root", () => {
+  const path = require("node:path");
+  const base = path.resolve("owned");
+  for (const [home, controller] of [[path.resolve("foreign"), path.join(base, "controller")],
+    [path.join(base, "rcc"), path.resolve("foreign-controller")]]) {
+    assert.throws(() => candidateProcessOptions(base, home, controller, {}), /owned fixture/);
+  }
 });

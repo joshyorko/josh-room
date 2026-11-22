@@ -3,6 +3,18 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
+function candidateProcessOptions(base, rccHome, controllerRoot, environment) {
+  for (const directory of [rccHome, controllerRoot]) {
+    const relative = path.relative(base, directory);
+    if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+      throw new Error("Candidate process paths must remain in the owned fixture");
+    }
+  }
+  // Match build_controller_artifact.py::_run's successful private consumer.
+  return { cwd: controllerRoot, env: { ...environment, HOME: path.dirname(rccHome),
+    MAMBA_ROOT_PREFIX: path.join(rccHome, "mamba"), ROBOCORP_HOME: rccHome, RCC_HOLOTREE_MODE: "private" } };
+}
+
 function runCandidatePhase(phase, command, args, { env, cwd, record,
   invoke = spawnSync, now = Date.now } = {}) {
   const deadlines = { "acquire-archive": 180000, "interpreter-probe": 60000 };
@@ -56,4 +68,4 @@ function candidateRuntime(candidate, env) {
     jatRoot: env.JOSH_ROOM_JAT_ROOT,
   };
 }
-module.exports = { applyInstalledRuntime, candidateRuntime, runCandidatePhase };
+module.exports = { applyInstalledRuntime, candidateRuntime, runCandidatePhase, candidateProcessOptions };
