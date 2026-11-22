@@ -13,7 +13,7 @@ from pathlib import Path
 # and PYTHONPATH. Only this shipped package supplies the cleanup implementation.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from josh_room.cancellation import terminate_owned_process
+from josh_room.cancellation import terminate_owned_descendants, terminate_owned_process
 
 
 def _open_pidfd(pid):
@@ -33,6 +33,16 @@ def _open_pidfd(pid):
     return descriptor
 
 
+def _become_subreaper():
+    function = getattr(ctypes.CDLL(None, use_errno=True), "prctl", None)
+    if function is None:
+        raise OSError(errno.ENOSYS, "Serve child adoption unavailable")
+    function.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    function.restype = ctypes.c_int
+    if function(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "Serve child adoption unavailable")
+
+
 def main():
     child = None
     pidfd = None
@@ -48,6 +58,7 @@ def main():
         os.set_inheritable(lifetime, False)
         probe = _open_pidfd(os.getpid())
         os.close(probe)
+        _become_subreaper()
         if select.select([lifetime], [], [], 0)[0]:
             return 130
         child = subprocess.Popen(sys.argv[3:], start_new_session=True, close_fds=True)
@@ -65,6 +76,8 @@ def main():
     finally:
         if child is not None and child.poll() is None:
             terminate_owned_process(child)
+        if child is not None:
+            terminate_owned_descendants(os.getpid())
         if pidfd is not None:
             os.close(pidfd)
         if lifetime is not None:

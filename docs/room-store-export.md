@@ -111,7 +111,9 @@ port. There is no browser action service or Room-owned port allocator.
 On Linux, foreground Serve uses a task-scoped child guard with an anonymous
 lifetime pipe owned only by the Room CLI. The guard blocks on that pipe and
 the RCC pidfd; controller disappearance closes the pipe and terminates the
-owned RCC/JAT descendants, including detached listeners. It exits with the
+owned RCC/JAT descendants, including detached listeners. The guard is a Linux
+child subreaper, so an RCC exit also adopts and stops its surviving descendants
+before releasing output pipes. It exits with the
 operation and creates no persistent service, state file or polling task.
 Linux without pidfd support fails before starting a listener. On Windows, the
 dedicated Serve CLI joins an anonymous kill-on-close Job Object before spawning

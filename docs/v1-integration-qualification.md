@@ -74,6 +74,13 @@ RCC, JAT and Hauler all disappeared, the socket closed and the startup receipt
 was absent without manual signals. This is an explicit source override; the
 corrected packaged VSIX and native Windows Job Object CI remain separate gates.
 
+Independent lifetime review then reproduced an RCC-exits-first orphan: the
+guard exited while a detached listener retained output pipes. The follow-up
+makes the guard a scoped Linux child subreaper and cleans adopted descendants
+on every exit. Both ordinary RCC exit and RCC SIGKILL regressions now preserve
+the wrapper status, stop the listener and release Room's output pipes. Native
+matching-runtime repetition and independent recheck remain required.
+
 Focused correction checks passed 63 JAT tests, 35 recovery tests and six native
 action tests. The final namespace regression passed with real age and pinned
 Restic 0.19.1 over synthetic S3 transport, including historical updates,
@@ -82,7 +89,7 @@ Both actual managed Serve interruption paths returned cancellation/130 and
 closed all listeners and owned children. Those interruption results used
 corrected source; they do not qualify the earlier installed packages.
 
-The final local supervision/JAT selection passed 68 tests with three Windows
+The final local supervision/JAT selection passed 70 tests with three Windows
 skips. Combined Node checks passed 444 with two managed-runtime opt-in skips.
 The mixed-provider CLI case initially failed on the sandbox's read-only default
 state directory; it passed with a task-private state root. One package-building

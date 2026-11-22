@@ -33,21 +33,25 @@ with socket.socket() as server:
             conn.sendall(b'alive')
 """
 _RCC = """
-import subprocess, sys, time
+import os, subprocess, sys, time
+from pathlib import Path
+Path(sys.argv[2] + '.rcc').write_text(str(os.getpid()))
 subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], start_new_session=True)
 time.sleep(60)
 """
+_RCC_EXITS = _RCC.replace("time.sleep(60)", "while not Path(sys.argv[2] + '.stop').exists(): time.sleep(.01)\nsys.exit(23)")
 _OWNER = """
 import sys
 from josh_room.jat import _run_cli
-_run_cli([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]], None, guard_owner=True)
+status, _, _ = _run_cli([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]], None, guard_owner=True)
+raise SystemExit(status)
 """
 
 
 @contextlib.contextmanager
-def _session(ready):
+def _session(ready, rcc_script=_RCC):
     env = {**os.environ, "PYTHONPATH": str(Path(serve_process_guard.__file__).resolve().parents[1])}
-    owner = subprocess.Popen([sys.executable, "-c", _OWNER, _RCC, _LISTENER, str(ready)], env=env)
+    owner = subprocess.Popen([sys.executable, "-c", _OWNER, rcc_script, _LISTENER, str(ready)], env=env)
     child = None
     try:
         deadline = time.monotonic() + 10
@@ -118,6 +122,8 @@ def test_lifetime_eof_during_spawn_cleans_started_process(monkeypatch):
             return child
 
         monkeypatch.setattr(serve_process_guard.subprocess, "Popen", spawn)
+        monkeypatch.setattr(serve_process_guard, "_become_subreaper", lambda: None)
+        monkeypatch.setattr(serve_process_guard, "terminate_owned_descendants", lambda _: None)
         monkeypatch.setattr(sys, "argv", ["guard", str(read_fd), "--", "synthetic-rcc"])
         assert serve_process_guard.main() == 130
         assert child.poll() is not None
@@ -149,3 +155,19 @@ def test_packaged_python_without_os_binding_uses_available_libc(monkeypatch):
         assert os.fstat(descriptor)
     finally:
         os.close(descriptor)
+
+
+@pytest.mark.parametrize("abrupt", [False, True], ids=["rcc-exits", "rcc-killed"])
+def test_rcc_exit_reaps_existing_detached_listener_and_releases_output_pipes(tmp_path, abrupt):
+    ready = tmp_path / "rcc-exit"
+    with _session(ready, _RCC_EXITS) as (owner, child, port):
+        _assert_serving(port)
+        if abrupt:
+            os.kill(int(Path(str(ready) + ".rcc").read_text()), signal.SIGKILL)
+        else:
+            Path(str(ready) + ".stop").touch()
+        status = owner.wait(timeout=5)
+        assert status == (247 if abrupt else 23)
+        assert not _alive(child)
+        with pytest.raises(ConnectionRefusedError):
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
