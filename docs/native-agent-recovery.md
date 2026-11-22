@@ -8,8 +8,10 @@ local-only; remote work references and general native continuation remain unqual
 
 [Synthetic native continuation](native-agent-synthetic-continuation.md) separately
 qualifies original-ID Codex/Claude resume plus one turn against deterministic
-loopback test backends. This does not enable Save, prove hosted/account compatibility
-or qualify the combined installed Room-reference/new-turn chain.
+loopback test backends. The later [combined installed chain](native-agent-installed-chain.md)
+also qualifies durable capture, cold Room hydrate, registered installed restore
+and a native turn using the exact restored file, with a disclosed source-runtime
+override. Neither enables Save or proves hosted/account compatibility.
 
 This opt-in checkpoint isolates a Room-owned T3 process and preserves allowlisted
 Codex and qualified Claude session files in independently versioned age-encrypted

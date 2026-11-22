@@ -214,3 +214,11 @@ resume loader is excluded because it stages plaintext and inherits auth/config.
 No proprietary SDK code or binary is redistributed. Direct native continuation
 has a separate deterministic loopback-only receipt; general/hosted and T3-mediated
 continuation remain unverified, and every Save selector stays unavailable.
+
+The later [installed durable-reference chain](native-agent-installed-chain.md)
+qualifies the reviewed controller through actual registered restore and direct
+native turns with deterministic local backends. The optional T3-mediated turn
+audit found a separate [strict-policy restriction](t3-synthetic-continuation-restriction.md):
+Codex request overrides force a plan tool, and no supported Claude strict
+tools/MCP/hooks-disable policy was established. No production worker boundary
+was relaxed and no T3 turn was attempted.

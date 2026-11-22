@@ -97,6 +97,11 @@ commands still expose history-only recovery. The test does not run the combined
 durable Room-reference/installed-command/new-turn chain or qualify a new immutable
 controller artifact or Windows.
 
+The subsequent [combined installed receipt](native-agent-installed-chain.md)
+closes the durable Room-reference/registered-installed-restore/native-turn split
+for this same synthetic backend scope. It retains the source-runtime override
+and does not qualify immutable RCC, hosted accounts or Save integration.
+
 Claude appends runtime rows beyond the closed text-history capture allowlist.
 The test explicitly proves that recapturing that richer file remains refused;
 it does not widen the policy. Repeated captures/turns and broader native formats

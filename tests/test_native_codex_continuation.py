@@ -184,7 +184,7 @@ class Protocol:
                 return message["result"]
 
 
-def test_native_codex_resumes_cold_original_id_for_one_loopback_turn(tmp_path, monkeypatch):
+def resume_restored_codex(tmp_path, *, workspace, native_home, relative, payload):
     _loopback_namespace()
     executable = os.environ.get("JOSH_ROOM_TEST_CODEX_CLI") or shutil.which("codex")
     if not executable:
@@ -192,7 +192,8 @@ def test_native_codex_resumes_cold_original_id_for_one_loopback_turn(tmp_path, m
     executable = str(Path(executable).resolve())
     assert hashlib.sha256(Path(executable).read_bytes()).hexdigest() == CODEX_SHA256
     assert not Path("/etc/codex").exists(), "host managed settings are outside this acceptance"
-    workspace, native_home, relative, payload = _cold_session(tmp_path, monkeypatch)
+    assert (native_home / relative).read_bytes() == payload
+    assert not (native_home / "auth.json").exists()
     home = tmp_path / "empty-home"
     home.mkdir(mode=0o700)
     environment = {"PATH": "/usr/bin:/bin", "HOME": str(home), "CODEX_HOME": str(native_home),
@@ -292,7 +293,15 @@ def test_native_codex_resumes_cold_original_id_for_one_loopback_turn(tmp_path, m
                 assert credential.encode() not in path.read_bytes()
     assert credential.encode() not in (tmp_path / "native.stderr").read_bytes()
     _loopback_namespace()
-    print(json.dumps({"provider": "codex", "version": agents.CODEX_VERSION, "backend": "deterministic-loopback",
+    receipt = {"provider": "codex", "version": agents.CODEX_VERSION, "backend": "deterministic-loopback",
         "provider_session_id": SESSION, "native_new_turn_observed": True, "hosted_provider_acceptance": False,
         "requests": 1, "tools": 0, "original_history_prefix_unchanged": True, "external_network_routes": 0,
-        "fresh_native_auth": "generated-disposable-api-key"}))
+        "fresh_native_auth": "generated-disposable-api-key"}
+    print(json.dumps(receipt))
+    return receipt
+
+
+def test_native_codex_resumes_cold_original_id_for_one_loopback_turn(tmp_path, monkeypatch):
+    _loopback_namespace()
+    workspace, native_home, relative, payload = _cold_session(tmp_path, monkeypatch)
+    resume_restored_codex(tmp_path, workspace=workspace, native_home=native_home, relative=relative, payload=payload)

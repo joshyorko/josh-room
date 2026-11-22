@@ -338,3 +338,38 @@ The combined durable Room-reference/installed-command/new-turn chain, final
 repaired installed/controller qualification, hosted/account compatibility,
 broader formats/recapture and Windows remain open. All Save selectors remain
 false. No merge, release or publication action was performed.
+
+## Combined installed durable-reference continuation checkpoint
+
+2026-11-22, Linux, test/documentation changes atop
+`1b9bea6bcab949519aca323aa44e5b33b16e78e1`. The production/controller source is
+unchanged, including the independently corrected `e052d6b` publication/removal
+fence. This closes the previously split installed/reference/native-turn evidence
+for deterministic local test backends with a disclosed source-runtime override.
+
+| Gate | Observed result |
+| --- | --- |
+| Rebuilt installed package | PASS, VSIX SHA256 `2cd3a4cda7ab51d4e64828e2119583a078c3bfadc3cb2664e9a310ee48808b5f`; 81 canonical top-level controller modules and extension bytes match source/package/install, installed manifest differs only by `__metadata`. |
+| Actual registered operations | PASS for both Codex and Claude: real installed capture=`captured`, pinned status=`inspected`, restore=`restored`; four native screens per provider observed/clicked. No mocked prompts/provider/catalog/keyring results. |
+| Combined cold chain | PASS, freshly enrolled MinIO/native Secret Service, encrypted exact-point capture, deleted source profiles, normal cold Room hydrate at the original cwd, fresh per-tool registered native restore. Exact original files were passed to native continuation without re-materialization or reconstruction. |
+| Native turns on exact installed-restored files | PASS, `tests/test_native_installed_chain.py`: 2 passed in 2.19s. Actual Codex `0.171.0`/Claude `2.1.310`, original UUID/cwd/history prefix, one authenticated deterministic loopback request each, `tools: []`, new native turn persisted, Room still clean. Distinct loopback-only namespace, no external routes or existing auth/hosted inference/paid requests. |
+| Actual richer Claude recapture | EXPECTED REFUSAL, installed controller admitted `agents capture` through real native custody into a fresh local reference. `claude-native-row-unsupported`; all 14 post-turn rows unchanged, no archive created. This is a supported-format gap, not a reason to drop rows or broaden the policy silently. |
+| Extracted runner regression | PASS, both original standalone native cold fixtures still pass after extracting test-only runners: 2 passed in 2.26s. |
+| Final public/controller/format boundaries | PASS, staged storage safety, repository inventory, controller artifact/parity, closed Claude-format and default combined-test suites: 112 passed, 2 explicit opt-out skips in 3.33s. Ruff, staged whitespace and unchanged production/controller diff checks passed. |
+| Opt-out/namespace boundaries | Default combined test: 2 skipped in 0.07s without a private receipt. Explicit host-namespace attempts: 2 expected guard failures in 0.09s before receipt reads/native invocation. |
+| Independent static review | SCOPED PASS for exact restored-file flow, namespace ordering, source/package/installed comparisons, absent source, Room marker, native IDs/context/turns and comments. Static/whitespace only; actual UI/provider evidence retained separately. No syscall or independent runtime rerun claimed. |
+| Optional T3 continuation | BLOCKED by versioned strict-policy contract, no turn/server/auth session attempted. T3 `.5098` source forces the Codex plan tool after launch overrides; Claude supplies tools/MCP/SDK Stop hooks without an established strict-disable setting. No production worker/security boundary changed. |
+
+The existing installed-source `local-build-fallback` override ran the **installed
+controller**, not an immutable new RCC artifact. Source/package parity and real
+registered execution do not establish immutable runtime, hosted accounts or
+Windows qualification. The [combined receipt](native-agent-installed-chain.md)
+records actual runtime/artifact details and setup/probe failures. The
+[usable-mode matrix](native-agent-usable-modes.md) distinguishes runnable narrow
+modes from required broader scope; the [T3 restriction](t3-synthetic-continuation-restriction.md)
+identifies its minimal upstream policy need.
+
+All owned native/workbench/Xvfb/MinIO/keyring processes and task images were
+stopped before task cleanup. Shared runtime caches/base images were preserved.
+Save selectors remain false, original-T3 restoration remains unsupported, and
+the owner release hold remains. No merge, release staging or publication occurred.

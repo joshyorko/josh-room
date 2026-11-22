@@ -5,6 +5,12 @@ registered installed commands. It does **not** qualify native continuation,
 original T3 app-thread recovery, automatic Room Save inclusion, an immutable new
 controller artifact, Windows, or multi-provider home restoration.
 
+This is the earlier history-only receipt. The later
+[combined installed acceptance](native-agent-installed-chain.md) rebuilds the
+reviewed publication/removal repair and qualifies durable capture through
+registered installed restore and direct native turns against deterministic local
+backends. It preserves the source-runtime disclosure and all Save gates.
+
 The trial uses the real disposable MinIO/native Secret Service recipe described
 in [native-agent-live-admission.md](native-agent-live-admission.md). All workspaces,
 native messages, identities, buckets and keyring entries are synthetic and

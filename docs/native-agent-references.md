@@ -126,3 +126,6 @@ The separate [synthetic native continuation receipt](native-agent-synthetic-cont
 proves original-ID Codex/Claude resume and one deterministic loopback turn after
 local encrypted materialization. It does not qualify the combined durable
 Room-reference/installed-command/new-turn chain or change this capability.
+That combined chain was subsequently [qualified separately](native-agent-installed-chain.md)
+for both providers using a rebuilt installed VSIX/source-runtime override and
+deterministic loopback backends. Capability and Save selectors remain unchanged.

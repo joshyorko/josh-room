@@ -56,22 +56,17 @@ def _loopback_namespace():
             assert int(fields[8], 16) & 0x200, "usable IPv6 default route present"
 
 
-def test_native_claude_resumes_cold_original_id_for_one_loopback_turn(request, tmp_path):
+def resume_restored_claude(tmp_path, *, workspace, config, relative, payload):
     _loopback_namespace()
     executable = os.environ.get("JOSH_ROOM_TEST_CLAUDE_CLI") or shutil.which("claude")
     if not executable:
         pytest.skip("installed pinned native Claude CLI required")
     executable = str(Path(executable).resolve())
     assert hashlib.sha256(Path(executable).read_bytes()).hexdigest() == CLAUDE_SHA256
-    case = request.getfixturevalue("cold_claude")
-    workspace = Path(case["binding"]["workspace"])
-    config = case["root"] / "claude"
-    restored = config / case["relative"]
-    assert restored.read_bytes() == case["payload"]
+    restored = config / relative
+    assert restored.read_bytes() == payload
     assert not (config / ".credentials.json").exists()
     assert not (config / "settings.json").exists()
-    # The resumed CLI cannot discover the original source profile as fallback.
-    shutil.rmtree(case["source"])
     home = tmp_path / "native-home"
     home.mkdir(mode=0o700)
     environment = {
@@ -177,7 +172,7 @@ def test_native_claude_resumes_cold_original_id_for_one_loopback_turn(request, t
     history = json.dumps(request["body"]["messages"])
     assert "synthetic Claude question" in history and "synthetic retained Claude answer" in history and PROMPT in history
     after = restored.read_bytes()
-    assert after.startswith(case["payload"])
+    assert after.startswith(payload)
     rows = [json.loads(row) for row in after.splitlines()]
     messages = [row for row in rows if row.get("type") in {"user", "assistant"}]
     assert len(messages) == 4 and all(row["sessionId"] == SESSION and row["cwd"] == str(workspace) for row in messages)
@@ -199,9 +194,20 @@ def test_native_claude_resumes_cold_original_id_for_one_loopback_turn(request, t
     # Native continuation appends runtime metadata beyond the admitted capture
     # subset. This acceptance does not silently widen that safety boundary.
     with pytest.raises(ClaudeHistoryError):
-        validate(str(case["relative"]), rows, str(workspace))
-    print(json.dumps({"provider": "claude", "version": "2.1.310", "backend": "deterministic-loopback",
+        validate(str(relative), rows, str(workspace))
+    receipt = {"provider": "claude", "version": "2.1.310", "backend": "deterministic-loopback",
                       "provider_session_id": SESSION, "native_new_turn_observed": True,
                       "hosted_provider_acceptance": False, "requests": 1, "tools": 0,
                       "new_messages": 2, "original_history_prefix_unchanged": True,
-                      "external_network_routes": 0, "fresh_native_auth": "generated-disposable-api-key"}))
+                      "external_network_routes": 0, "fresh_native_auth": "generated-disposable-api-key"}
+    print(json.dumps(receipt))
+    return receipt
+
+
+def test_native_claude_resumes_cold_original_id_for_one_loopback_turn(request, tmp_path):
+    _loopback_namespace()
+    case = request.getfixturevalue("cold_claude")
+    # The resumed CLI cannot discover the original source profile as fallback.
+    shutil.rmtree(case["source"])
+    resume_restored_claude(tmp_path, workspace=Path(case["binding"]["workspace"]),
+                          config=case["root"] / "claude", relative=case["relative"], payload=case["payload"])
