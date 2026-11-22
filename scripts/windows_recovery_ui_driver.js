@@ -67,7 +67,7 @@ exports.activate = async context => {
       const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
       if (!(tab?.input instanceof vscode.TabInputTextDiff)) throw new Error("Diff tab missing");
       const expected = tab.input.modified.toString();
-      await vscode.commands.executeCommand("workbench.action.compareEditor.focusSecondarySide");
+      await vscode.commands.executeCommand("workbench.action.compareEditor.focusPrimarySide");
       await new Promise((resolve, reject) => {
         const check = () => {
           if (vscode.window.activeTextEditor?.document.uri.toString() === expected) {
@@ -78,9 +78,9 @@ exports.activate = async context => {
         const timer = setTimeout(() => { subscription.dispose(); reject(new Error("Native focus unavailable")); }, 5000);
         check();
       });
-      write("ui-editor-focus.json", { state: "PASS", native_command: "workbench.action.compareEditor.focusSecondarySide",
+      write("ui-editor-focus.json", { state: "PASS", native_command: "workbench.action.compareEditor.focusPrimarySide",
         modified_diff_editor_active: true });
-    } catch { write("ui-editor-focus.json", { state: "FAIL", boundary: "native-secondary-diff-focus" }); }
+    } catch { write("ui-editor-focus.json", { state: "FAIL", boundary: "native-primary-diff-focus" }); }
   }));
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.verifyDiff", async () => {
     let stage = "native-diff-tab";
