@@ -121,3 +121,8 @@ overrides and evidence. Native continuation, original T3 recovery, broader forma
 repeated unchanged-point capture, offline import/rebinding, Windows and immutable
 controller qualification remain separate gates. No release or model/paid call is
 authorized by this contract.
+
+The separate [synthetic native continuation receipt](native-agent-synthetic-continuation.md)
+proves original-ID Codex/Claude resume and one deterministic loopback turn after
+local encrypted materialization. It does not qualify the combined durable
+Room-reference/installed-command/new-turn chain or change this capability.

@@ -4,7 +4,12 @@ The explicit [Room-bound encrypted reference lifecycle](native-agent-references.
 extends this local history slice with v3 host opt-in, exact historical bindings,
 Copy/export/remove/reconcile handling and registered native status/capture/restore.
 Closed JAT/PCC schemas and Save selectors stay unchanged. V1/v2 grants remain
-local-only; remote work references and native continuation remain unqualified.
+local-only; remote work references and general native continuation remain unqualified.
+
+[Synthetic native continuation](native-agent-synthetic-continuation.md) separately
+qualifies original-ID Codex/Claude resume plus one turn against deterministic
+loopback test backends. This does not enable Save, prove hosted/account compatibility
+or qualify the combined installed Room-reference/new-turn chain.
 
 This opt-in checkpoint isolates a Room-owned T3 process and preserves allowlisted
 Codex and qualified Claude session files in independently versioned age-encrypted
@@ -17,8 +22,8 @@ Normal Save and Enter do not enable, capture, or restore agent profiles.
 | Provider | This checkpoint | Native cold-resumed new turn |
 | --- | --- | --- |
 | T3 Code | Dedicated process home and provider environment; database capture blocked | NOT RUN; unsafe database projection unresolved |
-| Codex CLI | Admitted native-file capture/verification and explicit single-session materialization; history-only, whole-profile restore blocked | NOT RUN; provider authentication and a real new-turn acceptance remain required |
-| Claude Code | Opt-in 2.1.310 main linear text-only native capture/verification/single-file materialization | NOT RUN; runtime/auth/account acceptance unqualified |
+| Codex CLI | Admitted native-file capture/verification and explicit single-session materialization; history-only, whole-profile restore blocked | PASS only for original-ID resume and one deterministic loopback test turn; hosted/account and T3-mediated acceptance remain unqualified |
+| Claude Code | Opt-in 2.1.310 main linear text-only native capture/verification/single-file materialization | PASS only for original-ID resume and one deterministic loopback test turn; richer post-turn recapture is refused, hosted/account and T3-mediated acceptance remain unqualified |
 | Antigravity | Research only | Unsupported |
 | OpenCode | Research only | Unsupported |
 
@@ -247,10 +252,16 @@ draft fixtures are now rejected without modifying their encrypted references.
 See [the pinned upstream protocol](native-agent-upstream.md#qualified-codex-01710-persisted-history-selection)
 and [reproducible acceptance evidence](native-agent-verification.md#disk-backed-and-native-codex-discovery-follow-up).
 
-Runtime resume/account compatibility and an observed new turn remain unverified.
+That earlier qualification did not exercise runtime resume or a new turn.
+Hosted/account compatibility remains unverified.
 Fresh native authentication must be established separately; no auth material is
 recovered from the reference. Whole-profile restore, all #190 Save selections,
 T3/Claude native restore, and the release hold remain unchanged.
+
+That no-turn receipt is historical. The later
+[synthetic continuation test](native-agent-synthetic-continuation.md) observes
+direct Codex/Claude native turns with generated local-only credentials, without
+qualifying hosted accounts, whole profiles or T3 continuation.
 
 
 ## Qualified Claude native history slice

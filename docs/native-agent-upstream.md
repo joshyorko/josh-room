@@ -2,7 +2,10 @@
 
 Research checkpoint: 2026-11-22, implementation base
 `23c8071` (Josh Room v0.1.52). This is source and installed CLI evidence,
-not a successful native cold-resume receipt. No personal profile was opened,
+not itself a successful native cold-resume receipt. The later
+[synthetic continuation receipt](native-agent-synthetic-continuation.md) qualifies
+one original-ID turn for each direct native CLI against a deterministic local
+test backend only. No personal profile was opened,
 no credential was copied, and no hosted model request was made for this audit.
 
 ## Capability matrix
@@ -10,8 +13,8 @@ no credential was copied, and no hosted model request was made for this audit.
 | Harness | Examined version | Supported upstream location / continuation surface | Josh Room acceptance gate |
 | --- | --- | --- | --- |
 | T3 Code | Earlier `.5085`; current installed `0.1.12-nightly.20261122.5098` separately audited at public source `1d028248683f90f405b2d8e7b71682e3b67317ed` | `--base-dir` / `T3CODE_HOME`; one server-wide home; `userdata/statev2.sqlite`; provider-specific continuation bindings | Dedicated-profile launch can be isolated. Whole-database capture is blocked: database includes authentication and runnable outbox state. Native cold continuation NOT PROVEN. |
-| Codex CLI | Installed `0.171.0`; public source `cf3ff1530d821ec2d26452da4971d8e3e7d18d25` | `CODEX_HOME`; `sessions`, `archived_sessions`; `codex resume SESSION_ID`; `--all` disables cwd picker filtering | Synthetic native-file discovery and original-ID history selection verified through the installed standalone app-server. Runtime resume/new turn NOT PROVEN; T3-mediated continuity remains unqualified. |
-| Claude Code | Installed `2.1.310` | `CLAUDE_CONFIG_DIR` documented location contract; installed `claude --resume ID` / `--continue`; directory-associated history | Narrow main linear text-only 2.1.310 native-file slice qualified via matching SDK0.3.310 offline readers. Runtime/new-turn and T3-mediated continuation NOT PROVEN. |
+| Codex CLI | Installed `0.171.0`; public source `cf3ff1530d821ec2d26452da4971d8e3e7d18d25` | `CODEX_HOME`; `sessions`, `archived_sessions`; `codex resume SESSION_ID`; `--all` disables cwd picker filtering | Original-ID cold native resume plus one turn verified through the installed app-server against a deterministic loopback Responses backend. Hosted/account and T3-mediated continuity remain unqualified. |
+| Claude Code | Installed `2.1.310` | `CLAUDE_CONFIG_DIR` documented location contract; installed `claude --resume ID` / `--continue`; directory-associated history | Narrow main linear text-only native-file slice plus original-ID cold native resume/one turn verified against a deterministic loopback Messages backend. Richer post-turn recapture is refused; hosted/account and T3-mediated continuation remain unqualified. |
 | OpenCode | Public source `ee5fe34e136488a1839ac73bcca8321c51a31b75`; CLI package `2.3.0` | Explicit `OPENCODE_DB`; channel-aware SQLite filename; public session/storage APIs need version-specific qualification | Optional follow-up only. Current database credential service stores OAuth/API credential values; copying the database is unsafe. No installed synthetic cold-resume evidence. |
 | Antigravity | No installed/versioned native persistence contract qualified | Official documentation entry point inspected; no supported portable native storage/restore contract established | Optional follow-up only. No safe allowlist, versioned schema, licensing qualification or synthetic cold-resume evidence. |
 
@@ -161,6 +164,9 @@ also performs an account/auth check and starts a runtime. The next distinct gate
 is original-ID `thread/resume` with separately established supported native auth;
 a subsequent observed `turn/start` result is required for native-new-turn evidence.
 Neither method was sent in this qualification. Paid turns remain approval-gated.
+Both methods were subsequently exercised in the separate
+[deterministic loopback qualification](native-agent-synthetic-continuation.md),
+using supported custom-provider settings and freshly generated credentials.
 There is no established distinct raw `source: t3` value; do not invent one to claim
 T3-mediated preservation.
 
@@ -172,7 +178,8 @@ the qualified native files beside exact logical recovery points without changing
 catalog/JAT/PCC schemas. Real native Secret Service/MinIO and installed-command
 acceptance are separate from upstream continuation. Copy re-encrypts native
 bytes for the destination and preserves original provenance; no provider login,
-credential store or T3 database is copied. All new-turn claims remain unverified.
+credential store or T3 database is copied. General/hosted new-turn claims remain
+unverified; the separate deterministic native turn receipt is narrowly scoped.
 
 The [authenticated provider-history import acceptance](t3-provider-import-acceptance.md)
 now qualifies the existing T3 scan/import surface for both cold-materialized
@@ -204,5 +211,6 @@ Filesystem readers list/get original synthetic sessions/messages without any
 network or process operation. A narrow native main linear text slice is now
 implemented independently of the SDK runtime. The unsafe SessionStore-backed
 resume loader is excluded because it stages plaintext and inherits auth/config.
-No proprietary SDK code or binary is redistributed. Native continuation remains
-unverified for both providers, and every Save selector stays unavailable.
+No proprietary SDK code or binary is redistributed. Direct native continuation
+has a separate deterministic loopback-only receipt; general/hosted and T3-mediated
+continuation remain unverified, and every Save selector stays unavailable.

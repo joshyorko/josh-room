@@ -305,3 +305,36 @@ The previous installed VSIX receipt predates this repair. This checkpoint does
 not claim a rebuilt/installed VSIX, new immutable controller artifact, Windows
 qualification or a native new turn. No extension JavaScript changed. All Save
 selectors remain false; no release or publication action is authorized.
+
+## Synthetic native continuation checkpoint
+
+2026-11-22, Linux, test/documentation changes atop
+`e052d6bedbc969739cd12511bc1c50415726f5ce`. Both installed native CLIs now have
+observed original-ID resume plus one turn against a deterministic task-private
+loopback test backend, after real encrypted capture/cold native materialization.
+Production/controller sources and capability/Save gates are unchanged.
+
+| Gate | Observed result |
+| --- | --- |
+| Pinned Codex native resume | PASS, `0.171.0` actual app-server `thread/resume`, `turn/start`, completed-turn notification and `thread/read`; original provider UUID/cwd, old history and new prompt reached one authenticated loopback Responses request with `tools: []`; fixed assistant reply persisted in the same native file. |
+| Pinned Claude native resume | PASS, `2.1.310` actual `--resume` plus one print turn; original provider UUID/cwd, old history and new prompt reached one authenticated loopback Messages request with `tools: []`; one new user/assistant turn persisted under the original identity. |
+| Isolation and credentials | PASS, distinct new network namespace, only loopback, empty IPv4 route table, no usable IPv6 default/external route, fresh homes/config roots, generated disposable keys checked by backends and absent from resulting files. Source synthetic profiles deleted before runtime startup. Tools/hooks/plugins/MCP disabled through supported settings; no existing user/provider auth, hosted/paid request or native guard bypass. |
+| Final combined acceptance | PASS, `tests/test_native_codex_continuation.py tests/test_native_claude_continuation.py`: 2 passed in 2.14s. Both test opt-ins enabled only inside the isolated namespace. |
+| Native regressions | PASS, native agents/CLI, Claude policy/cold readers, Codex discovery, materializer and both new continuation suites in the isolated namespace: 158 passed, 1 optional SDK-reader skip in 4.22s. |
+| Public/controller boundaries | PASS, staged public storage safety, repository command inventory and controller artifact suites: 46 passed in 3.71s. All canonical controller modules match both bundled mirrors; production sources are unchanged from the preceding repair. Ruff and staged whitespace checks passed. |
+| Host namespace refusal | PASS, both explicit opt-in attempts failed at the fresh-namespace guard before fixture acquisition/native invocation: 2 expected failures in 0.09s. Default opt-out remained 2 skipped in 0.08s. |
+| Independent static review | SCOPED PASS, both final test source digests, guard ordering, auth isolation, tool disabling, original/new-turn evidence, resource cleanup and comments reviewed. Whitespace checked; no independent runtime rerun or syscall/filesystem-read audit. |
+| Iteration failures retained | Initial Codex custom-catalog prototype rejected a null enum under strict parsing; corrected to its supported value. Initial tool-free Responses request was refused because goals tools were still declared; supported `features.goals = false` produced an empty list. Claude namespace proof initially tried inaccessible `/proc/1/ns/net`; launcher-supplied outer namespace plus actual interface/route checks corrected that. These failures preceded the final passing tests and did not involve external routes or hosted calls. |
+
+See [exact versions, settings, limits and reproduction](native-agent-synthetic-continuation.md).
+The deterministic backends return fixed wire-protocol messages, not inference.
+Claude's local cost/provider labels do not prove hosted usage or billing. Its
+runtime-appended file remains outside the closed capture allowlist; recapture
+is tested to fail rather than silently broadening support.
+
+No T3 new turn ran here. Earlier supported T3 import still derives new app IDs
+from original provider identities; original-T3 restoration stays unsupported.
+The combined durable Room-reference/installed-command/new-turn chain, final
+repaired installed/controller qualification, hosted/account compatibility,
+broader formats/recapture and Windows remain open. All Save selectors remain
+false. No merge, release or publication action was performed.

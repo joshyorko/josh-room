@@ -96,3 +96,10 @@ such prerequisites belong only to a later explicitly approved continuation test.
 No existing profile/auth store was opened. No hosted/model/paid call, publication,
 or service mutation was performed. SDK/package/probe artifacts remain only in the
 parent-owned disk task directory for its cold-pipeline acceptance and cleanup.
+
+The later [synthetic native continuation receipt](native-agent-synthetic-continuation.md)
+uses direct CLI `2.1.310 --resume` with generated API-key authentication and a
+deterministic loopback Messages backend, not the excluded SessionStore route.
+It observes one new turn with the original provider UUID and cwd. It does not
+qualify hosted/account acceptance or broaden the capture allowlist: the richer
+runtime-appended file remains explicitly refused for recapture.
