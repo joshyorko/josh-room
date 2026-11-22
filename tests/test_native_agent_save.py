@@ -145,7 +145,16 @@ def test_v2_reserved_workspace_candidate_is_closed_and_old_unqualified_plan_refu
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux atomic marker custody")
-@pytest.mark.parametrize("phase", ["before-claim", "after-claim", "after-promote"])
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "before-claim",
+        "after-claim",
+        "after-promote",
+        "cleanup-old-marker",
+        "cleanup-intent.json",
+    ],
+)
 def test_marker_custody_resumes_actual_process_crash_without_losing_baseline(
     tmp_path, phase
 ):
@@ -181,9 +190,16 @@ def test_marker_custody_resumes_actual_process_crash_without_losing_baseline(
         move = save._marker_move
 
         def crashing_move(source_fd, source, destination_fd, destination):
+            cleanup = (
+                phase == "cleanup-" + source
+                and save._marker_record(destination_fd, source) is None
+                and source == destination
+            )
             if destination == "old-marker" and phase == "before-claim":
                 os._exit(71)
             move(source_fd, source, destination_fd, destination)
+            if cleanup:
+                os._exit(74)
             if destination == "old-marker" and phase == "after-claim":
                 os._exit(72)
             if source == "new-marker" and phase == "after-promote":
@@ -197,10 +213,23 @@ def test_marker_custody_resumes_actual_process_crash_without_losing_baseline(
     child.join(timeout=5)
     assert (
         child.exitcode
-        == {"before-claim": 71, "after-claim": 72, "after-promote": 73}[phase]
+        == {
+            "before-claim": 71,
+            "after-claim": 72,
+            "after-promote": 73,
+            "cleanup-old-marker": 74,
+            "cleanup-intent.json": 74,
+        }[phase]
     )
     custody = tmp_path / (".josh-room-marker-retry-" + value["attempt_id"])
-    assert (custody / "intent.json").is_file()
+    assert (
+        custody
+        / (
+            ".cleanup-intent.json/intent.json"
+            if phase == "cleanup-intent.json"
+            else "intent.json"
+        )
+    ).is_file()
     save._commit_retry_marker(
         workspace, value, marker, context_status(workspace), lambda: None
     )
@@ -251,8 +280,13 @@ def test_marker_retry_never_overwrites_foreign_c_in_claim_or_promotion_race(
     monkeypatch.setattr(save, "_marker_move", competing_move)
     with pytest.raises((OSError, ValueError)):
         save._commit_retry_marker(workspace, value, marker, previous, lambda: None)
-    assert (workspace / ".josh-room.json").read_bytes() == foreign[0]
-    assert context_status(workspace)["snapshot_id"] == "foreign-C"
+    if phase == "before-claim":
+        assert not (workspace / ".josh-room.json").exists()
+        custody = tmp_path / (".josh-room-marker-retry-" + value["attempt_id"])
+        assert (custody / "old-marker").read_bytes() == foreign[0]
+    else:
+        assert (workspace / ".josh-room.json").read_bytes() == foreign[0]
+        assert context_status(workspace)["snapshot_id"] == "foreign-C"
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux atomic marker custody")
@@ -307,6 +341,107 @@ def test_marker_completion_never_deletes_replaced_custody_control(
     custody = tmp_path / (".josh-room-marker-retry-" + value["attempt_id"])
     assert (custody / "intent.json").read_bytes() == foreign
     assert context_status(workspace)["snapshot_id"] == value["workspace_candidate_id"]
+
+
+def _marker_review_case(tmp_path):
+    from josh_room.workspace_state import context_status, write_stat_workspace_marker
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_stat_workspace_marker(
+        workspace,
+        dimension_id="synthetic",
+        encryption_domain_id="domain",
+        project_id="room",
+        display_name="Synthetic",
+        snapshot_id="old-point",
+        workspace_signature="e" * 64,
+        signature_algorithm="josh-room-stat-v1",
+        capture_policy_sha256="d" * 64,
+    )
+    value = plan()
+    value["reviewed_point"] = {
+        "logical_jat_id": "old-point",
+        "binding_sha256": "a" * 64,
+        "sidecar_sha256": "b" * 64,
+    }
+    marker = json.loads((workspace / ".josh-room.json").read_bytes())
+    marker["snapshot_id"] = value["workspace_candidate_id"]
+    return workspace, value, marker, context_status(workspace)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux atomic marker custody")
+@pytest.mark.parametrize("invalid", ["intent", "permissions", "baseline"])
+def test_invalid_resumed_custody_never_promotes_unverified_old_marker(
+    tmp_path, invalid
+):
+    import base64
+    import os
+
+    workspace, value, marker, previous = _marker_review_case(tmp_path)
+    custody = tmp_path / (".josh-room-marker-retry-" + value["attempt_id"])
+    custody.mkdir(mode=0o700)
+    fd = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        old = save._marker_record(fd, ".josh-room.json")
+    finally:
+        os.close(fd)
+    (workspace / ".josh-room.json").rename(custody / "old-marker")
+    foreign = b"synthetic unrelated marker replacement"
+    (custody / "old-marker").write_bytes(foreign)
+    intent = {
+        "format": "josh-room.save-marker-retry.v1",
+        "attempt_id": value["attempt_id"],
+        "plan_sha256": save.plan_digest(value),
+        "target": base64.b64encode(
+            (json.dumps(marker, sort_keys=True) + "\n").encode()
+        ).decode(),
+        "old": old,
+    }
+    if invalid == "intent":
+        intent["format"] = "unknown"
+    elif invalid == "baseline":
+        baseline = json.loads(base64.b64decode(old["data"]))
+        baseline["project_id"] = "unrelated-room"
+        old["data"] = base64.b64encode(json.dumps(baseline).encode()).decode()
+    (custody / "intent.json").write_text(json.dumps(intent, sort_keys=True))
+    if invalid == "permissions":
+        custody.chmod(0o755)
+    with pytest.raises(ValueError):
+        save._commit_retry_marker(workspace, value, marker, previous, lambda: None)
+    assert not (workspace / ".josh-room.json").exists()
+    assert (custody / "old-marker").read_bytes() == foreign
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux atomic marker custody")
+def test_replacement_immediately_before_cleanup_unlink_survives_in_original_namespace(
+    tmp_path, monkeypatch
+):
+    import os
+
+    workspace, value, marker, previous = _marker_review_case(tmp_path)
+    custody = tmp_path / (".josh-room-marker-retry-" + value["attempt_id"])
+    unlink = os.unlink
+    injected = []
+    foreign = b"synthetic late namespace replacement"
+
+    def racing_unlink(entry, *, dir_fd=None):
+        if entry == "intent.json" and not injected:
+            injected.append(True)
+            replacement = custody / "intent.json"
+            if replacement.exists():
+                unlink(replacement)
+            replacement.write_bytes(foreign)
+        return unlink(entry, dir_fd=dir_fd)
+
+    monkeypatch.setattr(save.os, "unlink", racing_unlink)
+    with pytest.raises(OSError):
+        save._commit_retry_marker(workspace, value, marker, previous, lambda: None)
+    assert injected and (custody / "intent.json").read_bytes() == foreign
+    assert (
+        json.loads((workspace / ".josh-room.json").read_bytes())["snapshot_id"]
+        == value["workspace_candidate_id"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -626,6 +761,24 @@ def test_stale_retry_preserves_corroborated_workspace_without_native_publication
     assert result["ok"] is False
     assert result["workspace_result"]["snapshot_id"] == "candidate-only"
     assert "prepare" not in pipeline[1]
+
+
+def test_scoped_candidate_without_attempt_ledger_never_becomes_workspace_success(
+    pipeline,
+):
+    pipeline[0]["reconciliation"] = {
+        "state": "blocked",
+        "workspace_committed": None,
+        "logical_jat_id": plan()["workspace_candidate_id"],
+        "candidate_point_verified": True,
+    }
+    result = run(pipeline, lambda *_: pytest.fail("must not save workspace"))
+    assert result["ok"] is False and result["workspace_result"] is None
+    assert result["agent_result"]["candidate_point_verified"] is True
+    assert "prepare" not in pipeline[1]
+    assert not any(
+        isinstance(call, tuple) and call[0] == "open-exact" for call in pipeline[1]
+    )
 
 
 @pytest.mark.parametrize("failure", [None, "ledger", "unknown", "cancel"])

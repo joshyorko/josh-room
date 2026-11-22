@@ -1670,25 +1670,26 @@ const nativePreview = (overrides = {}) => ({
   ...overrides,
 });
 
-for (const cancelled of [false, true]) for (const retry of [false, true]) test(`history partial retains workspace baseline; exact retry=${retry}; cancelled=${cancelled}`, async t => {
+for (const known of [true, false]) for (const cancelled of [false, true]) for (const retry of [false, true]) test(`history partial retains workspace baseline; exact retry=${retry}; cancelled=${cancelled}; ledger=${known}`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-agent-partial-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const profile = { tool: "codex", profile_ref: "1".repeat(64), scope: "personal", admitted: true };
   const agentPlan = { format: "josh-room.save-agent-plan.v2", attempt_id: "a".repeat(64), workspace_candidate_id: "c".repeat(32),
     target_scope_sha256: "b".repeat(64), workspace_content_sha256: "c".repeat(64),
     capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256, workspace_signature: "b".repeat(64),
-    reviewed_point: null, digest: "d".repeat(64), entries: [{tool: profile.tool, profile_ref: profile.profile_ref,
+    reviewed_point: { logical_jat_id: "jat-1", binding_sha256: "b".repeat(64), sidecar_sha256: "c".repeat(64) }, digest: "d".repeat(64), entries: [{tool: profile.tool, profile_ref: profile.profile_ref,
       content_sha256: "e".repeat(64), authority_sha256: "f".repeat(64), new_point_capture_id: "2".repeat(64), existing_point: null }] };
   const workspace = { ok: true, status: "already-saved", dimension_id: "backup", encryption_domain_id: "domain-a",
     project_id: "demo-room", snapshot_id: "jat-1", workspace_signature: "b".repeat(64),
     signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: agentPlan.capture_policy_sha256, data_added_bytes: 0 };
-  const agentResult = { ok: false, attempt_id: agentPlan.attempt_id, entries: [{ tool: "codex", state: "uncertain", data_uploaded: 13 }] };
-  const partial = { ok: false, error: "agent-save-partial", attempt_id: agentPlan.attempt_id, workspace_result: workspace, agent_result: agentResult, cancelled };
+  if (!known) { workspace.snapshot_id = agentPlan.workspace_candidate_id; workspace.status = "saved"; }
+  const agentResult = { workspace_committed: known ? true : null, candidate_point_verified: true, ok: false, attempt_id: agentPlan.attempt_id, entries: [{ tool: "codex", state: "uncertain", data_uploaded: 13 }] };
+  const partial = { ok: false, error: "agent-save-partial", attempt_id: agentPlan.attempt_id, candidate_logical_jat_id: known ? "jat-1" : agentPlan.workspace_candidate_id, workspace_result: known ? workspace : null, agent_result: agentResult, cancelled };
   let creates = 0;
   const fixture = createNativeSaveFixture(root, {
     preview: nativePreview({ agent_plan: agentPlan, component_plan_token: "3".repeat(64) }),
     agentStatus: { ok: true, agent_save: { contract_version: 1, mode: "history-only", available: true, profiles: [profile] } },
-    onSave: () => { creates += 1; if (cancelled && creates === 1) setImmediate(() => { fixture.progressCalls.at(-1).token.isCancellationRequested = true; }); },
+    onSave: () => { creates += 1; if (!known && creates > 1) writeStatMarker(root, { snapshot_id: agentPlan.workspace_candidate_id }); if (cancelled && creates === 1) setImmediate(() => { fixture.progressCalls.at(-1).token.isCancellationRequested = true; }); },
     saveResult: () => creates === 1 ? partial : { ...workspace, agent_result: { ...agentResult, ok: true, entries: [{ tool: "codex", state: "created", data_uploaded: 13 }] } },
   });
   fixture.vscode.quickPickResponses[1] = [{ id: "agent_codex", tool: "codex" }];
@@ -1699,15 +1700,42 @@ for (const cancelled of [false, true]) for (const retry of [false, true]) test(`
   fixture.extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions,
     secrets: { get: async key => key.startsWith("josh-room.encryption.v1:") ? JSON.stringify({ identity: "AGE-SECRET-KEY-synthetic" }) : undefined } });
   t.after(() => { for (const entry of subscriptions) entry.dispose?.(); });
-  assert.equal(await fixture.commandCallbacks.get("joshRoom.saveFolderAs")(), retry ? "already-saved" : "agent-save-partial");
-  assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "clean");
+  assert.equal(await fixture.commandCallbacks.get("joshRoom.saveFolderAs")(), retry ? (known ? "already-saved" : "saved") : (known ? "agent-save-partial" : "agent-save-uncertain"));
+  assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, !known && !retry ? "unknown" : "clean");
   const saves = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] === "create");
   assert.equal(saves.length, retry ? 2 : 1);
   assert.deepEqual(JSON.parse(saves[0].args[saves[0].args.indexOf("--agent-plan") + 1]), agentPlan);
   if (retry) assert.deepEqual(saves[1].args, saves[0].args);
   assert.equal(fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] === "preview").length, 1);
-  assert.ok(fixture.warningCalls.some(([message]) => /Workspace saved; selected agent HISTORY did not finish/.test(message)));
+  if (known) assert.ok(fixture.warningCalls.some(([message]) => /Workspace saved; selected agent HISTORY did not finish/.test(message)));
+  else {
+    assert.ok(fixture.warningCalls.some(([message]) => /Candidate recovery point verified; this attempt's workspace commit is unverified. Agent HISTORY is blocked/.test(message)));
+    assert.ok(fixture.warningCalls.every(([message]) => !/Workspace saved|Already saved|0 bytes|0B/i.test(message)));
+  }
   assert.ok(fixture.infoCalls.every(([message]) => !/Already saved — 0 bytes/.test(message)));
+});
+
+test("scoped candidate without ledger permits only bound exact retry, never baseline adoption", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-agent-candidate-only-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, createSpawnHarness(() => ({})).spawn);
+  writeStatMarker(root);
+  const plan = { format: "josh-room.save-agent-plan.v2", attempt_id: "a".repeat(64), workspace_candidate_id: "b".repeat(32),
+    capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256, reviewed_point: { logical_jat_id: "jat-1" } };
+  const receipt = { ok: false, error: "agent-save-partial", attempt_id: plan.attempt_id, candidate_logical_jat_id: plan.workspace_candidate_id,
+    workspace_result: null, agent_result: { workspace_committed: null, candidate_point_verified: true } };
+  const matches = () => extension.__test__.agentPartialMatchesReview(receipt, plan, root, "backup", "demo-room", "domain-a");
+  assert.equal(matches(), true);
+  assert.equal(extension.__test__.agentPartialWorkspace(receipt, root, "backup"), undefined);
+  receipt.candidate_logical_jat_id = "c".repeat(32);
+  assert.equal(matches(), false);
+  receipt.candidate_logical_jat_id = plan.workspace_candidate_id;
+  writeStatMarker(root, { project_id: "foreign-room" });
+  assert.equal(matches(), false);
+  writeStatMarker(root);
+  fs.writeFileSync(path.join(root, ".josh-roomignore"), "changed/\n");
+  assert.equal(matches(), false);
 });
 
 test("uncorroborated partial cannot mark the workspace saved", t => {

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import copy
+import ctypes
 import dataclasses
 import hashlib
 import os
@@ -623,20 +624,13 @@ def _finish(attempt, context, outcomes, *, fence):
         _fail("native-save-published-history-unavailable")
     objects = _created_objects(attempt, outcomes)
     pending = attempt.ledger["pending_receipt"]
-    path = None
     if pending is not None:
         if pending != _pending_name(attempt, context, objects):
             _fail("native-save-pending-receipt-mismatch")
-        path = context.instance / "agent-reference-receipts" / pending
-        if path.exists():
-            _verify_pending_receipt(context, path, objects)
+        _cleanup_pending_receipt(context, pending, objects)
     result = attempt.receipt("complete", context=context)
     attempt.ledger.update(phase="complete", receipt=result)
     attempt._persist()
-    if path is not None and path.exists():
-        _verify_pending_receipt(context, path, objects)
-        path.unlink()
-        native._fsync_directory(path.parent)
     return result
 
 
@@ -652,11 +646,53 @@ def _pending_name(attempt, context, objects):
 
 def _verify_pending_receipt(context, path, objects):
     verify_private_path(path.parent, directory=True)
+    before = native._file(path, references.MAX_CONTROL)
     document = native._json(native._read(path, references.MAX_CONTROL))
     expected = {"format": "josh-room.agent-reference-pending.v1", "id": path.name[:-5],
                 "scope_sha256": references._scope_digest(context), "operation": "capture", "objects": objects}
     if document != expected:
         _fail("native-save-pending-receipt-mismatch")
+    after = native._file(path, references.MAX_CONTROL)
+    if any(getattr(before, field) != getattr(after, field)
+           for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")):
+        _fail("native-save-pending-claim-changed")
+    return after
+
+
+def _cleanup_pending_receipt(context, pending, objects):
+    directory = context.instance / "agent-reference-receipts"
+    verify_private_path(directory, directory=True)
+    original = directory / pending
+    custody = directory / ("cleanup-" + pending[:-5])
+    if not custody.exists():
+        if not original.exists() and not original.is_symlink():
+            return
+        custody.mkdir(mode=0o700)
+        native._fsync_directory(directory)
+    verify_private_path(custody, directory=True)
+    claimed = custody / pending
+    if not claimed.exists() and original.exists():
+        before = _verify_pending_receipt(context, original, objects)
+        rename = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+        if rename is None:
+            _fail("native-save-pending-claim-unavailable")
+        if rename(-100, os.fsencode(original), -100, os.fsencode(claimed), 1):
+            _fail("native-save-pending-claim-uncertain")
+        native._fsync_directory(custody)
+        native._fsync_directory(directory)
+        after = _verify_pending_receipt(context, claimed, objects)
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            _fail("native-save-pending-claim-changed")
+    if claimed.exists():
+        # Only this entered attempt owns the private claim. Never unlink the
+        # original pathname after validation: another publisher may reuse it.
+        _verify_pending_receipt(context, claimed, objects)
+        claimed.unlink()
+        native._fsync_directory(custody)
+    custody.rmdir()
+    native._fsync_directory(directory)
+    if original.exists() or original.is_symlink():
+        _fail("native-save-pending-entry-replaced")
 
 
 def _pending_for_attempt(attempt, context, objects):
@@ -851,7 +887,8 @@ def reconcile_attempt(scope, selection, plan):
                                   else ledger["uploaded"].get(item["tool"], 0)),
                 "upload_uncertain": ledger is None or item["tool"] in ledger["upload_uncertain"]})
         return {"ok": False, "state": "blocked", "attempt_id": plan["attempt_id"], "logical_jat_id": logical_id,
-                "workspace_committed": True if context is not None else None, "history_only": True,
+                "workspace_committed": True if context is not None and ledger is not None else None,
+                "candidate_point_verified": context is not None, "history_only": True,
                 "native_resume_verified": False, "original_t3_identity_restored": False,
                 "reconciliation_required": ledger is None or ledger["phase"] not in {"preparing", "prepared", "complete"},
                 "error": code, "entries": entries}

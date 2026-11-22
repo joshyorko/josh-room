@@ -131,7 +131,10 @@ def test_real_save_two_tool_history_and_exact_uncertain_retry(live, monkeypatch)
             patch.setattr(BaseClient, "_make_api_call", observe)
             blocked = local(plan, ok=False)
         assert mutations == []
-        assert blocked["workspace_result"]["snapshot_id"] == plan["agent_plan"]["workspace_candidate_id"]
+        assert blocked["workspace_result"] is None
+        assert blocked["agent_result"]["logical_jat_id"] == plan["agent_plan"]["workspace_candidate_id"]
+        assert blocked["agent_result"]["candidate_point_verified"] is True
+        assert blocked["agent_result"]["workspace_committed"] is None
         assert all(entry["data_uploaded"] is None and entry["upload_uncertain"] for entry in blocked["agent_result"]["entries"])
     finally:
         value.policy["grants"].append(grant)

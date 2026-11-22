@@ -416,7 +416,22 @@ def _pending_objects(context):
     from .private_paths import verify_private_path
 
     verify_private_path(directory, directory=True)
-    paths = sorted(directory.iterdir())
+    paths = []
+    entries = sorted(directory.iterdir())
+    if len(entries) > 1024:
+        _fail("native-reference-receipt-limit")
+    for entry in entries:
+        if entry.name.startswith("cleanup-"):
+            identity = entry.name.removeprefix("cleanup-")
+            if len(identity) != 32 or any(character not in "0123456789abcdef" for character in identity):
+                _fail("native-reference-receipt-invalid")
+            verify_private_path(entry, directory=True)
+            claimed = list(entry.iterdir())
+            if len(claimed) > 1 or claimed and claimed[0].name != identity + ".json":
+                _fail("native-reference-receipt-invalid")
+            paths.extend(claimed)
+        else:
+            paths.append(entry)
     if len(paths) > 1024:
         _fail("native-reference-receipt-limit")
     objects = set()

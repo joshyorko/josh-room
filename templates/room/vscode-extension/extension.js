@@ -2248,6 +2248,24 @@ async function updateCompositionRoom(kind) {
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
 }
 
+function agentPartialMatchesReview(receipt, plan, source, dimension, project, domain) {
+  if (receipt?.ok !== false || receipt.error !== "agent-save-partial" || plan?.format !== "josh-room.save-agent-plan.v2"
+    || !/^[a-f0-9]{64}$/.test(plan.attempt_id || "") || receipt.attempt_id !== plan.attempt_id
+    || !/^[a-f0-9]{32}$/.test(plan.workspace_candidate_id || "")
+    || ![plan.workspace_candidate_id, plan.reviewed_point?.logical_jat_id].filter(Boolean).includes(receipt.candidate_logical_jat_id)) return false;
+  try {
+    if (loadCapturePolicy(source).sha256 !== plan.capture_policy_sha256) return false;
+    let metadata;
+    try { metadata = fs.lstatSync(path.join(source, ".josh-room.json")); }
+    catch (error) { if (error.code === "ENOENT") return true; throw error; }
+    if (!metadata.isFile() || metadata.isSymbolicLink()) return false;
+    const marker = currentRoom(source);
+    return Boolean(marker && domain && marker.encryption_domain_id === domain && marker.dimension_id === dimension && marker.project_id === project
+      && [plan.workspace_candidate_id, plan.reviewed_point?.logical_jat_id].filter(Boolean).includes(marker.snapshot_id)
+      && marker.workspace_path_sha256 === realWorkspacePathSha256(source) && !marker.composition_namespace);
+  } catch (_) { return false; }
+}
+
 function agentPartialWorkspace(receipt, source, dimension) {
   if (receipt?.ok !== false || receipt.error !== "agent-save-partial") return undefined;
   const result = receipt.workspace_result;
@@ -2456,8 +2474,7 @@ async function saveRoom(options = {}) {
       : await runOperation(`Saving ${name}…`, buildArgs, source);
       break;
     } catch (error) {
-      if (!nativeSave || !preview?.agent_plan || error.result?.error !== "agent-save-partial"
-        || error.result.attempt_id !== preview.agent_plan.attempt_id) throw error;
+      if (!nativeSave || !agentPartialMatchesReview(error.result, preview?.agent_plan, source, targetDimensionId, selected.project?.id, targetDimension?.encryption_domain_id)) throw error;
       const workspaceResult = agentPartialWorkspace(error.result, source, targetDimensionId);
       agentPartial = error.result;
       result = workspaceResult;
@@ -2466,6 +2483,8 @@ async function saveRoom(options = {}) {
       outputChannel?.appendLine(`Agent Save partial: ${sanitizeControllerText(JSON.stringify(agentPartial.agent_result))}`);
       const action = await vscode.window.showWarningMessage(workspaceResult
         ? "Workspace saved; selected agent HISTORY did not finish. The recovery point is retained. Retry reconciles only this exact reviewed attempt."
+        : agentPartial.agent_result?.candidate_point_verified === true && agentPartial.agent_result.workspace_committed === null
+          ? "Candidate recovery point verified; this attempt's workspace commit is unverified. Agent HISTORY is blocked. Retry reconciles only this exact reviewed attempt."
         : "Agent HISTORY Save is incomplete and the workspace outcome is not verified. Retry reconciles only this exact reviewed attempt; it cannot substitute a newer recovery point.",
       "Retry Exact Attempt", "Show Details");
       if (action === "Show Details") outputChannel?.show(true);
@@ -3718,6 +3737,7 @@ function activate(context) {
 
 module.exports = { activate };
 module.exports.__test__ = {
+  agentPartialMatchesReview,
   agentPartialWorkspace,
   saveCatalogRoom,
   enterChildRoom,

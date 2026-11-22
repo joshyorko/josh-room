@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import ctypes
 import dataclasses
-import errno
 import hashlib
 import json
 import os
@@ -416,6 +415,77 @@ def _marker_move(source_fd, source, destination_fd, destination):
     os.fsync(destination_fd)
 
 
+@contextmanager
+def _marker_cleanup_directory(custody, entry, *, create=False):
+    name = ".cleanup-" + entry
+    if create:
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=custody)
+            os.fsync(custody)
+        except FileExistsError:
+            pass
+    try:
+        private = os.open(
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=custody
+        )
+    except FileNotFoundError:
+        yield None
+        return
+    identity = os.fstat(private)
+    validated = False
+    try:
+        if (
+            identity.st_uid != os.geteuid()
+            or identity.st_mode & 0o077
+            or identity.st_dev != os.fstat(custody).st_dev
+            or set(os.listdir(private)) - {entry}
+        ):
+            raise ValueError("agent Save retry cleanup custody changed")
+        validated = True
+        yield private
+    finally:
+        try:
+            attached = os.stat(name, dir_fd=custody, follow_symlinks=False)
+            if validated and (attached.st_dev, attached.st_ino) == (
+                identity.st_dev,
+                identity.st_ino,
+            ) and not os.listdir(private):
+                os.rmdir(name, dir_fd=custody)
+                os.fsync(custody)
+        finally:
+            os.close(private)
+
+
+def _claimed_marker_record(custody, entry):
+    with _marker_cleanup_directory(custody, entry) as private:
+        return None if private is None else _marker_record(private, entry)
+
+
+def _remove_claimed_marker_control(custody, entry, expected):
+    """Replay a deterministic verified claim; never unlink its original name."""
+    with _marker_cleanup_directory(custody, entry, create=True) as private:
+        claimed = _marker_record(private, entry)
+        held = os.open(
+            entry,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=private if claimed is not None else custody,
+        )
+        try:
+            if _marker_fd_record(held) != expected:
+                raise ValueError("agent Save retry marker cleanup is uncertain")
+            if claimed is None:
+                _marker_move(custody, entry, private, entry)
+            if (
+                _marker_record(private, entry) != expected
+                or _marker_fd_record(held) != expected
+            ):
+                raise ValueError("agent Save retry marker cleanup claim changed")
+            os.unlink(entry, dir_fd=private)
+            os.fsync(private)
+        finally:
+            os.close(held)
+
+
 def _commit_retry_marker(workspace, plan, marker, previous, check):
     """Claim/verify an expected marker, never replace a competing binding."""
     from .workspace_state import MARKER_NAME, _validate_workspace_marker
@@ -453,7 +523,13 @@ def _commit_retry_marker(workspace, plan, marker, previous, check):
             "target": base64.b64encode(target).decode("ascii"),
             "old": None,
         }
-        existing = _marker_record(custody, "intent.json")
+        # Replay only the three reserved cleanup namespaces. In particular the
+        # intent may itself have been claimed before a process interruption.
+        for entry in ("old-marker", "new-marker", "intent.json"):
+            _claimed_marker_record(custody, entry)
+        existing = _claimed_marker_record(custody, "intent.json") or _marker_record(
+            custody, "intent.json"
+        )
         if existing is None:
             if os.listdir(custody):
                 raise ValueError("agent Save retry marker custody is not empty")
@@ -578,7 +654,9 @@ def _commit_retry_marker(workspace, plan, marker, previous, check):
             raise ValueError("agent Save retry marker finalization is uncertain")
         # The private attempt-bound directory is never recursively removed.
         for entry in ("old-marker", "new-marker", "intent.json"):
-            record = _marker_record(custody, entry)
+            record = _claimed_marker_record(custody, entry) or _marker_record(
+                custody, entry
+            )
             if record is None:
                 continue
             if (
@@ -593,26 +671,13 @@ def _commit_retry_marker(workspace, plan, marker, previous, check):
                 )
             ):
                 raise ValueError("agent Save retry marker cleanup is uncertain")
-            os.unlink(entry, dir_fd=custody)
+            _remove_claimed_marker_control(custody, entry, record)
         os.fsync(custody)
         attached = os.stat(name, dir_fd=parent, follow_symlinks=False)
         if (attached.st_dev, attached.st_ino) != (info.st_dev, info.st_ino):
             raise ValueError("agent Save retry custody binding changed")
         os.rmdir(name, dir_fd=parent)
         os.fsync(parent)
-    except BaseException:
-        # A failed claim must never remove or replace a foreign live marker.
-        if (
-            root is not None
-            and custody is not None
-            and _marker_record(custody, "old-marker") is not None
-        ):
-            try:
-                _marker_move(custody, "old-marker", root, MARKER_NAME)
-            except OSError as error:
-                if error.errno != errno.EEXIST:
-                    raise
-        raise
     finally:
         for descriptor in (custody, root, parent):
             if descriptor is not None:

@@ -103,9 +103,24 @@ is fsynced before the old marker is claimed. A retry can discover and finish a
 crash before/after claim or after promotion. Normal completion removes only its
 validated control files; conflicting/uncertain custody is retained for
 reconciliation, never recursively deleted. Cross-filesystem or unavailable
-no-replace support refuses finalization. A read-only blocked receipt can report
-verified B with `marker_state:unfinalized`; revocation never repairs its marker
-or publishes history.
+no-replace support refuses finalization. Failure never rolls a custody file
+back into the live marker namespace. Cleanup first moves each verified control
+entry into private anchored cleanup custody, verifies its held inode and bytes,
+and deletes only that private claim. Namespace replacements remain untouched;
+conflicts remain discoverable under the attempt's custody directory.
+Each control entry has one deterministic cleanup child, made durable before
+the move. Retry validates and replays those three bounded claims, including an
+intent retained inside its cleanup child. A process interruption between claim
+and deletion therefore does not lose the intent or require a new Save.
+
+When the encrypted attempt ledger is unavailable, a read-only blocked receipt
+can verify that scoped candidate B exists, but cannot attribute its commitment
+to this attempt: `workspace_committed:null`, unknown upload counts, and no
+successful `workspace_result`. The UI may offer only the original reviewed
+retry after checking its candidate, Room/Dimension/domain, current policy and
+marker binding; it does not adopt a baseline or claim Saved. Revocation never
+repairs the marker or publishes history. Restoring the same grant can recover
+the original encrypted ledger and resume normal exact-attempt verification.
 
 Partial-result UI admission reuses the full Save binding validator, including
 the encryption domain, signature algorithm and freshly loaded capture policy.

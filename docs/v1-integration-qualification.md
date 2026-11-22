@@ -173,6 +173,43 @@ no-clobber custody transaction with process-crash/race tests. These source-level
 results are not installed/RCC adapter acceptance; availability remains false.
 #220's Windows installed chain remains a separate active lane.
 
+## Save recovery review corrections
+
+At exact `574c0b0799ec0d6ba0d91d75ef159aaea7e1fd03`, all nine ordinary
+checks passed; promotion and release-candidate publication were skipped.
+The [main job](https://github.com/joshyorko/josh-room/actions/runs/45066565966/job/137343935375)
+passed 3,219 Python tests and 47 subtests with 125 skips, 463 Node tests with
+two skips, and 49 OMP tests. Independent review nevertheless found unsafe
+marker exception rollback, validation/unlink races and false attempt attribution
+when the encrypted ledger is unavailable. CI success did not close those gates.
+
+The next correction removes exception rollback entirely. Failed validation
+retains custody rather than installing an unverified old marker. Marker control
+cleanup claims into deterministic, private, anchored children and validates the
+claimed bytes and inode before removing only that claim. Process-exit regressions
+cover cleanup interruption after claiming both the old marker and the intent,
+as well as the earlier marker-claim and promotion boundaries. Original-namespace
+replacements remain retained with uncertainty. Pending-object cleanup follows
+the same private-claim rule and keeps interrupted claims visible to reconciliation.
+
+Without an accessible ledger, an independently verified scoped candidate point
+is reported separately from this attempt's commitment: `workspace_committed`
+remains null, upload counts remain unknown and no saved workspace baseline is
+adopted. The native warning offers the same approved exact retry without claiming
+Saved, Already saved or zero uploaded bytes. Restoring the same authority permits
+ledger-backed reconciliation; it does not authorize choosing a newer point.
+The [producer receipt](receipts/native-agent-save-producer-v2.json) retains the
+superseded attribution result and separately records corrected real MinIO/native
+Secret Service qualification. Fresh independent review and installed/RCC adapter
+acceptance are still required. All agent Save availability flags remain false.
+
+The explicit encryption-material input boundary also now refuses missing or
+disappearing caller-owned handoffs before vault fallback or identity generation.
+Normal requests for a new controller-owned output retain generation behavior.
+The dedicated regression covers both cases and refusal to initialize an empty
+bucket from an existing-input request. Native Windows ACL integration and direct
+installed missing-handoff refusal are being qualified separately on #220.
+
 ## Compatibility and rollback
 
 [The bounded source probe](receipts/v1-source-compatibility.json) compares

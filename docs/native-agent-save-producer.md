@@ -101,8 +101,12 @@ confirmed counts remain intact. These are retained-data counts, not billing or
 wire-transfer claims. The deterministic pending-receipt name is fsynced in the
 encrypted journal before exclusive receipt creation. An interrupted retry
 validates/reuses that exact receipt or recreates the missing reserved name.
-Successful publication validates its scope, operation and exact object list
-again before removal. Mismatched tracking remains protected and uncertain.
+Successful publication atomically claims the entry without replacement into
+private, attempt-specific cleanup custody. It validates the claimed inode,
+scope, operation and exact object list before removing only that owned claim.
+A concurrent replacement at the original entry remains intact and returns
+uncertainty. Interrupted/unverified claims remain visible to pending-object
+accounting and exact retry; mismatched tracking remains protected.
 
 Before any retry that might invoke workspace Save, call
 `reconcile_attempt(scope, selection, plan)`. It first locates/decrypts the durable
@@ -115,8 +119,12 @@ An unresolvable/revoked selector returns blocked, never absent permission.
 If the journal cannot be located, a read-only check under current Room authority
 may corroborate only the reserved workspace candidate against the exact physical
 Dimension, domain/keyset, repository, policy and approved workspace facts. This
-reports the committed workspace without native admission or mutation. Every
-unrecoverable upload count is null/uncertain rather than zero.
+reports `candidate_point_verified:true` and the exact reserved ID without native
+admission or mutation. Point existence does not independently bind that point to
+this attempt: `workspace_committed` remains null, and no already-saved workspace
+result or baseline adoption is authorized. Restoring the same grant allows the
+original encrypted journal to establish attempt attribution. Every unrecoverable
+upload count is null/uncertain rather than zero.
 Once candidate B is independently corroborated, preparation and exact retry do
 not need the old reviewed point A to remain in the catalog. No newer point may
 replace B.
@@ -158,12 +166,14 @@ the real MinIO write before injecting a lost catalog acknowledgment or failed
 native-object readback. They do not substitute catalog or keyring responses.
 It verifies two-tool no-op with zero mutating S3 calls, A-B-A events, exact
 reserved-candidate retry after reviewed-parent removal, revoked-first-grant
-read-only reporting with nullable counts, and successful retry with no pending
+read-only point proof with unknown attempt commitment and nullable counts, and successful retry with no pending
 receipt after the same task grant is restored. No native process/model call is
 made. Without explicit disposable-fixture opt-in it skips.
 
 The [v2 source-controller receipt](receipts/native-agent-save-producer-v2.json)
-records 34 producer regressions, 134 affected Python passes with two skips, and
-the actual disposable-provider CLI test passing in 87.61 seconds. Separate fresh
-CLI trials also exercised pre-point New Room capture and unchanged no-op bucket
-inventory. These checks do not qualify installed UI or an immutable RCC artifact.
+separates the earlier actual disposable-provider CLI run from the later review
+corrections. The live assertion now requires unknown attempt commitment when
+the encrypted ledger is unavailable. A fresh run of the corrected live case
+passed in 86.61 seconds, separately from 143 affected Python passes with four
+skips. The receipt records the exact source hashes for each run. These checks do not
+qualify installed UI or an immutable RCC artifact.

@@ -533,7 +533,8 @@ def test_revoked_first_grant_retains_readonly_exact_b_with_unknown_counts(case, 
     before = case.store.writes.copy()
     result = producer.reconcile_attempt(dataclasses.replace(case.scope, reviewed_context=None), case.selection, plan)
     assert not result["ok"] and result["state"] == "blocked"
-    assert result["workspace_committed"] is True and result["logical_jat_id"] == plan["workspace_candidate_id"]
+    assert result["workspace_committed"] is None and result["candidate_point_verified"] is True
+    assert result["logical_jat_id"] == plan["workspace_candidate_id"]
     assert result["reconciliation_required"] is True
     assert all(item["data_uploaded"] is None and item["upload_uncertain"] for item in result["entries"])
     assert case.store.writes == before and not case.store.controls
@@ -585,3 +586,97 @@ def test_finish_preserves_pending_receipt_changed_after_publication(case, monkey
     assert result["error"] == "native-save-pending-receipt-mismatch"
     assert retained[0][0].read_bytes() == retained[0][1]
     assert len(references._load(case.context)[0]["entries"]) == 2
+
+
+def test_distinct_attempt_same_reserved_point_cannot_attribute_commit_without_ledger(case):
+    plan = producer.preview_batch(case.scope, case.selection)
+    with _prepared(case, plan) as attempt:
+        actual = _new_workspace(case, attempt)
+        attempt.workspace_outcome("committed", logical_jat_id=plan["workspace_candidate_id"])
+    other = json.loads(json.dumps(plan))
+    other["attempt_id"] = "f" * 64
+    other["digest"] = producer._digest({key: value for key, value in other.items() if key != "digest"})
+    before = case.store.writes.copy()
+    result = producer.reconcile_attempt(case.scope, case.selection, other)
+    assert not result["ok"] and result["state"] == "blocked"
+    assert result["logical_jat_id"] == actual.selected_descriptor.to_dict()["logical_jat_id"]
+    assert result["candidate_point_verified"] is True and result["workspace_committed"] is None
+    assert result["reconciliation_required"] is True
+    assert all(entry["data_uploaded"] is None and entry["upload_uncertain"] for entry in result["entries"])
+    assert case.store.writes == before
+    # The original authenticated journal still establishes this attempt's B.
+    original = producer.reconcile_attempt(case.scope, case.selection, plan)
+    assert original["workspace_committed"] is True
+
+
+def test_cleanup_original_replaced_immediately_before_claim_unlink_is_preserved(case, monkeypatch):
+    plan = producer.preview_batch(case.scope, case.selection)
+    unlink = Path.unlink
+    retained = []
+    unrelated = {"key": "objects/sha256/" + "d" * 64, "sha256": "d" * 64, "size": 19}
+
+    def replace_before_unlink(path, *args, **kwargs):
+        if path.parent.name.startswith("cleanup-"):
+            original = path.parent.parent / path.name
+            document = json.loads(path.read_bytes())
+            document["objects"] = [unrelated]
+            original.write_text(json.dumps(document))
+            original.chmod(0o600)
+            retained.append((original, original.read_bytes()))
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", replace_before_unlink)
+    with _prepared(case, plan) as attempt:
+        result = _existing_save(attempt, case)
+    assert result["state"] == "agent-uncertain" and result["error"] == "native-save-pending-entry-replaced"
+    assert retained[0][0].read_bytes() == retained[0][1]
+    assert references._pending_objects(case.context)[0] == {unrelated["key"]}
+    assert len(references._load(case.context)[0]["entries"]) == 2
+
+
+def test_interrupted_cleanup_claim_remains_accounted_and_retries(case, monkeypatch):
+    plan = producer.preview_batch(case.scope, case.selection)
+    verify = producer._verify_pending_receipt
+
+    def interrupted(context, path, objects):
+        if path.parent.name.startswith("cleanup-"):
+            raise CLICancelled
+        return verify(context, path, objects)
+
+    with _prepared(case, plan) as attempt:
+        monkeypatch.setattr(producer, "_verify_pending_receipt", interrupted)
+        result = _existing_save(attempt, case)
+    assert result["state"] == "agent-uncertain"
+    assert len(references._pending_objects(case.context)[0]) == 2
+    monkeypatch.setattr(producer, "_verify_pending_receipt", verify)
+    with _prepared(case, plan) as attempt:
+        assert producer.publish_batch(case.context, attempt)["ok"]
+    assert references._pending_objects(case.context) == (set(), [])
+    assert list((case.context.instance / "agent-reference-receipts").iterdir()) == []
+
+
+def test_replacement_between_validation_and_claim_is_not_deleted(case, monkeypatch):
+    plan = producer.preview_batch(case.scope, case.selection)
+    verify = producer._verify_pending_receipt
+    replacement = {"key": "objects/sha256/" + "b" * 64, "sha256": "b" * 64, "size": 23}
+    changed = []
+
+    def replace_after_validation(context, path, objects):
+        info = verify(context, path, objects)
+        if path.parent.name == "agent-reference-receipts" and not changed:
+            document = json.loads(path.read_bytes())
+            document["objects"] = [replacement]
+            temporary = path.with_suffix(".replacement")
+            temporary.write_text(json.dumps(document))
+            temporary.chmod(0o600)
+            temporary.replace(path)
+            changed.append(document)
+        return info
+
+    monkeypatch.setattr(producer, "_verify_pending_receipt", replace_after_validation)
+    with _prepared(case, plan) as attempt:
+        result = _existing_save(attempt, case)
+    assert result["state"] == "agent-uncertain" and result["error"] == "native-save-pending-receipt-mismatch"
+    assert references._pending_objects(case.context)[0] == {replacement["key"]}
+    claimed = next((case.context.instance / "agent-reference-receipts").glob("cleanup-*/*.json"))
+    assert json.loads(claimed.read_bytes()) == changed[0]

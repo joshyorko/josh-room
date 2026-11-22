@@ -65,12 +65,12 @@
     "marker_finalized_through_adapter": true,
     "real_second_native_put_accepted_then_readback_failure": true,
     "immediate_first_count_confirmed_second_count_null": true,
-    "revoked_first_grant_committed_candidate_corroborated_read_only": true,
     "revoked_retry_mutating_s3_calls": 0,
     "inaccessible_ledger_all_counts_null_and_uncertain": true,
     "restored_same_grant_exact_retry_completed": true,
     "successful_retry_pending_receipts": 0,
-    "fault_wrappers_delegate_real_writes": true
+    "fault_wrappers_delegate_real_writes": true,
+    "revoked_first_grant_scoped_candidate_point_exists_read_only": true
   },
   "boundaries": {
     "tools": [
@@ -96,5 +96,70 @@
     "shared_public_image_preserved": "sha256:5a87197691c6f3614cfdce9f408149ff9ca20b08523324eaf71d2cf57d2213b2",
     "shared_public_image_bytes": 334313017,
     "unrelated_services_worktrees_caches_preserved": true
+  },
+  "qualification_status": "Historical first run retained below; review_corrections records the corrected source and fresh actual-provider requalification.",
+  "historical_limitation": "The earlier missing-ledger workspace_committed=true observation did not independently bind the point to this attempt and is superseded by unknown commitment, not false.",
+  "review_corrections": {
+    "base_commit": "574c0b0799ec0d6ba0d91d75ef159aaea7e1fd03",
+    "source_sha256": {
+      "src/josh_room/native_agent_save_producer.py": "0f6459e7e4046df68a77823ad589015aed5d4643e8533020ca61b9fb882dd2bf",
+      "src/josh_room/native_agent_reference.py": "9ba09a830579e57e3b1d51d7dfe0d6b8692c75b324cc5efe0b241e4dd78c71ea",
+      "tests/test_native_agent_save_producer.py": "0fb30f93929292a4c69854fd4772670941f00466652cf15398f4eea9161d2f84",
+      "tests/test_native_agent_save_producer_live.py": "544c1e8b9cc46e5b1ca54f5a0bab46984cbe6966e5a9b681af86e330dc7255a8",
+      "src/josh_room/native_agent_save.py": "031e2733a4cfe4f77ef5b748a40941e0f430b099ce9361ec19213c88219a06f4",
+      "src/josh_room/room_store_bridge.py": "03cfac8eec7c7b15ee855ca005e8b1e4df462e315531b4aa00c1a901f81ed9e6",
+      "src/josh_room/room_store_operations.py": "c9c82060ff86d07a49a860c7b93ec84f12560742ab24faefa83f9fa2ebcfb350"
+    },
+    "pending_cleanup": "atomic no-replace private claim; claimed inode/full scope/operation/object list verified; only owned claim removed; original replacement preserved with uncertainty; interrupted/unverified claims remain accounted",
+    "missing_ledger": {
+      "workspace_committed": null,
+      "candidate_point_verified": "true only after independent exact scoped-point verification; no attempt attribution",
+      "data_uploaded": null,
+      "upload_uncertain": true,
+      "workspace_result": null
+    },
+    "affected_python": {
+      "passed": 143,
+      "skipped": 4,
+      "seconds": 8.8
+    },
+    "regressions": [
+      "replacement at original immediately before claim unlink survives",
+      "replacement after validation before claim remains protected",
+      "interrupted claim accounted and exact retry cleans it",
+      "two distinct attempt IDs sharing reserved point ID do not establish attempt commitment without ledger"
+    ],
+    "actual_cli_live": {
+      "test": "tests/test_native_agent_save_producer_live.py::test_real_save_two_tool_history_and_exact_uncertain_retry",
+      "passed": 1,
+      "seconds": 86.61,
+      "fresh_minio_and_native_secret_service": true,
+      "missing_ledger_candidate_point_verified": true,
+      "missing_ledger_attempt_workspace_committed": null,
+      "missing_ledger_workspace_result": null,
+      "revoked_retry_mutating_s3_calls": 0,
+      "all_unrecoverable_counts_null_and_uncertain": true,
+      "same_grant_restored_exact_retry_success": true,
+      "successful_retry_pending_receipts": 0,
+      "native_process_calls": 0,
+      "model_calls": 0,
+      "existing_user_provider_auth_used": false,
+      "source_python_override": true,
+      "installed_vsix": false,
+      "immutable_rcc": false,
+      "global_save_availability": false
+    },
+    "ruff": "passed",
+    "diff_whitespace": "passed",
+    "cleanup": {
+      "owned_minio_stopped": true,
+      "owned_secret_service_container_removed": true,
+      "fresh_task_scratch_removed": true,
+      "fresh_task_scratch_removed_bytes": 147721136,
+      "shared_public_image_preserved": true,
+      "own_public_image_lease_released": true,
+      "unrelated_resources_preserved": true
+    },
+    "producer_cases_passed": 38
   }
 }
