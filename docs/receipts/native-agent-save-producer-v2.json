@@ -1,0 +1,100 @@
+{
+  "format": "josh-room.native-agent-save-producer-acceptance.v1",
+  "date": "2026-11-22",
+  "base_commit": "14a6a93ea246c4217a34085f67ad92a66d9b4767",
+  "source_state": "canonical source changes above base; parent owns final commit and mirror synchronization",
+  "source_sha256": {
+    "src/josh_room/native_agent_save_producer.py": "64509580ad92232a15136e475f6fb1806c7861895d4ab898ecd9a2654d1c8e2c",
+    "src/josh_room/native_agent_reference.py": "eb229747a686fd7e72ba75aa879acb819b72161ca135de886a1087b11f93d9e4",
+    "src/josh_room/native_agent_save.py": "27d9323ece47d3376493d595859f3a90ec59dd73ffad78844f681657955aedf2",
+    "src/josh_room/room_store_bridge.py": "03cfac8eec7c7b15ee855ca005e8b1e4df462e315531b4aa00c1a901f81ed9e6",
+    "src/josh_room/room_store_operations.py": "c9c82060ff86d07a49a860c7b93ec84f12560742ab24faefa83f9fa2ebcfb350",
+    "tests/test_native_agent_save_producer.py": "d8fc9b4747722e71459113729966be4ce8dad2d177369d891f137e356dda8432",
+    "tests/test_native_agent_save_producer_live.py": "335f25d8e327ca9a09a09ad8b9a4c3a0b7568b1ecf5b51fe164a6f32d56f6bda"
+  },
+  "plan_format": "josh-room.save-agent-plan.v2",
+  "environment": {
+    "platform": "Linux",
+    "controller": "source Python 3.12.14",
+    "extension_version_environment": "0.1.52",
+    "installed_vsix": false,
+    "immutable_rcc": false,
+    "minio_asset_sha256": "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f",
+    "restic_version": "0.19.1",
+    "restic_sha256": "20d4142678d0d95ec11a4759def1b73fd9190abc9ca19e4b62d067c0b387e639",
+    "secret_service_image": "sha256:5a87197691c6f3614cfdce9f408149ff9ca20b08523324eaf71d2cf57d2213b2",
+    "secret_service": "fresh network-none container; only task root mounted, no host home/socket",
+    "provider": "fresh real loopback MinIO with generated task credentials in isolated native Secret Service"
+  },
+  "checks": {
+    "producer_regressions": {
+      "passed": 34,
+      "seconds": 4.16
+    },
+    "affected_python": {
+      "passed": 134,
+      "skipped": 2,
+      "seconds": 8.5,
+      "files": [
+        "tests/test_native_agent_save_producer.py",
+        "tests/test_native_agent_reference.py",
+        "tests/test_native_agent_save_integration.py",
+        "tests/test_native_agent_save.py"
+      ]
+    },
+    "actual_cli_live": {
+      "test": "tests/test_native_agent_save_producer_live.py::test_real_save_two_tool_history_and_exact_uncertain_retry",
+      "passed": 1,
+      "seconds": 87.61
+    },
+    "default_no_fixture": {
+      "skipped": 1
+    },
+    "ruff": "passed for owned Python files",
+    "diff_whitespace": "passed"
+  },
+  "observed": {
+    "prepoint_explicit_grant_new_room_actual_id_equals_reserved": true,
+    "two_tool_noop_mutating_s3_calls": 0,
+    "separate_cli_noop_bucket_inventory_unchanged": true,
+    "a_b_a_distinct_codex_events": 3,
+    "a_b_a_phantom_workspace_points": 0,
+    "new_workspace_point_own_reserved_capture_ids": true,
+    "real_catalog_put_then_injected_lost_ack": true,
+    "reviewed_parent_removed_exact_candidate_retry": true,
+    "marker_finalized_through_adapter": true,
+    "real_second_native_put_accepted_then_readback_failure": true,
+    "immediate_first_count_confirmed_second_count_null": true,
+    "revoked_first_grant_committed_candidate_corroborated_read_only": true,
+    "revoked_retry_mutating_s3_calls": 0,
+    "inaccessible_ledger_all_counts_null_and_uncertain": true,
+    "restored_same_grant_exact_retry_completed": true,
+    "successful_retry_pending_receipts": 0,
+    "fault_wrappers_delegate_real_writes": true
+  },
+  "boundaries": {
+    "tools": [
+      "codex",
+      "claude"
+    ],
+    "mode": "history-only native files",
+    "native_process_calls": 0,
+    "model_calls": 0,
+    "existing_user_provider_auth_used": false,
+    "native_continuation_claimed": false,
+    "original_t3_restored": false,
+    "global_save_availability": false,
+    "release_hold": true,
+    "hosted_provider_acceptance": false,
+    "windows_r2_composition_qualified": false
+  },
+  "cleanup": {
+    "owned_minio_stopped": true,
+    "owned_secret_service_container_removed": true,
+    "task_scratch_removed": true,
+    "task_scratch_removed_bytes": 149596848,
+    "shared_public_image_preserved": "sha256:5a87197691c6f3614cfdce9f408149ff9ca20b08523324eaf71d2cf57d2213b2",
+    "shared_public_image_bytes": 334313017,
+    "unrelated_services_worktrees_caches_preserved": true
+  }
+}

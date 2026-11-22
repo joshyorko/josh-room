@@ -741,7 +741,7 @@ for (const receiptExit of [0, 130]) test(`managed Save retains typed partial acr
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const { vscode } = createVscodeMock(root);
   const artifact = "sha256:" + "b".repeat(64);
-  const plan = { format: "josh-room.save-agent-plan.v1", attempt_id: "1".repeat(64),
+  const plan = { format: "josh-room.save-agent-plan.v2", attempt_id: "1".repeat(64), workspace_candidate_id: "c".repeat(32),
     target_scope_sha256: "2".repeat(64), workspace_content_sha256: "3".repeat(64), capture_policy_sha256: "4".repeat(64),
     workspace_signature: "5".repeat(64), reviewed_point: null, digest: "6".repeat(64),
     entries: [{ tool: "codex", profile_ref: "7".repeat(64), content_sha256: "8".repeat(64), authority_sha256: "9".repeat(64), new_point_capture_id: "a".repeat(64), existing_point: null }] };
@@ -1674,7 +1674,7 @@ for (const cancelled of [false, true]) for (const retry of [false, true]) test(`
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-agent-partial-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const profile = { tool: "codex", profile_ref: "1".repeat(64), scope: "personal", admitted: true };
-  const agentPlan = { format: "josh-room.save-agent-plan.v1", attempt_id: "a".repeat(64),
+  const agentPlan = { format: "josh-room.save-agent-plan.v2", attempt_id: "a".repeat(64), workspace_candidate_id: "c".repeat(32),
     target_scope_sha256: "b".repeat(64), workspace_content_sha256: "c".repeat(64),
     capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256, workspace_signature: "b".repeat(64),
     reviewed_point: null, digest: "d".repeat(64), entries: [{tool: profile.tool, profile_ref: profile.profile_ref,

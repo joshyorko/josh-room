@@ -142,9 +142,11 @@ prior browser-qualified file. The new Linux and Windows controller CI archives
 were downloaded and their GitHub ZIP digests verified. Their artifact digests
 differ from the earlier c4b candidate despite equal dependency freezes; runtime
 qualification therefore uses the exact new candidate, without treating the old
-materialization as equivalent. The new packages include the lifetime correction,
-but actual installed workbench-close/data-path acceptance is still in progress.
-No published pin has changed.
+materialization as equivalent. The [installed Linux trial](receipts/v1-installed-linux-1ebb277.json)
+passed native workbench-close/pull verification, independent-session RCC failure
+isolation and eight executed data gates. Explicit session history was not run,
+and the installed wheel was not substituted for the VSIX controller data matrix.
+The exact frozen source remains `1ebb277`; no published pin has changed.
 
 #219 supplies explicit same-point immutable capture history. Its real MinIO and
 native-custody proof includes six historical payloads, zero-write no-op,
@@ -160,8 +162,16 @@ zero remaining pending receipts, nullable unknown upload counts and stricter
 native partial-result binding. Focused checks passed 60 adapter/producer cases,
 seven CLI boundary cases and 310 chooser/extension cases with two opt-in skips;
 unchanged real-Restic callback tests were not repeated. Independent recheck,
-new-head CI and real-provider adapter acceptance remain required. #220's
-Windows installed chain remains a separate active lane.
+new-head CI and real-provider adapter acceptance remain required. A subsequent
+recheck retained three grant-revocation/pending-receipt gaps. The next batch uses
+unreleased Save-plan v2 with a pre-reserved public workspace ID, grant-independent
+read-only commit corroboration, deterministic pending-receipt reservation and
+validated cleanup. Its real MinIO/native Secret Service CLI trial passed,
+including accepted/lost workspace CAS, A removal, exact B retry, unknown upload
+counts and first-grant revocation. Lost-CAS marker finalization uses a bounded
+no-clobber custody transaction with process-crash/race tests. These source-level
+results are not installed/RCC adapter acceptance; availability remains false.
+#220's Windows installed chain remains a separate active lane.
 
 ## Compatibility and rollback
 

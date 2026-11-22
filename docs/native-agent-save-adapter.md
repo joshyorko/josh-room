@@ -29,14 +29,20 @@ There may be one profile per tool and at most two tools. The request means
 capture current history; it does not select an implicit latest historical
 capture, copy authentication, or authorize a native turn.
 
-Preview returns a bounded `josh-room.save-agent-plan.v1` public envelope with
-the attempt ID, target/workspace/policy/authority/content digests, explicit
+Preview returns a bounded `josh-room.save-agent-plan.v2` public envelope with
+the attempt ID, a reserved 32-hex workspace candidate ID,
+target/workspace/policy/authority/content digests, explicit
 reviewed point, reserved new-point capture IDs, and exact existing-point
 created/reused alternatives. Create receives that **whole envelope** through
 `--agent-plan`, the original selection and the component approval token.
 The token includes a domain-separated hash of the full envelope only when
 agents are selected. No-agent token bytes and component keys remain unchanged.
 Normal JSON diagnostic redaction is unchanged.
+The unreleased Save plan v1 is rejected rather than migrated. Native history
+and sidecar v1 readers remain supported. Ordinary Save still chooses its usual
+UUID; only an explicit agent Save supplies the approved reserved workspace ID.
+The publisher rejects a reserved ID already present in the current Room
+catalog, preventing replacement of an existing immutable point.
 
 ## Save and exact retry
 
@@ -82,6 +88,24 @@ parent. A later removal of parent A cannot prevent independent corroboration
 of the already journaled committed candidate B. Only an attempt that still
 needs workspace Save resolves the reviewed parent before preparation. Retry
 does not substitute the catalog's current latest point.
+
+A lost workspace-CAS response may leave the local marker at A even after B is
+committed. With fresh native authority still admitted, the entered batch
+corroborates exact B, approved stat/policy and semantic content before finalizing
+that marker. The adapter claims and verifies the expected A marker, then
+promotes B with Linux atomic no-replace operations. A newer/foreign marker,
+symlink, changed content or revoked authority cannot be overwritten to proceed.
+Publication still requires the producer's strict exact-B marker check.
+
+Marker custody is a private, attempt-bound sibling directory named
+`.josh-room-marker-retry-<attempt_id>` outside the captured workspace. Its intent
+is fsynced before the old marker is claimed. A retry can discover and finish a
+crash before/after claim or after promotion. Normal completion removes only its
+validated control files; conflicting/uncertain custody is retained for
+reconciliation, never recursively deleted. Cross-filesystem or unavailable
+no-replace support refuses finalization. A read-only blocked receipt can report
+verified B with `marker_state:unfinalized`; revocation never repairs its marker
+or publishes history.
 
 Partial-result UI admission reuses the full Save binding validator, including
 the encryption domain, signature algorithm and freshly loaded capture policy.

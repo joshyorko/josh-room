@@ -22,9 +22,9 @@ Claude capture-current semantics are admitted. Profile references are opaque
 against the physical Dimension/current keyset.
 
 `preview_batch(scope, selection)` returns a bounded public
-`josh-room.save-agent-plan.v1` envelope with exactly:
+`josh-room.save-agent-plan.v2` envelope with exactly:
 
-- `attempt_id`, `target_scope_sha256`, `workspace_content_sha256`,
+- `attempt_id`, `workspace_candidate_id`, `target_scope_sha256`, `workspace_content_sha256`,
   `capture_policy_sha256`, `workspace_signature`, `digest`;
 - `reviewed_point`: null or `{logical_jat_id, binding_sha256, sidecar_sha256}`;
 - `entries`: `{tool, profile_ref, content_sha256, authority_sha256,
@@ -40,6 +40,9 @@ IDs are distinct from the existing-point alternatives, including component-only
 new descriptors with unchanged workspace content. No implicit latest selection
 or arbitrary revision rebase is permitted. Changed content, sidecar, physical
 scope, keyset or admission requires a fresh review.
+`workspace_candidate_id` reserves the lower-case 32-hex logical ID of any new
+workspace result before publication. The unreleased v1 Save-plan envelope is
+rejected; existing native history v1/v2 reads remain unchanged.
 
 ## Preparation and durable workspace callback
 
@@ -62,7 +65,8 @@ Before the workspace catalog CAS, the Save owner must call
 `attempt.before_workspace_publication(descriptor, object_ref,
 workspace_signature)` with the actual `LogicalJat` and uploaded ciphertext
 `ObjectRef`. It fsyncs the candidate logical ID, ciphertext identity/size and
-descriptor digest before returning. If it fails, the workspace CAS must not run.
+descriptor digest before returning. The logical ID must equal the reviewed
+`workspace_candidate_id`. If it fails, the workspace CAS must not run.
 It does not fabricate a selected snapshot or publish agent data.
 
 Record `attempt.workspace_outcome(phase, logical_jat_id=...)` with phase
@@ -94,8 +98,11 @@ back when agents remain prepared/unpublished or uncertain.
 `data_uploaded` is a nonnegative confirmed count or null when that tool's upload
 outcome is unknown; null must not be rendered or summed as zero. Other tools'
 confirmed counts remain intact. These are retained-data counts, not billing or
-wire-transfer claims. An interrupted retry verifies/reuses its exact pending
-receipt; successful publication clears it without forgetting earlier candidates.
+wire-transfer claims. The deterministic pending-receipt name is fsynced in the
+encrypted journal before exclusive receipt creation. An interrupted retry
+validates/reuses that exact receipt or recreates the missing reserved name.
+Successful publication validates its scope, operation and exact object list
+again before removal. Mismatched tracking remains protected and uncertain.
 
 Before any retry that might invoke workspace Save, call
 `reconcile_attempt(scope, selection, plan)`. It first locates/decrypts the durable
@@ -105,6 +112,11 @@ stale native data or admission must not hide an independently verified committed
 workspace or trigger a duplicate Save. A blocked receipt can retain
 `workspace_committed:true` and that exact ID without authorizing agent publication.
 An unresolvable/revoked selector returns blocked, never absent permission.
+If the journal cannot be located, a read-only check under current Room authority
+may corroborate only the reserved workspace candidate against the exact physical
+Dimension, domain/keyset, repository, policy and approved workspace facts. This
+reports the committed workspace without native admission or mutation. Every
+unrecoverable upload count is null/uncertain rather than zero.
 Once candidate B is independently corroborated, preparation and exact retry do
 not need the old reviewed point A to remain in the catalog. No newer point may
 replace B.
@@ -126,3 +138,32 @@ Producer tests use real age and kernel read barriers with synthetic native files
 storage and admission. They do not establish live provider, installed VSIX,
 immutable RCC, native Windows or model/account acceptance. Such evidence must be
 recorded separately. Release HOLD and all-false Save selectors remain unchanged.
+
+The opt-in `tests/test_native_agent_save_producer_live.py` reuses the disposable
+provider/native Secret Service fixture contract from
+[reference acceptance](native-agent-reference-acceptance.md#reproduce). Its
+template host admission policy must contain the synthetic `native-room` grant;
+each test creates a separate Room, workspace, profile and explicit grant. Run
+from the Linux source checkout with the pinned Restic tool on `PATH`,
+`JOSH_ROOM_TEST_REFERENCE_ROOT` naming only that task fixture, and a fresh private
+disk-backed pytest base:
+
+```sh
+.venv/bin/pytest -q tests/test_native_agent_save_producer_live.py \
+  --basetemp="$TASK_ROOT/pytest-save-producer"
+```
+
+The test calls the actual CLI and native custody backend. Fault wrappers perform
+the real MinIO write before injecting a lost catalog acknowledgment or failed
+native-object readback. They do not substitute catalog or keyring responses.
+It verifies two-tool no-op with zero mutating S3 calls, A-B-A events, exact
+reserved-candidate retry after reviewed-parent removal, revoked-first-grant
+read-only reporting with nullable counts, and successful retry with no pending
+receipt after the same task grant is restored. No native process/model call is
+made. Without explicit disposable-fixture opt-in it skips.
+
+The [v2 source-controller receipt](receipts/native-agent-save-producer-v2.json)
+records 34 producer regressions, 134 affected Python passes with two skips, and
+the actual disposable-provider CLI test passing in 87.61 seconds. Separate fresh
+CLI trials also exercised pre-point New Room capture and unchanged no-op bucket
+inventory. These checks do not qualify installed UI or an immutable RCC artifact.

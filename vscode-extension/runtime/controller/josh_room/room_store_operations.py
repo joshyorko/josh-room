@@ -605,6 +605,7 @@ class RoomStoreOperations:
         | None = None,
         prepare_components: Callable[[LogicalJat | None], None] | None = None,
         publication_hook: Any = None,
+        descriptor_id: str | None = None,
         active_runtime_root: Path | None = None,
         secure_private_file: Callable[[int, Path, int], None] | None = None,
         validate_private_directory: Callable[[Path], None] | None = None,
@@ -627,6 +628,9 @@ class RoomStoreOperations:
         self.resolve_components = resolve_components
         self.prepare_components = prepare_components
         self.publication_hook = publication_hook
+        if descriptor_id is not None and (not isinstance(descriptor_id, str) or re.fullmatch(r"[0-9a-f]{32}", descriptor_id) is None):
+            raise ValueError("reserved logical JAT ID is invalid")
+        self.descriptor_id = descriptor_id
         self.publication_candidate = {}
         self.active_runtime_root = active_runtime_root
         self.secure_private_file = secure_private_file
@@ -895,7 +899,7 @@ class RoomStoreOperations:
         body = {
             "format_version": 1,
             "payload_kind": "room-store-v1",
-            "logical_jat_id": uuid.uuid4().hex,
+            "logical_jat_id": self.descriptor_id if self.descriptor_id is not None else uuid.uuid4().hex,
             "dimension_id": self.descriptor_metadata["dimension_id"],
             "encryption_domain_id": self.descriptor_metadata["encryption_domain_id"],
             "room_id": self.descriptor_metadata["room_id"],

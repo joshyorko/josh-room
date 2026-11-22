@@ -30,7 +30,7 @@ from .native_workspace_content import fingerprint
 from .private_paths import verify_private_path
 
 SELECTION_FORMAT = "josh-room.save-agent-selection.v1"
-PLAN_FORMAT = "josh-room.save-agent-plan.v1"
+PLAN_FORMAT = "josh-room.save-agent-plan.v2"
 ATTEMPT_FORMAT = "josh-room.save-agent-attempt.v1"
 MAX_PLAN = 16 * 1024
 MAX_LEDGER = 512 * 1024
@@ -225,6 +225,7 @@ def _plan(scope, facts, members, reserved=None):
                         "new_point_capture_id": secrets.token_hex(32) if previous is None else previous["new_point_capture_id"],
                         "existing_point": outcome})
     result = {"format": PLAN_FORMAT, "attempt_id": secrets.token_hex(32) if reserved is None else reserved["attempt_id"],
+              "workspace_candidate_id": uuid.uuid4().hex if reserved is None else reserved["workspace_candidate_id"],
               **facts, "reviewed_point": reviewed, "entries": entries}
     result["digest"] = _digest(result)
     if len(references._canonical_json(result)) > MAX_PLAN:
@@ -240,12 +241,13 @@ def preview_batch(scope, selection):
 
 
 def _validate_plan(plan, selection):
-    fields = {"format", "attempt_id", "target_scope_sha256", "workspace_content_sha256", "capture_policy_sha256",
+    fields = {"format", "attempt_id", "workspace_candidate_id", "target_scope_sha256", "workspace_content_sha256", "capture_policy_sha256",
               "workspace_signature", "reviewed_point", "entries", "digest"}
     try:
         if (not isinstance(plan, dict) or set(plan) != fields or plan["format"] != PLAN_FORMAT
                 or len(references._canonical_json(plan)) > MAX_PLAN
-                or any(not references._is_digest(plan[name]) for name in fields - {"format", "reviewed_point", "entries"})
+                or any(not references._is_digest(plan[name]) for name in fields - {"format", "reviewed_point", "entries", "workspace_candidate_id"})
+                or not isinstance(plan["workspace_candidate_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", plan["workspace_candidate_id"])
                 or plan["digest"] != _digest({key: value for key, value in plan.items() if key != "digest"})
                 or not isinstance(plan["entries"], list) or len(plan["entries"]) != len(_selection(selection))):
             _fail("native-save-plan-invalid")
@@ -367,12 +369,18 @@ class PreparedBatch:
     def before_workspace_publication(self, descriptor, object_ref, workspace_signature):
         self.check()
         candidate = _candidate(self.scope, descriptor, object_ref, workspace_signature)
+        if candidate["logical_jat_id"] != self.plan["workspace_candidate_id"]:
+            _fail("native-save-candidate-not-reserved")
         if self.ledger["candidate"] is not None and self.ledger["candidate"] != candidate:
             _fail("native-save-candidate-changed")
         if self.ledger["phase"] not in {"prepared", "workspace-candidate"}:
             _fail("native-save-workspace-retry-required")
         self.ledger.update(candidate=candidate, logical_jat_id=candidate["logical_jat_id"], phase="workspace-candidate")
         self._persist()
+
+    def verify_workspace_result(self, exact_context):
+        """Freshly corroborate this attempt's result without waiving marker checks at publish."""
+        return self._exact(exact_context, require_marker=False)
 
     def workspace_outcome(self, phase, *, logical_jat_id=None):
         if phase not in {"committed", "uncertain", "rejected", "cancelled"}:
@@ -613,35 +621,55 @@ def _finish(attempt, context, outcomes, *, fence):
     expected = attempt.ledger["proposal"]
     if not _verify_outcomes(attempt, context, document, outcomes, expected=None if expected is None else expected["document"]):
         _fail("native-save-published-history-unavailable")
+    objects = _created_objects(attempt, outcomes)
+    pending = attempt.ledger["pending_receipt"]
+    path = None
+    if pending is not None:
+        if pending != _pending_name(attempt, context, objects):
+            _fail("native-save-pending-receipt-mismatch")
+        path = context.instance / "agent-reference-receipts" / pending
+        if path.exists():
+            _verify_pending_receipt(context, path, objects)
     result = attempt.receipt("complete", context=context)
     attempt.ledger.update(phase="complete", receipt=result)
     attempt._persist()
-    pending = attempt.ledger["pending_receipt"]
-    if pending is not None:
-        path = context.instance / "agent-reference-receipts" / pending
-        if path.exists():
-            native._file(path, references.MAX_CONTROL)
-            path.unlink()
-            native._fsync_directory(path.parent)
+    if path is not None and path.exists():
+        _verify_pending_receipt(context, path, objects)
+        path.unlink()
+        native._fsync_directory(path.parent)
     return result
+
+
+def _created_objects(attempt, outcomes):
+    return [attempt.ledger["payloads"][member["item"]["tool"]]
+            for member, outcome in zip(attempt.members, outcomes, strict=True) if outcome["outcome"] == "created"]
+
+
+def _pending_name(attempt, context, objects):
+    return _digest(["josh-room.save-agent-pending.v1", attempt.plan["attempt_id"],
+                    references._target(context), objects])[:32] + ".json"
+
+
+def _verify_pending_receipt(context, path, objects):
+    verify_private_path(path.parent, directory=True)
+    document = native._json(native._read(path, references.MAX_CONTROL))
+    expected = {"format": "josh-room.agent-reference-pending.v1", "id": path.name[:-5],
+                "scope_sha256": references._scope_digest(context), "operation": "capture", "objects": objects}
+    if document != expected:
+        _fail("native-save-pending-receipt-mismatch")
 
 
 def _pending_for_attempt(attempt, context, objects):
     previous = attempt.ledger["pending_receipt"]
-    if previous is not None:
-        directory = context.instance / "agent-reference-receipts"
-        path = directory / previous
-        if path.exists():
-            verify_private_path(directory, directory=True)
-            document = native._json(native._read(path, references.MAX_CONTROL))
-            expected = {"format": "josh-room.agent-reference-pending.v1", "id": previous[:-5],
-                        "scope_sha256": references._scope_digest(context), "operation": "capture", "objects": objects}
-            if document != expected:
-                _fail("native-save-pending-receipt-mismatch")
-            return path
-    # A missing receipt is re-established from the encrypted durable candidate
-    # before another upload. An existing mismatched receipt is never discarded.
-    return references._pending(context, objects, "capture")
+    if previous != _pending_name(attempt, context, objects):
+        _fail("native-save-pending-receipt-mismatch")
+    path = context.instance / "agent-reference-receipts" / previous
+    if path.exists():
+        _verify_pending_receipt(context, path, objects)
+        return path
+    # The deterministic name was already fsynced in the encrypted journal.
+    # Exclusive creation never overwrites unrelated or mismatched tracking.
+    return references._pending(context, objects, "capture", receipt_id=previous[:-5])
 
 
 def publish_batch(exact_context, attempt):
@@ -671,11 +699,13 @@ def publish_batch(exact_context, attempt):
         if proposal is not None and proposal != {"document": updated, "base_sha256": _digest([document, etag])}:
             _fail("native-save-sidecar-changed")
         attempt.ledger["proposal"] = {"document": updated, "base_sha256": _digest([document, etag])}
-        objects = [attempt.ledger["payloads"][member["item"]["tool"]] for member, outcome in zip(attempt.members, outcomes, strict=True)
-                   if outcome["outcome"] == "created"]
-        pending = _pending_for_attempt(attempt, context, objects)
-        attempt.ledger.update(phase="uploading", pending_receipt=pending.name)
+        objects = _created_objects(attempt, outcomes)
+        reserved_receipt = _pending_name(attempt, context, objects)
+        if attempt.ledger["pending_receipt"] not in {None, reserved_receipt}:
+            _fail("native-save-pending-receipt-mismatch")
+        attempt.ledger.update(phase="uploading", pending_receipt=reserved_receipt)
         attempt._persist()
+        _pending_for_attempt(attempt, context, objects)
         for member, outcome in zip(attempt.members, outcomes, strict=True):
             if outcome["outcome"] == "reused":
                 continue
@@ -705,7 +735,7 @@ def publish_batch(exact_context, attempt):
         attempt._persist()
         return _finish(attempt, context, outcomes, fence=True)
     except _FAILURES as error:
-        uncertain = attempt.ledger["phase"] in {"uploading", "publishing", "agent-published"}
+        uncertain = attempt.ledger["phase"] in {"uploading", "publishing", "agent-published", "complete"}
         code = str(error) if isinstance(error, native.NativeAgentError) else "native-save-operation-failed"
         return attempt.receipt("agent-uncertain" if uncertain else "blocked", error=code, context=context)
 
@@ -758,6 +788,24 @@ def _metadata_attempt(scope, selection, plan):
     return root, _load_ledger(scope, root, plan)
 
 
+def _reserved_workspace_context(scope, plan):
+    """Read-only Room-authority proof when native grant/ledger access is gone."""
+    facts = _scope_facts(scope)
+    if any(plan[name] != value for name, value in facts.items()):
+        _fail("native-save-plan-stale")
+    context = references._fresh(scope.context, scope.context.project_id, plan["workspace_candidate_id"])
+    target = references._target(context)
+    expected = {"logical_jat_id": plan["workspace_candidate_id"], "room_id": scope.context.project_id,
+                "dimension_id": scope.context.dimension.dimension_id, "physical_binding": scope.context.physical_binding,
+                "encryption_domain_id": scope.context.material.encryption_domain_id,
+                "key_generation": scope.context.material.keyset.key_generation,
+                "repository_id": scope.context.repository_info.repository_id,
+                "capture_policy_sha256": plan["capture_policy_sha256"], "workspace_signature": plan["workspace_signature"]}
+    if any(target[name] != value for name, value in expected.items()):
+        _fail("native-save-result-scope-mismatch")
+    return context
+
+
 def reconcile_attempt(scope, selection, plan):
     """Corroborate a durable exact candidate before re-reading native bytes.
 
@@ -776,22 +824,34 @@ def reconcile_attempt(scope, selection, plan):
                 context = metadata._exact(scope.context, require_marker=False, check_native=False)
             except _FAILURES:
                 context = None
+        elif ledger is None:
+            try:
+                context = _reserved_workspace_context(scope, plan)
+            except _FAILURES:
+                context = None
+            if context is not None:
+                _fail("native-save-attempt-unavailable")
         return _reconcile_active(scope, selection, plan)
     except _FAILURES as error:
         code = str(error) if isinstance(error, native.NativeAgentError) else "native-save-reconciliation-failed"
-        logical_id = None if ledger is None else ledger["logical_jat_id"]
+        if context is None and ledger is None:
+            try:
+                context = _reserved_workspace_context(scope, plan)
+            except _FAILURES:
+                context = None
+        logical_id = plan["workspace_candidate_id"] if ledger is None else ledger["logical_jat_id"]
         entries = []
         for item in plan["entries"]:
             existing = item["existing_point"]
-            capture_id = (item["new_point_capture_id"] if ledger is not None and ledger["candidate"] is not None
+            capture_id = (item["new_point_capture_id"] if ledger is None or ledger["candidate"] is not None
                           else None if existing is None else existing["capture_id"])
             entries.append({"tool": item["tool"], "profile_ref": item["profile_ref"], "capture_id": capture_id,
                 "content_sha256": item["content_sha256"], "state": "prepared-unpublished",
-                "data_uploaded": (None if ledger is not None and item["tool"] in ledger["upload_uncertain"]
-                                  else 0 if ledger is None else ledger["uploaded"].get(item["tool"], 0)),
-                "upload_uncertain": ledger is not None and item["tool"] in ledger["upload_uncertain"]})
+                "data_uploaded": (None if ledger is None or item["tool"] in ledger["upload_uncertain"]
+                                  else ledger["uploaded"].get(item["tool"], 0)),
+                "upload_uncertain": ledger is None or item["tool"] in ledger["upload_uncertain"]})
         return {"ok": False, "state": "blocked", "attempt_id": plan["attempt_id"], "logical_jat_id": logical_id,
                 "workspace_committed": True if context is not None else None, "history_only": True,
                 "native_resume_verified": False, "original_t3_identity_restored": False,
-                "reconciliation_required": ledger is not None and ledger["phase"] not in {"preparing", "prepared", "complete"},
+                "reconciliation_required": ledger is None or ledger["phase"] not in {"preparing", "prepared", "complete"},
                 "error": code, "entries": entries}

@@ -1526,6 +1526,8 @@ def _build_operations(
             raise _CatalogPublicationError(False)
         if state["catalog"] is None or state["etag"] != expected_etag:
             raise _CatalogPublicationError(False)
+        if agent_plan is not None and descriptor.to_dict()["logical_jat_id"] in state["catalog"].body["projects"].get(project_id, {}).get("snapshots", {}):
+            raise _CatalogPublicationError(False)
         ciphertext_path = runtime_dir / "logical-jat.age"
         descriptor_object_key = None
         try:
@@ -1773,6 +1775,7 @@ def _build_operations(
         resolve_components=resolve_components,
         prepare_components=prepare_components,
         **({"publication_hook": publication_hook} if publication_hook is not None else {}),
+        **({"descriptor_id": agent_plan["workspace_candidate_id"]} if agent_plan is not None else {}),
         active_runtime_root=active_runtime_root,
         secure_private_file=secure_private_file,
         validate_private_directory=validate_private_directory,

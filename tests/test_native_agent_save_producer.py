@@ -67,7 +67,8 @@ def _existing_save(attempt, case):
     return producer.publish_batch(case.context, attempt)
 
 
-def _new_workspace(case, attempt, name="history-new", *, marker=True):
+def _new_workspace(case, attempt, name=None, *, marker=True):
+    name = name or attempt.plan["workspace_candidate_id"]
     item = descriptor("demo", name, case.scan)
     cipher = references._encrypt(item.to_json().encode(), case.recipients)
     digest = hashlib.sha256(cipher).hexdigest()
@@ -165,7 +166,7 @@ def test_new_point_always_gets_its_own_event_even_with_identical_native_bytes(ca
     assert all(entry["existing_point"]["outcome"] == "reused" for entry in plan["entries"])
     with _prepared(case, plan) as attempt:
         context = _new_workspace(case, attempt)
-        attempt.workspace_outcome("committed", logical_jat_id="history-new")
+        attempt.workspace_outcome("committed", logical_jat_id=plan["workspace_candidate_id"])
         result = producer.publish_batch(context, attempt)
     assert result["ok"] and all(entry["state"] == "created" for entry in result["entries"])
     assert {entry["capture_id"] for entry in first["entries"]}.isdisjoint(entry["capture_id"] for entry in result["entries"])
@@ -192,7 +193,7 @@ def test_changed_review_requires_new_preview_before_any_workspace_write(case, ch
 def test_changed_native_after_workspace_commit_is_partial_without_agent_publish(case):
     with _prepared(case) as attempt:
         context = _new_workspace(case, attempt)
-        attempt.workspace_outcome("committed", logical_jat_id="history-new")
+        attempt.workspace_outcome("committed", logical_jat_id=attempt.plan["workspace_candidate_id"])
         # Replacing, rather than write-opening, deliberately exercises the
         # inventory fence alongside the kernel lease held on the old inode.
         replacement = case.native_file.with_suffix(".new")
@@ -234,15 +235,15 @@ def test_unknown_workspace_cas_uses_only_journaled_candidate(case):
     plan = producer.preview_batch(scope, case.selection)
     with producer.prepare_batch(scope, case.selection, plan) as attempt:
         actual = _new_workspace(case, attempt, marker=False)
-        attempt.workspace_outcome("uncertain", logical_jat_id="history-new")
+        attempt.workspace_outcome("uncertain", logical_jat_id=plan["workspace_candidate_id"])
     result = producer.reconcile_attempt(scope, case.selection, plan)
     assert result["state"] == "workspace-committed" and result["workspace_committed"] is True
-    assert result["logical_jat_id"] == "history-new" and not case.store.controls
+    assert result["logical_jat_id"] == plan["workspace_candidate_id"] and not case.store.controls
     # Save owner repairs only the verified exact marker; there is no second
     # workspace Save or newest-point substitution.
     mark(case, actual)
     with producer.prepare_batch(scope, case.selection, plan) as attempt:
-        attempt.workspace_outcome("committed", logical_jat_id="history-new")
+        attempt.workspace_outcome("committed", logical_jat_id=plan["workspace_candidate_id"])
         final = producer.publish_batch(actual, attempt)
     assert final["ok"] and len(references._load(actual)[0]["entries"]) == 2
 
@@ -251,15 +252,15 @@ def test_absent_unknown_workspace_candidate_does_not_authorize_another_save(case
     scope = dataclasses.replace(case.scope, reviewed_context=None)
     plan = producer.preview_batch(scope, case.selection)
     with producer.prepare_batch(scope, case.selection, plan) as attempt:
-        item = descriptor("demo", "not-committed", case.scan)
+        item = descriptor("demo", plan["workspace_candidate_id"], case.scan)
         cipher = references._encrypt(item.to_json().encode(), case.recipients)
         digest = hashlib.sha256(cipher).hexdigest()
         object_ref = case.store.put_bytes("objects/sha256/" + digest, cipher)
         attempt.before_workspace_publication(item, object_ref, case.scan.signature)
-        attempt.workspace_outcome("uncertain", logical_jat_id="not-committed")
+        attempt.workspace_outcome("uncertain", logical_jat_id=plan["workspace_candidate_id"])
     result = producer.reconcile_attempt(scope, case.selection, plan)
     assert result["state"] == "workspace-uncertain"
-    assert result["workspace_committed"] is None and result["logical_jat_id"] == "not-committed"
+    assert result["workspace_committed"] is None and result["logical_jat_id"] == plan["workspace_candidate_id"]
     assert not case.store.controls
 
 
@@ -296,7 +297,7 @@ def test_stale_retry_retains_independently_corroborated_exact_workspace(case, ch
     plan = producer.preview_batch(scope, case.selection)
     with producer.prepare_batch(scope, case.selection, plan) as attempt:
         _new_workspace(case, attempt)
-        attempt.workspace_outcome("uncertain", logical_jat_id="history-new")
+        attempt.workspace_outcome("uncertain", logical_jat_id=plan["workspace_candidate_id"])
     if change == "native":
         _append(case)
     elif change == "workspace":
@@ -306,7 +307,7 @@ def test_stale_retry_retains_independently_corroborated_exact_workspace(case, ch
     before = case.store.writes.copy()
     result = producer.reconcile_attempt(scope, case.selection, plan)
     assert result["state"] == "blocked" and result["workspace_committed"] is True
-    assert result["logical_jat_id"] == "history-new"
+    assert result["logical_jat_id"] == plan["workspace_candidate_id"]
     assert case.store.writes == before and not case.store.controls
 
 
@@ -460,21 +461,127 @@ def test_recorded_committed_b_retries_without_removed_reviewed_a(case):
     plan = producer.preview_batch(case.scope, case.selection)
     with _prepared(case, plan) as attempt:
         actual = _new_workspace(case, attempt)
-        attempt.workspace_outcome("uncertain", logical_jat_id="history-new")
+        attempt.workspace_outcome("uncertain", logical_jat_id=plan["workspace_candidate_id"])
     body = copy_catalog = json.loads(json.dumps(actual.catalog.body))
     del body["projects"]["demo"]["snapshots"]["history-first"]
     catalog = Catalog.from_body(copy_catalog)
     actual = dataclasses.replace(actual, catalog=catalog)
     case.contexts.pop(("demo", "history-first"))
-    case.contexts[("demo", "history-new")] = actual
+    case.contexts[("demo", plan["workspace_candidate_id"])] = actual
     case.store.conditional_catalog_put(references._encrypt(references._canonical_json(catalog.body), case.recipients),
                                        case.store.catalog_etag)
     metadata_scope = dataclasses.replace(case.scope, reviewed_context=None)
     reconciled = producer.reconcile_attempt(metadata_scope, case.selection, plan)
-    assert reconciled["workspace_committed"] is True and reconciled["logical_jat_id"] == "history-new"
+    assert reconciled["workspace_committed"] is True and reconciled["logical_jat_id"] == plan["workspace_candidate_id"]
     with producer.prepare_batch(metadata_scope, case.selection, plan) as attempt:
-        attempt.workspace_outcome("committed", logical_jat_id="history-new")
+        attempt.workspace_outcome("committed", logical_jat_id=plan["workspace_candidate_id"])
         final = producer.publish_batch(actual, attempt)
-    assert final["ok"] and final["logical_jat_id"] == "history-new"
+    assert final["ok"] and final["logical_jat_id"] == plan["workspace_candidate_id"]
     assert len(references._load(actual)[0]["entries"]) == 2
     assert ("demo", "history-first") not in case.contexts
+
+
+def test_unreleased_v1_plan_and_unreserved_candidate_are_rejected(case):
+    plan = producer.preview_batch(case.scope, case.selection)
+    old = dict(plan, format="josh-room.save-agent-plan.v1")
+    with pytest.raises(native.NativeAgentError, match="native-save-plan-invalid"), _prepared(case, old):
+        pytest.fail("v1 Save plan admitted")
+    with _prepared(case, plan) as attempt:
+        with pytest.raises(native.NativeAgentError, match="native-save-candidate-not-reserved"):
+            _new_workspace(case, attempt, name="f" * 32)
+        assert attempt.ledger["candidate"] is None
+        assert ("demo", "f" * 32) not in case.contexts
+
+
+@pytest.mark.parametrize("accepted_upload", [False, True])
+def test_revoked_first_grant_retains_readonly_exact_b_with_unknown_counts(case, monkeypatch, accepted_upload):
+    plan = producer.preview_batch(case.scope, case.selection)
+    get = case.store.get_bytes
+    with _prepared(case, plan) as attempt:
+        actual = _new_workspace(case, attempt)
+        attempt.workspace_outcome("committed", logical_jat_id=plan["workspace_candidate_id"])
+        if accepted_upload:
+            keys = {item["key"] for item in attempt.ledger["payloads"].values()}
+            readbacks = []
+
+            def fail_second(key, **kwargs):
+                if key in keys:
+                    readbacks.append(key)
+                    if len(readbacks) == 2:
+                        assert key in case.store.objects
+                        raise OSError("synthetic accepted second upload readback failure")
+                return get(key, **kwargs)
+
+            monkeypatch.setattr(case.store, "get_bytes", fail_second)
+            immediate = producer.publish_batch(actual, attempt)
+            assert not immediate["ok"]
+            assert immediate["entries"][0]["data_uploaded"] > 0
+            assert immediate["entries"][1]["data_uploaded"] is None
+    monkeypatch.setattr(case.store, "get_bytes", get)
+    body = json.loads(json.dumps(actual.catalog.body))
+    del body["projects"]["demo"]["snapshots"]["history-first"]
+    actual = dataclasses.replace(actual, catalog=Catalog.from_body(body))
+    case.contexts.pop(("demo", "history-first"))
+    case.contexts[("demo", plan["workspace_candidate_id"])] = actual
+    case.store.conditional_catalog_put(references._encrypt(references._canonical_json(body), case.recipients),
+                                       case.store.catalog_etag)
+
+    def revoked(**kwargs):
+        raise native.NativeAgentError("native-profile-selector-stale-or-unavailable")
+
+    monkeypatch.setattr(producer.discovery, "resolve_profile", revoked)
+    before = case.store.writes.copy()
+    result = producer.reconcile_attempt(dataclasses.replace(case.scope, reviewed_context=None), case.selection, plan)
+    assert not result["ok"] and result["state"] == "blocked"
+    assert result["workspace_committed"] is True and result["logical_jat_id"] == plan["workspace_candidate_id"]
+    assert result["reconciliation_required"] is True
+    assert all(item["data_uploaded"] is None and item["upload_uncertain"] for item in result["entries"])
+    assert case.store.writes == before and not case.store.controls
+
+
+@pytest.mark.parametrize("receipt_survives", [False, True])
+def test_crash_after_pending_create_is_journaled_and_retry_cleans_exact_receipt(case, monkeypatch, receipt_survives):
+    plan = producer.preview_batch(case.scope, case.selection)
+    pending = references._pending
+    created = []
+
+    def interrupted(context, objects, operation, **kwargs):
+        path = pending(context, objects, operation, **kwargs)
+        created.append(path)
+        raise CLICancelled
+
+    with _prepared(case, plan) as attempt:
+        monkeypatch.setattr(references, "_pending", interrupted)
+        result = _existing_save(attempt, case)
+        assert not result["ok"] and not case.store.writes
+        ledger = native._json(native._decrypt_to_memory(attempt.root / "attempt.age", case.identities[:1], producer.MAX_LEDGER))
+        assert ledger["pending_receipt"] == created[0].name
+    if not receipt_survives:
+        created[0].unlink()
+    monkeypatch.setattr(references, "_pending", pending)
+    with _prepared(case, plan) as attempt:
+        result = producer.publish_batch(case.context, attempt)
+    assert result["ok"] and references._pending_objects(case.context) == (set(), [])
+    assert list(created[0].parent.iterdir()) == []
+
+
+def test_finish_preserves_pending_receipt_changed_after_publication(case, monkeypatch):
+    plan = producer.preview_batch(case.scope, case.selection)
+    fence = references._fence_publication
+    retained = []
+
+    def changed(context, guard):
+        fence(context, guard)
+        path = next((context.instance / "agent-reference-receipts").glob("*.json"))
+        body = json.loads(path.read_bytes())
+        body["scope_sha256"] = "f" * 64
+        path.write_text(json.dumps(body))
+        retained.append((path, path.read_bytes()))
+
+    monkeypatch.setattr(references, "_fence_publication", changed)
+    with _prepared(case, plan) as attempt:
+        result = _existing_save(attempt, case)
+    assert not result["ok"] and result["state"] == "agent-uncertain"
+    assert result["error"] == "native-save-pending-receipt-mismatch"
+    assert retained[0][0].read_bytes() == retained[0][1]
+    assert len(references._load(case.context)[0]["entries"]) == 2

@@ -4,6 +4,7 @@ import copy
 import json
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -35,6 +36,7 @@ def plan(tools=("claude", "codex")):
     return {
         "format": save.PLAN_FORMAT,
         "attempt_id": "a" * 64,
+        "workspace_candidate_id": "1" * 32,
         "target_scope_sha256": "b" * 64,
         "workspace_content_sha256": "c" * 64,
         "capture_policy_sha256": "d" * 64,
@@ -104,7 +106,15 @@ def test_full_reviewed_plan_survives_json_and_binds_every_reserved_identity():
     import hashlib
 
     old_bytes = json.dumps(
-        [components(), "synthetic", "room", "/synthetic/workspace", "a" * 64, [], None],
+        [
+            components(),
+            "synthetic",
+            "room",
+            str(Path("/synthetic/workspace").resolve()),
+            "a" * 64,
+            [],
+            None,
+        ],
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -117,6 +127,186 @@ def test_full_reviewed_plan_survives_json_and_binds_every_reserved_identity():
         components(), **options, agent_plan=changed
     )
     assert save.reviewed_plan(json.dumps(reviewed), selection()) == reviewed
+
+
+@pytest.mark.parametrize("candidate", [None, "A" * 32, "a" * 64, "../unsafe", 7])
+def test_v2_reserved_workspace_candidate_is_closed_and_old_unqualified_plan_refuses(
+    candidate,
+):
+    value = plan()
+    value["workspace_candidate_id"] = candidate
+    with pytest.raises(ValueError):
+        save.reviewed_plan(value)
+    value = plan()
+    value["format"] = "josh-room.save-agent-plan.v1"
+    del value["workspace_candidate_id"]
+    with pytest.raises(ValueError):
+        save.reviewed_plan(value)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux atomic marker custody")
+@pytest.mark.parametrize("phase", ["before-claim", "after-claim", "after-promote"])
+def test_marker_custody_resumes_actual_process_crash_without_losing_baseline(
+    tmp_path, phase
+):
+    import multiprocessing
+    import os
+
+    from josh_room.workspace_state import context_status, write_stat_workspace_marker
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_stat_workspace_marker(
+        workspace,
+        dimension_id="synthetic",
+        encryption_domain_id="domain",
+        project_id="room",
+        display_name="Synthetic",
+        snapshot_id="old-point",
+        workspace_signature="e" * 64,
+        signature_algorithm="josh-room-stat-v1",
+        capture_policy_sha256="d" * 64,
+    )
+    value = plan()
+    value["reviewed_point"] = {
+        "logical_jat_id": "old-point",
+        "binding_sha256": "a" * 64,
+        "sidecar_sha256": "b" * 64,
+    }
+    previous = context_status(workspace)
+    marker = json.loads((workspace / ".josh-room.json").read_bytes())
+    marker["snapshot_id"] = value["workspace_candidate_id"]
+
+    def crash():
+        move = save._marker_move
+
+        def crashing_move(source_fd, source, destination_fd, destination):
+            if destination == "old-marker" and phase == "before-claim":
+                os._exit(71)
+            move(source_fd, source, destination_fd, destination)
+            if destination == "old-marker" and phase == "after-claim":
+                os._exit(72)
+            if source == "new-marker" and phase == "after-promote":
+                os._exit(73)
+
+        save._marker_move = crashing_move
+        save._commit_retry_marker(workspace, value, marker, previous, lambda: None)
+
+    child = multiprocessing.get_context("fork").Process(target=crash)
+    child.start()
+    child.join(timeout=5)
+    assert (
+        child.exitcode
+        == {"before-claim": 71, "after-claim": 72, "after-promote": 73}[phase]
+    )
+    custody = tmp_path / (".josh-room-marker-retry-" + value["attempt_id"])
+    assert (custody / "intent.json").is_file()
+    save._commit_retry_marker(
+        workspace, value, marker, context_status(workspace), lambda: None
+    )
+    assert context_status(workspace)["snapshot_id"] == value["workspace_candidate_id"]
+    assert not custody.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux atomic marker custody")
+@pytest.mark.parametrize("phase", ["before-claim", "before-promote"])
+def test_marker_retry_never_overwrites_foreign_c_in_claim_or_promotion_race(
+    tmp_path, monkeypatch, phase
+):
+    from josh_room.workspace_state import context_status, write_stat_workspace_marker
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    arguments = {
+        "dimension_id": "synthetic",
+        "encryption_domain_id": "domain",
+        "project_id": "room",
+        "display_name": "Synthetic",
+        "workspace_signature": "e" * 64,
+        "signature_algorithm": "josh-room-stat-v1",
+        "capture_policy_sha256": "d" * 64,
+    }
+    write_stat_workspace_marker(workspace, snapshot_id="old-point", **arguments)
+    value = plan()
+    value["reviewed_point"] = {
+        "logical_jat_id": "old-point",
+        "binding_sha256": "a" * 64,
+        "sidecar_sha256": "b" * 64,
+    }
+    previous = context_status(workspace)
+    marker = json.loads((workspace / ".josh-room.json").read_bytes())
+    marker["snapshot_id"] = value["workspace_candidate_id"]
+    move = save._marker_move
+    foreign = []
+
+    def competing_move(source_fd, source, destination_fd, destination):
+        if not foreign and (
+            (phase == "before-claim" and destination == "old-marker")
+            or (phase == "before-promote" and source == "new-marker")
+        ):
+            write_stat_workspace_marker(workspace, snapshot_id="foreign-C", **arguments)
+            foreign.append((workspace / ".josh-room.json").read_bytes())
+        move(source_fd, source, destination_fd, destination)
+
+    monkeypatch.setattr(save, "_marker_move", competing_move)
+    with pytest.raises((OSError, ValueError)):
+        save._commit_retry_marker(workspace, value, marker, previous, lambda: None)
+    assert (workspace / ".josh-room.json").read_bytes() == foreign[0]
+    assert context_status(workspace)["snapshot_id"] == "foreign-C"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux atomic marker custody")
+def test_marker_completion_never_deletes_replaced_custody_control(
+    tmp_path, monkeypatch
+):
+    import os
+
+    from josh_room.workspace_state import context_status, write_stat_workspace_marker
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    write_stat_workspace_marker(
+        workspace,
+        dimension_id="synthetic",
+        encryption_domain_id="domain",
+        project_id="room",
+        display_name="Synthetic",
+        snapshot_id="old-point",
+        workspace_signature="e" * 64,
+        signature_algorithm="josh-room-stat-v1",
+        capture_policy_sha256="d" * 64,
+    )
+    value = plan()
+    value["reviewed_point"] = {
+        "logical_jat_id": "old-point",
+        "binding_sha256": "a" * 64,
+        "sidecar_sha256": "b" * 64,
+    }
+    marker = json.loads((workspace / ".josh-room.json").read_bytes())
+    marker["snapshot_id"] = value["workspace_candidate_id"]
+    previous = context_status(workspace)
+    move = save._marker_move
+    foreign = b"synthetic unrelated retained control"
+
+    def replace_control(source_fd, source, destination_fd, destination):
+        move(source_fd, source, destination_fd, destination)
+        if source == "new-marker":
+            os.unlink("intent.json", dir_fd=source_fd)
+            fd = os.open(
+                "intent.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+                dir_fd=source_fd,
+            )
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(foreign)
+
+    monkeypatch.setattr(save, "_marker_move", replace_control)
+    with pytest.raises(ValueError, match="cleanup is uncertain"):
+        save._commit_retry_marker(workspace, value, marker, previous, lambda: None)
+    custody = tmp_path / (".josh-room-marker-retry-" + value["attempt_id"])
+    assert (custody / "intent.json").read_bytes() == foreign
+    assert context_status(workspace)["snapshot_id"] == value["workspace_candidate_id"]
 
 
 @pytest.mark.parametrize(
@@ -256,13 +446,16 @@ def pipeline(monkeypatch):
         "checks": 0,
         "exit_cancel": False,
     }
-    scope = SimpleNamespace(context=object())
+    scope = SimpleNamespace(context=object(), workspace=Path("/synthetic/workspace"))
 
     @contextmanager
     def opened_scope(*_args, **_kwargs):
         yield scope
 
     monkeypatch.setattr(save, "open_scope", opened_scope)
+    monkeypatch.setattr(
+        save, "_finalize_retry_marker", lambda _scope, exact, _attempt, _plan: exact
+    )
 
     class Attempt:
         def check(self):
@@ -498,6 +691,27 @@ def test_publication_hook_records_exact_descriptor_before_cas_and_retains_uncert
             "catalog-cas",
             ("committed", result.descriptor.to_dict()["logical_jat_id"]),
         ]
+
+
+@pytest.mark.parametrize("reserved", [None, "1" * 32])
+def test_workspace_descriptor_reservation_preserves_ordinary_uuid_default(
+    tmp_path, monkeypatch, reserved
+):
+    from test_room_store_operations import _Catalog, _operations, _Store
+
+    from josh_room import room_store_operations as operations
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("hello")
+    monkeypatch.setattr(operations.uuid, "uuid4", lambda: SimpleNamespace(hex="7" * 32))
+    operation = _operations(tmp_path, workspace, _Store(), _Catalog())
+    assert operation.descriptor_id is None
+    operation.descriptor_id = reserved
+    result = operation.save()
+    assert result.descriptor.to_dict()["logical_jat_id"] == (
+        reserved if reserved is not None else "7" * 32
+    )
 
 
 @pytest.mark.parametrize("failure", [1, 2])

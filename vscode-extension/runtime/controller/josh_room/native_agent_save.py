@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import base64
+import ctypes
 import dataclasses
+import errno
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 from contextlib import contextmanager
 from pathlib import Path
 
 SELECTION_FORMAT = "josh-room.save-agent-selection.v1"
-PLAN_FORMAT = "josh-room.save-agent-plan.v1"
+PLAN_FORMAT = "josh-room.save-agent-plan.v2"
 MAX_PLAN_BYTES = 16384
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 # Parent qualification must precede changing this narrow UI availability gate.
@@ -85,6 +90,7 @@ def reviewed_plan(value, selection=None):
     fields = {
         "format",
         "attempt_id",
+        "workspace_candidate_id",
         "target_scope_sha256",
         "workspace_content_sha256",
         "capture_policy_sha256",
@@ -102,7 +108,17 @@ def reviewed_plan(value, selection=None):
     if any(
         not _digest(value[key])
         for key in fields
-        - {"format", "workspace_signature", "reviewed_point", "entries"}
+        - {
+            "format",
+            "workspace_candidate_id",
+            "workspace_signature",
+            "reviewed_point",
+            "entries",
+        }
+    ):
+        _fail()
+    if not isinstance(value["workspace_candidate_id"], str) or not re.fullmatch(
+        r"[0-9a-f]{32}", value["workspace_candidate_id"]
     ):
         _fail()
     signature = value["workspace_signature"]
@@ -295,10 +311,10 @@ def partial(
     }
 
 
-def _workspace_receipt(context):
+def _workspace_receipt(context, *, workspace=None):
     descriptor = context.selected_descriptor.to_dict()
     record = context.selected_record
-    return {
+    result = {
         "ok": True,
         "status": "already-saved",
         "dimension_id": descriptor["dimension_id"],
@@ -315,6 +331,380 @@ def _workspace_receipt(context):
             for name in ("homebrew_recovery", "hauler_content")
         ),
     }
+    if workspace is not None:
+        from .workspace_state import context_status
+
+        marker = context_status(workspace)
+        keys = (
+            "dimension_id",
+            "encryption_domain_id",
+            "project_id",
+            "snapshot_id",
+            "workspace_signature",
+            "signature_algorithm",
+            "capture_policy_sha256",
+        )
+        result["marker_state"] = (
+            "updated"
+            if marker.get("path_matches") is True
+            and all(marker.get(key) == result[key] for key in keys)
+            else "unfinalized"
+        )
+    return result
+
+
+def _marker_fd_record(fd):
+    info = os.fstat(fd)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_size > 65536
+    ):
+        raise ValueError("agent Save retry marker is invalid")
+    data = os.pread(fd, 65537, 0)
+    after = os.fstat(fd)
+    if (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ) or len(data) != info.st_size:
+        raise ValueError("agent Save retry marker changed")
+    return {
+        "identity": [
+            info.st_dev,
+            info.st_ino,
+            info.st_mode,
+            info.st_size,
+            info.st_mtime_ns,
+        ],
+        "data": base64.b64encode(data).decode("ascii"),
+    }
+
+
+def _marker_record(directory, name):
+    try:
+        fd = os.open(
+            name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+        )
+    except FileNotFoundError:
+        return None
+    try:
+        return _marker_fd_record(fd)
+    finally:
+        os.close(fd)
+
+
+def _marker_move(source_fd, source, destination_fd, destination):
+    rename = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if rename is None:
+        raise ValueError("agent Save retry marker no-replace is unavailable")
+    if rename(
+        source_fd, os.fsencode(source), destination_fd, os.fsencode(destination), 1
+    ):
+        raise OSError(ctypes.get_errno(), "agent Save retry marker no-replace refused")
+    os.fsync(source_fd)
+    os.fsync(destination_fd)
+
+
+def _commit_retry_marker(workspace, plan, marker, previous, check):
+    """Claim/verify an expected marker, never replace a competing binding."""
+    from .workspace_state import MARKER_NAME, _validate_workspace_marker
+
+    _validate_workspace_marker(marker)
+
+    parent = os.open(workspace.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root = custody = None
+    name = ".josh-room-marker-retry-" + plan["attempt_id"]
+    try:
+        root = os.open(
+            workspace.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent
+        )
+        root_info = os.fstat(root)
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent)
+            os.fsync(parent)
+        except FileExistsError:
+            pass
+        custody = os.open(
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent
+        )
+        info = os.fstat(custody)
+        if (
+            info.st_uid != os.geteuid()
+            or info.st_mode & 0o077
+            or info.st_dev != root_info.st_dev
+        ):
+            raise ValueError("agent Save retry marker custody is unavailable")
+        target = (json.dumps(marker, sort_keys=True) + "\n").encode()
+        intent = {
+            "format": "josh-room.save-marker-retry.v1",
+            "attempt_id": plan["attempt_id"],
+            "plan_sha256": plan_digest(plan),
+            "target": base64.b64encode(target).decode("ascii"),
+            "old": None,
+        }
+        existing = _marker_record(custody, "intent.json")
+        if existing is None:
+            if os.listdir(custody):
+                raise ValueError("agent Save retry marker custody is not empty")
+            live = _marker_record(root, MARKER_NAME)
+            if live is not None and base64.b64decode(live["data"]) == target:
+                check()
+                attached = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if (attached.st_dev, attached.st_ino) != (info.st_dev, info.st_ino):
+                    raise ValueError("agent Save retry custody binding changed")
+                os.rmdir(name, dir_fd=parent)
+                os.fsync(parent)
+                return
+            intent["old"] = _marker_record(root, MARKER_NAME)
+            if intent["old"] is None and plan["reviewed_point"] is not None:
+                raise ValueError("agent Save retry expected marker is unavailable")
+            from .workspace_state import context_status
+
+            if context_status(workspace) != previous:
+                raise ValueError("agent Save retry marker changed")
+            fd = os.open(
+                "intent.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=custody,
+            )
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(json.dumps(intent, sort_keys=True).encode())
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(custody)
+        else:
+            loaded = json.loads(base64.b64decode(existing["data"]))
+            if (
+                not isinstance(loaded, dict)
+                or set(loaded) != set(intent)
+                or any(loaded[key] != intent[key] for key in set(intent) - {"old"})
+            ):
+                raise ValueError("agent Save retry marker custody changed")
+            intent = loaded
+        old = intent["old"]
+        if old is not None:
+            if (
+                not isinstance(old, dict)
+                or set(old) != {"identity", "data"}
+                or not isinstance(old["identity"], list)
+                or len(old["identity"]) != 5
+                or any(type(value) is not int for value in old["identity"])
+            ):
+                raise ValueError("agent Save retry custody baseline is invalid")
+            baseline = _validate_workspace_marker(
+                json.loads(base64.b64decode(old["data"], validate=True))
+            )
+            reviewed = plan["reviewed_point"]
+            if (
+                reviewed is None
+                or baseline.get("format_version") != 3
+                or baseline.get("snapshot_id") != reviewed["logical_jat_id"]
+                or any(
+                    baseline.get(key) != marker[key]
+                    for key in (
+                        "dimension_id",
+                        "encryption_domain_id",
+                        "project_id",
+                        "signature_algorithm",
+                        "capture_policy_sha256",
+                        "workspace_path_sha256",
+                    )
+                )
+            ):
+                raise ValueError("agent Save retry custody baseline changed")
+        elif plan["reviewed_point"] is not None:
+            raise ValueError("agent Save retry expected marker is unavailable")
+        current = _marker_record(root, MARKER_NAME)
+        complete = current is not None and base64.b64decode(current["data"]) == target
+        if not complete:
+            prepared = _marker_record(custody, "new-marker")
+            if prepared is None:
+                fd = os.open(
+                    "new-marker",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=custody,
+                )
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(target)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.fsync(custody)
+            elif base64.b64decode(prepared["data"]) != target:
+                raise ValueError("agent Save retry prepared marker changed")
+            claimed = _marker_record(custody, "old-marker")
+            if claimed is None and old is not None:
+                if current != old:
+                    raise ValueError("agent Save retry marker changed")
+                held = os.open(
+                    MARKER_NAME,
+                    os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=root,
+                )
+                try:
+                    if _marker_fd_record(held) != old:
+                        raise ValueError("agent Save retry marker changed")
+                    _marker_move(root, MARKER_NAME, custody, "old-marker")
+                    claimed = _marker_record(custody, "old-marker")
+                    if _marker_fd_record(held) != old:
+                        raise ValueError("agent Save retry held marker changed")
+                finally:
+                    os.close(held)
+            if claimed != old:
+                raise ValueError("agent Save retry claimed marker changed")
+            check()
+            attached = os.stat(workspace, follow_symlinks=False)
+            if (attached.st_dev, attached.st_ino) != (
+                root_info.st_dev,
+                root_info.st_ino,
+            ):
+                raise ValueError("agent Save retry workspace binding changed")
+            _marker_move(custody, "new-marker", root, MARKER_NAME)
+            complete = True
+        check()
+        if base64.b64decode(_marker_record(root, MARKER_NAME)["data"]) != target:
+            raise ValueError("agent Save retry marker finalization is uncertain")
+        # The private attempt-bound directory is never recursively removed.
+        for entry in ("old-marker", "new-marker", "intent.json"):
+            record = _marker_record(custody, entry)
+            if record is None:
+                continue
+            if (
+                (entry == "old-marker" and record != old)
+                or (
+                    entry == "new-marker" and base64.b64decode(record["data"]) != target
+                )
+                or (
+                    entry == "intent.json"
+                    and base64.b64decode(record["data"])
+                    != json.dumps(intent, sort_keys=True).encode()
+                )
+            ):
+                raise ValueError("agent Save retry marker cleanup is uncertain")
+            os.unlink(entry, dir_fd=custody)
+        os.fsync(custody)
+        attached = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (attached.st_dev, attached.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError("agent Save retry custody binding changed")
+        os.rmdir(name, dir_fd=parent)
+        os.fsync(parent)
+    except BaseException:
+        # A failed claim must never remove or replace a foreign live marker.
+        if (
+            root is not None
+            and custody is not None
+            and _marker_record(custody, "old-marker") is not None
+        ):
+            try:
+                _marker_move(custody, "old-marker", root, MARKER_NAME)
+            except OSError as error:
+                if error.errno != errno.EEXIST:
+                    raise
+        raise
+    finally:
+        for descriptor in (custody, root, parent):
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def _finalize_retry_marker(scope, exact, attempt, plan):
+    """Finalize only the approved candidate's local marker after a lost CAS reply."""
+    from .native_workspace_content import fingerprint
+    from .room_store_operations import scan_workspace_for_status
+    from .workspace_state import canonical_workspace_path_sha256, context_status
+
+    exact = attempt.verify_workspace_result(exact)
+    body = exact.selected_descriptor.to_dict()
+    expected = {
+        "dimension_id": body["dimension_id"],
+        "encryption_domain_id": body["encryption_domain_id"],
+        "project_id": body["room_id"],
+        "snapshot_id": body["logical_jat_id"],
+        "signature_algorithm": "josh-room-stat-v1",
+        "workspace_signature": exact.selected_record["workspace_signature"],
+        "capture_policy_sha256": body["capture_policy_sha256"],
+    }
+    if (
+        expected["workspace_signature"] != plan["workspace_signature"]
+        or expected["capture_policy_sha256"] != plan["capture_policy_sha256"]
+    ):
+        raise ValueError("agent Save retry marker target changed")
+
+    def unchanged():
+        attempt.check()
+        scan = scan_workspace_for_status(scope.workspace)
+        if (
+            scan.signature != plan["workspace_signature"]
+            or scan.capture_policy_sha256 != plan["capture_policy_sha256"]
+            or fingerprint(
+                scope.workspace, expected_policy_sha256=plan["capture_policy_sha256"]
+            )
+            != plan["workspace_content_sha256"]
+        ):
+            raise ValueError("agent Save retry workspace changed")
+
+    unchanged()
+    previous = context_status(scope.workspace)
+    already_exact = previous.get("path_matches") is True and all(
+        previous.get(key) == value for key, value in expected.items()
+    )
+    if already_exact and not os.path.lexists(
+        scope.workspace.parent / (".josh-room-marker-retry-" + plan["attempt_id"])
+    ):
+        return exact
+    reviewed = plan["reviewed_point"]
+    if already_exact or previous.get("state") == "unlinked":
+        # A missing old baseline is allowed only when the private, attempt-bound
+        # custody intent proves an earlier claim, or this was a new Room.
+        pass
+    elif (
+        reviewed is not None
+        and previous.get("path_matches") is True
+        and previous.get("snapshot_id") == reviewed["logical_jat_id"]
+        and not previous.get("composition_namespace")
+        and all(
+            previous.get(key) == expected[key]
+            for key in (
+                "dimension_id",
+                "encryption_domain_id",
+                "project_id",
+                "signature_algorithm",
+                "capture_policy_sha256",
+            )
+        )
+    ):
+        pass
+    else:
+        raise ValueError("agent Save retry marker was rebound or is unavailable")
+    unchanged()
+    if context_status(scope.workspace) != previous:
+        raise ValueError("agent Save retry marker changed")
+    marker = {
+        "format_version": 3,
+        **expected,
+        "display_name": exact.catalog.body["projects"][body["room_id"]]["display_name"],
+        "workspace_path_sha256": canonical_workspace_path_sha256(scope.workspace),
+    }
+    _commit_retry_marker(scope.workspace, plan, marker, previous, unchanged)
+    unchanged()
+    current = context_status(scope.workspace)
+    if current.get("path_matches") is not True or any(
+        current.get(key) != value for key, value in expected.items()
+    ):
+        raise ValueError("agent Save retry marker finalization is uncertain")
+    return attempt.verify_workspace_result(exact)
 
 
 def save(
@@ -355,7 +745,7 @@ def save(
             with bridge.open_existing_room_store(
                 instance, dimension, material, project_id=room, snapshot_id=exact_id
             ) as exact:
-                workspace_result = _workspace_receipt(exact)
+                workspace_result = _workspace_receipt(exact, workspace=scope.workspace)
         if state in {"workspace-uncertain", "agent-uncertain", "blocked"}:
             return partial(
                 workspace_result,
@@ -365,6 +755,7 @@ def save(
                 candidate_id=reconciliation.get("logical_jat_id"),
             )
         receipt = None
+        retry_committed = exact_id is not None
         try:
             # A durable committed candidate is authoritative independently of
             # the former reviewed parent, which may have since been removed.
@@ -390,6 +781,12 @@ def save(
                 ) as exact:
                     attempt.workspace_outcome("committed", logical_jat_id=exact_id)
                     attempt.check()
+                    if retry_committed:
+                        exact = _finalize_retry_marker(scope, exact, attempt, plan)
+                        workspace_result = {
+                            **workspace_result,
+                            "marker_state": "updated",
+                        }
                     receipt = publish_batch(exact, attempt)
                     if receipt.get("ok") is not True:
                         return partial(

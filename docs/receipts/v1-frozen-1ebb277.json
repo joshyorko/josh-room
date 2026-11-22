@@ -48,7 +48,17 @@
       "skipped": 0
     }
   },
-  "installed_linux_runtime_acceptance": "NOT YET QUALIFIED; active independent trial uses these exact packages",
+  "installed_linux_runtime_acceptance": {
+    "receipt": "linux-installed-acceptance.json",
+    "scope": "Installed immutable VSIX controller inside exact current CI-acquired RCC dependency environment via explicit runtime selection hook. No host-Python fallback or live integration worktree imports. Real registered native UI; synthetic data only. CLI entry is RCC env exec -- python -m josh_room using the installed VSIX controller; installed wheel was not substituted.",
+    "executed_data_gates": 8,
+    "serve_workbench_close": "passed",
+    "rcc_first_independent_session": "passed",
+    "explicit_session_capture_restore_history": "NOT RUN",
+    "agent_save_selectors": "all unavailable",
+    "wheel_runtime_data_matrix": "NOT RUN; installed VSIX controller used",
+    "no_source_or_package_rebuild": true
+  },
   "installed_windows_acceptance": "pending #220; not integrated",
   "agent_save_adapter": "in progress outside frozen source; selectors remain false",
   "target_version": "1.0.0",
@@ -109,6 +119,5 @@
     "packaged_cli_inspect": "passed",
     "viewer_source_unchanged_from": "c4b735f7fc89421681310c715fa475779cea1f27",
     "previous_browser_evidence": "reused unchanged viewer; not a fresh browser trial"
-  },
-  "receipt_scope": "immutable frozen package/source parity and completed source CI; not release qualification"
+  }
 }

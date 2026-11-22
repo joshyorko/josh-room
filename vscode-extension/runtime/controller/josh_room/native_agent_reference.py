@@ -392,13 +392,16 @@ def _scope_digest(context):
                                           context.repository_info.repository_id])).hexdigest()
 
 
-def _pending(context, objects, operation):
+def _pending(context, objects, operation, *, receipt_id=None):
     directory = context.instance / "agent-reference-receipts"
     directory.mkdir(mode=0o700, exist_ok=True)
     from .private_paths import verify_private_path
 
     verify_private_path(directory, directory=True)
-    identity = uuid.uuid4().hex
+    identity = uuid.uuid4().hex if receipt_id is None else receipt_id
+    if (not isinstance(identity, str) or len(identity) != 32
+            or any(character not in "0123456789abcdef" for character in identity)):
+        _fail("native-reference-receipt-invalid")
     path = directory / (identity + ".json")
     native._write(path, _canonical_json({"format": "josh-room.agent-reference-pending.v1", "id": identity,
         "scope_sha256": _scope_digest(context), "operation": operation, "objects": objects}))
