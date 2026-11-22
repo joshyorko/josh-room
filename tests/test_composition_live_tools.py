@@ -453,6 +453,7 @@ def test_process_loss_retry_preserves_exact_slots_and_no_duplicate_snapshots(
     original_descriptor = r.authority.put_descriptor
     hit = False
     descriptor_count = 0
+    original_accounting = {}
 
     def put(body, expected):
         nonlocal hit
@@ -470,6 +471,8 @@ def test_process_loss_retry_preserves_exact_slots_and_no_duplicate_snapshots(
 
     def descriptor(value):
         nonlocal descriptor_count, hit
+        body = value.to_dict()
+        original_accounting.setdefault(body["logical_jat_id"], (body["workspace"]["data_added"], body["workspace"]["data_added_packed"]))
         result = original_descriptor(value)
         descriptor_count += 1
         if (
@@ -492,6 +495,12 @@ def test_process_loss_retry_preserves_exact_slots_and_no_duplicate_snapshots(
     with r.factory(envelope["secret"]) as store:
         store.open_existing()
         assert len(store.snapshots()) == 3
+    for project in envelope["state"]["dimension_catalog"]["projects"].values():
+        record = project["snapshots"][project["latest"]]
+        descriptor = r.authority.descriptor(record).to_dict()
+        workspace = descriptor["workspace"]
+        assert (workspace["data_added"], workspace["data_added_packed"]) == original_accounting[descriptor["logical_jat_id"]]
+        assert workspace["data_added"] > 0
     assert save(r)["parent_snapshot_id"] == result["parent_snapshot_id"]
 
 

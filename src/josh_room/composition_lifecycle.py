@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import fnmatch
 import hashlib
 import os
 import secrets
@@ -302,20 +303,31 @@ def _commit(authority, envelope, etag, state):
     return updated, etag
 
 
+CONTENT_DIGEST_ALGORITHM = "sha256-framed-v2"
+
+
 def _content_digest(root):
     scan = scan_workspace_for_status(root)
-    digest = hashlib.sha256()
+    digest = hashlib.sha256(CONTENT_DIGEST_ALGORITHM.encode() + b"\0")
     for relative in sorted(scan.paths):
         path = root / relative
         info = path.lstat()
-        digest.update(
-            relative.encode() + b"\0" + str(stat.S_IMODE(info.st_mode)).encode() + b"\0"
-        )
+        kind = "file" if stat.S_ISREG(info.st_mode) else "directory"
+        header = canonical([relative, kind, stat.S_IMODE(info.st_mode),
+                            info.st_size if kind == "file" else 0])
+        digest.update(len(header).to_bytes(8, "big") + header)
         if stat.S_ISREG(info.st_mode):
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(fd, "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                if _record_stat(opened) != _record_stat(info):
+                    raise ValueError("capture digest file changed while opening")
+                size = 0
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    size += len(chunk)
                     digest.update(chunk)
+                if size != info.st_size or _record_stat(os.fstat(stream.fileno())) != _record_stat(info):
+                    raise ValueError("capture digest file changed while reading")
         elif not stat.S_ISDIR(info.st_mode):
             raise ValueError("linked capture payload is unsupported")
     return digest.hexdigest()
@@ -334,7 +346,7 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
     excludes.write_text("\n".join(policy.resolved_restic_excludes(root)) + "\n")
     if prior:
         snapshot = store.snapshot(prior[0].snapshot_id)
-        summary = None
+        summary = store.snapshot_backup_summary(snapshot.snapshot_id)
         proof = private / ("capture-reconcile-" + uuid.uuid4().hex)
         _validate_snapshot_entries(store.entries(snapshot.snapshot_id))
         store.restore(snapshot.snapshot_id, proof)
@@ -346,6 +358,9 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
         claim()
         summary = store.backup(root, excludes=excludes, tags=tag)
         snapshot = store.snapshot(summary.snapshot_id)
+    expected_parent = parent.to_dict()['workspace']['snapshot_id'] if parent else None
+    if snapshot.parent_snapshot_id != expected_parent:
+        raise ValueError("captured snapshot ancestry differs from selected baseline")
     entries = _validate_snapshot_entries(store.entries(snapshot.snapshot_id))
     after = scan_workspace_for_status(root)
     if (
@@ -375,8 +390,8 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
             "tree_id": snapshot.tree_id,
             "source_path": ".",
             "logical_bytes": before.logical_bytes,
-            "data_added": summary.data_added if summary else 0,
-            "data_added_packed": summary.data_added_packed if summary else 0,
+            "data_added": summary.data_added,
+            "data_added_packed": summary.data_added_packed,
         },
         "components": {
             "rcc_environment": None,
@@ -491,6 +506,40 @@ def _child_view(source, child, target, request):
         return _build_child_view(source, child, target, request, fd)
 
 
+def _inherited_exclusions(policy, child):
+    """Rebase the exclusion language, including matches not present on disk."""
+    if policy.is_excluded(child):
+        raise ValueError("selected child is excluded by parent policy")
+    values = []
+    for pattern in policy.patterns:
+        if len(pattern) == 1:
+            values.append("/".join(pattern))
+            continue
+
+        def closure(states, pattern=pattern):
+            states = set(states)
+            for index in range(len(pattern)):
+                if index in states and pattern[index] == "**":
+                    states.add(index + 1)
+            return states
+
+        states = closure({0})
+        for part in Path(child).parts:
+            states = closure({index if pattern[index] == "**" else index + 1
+                for index in states if index < len(pattern)
+                and (pattern[index] == "**" or fnmatch.fnmatchcase(part, pattern[index]))})
+        for index in sorted(states):
+            suffix = pattern[index:]
+            if not suffix or suffix == ("**",):
+                raise ValueError("parent exclusion covers the whole selected child")
+            # Single-component rules match anywhere; anchor a residual root
+            # component by appending **, which also preserves subtree pruning.
+            if len(suffix) == 1:
+                suffix += ("**",)
+            values.append("/".join(suffix))
+    return tuple(dict.fromkeys(values))
+
+
 def _build_child_view(source, child, target, request, source_fd):
     root_policy = load_capture_policy(source)
     root_scan = _scan_workspace(
@@ -559,6 +608,7 @@ def _build_child_view(source, child, target, request, source_fd):
         [
             "# josh-room capture-mode: source-only",
             ".josh-room-split.json",
+            *_inherited_exclusions(root_policy, child),
             *[path + "/**" for path in exclusions],
         ]
     )

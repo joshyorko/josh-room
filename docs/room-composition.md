@@ -35,7 +35,9 @@ with `composition save`, adding `--approve <approval_sha256>` and
 content. Overlapping non-root assignments are currently rejected, including a
 parent override beneath a local-only subtree. The explicit root assignment can
 set the reviewed default for all remaining paths. Existing exclusions remain
-exclusions; child allowlists also apply inherited parent exclusions. Invalid or
+exclusions; child allowlists also apply inherited parent exclusions. Inherited rules
+are rebased into the child policy, including wildcard matches for files created
+after hydration; they are not reduced to the paths present at capture time. Invalid or
 stale approval fails closed. Approval binds namespace, source/policy/child
 inventory metadata, provider, connection, physical bucket and encryption domain.
 
@@ -377,3 +379,15 @@ fail-closed workspace checks and #146's explicit source-only mode remain intact.
 planner is separate. #190 selects Save **components**, not child directories;
 this patch does not add a competing component picker or alter Save. #188 owns
 agent session recovery and remains out of scope.
+
+### Capture reconciliation integrity
+
+Tagged interrupted captures require authenticated persisted Restic byte-accounting
+counts and the exact expected payload parent before descriptor publication. Missing
+or invalid counts and wrong ancestry stop reconciliation; unknown added bytes are
+never reported as zero. Payload comparisons frame each entry with its path, type,
+mode and byte length, so an empty file and empty directory are distinct. Existing
+immutable descriptors remain readable and are verified from restored payloads.
+Previously saved policies and snapshots are never rewritten; a child created by
+an older build retains its saved policy. Review and explicitly approve any missing
+exclusion rules before saving further content in such a child.
