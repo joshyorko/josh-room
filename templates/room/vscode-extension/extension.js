@@ -12,7 +12,7 @@ const {
   formatProgressDisplay,
   operationKind,
 } = require("./progress");
-const { FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
+const { waitForServeStartup, validateServeStartup, readServeJson, verifiedPull, probeRegistry, FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
 const providerTools = require("./provider");
 
 let outputChannel;
@@ -1594,7 +1594,7 @@ class JatToolsProvider {
       { label: "Extract from JAT", description: "One reference", icon: "go-to-file", command: "joshRoom.jatExtract" },
       { label: "Restore Workspace", description: "Restore", icon: "folder-library", command: "joshRoom.jatRestore" },
       { label: "Serve JAT…", description: "Auto · Files · Registry · Both", icon: "server-process", command: "joshRoom.jatServe" },
-      { label: "Export Images…", description: "containerd", icon: "archive", command: "joshRoom.jatExport" },
+      { label: "Export Images…", description: "All images in one containerd archive", icon: "archive", command: "joshRoom.jatExport" },
       { label: "Copy / Seed…", description: "registry · dir", icon: "copy", command: "joshRoom.jatCopy" },
     ];
   }
@@ -2877,14 +2877,38 @@ async function chooseHaul(cwd, title, openLabel = "Use this haul") {
   return files?.length ? files[0].fsPath : undefined;
 }
 
+// These labels are presentation only. Keep JAT references intact for operations.
+function contentLabels(references) {
+  const labels = references.map((reference) => reference.split("/").at(-1) || reference);
+  const counts = new Map();
+  for (const label of labels) counts.set(label, (counts.get(label) || 0) + 1);
+  return labels.map((label, index) => counts.get(label) > 1 ? references[index] : label);
+}
+
 function inventoryQuickPickItems(inventory) {
-  return (Array.isArray(inventory) ? inventory : [])
-    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference)
-    .map((entry) => ({
-      label: `$(package) ${entry.reference}`,
-      description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
-      entry,
-    }));
+  const entries = (Array.isArray(inventory) ? inventory : [])
+    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference);
+  const labels = contentLabels(entries.map((entry) => entry.reference));
+  return entries.map((entry, index) => ({
+    label: `$(${entry.type === "files" ? "file" : "package"}) ${labels[index]}`,
+    description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
+    entry,
+  }));
+}
+
+async function showCatalogRepositories(repositories) {
+  const names = repositories.filter((name) => typeof name === "string" && name);
+  if (!names.length) return vscode.window.showInformationMessage("The registry catalog lists no repositories.");
+  const labels = contentLabels(names);
+  const selected = await vscode.window.showQuickPick(names.map((name, index) => ({
+    label: `$(package) ${labels[index]}`, description: "OCI repository", name,
+  })), { title: "OCI registry catalog", placeHolder: "Select a repository for details" });
+  if (!selected) return;
+  const action = await vscode.window.showInformationMessage(
+    `Catalog repository: ${selected.name}. The catalog does not identify the original image or a verified pull target.`,
+    "Copy Repository Name",
+  );
+  if (action === "Copy Repository Name") await vscode.env.clipboard.writeText(selected.name);
 }
 
 async function jatBuild() {
@@ -3017,11 +3041,11 @@ async function showJatInventory(haul, cwd) {
     selected.entry.digest,
   ].filter(Boolean).join(" · ");
   const action = await vscode.window.showInformationMessage(
-    `${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
-    "Copy Reference",
+    `Stored reference: ${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
+    "Copy Stored Reference",
     "Extract…",
   );
-  if (action === "Copy Reference") {
+  if (action === "Copy Stored Reference") {
     await vscode.env.clipboard.writeText(selected.entry.reference);
     await vscode.window.showInformationMessage(`Copied ${selected.entry.reference}.`);
   } else if (action === "Extract…") {
@@ -3059,7 +3083,8 @@ async function jatExtract(preselection) {
     openLabel: "Extract here",
   });
   if (!parents?.length) return "cancelled";
-  const defaultName = `${path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "")}-extract`;
+  const slug = reference.split("/").at(-1).replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  const defaultName = `extract-${slug || "content"}`;
   const name = await vscode.window.showInputBox({
     title: "JAT: Extract from JAT",
     prompt: "New destination folder name (created only if absent)",
@@ -3130,10 +3155,10 @@ async function jatRestore() {
 }
 
 const JAT_SERVE_MODES = [
-  { label: "Auto", description: "Let JAT choose the compatible projection", mode: "auto" },
-  { label: "Files", description: "Direct downloads / file artifacts", mode: "files" },
+  { label: "Auto", description: "JAT chooses the projection. Files may listen on all network interfaces.", mode: "auto" },
+  { label: "Files", description: "File downloads may listen on all network interfaces", mode: "files" },
   { label: "Registry", description: "OCI images and charts", mode: "registry" },
-  { label: "Files + Registry", description: "Expose both from the same capsule", mode: "both" },
+  { label: "Files + Registry", description: "Local registry and files that may listen on all network interfaces", mode: "both" },
 ];
 
 async function jatServe() {
@@ -3162,7 +3187,7 @@ async function jatExport() {
   if (!haul) return "cancelled";
   const base = path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "");
   const output = await vscode.window.showSaveDialog({
-    title: "Save containerd image archive",
+    title: "Save all images in one containerd archive",
     defaultUri: vscode.Uri.file(path.join(path.dirname(haul), `${base}-images.tar`)),
     filters: { "containerd archive": ["tar"] },
   });
@@ -3256,8 +3281,57 @@ function waitForServeEndpoint() {
   ]);
 }
 
+function sessionIsActive(startupPath, serve, isStopped) {
+  try {
+    if (isStopped() || typeof serve.session_id !== "string" || !serve.session_id) return false;
+    const current = validateServeStartup(readServeJson(startupPath), serve.mode);
+    if (current.session_id !== serve.session_id || current.pid !== serve.pid ||
+        current.registry_url !== serve.registry_url) return false;
+    process.kill(serve.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function showMappedImages(serve, isActive) {
+  const images = serve.image_mapping.images.filter(image => typeof image?.stored_reference === "string" && image.stored_reference);
+  const labels = images.map(image => image.display_label || image.stored_reference);
+  const items = images.map((image, index) => ({
+    label: labels.indexOf(labels[index]) === labels.lastIndexOf(labels[index]) ? labels[index] : image.stored_reference,
+    description: image.platform || "OCI image",
+    detail: [image.requested_reference && `Requested: ${image.requested_reference}`, image.digest].filter(Boolean).join(" · "), image,
+  }));
+  const selected = await vscode.window.showQuickPick(items, { title: "Images in this JAT", ignoreFocusOut: true, placeHolder: "Select an image for details" });
+  if (!selected) return;
+  const image = selected.image;
+  const pull = isActive() && verifiedPull(serve, image);
+  const actions = [
+    ...(pull ? [
+      { label: "Copy Pull Command", detail: `docker pull ${pull}` },
+      { label: "Copy Served Reference", detail: pull },
+    ] : []),
+    ...(image.source_reference ? [{ label: "Copy Source Reference", detail: image.source_reference }] : []),
+    { label: "Copy Stored Reference", detail: image.stored_reference },
+  ];
+  const choice = await vscode.window.showQuickPick(actions, {
+    title: image.display_label || image.stored_reference,
+    placeHolder: pull ? "Choose a reference to copy" : "No verified pull reference for this session",
+    ignoreFocusOut: true,
+  });
+  const action = choice?.label;
+  if (action === "Copy Pull Command" || action === "Copy Served Reference") {
+    if (!pull || !isActive()) return vscode.window.showInformationMessage("This Serve session has ended.");
+    await vscode.env.clipboard.writeText(action === "Copy Pull Command" ? `docker pull ${pull}` : pull);
+  } else if (action === "Copy Source Reference") await vscode.env.clipboard.writeText(image.source_reference);
+  else if (action === "Copy Stored Reference") await vscode.env.clipboard.writeText(image.stored_reference);
+}
+
 async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry, encryptionMaterial }) {
   const runtime = await runtimeFor(cwd, args);
+  const jatRoot = runtime.jatRoot || runtime.env?.JOSH_ROOM_JAT_ROOT;
+  const producerCli = path.join(jatRoot, "src", "jat", "cli.py");
+  const supportsStartup = fs.existsSync(producerCli) && fs.readFileSync(producerCli, "utf8").includes("--startup-file");
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
   let encryptionCleanup = () => {};
@@ -3267,9 +3341,15 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     credentialsCleanup();
     throw error;
   }
-  const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
   fs.chmodSync(progressDirectory, 0o700);
+  const startupPath = supportsStartup
+    ? path.join(progressDirectory, "serve-startup.json") : undefined;
+  const resultPath = path.join(progressDirectory, "controller-result.json");
+  if (startupPath) {
+    environment.JOSH_ROOM_SERVE_STARTUP_FILE = startupPath;
+    environment.JOSH_ROOM_RESULT_FILE = resultPath;
+  }
   const progressPath = path.join(progressDirectory, "events.jsonl");
   const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
   fs.writeFileSync(progressPath, "", { mode: 0o600 });
@@ -3305,9 +3385,15 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
   );
   let stopped = false;
+  let commandEnded = false;
+  const executionEnd = vscode.window.onDidEndTerminalShellExecution?.((event) => {
+    if (event.terminal === terminal) commandEnded = true;
+  });
+  const sessionEnded = () => stopped || commandEnded || fs.existsSync(resultPath) || fs.existsSync(receiptPath);
   const stopFollowing = () => {
     if (stopped) return;
     stopped = true;
+    executionEnd?.dispose();
     for (const follower of followers) follower.dispose();
     progressReporter?.dispose();
     credentialsCleanup();
@@ -3358,6 +3444,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
         terminal.sendText(launch.command, true);
         try {
+          if (startupPath) {
+            const serve = await waitForServeStartup(startupPath, { mode, checkStopped() {
+              if (sessionEnded()) throw new Error("Serve exited before publishing its endpoints");
+            } });
+            return { serve, kind: serve.mode, catalog: serve.registry_url ? await probeRegistry(serve.registry_url) : null };
+          }
           if (autoServe) {
             // JAT resolves Auto itself: a files-only capsule starts only the
             // fileserver. Wait for whichever endpoint JAT actually starts
@@ -3370,48 +3462,49 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         }
       },
     );
+    const serve = outcome?.serve;
+    const filesUrl = serve?.fileserver_url || FILESERVER_URL;
+    const registryUrl = serve?.registry_url || REGISTRY_URL;
+    const filesScope = serve?.fileserver_bind === "all-interfaces" ? " (all interfaces)" : "";
     if (!outcome || outcome.kind === "files") {
       setStatus("$(server-process) Serving files", title);
       outputChannel?.info(`READY · JAT fileserver · ${title}`);
       const filesAction = await vscode.window.showInformationMessage(
-        outcome
+        serve ? `JAT files are available at ${filesUrl}${filesScope}. Close the ${terminalName} terminal to stop.` : outcome
           ? `JAT resolved this capsule to a files projection — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`
           : `JAT is serving files from this capsule — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`,
         "Show Logs",
+        ...(serve ? ["Copy Fileserver URL"] : []),
       );
+      if (filesAction === "Copy Fileserver URL") await vscode.env.clipboard.writeText(filesUrl);
       if (filesAction === "Show Logs") outputChannel?.show(true);
       return "started";
     }
     const catalog = outcome.catalog;
     const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
     const count = repositories.length;
-    const servingFiles = mode === "both";
+    const servingFiles = (serve?.mode || mode) === "both";
     progressReporter?.event({ stage: "complete", message: "Serve endpoints ready" });
-    setStatus("$(server-process) Registry :5000", `${count} repositories · ${title}`);
-    outputChannel?.info(`READY · ${REGISTRY_URL} · ${count} ${count === 1 ? "repository" : "repositories"}`);
+    setStatus(`$(server-process) Registry :${new URL(registryUrl).port}`, `${count} repositories · ${title}`);
+    outputChannel?.info(`READY · ${registryUrl} · ${count} ${count === 1 ? "repository" : "repositories"}`);
     const action = await vscode.window.showInformationMessage(
       servingFiles
-        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL} and files at ${FILESERVER_URL}.`
-        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl} and files at ${filesUrl}${filesScope}.`
+        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl}.`,
       "Show Images",
       "Copy Registry URL",
+      ...(servingFiles && serve ? ["Copy Fileserver URL"] : []),
       "Show Logs",
     );
     if (action === "Show Images") {
-      if (!repositories.length) {
-        await vscode.window.showInformationMessage("This haul contains no registry repositories.");
-      } else {
-        await vscode.window.showQuickPick(
-          repositories.map((repository) => ({
-            label: `$(package) ${repository}`,
-            description: `127.0.0.1:5000/${repository}`,
-          })),
-          { title: "Images served by JAT", placeHolder: "Registry contents" },
-        );
-      }
+      if (serve?.image_mapping?.schema_version === 1 && Array.isArray(serve.image_mapping.images)) {
+        await showMappedImages(serve, () => sessionIsActive(startupPath, serve, sessionEnded));
+      } else await showCatalogRepositories(repositories);
+    } else if (action === "Copy Fileserver URL") {
+      await vscode.env.clipboard.writeText(filesUrl);
     } else if (action === "Copy Registry URL") {
-      await vscode.env.clipboard.writeText(REGISTRY_URL);
-      await vscode.window.showInformationMessage(`Copied ${REGISTRY_URL}.`);
+      await vscode.env.clipboard.writeText(registryUrl);
+      await vscode.window.showInformationMessage(`Copied ${registryUrl}.`);
     } else if (action === "Show Logs") {
       outputChannel?.show(true);
     }
@@ -5784,6 +5877,9 @@ Object.assign(module.exports.__test__, {
   logicalReferenceChoices,
   chooseHaul,
   inventoryQuickPickItems,
+  showCatalogRepositories,
+  showMappedImages,
+  sessionIsActive,
   isHaulerChunkSize,
   isSafeCopyTarget,
   resultPayloads,

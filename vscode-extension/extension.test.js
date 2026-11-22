@@ -5556,10 +5556,10 @@ test("Serve JAT offers the four projection modes and launches the mode-specific 
     "auto", "files", "registry", "both",
   ]);
   assert.deepEqual(extension.__test__.JAT_SERVE_MODES.map((item) => item.description), [
-    "Let JAT choose the compatible projection",
-    "Direct downloads / file artifacts",
+    "JAT chooses the projection. Files may listen on all network interfaces.",
+    "File downloads may listen on all network interfaces",
     "OCI images and charts",
-    "Expose both from the same capsule",
+    "Local registry and files that may listen on all network interfaces",
   ]);
 
   vscode.openDialogResponses.push([{ fsPath: haul }]);
@@ -7158,4 +7158,82 @@ test("legacy catalog disambiguates labels and copies only the selected repositor
   ]);
   assert.deepEqual(infoCalls[0].slice(1), ["Copy Repository Name"]);
   assert.deepEqual(writes, [names[1]]);
+});
+
+test("a mapped pull expires between image selection and clipboard copy", async () => {
+  const { vscode, quickPickCalls } = createVscodeMock(os.tmpdir());
+  const writes = withClipboardRecorder(vscode);
+  const extension = loadExtension(vscode);
+  const digest = "sha256:" + "b".repeat(64);
+  const image = { stored_reference: "docker.io/library/tool:v1", display_label: "tool:v1", digest,
+    pull_reference: "127.0.0.1:43211/library/tool@" + digest };
+  const serve = { image_mapping: { schema_version: 1, images: [image] }, session_id: "unique",
+    registry_bind: "loopback", registry_url: "http://127.0.0.1:43211" };
+  vscode.quickPickResponses.push({ image }, { label: "Copy Pull Command" });
+  let alive = true;
+  await extension.__test__.showMappedImages(serve, () => { const previous = alive; alive = false; return previous; });
+  assert.ok(quickPickCalls[1].items.some(item => item.label === "Copy Pull Command"));
+  assert.deepEqual(writes, []);
+});
+
+test("expired, replaced or absent startup receipt disables the installed session's pull action", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const { sessionIsActive } = loadExtension(vscode).__test__;
+  const registry = require("./registry");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "serve-session-"));
+  try {
+    const file = path.join(dir, "active.json");
+    const receipt = { schema_version: 1, state: "ready", operation: "serve", pid: process.pid, session_id: "first",
+      serve: { mode: "registry", registry_bind: "loopback", registry_url: "http://127.0.0.1:42345", fileserver_url: null, fileserver_bind: null } };
+    fs.writeFileSync(file, JSON.stringify(receipt));
+    const selected = registry.validateServeStartup(receipt);
+    assert.equal(sessionIsActive(file, selected, () => false), true);
+    assert.equal(sessionIsActive(file, selected, () => true), false);
+    fs.writeFileSync(file, JSON.stringify({ ...receipt, session_id: "replaced" }));
+    assert.equal(sessionIsActive(file, selected, () => false), false);
+    fs.unlinkSync(file);
+    assert.equal(sessionIsActive(file, selected, () => false), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Serve passes a private startup path and offers the active mapping or catalog fallback", async (t) => {
+  for (const mapped of [true, false]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-jat-mapping-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, "src/jat"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src/jat/cli.py"), "--startup-file");
+    const { vscode, statusItem } = createVscodeMock(root);
+    const writes = withClipboardRecorder(vscode);
+    const digest = "sha256:" + "c".repeat(64);
+    const registry = "http://127.0.0.1:45218";
+    const name = "fixture/team/test";
+    const image = { stored_reference: "example.test/base:v1", source_reference: "example.test/base:v1",
+      display_label: "base:v1", digest, pull_reference: "127.0.0.1:45218/" + name + "@" + digest };
+    let closed;
+    let terminal;
+    vscode.window.onDidCloseTerminal = (fn) => { closed = fn; return { dispose() {} }; };
+    vscode.window.createTerminal = ({ env }) => {
+      terminal = { show() {}, dispose() {}, sendText() {
+        fs.writeFileSync(env.JOSH_ROOM_SERVE_STARTUP_FILE, JSON.stringify({
+          schema_version: 1, operation: "serve", state: "ready", pid: process.pid, session_id: "owned",
+          serve: { mode: "registry", registry_bind: "loopback", registry_url: registry,
+            fileserver_url: null, fileserver_bind: null,
+            ...(mapped ? { image_mapping: { schema_version: 1, images: [image] } } : {}) },
+        }));
+      } };
+      return terminal;
+    };
+    const extension = loadExtension(vscode, undefined, {
+      probeRegistry: async (url) => { assert.equal(url, registry); return { repositories: [name] }; },
+    });
+    extension.__test__.setRuntimeForTests({ command: "rcc", args: args => args, env: {}, jatRoot: root });
+    extension.__test__.setStatusItem(statusItem);
+    vscode.openDialogResponses.push([{ fsPath: path.join(root, "test.haul") }]);
+    vscode.quickPickResponses.push({ mode: "registry" }, mapped ? { image } : { name }, { label: "Copy Pull Command" });
+    vscode.infoResponses.push("Show Images", "Copy Repository Name");
+    try {
+      assert.equal(await extension.__test__.jatServe(), "started");
+      assert.deepEqual(writes, [mapped ? "docker pull " + image.pull_reference : name]);
+    } finally { closed?.(terminal); }
+  }
 });

@@ -12,7 +12,7 @@ const {
   formatProgressDisplay,
   operationKind,
 } = require("./progress");
-const { FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
+const { waitForServeStartup, validateServeStartup, readServeJson, verifiedPull, probeRegistry, FILESERVER_URL, REGISTRY_URL, followLogFile, stageForLog, waitForFileserver, waitForRegistry } = require("./registry");
 const providerTools = require("./provider");
 
 let outputChannel;
@@ -3155,10 +3155,10 @@ async function jatRestore() {
 }
 
 const JAT_SERVE_MODES = [
-  { label: "Auto", description: "Let JAT choose the compatible projection", mode: "auto" },
-  { label: "Files", description: "Direct downloads / file artifacts", mode: "files" },
+  { label: "Auto", description: "JAT chooses the projection. Files may listen on all network interfaces.", mode: "auto" },
+  { label: "Files", description: "File downloads may listen on all network interfaces", mode: "files" },
   { label: "Registry", description: "OCI images and charts", mode: "registry" },
-  { label: "Files + Registry", description: "Expose both from the same capsule", mode: "both" },
+  { label: "Files + Registry", description: "Local registry and files that may listen on all network interfaces", mode: "both" },
 ];
 
 async function jatServe() {
@@ -3281,8 +3281,57 @@ function waitForServeEndpoint() {
   ]);
 }
 
+function sessionIsActive(startupPath, serve, isStopped) {
+  try {
+    if (isStopped() || typeof serve.session_id !== "string" || !serve.session_id) return false;
+    const current = validateServeStartup(readServeJson(startupPath), serve.mode);
+    if (current.session_id !== serve.session_id || current.pid !== serve.pid ||
+        current.registry_url !== serve.registry_url) return false;
+    process.kill(serve.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function showMappedImages(serve, isActive) {
+  const images = serve.image_mapping.images.filter(image => typeof image?.stored_reference === "string" && image.stored_reference);
+  const labels = images.map(image => image.display_label || image.stored_reference);
+  const items = images.map((image, index) => ({
+    label: labels.indexOf(labels[index]) === labels.lastIndexOf(labels[index]) ? labels[index] : image.stored_reference,
+    description: image.platform || "OCI image",
+    detail: [image.requested_reference && `Requested: ${image.requested_reference}`, image.digest].filter(Boolean).join(" · "), image,
+  }));
+  const selected = await vscode.window.showQuickPick(items, { title: "Images in this JAT", ignoreFocusOut: true, placeHolder: "Select an image for details" });
+  if (!selected) return;
+  const image = selected.image;
+  const pull = isActive() && verifiedPull(serve, image);
+  const actions = [
+    ...(pull ? [
+      { label: "Copy Pull Command", detail: `docker pull ${pull}` },
+      { label: "Copy Served Reference", detail: pull },
+    ] : []),
+    ...(image.source_reference ? [{ label: "Copy Source Reference", detail: image.source_reference }] : []),
+    { label: "Copy Stored Reference", detail: image.stored_reference },
+  ];
+  const choice = await vscode.window.showQuickPick(actions, {
+    title: image.display_label || image.stored_reference,
+    placeHolder: pull ? "Choose a reference to copy" : "No verified pull reference for this session",
+    ignoreFocusOut: true,
+  });
+  const action = choice?.label;
+  if (action === "Copy Pull Command" || action === "Copy Served Reference") {
+    if (!pull || !isActive()) return vscode.window.showInformationMessage("This Serve session has ended.");
+    await vscode.env.clipboard.writeText(action === "Copy Pull Command" ? `docker pull ${pull}` : pull);
+  } else if (action === "Copy Source Reference") await vscode.env.clipboard.writeText(image.source_reference);
+  else if (action === "Copy Stored Reference") await vscode.env.clipboard.writeText(image.stored_reference);
+}
+
 async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "auto", retry, encryptionMaterial }) {
   const runtime = await runtimeFor(cwd, args);
+  const jatRoot = runtime.jatRoot || runtime.env?.JOSH_ROOM_JAT_ROOT;
+  const producerCli = path.join(jatRoot, "src", "jat", "cli.py");
+  const supportsStartup = fs.existsSync(producerCli) && fs.readFileSync(producerCli, "utf8").includes("--startup-file");
   const environment = { ...runtime.env };
   const credentialsCleanup = await writeRuntimeCredentials(environment);
   let encryptionCleanup = () => {};
@@ -3292,9 +3341,15 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     credentialsCleanup();
     throw error;
   }
-  const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
   const progressDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-registry-"));
   fs.chmodSync(progressDirectory, 0o700);
+  const startupPath = supportsStartup
+    ? path.join(progressDirectory, "serve-startup.json") : undefined;
+  const resultPath = path.join(progressDirectory, "controller-result.json");
+  if (startupPath) {
+    environment.JOSH_ROOM_SERVE_STARTUP_FILE = startupPath;
+    environment.JOSH_ROOM_RESULT_FILE = resultPath;
+  }
   const progressPath = path.join(progressDirectory, "events.jsonl");
   const receiptPath = path.join(progressDirectory, "rcc-receipt.json");
   fs.writeFileSync(progressPath, "", { mode: 0o600 });
@@ -3330,9 +3385,15 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
     followLogFile(path.join(jatRoot, "output", "stderr.log"), (line) => stream(line, "warn")),
   );
   let stopped = false;
+  let commandEnded = false;
+  const executionEnd = vscode.window.onDidEndTerminalShellExecution?.((event) => {
+    if (event.terminal === terminal) commandEnded = true;
+  });
+  const sessionEnded = () => stopped || commandEnded || fs.existsSync(resultPath) || fs.existsSync(receiptPath);
   const stopFollowing = () => {
     if (stopped) return;
     stopped = true;
+    executionEnd?.dispose();
     for (const follower of followers) follower.dispose();
     progressReporter?.dispose();
     credentialsCleanup();
@@ -3383,6 +3444,12 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         progressReporter.event({ stage: "auth", message: "Preparing secure Room session" });
         terminal.sendText(launch.command, true);
         try {
+          if (startupPath) {
+            const serve = await waitForServeStartup(startupPath, { mode, checkStopped() {
+              if (sessionEnded()) throw new Error("Serve exited before publishing its endpoints");
+            } });
+            return { serve, kind: serve.mode, catalog: serve.registry_url ? await probeRegistry(serve.registry_url) : null };
+          }
           if (autoServe) {
             // JAT resolves Auto itself: a files-only capsule starts only the
             // fileserver. Wait for whichever endpoint JAT actually starts
@@ -3395,38 +3462,49 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
         }
       },
     );
+    const serve = outcome?.serve;
+    const filesUrl = serve?.fileserver_url || FILESERVER_URL;
+    const registryUrl = serve?.registry_url || REGISTRY_URL;
+    const filesScope = serve?.fileserver_bind === "all-interfaces" ? " (all interfaces)" : "";
     if (!outcome || outcome.kind === "files") {
       setStatus("$(server-process) Serving files", title);
       outputChannel?.info(`READY · JAT fileserver · ${title}`);
       const filesAction = await vscode.window.showInformationMessage(
-        outcome
+        serve ? `JAT files are available at ${filesUrl}${filesScope}. Close the ${terminalName} terminal to stop.` : outcome
           ? `JAT resolved this capsule to a files projection — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`
           : `JAT is serving files from this capsule — the JAT fileserver default is ${FILESERVER_URL}. Close the ${terminalName} terminal to stop.`,
         "Show Logs",
+        ...(serve ? ["Copy Fileserver URL"] : []),
       );
+      if (filesAction === "Copy Fileserver URL") await vscode.env.clipboard.writeText(filesUrl);
       if (filesAction === "Show Logs") outputChannel?.show(true);
       return "started";
     }
     const catalog = outcome.catalog;
     const repositories = Array.isArray(catalog.repositories) ? catalog.repositories : [];
     const count = repositories.length;
-    const servingFiles = mode === "both";
+    const servingFiles = (serve?.mode || mode) === "both";
     progressReporter?.event({ stage: "complete", message: "Serve endpoints ready" });
-    setStatus("$(server-process) Registry :5000", `${count} repositories · ${title}`);
-    outputChannel?.info(`READY · ${REGISTRY_URL} · ${count} ${count === 1 ? "repository" : "repositories"}`);
+    setStatus(`$(server-process) Registry :${new URL(registryUrl).port}`, `${count} repositories · ${title}`);
+    outputChannel?.info(`READY · ${registryUrl} · ${count} ${count === 1 ? "repository" : "repositories"}`);
     const action = await vscode.window.showInformationMessage(
       servingFiles
-        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL} and files at ${FILESERVER_URL}.`
-        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${REGISTRY_URL}.`,
+        ? `JAT serve is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl} and files at ${filesUrl}${filesScope}.`
+        : `Hauler registry is ready — ${count} ${count === 1 ? "repository" : "repositories"} on ${registryUrl}.`,
       "Show Images",
       "Copy Registry URL",
+      ...(servingFiles && serve ? ["Copy Fileserver URL"] : []),
       "Show Logs",
     );
     if (action === "Show Images") {
-      await showCatalogRepositories(repositories);
+      if (serve?.image_mapping?.schema_version === 1 && Array.isArray(serve.image_mapping.images)) {
+        await showMappedImages(serve, () => sessionIsActive(startupPath, serve, sessionEnded));
+      } else await showCatalogRepositories(repositories);
+    } else if (action === "Copy Fileserver URL") {
+      await vscode.env.clipboard.writeText(filesUrl);
     } else if (action === "Copy Registry URL") {
-      await vscode.env.clipboard.writeText(REGISTRY_URL);
-      await vscode.window.showInformationMessage(`Copied ${REGISTRY_URL}.`);
+      await vscode.env.clipboard.writeText(registryUrl);
+      await vscode.window.showInformationMessage(`Copied ${registryUrl}.`);
     } else if (action === "Show Logs") {
       outputChannel?.show(true);
     }
@@ -5800,6 +5878,8 @@ Object.assign(module.exports.__test__, {
   chooseHaul,
   inventoryQuickPickItems,
   showCatalogRepositories,
+  showMappedImages,
+  sessionIsActive,
   isHaulerChunkSize,
   isSafeCopyTarget,
   resultPayloads,

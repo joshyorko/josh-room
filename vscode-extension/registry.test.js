@@ -334,3 +334,16 @@ test("S3 retains explicit provider identity rather than Cloudflare authority", (
   const tree = buildProviderTree({ dimensions: [{ id: "synthetic-s3", provider: "s3", bucket: "synthetic-room", projects: [] }] });
   assert.equal(tree[0].provider, "s3");
 });
+
+test("pull references require the reported registry authority and matching immutable digest", () => {
+  const { verifiedPull } = require("./registry");
+  const serve = { session_id: "test", registry_bind: "loopback", registry_url: "http://127.0.0.1:45123" };
+  const digest = "sha256:" + "a".repeat(64);
+  const ref = "127.0.0.1:45123/nested/team/api@" + digest;
+  const verify = (pull_reference) => verifiedPull(serve, { pull_reference, digest });
+  assert.equal(verify(ref), ref);
+  for (const unsafe of [null, ref + "\n", ref.replace("45123", "5000"), ref.replace("api", "api;id"),
+    ref.replace("team", ".."), ref.replace("api", "api$(id)"), ref.slice(0,-1), "api:latest"]) {
+    assert.equal(verify(unsafe), undefined);
+  }
+});

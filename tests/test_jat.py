@@ -542,16 +542,22 @@ def test_jat_cli_failure_raises_with_exit_status(tmp_path, monkeypatch):
         __import__("josh_room.jat", fromlist=["run_inspect"]).run_inspect(tmp_path, tmp_path / "workspace.haul")
 
 
-def test_jat_cli_serve_runs_foreground_without_timeout(tmp_path, monkeypatch):
+@pytest.mark.parametrize("startup", [True, False])
+def test_jat_cli_serve_runs_foreground_without_timeout(tmp_path, monkeypatch, startup):
     _managed_env(monkeypatch)
     haul = tmp_path / "workspace.haul"
     seen = {}
     monkeypatch.setattr("josh_room.jat._run_cli", _fake_run_cli(seen, _cli_stdout("serve")))
+    options = []
+    if startup:
+        receipt = str(tmp_path / "ready.json")
+        monkeypatch.setenv("JOSH_ROOM_SERVE_STARTUP_FILE", receipt)
+        options = ["--startup-file", receipt, "--registry-port", "0", "--fileserver-port", "0"]
     __import__("josh_room.jat", fromlist=["run_serve"]).run_serve(tmp_path, haul, mode="both")
 
     assert seen["timeout"] is None
     command = seen["argv"][seen["argv"].index("--") + 1:]
-    assert command == ["python", "-m", "jat.cli", "serve", "--haul", str(haul), "--mode", "both", "--json"]
+    assert command == ["python", "-m", "jat.cli", "serve", "--haul", str(haul), "--mode", "both", *options, "--json"]
 
 
 def test_jat_cli_extract_passes_reference_and_destination_verbatim(tmp_path, monkeypatch):

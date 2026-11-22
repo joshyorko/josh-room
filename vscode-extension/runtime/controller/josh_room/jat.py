@@ -563,9 +563,11 @@ def run_restore(jat_root: Path, haul: Path, destination: Path) -> dict:
 
 
 def run_serve(jat_root: Path, haul: Path, *, mode: str = "auto") -> dict:
+    startup = os.environ.get("JOSH_ROOM_SERVE_STARTUP_FILE")
+    options = ["--startup-file", startup, "--registry-port", "0", "--fileserver-port", "0"] if startup else []
     return _run_jat_cli(
         jat_root,
-        ["serve", "--haul", str(haul), "--mode", str(mode), "--json"],
+        ["serve", "--haul", str(haul), "--mode", str(mode), *options, "--json"],
         foreground=True,
     )
 

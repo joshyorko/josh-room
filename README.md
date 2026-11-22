@@ -170,7 +170,8 @@ the configured Josh Room workspace root; selecting another historical JAT reuses
 that same folder after an explicit clean/dirty-state confirmation.
 Save can include all tagged local OCI images in the JAT haul. `Josh: Serve Room
 Images` decrypts the chosen snapshot only into private runtime staging and runs
-JAT's foreground Hauler registry on `127.0.0.1:5000`; stopping the terminal
+JAT's foreground Hauler registry on localhost. Receipt-capable runtimes report
+their selected port, and older runtimes use port 5000. Stopping the terminal
 removes the temporary haul and registry store.
 
 A separate `JAT Tools` view preserves one-off automation outside the Room/storage
@@ -186,8 +187,11 @@ R2 operation.
 Inspect shows the stored JAT reference and any digest reported by JAT. Show
 Images lists OCI registry repository names. Select one to copy its catalog
 name. Older receipts provide no verified source-to-pull mapping, so the
-extension offers no image-specific pull command. The registry URL is a local
-transport address. Extract suggests a new folder for the selected entry.
+extension offers no image-specific pull command. With a version 1 JAT Serve image mapping, Show Images also presents
+the recorded source, stored identity and digest. Copy Pull Command copies the
+producer-verified immutable reference for the active localhost session. Closing
+Serve expires that reference. Missing or incompatible mappings retain catalog
+browsing without a pull action. Extract suggests a new folder for the selected entry.
 Export Images saves all images together in one containerd archive.
 
 Room rows show Current and the known save state. Recovery points show their date,
