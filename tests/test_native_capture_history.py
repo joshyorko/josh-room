@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,7 @@ from josh_room.room_store_references import LogicalJatIdentity
 from josh_room.workspace_state import write_stat_workspace_marker
 
 pytest_plugins = ["test_native_agent_reference"]
+pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux native-history reference contract")
 
 
 def capture(room):

@@ -110,7 +110,7 @@ def capabilities():
         "native_resume_verified": False,
         "providers": {
             "t3": {"capture": "blocked", "reason": "native-thread-projection-import-unavailable", "launch": "dedicated-linux-profile", "restore": "blocked", "selectable": False},
-            "codex": {"capture": "history-only", "reason": "new-turn-acceptance-not-run", "allowlist": "dedicated sessions rollout JSONL only", "restore": "blocked", "restore_reason": "crash-safe-materialization-unavailable", "materialize_session": "history-only-single-file", "selectable": False},
+            "codex": {"capture": "history-only", "reason": "hosted-continuation-unqualified", "allowlist": "dedicated sessions rollout JSONL only", "restore": "blocked", "restore_reason": "crash-safe-materialization-unavailable", "materialize_session": "history-only-single-file", "selectable": False},
             "claude": {"capture": "history-only", "reason": "closed-completed-tool-free-history; hosted-continuation-unqualified", "allowlist": "Claude 2.1.310 text turns and validated inert runtime rows", "archive_format": CLAUDE_FORMAT, "materialize_session": "history-only-single-file", "restore": "blocked", "selectable": False},
         },
         "storage": "explicit-local-encrypted-reference",
@@ -125,7 +125,7 @@ def capabilities():
         "experimental": True,
         "admission_requirement": "host-grant-and-current-keyset-required",
         "capture_consistency": "linux-kernel-read-leases-and-inventory-fences",
-        "release_blockers": ["crash-safe-materialization-unavailable", "native-new-turn-not-run"],
+        "release_blockers": ["general-native-restore-unavailable", "hosted-native-continuation-unqualified", "save-integration-unqualified"],
     }
 
 

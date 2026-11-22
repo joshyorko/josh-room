@@ -51,7 +51,7 @@ providers or perform a syscall/filesystem audit.
 
 The subsequent [immutable-history contract](native-capture-history-contract.md)
 retains both captures at the same logical Room point. The opt-in
-`tests/test_native_claude_history_cycle.py` passed **1 case in 1.40s** against
+`tests/test_native_claude_history_cycle.py` passed **1 case in 1.37s** against
 source-bound controller modules and the pinned native CLI. It captures the initial
 two rows, deletes the source profile, restores the explicit first capture into a
 new authorized profile, runs the original-ID loopback turn, recaptures all 14 rows

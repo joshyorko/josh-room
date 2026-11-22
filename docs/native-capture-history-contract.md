@@ -5,6 +5,9 @@ v2 permits the qualified completed tool-free turn; this extension retains its
 successive immutable Room captures. It is **not** Save integration. Selectors
 remain false, and unknown contract versions remain unavailable.
 
+See the [acceptance receipt](native-capture-history-acceptance.md) for source,
+fixture/native evidence and remaining live/installed gates.
+
 ## Stable address and versioned document
 
 Retain the existing `control/agent-references/v1/<binding-sha256>.age` CAS address.
@@ -29,10 +32,18 @@ control-size limits. No automatic pruning or garbage collection is introduced.
   sidecar CAS or catalog fence. A → B → A records three immutable events.
 - Native bytes are never rewritten to produce either identifier.
 
+The raw-content digest is SHA256 of canonical JSON
+`["josh-room.native-capture-content.v1", tool, manifest]`, where each sorted
+manifest item is `[relative_path, byte_length, raw_sha256]`. Canonical JSON uses
+sorted object keys, ASCII escapes and comma/colon separators without whitespace.
+
 V1 reads remain supported without writes. Stable legacy IDs derive from existing
 origin/archive-binding/profile/tool/scope/created-at metadata, not ciphertext.
 Content digests are computed and checked when decoding/migrating. Promotion occurs
 only during a successful changed capture with an authorized content baseline.
+Legacy IDs hash canonical JSON
+`["josh-room.native-capture-id.legacy.v1", metadata]`, with exactly `origin`,
+`archive_binding`, `profile`, `tool`, `scope`, `created_at` in metadata.
 
 ## Workspace authority after hydration
 
