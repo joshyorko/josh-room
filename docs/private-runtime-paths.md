@@ -18,6 +18,11 @@ Persistent provider credentials remain in the host operating system's
 credential service or keyring. An ephemeral runtime credential supplied by a
 caller is still only accepted in the already-protected runtime directory.
 
+An explicit `JOSH_ROOM_ENCRYPTION_MATERIAL` names an existing input. If that
+handoff disappears or fails private-file admission, the command stops. It does
+not recreate the file from the keyring or enrolled keyset. Controller-owned new
+output paths still use the normal scoped identity-resolution flow.
+
 ## Runtime artifact cache and system-tool discovery
 
 Controller and JAT archive cache filenames include the pinned archive SHA256.

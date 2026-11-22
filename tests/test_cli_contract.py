@@ -1085,6 +1085,7 @@ def test_selected_minio_operation_consumes_the_bounded_encryption_handoff(monkey
         pass
 
     assert captured["identity_path"] == handoff
+    assert captured["require_existing_identity"] is True
 
 
 def test_encryption_initialize_does_not_leave_identity_environment_or_file(monkeypatch, tmp_path):
