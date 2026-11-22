@@ -131,7 +131,7 @@ def _validate_document(document, target):
             _fail("native-reference-format-invalid")
         if (not isinstance(entry["profile"], str) or not authority._LABEL.fullmatch(entry["profile"])
                 or entry["tool"] not in {"codex", "claude"} or entry["scope"] not in {"personal", "oss", "homelab"}
-                or entry["archive_format"] != native._native_format(entry["tool"])):
+                or not native._supported_native_format(entry["tool"], entry["archive_format"])):
             _fail("native-reference-format-invalid")
         stamp = datetime.fromisoformat(entry["created_at"])
         if stamp.utcoffset() is None:
@@ -392,6 +392,8 @@ def _decode_entry(context, entry, data=None):
     with _cipher_file(context, _blob(context, entry) if data is None else data) as source:
         decoded, recipients = native._decode(source, [context.material.identity], entry["archive_binding"], entry["tool"])
         plain = native._json(native._decrypt_to_memory(source, [context.material.identity]))
+    if plain["format"] != entry["archive_format"]:
+        _fail("native-reference-archive-format-mismatch")
     if recipients != _recipients(context):
         _fail("native-reference-recipient-mismatch")
     _sessions(decoded, entry["tool"])

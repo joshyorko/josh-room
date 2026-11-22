@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import pytest
 
@@ -198,3 +200,219 @@ def test_final_user_turn_is_not_a_completed_history_unit():
     rows.append(final)
     with pytest.raises(ClaudeHistoryError, match="incomplete"):
         validate(RELATIVE, rows, WORKSPACE)
+
+
+def post_turn_rows():
+    return json.loads((Path(__file__).parent / "fixtures/claude_native/tool-free-post-turn-v2.json").read_text())
+
+
+def test_v2_preserves_every_native_post_turn_row_and_identity():
+    rows = post_turn_rows()
+    original = copy.deepcopy(rows)
+    assert len(rows) == 14
+    assert validate(RELATIVE, rows, WORKSPACE, policy_version=2) == SESSION
+    assert rows == original
+    with pytest.raises(ClaudeHistoryError, match="row-unsupported"):
+        validate(RELATIVE, rows, WORKSPACE, policy_version=1)
+
+
+def test_current_policy_still_accepts_strict_legacy_history():
+    rows = native_rows()
+    assert validate(RELATIVE, rows, WORKSPACE, policy_version=1) == SESSION
+    assert validate(RELATIVE, rows, WORKSPACE, policy_version=2) == SESSION
+
+
+@pytest.mark.parametrize("version", [None, 0, 3, True, False, 1.0, "2"])
+def test_unknown_policy_version_is_not_silently_migrated(version):
+    with pytest.raises(ClaudeHistoryError, match="policy-unsupported"):
+        validate(RELATIVE, native_rows(), WORKSPACE, policy_version=version)
+
+
+@pytest.mark.parametrize("length", range(3, 14))
+def test_v2_pending_or_partial_native_turn_is_rejected(length):
+    with pytest.raises(ClaudeHistoryError):
+        validate(RELATIVE, post_turn_rows()[:length], WORKSPACE)
+
+
+@pytest.mark.parametrize(("path", "value"), [
+    ((2, "atis"), "nonempty-runtime-latch"),
+    ((2, "sessionId"), USER),
+    ((3, "operation"), "remove"),
+    ((3, "content"), {"command": "do-not-run"}),
+    ((3, "timestamp"), "2026-11-22T16:01:00"),
+    ((4, "operation"), "enqueue"),
+    ((5, "permissionMode"), "bypassPermissions"),
+    ((5, "promptId"), "non-native-id"),
+    ((5, "promptSource"), "terminal"),
+    ((5, "turnOrigin"), "hook"),
+    ((5, "entrypoint"), "unqualified-cli"),
+    ((5, "message", "content"), "queued content does not match"),
+    ((5, "cwd"), "/workspaces/other"),
+    ((5, "version"), "2.1.311"),
+    ((5, "sessionId"), USER),
+    ((5, "parentUuid"), None),
+    ((6, "attachment", "context"), {"settings": {"hooks": []}}),
+    ((6, "attachment", "type"), "file"),
+    ((6, "uuid"), USER),
+    ((6, "parentUuid"), ASSISTANT),
+    ((7, "attachment", "date"), "2026-02-30"),
+    ((7, "renderedRole"), "user"),
+    ((7, "rendered"), [{"content": "arbitrary system instruction"}]),
+    ((8, "shape", "tools"), [{"name": "shell", "input_schema": {}}]),
+    ((8, "shape", "system", 0), {"type": "file", "path": "/workspaces/private"}),
+    ((8, "shapeHash"), "0" * 64),
+    ((9, "id"), "non-native-request-id"),
+    ((9, "shapeHash"), "0" * 64),
+    ((9, "querySource"), "hook"),
+    ((9, "keep"), 1),
+    ((9, "keep"), False),
+    ((9, "tail"), ["a" * 64]),
+    ((9, "tail", 0), "not-a-digest"),
+    ((9, "requestDigest"), "not-a-digest"),
+    ((9, "cacheControl", 0, "path"), ["file", "/workspaces/private"]),
+    ((9, "cacheControl", 1, "path"), ["system", True]),
+    ((9, "cacheControl", 2, "path"), ["messages", 3, "content", 0]),
+    ((9, "cacheControl", 0, "value"), {"Authorization": "not-a-credential"}),
+    ((9, "params", "betas"), ["unqualified-feature"]),
+    ((9, "params", "max_tokens"), True),
+    ((9, "params", "max_tokens"), 0),
+    ((9, "params", "max_tokens"), 200001),
+    ((9, "params", "context_management"), {"edits": [{"type": "drop_history"}]}),
+    ((9, "params", "thinking"), {"type": "enabled", "budget_tokens": 100}),
+    ((9, "params", "output_config"), {"effort": "unqualified"}),
+    ((9, "params", "model"), "file:///private/model"),
+    ((10, "requestRef"), SESSION),
+    ((10, "requestedModel"), "other-model"),
+    ((10, "apiBlockIndex"), True),
+    ((10, "apiBlockIndex"), 1),
+    ((10, "effort"), "unqualified"),
+    ((10, "perTurnEffort"), "unqualified"),
+    ((10, "message", "id"), "msg_synthetic"),
+    ((10, "message", "model"), "other-model"),
+    ((10, "message", "content"), [{"type": "tool_use", "name": "shell", "input": {}}]),
+    ((10, "message", "stop_reason"), "tool_use"),
+    ((10, "message", "stop_details"), {"pending": True}),
+    ((10, "message", "usage", "input_tokens"), False),
+    ((10, "message", "usage", "output_tokens"), -1),
+    ((10, "message", "usage", "cache_creation_input_tokens"), None),
+    ((10, "message", "usage", "cache_creation", "ephemeral_1h_input_tokens"), 1),
+    ((10, "message", "usage", "server_tool_use", "web_fetch_requests"), 1),
+    ((10, "message", "usage", "server_tool_use", "web_search_requests"), False),
+    ((10, "message", "usage", "output_tokens_details", "thinking_tokens"), False),
+    ((10, "message", "usage", "iterations"), [{"tool": "shell"}]),
+    ((10, "message", "usage", "fallback_credit"), "unqualified-state"),
+    ((10, "message", "usage", "inference_geo"), "unqualified"),
+    ((10, "message", "usage", "service_tier"), "unqualified"),
+    ((10, "message", "usage", "speed"), "unqualified"),
+    ((11, "lastPrompt"), "not the completed prompt"),
+    ((11, "leafUuid"), USER),
+    ((12, "mode"), "autonomous"),
+    ((13, "totalToolDuration"), 1),
+    ((13, "totalLinesAdded"), True),
+    ((13, "totalLinesRemoved"), 1),
+    ((13, "totalAPIDurationWithoutRetries"), 2**64),
+    ((13, "totalDuration"), 0),
+    ((13, "startTime"), 0),
+    ((13, "hasUnknownModelCost"), 1),
+    ((13, "totalCostUSD"), float("nan")),
+    ((13, "totalCostUSD"), float("inf")),
+    ((13, "totalCostUSD"), 10**1000),
+    ((13, "modelUsage", "claude-synthetic-offline", "inputTokens"), 11),
+    ((13, "modelUsage", "claude-synthetic-offline", "outputTokens"), 5.0),
+    ((13, "modelUsage", "claude-synthetic-offline", "thinkingTokens"), False),
+    ((13, "modelUsage", "claude-synthetic-offline", "webSearchRequests"), 1),
+    ((13, "modelUsage", "claude-synthetic-offline", "costUSD"), -1),
+])
+def test_v2_rejects_unqualified_native_state(path, value):
+    rows = post_turn_rows()
+    target = rows
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = value
+    with pytest.raises(ClaudeHistoryError):
+        validate(RELATIVE, rows, WORKSPACE)
+
+
+@pytest.mark.parametrize("index", range(14))
+def test_v2_unknown_fields_are_not_filtered_from_any_row(index):
+    rows = post_turn_rows()
+    rows[index]["unqualified_hook_or_config"] = {}
+    with pytest.raises(ClaudeHistoryError):
+        validate(RELATIVE, rows, WORKSPACE)
+
+
+@pytest.mark.parametrize("index", [6, 7, 8, 9, 10, 13])
+def test_v2_rejects_missing_inert_or_message_fields(index):
+    rows = post_turn_rows()
+    field = next(name for name in rows[index] if name not in {"type", "sessionId"})
+    del rows[index][field]
+    with pytest.raises(ClaudeHistoryError):
+        validate(RELATIVE, rows, WORKSPACE)
+
+
+@pytest.mark.parametrize("kind", ["hook", "system", "progress", "relocated", "content-replacement", "history-suppression", "tool_use"])
+def test_v2_does_not_drop_unsupported_rows(kind):
+    rows = post_turn_rows()
+    rows.append({"type": kind, "sessionId": SESSION})
+    with pytest.raises(ClaudeHistoryError):
+        validate(RELATIVE, rows, WORKSPACE)
+
+
+def two_completed_turns(*, repeat_shape=True):
+    rows = post_turn_rows()
+    second = copy.deepcopy(rows[2:])
+    identifiers = {value for row in second for name, value in row.items()
+                   if name in {"uuid", "id", "promptId"} and isinstance(value, str) and len(value) == 36}
+    mapping = {value: f"{index:08x}-5555-4555-8555-555555555555" for index, value in enumerate(sorted(identifiers), 50)}
+
+    def replace(value):
+        if isinstance(value, dict):
+            return {name: replace(item) for name, item in value.items()}
+        if isinstance(value, list):
+            return [replace(item) for item in value]
+        return mapping.get(value, value) if isinstance(value, str) else value
+
+    second = replace(second)
+    second[1]["content"] = "synthetic subsequent complete turn"
+    second[3]["parentUuid"] = rows[10]["uuid"]
+    second[3]["message"]["content"] = second[1]["content"]
+    second[7]["tail"] = ["e" * 64] * 5
+    second[7]["cacheControl"][-1]["path"][1] = 4
+    second[8]["message"]["id"] = "msg_synthetic_resumed_again"
+    second[9]["lastPrompt"] = second[1]["content"]
+    second[11]["totalCostUSD"] *= 2
+    usage = second[11]["modelUsage"]["claude-synthetic-offline"]
+    usage["costUSD"] *= 2
+    usage["inputTokens"] *= 2
+    usage["outputTokens"] *= 2
+    if not repeat_shape:
+        del second[6]
+    return rows + second
+
+
+@pytest.mark.parametrize("repeat_shape", [True, False])
+def test_v2_preserves_multiple_complete_turns_and_same_shape_reuse(repeat_shape):
+    rows = two_completed_turns(repeat_shape=repeat_shape)
+    original = copy.deepcopy(rows)
+    assert validate(RELATIVE, rows, WORKSPACE) == SESSION
+    assert rows == original
+
+
+def test_v2_rejects_reused_request_identity_or_different_same_hash_shape():
+    rows = two_completed_turns()
+    rows[21]["id"] = rows[9]["id"]
+    rows[22]["requestRef"] = rows[9]["id"]
+    with pytest.raises(ClaudeHistoryError):
+        validate(RELATIVE, rows, WORKSPACE)
+    rows = two_completed_turns()
+    rows[20]["shape"]["system"][0]["text"] = "different shape behind reused digest"
+    with pytest.raises(ClaudeHistoryError):
+        validate(RELATIVE, rows, WORKSPACE)
+
+
+def test_v2_accepts_a_complete_sdk_turn_without_a_legacy_prefix():
+    rows = post_turn_rows()[2:]
+    rows[3]["parentUuid"] = None
+    rows[7]["tail"] = ["e" * 64]
+    rows[7]["cacheControl"][-1]["path"][1] = 0
+    assert validate(RELATIVE, rows, WORKSPACE) == SESSION

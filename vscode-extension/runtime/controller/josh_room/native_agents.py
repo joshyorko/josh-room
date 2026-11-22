@@ -37,7 +37,8 @@ from .private_paths import verify_private_path
 MAX_BYTES = 16 * 1024 * 1024
 MAX_FILES = 256
 FORMAT = "josh-room.native-history.v1"
-CLAUDE_FORMAT = "josh-room.native-claude-history.v1"
+CLAUDE_FORMAT_V1 = "josh-room.native-claude-history.v1"
+CLAUDE_FORMAT = "josh-room.native-claude-history.v2"
 POLICY = "native-profile.json"
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -110,7 +111,7 @@ def capabilities():
         "providers": {
             "t3": {"capture": "blocked", "reason": "native-thread-projection-import-unavailable", "launch": "dedicated-linux-profile", "restore": "blocked", "selectable": False},
             "codex": {"capture": "history-only", "reason": "new-turn-acceptance-not-run", "allowlist": "dedicated sessions rollout JSONL only", "restore": "blocked", "restore_reason": "crash-safe-materialization-unavailable", "materialize_session": "history-only-single-file", "selectable": False},
-            "claude": {"capture": "history-only", "reason": "basic-linear-no-tools; native-new-turn-not-run", "allowlist": "main linear text-only Claude 2.1.310 JSONL", "archive_format": CLAUDE_FORMAT, "materialize_session": "history-only-single-file", "restore": "blocked", "selectable": False},
+            "claude": {"capture": "history-only", "reason": "closed-completed-tool-free-history; hosted-continuation-unqualified", "allowlist": "Claude 2.1.310 text turns and validated inert runtime rows", "archive_format": CLAUDE_FORMAT, "materialize_session": "history-only-single-file", "restore": "blocked", "selectable": False},
         },
         "storage": "explicit-local-encrypted-reference",
         "automatic_room_restore": False,
@@ -139,6 +140,10 @@ def _native_format(tool):
     return FORMAT if _tool(tool) == "codex" else CLAUDE_FORMAT
 
 
+def _supported_native_format(tool, value):
+    return value == FORMAT if _tool(tool) == "codex" else value in (CLAUDE_FORMAT_V1, CLAUDE_FORMAT)
+
+
 def _claude_key(workspace):
     from .claude_native_history import ClaudeHistoryError, project_key
 
@@ -157,7 +162,7 @@ def _native_path(relative, tool, workspace):
             and path.as_posix() == relative)
 
 
-def _validate_history(relative, data, workspace, tool):
+def _validate_history(relative, data, workspace, tool, *, archive_format=None):
     if tool == "codex":
         _validate_rollout(relative, data, workspace)
         return
@@ -170,7 +175,9 @@ def _validate_history(relative, data, workspace, tool):
         rows = [_json(line) for line in data.splitlines()]
         for row in rows:
             _inspect_native_values(row)
-        validate(relative, rows, workspace)
+        if archive_format is not None and not _supported_native_format(tool, archive_format):
+            _fail("unsupported-recovery-format")
+        validate(relative, rows, workspace, policy_version=1 if archive_format == CLAUDE_FORMAT_V1 else 2)
     except ClaudeHistoryError as error:
         _fail(str(error))
     except (ValueError, KeyError, TypeError):
@@ -584,7 +591,7 @@ def _decode(source, identity_paths, binding, tool="codex"):
     data = _decrypt_to_memory(source, identity_paths)
     try:
         document = _json(data)
-        if set(document) != {"format", "binding", "recipients", "provider", "mode", "entries"} or document["format"] != _native_format(tool) or document["provider"] != tool or document["mode"] != "history-only":
+        if set(document) != {"format", "binding", "recipients", "provider", "mode", "entries"} or not _supported_native_format(tool, document["format"]) or document["provider"] != tool or document["mode"] != "history-only":
             _fail("unsupported-recovery-format")
         recipients = _recipients(document["recipients"])
         if document["binding"] != binding:
@@ -598,7 +605,7 @@ def _decode(source, identity_paths, binding, tool="codex"):
             if set(entry) != {"path", "sha256", "bytes", "data"}:
                 _fail("invalid-recovery-manifest")
             content = base64.b64decode(entry["data"], validate=True)
-            _validate_history(entry["path"], content, binding["workspace"], tool)
+            _validate_history(entry["path"], content, binding["workspace"], tool, archive_format=document["format"])
             total += len(content)
             if total > MAX_BYTES or entry["path"] in decoded or type(entry["bytes"]) is not int or entry["bytes"] != len(content) or entry["sha256"] != hashlib.sha256(content).hexdigest():
                 _fail("invalid-recovery-manifest")
