@@ -1594,7 +1594,7 @@ class JatToolsProvider {
       { label: "Extract from JAT", description: "One reference", icon: "go-to-file", command: "joshRoom.jatExtract" },
       { label: "Restore Workspace", description: "Restore", icon: "folder-library", command: "joshRoom.jatRestore" },
       { label: "Serve JAT…", description: "Auto · Files · Registry · Both", icon: "server-process", command: "joshRoom.jatServe" },
-      { label: "Export Images…", description: "containerd", icon: "archive", command: "joshRoom.jatExport" },
+      { label: "Export Images…", description: "All images in one containerd archive", icon: "archive", command: "joshRoom.jatExport" },
       { label: "Copy / Seed…", description: "registry · dir", icon: "copy", command: "joshRoom.jatCopy" },
     ];
   }
@@ -2877,14 +2877,38 @@ async function chooseHaul(cwd, title, openLabel = "Use this haul") {
   return files?.length ? files[0].fsPath : undefined;
 }
 
+// These labels are presentation only. Keep JAT references intact for operations.
+function contentLabels(references) {
+  const labels = references.map((reference) => reference.split("/").at(-1) || reference);
+  const counts = new Map();
+  for (const label of labels) counts.set(label, (counts.get(label) || 0) + 1);
+  return labels.map((label, index) => counts.get(label) > 1 ? references[index] : label);
+}
+
 function inventoryQuickPickItems(inventory) {
-  return (Array.isArray(inventory) ? inventory : [])
-    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference)
-    .map((entry) => ({
-      label: `$(package) ${entry.reference}`,
-      description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
-      entry,
-    }));
+  const entries = (Array.isArray(inventory) ? inventory : [])
+    .filter((entry) => entry && typeof entry.reference === "string" && entry.reference);
+  const labels = contentLabels(entries.map((entry) => entry.reference));
+  return entries.map((entry, index) => ({
+    label: `$(${entry.type === "files" ? "file" : "package"}) ${labels[index]}`,
+    description: [entry.type, entry.platform, formatHaulerSize(entry.size)].filter(Boolean).join(" · "),
+    entry,
+  }));
+}
+
+async function showCatalogRepositories(repositories) {
+  const names = repositories.filter((name) => typeof name === "string" && name);
+  if (!names.length) return vscode.window.showInformationMessage("The registry catalog lists no repositories.");
+  const labels = contentLabels(names);
+  const selected = await vscode.window.showQuickPick(names.map((name, index) => ({
+    label: `$(package) ${labels[index]}`, description: "OCI repository", name,
+  })), { title: "OCI registry catalog", placeHolder: "Select a repository for details" });
+  if (!selected) return;
+  const action = await vscode.window.showInformationMessage(
+    `Catalog repository: ${selected.name}. The catalog does not identify the original image or a verified pull target.`,
+    "Copy Repository Name",
+  );
+  if (action === "Copy Repository Name") await vscode.env.clipboard.writeText(selected.name);
 }
 
 async function jatBuild() {
@@ -3017,11 +3041,11 @@ async function showJatInventory(haul, cwd) {
     selected.entry.digest,
   ].filter(Boolean).join(" · ");
   const action = await vscode.window.showInformationMessage(
-    `${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
-    "Copy Reference",
+    `Stored reference: ${selected.entry.reference}${detail ? ` — ${detail}` : ""}`,
+    "Copy Stored Reference",
     "Extract…",
   );
-  if (action === "Copy Reference") {
+  if (action === "Copy Stored Reference") {
     await vscode.env.clipboard.writeText(selected.entry.reference);
     await vscode.window.showInformationMessage(`Copied ${selected.entry.reference}.`);
   } else if (action === "Extract…") {
@@ -3059,7 +3083,8 @@ async function jatExtract(preselection) {
     openLabel: "Extract here",
   });
   if (!parents?.length) return "cancelled";
-  const defaultName = `${path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "")}-extract`;
+  const slug = reference.split("/").at(-1).replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  const defaultName = `extract-${slug || "content"}`;
   const name = await vscode.window.showInputBox({
     title: "JAT: Extract from JAT",
     prompt: "New destination folder name (created only if absent)",
@@ -3162,7 +3187,7 @@ async function jatExport() {
   if (!haul) return "cancelled";
   const base = path.basename(haul).replace(/\.tar\.zst$|\.zst$|\.tar$/i, "");
   const output = await vscode.window.showSaveDialog({
-    title: "Save containerd image archive",
+    title: "Save all images in one containerd archive",
     defaultUri: vscode.Uri.file(path.join(path.dirname(haul), `${base}-images.tar`)),
     filters: { "containerd archive": ["tar"] },
   });
@@ -3398,17 +3423,7 @@ async function startRegistryTerminal({ cwd, title, terminalName, args, mode = "a
       "Show Logs",
     );
     if (action === "Show Images") {
-      if (!repositories.length) {
-        await vscode.window.showInformationMessage("This haul contains no registry repositories.");
-      } else {
-        await vscode.window.showQuickPick(
-          repositories.map((repository) => ({
-            label: `$(package) ${repository}`,
-            description: `127.0.0.1:5000/${repository}`,
-          })),
-          { title: "Images served by JAT", placeHolder: "Registry contents" },
-        );
-      }
+      await showCatalogRepositories(repositories);
     } else if (action === "Copy Registry URL") {
       await vscode.env.clipboard.writeText(REGISTRY_URL);
       await vscode.window.showInformationMessage(`Copied ${REGISTRY_URL}.`);
@@ -5784,6 +5799,7 @@ Object.assign(module.exports.__test__, {
   logicalReferenceChoices,
   chooseHaul,
   inventoryQuickPickItems,
+  showCatalogRepositories,
   isHaulerChunkSize,
   isSafeCopyTarget,
   resultPayloads,

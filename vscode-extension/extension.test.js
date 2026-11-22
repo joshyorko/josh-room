@@ -4988,7 +4988,7 @@ test("JAT Tools rows expose the seven capability-capsule commands in order", () 
     "One reference",
     "Restore",
     "Auto · Files · Registry · Both",
-    "containerd",
+    "All images in one containerd archive",
     "registry · dir",
   ]);
   assert.deepEqual(rows.map((row) => row.command), JAT_COMMAND_IDS);
@@ -5356,7 +5356,7 @@ test("Inspect JAT renders the inventory QuickPick and copies the selected refere
   const clipboardWrites = withClipboardRecorder(vscode);
   vscode.openDialogResponses.push([{ fsPath: haul }]);
   vscode.quickPickResponses.push({ entry: inventory[0] });
-  vscode.infoResponses.push("Copy Reference");
+  vscode.infoResponses.push("Copy Stored Reference");
 
   assert.equal(await extension.__test__.jatInspect(), "inspected");
 
@@ -5365,8 +5365,8 @@ test("Inspect JAT renders the inventory QuickPick and copies the selected refere
   assert.equal(inspectCall.args.at(-1), "--json");
   const pick = quickPickCalls.at(-1);
   assert.deepEqual(pick.items.map((item) => item.label), [
-    "$(package) registry.example.test:5000/demo/app:1.0",
-    "$(package) files/app-settings",
+    "$(package) app:1.0",
+    "$(file) app-settings",
   ]);
   assert.deepEqual(pick.items.map((item) => item.description), [
     "image · linux/amd64 · 1.0 MB",
@@ -5375,7 +5375,7 @@ test("Inspect JAT renders the inventory QuickPick and copies the selected refere
   assert.match(pick.options.title, /2 references/);
   assert.match(pick.options.placeHolder, /JAT anchors: images, files/);
   assert.match(infoCalls[0][0], /registry\.example\.test:5000\/demo\/app:1\.0/);
-  assert.deepEqual(infoCalls[0].slice(1), ["Copy Reference", "Extract…"]);
+  assert.deepEqual(infoCalls[0].slice(1), ["Copy Stored Reference", "Extract…"]);
   assert.deepEqual(clipboardWrites, ["registry.example.test:5000/demo/app:1.0"]);
   assert.equal(infoCalls.at(-1)[0], "Copied registry.example.test:5000/demo/app:1.0.");
 });
@@ -5405,7 +5405,7 @@ test("Extract from JAT inspects once and extracts the chosen reference", async (
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-extract-parent-"));
   const inventory = demoInventory();
   const destination = path.join(parent, "demo-extract");
-  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const { vscode, statusItem, inputBoxCalls, infoCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
     if (args[0] === "jat" && args[1] === "inspect") {
       return { stdout: JSON.stringify({ ok: true, inventory }) };
@@ -5426,6 +5426,7 @@ test("Extract from JAT inspects once and extracts the chosen reference", async (
   vscode.inputBoxResponses.push("demo-extract");
 
   assert.equal(await extension.__test__.jatExtract(), "extracted");
+  assert.equal(inputBoxCalls.at(-1).value, "extract-app-1-0");
   assert.equal(fs.existsSync(destination), false);
 
   assert.equal(spawnHarness.calls.length, 2);
@@ -5765,7 +5766,7 @@ test("inventory quick pick items skip reference-less entries and compose descrip
   };
   const mapped = items([entry, {}, { reference: "" }, { reference: 42 }, null]);
   assert.equal(mapped.length, 1);
-  assert.equal(mapped[0].label, "$(package) registry.example.test:5000/demo/app:1.0");
+  assert.equal(mapped[0].label, "$(package) app:1.0");
   assert.equal(mapped[0].description, "image · linux/amd64 · 1.0 MB");
   assert.equal(mapped[0].entry, entry);
   assert.deepEqual(items(undefined), []);
@@ -7143,3 +7144,18 @@ for (const name of [".josh-room-composition.json", ".josh-room-split.json"]) {
     assert.equal(mock.quickPickCalls.length, 0);
   });
 }
+
+test("legacy catalog disambiguates labels and copies only the selected repository name", async () => {
+  const { vscode, quickPickCalls, infoCalls } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode);
+  const writes = withClipboardRecorder(vscode);
+  const names = ["library/tool", "nested/team/api", "other/api"];
+  vscode.quickPickResponses.push({ name: names[1] });
+  vscode.infoResponses.push("Copy Repository Name");
+  await extension.__test__.showCatalogRepositories(names);
+  assert.deepEqual(quickPickCalls[0].items.map(item => item.label), [
+    "$(package) tool", "$(package) nested/team/api", "$(package) other/api",
+  ]);
+  assert.deepEqual(infoCalls[0].slice(1), ["Copy Repository Name"]);
+  assert.deepEqual(writes, [names[1]]);
+});
