@@ -350,6 +350,26 @@
       this.sensitivity = initialPayload.sensitivity;
       this.meta = initialPayload.meta || {};
       this._blobCache = new Map();
+      this._indexAttachments();
+      this._refreshSequence = 0;
+      this._appliedRefresh = 0;
+    }
+
+    _indexAttachments() {
+      const next = new Map();
+      for (const owner of [...(this.state.items || []), ...(this.state.nodes || [])]) {
+        for (const ref of owner.attachments || []) {
+          const key = JSON.stringify([owner.id, ref.name]);
+          const cached = this._blobCache.get(key);
+          next.set(key, cached && cached.digest === ref.digest && cached.mediaType === ref.media_type
+            ? cached
+            : { digest: ref.digest, mediaType: ref.media_type });
+        }
+      }
+      for (const [key, cached] of this._blobCache) {
+        if (cached.entry && next.get(key) !== cached) URL.revokeObjectURL(cached.entry.url);
+      }
+      this._blobCache = next;
     }
 
     _liveHeaders() {
@@ -371,20 +391,30 @@
 
     async refreshLive() {
       if (this.mode !== 'live') return false;
+      const sequence = ++this._refreshSequence;
       const resp = await fetch(`/state.json${this._liveQuerySuffix()}`, {
         cache: 'no-store',
         headers: this._liveHeaders(),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const payload = await resp.json();
+      if (sequence < this._appliedRefresh) return false;
+      if (this.SQL) {
+        const db = hydrateLiveSqlite(this.SQL, payload.descriptor, payload.state, payload.sensitivity);
+        try {
+          this.rawSqliteBytes = db.export();
+        } catch (err) {
+          db.close();
+          throw err;
+        }
+        if (this.db) this.db.close();
+        this.db = db;
+      }
+      this._appliedRefresh = sequence;
       this.descriptor = payload.descriptor;
       this.state = payload.state;
       this.sensitivity = payload.sensitivity;
-      if (this.SQL) {
-        if (this.db) this.db.close();
-        this.db = hydrateLiveSqlite(this.SQL, this.descriptor, this.state, this.sensitivity);
-        this.rawSqliteBytes = this.db.export();
-      }
+      this._indexAttachments();
       return true;
     }
 
@@ -451,15 +481,30 @@
     }
 
     async getAttachmentBlobUrl(itemId, name) {
-      const key = `${encodeURIComponent(itemId)}/${encodeURIComponent(name)}`;
-      if (this._blobCache.has(key)) return this._blobCache.get(key);
-      const data = await this.loadAttachmentBytes(itemId, name);
-      if (!data) return null;
-      const blob = new Blob([data.bytes], { type: data.mediaType });
-      const url = URL.createObjectURL(blob);
-      const entry = { url, mediaType: data.mediaType, size: data.bytes.byteLength };
-      this._blobCache.set(key, entry);
-      return entry;
+      const key = JSON.stringify([itemId, name]);
+      const cached = this._blobCache.get(key);
+      if (!cached) return null;
+      if (cached.entry) return cached.entry;
+      if (cached.pending) return cached.pending;
+      cached.pending = this.loadAttachmentBytes(itemId, name).then(async data => {
+        if (!data) return null;
+        if (this.mode === 'live') {
+          // The name-addressed route may already serve a newer version than state.json.
+          const hash = await crypto.subtle.digest('SHA-256', data.bytes);
+          const hex = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+          if (hex !== cached.digest) return null;
+        }
+        if (this._blobCache.get(key) !== cached) return null;
+        const blob = new Blob([data.bytes], { type: data.mediaType });
+        const url = URL.createObjectURL(blob);
+        cached.entry = { url, mediaType: data.mediaType, size: data.bytes.byteLength };
+        return cached.entry;
+      });
+      try {
+        return await cached.pending;
+      } finally {
+        cached.pending = null;
+      }
     }
 
     runReadOnlySql(sqlText) {
