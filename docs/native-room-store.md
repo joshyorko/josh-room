@@ -18,7 +18,7 @@ Save with:
 josh-room snapshot create my-room --source . --dimension archive --json
 ```
 
-The first Save initializes the Dimension's Room Store repository and publishes a complete logical JAT. Later Saves reuse unchanged Restic data. A no-op Save returns `status: already-saved` and adds no recovery point. Human output says `Already saved — 0 bytes uploaded`.
+The first Save initializes the Dimension's Room Store repository and publishes a complete logical JAT. Later Saves reuse unchanged Restic data. A no-op Save returns `status: already-saved` and adds no recovery point. Human output says `Already saved — no new backup data`. Temporary Restic lock writes can still occur; this is not a claim of zero network writes.
 
 If a Save reports `deletion-confirmation-required`, review a fresh preview and pass its token back with `--confirm-deletion`:
 
