@@ -151,6 +151,7 @@ async function main() {
     const env = { ...process.env, JOSH_ROOM_ACCEPTANCE_ROOT: base,
       JOSH_ROOM_ACCEPTANCE_PORT: String(await reservePort()),
       PYTHONPATH: path.join(installed, "runtime/controller"),
+      LOCALAPPDATA: path.join(base, "local-appdata"), APPDATA: path.join(base, "appdata"),
       PATH: path.join(tools, "age/age") + path.delimiter + process.env.PATH };
     delete env.JOSH_ROOM_RESULT_FILE;
     delete env.JOSH_ROOM_CREDENTIAL_FILE;
@@ -229,13 +230,16 @@ async function main() {
     if (provider) {
       await fsp.writeFile(path.join(base, "stop-provider"), "stop");
       await until(() => provider.exitCode !== null, "owned native credential cleanup", 30000);
-      for (const name of ["provider-ready.json", "provider-failed.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
+      for (const name of ["provider-ready.json", "provider-failed.json", "provider-cli-failed.json",
+        "provider-progress.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
         if (fs.existsSync(path.join(base, name))) {
           const value = JSON.parse(await fsp.readFile(path.join(base, name)));
           await fsp.writeFile(path.join(evidence, name), JSON.stringify(value, null, 2));
         }
       }
-      if (provider.exitCode !== 0) { failure ||= new Error("Provider custody/preservation cleanup failed"); receipt.cleanup = "FAIL"; }
+      const cleanup = path.join(base, "custody-cleanup.json");
+      receipt.cleanup = fs.existsSync(cleanup) && JSON.parse(await fsp.readFile(cleanup)).state === "PASS" ? "PASS" : "FAIL";
+      if (provider.exitCode !== 0) { failure ||= new Error("Provider acceptance failed"); receipt.provider_state = "FAIL"; }
       if (fs.existsSync(path.join(base, "provider-errors.log"))) {
         // Only sanitized exception type/boundary; never copy raw provider or editor logs.
         receipt.provider_error_log_bytes = (await fsp.stat(path.join(base, "provider-errors.log"))).size;

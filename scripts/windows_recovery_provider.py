@@ -26,6 +26,23 @@ def fingerprint(root):
             for p in root.rglob("*") if p.is_file()}
 
 
+def public_cli_failure(body, *, forbidden=()):
+    """Keep only an error code and bounded, shared-policy sanitized diagnostic."""
+    from josh_room.cli import _sanitize_human_diagnostic
+
+    result = {}
+    code = body.get("error_code")
+    if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,79}", code):
+        result["error_code"] = code
+    message = body.get("error")
+    if isinstance(message, str):
+        for value in forbidden:
+            message = message.replace(value, "[REDACTED]")
+        message = re.sub(r"[A-Za-z]:[\\/][^\s\"'<>]+", "[PRIVATE PATH]", message)
+        result["error"] = _sanitize_human_diagnostic(message)[:600]
+    return result
+
+
 def main():
     if sys.platform != "win32":
         raise RuntimeError("native Windows is required")
@@ -72,6 +89,7 @@ def main():
     access = "fixture" + secrets.token_hex(10)
     secret = secrets.token_hex(24)
     server = None
+    progress = {"native_backend": status.backend, "provider_credential_roundtrip": "NOT RUN", "commands": []}
 
     def cli(*args, expected=0):
         (base / "provider-stage.json").write_text(json.dumps({"stage": list(args[:2])}))
@@ -79,14 +97,20 @@ def main():
                                 capture_output=True, timeout=120, check=False)
         body = json.loads(result.stdout)
         if (result.returncode == 0) != (expected == 0):
-            # No raw controller/provider output in retained diagnostics.
+            (base / "provider-cli-failed.json").write_text(json.dumps({
+                "stage": list(args[:2]), "exit_code": result.returncode,
+                **public_cli_failure(body, forbidden=(access, secret))}))
             raise RuntimeError("production CLI failed: " + " ".join(args[:2]))
+        progress["commands"].append({"command": list(args[:2]), "state": "PASS"})
+        (base / "provider-progress.json").write_text(json.dumps(progress))
         return body
 
     try:
         keyring.store(profile, {"access-key-id": access, "secret-access-key": secret})
         if keyring.secure_lookup(profile, "secret-access-key") != secret:
             raise RuntimeError("native provider credential roundtrip failed")
+        progress["provider_credential_roundtrip"] = "PASS"
+        (base / "provider-progress.json").write_text(json.dumps(progress))
         with (base / "minio.log").open("wb") as log:
             server = subprocess.Popen([str(base / "tools/minio.exe"), "server",
                 str(base / "minio-data"), "--address", f"127.0.0.1:{port}",
