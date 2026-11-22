@@ -180,6 +180,37 @@ does not prove arbitrary filesystem safety or any Save/publication behavior.
 
 ## Hard gates before enabling split publication
 
+### Synthetic transaction qualification
+
+`composition_transaction` now implements candidate-v4 metadata transitions:
+reserve operation and logical slots, record a child and its pin atomically,
+prepare canonical manifest/policy digests, then record the parent and committed
+phase atomically. An operation ID cannot change its approved plan, recorded
+outputs are immutable, and retries do not allocate new slots. The manifest uses
+the exact reserved child JAT, never the current latest JAT.
+
+`persist_candidate` qualifies those transitions against an injected synthetic CAS
+store. It checks the paired body/ETag baseline and reads back the entire desired
+state after a write or uncertain reply. Process loss propagates; reopening and
+repeating first checks for the exact desired state. A conflicting or unconfirmed
+outcome stops rather than blindly repeating a write. Tests use durable SQLite
+commits and process-loss injection before/after every phase, not a live provider.
+
+This module has **no production adapter or CLI write command**. Its `committed`
+phase describes candidate metadata only, not a verified saved parent. It does
+not capture payloads, inspect an immutable parent tree, prove Restic reachability,
+establish an exclusive authority, migrate catalogs or modify owner files. The
+existing production Save guard remains in place. Provider-backed publication,
+tri-state assignment, installed UX and child hydration remain unimplemented.
+
+Independent Astra design review reconfirmed the authority blocker on 2026-11-22:
+a new Dimension/connection/catalog key does not establish physical repository
+isolation. An independently provisioned physical bucket with exclusive writer
+access from creation is a possible prerequisite, but current adapters cannot
+verify that condition. An arbitrary local `retention-locked` flag is insufficient.
+Existing v3 writers already past CAS can still delete descriptor objects or
+Restic data. No provider write is enabled by the synthetic transaction tests.
+
 1. **Historical pin retention.** `room_store_references.build_reference_index`
    indexes catalog records and logical descriptor references, not manifests in
    workspace snapshots. `remove_logical_catalog_records`, reconcile and Optimize
