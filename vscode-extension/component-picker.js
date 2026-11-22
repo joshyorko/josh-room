@@ -2,7 +2,16 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 
 // This selection is a request, never storage or source authorization.
-async function pickComponents(vscode, source, previous, discoverInstalled) {
+async function pickComponents(vscode, source, previous, discoverInstalled, discoverAgents) {
+  let agentProfiles = [];
+  if (discoverAgents) {
+    try {
+      const candidate = (await discoverAgents())?.agent_save;
+      if (candidate?.contract_version === 1 && candidate.mode === "history-only" && candidate.available === true
+        && Array.isArray(candidate.profiles) && candidate.profiles.length <= 128
+        && candidate.profiles.every(p => p?.admitted === true && ["codex", "claude"].includes(p.tool) && /^[0-9a-f]{64}$/.test(p.profile_ref) && ["personal", "oss", "homelab"].includes(p.scope))) agentProfiles = candidate.profiles;
+    } catch (_) { /* Unavailable admission never authorizes capture. */ }
+  }
   let installed = { available: false };
   if (discoverInstalled) {
     try {
@@ -17,8 +26,8 @@ async function pickComponents(vscode, source, previous, discoverInstalled) {
   };
   const unavailable = [
     ...(!installed.available ? [{ label: 'Homebrew installed prefix / binaries', detail: 'Unavailable: requires qualified Debian 12 x64, owner-controlled exact prefix, supported Hello or declared jq runtime closure.' }] : []),
-    { label: 'Codex sessions (history-only)', detail: 'Unavailable in this controller: #188 admission and history capture must qualify; auth is never copied.' },
-    { label: 'Claude sessions', detail: 'Blocked: no qualified #188 capability.' },
+    ...(!agentProfiles.some(p => p.tool === 'codex') ? [{ label: 'Codex HISTORY', detail: 'Unavailable: no qualified fresh Save admission; auth is never copied.' }] : []),
+    ...(!agentProfiles.some(p => p.tool === 'claude') ? [{ label: 'Claude HISTORY', detail: 'Unavailable: no qualified fresh Save admission; auth is never copied.' }] : []),
     { label: 'T3 Code sessions', detail: 'Blocked: shared-server isolation and #188 admission are not qualified.' },
   ];
   const rows = [
@@ -27,6 +36,7 @@ async function pickComponents(vscode, source, previous, discoverInstalled) {
     ...(installed.available ? [{ id: 'homebrew_installed', label: 'Installed Homebrew package/runtime (Debian 12 x64, exact prefix)', detail: 'Conditional source admission: qualified Hello build or jq/oniguruma + installed Homebrew glibc. Includes exact loader/libc bytes and a recipe fallback; replaces this point’s Homebrew recovery component.', picked: false }] : []),
     { id: 'homebrew_recovery', label: 'Homebrew recovery export', picked: defaults.homebrew_recovery !== 'omit', detail: 'Keep previous or select a prepared recovery archive. A Brewfile is a reinstall recipe, not installed binaries.' },
     { id: 'hauler_content', label: 'OCI images / additional Hauler content', picked: defaults.hauler_content !== 'omit', detail: 'Keep previous or explicitly refresh selected content.' },
+    ...['codex', 'claude'].filter(tool => agentProfiles.some(p => p.tool === tool)).map(tool => ({ id: `agent_${tool}`, tool, label: `${tool === 'codex' ? 'Codex' : 'Claude'} HISTORY`, picked: false, detail: 'Explicit current granted-profile history capture; no auth or native continuation. Reviewed separately from workspace bytes.' })),
     ...unavailable.map(row => ({ ...row, label: `Unavailable — ${row.label}`, unavailable: true, picked: false })),
   ];
   let chosen;
@@ -78,12 +88,22 @@ async function pickComponents(vscode, source, previous, discoverInstalled) {
       args.push(id === 'homebrew_recovery' ? (action === 'Select Brewfile-only recipe directory' ? '--brew-directory' : '--brew-archive') : '--hauler-manifest', files[0].fsPath);
     }
   }
+  const agentEntries = [];
+  for (const row of chosen.filter(row => row.id?.startsWith('agent_'))) {
+    const profiles = agentProfiles.filter(p => p.tool === row.tool);
+    const selected = await vscode.window.showQuickPick(profiles.map(p => ({ label: `${p.scope} · ${p.profile_ref.slice(0, 12)}`, profile: p })), { title: `${row.tool} HISTORY: choose granted profile`, ignoreFocusOut: true });
+    if (!selected) return undefined;
+    agentEntries.push({ tool: row.tool, profile_ref: selected.profile.profile_ref });
+  }
+  if (agentEntries.length) args.push('--agent-selection', JSON.stringify({ format: 'josh-room.save-agent-selection.v1', entries: agentEntries }));
   const request = { format_version: 1, components };
   return { request, args: ['--component-selection', JSON.stringify(request), ...args], allImages: args.includes('--all-images') };
 }
 
 function planText(preview) {
-  return Object.entries(preview.component_plan || {}).map(([name, row]) => `${name}: ${row.mode} — ${row.state}${row.restore_mode ? ` · ${row.restore_mode} · ${row.platform?.ID} ${row.platform?.VERSION_ID} ${row.platform?.arch} · ${row.prefix} · ${row.estimated_logical_bytes} logical bytes${row.packages ? ' · ' + row.packages.map(item => `${item.name}@${item.version} (${item.role})`).join(', ') : ''}` : ''}`).join('\n');
+  const agents = (preview.agent_plan?.entries || []).map(row => `${row.tool} HISTORY · profile ${row.profile_ref} · content ${row.content_sha256} · new point capture ${row.new_point_capture_id}${row.existing_point ? ` · existing point ${row.existing_point.outcome} ${row.existing_point.capture_id}` : ""}`).join("\n");
+  const components = Object.entries(preview.component_plan || {}).map(([name, row]) => `${name}: ${row.mode} — ${row.state}${row.restore_mode ? ` · ${row.restore_mode} · ${row.platform?.ID} ${row.platform?.VERSION_ID} ${row.platform?.arch} · ${row.prefix} · ${row.estimated_logical_bytes} logical bytes${row.packages ? ' · ' + row.packages.map(item => `${item.name}@${item.version} (${item.role})`).join(', ') : ''}` : ''}`).join('\n');
+  return [components, agents].filter(Boolean).join('\n');
 }
 function storageKey(binding) {
   return `save-components.v1.${crypto.createHash('sha256').update(binding).digest('hex')}`;

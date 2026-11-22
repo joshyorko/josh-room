@@ -36,7 +36,7 @@ def selection_plan(request, prior, *, rcc_present=False, homebrew=False, hauler=
     )} for name in COMPONENTS}
 
 
-def plan_token(request, *, dimension, project, workspace, policy_sha256, archive=None, directory=None, hauler=None, prior_snapshot=None, installed=None, installed_manifest=None):
+def plan_token(request, *, dimension, project, workspace, policy_sha256, archive=None, directory=None, hauler=None, prior_snapshot=None, installed=None, installed_manifest=None, agent_plan=None):
     """Bind reviewed selection to target, policy and explicit external input bytes."""
     import os
     import stat
@@ -76,4 +76,7 @@ def plan_token(request, *, dimension, project, workspace, policy_sha256, archive
         inputs.extend(["manifest", file_hash(path)] for path in hauler["manifests"])
         inputs.extend(["file", name, file_hash(path)] for path, name in hauler["files"])
     value = [selection_request(request), dimension, project, str(Path(workspace).resolve()), policy_sha256, inputs, prior_snapshot]
+    if agent_plan is not None:
+        from .native_agent_save import plan_digest
+        value = ["josh-room.save-agent-approval.v1", value, plan_digest(agent_plan)]
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

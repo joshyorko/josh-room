@@ -604,7 +604,15 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--brew-formula", help="qualified installed Hello or jq with its declared library/runtime closure")
         command.add_argument("--brew-directory", type=Path, help="Brewfile-only recipe export directory; never installed binaries")
         command.add_argument("--component-selection", help="versioned explicit Save component selection JSON")
+        command.add_argument("--agent-selection", help="explicit history-only agent Save selection JSON")
+        command.add_argument("--agent-plan", help="bounded public reviewed agent plan from preview")
         command.add_argument("--brew-archive", type=Path, help="reuse a saved Homebrew recovery archive in the native Room Store")
+    agent_capabilities = snapshot_commands.add_parser("agent-save-status")
+    agent_capabilities.add_argument("project")
+    agent_capabilities.add_argument("--source", type=Path, required=True)
+    agent_capabilities.add_argument("--dimension", required=True)
+    agent_capabilities.add_argument("--backend", choices=("minio", "s3", "r2"), required=True)
+    _json_option(agent_capabilities)
     installed_capabilities = snapshot_commands.add_parser("homebrew-capabilities")
     _json_option(installed_capabilities)
     brew_export = snapshot_commands.add_parser("export-homebrew")
@@ -2641,6 +2649,9 @@ def dispatch(args, instance: Path) -> dict:
         if dimension is not None and dimension.provider in {"minio", "s3", "r2"}:
             if dimension.provider in {"minio", "s3"} and selected_material is None:
                 raise ValueError("selected MinIO encryption material is required for native Save")
+            if args.snapshot_command == "agent-save-status":
+                from .native_agent_save import status as agent_save_status
+                return agent_save_status(instance, dimension, selected_material, project_id, source)
             components = _native_component_inputs(args, source)
             capture_options = _native_capture_options(args)
             if args.snapshot_command == "preview":
@@ -3048,6 +3059,8 @@ def hydrate_command(args, instance: Path, backend=None) -> dict:
 
 
 def _local_save_preflight(args, instance: Path) -> dict | None:
+    if getattr(args, "agent_selection", None) is not None:
+        return None
     if args.command != "snapshot" or args.snapshot_command != "create":
         return None
     from .local_save_receipt import invalidate, read_noop
@@ -3091,6 +3104,23 @@ def _native_capture_options(args) -> dict:
     if getattr(args, "component_plan_token", None) is not None and request is None:
         raise ValueError("a component plan token requires an explicit component selection")
     options = {"component_selection": request} if request is not None else {}
+    from .native_agent_save import reviewed_plan
+    from .native_agent_save import selection_request as agent_request
+    agents = agent_request(getattr(args, "agent_selection", None))
+    agent_plan = reviewed_plan(getattr(args, "agent_plan", None), agents)
+    if agent_plan is not None and agents is None:
+        raise ValueError("agent plan requires explicit agent selection")
+    if agents is not None:
+        if request is None:
+            raise ValueError("agent Save requires explicit workspace component selection")
+        if getattr(args, "snapshot_command", None) == "create" and (agent_plan is None or not getattr(args, "component_plan_token", None)):
+            raise ValueError("agent Save requires the reviewed plan and approval token")
+        if getattr(args, "snapshot_command", None) == "preview" and agent_plan is not None:
+            raise ValueError("preview produces an agent plan, not consumes one")
+        options["agent_selection"] = agents
+        if agent_plan is not None:
+            options["agent_plan"] = agent_plan
+
     if images or all_images or manifests or files:
         options["hauler_selection"] = {"images": images, "all_images": all_images, "manifests": manifests, "files": files}
     homebrew = getattr(args, "brew_archive", None)

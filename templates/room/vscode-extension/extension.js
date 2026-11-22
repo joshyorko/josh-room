@@ -1337,6 +1337,10 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
       }
       cleanup();
       if (options.inventoryError) { reject(options.inventoryError); return; }
+      if (result?.ok === false && result.error === "agent-save-partial") {
+        reject(controllerFailure(result, { controllerExitStatus: code, controllerStderr: stderr }));
+        return;
+      }
       if (cancelled || cancellationToken?.isCancellationRequested) {
         reject(cancellationError());
         return;
@@ -2243,6 +2247,19 @@ async function updateCompositionRoom(kind) {
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
 }
 
+function agentPartialWorkspace(receipt, source, dimension) {
+  if (receipt?.ok !== false || receipt.error !== "agent-save-partial") return undefined;
+  const result = receipt.workspace_result;
+  if (result?.ok !== true || !["saved", "saved-but-dirty", "already-saved"].includes(result.status)) return undefined;
+  const marker = currentRoom(source);
+  if (!marker || marker.dimension_id !== dimension || marker.dimension_id !== result.dimension_id
+    || marker.project_id !== result.project_id || marker.snapshot_id !== result.snapshot_id
+    || marker.workspace_path_sha256 !== realWorkspacePathSha256(source)
+    || marker.workspace_signature !== result.workspace_signature
+    || marker.capture_policy_sha256 !== result.capture_policy_sha256) return undefined;
+  return result;
+}
+
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
@@ -2373,7 +2390,9 @@ async function saveRoom(options = {}) {
     }
   }
   const choiceKey = captureChoiceKey(source, targetDimensionId, selected.project?.id || name);
-  imageChoice = await require("./component-picker").pickComponents(vscode, source, sessionCaptureChoices.get(choiceKey) || require("./component-picker").storedChoice(extensionContext?.globalState, choiceKey), () => runJoshRoom(["snapshot", "homebrew-capabilities"], source));
+  imageChoice = await require("./component-picker").pickComponents(vscode, source, sessionCaptureChoices.get(choiceKey) || require("./component-picker").storedChoice(extensionContext?.globalState, choiceKey), () => runJoshRoom(["snapshot", "homebrew-capabilities"], source),
+    ["minio", "s3"].includes(targetProvider) ? () => runJoshRoom(nativeRegistry.dimensionArgs(
+      ["snapshot", "agent-save-status", name, "--source", source, "--backend", targetProvider], targetDimensionId), source) : undefined);
   if (!imageChoice) return "cancelled";
   const buildArgs = nativeRegistry.dimensionArgs(
     ["snapshot", "create", name, "--source", source, "--backend", targetProvider],
@@ -2405,6 +2424,7 @@ async function saveRoom(options = {}) {
     assertValidRoomStorePreview(preview);
     deletionConfirmationToken = await approveRoomStorePreview(preview, { name, source, allImages: imageChoice.allImages, dimension: targetDimension?.display_name || targetDimensionId });
     if (deletionConfirmationToken === undefined) return "cancelled";
+    if (preview.agent_plan) buildArgs.push("--agent-plan", JSON.stringify(preview.agent_plan));
     if (preview.component_plan_token) buildArgs.push("--component-plan-token", preview.component_plan_token);
     if (deletionConfirmationToken) buildArgs.push("--confirm-deletion", deletionConfirmationToken);
   }
@@ -2424,13 +2444,37 @@ async function saveRoom(options = {}) {
     }
   }
   const saveEventGeneration = workspaceEventGeneration;
-  const result = nativeSave
-    ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
-      title: `Saving ${name}…`,
-      action: "save a Room",
-      encryptionMaterial,
-    })
-    : await runOperation(`Saving ${name}…`, buildArgs, source);
+  let result;
+  let agentPartial;
+  while (true) {
+    try {
+      result = nativeSave
+      ? await runSelectedEncryption(buildArgs, source, targetDimension || { id: targetDimensionId, provider: targetProvider }, {
+        title: `Saving ${name}…`,
+        action: "save a Room",
+        encryptionMaterial,
+      })
+      : await runOperation(`Saving ${name}…`, buildArgs, source);
+      break;
+    } catch (error) {
+      if (!nativeSave || !preview?.agent_plan || error.result?.error !== "agent-save-partial"
+        || error.result.attempt_id !== preview.agent_plan.attempt_id) throw error;
+      const workspaceResult = agentPartialWorkspace(error.result, source, targetDimensionId);
+      agentPartial = error.result;
+      result = workspaceResult;
+      if (workspaceResult) finishRoomStoreSave(workspaceResult, source, saveEventGeneration, imageChoice.allImages);
+      else setRoomState("unknown", { bindingTrusted: false });
+      outputChannel?.appendLine(`Agent Save partial: ${sanitizeControllerText(JSON.stringify(agentPartial.agent_result))}`);
+      const action = await vscode.window.showWarningMessage(workspaceResult
+        ? "Workspace saved; selected agent HISTORY did not finish. The recovery point is retained. Retry reconciles only this exact reviewed attempt."
+        : "Agent HISTORY Save is incomplete and the workspace outcome is not verified. Retry reconciles only this exact reviewed attempt; it cannot substitute a newer recovery point.",
+      "Retry Exact Attempt", "Show Details");
+      if (action === "Show Details") outputChannel?.show(true);
+      if (action === "Retry Exact Attempt") { agentPartial = undefined; continue; }
+      if (!workspaceResult) return "agent-save-uncertain";
+      break;
+    }
+  }
   if (nativeSave) {
     if (!["saved", "saved-but-dirty", "already-saved"].includes(result.status)) {
       throw new Error("Room Store Save returned an unsupported receipt.");
@@ -2443,10 +2487,17 @@ async function saveRoom(options = {}) {
       if (result[key] !== undefined && result[key] !== null) outputChannel?.appendLine(`${key}: ${sanitizeControllerText(result[key])}`);
     }
     let action;
-    if (dirtyBuffers.size > 0) {
+    if (agentPartial) {
+      // The partial receipt and explicit exact-attempt retry were handled above.
+    } else if (dirtyBuffers.size > 0) {
       action = await vscode.window.showWarningMessage("The Room was saved from disk, but unsaved editor changes remain. Save the files and save the Room again.", "Show Details");
     } else if (result.status === "already-saved") {
-      action = await vscode.window.showInformationMessage("Already saved — 0 bytes uploaded", "Show Details");
+      const entries = result.agent_result?.entries;
+      const knownBytes = Array.isArray(entries) && entries.length > 0 && entries.every(entry => Number.isSafeInteger(entry.data_uploaded) && entry.data_uploaded >= 0);
+      const agentBytes = knownBytes ? entries.reduce((sum, entry) => sum + entry.data_uploaded, 0) : undefined;
+      action = await vscode.window.showInformationMessage(result.agent_result && !knownBytes
+        ? "Workspace already saved; agent HISTORY receipt has no verified upload count."
+        : agentBytes > 0 ? `Workspace already saved; agent HISTORY uploaded ${agentBytes} bytes.` : "Already saved — 0 bytes uploaded", "Show Details");
     } else if (result.status === "saved-but-dirty" || saveEventGeneration !== workspaceEventGeneration) {
       action = await vscode.window.showWarningMessage(`Saved “${name}”, but workspace changes remain.`, "Show Details");
     } else {
@@ -2456,6 +2507,7 @@ async function saveRoom(options = {}) {
     if (result.component_receipt) {
       for (const [name, receipt] of Object.entries(result.component_receipt)) outputChannel?.appendLine(`${name}: ${receipt.status}`);
     }
+    if (!agentPartial && result.agent_result) outputChannel?.appendLine(`Agent HISTORY receipt: ${sanitizeControllerText(JSON.stringify(result.agent_result))}`);
     finishRoomStoreSave(result, source, saveEventGeneration, imageChoice.allImages);
   } else {
     const size = Number.isFinite(result.ciphertext_size)
@@ -2480,6 +2532,7 @@ async function saveRoom(options = {}) {
   } catch (_error) {
     await vscode.window.showWarningMessage("Room saved, but storage refresh did not finish. Use Refresh to reload the list; you do not need to save again.");
   }
+  if (agentPartial) return "agent-save-partial";
   return dirtyBuffers.size > 0 || saveEventGeneration !== workspaceEventGeneration || result.status === "saved-but-dirty"
     ? "saved-but-dirty" : nativeSave ? result.status : "saved";
 }
@@ -3666,6 +3719,7 @@ function activate(context) {
 
 module.exports = { activate };
 module.exports.__test__ = {
+  agentPartialWorkspace,
   saveCatalogRoom,
   enterChildRoom,
   splitWorkspace,

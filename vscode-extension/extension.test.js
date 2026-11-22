@@ -1553,7 +1553,7 @@ test("dirty tracking marks watcher changes immediately without rescanning each e
   assert.equal(statusCalls(), startupStatusCalls);
 });
 
-function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult, provider = "minio" } = {}) {
+function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult, agentStatus, provider = "minio" } = {}) {
   const dimension = {
     id: "backup",
     display_name: "Backup",
@@ -1580,12 +1580,15 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
     if (args[0] === "dimensions" && args[1] === "list") {
       return { stdout: JSON.stringify({ ok: true, dimensions: [dimension] }) };
     }
+    if (args[0] === "snapshot" && args[1] === "agent-save-status") {
+      return { stdout: JSON.stringify(agentStatus || { ok: true, agent_save: { contract_version: 1, mode: "history-only", available: false, profiles: [] } }) };
+    }
     if (args[0] === "snapshot" && args[1] === "preview") {
       return { stdout: JSON.stringify(preview) };
     }
     if (args[0] === "snapshot" && args[1] === "create") {
       onSave?.(args, { root, project, dimension, vscode });
-      return { stdout: JSON.stringify(saveResult) };
+      return { stdout: JSON.stringify(typeof saveResult === "function" ? saveResult() : saveResult), code: (typeof saveResult === "function" ? undefined : saveResult?.ok === false ? 1 : 0) };
     }
     if (args[0] === "status") {
       return { stdout: JSON.stringify(typeof statusResult === "function" ? statusResult() : statusResult || { ok: false, state: "unknown" }) };
@@ -1628,6 +1631,54 @@ const nativePreview = (overrides = {}) => ({
   ...overrides,
 });
 
+for (const retry of [false, true]) test(`history partial retains workspace baseline; exact retry=${retry}`, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-agent-partial-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const profile = { tool: "codex", profile_ref: "1".repeat(64), scope: "personal", admitted: true };
+  const agentPlan = { format: "josh-room.save-agent-plan.v1", attempt_id: "a".repeat(64),
+    target_scope_sha256: "b".repeat(64), workspace_content_sha256: "c".repeat(64),
+    capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256, workspace_signature: "b".repeat(64),
+    reviewed_point: null, digest: "d".repeat(64), entries: [{tool: profile.tool, profile_ref: profile.profile_ref,
+      content_sha256: "e".repeat(64), authority_sha256: "f".repeat(64), new_point_capture_id: "2".repeat(64), existing_point: null }] };
+  const workspace = { ok: true, status: "already-saved", dimension_id: "backup", encryption_domain_id: "domain-a",
+    project_id: "demo-room", snapshot_id: "jat-1", workspace_signature: "b".repeat(64),
+    signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: agentPlan.capture_policy_sha256, data_added_bytes: 0 };
+  const agentResult = { ok: false, attempt_id: agentPlan.attempt_id, entries: [{ tool: "codex", state: "uncertain", data_uploaded: 13 }] };
+  const partial = { ok: false, error: "agent-save-partial", attempt_id: agentPlan.attempt_id, workspace_result: workspace, agent_result: agentResult };
+  let creates = 0;
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview({ agent_plan: agentPlan, component_plan_token: "3".repeat(64) }),
+    agentStatus: { ok: true, agent_save: { contract_version: 1, mode: "history-only", available: true, profiles: [profile] } },
+    onSave: () => { creates += 1; },
+    saveResult: () => creates === 1 ? partial : { ...workspace, agent_result: { ...agentResult, ok: true, entries: [{ tool: "codex", state: "created", data_uploaded: 13 }] } },
+  });
+  fixture.vscode.quickPickResponses[1] = [{ id: "agent_codex", tool: "codex" }];
+  fixture.vscode.quickPickResponses.push({ profile });
+  fixture.vscode.infoResponses.push("Save");
+  if (retry) fixture.vscode.warningResponses.push("Retry Exact Attempt");
+  assert.equal(await fixture.extension.__test__.saveRoom(), retry ? "already-saved" : "agent-save-partial");
+  assert.equal(fixture.extension.__test__.getRoomStatusForTests().kind, "clean");
+  const saves = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] === "create");
+  assert.equal(saves.length, retry ? 2 : 1);
+  assert.deepEqual(JSON.parse(saves[0].args[saves[0].args.indexOf("--agent-plan") + 1]), agentPlan);
+  if (retry) assert.deepEqual(saves[1].args, saves[0].args);
+  assert.equal(fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] === "preview").length, 1);
+  assert.ok(fixture.warningCalls.some(([message]) => /Workspace saved; selected agent HISTORY did not finish/.test(message)));
+  assert.ok(fixture.infoCalls.every(([message]) => !/Already saved — 0 bytes/.test(message)));
+});
+
+test("uncorroborated partial cannot mark the workspace saved", t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-agent-partial-binding-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  const extension = loadExtension(vscode, createSpawnHarness(() => ({})).spawn);
+  writeStatMarker(root);
+  assert.equal(extension.__test__.agentPartialWorkspace({ ok: false, error: "agent-save-partial", workspace_result: {
+    ok: true, status: "saved", dimension_id: "backup", project_id: "demo-room", snapshot_id: "different-point",
+    workspace_signature: "b".repeat(64), capture_policy_sha256: require("./dirty").loadCapturePolicy(root).sha256,
+  } }, root, "backup"), undefined);
+});
+
 test("native Save previews the Room Store and reports logical, scanned, and Restic bytes separately", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-preview-"));
   const fixture = createNativeSaveFixture(root, {
@@ -1652,7 +1703,7 @@ test("native Save previews the Room Store and reports logical, scanned, and Rest
 
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
 
-  const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
+  const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && !["homebrew-capabilities", "agent-save-status"].includes(call.args[1]));
   assert.deepEqual(snapshotCalls.map((call) => call.args[1]), ["preview", "create"]);
   assert.ok(fixture.infoCalls.some(([message]) => /Initial full capture/.test(message)));
   assert.ok(fixture.infoCalls.some(([message]) => message === "Saved “Demo Room”."));
@@ -1735,7 +1786,7 @@ for (const externalComponents of [false, true]) test(`repeat Save resolves contr
   fixture.vscode.quickPickResponses.push({ project: fixture.project }, []);
   fixture.vscode.infoResponses.push("Save", undefined);
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  const operations = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
+  const operations = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && !["homebrew-capabilities", "agent-save-status"].includes(call.args[1]));
   assert.deepEqual(operations.map(call => call.args[1]), ["preview", "create", "preview", "create"]);
   assert.ok(operations.every(call => call.args.includes("--component-selection")));
 });
@@ -1784,7 +1835,7 @@ for (const changeAt of ["before chooser", "during chooser"]) test(`Git object ch
   }
   fixture.vscode.infoResponses.push("Save", undefined);
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  assert.deepEqual(fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities").map(call => call.args[1]), ["preview", "create"]);
+  assert.deepEqual(fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && !["homebrew-capabilities", "agent-save-status"].includes(call.args[1])).map(call => call.args[1]), ["preview", "create"]);
 });
 
 test("changing the selected components reaches controller preview and create with the same plan", async () => {
@@ -6881,7 +6932,7 @@ test("R2 native Save previews the selected capture scope and respects a no-op re
   fixture.vscode.quickPickResponses.splice(1, 1, [{ id: "hauler_content" }], "All tagged local OCI images");
   fixture.vscode.infoResponses.push("Save");
   assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
-  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
+  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && !["homebrew-capabilities", "agent-save-status"].includes(call.args[1]));
   assert.deepEqual(calls.map((call) => call.args[1]), ["preview", "create"]);
   assert.ok(calls.every((call) => call.args.includes("--all-images")));
 });

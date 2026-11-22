@@ -1,6 +1,31 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { pickComponents, planText } = require('./component-picker');
+const admitted = { agent_save: { contract_version: 1, mode: 'history-only', available: true, profiles: [
+  { tool: 'codex', profile_ref: 'a'.repeat(64), scope: 'personal', admitted: true },
+  { tool: 'claude', profile_ref: 'b'.repeat(64), scope: 'oss', admitted: true },
+] } };
+test('two history tools require explicit opaque profiles and never persist opt-in', async () => {
+  const v = mock([rows => rows.filter(r => r.tool), rows => rows[0], rows => rows[0]]);
+  const result = await pickComponents(v, '/synthetic/source', undefined, undefined, async () => admitted);
+  assert.ok(v.calls[0].rows.filter(r => r.tool).every(r => !r.picked && /HISTORY/.test(r.label)));
+  assert.deepEqual(JSON.parse(result.args[result.args.indexOf('--agent-selection') + 1]), {
+    format: 'josh-room.save-agent-selection.v1', entries: [
+      { tool: 'codex', profile_ref: 'a'.repeat(64) }, { tool: 'claude', profile_ref: 'b'.repeat(64) },
+    ],
+  });
+  let persisted;
+  await require('./component-picker').rememberChoice({ update: async (_k, value) => { persisted = value; } }, 'synthetic', result);
+  assert.deepEqual(Object.keys(persisted), ['request']);
+  assert.deepEqual(Object.keys(persisted.request.components).sort(), ['hauler_content', 'homebrew_recovery', 'rcc_environment']);
+});
+test('unknown admission version and cancelled profile selection authorize no history', async () => {
+  const v = mock([[]]);
+  await pickComponents(v, '/synthetic/source', undefined, undefined, async () => ({ agent_save: { ...admitted.agent_save, contract_version: 2 } }));
+  assert.equal(v.calls[0].rows.some(r => r.tool), false);
+  const cancelled = mock([rows => rows.filter(r => r.tool === 'codex'), undefined]);
+  assert.equal(await pickComponents(cancelled, '/synthetic/source', undefined, undefined, async () => admitted), undefined);
+});
 function mock(answers, files = []) {
   const calls = [];
   return { calls, window: {

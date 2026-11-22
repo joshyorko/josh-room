@@ -1,0 +1,114 @@
+{
+  "source_sha": "1ebb277f43e51c333fb9aeb577b6c7a70972448e",
+  "branch": "feat/v1-integration",
+  "pr": "https://github.com/joshyorko/josh-room/pull/221",
+  "published": false,
+  "release_qualified": false,
+  "pins_changed": false,
+  "default_jat_version": "0.1.18",
+  "packages": [
+    {
+      "filename": "josh_room-0.1.0.dev0-py3-none-any.whl",
+      "sha256": "f43c89e755642b8b974065ef928283901db2b0fb52d249ccdc56e4fd4ce8bc38",
+      "size": 1802160
+    },
+    {
+      "filename": "josh-room-0.1.52.vsix",
+      "sha256": "7a3bb8a8362d540be2180620df1aca87736536175224c39488fd51fcb0da078c",
+      "size": 1846521
+    }
+  ],
+  "source_and_installed_parity": {
+    "wheel_source_files": 138,
+    "controller_files": 126,
+    "extension_files": 149
+  },
+  "installer_metadata_exception": "VSCode-added __metadata only; all other parsed package.json fields equal",
+  "ci": {
+    "main_run": 45060569383,
+    "controller_candidate_run": 45060569301,
+    "successes": 9,
+    "intentional_skips": [
+      "promote",
+      "release-candidate"
+    ],
+    "failures": 0,
+    "pending": 0,
+    "python": {
+      "passed": 3127,
+      "skipped": 121,
+      "subtests_passed": 47
+    },
+    "node": {
+      "passed": 451,
+      "skipped": 2
+    },
+    "omp": {
+      "passed": 49,
+      "skipped": 0
+    }
+  },
+  "installed_linux_runtime_acceptance": "NOT YET QUALIFIED; active independent trial uses these exact packages",
+  "installed_windows_acceptance": "pending #220; not integrated",
+  "agent_save_adapter": "in progress outside frozen source; selectors remain false",
+  "target_version": "1.0.0",
+  "controller_candidates": [
+    {
+      "archive": {
+        "sha256": "5e2d6d26b6075768608d8d51fe3db532ce1cb3553e44b8798851fe1dbb5fead5",
+        "size": 101054937
+      },
+      "artifact_digest": "sha256:71b2f5cdeb2f1c08dcd122b8899adfe72d881f25e0c61e50716d9f9211d37c10",
+      "format_version": 1,
+      "freeze": {
+        "asset": "environment_linux_amd64_freeze.yaml",
+        "sha256": "0f4d2ec0e62bad278e44de4adae023f260cf5d28c5aa4eaeb94ee8f0bd824b75",
+        "size": 677
+      },
+      "input_digest": "sha256:e859591fe458d6a7e73fda8c5aea54bb51de6e01d24f7ee77dbc20c6741ce96f",
+      "legacy_blueprint_key": "49c86dacedc0cfe4",
+      "platform": "linux-x64",
+      "rcc_sha256": "4d68609044d3a39a1728d571d54c77a6174215adb40eb9acd69ce5ad34a6db1f",
+      "rcc_version": "v18.19.11",
+      "source": "1ebb277f43e51c333fb9aeb577b6c7a70972448e",
+      "specification_digest": "sha256:9b69a0097c30cce8f06f05a0e662f5c3368c54e18fd704b9e9c13e3f1ff810c9",
+      "verified_acquire": true,
+      "verified_crypto": true,
+      "verified_exec": true,
+      "verified_no_build": true
+    },
+    {
+      "archive": {
+        "sha256": "d36e9f969e61035e2c94dac8b8223767df442630c256cd463d394bf816909e75",
+        "size": 77989906
+      },
+      "artifact_digest": "sha256:af5caa0cc60d63fcf5de101ffa56db95feeb7045fb43e06aaa201dcc523c374b",
+      "format_version": 1,
+      "freeze": {
+        "asset": "environment_windows_amd64_freeze.yaml",
+        "sha256": "4fc0408901a798c1693e4b5db1b1392e77940a11e5181a0401fc410215bbd489",
+        "size": 618
+      },
+      "input_digest": "sha256:dd04b4b82bc89d1396bb943faa0bbc34c65b806e635cb6dd703c0ad6fa03d578",
+      "legacy_blueprint_key": "8b058f3f1dcb2066",
+      "platform": "win32-x64",
+      "rcc_sha256": "58f43a3b3c54032740f224cb4a8bbf68c47c865cf2652084fb139b8ecc01cfd0",
+      "rcc_version": "v18.19.11",
+      "source": "1ebb277f43e51c333fb9aeb577b6c7a70972448e",
+      "specification_digest": "sha256:40b2d8fcbf5e12842762902efbb507f51bdcb1f85f2fdecf5f2632ea19fd770e",
+      "verified_acquire": true,
+      "verified_crypto": true,
+      "verified_exec": true,
+      "verified_no_build": true
+    }
+  ],
+  "synthetic_offline_html": {
+    "filename": "room-view-synthetic.html",
+    "sha256": "5f76c2b30e890c8c9d6af008d34843a09d888522197c0a873cb6cb6274db1009",
+    "packaged_cli_export": "passed",
+    "packaged_cli_inspect": "passed",
+    "viewer_source_unchanged_from": "c4b735f7fc89421681310c715fa475779cea1f27",
+    "previous_browser_evidence": "reused unchanged viewer; not a fresh browser trial"
+  },
+  "receipt_scope": "immutable frozen package/source parity and completed source CI; not release qualification"
+}
