@@ -110,13 +110,13 @@ files. No Antigravity binary or user profile was inspected.
 
 ## Follow-up issue scope
 
-**OpenCode native continuity qualification:** pin executable/source and license;
+**OpenCode native continuity qualification ([#211](https://github.com/joshyorko/josh-room/issues/211)):** pin executable/source and license;
 document explicit database/session APIs and auth separation; establish a closed
 allowlist with WAL/stopped-writer guarantees; restore to an absent isolated
 target; prove a new real synthetic turn with original identity; qualify direct
 and T3-mediated modes separately. Until then show unavailable, not included.
 
-**Antigravity native continuity feasibility:** identify a vendor-supported,
+**Antigravity native continuity feasibility ([#212](https://github.com/joshyorko/josh-room/issues/212)):** identify a vendor-supported,
 versioned session storage/export/import/continuation contract and license terms;
 prove credentials and machine identity can be omitted; test synthetic cold
 restore and a new real turn. Without those prerequisites, retain unsupported

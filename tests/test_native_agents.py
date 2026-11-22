@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
+import sys
+import time
+from pathlib import Path
 
 import pytest
 
@@ -127,7 +131,7 @@ def test_capture_rejects_unsafe_material_before_reference(profile, identities, t
     elif unsafe == "path":
         target.write_text(target.read_text().replace(str(binding["workspace"]), "/workspaces/another-room"))
     elif unsafe == "credential":
-        rollout(root, binding, text="-----BEGIN OPENSSH PRIVATE KEY-----")
+        rollout(root, binding, text=("-" * 5 + "BEGIN OPENSSH " + "PRIVATE KEY" + "-" * 5))
     elif unsafe == "invalid-json":
         target.write_text("not native JSONL")
     else:
@@ -188,7 +192,7 @@ def test_native_format_and_decoded_credentials_fail_closed(profile, identities, 
     elif change == "quoted-credential":
         rows[1]["payload"]["access_token"] = "synthetic-token-must-be-rejected"
     elif change == "escaped-secret":
-        rows[1]["payload"]["message"] = "-----BEGIN OPENSSH PRIVATE KEY-----"
+        rows[1]["payload"]["message"] = ("-" * 5 + "BEGIN OPENSSH " + "PRIVATE KEY" + "-" * 5)
     data = "\n".join(json.dumps(row, ensure_ascii=True) for row in rows) + "\n"
     if change == "escaped-secret":
         data = data.replace("PRIVATE", "\\u0050RIVATE")
@@ -226,3 +230,30 @@ def test_restore_collision_race_keeps_existing_empty_directory(profile, identiti
         agents.restore(target, source=source, identity_paths=identities[0], **binding)
     assert target.is_dir() and list(target.iterdir()) == []
     assert not list(tmp_path.glob(".native-*"))
+
+
+def test_cancel_foreground_launch_stops_owned_process_and_releases_lock(profile, tmp_path):
+    root, binding = profile
+    executable = tmp_path / "synthetic-long-running-t3"
+    pid_path = tmp_path / "synthetic-child.pid"
+    executable.write_text("#!/usr/bin/env python3\nimport os,time\nfrom pathlib import Path\nPath(" + repr(str(pid_path)) + ").write_text(str(os.getpid()))\ntime.sleep(60)\n")
+    executable.chmod(0o700)
+    script = "from pathlib import Path; from josh_room.native_agents import launch; launch(Path(" + repr(str(root)) + "), executable=" + repr(str(executable)) + ", dimension='synthetic-dimension',room='demo-room',profile='synthetic-profile',workspace=Path(" + repr(str(binding["workspace"])) + "))"
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(Path(agents.__file__).parents[1])
+    process = subprocess.Popen([sys.executable, "-c", script], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 5
+        while not pid_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert pid_path.exists()
+        child_pid = int(pid_path.read_text())
+        process.send_signal(signal.SIGTERM)
+        process.wait(timeout=5)
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
+        assert agents.status(root, **binding)["state"] == "configured"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()

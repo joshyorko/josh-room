@@ -175,6 +175,14 @@ def _write(path, data):
         os.fsync(handle.fileno())
 
 
+def _fsync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _initialize(root, binding, recipients):
     root.mkdir(mode=0o700)
     for name in ("t3", "codex", "claude"):
@@ -346,6 +354,7 @@ def capture(root, *, output, recipients, **binding):
             if _inventory(root) != expected:
                 _fail("source-changed")
             os.link(temporary, output)
+            _fsync_directory(output.parent)
         finally:
             temporary.unlink(missing_ok=True)
     return {"ok": True, "state": "history-available", "files": len(entries), "native_resume_verified": False}
@@ -453,12 +462,15 @@ def restore(root, *, source, identity_paths, **binding):
                 for parent in reversed(parents):
                     parent.mkdir(mode=0o700)
                 _write(target, data)
+            for directory, _dirs, _files in os.walk(staging, topdown=False):
+                _fsync_directory(directory)
             # RENAME_NOREPLACE preserves even a concurrent empty target.
             rename = ctypes.CDLL(None, use_errno=True).renameat2
             rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
             rename.restype = ctypes.c_int
             if rename(-100, os.fsencode(staging), -100, os.fsencode(root), 1):
                 _fail("profile-target-collision")
+            _fsync_directory(root.parent)
         finally:
             if staging.exists():
                 shutil.rmtree(staging)
