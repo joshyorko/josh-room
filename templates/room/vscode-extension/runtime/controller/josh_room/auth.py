@@ -882,6 +882,8 @@ def _write_encryption_identity(path: Path, value: str) -> Path:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "w") as handle:
+            if os.name == "nt":
+                protect_private_file(temporary)
             handle.write(value.rstrip("\n") + "\n")
             handle.flush()
             os.fsync(handle.fileno())

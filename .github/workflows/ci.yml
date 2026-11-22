@@ -115,7 +115,7 @@ jobs:
           $receipt | Set-Content (Join-Path $env:RUNNER_TEMP "recovery-restic.json")
       - name: Verify native pinned recovery and no-clobber boundaries
         shell: pwsh
-        run: uv run pytest tests/test_recovery_windows.py tests/test_recovery_text.py -q -s --junitxml="$env:RUNNER_TEMP/recovery-windows.xml"
+        run: uv run pytest tests/test_recovery_windows.py tests/test_recovery_text.py tests/test_encryption_windows.py -q -s --junitxml="$env:RUNNER_TEMP/recovery-windows.xml"
       - name: Upload native recovery evidence
         if: always()
         uses: actions/upload-artifact@v7
