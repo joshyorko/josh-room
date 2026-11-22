@@ -5023,6 +5023,23 @@ test("activation registers every JAT capability command", () => {
   }
 });
 
+test("agent session status is registered lazily and never claims native continuation", () => {
+  const { vscode, statusItem, commandCallbacks } = createVscodeMock(__dirname);
+  const extension = loadExtension(vscode, () => { throw new Error("activation must not spawn"); });
+  extension.__test__.setStatusItem(statusItem);
+  extension.__test__.setRuntimeReadinessForTests(new Promise(() => {}));
+  extension.activate({ extensionPath: __dirname, globalStorageUri: { fsPath: __dirname }, subscriptions: [], secrets: { get: async () => { throw new Error("activation must not read secrets"); } } });
+  assert.equal(typeof commandCallbacks.get("joshRoom.agentSessionsStatus"), "function");
+  const summary = extension.__test__.agentSessionsSummary({ providers: {
+    t3: { capture: "blocked" }, codex: { capture: "history-only" }, claude: { capture: "blocked" },
+  } });
+  assert.match(summary, /T3 Code: blocked/);
+  assert.match(summary, /Codex CLI: history-only/);
+  assert.match(summary, /Claude Code: blocked/);
+  assert.match(summary, /Native continuation is unverified/);
+  assert.match(summary, /Save and Enter do not include agent state/);
+});
+
 test("native logical JAT and Dimension lifecycle commands are contributed and registered", () => {
   for (const manifestPath of ["vscode-extension/package.json", "templates/room/vscode-extension/package.json"]) {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", manifestPath), "utf8"));

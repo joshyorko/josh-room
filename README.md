@@ -263,6 +263,13 @@ corroborated device-local materialization when present, or hydrates into the
 configured workspace root and launches the selected IDE only after durable
 completion.
 
+## Opt-in agent session checkpoint
+
+The [native agent recovery checkpoint](docs/native-agent-recovery.md) provides
+dedicated T3 process isolation and encrypted Codex session-file recovery.
+Recovery is history-only until a cold-restored process completes a new turn.
+T3 and Claude native capture remain blocked. Normal Save and Enter are unchanged.
+
 ## Evidence and current limits
 
 The test suite includes real synthetic JAT/Hauler/age local hydration and a

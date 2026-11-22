@@ -45,6 +45,7 @@
     "onCommand:joshRoom.deleteRoom",
     "onCommand:joshRoom.serve",
     "onCommand:joshRoom.inspectLogicalSnapshot",
+    "onCommand:joshRoom.agentSessionsStatus",
     "onCommand:joshRoom.exportPortableJat",
     "onCommand:joshRoom.extractLogicalSnapshot",
     "onCommand:joshRoom.verifyRoomStore",
@@ -200,6 +201,11 @@
         "command": "joshRoom.inspectLogicalSnapshot",
         "title": "Josh: Inspect Logical JAT",
         "icon": "$(search)"
+      },
+      {
+        "command": "joshRoom.agentSessionsStatus",
+        "title": "Josh: Agent Sessions Status",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "joshRoom.exportPortableJat",
@@ -380,6 +386,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "joshRoom.agentSessionsStatus",
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "group": "room@4"
+        },
         {
           "command": "joshRoom.connectStorage",
           "when": "view == joshRoom.rooms && viewItem == provider-connection",

@@ -5204,6 +5204,26 @@ async function inspectLogicalSnapshot(preselected) {
   return "inspected";
 }
 
+async function agentSessionsStatus() {
+  assertWorkspaceTrusted("inspect agent session capabilities");
+  const result = await runJoshRoom(["agents", "capabilities", "--json"], activeWorkspace());
+  await vscode.window.showInformationMessage(
+    agentSessionsSummary(result), { modal: true },
+  );
+  return "inspected";
+}
+
+function agentSessionsSummary(result) {
+  const providers = result.providers || {};
+  const labels = { t3: "T3 Code", codex: "Codex CLI", claude: "Claude Code" };
+  const states = new Set(["blocked", "history-only"]);
+  const lines = Object.entries(labels).map(([key, label]) => {
+    const state = providers[key]?.capture;
+    return `${label}: ${states.has(state) ? state : "unavailable"}`;
+  });
+  return [...lines, "Native continuation is unverified. Recovery is opt-in through josh-room agents. Save and Enter do not include agent state."].join("\n");
+}
+
 async function exportPortableJat(preselected) {
   assertWorkspaceTrusted("export a portable JAT");
   const context = await selectedLogicalSnapshot(preselected, "Josh: Export Portable JAT");
@@ -5528,6 +5548,7 @@ function activateNative(context) {
   register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
+  register(context, "joshRoom.agentSessionsStatus", agentSessionsStatus);
   register(context, "joshRoom.exportPortableJat", exportPortableJat);
   register(context, "joshRoom.extractLogicalSnapshot", extractLogicalSnapshot);
   register(context, "joshRoom.verifyRoomStore", verifyRoomStore);
@@ -5776,6 +5797,8 @@ Object.assign(module.exports.__test__, {
   jatExport,
   jatCopy,
   inspectLogicalSnapshot,
+  agentSessionsStatus,
+  agentSessionsSummary,
   exportPortableJat,
   extractLogicalSnapshot,
   verifyRoomStore,
