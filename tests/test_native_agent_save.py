@@ -113,9 +113,11 @@ def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypat
 def test_release_disabled_save_refuses_before_opening_storage(tmp_path, monkeypatch):
     assert save.SAVE_ADAPTER_QUALIFIED is False
     monkeypatch.setattr(bridge, "open_existing_room_store", lambda *a, **k: pytest.fail("disabled storage admission"))
-    with pytest.raises(ValueError, match="history Save integration is not enabled"):
-        with save.open_scope(None, None, None, "room", tmp_path, "a" * 64, "b" * 64):
-            pytest.fail("disabled Save yielded authority")
+    with (
+        pytest.raises(ValueError, match="history Save integration is not enabled"),
+        save.open_scope(None, None, None, "room", tmp_path, "a" * 64, "b" * 64),
+    ):
+        pytest.fail("disabled Save yielded authority")
 
 
 @pytest.mark.parametrize("grant_state", ["denied", "matching", "replaced"])
