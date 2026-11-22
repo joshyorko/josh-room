@@ -17,7 +17,8 @@ pytestmark = pytest.mark.skipif(not agents.sys.platform.startswith("linux"), rea
 
 
 @pytest.fixture
-def profile(tmp_path, identities):
+def profile(tmp_path, identities, monkeypatch):
+    monkeypatch.setattr(agents, "_admit", lambda *args, **kwargs: {"admitted": True, "authority_digest": "synthetic-authority"})
     tmp_path.chmod(0o700)
     workspace = tmp_path / "workspace"
     workspace.mkdir(mode=0o700)
@@ -88,7 +89,7 @@ def test_existing_busy_profile_is_not_touched(profile):
             agents.launch(root, **binding, executable="python")
 
 
-def test_real_age_roundtrip_preserves_native_bytes_but_excludes_auth_and_t3(profile, identities, tmp_path):
+def test_real_age_capture_verifies_native_bytes_but_restore_fails_closed(profile, identities, tmp_path):
     root, binding = profile
     paths, recipients = identities
     target = rollout(root, binding)
@@ -101,15 +102,12 @@ def test_real_age_roundtrip_preserves_native_bytes_but_excludes_auth_and_t3(prof
     assert source.read_bytes().startswith(b"age-encryption.org/v1")
     assert b"synthetic turn" not in source.read_bytes()
     assert agents.verify(root, source=source, identity_paths=paths[:1], **binding)["files"] == 1
+    decoded, _ = agents._decode(source, paths[:1], agents._binding(**binding))
+    assert decoded == {target.relative_to(root / "codex").as_posix(): expected}
     restored = tmp_path / "restored"
-    result = agents.restore(restored, source=source, identity_paths=paths[1:], **binding)
-    assert result["native_resume_verified"] is False
-    assert (restored / target.relative_to(root)).read_bytes() == expected
-    assert not (restored / "codex/auth.json").exists()
-    assert list((restored / "t3").iterdir()) == []
-    assert agents.status(restored, **binding)["state"] == "configured"
-    with pytest.raises(agents.NativeAgentError, match="collision"):
+    with pytest.raises(agents.NativeAgentError, match="crash-safe-materialization-unavailable"):
         agents.restore(restored, source=source, identity_paths=paths, **binding)
+    assert not restored.exists()
     with pytest.raises(agents.NativeAgentError):
         agents.verify(root, source=source, identity_paths=paths, **{**binding, "room": "wrong"})
     assert not list(tmp_path.glob(".native-*"))
@@ -142,7 +140,7 @@ def test_capture_rejects_unsafe_material_before_reference(profile, identities, t
     assert not output.exists()
 
 
-def test_restore_tampering_and_wrong_identity_leave_target_absent(profile, identities, tmp_path):
+def test_verify_rejects_ciphertext_tampering(profile, identities, tmp_path):
     root, binding = profile
     paths, recipients = identities
     rollout(root, binding)
@@ -151,7 +149,7 @@ def test_restore_tampering_and_wrong_identity_leave_target_absent(profile, ident
     source.write_bytes(source.read_bytes()[:-12] + b"tampered-end")
     target = tmp_path / "new-profile"
     with pytest.raises(agents.NativeAgentError):
-        agents.restore(target, source=source, identity_paths=paths, **binding)
+        agents.verify(root, source=source, identity_paths=paths, **binding)
     assert not target.exists()
     assert not list(tmp_path.glob(".native-*"))
 
@@ -213,23 +211,16 @@ def test_capture_cannot_change_configured_recipient_scope(profile, identities, t
         agents.capture(root, output=tmp_path / "wrong-scope.age", recipients=changed, **binding)
 
 
-def test_restore_collision_race_keeps_existing_empty_directory(profile, identities, tmp_path, monkeypatch):
-    root, binding = profile
-    rollout(root, binding)
-    source = tmp_path / "retained.age"
-    agents.capture(root, output=source, recipients=identities[1], **binding)
-    target = tmp_path / "occupied-after-validation"
-    initialize = agents._initialize
+def test_restore_refuses_before_decryption_or_plaintext_creation(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("blocked restore must not decrypt or create plaintext")
 
-    def race(staging, bound, recipients):
-        initialize(staging, bound, recipients)
-        target.mkdir(mode=0o700)
-
-    monkeypatch.setattr(agents, "_initialize", race)
-    with pytest.raises(agents.NativeAgentError, match="collision"):
-        agents.restore(target, source=source, identity_paths=identities[0], **binding)
-    assert target.is_dir() and list(target.iterdir()) == []
-    assert not list(tmp_path.glob(".native-*"))
+    monkeypatch.setattr(agents, "_decode", forbidden)
+    monkeypatch.setattr(agents, "_initialize", forbidden)
+    target = tmp_path / "absent"
+    with pytest.raises(agents.NativeAgentError, match="crash-safe-materialization-unavailable"):
+        agents.restore(target, source=tmp_path / "not-read.age", identity_paths=[], dimension="untrusted")
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_cancel_foreground_launch_stops_owned_process_and_releases_lock(profile, tmp_path):
@@ -238,7 +229,7 @@ def test_cancel_foreground_launch_stops_owned_process_and_releases_lock(profile,
     pid_path = tmp_path / "synthetic-child.pid"
     executable.write_text("#!/usr/bin/env python3\nimport os,time\nfrom pathlib import Path\nPath(" + repr(str(pid_path)) + ").write_text(str(os.getpid()))\ntime.sleep(60)\n")
     executable.chmod(0o700)
-    script = "from pathlib import Path; from josh_room.native_agents import launch; launch(Path(" + repr(str(root)) + "), executable=" + repr(str(executable)) + ", dimension='synthetic-dimension',room='demo-room',profile='synthetic-profile',workspace=Path(" + repr(str(binding["workspace"])) + "))"
+    script = "from pathlib import Path; from josh_room import native_agents as agents; agents._admit=lambda *a,**k: {}; agents.launch(Path(" + repr(str(root)) + "), executable=" + repr(str(executable)) + ", dimension='synthetic-dimension',room='demo-room',profile='synthetic-profile',workspace=Path(" + repr(str(binding["workspace"])) + "))"
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(Path(agents.__file__).parents[1])
     process = subprocess.Popen([sys.executable, "-c", script], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -257,3 +248,102 @@ def test_cancel_foreground_launch_stops_owned_process_and_releases_lock(profile,
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+def test_capture_refuses_unmanaged_open_writer_before_output(profile, identities, tmp_path):
+    root, binding = profile
+    target = rollout(root, binding)
+    output = tmp_path / "never-published.age"
+    with target.open("ab"), pytest.raises(agents.NativeAgentError, match="writer-active"):
+        agents.capture(root, output=output, recipients=identities[1], **binding)
+    assert not output.exists()
+
+
+def test_writer_arriving_during_encryption_prevents_publication(profile, identities, tmp_path, monkeypatch):
+    root, binding = profile
+    target = rollout(root, binding)
+    output = tmp_path / "never-published.age"
+    original = agents.subprocess.Popen
+
+    def attempted_writer(*args, **kwargs):
+        with pytest.raises(BlockingIOError):
+            descriptor = os.open(target, os.O_WRONLY | os.O_NONBLOCK)
+            os.close(descriptor)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(agents.subprocess, "Popen", attempted_writer)
+    with pytest.raises(agents.NativeAgentError, match="writer-active"):
+        agents.capture(root, output=output, recipients=identities[1], **binding)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".native-encrypted-*"))
+
+
+def test_source_replacement_after_lease_admission_is_rejected(profile, identities, tmp_path, monkeypatch):
+    root, binding = profile
+    target = rollout(root, binding)
+    original_entries = agents._entries
+
+    def replace_before_read(root, binding, barrier, expected):
+        replacement = target.with_name("replacement")
+        replacement.write_bytes(target.read_bytes())
+        replacement.chmod(0o600)
+        os.replace(replacement, target)
+        return original_entries(root, binding, barrier, expected)
+
+    monkeypatch.setattr(agents, "_entries", replace_before_read)
+    output = tmp_path / "never-published.age"
+    with pytest.raises(agents.NativeAgentError, match="source-changed"):
+        agents.capture(root, output=output, recipients=identities[1], **binding)
+    assert not output.exists()
+
+
+def test_missing_host_admission_blocks_before_native_content(profile, identities, tmp_path, monkeypatch):
+    root, binding = profile
+    monkeypatch.undo()
+    config_home = tmp_path / "missing-host-authority"
+    config_home.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("native content must not be inventoried without host admission")
+
+    monkeypatch.setattr(agents, "_inventory", forbidden)
+    output = tmp_path / "never-published.age"
+    with pytest.raises(agents.NativeAgentError, match="admission"):
+        agents.capture(root, output=output, recipients=identities[1], **binding)
+    assert not output.exists()
+
+
+def test_changed_authority_during_capture_prevents_publication(profile, identities, tmp_path, monkeypatch):
+    root, binding = profile
+    rollout(root, binding)
+    calls = []
+
+    def changed(*args, **kwargs):
+        calls.append(kwargs["operation"])
+        return {"authority_sha256": str(len(calls))}
+
+    monkeypatch.setattr(agents, "_admit", changed)
+    output = tmp_path / "never-published.age"
+    with pytest.raises(agents.NativeAgentError, match="admission-changed"):
+        agents.capture(root, output=output, recipients=identities[1], **binding)
+    assert calls == ["capture", "capture"]
+    assert not output.exists()
+
+
+def test_new_native_file_during_encryption_prevents_publication(profile, identities, tmp_path, monkeypatch):
+    root, binding = profile
+    target = rollout(root, binding)
+    original = agents.subprocess.Popen
+
+    def new_file(*args, **kwargs):
+        added = target.with_name("rollout-additional.jsonl")
+        added.write_bytes(target.read_bytes())
+        added.chmod(0o600)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(agents.subprocess, "Popen", new_file)
+    output = tmp_path / "never-published.age"
+    with pytest.raises(agents.NativeAgentError, match="source-changed"):
+        agents.capture(root, output=output, recipients=identities[1], **binding)
+    assert not output.exists()

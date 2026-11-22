@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import ctypes
 import hashlib
 import json
 import os
@@ -26,6 +25,7 @@ from pathlib import Path
 from .cancellation import sigterm_cancellation, terminate_owned_process
 from .crypto import _managed_executable
 from .material_security import Decision, MaterialClass, scan_content
+from .native_agent_quiescence import QuiescenceError, read_barrier
 from .private_paths import verify_private_path
 
 MAX_BYTES = 16 * 1024 * 1024
@@ -82,16 +82,19 @@ def _inspect_native_values(value, *, depth=0):
 def capabilities():
     return {
         "format": FORMAT,
+        "contract_version": 1,
         "native_resume_verified": False,
         "providers": {
-            "t3": {"capture": "blocked", "reason": "effect-outbox-and-schema-audit-required", "launch": "dedicated-linux-profile"},
-            "codex": {"capture": "history-only", "reason": "new-turn-acceptance-not-run", "allowlist": "dedicated sessions rollout JSONL only"},
-            "claude": {"capture": "blocked", "reason": "native-policy-and-cold-resume-not-qualified"},
+            "t3": {"capture": "blocked", "reason": "effect-outbox-and-schema-audit-required", "launch": "dedicated-linux-profile", "restore": "blocked", "selectable": False},
+            "codex": {"capture": "history-only", "reason": "new-turn-acceptance-not-run", "allowlist": "dedicated sessions rollout JSONL only", "restore": "blocked", "restore_reason": "crash-safe-materialization-unavailable", "selectable": False},
+            "claude": {"capture": "blocked", "reason": "native-policy-and-cold-resume-not-qualified", "restore": "blocked", "selectable": False},
         },
         "storage": "explicit-local-encrypted-reference",
         "automatic_room_restore": False,
         "experimental": True,
-        "release_blockers": ["dimension-admission-not-integrated", "external-writer-quiescence-unverified", "sigkill-plaintext-stage-cleanup-unresolved", "native-new-turn-not-run"],
+        "admission_requirement": "host-grant-and-current-keyset-required",
+        "capture_consistency": "linux-kernel-read-leases-and-inventory-fences",
+        "release_blockers": ["crash-safe-materialization-unavailable", "native-new-turn-not-run"],
     }
 
 
@@ -191,14 +194,25 @@ def _initialize(root, binding, recipients):
     _write(root / "operation.lock", b"")
 
 
+def _admit(binding, recipients, *, root, operation, destination=None):
+    from .native_agent_admission import AdmissionError, require_admission
+
+    try:
+        return require_admission(binding, recipients, profile_root=root, operation=operation, destination=destination)
+    except AdmissionError as error:
+        _fail(str(error))
+
+
 def configure(root, *, recipients=None, **binding):
     binding = _binding(**binding)
     root = _canonical(root, exists=False)
     if root.exists() or root.is_relative_to(Path(binding["workspace"])):
         _fail("profile-target-collision")
     verify_private_path(root.parent, directory=True)
-    _initialize(root, binding, _recipients(recipients))
-    return {"ok": True, "state": "configured", **capabilities()}
+    recipients = _recipients(recipients)
+    admission = _admit(binding, recipients, root=root, operation="configure")
+    _initialize(root, binding, recipients)
+    return {"ok": True, "state": "configured", "admission": admission, **capabilities()}
 
 
 @contextlib.contextmanager
@@ -224,7 +238,7 @@ def status(root, **binding):
             pass
     except NativeAgentError:
         state = "busy"
-    return {"ok": True, "state": state, **capabilities()}
+    return {"ok": True, "state": state, "admission": "revalidation-required", **capabilities()}
 
 
 def launch(root, *, executable="t3", port=3773, **binding):
@@ -235,6 +249,7 @@ def launch(root, *, executable="t3", port=3773, **binding):
     executable = shutil.which(executable)
     if not executable:
         _fail("provider-missing")
+    _admit(binding, _json(_read(root / POLICY, 4096))["recipients"], root=root, operation="launch")
     environment = dict(os.environ)
     environment.update(T3CODE_HOME=str(root / "t3"), CODEX_HOME=str(root / "codex"), CLAUDE_CONFIG_DIR=str(root / "claude"))
     with _lock(root) as lock_fd, sigterm_cancellation():
@@ -307,16 +322,29 @@ def _inventory(root):
     return inventory
 
 
-def _entries(root, binding):
-    expected = _inventory(root)
+def _entries(root, binding, barrier, expected):
+    if _inventory(root) != expected:
+        _fail("source-changed")
     entries = []
     for relative in sorted(expected):
-        data = _read(root / "codex" / relative)
+        data = barrier.read(root / "codex" / relative, MAX_BYTES)
         _validate_rollout(relative, data, binding["workspace"])
         entries.append({"path": relative, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "data": base64.b64encode(data).decode("ascii")})
     if _inventory(root) != expected:
         _fail("source-changed")
     return entries, expected
+
+
+@contextlib.contextmanager
+def _capture_barrier(root):
+    expected = _inventory(root)
+    try:
+        with read_barrier([(root / "codex" / relative, value) for relative, value in sorted(expected.items())]) as barrier:
+            if _inventory(root) != expected:
+                _fail("source-changed")
+            yield barrier, expected
+    except QuiescenceError as error:
+        _fail(str(error))
 
 
 def capture(root, *, output, recipients, **binding):
@@ -329,8 +357,9 @@ def capture(root, *, output, recipients, **binding):
     recipients = _recipients(recipients)
     if recipients != _json(_read(root / POLICY, 4096))["recipients"]:
         _fail("profile-recipient-mismatch")
-    with _lock(root), sigterm_cancellation():
-        entries, expected = _entries(root, binding)
+    admission = _admit(binding, recipients, root=root, operation="capture", destination=output)
+    with _lock(root), sigterm_cancellation(), _capture_barrier(root) as (barrier, expected):
+        entries, expected = _entries(root, binding, barrier, expected)
         document = {"format": FORMAT, "binding": binding, "recipients": recipients, "provider": "codex", "mode": "history-only", "entries": entries}
         data = json.dumps(document, separators=(",", ":")).encode()
         fd, temporary = tempfile.mkstemp(prefix=".native-encrypted-", dir=output.parent)
@@ -351,8 +380,11 @@ def capture(root, *, output, recipients, **binding):
                     _fail("native-encryption-failed")
                 handle.flush()
                 os.fsync(handle.fileno())
+            if _admit(binding, recipients, root=root, operation="capture", destination=output) != admission:
+                _fail("native-admission-changed")
             if _inventory(root) != expected:
                 _fail("source-changed")
+            barrier.check()
             os.link(temporary, output)
             _fsync_directory(output.parent)
         finally:
@@ -436,42 +468,15 @@ def _decode(source, identity_paths, binding):
 
 def verify(root, *, source, identity_paths, **binding):
     binding = _binding(**binding)
-    entries, _ = _decode(source, identity_paths, binding)
+    root = _load(root, binding)
+    recipients = _json(_read(root / POLICY, 4096))["recipients"]
+    _admit(binding, recipients, root=root, operation="verify", destination=source)
+    entries, recovered_recipients = _decode(source, identity_paths, binding)
+    if recipients != recovered_recipients:
+        _fail("profile-recipient-mismatch")
     return {"ok": True, "state": "history-available", "files": len(entries), "native_resume_verified": False}
 
 
 def restore(root, *, source, identity_paths, **binding):
-    binding = _binding(**binding)
-    root = _canonical(root, exists=False)
-    if root.exists() or root.is_relative_to(Path(binding["workspace"])):
-        _fail("profile-target-collision")
-    verify_private_path(root.parent, directory=True)
-    with sigterm_cancellation():
-        entries, recipients = _decode(source, identity_paths, binding)
-        staging = Path(tempfile.mkdtemp(prefix=".native-restore-", dir=root.parent))
-        staging.rmdir()
-        try:
-            _initialize(staging, binding, recipients)
-            for relative, data in entries.items():
-                target = staging / "codex" / relative
-                parents = []
-                current = target.parent
-                while not current.exists():
-                    parents.append(current)
-                    current = current.parent
-                for parent in reversed(parents):
-                    parent.mkdir(mode=0o700)
-                _write(target, data)
-            for directory, _dirs, _files in os.walk(staging, topdown=False):
-                _fsync_directory(directory)
-            # RENAME_NOREPLACE preserves even a concurrent empty target.
-            rename = ctypes.CDLL(None, use_errno=True).renameat2
-            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-            rename.restype = ctypes.c_int
-            if rename(-100, os.fsencode(staging), -100, os.fsencode(root), 1):
-                _fail("profile-target-collision")
-            _fsync_directory(root.parent)
-        finally:
-            if staging.exists():
-                shutil.rmtree(staging)
-    return {"ok": True, "state": "history-available", "files": len(entries), "native_resume_verified": False}
+    # Named plaintext directories cannot survive SIGKILL safely on ordinary filesystems.
+    _fail("crash-safe-materialization-unavailable")

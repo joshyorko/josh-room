@@ -266,9 +266,9 @@ completion.
 ## Opt-in agent session checkpoint
 
 The [native agent recovery checkpoint](docs/native-agent-recovery.md) provides
-dedicated T3 process isolation and encrypted Codex session-file recovery.
-Recovery is history-only until a cold-restored process completes a new turn.
-T3 and Claude native capture remain blocked. Normal Save and Enter are unchanged.
+host-admitted T3 process isolation and encrypted Codex session-file capture and
+verification. All native restoration is blocked pending crash-safe materialization.
+Codex capture is history-only; T3 and Claude native capture remain blocked. Normal Save and Enter are unchanged.
 
 ## Evidence and current limits
 

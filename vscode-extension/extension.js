@@ -5219,7 +5219,7 @@ function agentSessionsSummary(result) {
   const states = new Set(["blocked", "history-only"]);
   const lines = Object.entries(labels).map(([key, label]) => {
     const state = providers[key]?.capture;
-    return `${label}: ${states.has(state) ? state : "unavailable"}`;
+    return `${label}: ${states.has(state) ? state : "unavailable"}; restore blocked`;
   });
   return [...lines, "Native continuation is unverified. Recovery is opt-in through josh-room agents. Save and Enter do not include agent state."].join("\n");
 }
