@@ -29,7 +29,7 @@ def _signature(metadata):
 
 
 def capture_homebrew_component(
-    *, archive, prior_component, repository_id, repository_format, restic, validator, cancellation=None,
+    *, archive, prior_component, repository_id, repository_format, restic, validator, cancellation=None, installed_manifest_sha256=None,
 ) -> dict:
     _cancelled(cancellation)
     if repository_format != 2 or not isinstance(repository_id, str) or _SHA256.fullmatch(repository_id) is None:
@@ -91,7 +91,13 @@ def capture_homebrew_component(
                 if copied != before.st_size or copied_digest.hexdigest() != sha256:
                     raise RoomStoreHomebrewError("Homebrew archive changed during capture")
                 try:
-                    validator().validate_brew_archive(owned)
+                    if installed_manifest_sha256 is not None:
+                        from .homebrew_prefix import manifest_digest, read_archive
+                        installed, _data = read_archive(owned)
+                        if manifest_digest(installed) != installed_manifest_sha256:
+                            raise ValueError('installed capture manifest changed')
+                    else:
+                        validator().validate_brew_archive(owned)
                 except (OSError, RuntimeError, TypeError, ValueError):
                     raise RoomStoreHomebrewError("saved Homebrew archive failed JAT validation") from None
                 _cancelled(cancellation)
@@ -157,6 +163,10 @@ def prepare_recipe_archive(directory: Path, output: Path) -> Path:
     with Path(output).open("xb") as raw:
         protect_private_file(output)
         with zstandard.ZstdCompressor().stream_writer(raw, closefd=False) as compressed, tarfile.open(fileobj=compressed, mode="w|") as archive:
+            directory_member = tarfile.TarInfo("homebrew-recovery")
+            directory_member.type = tarfile.DIRTYPE
+            directory_member.mode = 0o700
+            archive.addfile(directory_member)
             member = tarfile.TarInfo("homebrew-recovery/Brewfile")
             member.mode = 0o600
             member.size = len(data)

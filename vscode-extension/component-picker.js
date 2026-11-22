@@ -2,13 +2,21 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 
 // This selection is a request, never storage or source authorization.
-async function pickComponents(vscode, source, previous) {
+async function pickComponents(vscode, source, previous, discoverInstalled) {
+  let installed = { available: false };
+  if (discoverInstalled) {
+    try {
+      const result = await discoverInstalled();
+      const candidate = result?.homebrew_installed;
+      if (candidate?.available === true && candidate.format === "josh-room-homebrew-installed-v1") installed = candidate;
+    } catch (_error) { /* Unavailable discovery never authorizes capture. */ }
+  }
   const robot = fs.existsSync(require('node:path').join(source, 'robot.yaml'));
   const defaults = previous?.request?.components || {
     rcc_environment: robot ? 'refresh' : 'keep', homebrew_recovery: 'keep', hauler_content: 'keep',
   };
   const unavailable = [
-    { label: 'Homebrew installed prefix / binaries', detail: 'Unavailable: fresh same-platform, same-prefix restore and binary execution are not qualified.' },
+    ...(!installed.available ? [{ label: 'Homebrew installed prefix / binaries', detail: 'Unavailable: requires qualified Debian 12 x64, owner-controlled exact prefix, tested Hello 2.12.3/runtime bytes.' }] : []),
     { label: 'Codex sessions (history-only)', detail: 'Unavailable in this controller: #188 admission and history capture must qualify; auth is never copied.' },
     { label: 'Claude sessions', detail: 'Blocked: no qualified #188 capability.' },
     { label: 'T3 Code sessions', detail: 'Blocked: shared-server isolation and #188 admission are not qualified.' },
@@ -16,6 +24,7 @@ async function pickComponents(vscode, source, previous) {
   const rows = [
     { label: 'Workspace source + Git state — always included', mandatory: true, kind: vscode.QuickPickItemKind?.Separator ?? -1, detail: 'Uses the reviewed workspace capture policy; source-only omits Git history.' },
     { id: 'rcc_environment', label: 'RCC exact environment', picked: defaults.rcc_environment !== 'omit', detail: robot ? 'Refresh/reuse robot.yaml artifact; platform bound.' : 'Keep previous artifact if present; no root robot.yaml to capture.' },
+    ...(installed.available ? [{ id: 'homebrew_installed', label: 'Installed Homebrew Hello (Debian 12 x64, exact prefix)', detail: 'Conditional source admission: tested Hello 2.12.3 and runtime hashes only. Includes exact loader/libc bytes and a recipe fallback; replaces this point’s Homebrew recovery component.', picked: false }] : []),
     { id: 'homebrew_recovery', label: 'Homebrew recovery export', picked: defaults.homebrew_recovery !== 'omit', detail: 'Keep previous or select a prepared recovery archive. A Brewfile is a reinstall recipe, not installed binaries.' },
     { id: 'hauler_content', label: 'OCI images / additional Hauler content', picked: defaults.hauler_content !== 'omit', detail: 'Keep previous or explicitly refresh selected content.' },
     ...unavailable.map(row => ({ ...row, label: `Unavailable — ${row.label}`, unavailable: true, picked: false })),
@@ -33,11 +42,21 @@ async function pickComponents(vscode, source, previous) {
   const components = Object.fromEntries(['rcc_environment', 'homebrew_recovery', 'hauler_content'].map(id => [id, chosen.some(row => row.id === id) ? 'keep' : 'omit']));
   if (components.rcc_environment !== 'omit' && robot) components.rcc_environment = 'refresh';
   const args = [];
+  const installedSelected = chosen.some(row => row.id === 'homebrew_installed');
+  if (installedSelected) {
+    if (!installed.available) throw new Error('Installed Homebrew capture is unavailable.');
+    const folders = await vscode.window.showOpenDialog({ title: 'Select the qualified installed Homebrew prefix', canSelectFiles: false, canSelectFolders: true, canSelectMany: false });
+    if (!folders?.length) return undefined;
+    const formula = await vscode.window.showInputBox({ title: 'Installed Homebrew formula', prompt: 'Only tested hello 2.12.3/runtime hashes qualify; validated before Save', ignoreFocusOut: true, validateInput: value => /^[a-z0-9][a-z0-9+.-]{0,63}$/.test(value.trim()) ? undefined : 'Enter one formula name.' });
+    if (!formula?.trim()) return undefined;
+    components.homebrew_recovery = 'refresh';
+    args.push('--brew-installed-prefix', folders[0].fsPath, '--brew-formula', formula.trim());
+  }
   for (const [id, title, actions] of [
     ['homebrew_recovery', 'Homebrew recovery export', ['Keep previous', ...(process.platform === 'linux' ? ['Select Brewfile-only recipe directory'] : []), 'Select prepared archive']],
     ['hauler_content', 'OCI / Hauler content', ['Keep previous', 'All tagged local OCI images', 'Select OCI image references', 'Select Hauler manifest', 'Select additional Hauler file']],
   ]) {
-    if (components[id] === 'omit') continue;
+    if (components[id] === 'omit' || (id === 'homebrew_recovery' && installedSelected)) continue;
     const action = await vscode.window.showQuickPick(actions, { title, ignoreFocusOut: true });
     if (!action) return undefined;
     if (action === 'Keep previous') continue;
@@ -64,7 +83,7 @@ async function pickComponents(vscode, source, previous) {
 }
 
 function planText(preview) {
-  return Object.entries(preview.component_plan || {}).map(([name, row]) => `${name}: ${row.mode} — ${row.state}`).join('\n');
+  return Object.entries(preview.component_plan || {}).map(([name, row]) => `${name}: ${row.mode} — ${row.state}${row.restore_mode ? ` · ${row.restore_mode} · ${row.platform?.ID} ${row.platform?.VERSION_ID} ${row.platform?.arch} · ${row.prefix} · ${row.estimated_logical_bytes} logical bytes` : ''}`).join('\n');
 }
 function storageKey(binding) {
   return `save-components.v1.${crypto.createHash('sha256').update(binding).digest('hex')}`;

@@ -89,6 +89,9 @@ jobs:
         env:
           PYTHONPATH: vscode-extension/runtime/controller
         run: python scripts/verify_private_runtime.py
+      - uses: astral-sh/setup-uv@v10.0.1
+      - name: Verify Windows component selection and installed-prefix refusal
+        run: uv run --locked pytest -q tests/test_homebrew_prefix.py tests/test_component_selection.py
 
   managed-runtime-consumer:
     strategy:

@@ -108,12 +108,19 @@ Homebrew has three distinct meanings:
   not been verified by this checkpoint.
 - **Prepared recovery archive:** existing validated `--brew-archive` semantics,
   independently of a Brewfile recipe. It does not establish installed binaries.
-- **Installed prefix/binaries:** unavailable. Prefix, Cellar, repository and cache
-  are distinct; a raw Cellar transplant does not establish relocatability, ABI,
-  dependency/link completeness, collision safety or provenance. Fresh same-OS,
-  architecture and exact-prefix execution, hardlink/reparse containment and
-  no-clobber restoration remain required before enabling capture. No arbitrary
-  prefix or cache is traversed by this feature.
+- **Installed prefix/binaries:** conditional v1 support for the qualified Hello
+  2.12.3 build on Debian 12 x86_64, at `/home/linuxbrew/.linuxbrew` only. The
+  chooser offers an explicit installed selection after offline platform discovery;
+  Preview additionally checks owner-controlled source directories, receipt-declared
+  `homebrew/core` bottle provenance, no formula dependencies, the qualified ELF
+  digest and captured loader/libc digests. Other packages/runtime bytes fail closed.
+  It saves the selected keg's regular files plus the two source runtime files,
+  file modes and SHA256 values in the existing `homebrew_recovery` archive slot.
+  Five contained relative aliases replace the observed external OS-loader alias;
+  the preview/manifest records that normalization. No Homebrew repository, cache,
+  configuration, other formula or keg symlink is included. This restores the
+  qualified package closure, not the Homebrew manager or an arbitrary prefix.
+  See [qualification and restore commands](homebrew-feasibility.md).
 
 OCI refresh supports all tagged images, explicit image references, an explicit
 Hauler manifest or an explicitly selected additional file. RCC artifacts remain platform bound. Agent state is unavailable in this

@@ -1637,7 +1637,7 @@ test("native Save previews the Room Store and reports logical, scanned, and Rest
 
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
 
-  const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot");
+  const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
   assert.deepEqual(snapshotCalls.map((call) => call.args[1]), ["preview", "create"]);
   assert.ok(fixture.infoCalls.some(([message]) => /Initial full capture/.test(message)));
   assert.ok(fixture.infoCalls.some(([message]) => message === "Saved “Demo Room”."));
@@ -1720,7 +1720,7 @@ for (const externalComponents of [false, true]) test(`repeat Save resolves contr
   fixture.vscode.quickPickResponses.push({ project: fixture.project }, []);
   fixture.vscode.infoResponses.push("Save", undefined);
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  const operations = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot");
+  const operations = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
   assert.deepEqual(operations.map(call => call.args[1]), ["preview", "create", "preview", "create"]);
   assert.ok(operations.every(call => call.args.includes("--component-selection")));
 });
@@ -1769,7 +1769,7 @@ for (const changeAt of ["before chooser", "during chooser"]) test(`Git object ch
   }
   fixture.vscode.infoResponses.push("Save", undefined);
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  assert.deepEqual(fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot").map(call => call.args[1]), ["preview", "create"]);
+  assert.deepEqual(fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities").map(call => call.args[1]), ["preview", "create"]);
 });
 
 test("changing the selected components reaches controller preview and create with the same plan", async () => {
@@ -6867,7 +6867,7 @@ test("R2 native Save previews the selected capture scope and respects a no-op re
   fixture.vscode.quickPickResponses.splice(1, 1, [{ id: "hauler_content" }], "All tagged local OCI images");
   fixture.vscode.infoResponses.push("Save");
   assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
-  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot");
+  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
   assert.deepEqual(calls.map((call) => call.args[1]), ["preview", "create"]);
   assert.ok(calls.every((call) => call.args.includes("--all-images")));
 });

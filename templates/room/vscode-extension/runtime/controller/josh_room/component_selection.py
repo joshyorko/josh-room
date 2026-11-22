@@ -36,7 +36,7 @@ def selection_plan(request, prior, *, rcc_present=False, homebrew=False, hauler=
     )} for name in COMPONENTS}
 
 
-def plan_token(request, *, dimension, project, workspace, policy_sha256, archive=None, directory=None, hauler=None, prior_snapshot=None):
+def plan_token(request, *, dimension, project, workspace, policy_sha256, archive=None, directory=None, hauler=None, prior_snapshot=None, installed=None, installed_manifest=None):
     """Bind reviewed selection to target, policy and explicit external input bytes."""
     import os
     import stat
@@ -60,6 +60,11 @@ def plan_token(request, *, dimension, project, workspace, policy_sha256, archive
             return digest.hexdigest()
 
     inputs = []
+    if installed is not None:
+        from .homebrew_prefix import capture, manifest_digest
+        if installed_manifest is None:
+            installed_manifest, _data = capture(installed["prefix"], installed["formula"])
+        inputs.append(["installed", manifest_digest(installed_manifest)])
     if archive is not None:
         inputs.append(["archive", file_hash(archive)])
     if directory is not None:

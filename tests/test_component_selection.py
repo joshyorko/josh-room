@@ -48,8 +48,8 @@ def test_recipe_is_inert_bounded_archive(tmp_path):
     with output.open('rb') as raw, zstandard.ZstdDecompressor().stream_reader(raw) as stream:
         data = stream.read()
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-        assert archive.getnames() == ['homebrew-recovery/Brewfile']
-        assert archive.extractfile(archive.getmembers()[0]).read() == b'brew "hello"\n'
+        assert archive.getnames() == ['homebrew-recovery', 'homebrew-recovery/Brewfile']
+        assert archive.extractfile('homebrew-recovery/Brewfile').read() == b'brew "hello"\n'
     assert output.stat().st_mode & 0o777 == 0o600
 
 

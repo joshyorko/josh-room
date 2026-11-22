@@ -157,3 +157,50 @@ a second distinct point bound to that Room/Dimension. The built-in native
 simple folder dialog setting was enabled only in the disposable VS Code
 profile. No picker API was mocked. See `registered-new-folder.json` and driver.
 Both retain the explicit source-Python override limitation.
+
+## Installed Homebrew closure checkpoint (2026-11-22)
+
+Supersedes the earlier blanket unavailable statement only for the qualified
+Hello 2.12.3 / Debian 12 x86_64 / exact-prefix executable and loader/libc hashes.
+The existing earlier jq and recipe results are retained, not generalized.
+
+- PASS: real installed wheel plus explicitly supplied unchanged repository Restic
+  runtime assets; task-only Secret Service and pinned real MinIO; normal Preview,
+  Save, unchanged repeat, stale preview rejection and immutable component export.
+  The standalone wheel alone did not contain its external runtime assets and is
+  not claimed to be a complete standalone managed-runtime distribution.
+- PASS: unchanged pinned JAT source validates the exact Store-exported archive.
+  This is not a managed RCC artifact run.
+- PASS: actual offline target CLI restores that export in a second clean container.
+  All 60 regular files, safe file modes, five contained aliases and the complete
+  171-entry topology match. Hello version and custom greeting execute; loader
+  tracing confirms captured libc is loaded. A second restore refuses the occupied
+  prefix and leaves every file unchanged.
+- PASS: 127 Python bridge/lifecycle/logical-descriptor/prefix tests; 2 SKIP (optional
+  RCC fixture inputs unavailable). Uses pinned `JOSH_ROOM_TEST_RESTIC=.../0.19.1/...`;
+  the initial host Restic 0.20.0 run failed 10 tests and is retained as a setup failure.
+- PASS: 196 focused component, CLI, archive/selection tests after one CLI test's
+  XDG state was isolated. The initial test tried a sandbox-blocked host state path;
+  no host state was written.
+- PASS: 110 controller artifact/material security/public storage/Dimension schema
+  tests; canonical/controller/template bytes synchronized.
+- PASS: 264 Node chooser/extension tests; 2 SKIP (optional Python contract environment).
+- PASS: scoped Ruff, whitespace check and local-only VSIX packaging.
+- Ordinary independent correctness review found input snapshot-binding, internal
+  links, negative tar sizes, executable-mode and cleanup issues; fixes and focused
+  regressions landed. Independent security-review invocation was unavailable:
+  that separate review gate is SKIP, not a passing security assessment.
+
+The detailed synthetic artifact/provenance/result boundary is
+[homebrew-installed-prefix.json](homebrew-installed-prefix.json). The target
+runner is [homebrew-prefix-target-driver.py](homebrew-prefix-target-driver.py);
+it requires the test wheel installed in the task user base and a previously
+Store-exported archive at `/task/component-from-store.tar.zst`, plus an absent
+private exact prefix. It must only run inside the disposable target container.
+
+NOT RUN/SKIP: installed native chooser's new positive installed row after this
+checkpoint, managed RCC controller/JAT artifact, native Windows installed restore
+(deliberately unavailable; refusal/schema CI added), macOS, other formula/runtime
+hashes, locales/NSS/services, cross-distro/prefix portability, whole Homebrew
+manager, full work-jatt binary capture and verified native reinstallation.
+No merge, tag, release staging, release publication or paid call occurred.

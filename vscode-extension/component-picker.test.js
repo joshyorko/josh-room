@@ -44,3 +44,16 @@ test('host defaults persist modes only and reject malformed saved requests', asy
   saved.set([...saved.keys()][0], { request: { format_version: 1, components: { auth: 'refresh' } } });
   assert.equal(storedChoice(state, 'synthetic-binding'), undefined);
 });
+test('qualified installed closure uses existing Homebrew slot and explicit source flags', async () => {
+  const v = mock([rows => rows.filter(r => r.id === 'homebrew_installed')], [[{fsPath:'/home/linuxbrew/.linuxbrew'}]]);
+  v.window.showInputBox = async () => 'hello';
+  const result = await pickComponents(v,'/synthetic/source',undefined,async()=>({homebrew_installed:{available:true,format:'josh-room-homebrew-installed-v1'}}));
+  assert.equal(result.request.components.homebrew_recovery,'refresh');
+  assert.deepEqual(result.args.slice(-4),['--brew-installed-prefix','/home/linuxbrew/.linuxbrew','--brew-formula','hello']);
+  assert.equal(v.calls[0].rows.some(row=>row.id==='homebrew_installed'),true);
+});
+test('missing or failed installed capability stays unavailable', async () => {
+  const v = mock([[]]);
+  await pickComponents(v,'/synthetic/source',undefined,async()=>{throw new Error('unavailable');});
+  assert.equal(v.calls[0].rows.some(row=>row.id==='homebrew_installed'),false);
+});

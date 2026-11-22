@@ -1383,6 +1383,7 @@ def _build_operations(
     authority_session: Any | None = None,
     hauler_selection: Mapping[str, Any] | None = None,
     component_selection: Mapping[str, Any] | None = None,
+    homebrew_installed: Mapping[str, Any] | None = None,
     homebrew_directory: Path | None = None,
     homebrew_archive: Path | None = None,
     jat_root: Path | None = None,
@@ -1391,6 +1392,15 @@ def _build_operations(
     from .component_selection import selection_request
     component_selection = selection_request(component_selection)
     modes = component_selection["components"] if component_selection else None
+    installed_capture = None
+    if homebrew_installed is not None:
+        if homebrew_archive is not None or homebrew_directory is not None:
+            raise ValueError("select one Homebrew recovery input")
+        from .homebrew_prefix import capture
+        installed_prefix = Path(homebrew_installed["prefix"]).resolve()
+        if installed_prefix.is_relative_to(workspace.resolve()) or workspace.resolve().is_relative_to(installed_prefix):
+            raise ValueError("installed Homebrew closure must be separate from the workspace baseline")
+        installed_capture = capture(homebrew_installed["prefix"], homebrew_installed["formula"])
     if homebrew_directory is not None:
         if homebrew_archive is not None:
             raise ValueError("select one Homebrew recovery input")
@@ -1398,11 +1408,11 @@ def _build_operations(
         recipe_bytes(homebrew_directory)
 
     if modes:
-        if (homebrew_archive is not None or homebrew_directory is not None) and modes["homebrew_recovery"] != "refresh":
+        if (homebrew_archive is not None or homebrew_directory is not None or homebrew_installed is not None) and modes["homebrew_recovery"] != "refresh":
             raise ValueError("Homebrew input requires refresh selection")
         if hauler_selection is not None and modes["hauler_content"] != "refresh":
             raise ValueError("Hauler input requires refresh selection")
-        if modes["homebrew_recovery"] == "refresh" and homebrew_archive is None and homebrew_directory is None:
+        if modes["homebrew_recovery"] == "refresh" and homebrew_archive is None and homebrew_directory is None and homebrew_installed is None:
             raise ValueError("Homebrew refresh requires a prepared archive")
         if modes["hauler_content"] == "refresh" and hauler_selection is None:
             raise ValueError("Hauler refresh requires explicit content")
@@ -1413,7 +1423,7 @@ def _build_operations(
             return
         from .component_selection import plan_token
         from .workspace_policy import load_capture_policy
-        actual = plan_token(component_selection, dimension=dimension.dimension_id, project=project_id, workspace=workspace, policy_sha256=load_capture_policy(workspace, active_runtime_root=active_runtime_root).sha256, archive=original_archive, directory=homebrew_directory, hauler=hauler_selection, prior_snapshot=latest.to_dict()["logical_jat_id"] if latest else None)
+        actual = plan_token(component_selection, dimension=dimension.dimension_id, project=project_id, workspace=workspace, policy_sha256=load_capture_policy(workspace, active_runtime_root=active_runtime_root).sha256, archive=original_archive, directory=homebrew_directory, hauler=hauler_selection, installed=homebrew_installed, installed_manifest=installed_capture[0] if installed_capture else None, prior_snapshot=latest.to_dict()["logical_jat_id"] if latest else None)
         if actual != component_plan_token:
             raise RoomStoreBridgeError("component preview is stale", code="component-plan-stale")
 
@@ -1448,6 +1458,7 @@ def _build_operations(
         "object_ref": None,
         "display_name": None,
         "latest_descriptor": None,
+        "installed_capture": installed_capture,
         "workspace_evidence": None,
     }
 
@@ -1551,6 +1562,9 @@ def _build_operations(
     def prepare_components(latest_descriptor):
         nonlocal prepared_rcc, homebrew_archive
         check_component_plan(latest_descriptor)
+        if installed_capture is not None:
+            from .homebrew_prefix import prepare_archive
+            homebrew_archive = prepare_archive(installed_capture, runtime_dir / "homebrew-recovery.tar.zst")
         if homebrew_directory is not None:
             from .room_store_homebrew import prepare_recipe_archive
             homebrew_archive = prepare_recipe_archive(homebrew_directory, runtime_dir / "homebrew-recovery.tar.zst")
@@ -1616,11 +1630,16 @@ def _build_operations(
 
         try:
             if homebrew_archive is not None:
+                installed_options = {}
+                if installed_capture is not None:
+                    from .homebrew_prefix import manifest_digest
+                    installed_options["installed_manifest_sha256"] = manifest_digest(installed_capture[0])
                 resolved["homebrew_recovery"] = capture_homebrew_component(
                     archive=homebrew_archive, prior_component=prior_components["homebrew_recovery"],
                     repository_id=opened_store.repository_info.repository_id,
                     repository_format=opened_store.repository_info.repository_format,
                     restic=opened_store, validator=adapter, cancellation=cancellation,
+                    **installed_options,
                 )
             if hauler_selection is not None:
                 selected_adapter = adapter()
@@ -1848,6 +1867,7 @@ def preview_room_store(
     authority_session: Any | None = None,
     hauler_selection: Mapping[str, Any] | None = None,
     component_selection: Mapping[str, Any] | None = None,
+    homebrew_installed: Mapping[str, Any] | None = None,
     homebrew_directory: Path | None = None,
     homebrew_archive: Path | None = None,
 ) -> dict:
@@ -1898,6 +1918,7 @@ def preview_room_store(
                 authority_session=authority_session,
                 component_selection=component_selection,
                 hauler_selection=hauler_selection,
+                homebrew_installed=homebrew_installed,
                 homebrew_directory=homebrew_directory,
                 homebrew_archive=homebrew_archive,
             )
@@ -1908,14 +1929,23 @@ def preview_room_store(
                     preview, rcc_capture_pending=_rcc_capture_pending(workspace, latest)
                 )
                 output.update(hauler_capture_pending=hauler_selection is not None,
-                              homebrew_capture_pending=homebrew_archive is not None or homebrew_directory is not None)
+                              homebrew_capture_pending=homebrew_archive is not None or homebrew_directory is not None or homebrew_installed is not None)
                 if component_selection:
                     prior = latest.to_dict()["components"] if latest else {}
                     output["component_selection_sha256"] = selection_digest(component_selection)
                     from .component_selection import plan_token
-                    output["component_plan_token"] = plan_token(component_selection, dimension=dimension.dimension_id, project=project_id, workspace=workspace, policy_sha256=output["capture_policy_sha256"], archive=homebrew_archive, directory=homebrew_directory, hauler=hauler_selection, prior_snapshot=latest.to_dict()["logical_jat_id"] if latest else None)
-                    output["component_plan"] = selection_plan(component_selection, prior, rcc_present=(workspace / "robot.yaml").is_file(), homebrew=homebrew_archive is not None or homebrew_directory is not None, hauler=hauler_selection is not None)
+                    output["component_plan_token"] = plan_token(component_selection, dimension=dimension.dimension_id, project=project_id, workspace=workspace, policy_sha256=output["capture_policy_sha256"], archive=homebrew_archive, directory=homebrew_directory, hauler=hauler_selection, installed=homebrew_installed, installed_manifest=state["installed_capture"][0] if homebrew_installed else None, prior_snapshot=latest.to_dict()["logical_jat_id"] if latest else None)
+                    output["component_plan"] = selection_plan(component_selection, prior, rcc_present=(workspace / "robot.yaml").is_file(), homebrew=homebrew_archive is not None or homebrew_directory is not None or homebrew_installed is not None, hauler=hauler_selection is not None)
                     output["rcc_capture_pending"] = output["component_plan"]["rcc_environment"]["state"] == "pending"
+                if homebrew_installed is not None:
+                    from .homebrew_prefix import manifest_digest
+                    installed, _data = state["installed_capture"]
+                    output["component_plan"]["homebrew_recovery"].update(
+                        restore_mode="same-platform-exact-prefix-bundled-libc",
+                        manifest_sha256=manifest_digest(installed),
+                        platform=installed["platform"], prefix=installed["prefix"],
+                        estimated_logical_bytes=sum(record["bytes"] for record in installed["files"].values()),
+                    )
                 return output
             else:
                 catalog, _catalog_etag = _read_catalog(
@@ -1982,6 +2012,7 @@ def save_room_store(
     authority_session: Any | None = None,
     hauler_selection: Mapping[str, Any] | None = None,
     component_selection: Mapping[str, Any] | None = None,
+    homebrew_installed: Mapping[str, Any] | None = None,
     homebrew_directory: Path | None = None,
     homebrew_archive: Path | None = None,
     jat_root: Path | None = None,
@@ -2005,6 +2036,7 @@ def save_room_store(
         and hauler_selection is None
         and homebrew_archive is None
         and homebrew_directory is None
+        and homebrew_installed is None
         and component_selection is None
         and component_plan_token is None
         and rcc_runtime is None
@@ -2061,6 +2093,7 @@ def save_room_store(
                 else None,
                 authority_session=authority_session,
                 hauler_selection=hauler_selection,
+                homebrew_installed=homebrew_installed,
                 homebrew_directory=homebrew_directory,
                 homebrew_archive=homebrew_archive,
                 component_selection=component_selection,
