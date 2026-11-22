@@ -66,8 +66,13 @@ A subsequent Serve-scoped hangup handler also failed that native close trial;
 neither failure is counted as a pass. The next correction adds a foreground
 Linux lifetime-pipe guard and a Windows kill-on-close Job Object. Local Linux
 tests cover abrupt owner death, startup EOF/races, normal exit status and an
-independent concurrent listener. Actual corrected editor-close acceptance and
-native Windows Job Object CI remain separate gates.
+independent concurrent listener. The exact CI Python initially refused before
+starting a listener because its `os.pidfd_open` binding was absent. A verified
+libc fallback corrected that packaging boundary. Actual editor-close acceptance
+then passed with the same CI environment and corrected source: Room, guard,
+RCC, JAT and Hauler all disappeared, the socket closed and the startup receipt
+was absent without manual signals. This is an explicit source override; the
+corrected packaged VSIX and native Windows Job Object CI remain separate gates.
 
 Focused correction checks passed 63 JAT tests, 35 recovery tests and six native
 action tests. The final namespace regression passed with real age and pinned
@@ -77,7 +82,7 @@ Both actual managed Serve interruption paths returned cancellation/130 and
 closed all listeners and owned children. Those interruption results used
 corrected source; they do not qualify the earlier installed packages.
 
-The final local supervision/JAT selection passed 67 tests with three Windows
+The final local supervision/JAT selection passed 68 tests with three Windows
 skips. Combined Node checks passed 444 with two managed-runtime opt-in skips.
 The mixed-provider CLI case initially failed on the sandbox's read-only default
 state directory; it passed with a task-private state root. One package-building

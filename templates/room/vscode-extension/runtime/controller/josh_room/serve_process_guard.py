@@ -1,5 +1,7 @@
 """Foreground Linux Serve lifetime guard; no persistent service or state."""
 
+import ctypes
+import errno
 import os
 import select
 import stat
@@ -14,12 +16,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from josh_room.cancellation import terminate_owned_process
 
 
+def _open_pidfd(pid):
+    if hasattr(os, "pidfd_open"):
+        return os.pidfd_open(pid)
+    # Some packaged CPython builds omit the os binding despite kernel/libc
+    # support. Use the same checked libc ABI, never guessed syscall numbers.
+    function = getattr(ctypes.CDLL(None, use_errno=True), "pidfd_open", None)
+    if function is None:
+        raise OSError(errno.ENOSYS, "pidfd supervision unavailable")
+    function.argtypes = [ctypes.c_int, ctypes.c_uint]
+    function.restype = ctypes.c_int
+    descriptor = function(pid, 0)
+    if descriptor < 0:
+        raise OSError(ctypes.get_errno(), "pidfd supervision unavailable")
+    os.set_inheritable(descriptor, False)
+    return descriptor
+
+
 def main():
     child = None
     pidfd = None
     lifetime = None
     try:
-        if not sys.platform.startswith("linux") or not hasattr(os, "pidfd_open"):
+        if not sys.platform.startswith("linux"):
             raise RuntimeError("Linux pidfd supervision is unavailable")
         if len(sys.argv) < 4 or sys.argv[2] != "--":
             raise ValueError("Invalid Serve lifetime invocation")
@@ -27,12 +46,12 @@ def main():
         if lifetime < 3 or not stat.S_ISFIFO(os.fstat(lifetime).st_mode):
             raise ValueError("Invalid Serve lifetime descriptor")
         os.set_inheritable(lifetime, False)
-        probe = os.pidfd_open(os.getpid())
+        probe = _open_pidfd(os.getpid())
         os.close(probe)
         if select.select([lifetime], [], [], 0)[0]:
             return 130
         child = subprocess.Popen(sys.argv[3:], start_new_session=True, close_fds=True)
-        pidfd = os.pidfd_open(child.pid)
+        pidfd = _open_pidfd(child.pid)
         while True:
             ready, _, _ = select.select([lifetime, pidfd], [], [])
             if lifetime in ready:

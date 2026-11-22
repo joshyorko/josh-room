@@ -139,3 +139,13 @@ def test_guard_preserves_child_exit_status(tmp_path):
     finally:
         os.close(read_fd)
         os.close(write_fd)
+
+
+def test_packaged_python_without_os_binding_uses_available_libc(monkeypatch):
+    monkeypatch.delattr(os, "pidfd_open", raising=False)
+    descriptor = serve_process_guard._open_pidfd(os.getpid())
+    try:
+        assert not os.get_inheritable(descriptor)
+        assert os.fstat(descriptor)
+    finally:
+        os.close(descriptor)

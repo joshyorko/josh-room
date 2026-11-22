@@ -92,7 +92,7 @@ def _run_cli(
             from .serve_job_windows import ensure_serve_job
 
             ensure_serve_job()
-        elif sys.platform.startswith("linux") and hasattr(os, "pidfd_open"):
+        elif sys.platform.startswith("linux"):
             lifetime_read, lifetime_write = os.pipe2(os.O_CLOEXEC)
             options["pass_fds"] = (lifetime_read,)
             argv = [sys.executable, "-I", str(Path(__file__).with_name("serve_process_guard.py")),
