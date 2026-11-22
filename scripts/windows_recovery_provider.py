@@ -145,6 +145,10 @@ def main():
                 f'def greeting():\n\treturn "{content} 你好"\n'.encode())
             pins.append(cli("snapshot", "create", "synthetic-room", "--dimension",
                 "recovery-fixture", "--backend", "minio", "--source", str(workspace))["snapshot_id"])
+        cli("dimensions", "list")
+        hierarchy = cli("dimensions", "list", "--with-hierarchy", "--dimension", "recovery-fixture")
+        if pins[0] not in json.dumps(hierarchy):
+            raise RuntimeError("catalog hierarchy is missing historical pin")
         # Prove the installed CLI reads the exact point and refuses overwrite.
         arguments = ["synthetic-room", "--dimension", "recovery-fixture", "--snapshot", pins[0],
                      "--path", "code.py"]
@@ -184,6 +188,17 @@ def main():
                     if (access.encode() in data or secret.encode() in data
                             or ("AGE" + "-SECRET-KEY-").encode() in data):
                         raise RuntimeError("synthetic provider credential leaked")
+        # Only this owned extension's existing log, after exact native-secret
+        # removal and the shared CLI sanitizer. No raw output is copied.
+        forbidden = (access, secret, keyring.lookup_room_store_secret(domain, 1))
+        diagnostics = []
+        for candidate in (base / "profile").rglob("*.log"):
+            if "josh" not in candidate.name.lower() or candidate.stat().st_size > 1024 * 1024:
+                continue
+            for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]:
+                if any(label in line for label in ("START", "DONE", "[error]", "[warning]")):
+                    diagnostics.append(public_cli_failure({"error": line}, forbidden=forbidden))
+        (base / "ui-controller-summary.json").write_text(json.dumps({"messages": diagnostics[-24:]}))
         (base / "preservation.json").write_text(json.dumps({"state": "PASS",
             "workspace_and_marker_unchanged": True, "provider_credentials_absent_from_logs": True}))
     finally:

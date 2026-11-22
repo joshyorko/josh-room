@@ -247,6 +247,13 @@ async function main() {
           known_choices: ["code.py", "nested", "Recovery fixture start", "Compare with current workspace", "Recover selection"]
             .filter(value => widget?.rows.some(row => row.includes(value))),
           text_sha256: widget ? digest(widget.text) : null };
+        receipt.native_surfaces = await cdp.evaluate(`(() => ({
+          dialog_count: document.querySelectorAll('.monaco-dialog-box').length,
+          notification_count: document.querySelectorAll('.notification-list-item').length,
+          known_categories: ['encryption','authorization','private','runtime','password','keyring','catalog','Python','path','provider']
+            .filter(value => [...document.querySelectorAll('.monaco-dialog-box,.notification-list-item')]
+              .some(node => node.innerText.toLowerCase().includes(value.toLowerCase())))
+        }))()`);
       } catch { receipt.native_widget = { diagnostic: "unavailable" }; }
     }
   }
@@ -261,7 +268,7 @@ async function main() {
       await until(() => provider.exitCode !== null, "owned native credential cleanup", 30000);
       for (const name of ["provider-ready.json", "provider-failed.json", "provider-cli-failed.json",
         "provider-progress.json", "ui-driver-ready.json", "ui-command-started.json", "ui-command-finished.json",
-        "ui-command-failed.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
+        "ui-command-failed.json", "ui-controller-summary.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
         if (fs.existsSync(path.join(base, name))) {
           const value = JSON.parse(await fsp.readFile(path.join(base, name)));
           await fsp.writeFile(path.join(evidence, name), JSON.stringify(value, null, 2));
