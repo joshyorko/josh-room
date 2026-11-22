@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -34,6 +35,7 @@ def test_selection_change_invalidates_digest_and_omit_does_not_mutate_prior():
     assert selection_plan(request(), prior)['homebrew_recovery']['state'] == 'reused'
 
 
+@pytest.mark.skipif(os.open not in os.supports_dir_fd, reason="recipe directory capture requires qualified no-follow dirfd support")
 def test_recipe_is_inert_bounded_archive(tmp_path):
     import io
     import tarfile
@@ -70,6 +72,7 @@ def test_recipe_refuses_unapproved_files(tmp_path, unsafe):
         recipe_bytes(source)
 
 
+@pytest.mark.skipif(os.open not in os.supports_dir_fd, reason="recipe directory capture requires qualified no-follow dirfd support")
 def test_plan_token_changes_with_target_prior_snapshot_and_recipe(tmp_path):
     from josh_room.component_selection import plan_token
     recipe = tmp_path / 'recipe'
@@ -81,3 +84,12 @@ def test_plan_token_changes_with_target_prior_snapshot_and_recipe(tmp_path):
     assert initial != plan_token(request(), **options, prior_snapshot='synthetic-old')
     (recipe / 'Brewfile').write_text('brew "jq"\n')
     assert initial != plan_token(request(), **options)
+
+
+def test_recipe_directory_fails_closed_without_platform_containment(tmp_path, monkeypatch):
+    source = tmp_path / "recipe"
+    source.mkdir()
+    (source / "Brewfile").write_text("synthetic recipe")
+    monkeypatch.setattr(os, "supports_dir_fd", set())
+    with pytest.raises(RoomStoreHomebrewError, match="not qualified"):
+        recipe_bytes(source)

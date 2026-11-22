@@ -34,7 +34,7 @@ async function pickComponents(vscode, source, previous) {
   if (components.rcc_environment !== 'omit' && robot) components.rcc_environment = 'refresh';
   const args = [];
   for (const [id, title, actions] of [
-    ['homebrew_recovery', 'Homebrew recovery export', ['Keep previous', 'Select Brewfile-only recipe directory', 'Select prepared archive']],
+    ['homebrew_recovery', 'Homebrew recovery export', ['Keep previous', ...(process.platform === 'linux' ? ['Select Brewfile-only recipe directory'] : []), 'Select prepared archive']],
     ['hauler_content', 'OCI / Hauler content', ['Keep previous', 'All tagged local OCI images', 'Select OCI image references', 'Select Hauler manifest', 'Select additional Hauler file']],
   ]) {
     if (components[id] === 'omit') continue;

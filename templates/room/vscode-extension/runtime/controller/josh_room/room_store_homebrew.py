@@ -130,8 +130,8 @@ def recipe_bytes(directory: Path) -> bytes:
                 descriptor = child
             if set(os.listdir(descriptor)) != {"Brewfile"}:
                 raise RoomStoreHomebrewError("Select a Brewfile-only recipe directory or a prepared recovery archive")
-            target_descriptor = os.open("Brewfile", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor)
             target_info = os.stat("Brewfile", dir_fd=descriptor, follow_symlinks=False)
+            target_descriptor = os.open("Brewfile", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor)
         finally:
             os.close(descriptor)
         with os.fdopen(target_descriptor, "rb") as handle:

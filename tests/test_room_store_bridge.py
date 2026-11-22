@@ -1907,7 +1907,7 @@ def test_save_preview_preserves_workspace_validation_diagnostic(tmp_path, monkey
 def test_explicit_selection_omits_rcc_and_preserves_historical_descriptor(tmp_path, monkeypatch):
     from josh_room.component_selection import COMPONENTS
 
-    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    dimension, material, _backend, *_ = _fixture(tmp_path, monkeypatch)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "synthetic.txt").write_text("synthetic workspace")
@@ -1931,7 +1931,7 @@ def test_explicit_selection_omits_rcc_and_preserves_historical_descriptor(tmp_pa
 
 def test_component_preview_token_refuses_new_latest_before_capture(tmp_path, monkeypatch):
     from josh_room.component_selection import COMPONENTS
-    dimension, material, backend, *_ = _fixture(tmp_path, monkeypatch)
+    dimension, material, _backend, *_ = _fixture(tmp_path, monkeypatch)
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     (workspace / 'notes.txt').write_text('synthetic one')
