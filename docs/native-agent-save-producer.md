@@ -3,8 +3,11 @@
 The optional producer is `josh_room.native_agent_save_producer`; Save orchestration
 belongs to `native_agent_save`. It captures only the existing qualified native
 history formats. No native CLI/server/model is started, no grant is created, and
-the standalone recovery CLI's native-keyring/handoff gate is unchanged. Global
-Save availability remains false pending separate adapter qualification.
+the standalone recovery CLI's native-keyring/handoff gate is unchanged. General
+native capabilities remain false. The separately reviewed
+[adapter](native-agent-save-adapter.md) enables an explicit Linux/MinIO source
+pilot for its forthcoming installed trial; it does not establish that trial's
+success or broader platform/provider availability.
 
 ## Scope and review
 
@@ -145,7 +148,9 @@ automatic pruning is introduced.
 Producer tests use real age and kernel read barriers with synthetic native files,
 storage and admission. They do not establish live provider, installed VSIX,
 immutable RCC, native Windows or model/account acceptance. Such evidence must be
-recorded separately. Release HOLD and all-false Save selectors remain unchanged.
+recorded separately. Release HOLD remains; source-pilot availability and its
+pending installed qualification are described by the adapter, not inferred
+from producer tests.
 
 The opt-in `tests/test_native_agent_save_producer_live.py` reuses the disposable
 provider/native Secret Service fixture contract from

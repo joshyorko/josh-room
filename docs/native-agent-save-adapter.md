@@ -137,8 +137,11 @@ Admission requires ordinary Linux MinIO/S3 custody, an already opened/bound
 Room Store and an existing exact-Room v3 host grant. New Room does not create a
 grant. Missing authority, R2, Windows and composition namespaces are unavailable.
 The global native capabilities remain selectable false and Save integration
-false. The adapter's separate narrow qualification flag must stay false until
-review and actual integrated acceptance qualify it.
+false. The separately reviewed adapter flag now enables only the Linux/MinIO
+source pilot; the opened backend and each current profile grant must still
+admit capture. It is not installed qualification. The candidate must not be
+promoted before actual integrated acceptance passes; failed pilot evidence
+must remain an open gate.
 
 Focused checks live in `tests/test_native_agent_save.py`,
 `tests/test_native_agent_save_integration.py`,
