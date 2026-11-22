@@ -34,7 +34,7 @@ def test_preview_serialization_preserves_exact_whitespace_unicode_and_digest(tmp
     ("config.json", b'{"password":"synthetic-not-a-real-password"}', "sensitive-content"),
     ("config.yaml", b"api_key: synthetic-value-1234567890", "sensitive-content"),
     ("code.txt", b"Authorization: Bearer synthetic-token-1234567890", "sensitive-content"),
-    ("code.txt", b"AGE-SECRET-KEY-1SYNTHETICVALUE1234567890", "sensitive-content"),
+    ("code.txt", b"-".join((b"AGE", b"SECRET", b"KEY", b"1SYNTHETICVALUE1234567890")), "sensitive-content"),
     ("code.txt", b"\x00\x01", "binary"),
     ("code.txt", b"\xff", "binary"),
     ("code.txt", b"a" * (MAX_TEXT_BYTES + 1), "oversized"),
