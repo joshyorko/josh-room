@@ -97,7 +97,9 @@ def test_owner_exit_closes_only_its_detached_listener(tmp_path, abrupt):
         if not abrupt:
             assert status == 19
         assert _winapi.WaitForSingleObject(child, 5000) == _winapi.WAIT_OBJECT_0
-        with pytest.raises(ConnectionRefusedError):
+        # Windows runner networking can silently drop a closed-port SYN instead
+        # of returning RST. The process handle above must already be signalled.
+        with pytest.raises((ConnectionRefusedError, TimeoutError)):
             socket.create_connection(("127.0.0.1", port), timeout=2).close()
         _assert_serving(other[2])
 
