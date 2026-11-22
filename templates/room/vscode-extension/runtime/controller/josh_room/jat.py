@@ -584,6 +584,8 @@ def run_serve(
     if mode != "registry":
         print("Hauler may serve file artifacts on all network interfaces.", file=sys.stderr, flush=True)
     options = ["--fileserver-port", str(fileserver_port), "--registry-port", str(registry_port)]
+    if startup_file is None and os.environ.get("JOSH_ROOM_SERVE_STARTUP_FILE"):
+        startup_file = Path(os.environ["JOSH_ROOM_SERVE_STARTUP_FILE"])
     if startup_file is not None:
         options += ["--startup-file", str(startup_file)]
     return _run_jat_cli(

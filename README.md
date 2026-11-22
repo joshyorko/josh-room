@@ -200,6 +200,17 @@ images for containerd, or seed a registry or directory. New operations invoke th
 canonical JAT CLI contract inside the acquired JAT Environment Artifact; Hauler
 behavior stays owned by JAT. These commands require no Room, catalog, OAuth, or
 R2 operation.
+
+Inspect shows the stored JAT reference and any digest reported by JAT. Show
+Images lists OCI registry repository names. Select one to copy its catalog
+name. Older receipts provide no verified source-to-pull mapping, so the
+extension offers no image-specific pull command. With a version 1 JAT Serve image mapping, Show Images also presents
+the recorded source, stored identity and digest. Copy Pull Command copies the
+producer-verified immutable reference for the active localhost session. Closing
+Serve expires that reference. Missing or incompatible mappings retain catalog
+browsing without a pull action. Extract suggests a new folder for the selected entry.
+Export Images saves all images together in one containerd archive.
+
 Room rows show Current and the known save state. Recovery points show their date,
 Latest and Open status, and logical or portable kind. Their full ID is available
 in the tooltip. Room context menus contain Link, Repair, Serve and Delete; ready

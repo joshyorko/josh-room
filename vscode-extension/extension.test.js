@@ -4901,7 +4901,7 @@ test("JAT Tools rows expose the seven capability-capsule commands in order", () 
     "One reference",
     "Restore",
     "Auto · Files · Registry · Both",
-    "containerd",
+    "All images in one containerd archive",
     "registry · dir",
   ]);
   assert.deepEqual(rows.map((row) => row.command), JAT_COMMAND_IDS);
@@ -5286,7 +5286,7 @@ test("Inspect JAT renders the inventory QuickPick and copies the selected refere
   const clipboardWrites = withClipboardRecorder(vscode);
   vscode.openDialogResponses.push([{ fsPath: haul }]);
   vscode.quickPickResponses.push({ entry: inventory[0] });
-  vscode.infoResponses.push("Copy Reference");
+  vscode.infoResponses.push("Copy Stored Reference");
 
   assert.equal(await extension.__test__.jatInspect(), "inspected");
 
@@ -5295,8 +5295,8 @@ test("Inspect JAT renders the inventory QuickPick and copies the selected refere
   assert.equal(inspectCall.args.at(-1), "--json");
   const pick = quickPickCalls.at(-1);
   assert.deepEqual(pick.items.map((item) => item.label), [
-    "$(package) registry.example.test:5000/demo/app:1.0",
-    "$(package) files/app-settings",
+    "$(package) app:1.0",
+    "$(file) app-settings",
   ]);
   assert.deepEqual(pick.items.map((item) => item.description), [
     "image · linux/amd64 · 1.0 MB",
@@ -5305,7 +5305,7 @@ test("Inspect JAT renders the inventory QuickPick and copies the selected refere
   assert.match(pick.options.title, /2 references/);
   assert.match(pick.options.placeHolder, /JAT anchors: images, files/);
   assert.match(infoCalls[0][0], /registry\.example\.test:5000\/demo\/app:1\.0/);
-  assert.deepEqual(infoCalls[0].slice(1), ["Copy Reference", "Extract…"]);
+  assert.deepEqual(infoCalls[0].slice(1), ["Copy Stored Reference", "Extract…"]);
   assert.deepEqual(clipboardWrites, ["registry.example.test:5000/demo/app:1.0"]);
   assert.equal(infoCalls.at(-1)[0], "Copied registry.example.test:5000/demo/app:1.0.");
 });
@@ -5335,7 +5335,7 @@ test("Extract from JAT inspects once and extracts the chosen reference", async (
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-jat-extract-parent-"));
   const inventory = demoInventory();
   const destination = path.join(parent, "demo-extract");
-  const { vscode, statusItem, infoCalls } = createVscodeMock(root);
+  const { vscode, statusItem, inputBoxCalls, infoCalls } = createVscodeMock(root);
   const spawnHarness = createSpawnHarness(({ args }) => {
     if (args[0] === "jat" && args[1] === "inspect") {
       return { stdout: JSON.stringify({ ok: true, inventory }) };
@@ -5356,6 +5356,7 @@ test("Extract from JAT inspects once and extracts the chosen reference", async (
   vscode.inputBoxResponses.push("demo-extract");
 
   assert.equal(await extension.__test__.jatExtract(), "extracted");
+  assert.equal(inputBoxCalls.at(-1).value, "extract-app-1-0");
   assert.equal(fs.existsSync(destination), false);
 
   assert.equal(spawnHarness.calls.length, 2);
@@ -5676,7 +5677,7 @@ test("inventory quick pick items skip reference-less entries and compose descrip
   };
   const mapped = items([entry, {}, { reference: "" }, { reference: 42 }, null]);
   assert.equal(mapped.length, 1);
-  assert.equal(mapped[0].label, "$(package) registry.example.test:5000/demo/app:1.0");
+  assert.equal(mapped[0].label, "$(package) app:1.0");
   assert.equal(mapped[0].description, "image · linux/amd64 · 1.0 MB");
   assert.equal(mapped[0].entry, entry);
   assert.deepEqual(items(undefined), []);
@@ -7542,4 +7543,97 @@ test("recovery text stays pipe-only and absent from runtime files logs and progr
     assert.ok(!JSON.stringify(fixture.logLines).includes(content));
     assert.deepEqual(fs.readdirSync(root), []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("legacy catalog disambiguates labels and copies only the selected repository name", async () => {
+  const { vscode, quickPickCalls, infoCalls } = createVscodeMock(os.tmpdir());
+  const extension = loadExtension(vscode);
+  const writes = withClipboardRecorder(vscode);
+  const names = ["library/tool", "nested/team/api", "other/api"];
+  vscode.quickPickResponses.push({ name: names[1] });
+  vscode.infoResponses.push("Copy Repository Name");
+  await extension.__test__.showCatalogRepositories(names);
+  assert.deepEqual(quickPickCalls[0].items.map(item => item.label), [
+    "$(package) tool", "$(package) nested/team/api", "$(package) other/api",
+  ]);
+  assert.deepEqual(infoCalls[0].slice(1), ["Copy Repository Name"]);
+  assert.deepEqual(writes, [names[1]]);
+});
+
+test("a mapped pull expires between image selection and clipboard copy", async () => {
+  const { vscode, quickPickCalls } = createVscodeMock(os.tmpdir());
+  const writes = withClipboardRecorder(vscode);
+  const extension = loadExtension(vscode);
+  const digest = "sha256:" + "b".repeat(64);
+  const image = { stored_reference: "docker.io/library/tool:v1", display_label: "tool:v1", digest,
+    pull_reference: "127.0.0.1:43211/library/tool@" + digest };
+  const serve = { image_mapping: { schema_version: 1, images: [image] }, session_id: "unique",
+    registry_bind: "loopback", registry_url: "http://127.0.0.1:43211" };
+  vscode.quickPickResponses.push({ image }, { label: "Copy Pull Command" });
+  let alive = true;
+  await extension.__test__.showMappedImages(serve, () => { const previous = alive; alive = false; return previous; });
+  assert.ok(quickPickCalls[1].items.some(item => item.label === "Copy Pull Command"));
+  assert.deepEqual(writes, []);
+});
+
+test("expired, replaced or absent startup receipt disables the installed session's pull action", () => {
+  const { vscode } = createVscodeMock(os.tmpdir());
+  const { sessionIsActive } = loadExtension(vscode).__test__;
+  const registry = require("./registry");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "serve-session-"));
+  try {
+    const file = path.join(dir, "active.json");
+    const receipt = { schema_version: 1, state: "ready", operation: "serve", pid: process.pid, session_id: "first",
+      serve: { mode: "registry", registry_bind: "loopback", registry_url: "http://127.0.0.1:42345", fileserver_url: null, fileserver_bind: null } };
+    fs.writeFileSync(file, JSON.stringify(receipt));
+    const selected = registry.validateServeStartup(receipt);
+    assert.equal(sessionIsActive(file, selected, () => false), true);
+    assert.equal(sessionIsActive(file, selected, () => true), false);
+    fs.writeFileSync(file, JSON.stringify({ ...receipt, session_id: "replaced" }));
+    assert.equal(sessionIsActive(file, selected, () => false), false);
+    fs.unlinkSync(file);
+    assert.equal(sessionIsActive(file, selected, () => false), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("Serve passes a private startup path and offers the active mapping or catalog fallback", async (t) => {
+  for (const mapped of [true, false]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-jat-mapping-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, "src/jat"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src/jat/cli.py"), "--startup-file");
+    const { vscode, statusItem } = createVscodeMock(root);
+    const writes = withClipboardRecorder(vscode);
+    const digest = "sha256:" + "c".repeat(64);
+    const registry = "http://127.0.0.1:45218";
+    const name = "fixture/team/test";
+    const image = { stored_reference: "example.test/base:v1", source_reference: "example.test/base:v1",
+      display_label: "base:v1", digest, pull_reference: "127.0.0.1:45218/" + name + "@" + digest };
+    let closed;
+    let terminal;
+    vscode.window.onDidCloseTerminal = (fn) => { closed = fn; return { dispose() {} }; };
+    vscode.window.createTerminal = ({ env }) => {
+      terminal = { show() {}, dispose() {}, sendText() {
+        fs.writeFileSync(env.JOSH_ROOM_SERVE_STARTUP_FILE, JSON.stringify({
+          schema_version: 1, operation: "serve", state: "ready", pid: process.pid, session_id: "owned",
+          serve: { mode: "registry", registry_bind: "loopback", registry_url: registry,
+            fileserver_url: null, fileserver_bind: null,
+            ...(mapped ? { image_mapping: { schema_version: 1, images: [image] } } : {}) },
+        }));
+      } };
+      return terminal;
+    };
+    const extension = loadExtension(vscode, undefined, {
+      probeRegistry: async (url) => { assert.equal(url, registry); return { repositories: [name] }; },
+    });
+    extension.__test__.setRuntimeForTests({ command: "rcc", args: args => args, env: {}, jatRoot: root });
+    extension.__test__.setStatusItem(statusItem);
+    vscode.openDialogResponses.push([{ fsPath: path.join(root, "test.haul") }]);
+    vscode.quickPickResponses.push({ mode: "registry" }, mapped ? { image } : { name }, { label: "Copy Pull Command" });
+    vscode.infoResponses.push("Show Images", "Copy Repository Name");
+    try {
+      assert.equal(await extension.__test__.jatServe(), "started");
+      assert.deepEqual(writes, [mapped ? "docker pull " + image.pull_reference : name]);
+    } finally { closed?.(terminal); }
+  }
 });

@@ -28,10 +28,10 @@ function validateServeStartup(value, requestedMode = "auto") {
     }
   }
   if (serve.fileserver_url && serve.fileserver_url === serve.registry_url) throw new Error("JAT Serve endpoints collide");
-  return { ...serve };
+  return { ...serve, session_id: value.session_id, pid: value.pid };
 }
 
-function readServeJson(file, limit = 16384) {
+function readServeJson(file, limit = 1024 * 1024) {
   try {
     const info = fs.lstatSync(file);
     if (!info.isFile() || info.size > limit) throw new Error("Invalid Serve receipt file");
@@ -54,6 +54,21 @@ async function waitForServeStartup(startupFile, {
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   } while (true);
   throw new Error("JAT did not report selected endpoints; the acquired runtime may lack Serve startup support");
+}
+
+function verifiedPull(serve, image) {
+  if (serve.registry_bind !== "loopback" || !serve.session_id || !serve.registry_url) return;
+  const reference = image.pull_reference;
+  if (typeof reference !== "string" || typeof image.digest !== "string") return;
+  const authority = serve.registry_url.slice("http://".length);
+  const parts = reference.split("/");
+  if (parts.shift() !== authority) return;
+  const pieces = parts.join("/").split("@");
+  if (pieces.length !== 2 || pieces[1] !== image.digest || !/^sha256:[0-9a-f]{64}$/.test(image.digest)) return;
+  if (!pieces[0].split("/").every(part => /^[a-z0-9]+(?:(?:[.]|_{1,2}|-+)[a-z0-9]+)*$/.test(part))) return;
+  // JS end anchors can accept a final newline. Clipboard commands must be one shell argument.
+  if (/[^a-z0-9:@/._-]/.test(reference)) return;
+  return reference;
 }
 
 function probeRegistry(endpoint) {
@@ -191,6 +206,7 @@ module.exports = {
   readServeJson,
   validateServeStartup,
   waitForServeStartup,
+  verifiedPull,
   cleanLogLine,
   followLogFile,
   probeFileserver,
