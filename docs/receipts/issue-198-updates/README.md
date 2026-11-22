@@ -1,5 +1,9 @@
 # Synthetic Linux child-update and parent-refresh acceptance
 
+The following receipt predates the combined-review findings. See the
+[corrected-source review receipt](review-fixes.md) for fixes and fresh evidence;
+this older receipt does not establish their absence.
+
 Dependent draft [#218](https://github.com/joshyorko/josh-room/pull/218) extends
 [#216](https://github.com/joshyorko/josh-room/pull/216). The tested product source
 is `801c79af97867748218cb8e77e35667e4bd43a29`. The final evidence commit changes
