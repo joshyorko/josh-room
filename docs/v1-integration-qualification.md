@@ -335,6 +335,15 @@ denials retain their nonzero exits rather than being mistaken for harness
 failures. Interpreter origin checks, private storage, deadlines and no-build
 mode remain unchanged. Native provider/UI acceptance is still pending.
 
+The `7f705ce` harness then passed archive acquisition, interpreter origin checks,
+native Credential Manager roundtrip, bucket creation and encryption initialization.
+Its first snapshot creation failed `runtime-version-unavailable`: the direct
+fixture omitted the version handoff normally supplied by the installed extension.
+The harness now reads that value from the parity-verified installed VSIX manifest.
+The product's version guard is unchanged; full native recovery still requires the
+actual next job result. The failed receipt and successful owned-target cleanup
+remain retained separately.
+
 The exact combined baseline `e67bc289059766db51c7320773305d6e47089e41`
 passed all ten ordinary checks, with two intentional publication skips and no
 unresolved review threads. Its independent recheck closed both remaining UI

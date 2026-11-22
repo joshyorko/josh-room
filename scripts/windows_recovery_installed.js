@@ -167,6 +167,7 @@ async function main() {
     receipt.installed_files_compared = compared;
     const env = { ...process.env, JOSH_ROOM_ACCEPTANCE_ROOT: base,
       JOSH_ROOM_ACCEPTANCE_PORT: String(await reservePort()),
+      JOSH_ROOM_EXTENSION_VERSION: JSON.parse(await fsp.readFile(path.join(installed, "package.json"), "utf8")).version,
       PYTHONPATH: path.join(installed, "runtime/controller"),
       LOCALAPPDATA: path.join(base, "local-appdata"), APPDATA: path.join(base, "appdata"),
       TEMP: path.join(base, "provider-runtime"), TMP: path.join(base, "provider-runtime"),
