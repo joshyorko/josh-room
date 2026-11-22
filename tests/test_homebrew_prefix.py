@@ -10,25 +10,25 @@ from josh_room import homebrew_prefix as brew
 
 
 def executable():
-    data = bytearray(1024)
+    data = bytearray(4096)
     data[:7] = b"\x7fELF\x02\x01\x01"
     struct.pack_into("<HHI", data, 16, 2, 62, 1)
     struct.pack_into("<Q", data, 32, 64)
     struct.pack_into("<HHH", data, 52, 64, 56, 3)
     interpreter = (brew.PREFIX + "/lib/ld.so").encode() + b"\0"
-    data[300 : 300 + len(interpreter)] = interpreter
+    data[1024 : 1024 + len(interpreter)] = interpreter
     strings = b"libc.so.6\0" + (brew.PREFIX + "/lib").encode() + b"\0"
-    data[600 : 600 + len(strings)] = strings
+    data[2048 : 2048 + len(strings)] = strings
     for offset, header in [
-        (64, (1, 5, 0, 0x400000, 0x400000, 1024, 1024, 4096)),
+        (64, (1, 5, 0, 0x400000, 0x400000, 4096, 4096, 4096)),
         (
             120,
             (
                 3,
                 4,
-                300,
-                0x400000 + 300,
-                0x400000 + 300,
+                1024,
+                0x400000 + 1024,
+                0x400000 + 1024,
                 len(interpreter),
                 len(interpreter),
                 1,
@@ -37,7 +37,7 @@ def executable():
         (176, (2, 6, 400, 0x400000 + 400, 0x400000 + 400, 64, 64, 8)),
     ]:
         struct.pack_into("<IIQQQQQQ", data, offset, *header)
-    for index, pair in enumerate([(5, 0x400000 + 600), (1, 0), (15, 10), (0, 0)]):
+    for index, pair in enumerate([(5, 0x400000 + 2048), (1, 0), (15, 10), (0, 0)]):
         struct.pack_into("<qQ", data, 400 + index * 16, *pair)
     return bytes(data)
 

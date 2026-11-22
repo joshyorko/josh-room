@@ -570,7 +570,7 @@
     "no populated-prefix merge/overwrite",
     "no other CPU/kernel/distro/macOS/Windows installed restore or NSS/locales/services qualification",
     "no cold-host native reinstallation",
-    "independent security delegation unavailable; e4be60c coordinator review covers earlier fix, not v2; new review needed"
+    "independent security delegation unavailable; e4be60c coordinator review covers earlier fix, not v2; independent static review covers cc738b3; runtime acceptance separately recorded"
   ],
   "installed_native_export": {
     "archive_sha256": "8963218e00c187603458ec8dd95912224510a125e9bd6edbc7c192de92638fb9",
@@ -591,5 +591,12 @@
     "latest": "232b84527f234cf7ba8d4263a998a1a1",
     "snapshot_count": 3,
     "final_marker_matches_latest": true
+  },
+  "review": {
+    "source_sha": "cc738b3b1ad7ac513e5872cf34c4196fad5b2c05",
+    "result": "no new concrete finding in independent static contract/correctness review",
+    "scope": "manifest/receipt roles, ELF resolution, v1 compatibility, preview/archive/material checks and failure/uncertainty propagation; no tests or binaries run by reviewer",
+    "requested_followup": "v2 shared archive roundtrip/occupied-prefix/stage-substitution coverage added; combined v1/v2/material suite116PASS",
+    "specialist_security_review": "unavailable: prior broader invocations service-flagged before result"
   }
 }

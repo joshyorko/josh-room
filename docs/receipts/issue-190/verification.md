@@ -286,3 +286,18 @@ Windows/macOS installed restore, other tools/graphs/CPU/kernel/distro combinatio
 NSS/locales/services, populated-prefix merge, full Homebrew manager and cold-host
 native reinstall. #188 remains unavailable/blocked in the chooser, with Codex
 history-only explicitly labeled; no auth or new-turn continuation is copied.
+
+### V2 shared lifecycle coverage and review
+
+Coordinator relayed an independent static contract/correctness review at exact
+cc738b3 with no new concrete finding. It ran no tests or binaries. Its requested
+coverage gap is addressed with the existing v2 fixture: shared archive roundtrip,
+confirmed promotion, occupied-prefix refusal with unchanged bytes, and substituted
+stage returning commit-uncertain while leaving unrelated bytes untouched. V1
+compatibility remains covered. Combined v1/v2/material suite:116PASS. A task-local
+long pytest path exposed overlapping offsets in the small synthetic v1 ELF builder;
+expanded its fixture layout and retained the initial5FAIL/111PASS, then116PASS.
+Production and tested VSIX/controller bytes are unchanged by this follow-up.
+The additional pinned Restic bridge component subset passed5 (43deselected).
+Windows focused parser/refusal job at cc738b3 passed; final exact-head CI remains
+separate. Broader specialist security delegation remains unavailable, not passed.

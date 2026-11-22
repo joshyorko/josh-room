@@ -311,3 +311,51 @@ def test_validate_payload_uses_same_content_policy_as_capture(installed):
 def test_unsupported_selected_package_does_not_traverse_source(tmp_path):
     with pytest.raises(base.PrefixError):
         declared.capture(tmp_path / "missing", "arbitrary-tool")
+
+
+def test_v2_shared_archive_roundtrip_and_occupied_prefix_refusal(installed, tmp_path):
+    manifest, data = declared.capture(installed, "jq")
+    archive = base.prepare_archive((manifest, data), tmp_path / "jq.tar.zst")
+    assert base.read_archive(archive) == (manifest, data)
+    installed.rename(tmp_path / "synthetic-source")
+    plan = base.plan_restore(archive, installed)
+    result = base.restore(
+        archive, installed, expected_manifest_sha256=plan["manifest_sha256"]
+    )
+    assert result["status"] == "restored" and result["format"] == declared.FORMAT
+    for name, value in data.items():
+        assert (installed / name).read_bytes() == value
+    with pytest.raises(base.PrefixError, match="absent"):
+        base.restore(
+            archive, installed, expected_manifest_sha256=plan["manifest_sha256"]
+        )
+    assert all((installed / name).read_bytes() == value for name, value in data.items())
+
+
+def test_v2_shared_restore_reports_swapped_stage_as_commit_uncertain(
+    installed, tmp_path, monkeypatch
+):
+    import os
+
+    manifest, data = declared.capture(installed, "jq")
+    archive = base.prepare_archive((manifest, data), tmp_path / "jq.tar.zst")
+    installed.rename(tmp_path / "synthetic-source")
+    promote = base._promote
+
+    def swap(parent, stage, destination):
+        os.rename(stage, "displaced-stage", src_dir_fd=parent, dst_dir_fd=parent)
+        os.mkdir(stage, dir_fd=parent)
+        replacement = tmp_path / stage
+        (replacement / "unrelated.txt").write_bytes(b"unrelated synthetic file")
+        return promote(parent, stage, destination)
+
+    monkeypatch.setattr(base, "_promote", swap)
+    result = base.restore(
+        archive, installed, expected_manifest_sha256=base.manifest_digest(manifest)
+    )
+    assert result["ok"] is False and result["status"] == "commit-uncertain"
+    assert result["reconciliation_required"] is True
+    assert (installed / "unrelated.txt").read_bytes() == b"unrelated synthetic file"
+    assert (tmp_path / "displaced-stage/Cellar/jq/1.8.2/bin/jq").read_bytes() == data[
+        "Cellar/jq/1.8.2/bin/jq"
+    ]
