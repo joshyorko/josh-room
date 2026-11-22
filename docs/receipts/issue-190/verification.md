@@ -213,3 +213,25 @@ NOT RUN/SKIP: managed RCC controller/JAT artifact, native Windows installed rest
 hashes, locales/NSS/services, cross-distro/prefix portability, whole Homebrew
 manager, full work-jatt binary capture and verified native reinstallation.
 No merge, tag, release staging, release publication or paid call occurred.
+
+## Independent security review corrections
+
+The coordinator's independent review of f6ac743 found release blockers despite
+its passing functional trial: .env and credential-shaped content in ordinary keg
+files were admitted, and a concurrent same-UID process could replace the named
+stage before promotion so unrelated bytes were reported restored. Those earlier
+receipts do not establish security acceptance.
+
+The fix applies the shared material path/content rules before package creation
+and to decoded archive payloads, including binary bytes conservatively. Restore
+writes through no-follow directory descriptors, verifies exact stage topology,
+file digests/modes and parent/stage inode bindings before promotion, then verifies
+the promoted identity/content. A changed/unknown post-promotion outcome returns
+`commit-uncertain` with `reconciliation_required`, never restored success. Cleanup
+uses the held stage descriptor and does not recursively delete a replaced parent
+name. Focused synthetic stage-swap/failed-promotion replacement regressions and
+.env/Bearer/API-key capture/archive regressions pass with the shared security
+suite (99 tests). Repeat real installed/archive acceptance and a new independent
+review are required at the fix SHA; they are not inferred from those unit results.
+A malicious same-UID writer can modify user-owned files after any completed
+verification; this is not claimed to provide a separate OS-user security boundary.

@@ -296,3 +296,106 @@ def test_qualified_executable_must_remain_executable(capture):
     manifest["files"]["Cellar/hello/2.12.3/bin/hello"]["mode"] = 0o644
     with pytest.raises(brew.PrefixError, match="modes"):
         brew.validate_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    "name,content",
+    [
+        (".env", b"synthetic configuration"),
+        (".env.local", b"synthetic configuration"),
+        ("readme.txt", b"Bearer " + b"synthetic" * 4),
+        ("readme.txt", b"api_key=" + b"synthetic" * 4),
+    ],
+)
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux capture/dirfd only")
+def test_shared_material_policy_refuses_capture_and_archive_payload(
+    tmp_path, capture, monkeypatch, name, content
+):
+    manifest, data = capture
+    keg = Path(brew.PREFIX) / "Cellar/hello/2.12.3"
+    keg.mkdir(parents=True, mode=0o700)
+    (keg / "INSTALL_RECEIPT.json").write_text(
+        '{"runtime_dependencies":[],"poured_from_bottle":true,"source":{"tap":"homebrew/core"}}'
+    )
+    (keg / name).write_bytes(content)
+    opt = Path(brew.PREFIX) / "opt"
+    opt.mkdir()
+    (opt / "hello").symlink_to("../Cellar/hello/2.12.3")
+    with pytest.raises(brew.PrefixError, match="sensitive"):
+        brew.capture(brew.PREFIX, "hello")
+    logical = "Cellar/hello/2.12.3/" + name
+    data[logical] = content
+    manifest["files"][logical] = {
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "bytes": len(content),
+        "mode": 0o600,
+    }
+    original = brew.check_material
+    monkeypatch.setattr(brew, "check_material", lambda *_args: None)
+    archive = brew.prepare_archive((manifest, data), tmp_path / "untrusted.tar.zst")
+    monkeypatch.setattr(brew, "check_material", original)
+    if sys.platform == "linux":
+        with pytest.raises(brew.PrefixError, match="sensitive"):
+            brew.read_archive(archive)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux dirfd/renameat2 restore only"
+)
+def test_stage_swap_is_never_reported_as_verified_restore(
+    tmp_path, capture, monkeypatch
+):
+    archive = brew.prepare_archive(capture, tmp_path / "brew.tar.zst")
+    original = brew._promote
+
+    def swap(parent, stage, destination):
+        import os
+
+        os.rename(stage, "displaced-stage", src_dir_fd=parent, dst_dir_fd=parent)
+        os.mkdir(stage, dir_fd=parent)
+        replacement = Path("/proc/self/fd") / str(parent) / stage
+        (replacement / "unrelated.txt").write_bytes(b"unrelated synthetic file")
+        return original(parent, stage, destination)
+
+    monkeypatch.setattr(brew, "_promote", swap)
+    result = brew.restore(
+        archive, brew.PREFIX, expected_manifest_sha256=brew.manifest_digest(capture[0])
+    )
+    assert result["ok"] is False and result["status"] == "commit-uncertain"
+    assert result["reconciliation_required"] is True
+    assert (
+        Path(brew.PREFIX) / "unrelated.txt"
+    ).read_bytes() == b"unrelated synthetic file"
+    assert (tmp_path / "displaced-stage/Cellar/hello/2.12.3/bin/hello").exists()
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux dirfd/renameat2 restore only"
+)
+def test_failed_promotion_cleanup_never_deletes_replacement_stage(
+    tmp_path, capture, monkeypatch
+):
+    archive = brew.prepare_archive(capture, tmp_path / "brew.tar.zst")
+    swapped = []
+
+    def swap(parent, stage, _destination):
+        import os
+
+        os.rename(stage, "original-owned-stage", src_dir_fd=parent, dst_dir_fd=parent)
+        os.mkdir(stage, dir_fd=parent)
+        replacement = Path("/proc/self/fd") / str(parent) / stage
+        (replacement / "unrelated.txt").write_bytes(b"unrelated synthetic file")
+        swapped.append(stage)
+        return -1
+
+    monkeypatch.setattr(brew, "_promote", swap)
+    with pytest.raises(brew.PrefixError):
+        brew.restore(
+            archive,
+            brew.PREFIX,
+            expected_manifest_sha256=brew.manifest_digest(capture[0]),
+        )
+    assert (
+        tmp_path / swapped[0] / "unrelated.txt"
+    ).read_bytes() == b"unrelated synthetic file"
+    assert not Path(brew.PREFIX).exists()

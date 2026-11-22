@@ -55,6 +55,25 @@ def _sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def check_material(name, value=None):
+    """Apply shared denied-path/content rules to package bytes without executing them."""
+    from .material_security import Decision, MaterialClass, _path_class, scan_content
+
+    if _path_class(Path(name)) is not None:
+        _fail("sensitive material paths cannot enter an installed closure")
+    if (
+        value is not None
+        and scan_content(
+            (value,),
+            adapter="homebrew-installed",
+            material_class=MaterialClass.SESSION_ASSET,
+            max_bytes=MAX_FILE,
+        ).decision
+        != Decision.ALLOW
+    ):
+        _fail("sensitive or unscannable material cannot enter an installed closure")
+
+
 def native_platform():
     if (
         sys.platform != "linux"
@@ -308,6 +327,7 @@ def capture(prefix, formula):
                     )
                 path = directory / name
                 relative = _relative(path.relative_to(root).as_posix())
+                check_material(relative)
                 metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
                 if metadata.st_uid != os.getuid() or (
                     not stat.S_ISLNK(metadata.st_mode) and metadata.st_mode & 0o7022
@@ -320,6 +340,7 @@ def capture(prefix, formula):
                     _fail("keg-internal symlinks are outside the qualified v1 closure")
                 elif stat.S_ISREG(metadata.st_mode):
                     value, info = _read(path)
+                    check_material(relative, value)
                     if b"PRIVATE KEY-----" in value:
                         _fail(
                             "private key material cannot be captured in an installed closure"
@@ -479,6 +500,7 @@ def validate_manifest(value):
     total = 0
     for name, record in files.items():
         _relative(name)
+        check_material(name)
         if (
             not allowed(name)
             or not isinstance(record, dict)
@@ -564,6 +586,8 @@ def prepare_archive(captured, output):
 
     manifest, data = captured
     validate_manifest(manifest)
+    for name, content in data.items():
+        check_material(name, content)
     directory_names = {ROOT, ROOT + "/installed"}
     for name in [*data, *manifest["directories"]]:
         path = PurePosixPath(ROOT + "/installed/" + name)
@@ -694,6 +718,7 @@ def _parse_archive(blob):
     if directories != expected_dirs:
         _fail("installed recovery archive directory inventory mismatch")
     for name, value in data.items():
+        check_material(name, value)
         record = manifest["files"][name]
         if len(value) != record["bytes"] or _sha(value) != record["sha256"]:
             _fail("installed file digest mismatch")
@@ -720,7 +745,134 @@ def _parse_archive(blob):
     return manifest, data
 
 
+def _identity(info):
+    return info.st_dev, info.st_ino
+
+
+def _bound(parent_fd, name, descriptor):
+    try:
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        return stat.S_ISDIR(named.st_mode) and _identity(named) == _identity(
+            os.fstat(descriptor)
+        )
+    except OSError:
+        return False
+
+
+def _verify_restored(root_fd, manifest):
+    """Verify exact topology and bytes through no-follow directory descriptors."""
+    expected = (
+        set(manifest["files"]) | set(manifest["links"]) | set(manifest["directories"])
+    )
+    for name in list(expected):
+        expected.update(
+            str(part) for part in PurePosixPath(name).parents if str(part) != "."
+        )
+    observed = set()
+
+    def visit(descriptor, base=""):
+        for leaf in os.listdir(descriptor):
+            name = base + leaf
+            if name not in expected:
+                _fail("restored prefix contains unexpected material")
+            observed.add(name)
+            info = os.stat(leaf, dir_fd=descriptor, follow_symlinks=False)
+            if name in manifest["files"]:
+                record = manifest["files"][name]
+                handle = os.open(
+                    leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor
+                )
+                with os.fdopen(handle, "rb") as source:
+                    actual = os.fstat(source.fileno())
+                    if (
+                        not stat.S_ISREG(actual.st_mode)
+                        or actual.st_nlink != 1
+                        or _identity(actual) != _identity(info)
+                        or stat.S_IMODE(actual.st_mode) != record["mode"]
+                        or actual.st_size != record["bytes"]
+                    ):
+                        _fail("restored prefix file identity changed")
+                    value = source.read(MAX_FILE + 1)
+                    if len(value) != record["bytes"] or _sha(value) != record["sha256"]:
+                        _fail("restored prefix file content changed")
+            elif name in manifest["links"]:
+                if (
+                    not stat.S_ISLNK(info.st_mode)
+                    or os.readlink(leaf, dir_fd=descriptor) != manifest["links"][name]
+                ):
+                    _fail("restored prefix link changed")
+            else:
+                child = os.open(
+                    leaf,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                try:
+                    if _identity(os.fstat(child)) != _identity(info):
+                        _fail("restored prefix directory changed")
+                    visit(child, name + "/")
+                finally:
+                    os.close(child)
+
+    visit(root_fd)
+    if observed != expected:
+        _fail("restored prefix inventory is incomplete")
+
+
+def _promote(parent_fd, stage_name, destination_name):
+    rename = ctypes.CDLL(None, use_errno=True).renameat2
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    return rename(
+        parent_fd, os.fsencode(stage_name), parent_fd, os.fsencode(destination_name), 1
+    )
+
+
+def _cleanup_stage(parent_fd, stage_name, stage_fd):
+    # Delete through the held stage descriptor, never a replaceable parent name.
+    # rmtree's final rmdir(".") cannot remove the root; remove that empty root
+    # separately only while its parent name still identifies our directory.
+    def onerror(function, path, error):
+        if function is os.rmdir and path == ".":
+            return
+        raise error[1]
+
+    shutil.rmtree(".", dir_fd=stage_fd, onerror=onerror)
+    if _bound(parent_fd, stage_name, stage_fd):
+        try:
+            os.rmdir(stage_name, dir_fd=parent_fd)
+        except OSError:
+            pass
+
+
+def _stage_parent(root_fd, name):
+    descriptor = os.dup(root_fd)
+    try:
+        for part in PurePosixPath(name).parts[:-1]:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=descriptor)
+            except FileExistsError:
+                pass
+            child = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor
+            )
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def restore(archive, prefix, *, expected_manifest_sha256):
+    from .cancellation import CLICancelled
+
     manifest, data = read_archive(archive)
     if (
         str(Path(prefix)) != manifest["prefix"]
@@ -734,6 +886,8 @@ def restore(archive, prefix, *, expected_manifest_sha256):
     stage_fd = None
     stage_name = None
     created = False
+    promoted = False
+    promotion_attempted = False
     try:
         info = os.fstat(parent_fd)
         if info.st_uid != os.getuid() or info.st_mode & 0o022:
@@ -756,19 +910,30 @@ def restore(archive, prefix, *, expected_manifest_sha256):
         )
         stage = Path("/proc/self/fd") / str(stage_fd)
         for name in manifest["directories"]:
-            (stage / name).mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory = _stage_parent(stage_fd, name + "/.directory")
+            os.close(directory)
         for name, value in data.items():
-            target = stage / name
-            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            with target.open("xb") as output:
+            parent = _stage_parent(stage_fd, name)
+            try:
+                handle = os.open(
+                    PurePosixPath(name).name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=parent,
+                )
+            finally:
+                os.close(parent)
+            with os.fdopen(handle, "wb") as output:
                 output.write(value)
                 os.fchmod(output.fileno(), manifest["files"][name]["mode"])
                 output.flush()
                 os.fsync(output.fileno())
         for name, target in manifest["links"].items():
-            link = stage / name
-            link.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            link.symlink_to(target)
+            parent = _stage_parent(stage_fd, name)
+            try:
+                os.symlink(target, PurePosixPath(name).name, dir_fd=parent)
+            finally:
+                os.close(parent)
         for directory, _directories, _files in os.walk(
             stage, topdown=False, followlinks=False
         ):
@@ -777,29 +942,46 @@ def restore(archive, prefix, *, expected_manifest_sha256):
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
-        rename = ctypes.CDLL(None, use_errno=True).renameat2
-        rename.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        rename.restype = ctypes.c_int
-        if rename(
-            parent_fd,
-            os.fsencode(stage_name),
-            parent_fd,
-            os.fsencode(destination.name),
-            1,
-        ):
+        _verify_restored(stage_fd, manifest)
+        fresh_parent = _directory(destination.parent)
+        try:
+            if _identity(os.fstat(fresh_parent)) != _identity(
+                os.fstat(parent_fd)
+            ) or not _bound(parent_fd, stage_name, stage_fd):
+                _fail("restore parent or stage identity changed before promotion")
+        finally:
+            os.close(fresh_parent)
+        promotion_attempted = True
+        if _promote(parent_fd, stage_name, destination.name):
+            promotion_attempted = False
             _fail("prefix admission changed; atomic no-clobber promotion refused")
+        promoted = True
         stage = None
         created = False
         os.fsync(parent_fd)
+        fresh_parent = _directory(destination.parent)
+        try:
+            if _identity(os.fstat(fresh_parent)) != _identity(
+                os.fstat(parent_fd)
+            ) or not _bound(parent_fd, destination.name, stage_fd):
+                _fail("restored prefix binding changed during promotion")
+            _verify_restored(stage_fd, manifest)
+            if not _bound(parent_fd, destination.name, stage_fd):
+                _fail("restored prefix binding changed after verification")
+        finally:
+            os.close(fresh_parent)
+    except (OSError, PrefixError, KeyboardInterrupt, CLICancelled):
+        if promoted or promotion_attempted:
+            return {
+                "ok": False,
+                "status": "commit-uncertain",
+                "reconciliation_required": True,
+                "reason": "prefix promotion occurred but final identity/content could not be verified; inspect before retrying",
+            }
+        raise
     finally:
-        if created:
-            shutil.rmtree(Path("/proc/self/fd") / str(parent_fd) / stage_name)
+        if created and not promotion_attempted and stage_fd is not None:
+            _cleanup_stage(parent_fd, stage_name, stage_fd)
         if stage_fd is not None:
             os.close(stage_fd)
         os.close(parent_fd)

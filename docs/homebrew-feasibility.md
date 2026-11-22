@@ -120,7 +120,10 @@ the restored program. It writes a private sibling stage and atomically promotes
 with Linux `renameat2(RENAME_NOREPLACE)`. Regular cancellation removes the stage.
 SIGKILL can leave a private `.room-prefix-*` sibling; interruption or an fsync
 failure after promotion can leave a complete restored prefix despite an error
-receipt. Inspect before retrying; retries refuse any occupied prefix.
+receipt. A failed final inode/content check returns `commit-uncertain` and requires
+inspection before retrying; retries refuse any occupied prefix. Shared material
+path/content rules also apply to captured and decoded package bytes. These checks
+do not isolate files from a malicious same-UID writer after verification.
 
 The [installed-prefix receipt](receipts/issue-190/homebrew-installed-prefix.json)
 records the concrete test boundary. It does not establish full Homebrew restore,
