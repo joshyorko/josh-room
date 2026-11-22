@@ -541,7 +541,7 @@ module.exports.workspaceFingerprint = workspaceFingerprint;
 function isRoomMarker(marker) {
   const digest = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   return Boolean(
-    marker && [1, 2, 3].includes(marker.format_version)
+    marker && [1, 2, 3, 4].includes(marker.format_version)
     && typeof marker.project_id === "string"
     && typeof marker.display_name === "string"
     && marker.display_name.length > 0
@@ -550,7 +550,9 @@ function isRoomMarker(marker) {
       && typeof marker.dimension_id === "string"
       && digest(marker.workspace_fingerprint)
       && digest(marker.workspace_path_sha256)
-    )) || (marker.format_version === 3 && (
+    )) || ([3, 4].includes(marker.format_version) && (
+      (marker.format_version !== 4 || /^[a-f0-9]{32}$/.test(marker.composition_namespace))
+      &&
       typeof marker.snapshot_id === "string"
       && typeof marker.dimension_id === "string"
       && typeof marker.encryption_domain_id === "string"

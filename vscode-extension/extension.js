@@ -1133,7 +1133,8 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     environment = managedRuntime.mergeRuntimeEnvironment(process.env, { ...(runtime.env || {}), JOSH_ROOM_PROGRESS_FILE: progressPath });
     credentialsCleanup = await writeRuntimeCredentials(environment, {
       extensionMode: runtime.mode !== "local-build-fallback" || Boolean(runtime.jatArtifact),
-      authFree: ["status", "composition"].includes(args[0]),
+      authFree: args[0] === "status" || (args[0] === "composition" && ["plan", "inventory", "reconcile", "capture-plan"].includes(args[1]))
+        || (options.localConfigurationOnly && args[0] === "dimensions" && !args.includes("--with-hierarchy")),
     });
     encryptionCleanup = await writeEncryptionHandoff(environment, options.encryptionMaterial);
   } catch (error) {
@@ -2167,9 +2168,50 @@ async function splitWorkspace() {
   return outcome;
 }
 
+async function newRoom() {
+  assertWorkspaceTrusted("create a Room");
+  const choice = await vscode.window.showQuickPick([
+    { label: "Save one Room", id: "ordinary" },
+    { label: "Configure Catalog Room", id: "catalog" },
+  ], { title: "New Room", placeHolder: "Save one Room is the default" });
+  if (!choice) return "cancelled";
+  return choice.id === "catalog" ? saveCatalogRoom() : saveRoom({ forceCreate: true });
+}
+
+async function saveCatalogRoom() {
+  assertWorkspaceTrusted("save a Catalog Room");
+  const argsFor = (selection, command) => ["composition", command, "--workspace", selection.root,
+    "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
+    "--parent-room", selection.parentRoom, "--expected-domain", selection.dimension.encryption_domain_id, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`])];
+  return require("./catalog-actions").saveCatalog(vscode, {
+    dimensions: async (root) => dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true })),
+    plan: (selection) => runJoshRoom(argsFor(selection, "capture-plan"), selection.root),
+    save: (selection, approval) => runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"], selection.root,
+      selection.dimension, { title: "Saving Catalog Room…", action: "save a Catalog Room" }),
+  });
+}
+
+async function enterChildRoom() {
+  assertWorkspaceTrusted("enter a child Room");
+  const root = activeWorkspace();
+  return require("./catalog-actions").enterChild(vscode, {
+    root, marker: currentRoom(root),
+    enter: async ({ namespace, child, marker }) => {
+      const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
+      const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
+      if (!dimension) throw new Error("The parent Dimension is not configured.");
+      return runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
+        "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
+      dimension, { title: "Entering pinned child Room…", action: "enter a child Room" });
+    },
+    open: (target) => vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(target), false),
+  });
+}
+
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
+  if (currentRoom(cwd)?.composition_namespace) throw new Error("This Room belongs to a composition namespace. Ordinary Save cannot update it.");
   const currentMarker = options.current ? currentRoom(cwd) : undefined;
   if (options.current && !currentMarker) {
     await vscode.window.showInformationMessage("Open a Room first, or use Save Folder As Room.");
@@ -3493,8 +3535,10 @@ function activate(context) {
   register(context, "joshRoom.save", () => saveRoom({ current: true }));
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
+  register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.enterChild", () => enterChildRoom());
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
-  register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
+  register(context, "joshRoom.new", () => newRoom());
   register(context, "joshRoom.enter", enterRoom);
   register(context, "joshRoom.remove", removeRoom);
   register(context, "joshRoom.deleteRecoveryPoint", deleteRecoveryPoint);
@@ -3521,6 +3565,8 @@ function activate(context) {
 
 module.exports = { activate };
 module.exports.__test__ = {
+  saveCatalogRoom,
+  enterChildRoom,
   splitWorkspace,
   enterRoom,
   checkWorkspace,
@@ -4985,7 +5031,7 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
   const generation = ++dirtyTrackingGeneration;
   watchWorkspace(context, root);
   const eventGenerationAtStart = workspaceEventGeneration;
-  const savedFingerprint = marker.format_version === 3
+  const savedFingerprint = [3, 4].includes(marker.format_version)
     ? marker.workspace_signature
     : marker.workspace_fingerprint;
   workspaceBindingTrusted = false;
@@ -5021,14 +5067,14 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     || status.current_workspace_fingerprint || status.current_fingerprint || status.workspace_fingerprint
   );
   const localPathSha = realWorkspacePathSha256(root);
-  const v3BindingMatches = marker.format_version === 3 && Boolean(localPathSha)
+  const v3BindingMatches = [3, 4].includes(marker.format_version) && Boolean(localPathSha)
     && Boolean(status?.path_matches)
     && status?.workspace_path_sha256 === marker.workspace_path_sha256
     && marker.workspace_path_sha256 === localPathSha
     && status?.signature_algorithm === marker.signature_algorithm
     && status?.capture_policy_sha256 === marker.capture_policy_sha256
     && marker.capture_policy_sha256 === workspaceCapturePolicy.sha256;
-  workspaceBindingTrusted = marker.format_version === 3
+  workspaceBindingTrusted = [3, 4].includes(marker.format_version)
     ? v3BindingMatches
     : Boolean(status?.ok && status?.path_matches && status?.state === "clean" && status?.fingerprint_matches !== false);
   await workspaceBaseline.capture({ savedFingerprint, currentFingerprint: currentFingerprint || savedFingerprint });
@@ -5038,7 +5084,7 @@ startDirtyTracking = async function nativeStartDirtyTracking(context) {
     setRoomState("dirty", { bindingTrusted: workspaceBindingTrusted });
   } else if (!status || status.state === "unknown" || !workspaceBindingTrusted) {
     setRoomState("unknown", { bindingTrusted: false });
-  } else if (marker.format_version === 3) {
+  } else if ([3, 4].includes(marker.format_version)) {
     const signatureChanged = status.state === "changed"
       || status.signature_matches === false
       || status.policy_matches === false
@@ -5055,7 +5101,7 @@ module.exports.__test__.startDirtyTracking = startDirtyTracking;
 async function resetNativeBaseline(result) {
   if (!workspaceBaseline) return;
   const marker = currentRoom(activeWorkspace());
-  if (marker?.format_version === 3) {
+  if ([3, 4].includes(marker?.format_version)) {
     const policy = workspaceCapturePolicy;
     const pathSha = realWorkspacePathSha256(activeWorkspace());
     const bindingTrusted = Boolean(policy && pathSha
@@ -5503,8 +5549,10 @@ function activateNative(context) {
   register(context, "joshRoom.save", () => saveRoom({ current: true }));
   register(context, "joshRoom.saveFolderAs", () => saveRoom());
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
+  register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
+  register(context, "joshRoom.enterChild", () => enterChildRoom());
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
-  register(context, "joshRoom.new", () => saveRoom({ forceCreate: true }));
+  register(context, "joshRoom.new", () => newRoom());
   register(context, "joshRoom.addStorage", addStorage);
   register(context, "joshRoom.connectCloudflare", connectCloudflare);
   register(context, "joshRoom.reconnectCloudflare", connectCloudflare);

@@ -1,0 +1,1042 @@
+"""Explicit composition capture and whole-child entry; never unload or migrate."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import os
+import secrets
+import shutil
+import stat
+import sys
+import uuid
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path
+
+from .catalog import Catalog, corroborate_logical_snapshot
+from .composition import (
+    MANIFEST,
+    parse_manifest,
+    portable_path,
+    require_uncomposed_workspace,
+    validate_paths,
+)
+from .composition_authority import (
+    CompositionAuthority,
+    dimension_binding,
+    namespace_prefix,
+)
+from .composition_safety import CompositionSafetyState, _identifier, plan_digest
+from .composition_transaction import (
+    _require_extension,
+    canonical,
+    manifest_for,
+    prepare_parent,
+    record_child,
+    record_parent,
+    reserve,
+)
+from .logical_jat import LogicalJat
+from .room_store_operations import (
+    RoomStoreOperations,
+    _scan_workspace,
+    _validate_snapshot_entries,
+    scan_workspace_for_status,
+)
+from .workspace_onboarding import _directory
+from .workspace_policy import _read_ignore, load_capture_policy
+from .workspace_state import context_status, write_stat_workspace_marker
+
+
+def _outcome(path, assignments):
+    matches = [
+        (len(row["path"]), row["outcome"])
+        for row in assignments
+        if row["path"] == "."
+        or path == row["path"]
+        or path.startswith(row["path"] + "/")
+    ]
+    if not matches:
+        raise ValueError("every captured path needs an explicit subtree assignment")
+    return max(matches)[1]
+
+
+def capture_plan(workspace, dimension, namespace, parent_room, assignments):
+    if not sys.platform.startswith("linux"):
+        raise ValueError("catalog capture is not yet qualified on this platform")
+    namespace_prefix(namespace)
+    _identifier(parent_room)
+    workspace = Path(os.path.abspath(workspace))
+    descriptor = _directory(workspace)
+    source_identity = [os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino]
+    os.close(descriptor)
+    require_uncomposed_workspace(workspace)
+    if (workspace / ".josh-room.json").exists():
+        raise ValueError(
+            "existing Room conversion is unsupported; use an unbound source"
+        )
+    if not isinstance(assignments, list) or not assignments or len(assignments) > 64:
+        raise ValueError("invalid capture assignments")
+    rows = []
+    for row in assignments:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"path", "outcome"}
+            or row["outcome"] not in ("child", "parent", "local-only")
+        ):
+            raise ValueError("invalid capture assignment")
+        path = row["path"]
+        if path != ".":
+            portable_path(path)
+            fd = (
+                _directory(workspace / path)
+                if (workspace / path).is_dir()
+                else _directory((workspace / path).parent)
+            )
+            os.close(fd)
+            if not (workspace / path).exists() or (workspace / path).is_symlink():
+                raise ValueError("capture assignment unavailable")
+        elif row["outcome"] == "child":
+            raise ValueError("the source root cannot be its own child")
+        rows.append(dict(row))
+    if len({row["path"] for row in rows}) != len(rows):
+        raise ValueError("duplicate capture assignment")
+    validate_paths(row["path"] for row in rows if row["path"] != ".")
+    children = [row["path"] for row in rows if row["outcome"] == "child"]
+    if not 1 <= len(children) <= 32:
+        raise ValueError(
+            "v1 publication requires one to 32 children; discovery is not limited"
+        )
+    validate_paths(children)
+    for child in children:
+        require_uncomposed_workspace(workspace / child)
+        try:
+            (workspace / child / ".josh-room.json").lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("existing child Room conversion is unsupported")
+        if any(row["path"].startswith(child + "/") for row in rows):
+            raise ValueError("whole-child capture cannot contain assignment overrides")
+        if not (workspace / child).is_dir():
+            raise ValueError("child assignment must select a directory")
+    policy = load_capture_policy(workspace)
+    # Explicit catalog mode always separates parent Git history. Source bytes
+    # and policy remain untouched; only the private parent capture view changes.
+    scan = _scan_workspace(workspace, replace(policy, capture_mode="source-only"))
+    for path in scan.paths:
+        if path == ".josh-roomignore" or path in {
+            child + "/.josh-roomignore" for child in children
+        }:
+            continue
+        portable_path(path)
+        if (workspace / path).is_symlink():
+            raise ValueError("linked capture sources are unsupported in catalog mode")
+        _outcome(path, rows)
+    if any(child not in scan.paths or policy.is_excluded(child) for child in children):
+        raise ValueError("selected child is excluded or unavailable")
+    rows.sort(key=lambda row: row["path"])
+    if not dimension.encryption_domain_id:
+        raise ValueError("select an initialized encryption domain before planning")
+    child_evidence = {}
+    for child in children:
+        child_policy = load_capture_policy(workspace / child)
+        child_scan = _scan_workspace(
+            workspace / child, replace(child_policy, capture_mode="source-only")
+        )
+        allowed = sorted(
+            path for path in child_scan.paths if child + "/" + path in scan.paths
+        )
+        child_evidence[child] = {
+            "signature": child_scan.signature,
+            "policy_sha256": child_policy.sha256,
+            "approved_paths_sha256": plan_digest(allowed),
+            "capture_mode": "source-only",
+        }
+    request = {
+        "namespace": namespace,
+        "source_identity": source_identity,
+        "dimension_id": dimension.dimension_id,
+        "destination_binding": dimension_binding(
+            dimension, dimension.encryption_domain_id
+        ),
+        "child_evidence": child_evidence,
+        "source_path_sha256": hashlib.sha256(str(workspace).encode()).hexdigest(),
+        "source_signature": scan.signature,
+        "capture_policy_sha256": policy.sha256,
+        "parent_room_id": parent_room,
+        "capture_mode": "source-only",
+        "assignments": rows,
+    }
+    return {
+        "ok": True,
+        "status": "approval-required",
+        "can_apply": False,
+        "request": request,
+        "approval_sha256": plan_digest(request),
+        "child_count": len(children),
+        "local_only_acknowledgement_required": any(
+            row["outcome"] == "local-only" for row in rows
+        ),
+    }
+
+
+def _slot(namespace, label):
+    return uuid.uuid5(uuid.UUID(hex=namespace), label).hex
+
+
+@contextmanager
+def provider_runtime(instance, dimension, material, namespace):
+    from .room_store_bridge import (
+        _create_backend,
+        _private_operation_directory,
+        _provider_environment,
+        _repository_locator,
+        _resolve_material,
+        _restic_store_factory,
+        _s3_lookup_option,
+        _scope,
+        _verified_restic_executable,
+    )
+
+    material, _session = _resolve_material(
+        dimension, material, None, allow_initialize=False
+    )
+    _scope(dimension, material)
+    # Validate bucket, TLS and credentials using the existing provider boundary.
+    legacy = _repository_locator(dimension)
+    root = legacy.rsplit("/room-store/v1", 1)[0]
+    repository = root + "/" + namespace_prefix(namespace) + "payload-restic-v1"
+    with _private_operation_directory() as private:
+        authority = CompositionAuthority(
+            _create_backend(dimension, instance),
+            dimension,
+            namespace,
+            material,
+            private,
+        )
+        password = private / "password"
+        cache = private / "cache"
+        cache.mkdir(mode=0o700)
+        executable = _verified_restic_executable(
+            runtime_root=Path(instance).parent / "josh-room-runtime", install=True
+        )
+
+        def store_factory(secret):
+            password.write_text(secret + "\n")
+            password.chmod(0o600)
+            return _restic_store_factory(
+                repository=repository,
+                cache_dir=cache,
+                password_file=password,
+                provider_env=_provider_environment(dimension),
+                executable=executable,
+                ca_bundle=dimension.option("ca_bundle"),
+                **_s3_lookup_option(dimension),
+            )
+
+        try:
+            yield authority, store_factory, private
+        finally:
+            password.unlink(missing_ok=True)
+
+
+def _commit(authority, envelope, etag, state):
+    _require_extension(envelope["state"], state.to_dict())
+    updated = copy.deepcopy(envelope)
+    updated["state"] = state.to_dict()
+    etag = authority.put(updated, etag)
+    return updated, etag
+
+
+def _content_digest(root):
+    scan = scan_workspace_for_status(root)
+    digest = hashlib.sha256()
+    for relative in sorted(scan.paths):
+        path = root / relative
+        info = path.lstat()
+        digest.update(
+            relative.encode() + b"\0" + str(stat.S_IMODE(info.st_mode)).encode() + b"\0"
+        )
+        if stat.S_ISREG(info.st_mode):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        elif not stat.S_ISDIR(info.st_mode):
+            raise ValueError("linked capture payload is unsupported")
+    return digest.hexdigest()
+
+
+def _capture(root, store, private, slot, dimension, domain, *, claim, parent=None):
+    policy = load_capture_policy(root)
+    before = scan_workspace_for_status(root)
+    tag = ("composition:" + slot["logical_jat_id"],)
+    prior = store.snapshots(tags=tag)
+    if len(prior) > 1:
+        raise ValueError("ambiguous capture inventory; no snapshot was deleted")
+    excludes = private / "excludes"
+    excludes.write_text("\n".join(policy.resolved_restic_excludes(root)) + "\n")
+    if prior:
+        snapshot = store.snapshot(prior[0].snapshot_id)
+        summary = None
+        proof = private / ("capture-reconcile-" + uuid.uuid4().hex)
+        _validate_snapshot_entries(store.entries(snapshot.snapshot_id))
+        store.restore(snapshot.snapshot_id, proof)
+        if _content_digest(proof) != _content_digest(root):
+            raise ValueError(
+                "interrupted capture differs from approved payload; preserve namespace"
+            )
+    else:
+        claim()
+        summary = store.backup(root, excludes=excludes, tags=tag)
+        snapshot = store.snapshot(summary.snapshot_id)
+    entries = _validate_snapshot_entries(store.entries(snapshot.snapshot_id))
+    after = scan_workspace_for_status(root)
+    if (
+        before.signature != after.signature
+        or before.capture_policy_sha256 != after.capture_policy_sha256
+    ):
+        raise ValueError(
+            "source changed during capture; retained snapshot requires reconciliation"
+        )
+    if set(entries) - {"."} != set(before.paths):
+        raise ValueError("captured inventory differs from validated source")
+    value = {
+        "format_version": 1,
+        "payload_kind": "room-store-v1",
+        "logical_jat_id": slot["logical_jat_id"],
+        "dimension_id": dimension.dimension_id,
+        "encryption_domain_id": domain,
+        "room_id": slot["room_id"],
+        "created_at": snapshot.time,
+        "capture_policy_sha256": policy.sha256,
+        "capture_mode": policy.capture_mode,
+        "workspace": {
+            "engine": "restic",
+            "repository_id": store.open_existing().repository_id,
+            "repository_format": 2,
+            "snapshot_id": snapshot.snapshot_id,
+            "tree_id": snapshot.tree_id,
+            "source_path": ".",
+            "logical_bytes": before.logical_bytes,
+            "data_added": summary.data_added if summary else 0,
+            "data_added_packed": summary.data_added_packed if summary else 0,
+        },
+        "components": {
+            "rcc_environment": None,
+            "homebrew_recovery": None,
+            "hauler_content": None,
+        },
+        "source": {},
+        "producer": {
+            "josh_room_version": "0.1.0",
+            "restic_version": "0.19.1",
+            "source_platform": "linux-x64",
+            "restore_platforms": ["linux-x64"],
+        },
+    }
+    if parent:
+        value.update(parent_logical_jat_id=parent.to_dict()["logical_jat_id"])
+        value["workspace"]["parent_snapshot_id"] = parent.to_dict()["workspace"][
+            "snapshot_id"
+        ]
+    return LogicalJat.from_dict(value), before
+
+
+def _copy_paths(source, target, paths):
+    """Read every payload through no-follow descriptors rooted at the source."""
+    root_fd = _directory(source)
+    modes = []
+    try:
+        policy = load_capture_policy(source, directory_fd=root_fd)
+        ignore = _read_ignore(source, directory_fd=root_fd) or b""
+        for relative in sorted(
+            paths, key=lambda value: (len(Path(value).parts), value)
+        ):
+            if relative == ".josh-roomignore":
+                continue
+            parts = Path(relative).parts
+            fd = os.dup(root_fd)
+            try:
+                for part in parts[:-1]:
+                    child = os.open(
+                        part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                    )
+                    os.close(fd)
+                    fd = child
+                info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+                if info.st_dev != os.fstat(root_fd).st_dev:
+                    raise ValueError("capture crossed a filesystem boundary")
+                destination = target / relative
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if stat.S_ISDIR(info.st_mode):
+                    destination.mkdir(exist_ok=True, mode=0o700)
+                    modes.append((destination, stat.S_IMODE(info.st_mode)))
+                elif stat.S_ISREG(info.st_mode):
+                    opened = os.open(
+                        parts[-1],
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        dir_fd=fd,
+                    )
+                    with (
+                        os.fdopen(opened, "rb") as stream,
+                        destination.open("xb") as output,
+                    ):
+                        current = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(current.st_mode) or (
+                            current.st_dev,
+                            current.st_ino,
+                        ) != (info.st_dev, info.st_ino):
+                            raise ValueError("capture file identity changed")
+                        shutil.copyfileobj(stream, output)
+                        final = os.fstat(stream.fileno())
+                        if (
+                            final.st_size,
+                            final.st_mtime_ns,
+                            final.st_ctime_ns,
+                            final.st_mode,
+                        ) != (
+                            current.st_size,
+                            current.st_mtime_ns,
+                            current.st_ctime_ns,
+                            current.st_mode,
+                        ):
+                            raise ValueError("capture file changed while reading")
+                    destination.chmod(stat.S_IMODE(info.st_mode))
+                    os.utime(destination, ns=(info.st_atime_ns, info.st_mtime_ns))
+                else:
+                    raise ValueError("linked or special capture entry is unsupported")
+            finally:
+                os.close(fd)
+        if load_capture_policy(source, directory_fd=root_fd).sha256 != policy.sha256:
+            raise ValueError("capture policy changed while staging")
+        return ignore.decode("utf-8"), modes
+    finally:
+        os.close(root_fd)
+
+
+def _finish_view(target, expected_paths, modes):
+    for directory, mode in reversed(modes):
+        directory.chmod(mode)
+    scan = scan_workspace_for_status(target)
+    if set(scan.paths) != set(expected_paths):
+        raise ValueError("private capture view differs from approved inventory")
+
+
+def _child_view(source, child, target, request):
+    fd = _directory(source)
+    try:
+        if [os.fstat(fd).st_dev, os.fstat(fd).st_ino] != request["source_identity"]:
+            raise ValueError("approved source identity changed")
+    finally:
+        os.close(fd)
+    root_policy = load_capture_policy(source)
+    root_scan = _scan_workspace(
+        source, replace(root_policy, capture_mode="source-only")
+    )
+    original = source / child
+    child_policy = load_capture_policy(original)
+    child_scan = _scan_workspace(
+        original, replace(child_policy, capture_mode="source-only")
+    )
+    allowed = {
+        path for path in child_scan.paths if child + "/" + path in root_scan.paths
+    }
+    evidence = {
+        "signature": child_scan.signature,
+        "policy_sha256": child_policy.sha256,
+        "approved_paths_sha256": plan_digest(sorted(allowed)),
+        "capture_mode": "source-only",
+    }
+    if (
+        evidence != request["child_evidence"][child]
+        or root_scan.signature != request["source_signature"]
+        or root_policy.sha256 != request["capture_policy_sha256"]
+    ):
+        raise ValueError("approved child inventory changed before capture")
+    omitted = sorted(set(child_scan.paths) - allowed)
+    exclusions = [
+        path
+        for path in omitted
+        if not any(
+            path.startswith(parent + "/") for parent in omitted if parent != path
+        )
+    ]
+    target.mkdir(mode=0o700)
+    original_ignore, modes = _copy_paths(original, target, allowed)
+    lines = [
+        line
+        for line in original_ignore.splitlines()
+        if not line.strip().startswith("# josh-room capture-mode:")
+    ]
+    lines.extend(
+        [
+            "# josh-room capture-mode: source-only",
+            ".josh-room-split.json",
+            *[path + "/**" for path in exclusions],
+        ]
+    )
+    (target / ".josh-roomignore").write_text("\n".join(lines) + "\n")
+    _finish_view(target, allowed | {".josh-roomignore"}, modes)
+    after = _scan_workspace(
+        original, replace(load_capture_policy(original), capture_mode="source-only")
+    )
+    if (
+        after.signature != evidence["signature"]
+        or after.capture_policy_sha256 != evidence["policy_sha256"]
+    ):
+        raise ValueError("child source changed during private staging")
+    return target
+
+
+def _parent_view(source, target, assignments, manifest, request):
+    fd = _directory(source)
+    try:
+        if [os.fstat(fd).st_dev, os.fstat(fd).st_ino] != request["source_identity"]:
+            raise ValueError("approved source identity changed")
+    finally:
+        os.close(fd)
+    target.mkdir(mode=0o700)
+    policy = load_capture_policy(source)
+    scan = _scan_workspace(source, replace(policy, capture_mode="source-only"))
+    if (
+        scan.signature != request["source_signature"]
+        or policy.sha256 != request["capture_policy_sha256"]
+    ):
+        raise ValueError("approved parent inventory changed before capture")
+    allowed = {
+        path
+        for path in scan.paths
+        if path != ".josh-roomignore" and _outcome(path, assignments) == "parent"
+    }
+    for path in list(allowed) + [row["path"] for row in manifest["children"]]:
+        allowed.update(
+            parent.as_posix() for parent in Path(path).parents if parent != Path(".")
+        )
+    original, modes = _copy_paths(source, target, allowed)
+    lines = [
+        line
+        for line in original.splitlines()
+        if not line.strip().startswith("# josh-room capture-mode:")
+    ]
+    lines.append("# josh-room capture-mode: source-only")
+    lines.extend(
+        row["path"] + "/**"
+        for row in assignments
+        if row["outcome"] in ("child", "local-only") and row["path"] != "."
+    )
+    (target / ".josh-roomignore").write_text("\n".join(lines) + "\n")
+    (target / MANIFEST).write_bytes(canonical(manifest))
+    _finish_view(target, allowed | {".josh-roomignore", MANIFEST}, modes)
+    after = _scan_workspace(
+        source, replace(load_capture_policy(source), capture_mode="source-only")
+    )
+    if (
+        after.signature != request["source_signature"]
+        or after.capture_policy_sha256 != request["capture_policy_sha256"]
+    ):
+        raise ValueError("parent source changed during private staging")
+
+
+def save_composition(
+    workspace,
+    dimension,
+    namespace,
+    parent_room,
+    assignments,
+    approval,
+    authority,
+    store_factory,
+    private,
+):
+    if namespace != authority.namespace:
+        raise ValueError("requested namespace differs from selected authority")
+    workspace = Path(workspace)
+    if (
+        workspace.resolve() == Path(private).resolve()
+        or workspace.resolve() in Path(private).resolve().parents
+    ):
+        raise ValueError("private runtime must be outside the capture source")
+    preview = capture_plan(workspace, dimension, namespace, parent_room, assignments)
+    request = preview["request"]
+    if approval != preview["approval_sha256"]:
+        raise ValueError("capture approval is stale or missing")
+    envelope, etag = authority.read()
+    if envelope is None:
+        envelope = {
+            "format": "composition-authority-v1",
+            "namespace": namespace,
+            "binding": authority.binding,
+            "request": request,
+            "secret": secrets.token_urlsafe(32),
+            "repository_id": None,
+            "state": None,
+            "capture_claims": {},
+        }
+        etag = authority.put(envelope, None)
+    elif canonical(envelope["request"]) != canonical(request):
+        raise ValueError("namespace already binds a different capture request")
+    if envelope["binding"] != request["destination_binding"]:
+        raise ValueError("approved physical destination binding differs")
+    with store_factory(envelope["secret"]) as store:
+        repository = (
+            store.initialize()
+            if envelope["repository_id"] is None
+            else store.open_existing()
+        )
+        if (
+            envelope["repository_id"] is not None
+            and repository.repository_id != envelope["repository_id"]
+        ):
+            raise ValueError("composition repository binding differs")
+        if envelope["state"] is None:
+            envelope["repository_id"] = repository.repository_id
+            catalog = Catalog.empty(
+                dimension.dimension_id, authority.binding["encryption_domain_id"]
+            ).body
+            catalog["format_version"] = 3
+            children = [
+                {
+                    "path": row["path"],
+                    "room_id": "child-" + _slot(namespace, row["path"]),
+                    "logical_jat_id": "jat-"
+                    + _slot(namespace, "capture:" + row["path"]),
+                }
+                for row in request["assignments"]
+                if row["outcome"] == "child"
+            ]
+            plan = {
+                key: request[key]
+                for key in (
+                    "source_path_sha256",
+                    "capture_policy_sha256",
+                    "parent_room_id",
+                    "capture_mode",
+                )
+            }
+            plan.update(
+                parent_logical_jat_id="jat-" + _slot(namespace, "parent"),
+                expected_parent_logical_jat_id=None,
+                children=children,
+            )
+            scope = {
+                key: authority.binding[key]
+                for key in (
+                    "provider",
+                    "connection_id",
+                    "dimension_id",
+                    "encryption_domain_id",
+                )
+            }
+            scope.update(
+                repository_id=repository.repository_id, catalog_key="catalog.jroom.age"
+            )
+            state = reserve(Catalog.from_body(catalog), scope, namespace, plan)
+            envelope, etag = _commit(authority, envelope, etag, state)
+        state = CompositionSafetyState.from_dict(envelope["state"])
+        operation = state.to_dict()["operations"][namespace]
+        approved = operation["plan_sha256"]
+
+        def claim(slot):
+            nonlocal envelope, etag
+            key = slot["logical_jat_id"]
+            if key in envelope["capture_claims"]:
+                raise ValueError(
+                    "capture is claimed without a completed snapshot; reconcile the stopped writer before retry"
+                )
+            updated = copy.deepcopy(envelope)
+            updated["capture_claims"][key] = uuid.uuid4().hex
+            etag = authority.put(updated, etag)
+            envelope = updated
+
+        for slot in operation["plan"]["children"]:
+            if slot["path"] in state.to_dict()["operations"][namespace]["child_pins"]:
+                continue
+            view = _child_view(
+                workspace,
+                slot["path"],
+                private / ("child-view-" + uuid.uuid4().hex),
+                request,
+            )
+            descriptor, scan = _capture(
+                view,
+                store,
+                private,
+                slot,
+                dimension,
+                authority.binding["encryption_domain_id"],
+                claim=lambda slot=slot: claim(slot),
+            )
+            ref = authority.put_descriptor(descriptor)
+            state = record_child(
+                state,
+                namespace,
+                approved,
+                slot["path"],
+                descriptor=descriptor,
+                object_ref=ref,
+                workspace_signature=scan.signature,
+                display_name="Child Room",
+            )
+            envelope, etag = _commit(authority, envelope, etag, state)
+        manifest = manifest_for(state, namespace, approved)
+        parent = private / ("parent-view-" + uuid.uuid4().hex)
+        _parent_view(workspace, parent, request["assignments"], manifest, request)
+        state = prepare_parent(
+            state, namespace, approved, policy_sha256=load_capture_policy(parent).sha256
+        )
+        if canonical(state.to_dict()) != canonical(envelope["state"]):
+            envelope, etag = _commit(authority, envelope, etag, state)
+        if state.to_dict()["operations"][namespace]["phase"] != "committed":
+            slot = {
+                "room_id": parent_room,
+                "logical_jat_id": operation["plan"]["parent_logical_jat_id"],
+            }
+            descriptor, scan = _capture(
+                parent,
+                store,
+                private,
+                slot,
+                dimension,
+                authority.binding["encryption_domain_id"],
+                claim=lambda: claim(slot),
+            )
+            # Verify actual encrypted Restic bytes, not merely intended files.
+            restored = private / ("parent-proof-" + uuid.uuid4().hex)
+            store.restore(descriptor.to_dict()["workspace"]["snapshot_id"], restored)
+            if (restored / MANIFEST).read_bytes() != canonical(manifest) or (
+                restored / ".josh-roomignore"
+            ).read_bytes() != (parent / ".josh-roomignore").read_bytes():
+                raise ValueError("saved parent metadata verification failed")
+            entries = _validate_snapshot_entries(
+                store.entries(descriptor.to_dict()["workspace"]["snapshot_id"])
+            )
+            if any(
+                path == row["path"] or path.startswith(row["path"] + "/")
+                for row in manifest["children"]
+                for path in entries
+            ):
+                raise ValueError("saved parent contains child payload")
+            if (
+                capture_plan(workspace, dimension, namespace, parent_room, assignments)[
+                    "approval_sha256"
+                ]
+                != approval
+            ):
+                raise ValueError(
+                    "source changed before parent commit; child history retained"
+                )
+            state = record_parent(
+                state,
+                namespace,
+                approved,
+                descriptor=descriptor,
+                object_ref=authority.put_descriptor(descriptor),
+                workspace_signature=scan.signature,
+                display_name="Catalog Room",
+            )
+            envelope, etag = _commit(authority, envelope, etag, state)
+        return {
+            "ok": True,
+            "status": "saved",
+            "namespace": namespace,
+            "parent_room_id": parent_room,
+            "parent_snapshot_id": operation["plan"]["parent_logical_jat_id"],
+            "child_count": len(manifest["children"]),
+            "source_modified": False,
+            "retention": "append-only-composition-namespace",
+        }
+
+
+def _restore(
+    store,
+    repository,
+    descriptor,
+    destination,
+    private,
+    dimension,
+    display_name,
+    before_promote=None,
+    child_namespace=None,
+):
+    metadata = descriptor.to_dict()
+    operations = RoomStoreOperations(
+        workspace=Path(destination).parent,
+        repository="unused",
+        cache_dir=private,
+        password_dir=private,
+        dimension=dimension,
+        backend=None,
+        read_latest=lambda: (descriptor, None),
+        publish_descriptor=lambda *_a, **_k: None,
+        write_marker=lambda *_a, **_k: None,
+        descriptor_metadata={
+            "dimension_id": dimension.dimension_id,
+            "encryption_domain_id": metadata["encryption_domain_id"],
+            "room_id": metadata["room_id"],
+        },
+    )
+
+    def marker(stage, target, selected):
+        if before_promote:
+            before_promote(stage.parent)
+        if child_namespace:
+            with (stage / ".josh-room-split.json").open("xb") as guard:
+                guard.write(
+                    canonical(
+                        {
+                            "namespace": child_namespace,
+                            "room_id": metadata["room_id"],
+                            "snapshot_id": metadata["logical_jat_id"],
+                        }
+                    )
+                )
+        scan = scan_workspace_for_status(stage)
+        if scan.capture_policy_sha256 != metadata["capture_policy_sha256"]:
+            raise ValueError("restored policy differs from descriptor")
+        write_stat_workspace_marker(
+            stage,
+            dimension_id=dimension.dimension_id,
+            encryption_domain_id=metadata["encryption_domain_id"],
+            project_id=metadata["room_id"],
+            snapshot_id=metadata["logical_jat_id"],
+            display_name=display_name,
+            workspace_signature=scan.signature,
+            signature_algorithm=scan.signature_algorithm,
+            capture_policy_sha256=scan.capture_policy_sha256,
+            path_binding=target,
+            composition_namespace=child_namespace,
+        )
+
+    destination = Path(os.path.abspath(destination))
+    parent_fd = _directory(destination.parent)
+    try:
+        operations.restore(
+            descriptor,
+            destination,
+            restic_store=store,
+            repository_info=repository,
+            write_restore_marker=marker,
+            destination_parent_fd=parent_fd,
+        )
+    finally:
+        os.close(parent_fd)
+    result = context_status(destination)
+    scan = scan_workspace_for_status(destination)
+    if not result["ok"] or result.get("workspace_signature") != scan.signature:
+        raise ValueError("restored marker is unverified; preserve destination")
+    return result
+
+
+def hydrate_composition(
+    dimension,
+    namespace,
+    room,
+    snapshot,
+    destination,
+    authority,
+    store_factory,
+    private,
+    *,
+    child_path=None,
+):
+    if not sys.platform.startswith("linux"):
+        raise ValueError("catalog entry is not yet qualified on this platform")
+    if namespace != authority.namespace:
+        raise ValueError("requested namespace differs from selected authority")
+    _identifier(snapshot)
+    if snapshot.casefold() == "latest":
+        raise ValueError("composition entry requires an immutable parent pin")
+    envelope, _etag = authority.read()
+    if envelope is None or envelope["state"] is None:
+        raise ValueError("composition namespace is unavailable")
+    state = CompositionSafetyState.from_dict(envelope["state"])
+    body = state.to_dict()
+    operation = next(
+        (
+            op
+            for op in body["operations"].values()
+            if op["phase"] == "committed"
+            and op["parent_pin"]["room_id"] == room
+            and op["parent_pin"]["logical_jat_id"] == snapshot
+        ),
+        None,
+    )
+    if operation is None:
+        raise ValueError("parent pin is not committed in this namespace")
+    catalog = Catalog.from_body(body["dimension_catalog"])
+    parent_record = catalog.resolve_snapshot(room, snapshot)
+    parent_descriptor = authority.descriptor(parent_record)
+    corroborate_logical_snapshot(room, parent_record, parent_descriptor)
+    with store_factory(envelope["secret"]) as store:
+        repository = store.open_existing()
+        if repository.repository_id != envelope["repository_id"]:
+            raise ValueError("composition repository differs")
+        if child_path is None:
+            result = _restore(
+                store,
+                repository,
+                parent_descriptor,
+                Path(destination),
+                private,
+                dimension,
+                "Catalog Room",
+            )
+        else:
+            portable_path(child_path)
+            root = Path(os.path.abspath(destination))
+            fd = _directory(root)
+            os.close(fd)
+            original = context_status(root)
+            if (
+                not original["ok"]
+                or original.get("project_id") != room
+                or original.get("snapshot_id") != snapshot
+                or original.get("dimension_id") != dimension.dimension_id
+                or original.get("encryption_domain_id")
+                != authority.binding["encryption_domain_id"]
+            ):
+                raise ValueError("parent marker does not match selected immutable pin")
+
+            def parent_current(transient=None):
+                current = context_status(root)
+                policy = load_capture_policy(root)
+                if transient is not None:
+                    policy = replace(
+                        policy,
+                        active_runtime_relative=transient.resolve()
+                        .relative_to(root.resolve())
+                        .as_posix(),
+                    )
+                scan = _scan_workspace(root, policy)
+                if current != original or scan.signature != original.get(
+                    "workspace_signature"
+                ):
+                    raise ValueError("parent has changed; no child was promoted")
+
+            parent_current()
+            # Recover the manifest from the authenticated immutable parent, then
+            # compare local bytes. Local metadata alone never grants authority.
+            proof = private / ("parent-entry-proof-" + uuid.uuid4().hex)
+            parent_workspace = parent_descriptor.to_dict()["workspace"]
+            if (
+                store.snapshot(parent_workspace["snapshot_id"]).tree_id
+                != parent_workspace["tree_id"]
+            ):
+                raise ValueError("parent snapshot tree differs from descriptor")
+            _validate_snapshot_entries(store.entries(parent_workspace["snapshot_id"]))
+            store.restore(parent_workspace["snapshot_id"], proof)
+            raw = (proof / MANIFEST).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != operation["manifest_sha256"]:
+                raise ValueError("parent manifest digest differs from committed state")
+            local = root / MANIFEST
+            if local.is_symlink() or local.read_bytes() != raw:
+                raise ValueError("local parent manifest differs from saved parent")
+            manifest = parse_manifest(raw)
+            child = next(
+                (row for row in manifest["children"] if row["path"] == child_path), None
+            )
+            if child is None or any(
+                child[k] != authority.binding[k]
+                for k in ("provider", "connection_id", "dimension_id")
+            ):
+                raise ValueError("child is not in the selected authority")
+            pin = operation["child_pins"].get(child_path)
+            if (
+                pin is None
+                or pin["room_id"] != child["room_id"]
+                or pin["logical_jat_id"] != child["snapshot_id"]
+            ):
+                raise ValueError("child pin differs from committed operation")
+            policy = load_capture_policy(root)
+            if not policy.is_excluded(child_path):
+                raise ValueError("child payload is not excluded from parent capture")
+            target = root / child_path
+            fd = _directory(target.parent)
+            os.close(fd)
+            if target.is_symlink():
+                raise ValueError(
+                    "child destination must be absent or an exact clean materialization"
+                )
+            if target.exists():
+                existing = context_status(target)
+                guard_fd = _directory(target)
+                try:
+                    guard = os.open(
+                        ".josh-room-split.json",
+                        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        dir_fd=guard_fd,
+                    )
+                    try:
+                        if not stat.S_ISREG(os.fstat(guard).st_mode):
+                            raise ValueError("child namespace guard is invalid")
+                        guard_bytes = os.read(guard, 1025)
+                    finally:
+                        os.close(guard)
+                finally:
+                    os.close(guard_fd)
+                expected_guard = canonical(
+                    {
+                        "namespace": namespace,
+                        "room_id": child["room_id"],
+                        "snapshot_id": child["snapshot_id"],
+                    }
+                )
+                if (
+                    guard_bytes != expected_guard
+                    or existing.get("composition_namespace") != namespace
+                ):
+                    raise ValueError(
+                        "child namespace guard or marker differs; no ordinary Save is permitted"
+                    )
+                scan = scan_workspace_for_status(target)
+                if (
+                    not existing["ok"]
+                    or existing.get("project_id") != child["room_id"]
+                    or existing.get("snapshot_id") != child["snapshot_id"]
+                    or existing.get("dimension_id") != dimension.dimension_id
+                    or existing.get("encryption_domain_id")
+                    != authority.binding["encryption_domain_id"]
+                    or existing.get("workspace_signature") != scan.signature
+                    or existing.get("capture_policy_sha256")
+                    != scan.capture_policy_sha256
+                ):
+                    raise ValueError(
+                        "child destination has local changes or a different marker; no clobber or unload"
+                    )
+                return {
+                    "ok": True,
+                    "status": "loaded",
+                    "namespace": namespace,
+                    "room_id": child["room_id"],
+                    "snapshot_id": child["snapshot_id"],
+                    "marker_verified": True,
+                    "unit": "whole-child",
+                }
+            record = catalog.resolve_snapshot(child["room_id"], child["snapshot_id"])
+            if record["ciphertext_sha256"] != pin["descriptor_sha256"]:
+                raise ValueError("child descriptor differs from historical pin")
+            descriptor = authority.descriptor(record)
+            corroborate_logical_snapshot(child["room_id"], record, descriptor)
+            result = _restore(
+                store,
+                repository,
+                descriptor,
+                target,
+                private,
+                dimension,
+                "Child Room",
+                parent_current,
+                namespace,
+            )
+        return {
+            "ok": True,
+            "status": "hydrated",
+            "namespace": namespace,
+            "room_id": result["project_id"],
+            "snapshot_id": result["snapshot_id"],
+            "marker_verified": True,
+            "unit": "whole-child" if child_path else "parent",
+        }

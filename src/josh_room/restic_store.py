@@ -951,6 +951,7 @@ class ResticStore:
         excludes: Path | None = None,
         on_progress: Callable[[BackupProgress], None] | None = None,
         cancellation: CancellationToken | None = None,
+        tags: tuple[str, ...] = (),
     ) -> BackupSummary:
         self._require_initialized()
         root = self._validate_workspace(workspace, excludes)
@@ -962,6 +963,7 @@ class ResticStore:
             raise ResticStoreError(ResticStoreErrorCode.CANCELLED)
         force_scan = sys.platform.startswith("win")
         args = ["backup", "--json", "--skip-if-unchanged", "--no-scan"]
+        args.extend(self._tag_args(tags))
         if force_scan:
             args.append("--force")
         elif parent is not None:
@@ -1039,10 +1041,17 @@ class ResticStore:
         self._snapshot_info[snapshot_id] = snapshot
         return snapshot
 
-    def snapshots(self) -> tuple[SnapshotInventoryItem, ...]:
+    @staticmethod
+    def _tag_args(tags):
+        if (not isinstance(tags, tuple) or len(tags) > 4
+                or any(not isinstance(tag, str) or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', tag) is None for tag in tags)):
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_CONFIGURATION)
+        return [value for tag in tags for value in ('--tag', tag)]
+
+    def snapshots(self, *, tags: tuple[str, ...] = ()) -> tuple[SnapshotInventoryItem, ...]:
         """Return a bounded, read-only inventory with private fields omitted."""
         self._require_initialized()
-        _code, output = self._capture(["snapshots", "--json"])
+        _code, output = self._capture(["snapshots", "--json", *self._tag_args(tags)])
         return parse_snapshot_inventory(output)
 
     def entries(self, snapshot_id: str, *, expected_tree_id: str | None = None) -> Iterator[SnapshotEntry]:

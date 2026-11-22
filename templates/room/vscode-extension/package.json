@@ -62,7 +62,9 @@
     "onCommand:joshRoom.jatExport",
     "onCommand:joshRoom.jatCopy",
     "onView:joshRoom.rooms",
-    "onCommand:joshRoom.splitWorkspace"
+    "onCommand:joshRoom.splitWorkspace",
+    "onCommand:joshRoom.saveCatalog",
+    "onCommand:joshRoom.enterChild"
   ],
   "main": "./extension.js",
   "extensionKind": [
@@ -284,6 +286,14 @@
       {
         "command": "joshRoom.splitWorkspace",
         "title": "Josh: Split Workspace into Rooms (Preview Only)"
+      },
+      {
+        "command": "joshRoom.saveCatalog",
+        "title": "Josh: Save Catalog Room"
+      },
+      {
+        "command": "joshRoom.enterChild",
+        "title": "Josh: Enter Child Room"
       }
     ],
     "viewsContainers": {

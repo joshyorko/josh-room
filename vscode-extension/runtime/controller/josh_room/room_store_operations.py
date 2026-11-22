@@ -18,6 +18,7 @@ import os
 import posixpath
 import re
 import stat
+import sys
 import tempfile
 import unicodedata
 import uuid
@@ -543,7 +544,7 @@ def _deletion_token(
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def _rename_directory_noreplace(source: Path, destination: Path) -> None:
+def _rename_directory_noreplace(source: Path, destination: Path, *, directory_fd: int | None = None) -> None:
     """Promote a staged tree without replacing a destination created in a race."""
     if os.name == "nt":
         os.rename(source, destination)
@@ -553,7 +554,7 @@ def _rename_directory_noreplace(source: Path, destination: Path) -> None:
         raise RoomStoreOperationsError(
             "atomic no-replace restore promotion is unavailable"
         )
-    at_fdcwd = -100
+    at_fdcwd = -100 if directory_fd is None else directory_fd
     result = renameat2(
         at_fdcwd,
         os.fsencode(source),
@@ -1340,6 +1341,7 @@ class RoomStoreOperations:
         write_restore_marker: Callable[[Path, Path, LogicalJat], None] | None = None,
         restic_store: Any | None = None,
         repository_info: Any | None = None,
+        destination_parent_fd: int | None = None,
     ) -> RestoreResult:
         body = descriptor.to_dict()
         if write_restore_marker is None:
@@ -1354,7 +1356,12 @@ class RoomStoreOperations:
         target = Path(destination)
         if target.exists() or target.is_symlink():
             raise RoomStoreOperationsError("restore destination must be absent")
-        parent_dir = target.parent.resolve(strict=True)
+        if destination_parent_fd is None:
+            parent_dir = target.parent.resolve(strict=True)
+        else:
+            if not sys.platform.startswith('linux') or not stat.S_ISDIR(os.fstat(destination_parent_fd).st_mode):
+                raise RoomStoreOperationsError('descriptor-bound restore is unavailable')
+            parent_dir = Path(f'/proc/{os.getpid()}/fd/{destination_parent_fd}')
         if not parent_dir.is_dir():
             raise RoomStoreOperationsError(
                 "restore destination parent must be a directory"
@@ -1427,7 +1434,10 @@ class RoomStoreOperations:
                         prepare_restored_workspace(stage, descriptor, opened)
                     _scan_workspace(stage, None, capture_mode=body.get("capture_mode", "full-repository"))
                     write_restore_marker(stage, target, descriptor)
-                    _rename_directory_noreplace(stage, target)
+                    if destination_parent_fd is None:
+                        _rename_directory_noreplace(stage, target)
+                    else:
+                        _rename_directory_noreplace(stage.relative_to(parent_dir), Path(target.name), directory_fd=destination_parent_fd)
                     return RestoreResult(descriptor, target)
         finally:
             if password_file is not None:

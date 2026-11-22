@@ -462,7 +462,7 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("workspace-check", help="validate workspace metadata without changing it")
     check.add_argument("--workspace", type=Path, default=Path.cwd())
     _json_option(check)
-    composition = commands.add_parser("composition", help="offline split preview; publication is blocked")
+    composition = commands.add_parser("composition", help="explicit catalog capture, pinned entry and offline discovery")
     composition_commands = composition.add_subparsers(dest="composition_command", required=True)
     composition_plan = composition_commands.add_parser("plan")
     composition_plan.add_argument("--workspace", type=Path, required=True)
@@ -474,6 +474,26 @@ def build_parser() -> argparse.ArgumentParser:
     composition_reconcile = composition_commands.add_parser("reconcile", help="inspect offline evidence; never repair")
     composition_reconcile.add_argument("--evidence-file", type=Path, required=True)
     _json_option(composition_reconcile)
+    for action in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
+        operation = composition_commands.add_parser(action)
+        operation.add_argument('--dimension', required=True)
+        operation.add_argument('--namespace', required=True)
+        operation.add_argument('--parent-room', required=True)
+        if action in ('capture-plan', 'save'):
+            operation.add_argument('--expected-domain', help='encryption domain from the existing enrollment receipt; required if not cached in config')
+            operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--assign', action='append', default=[], help='relative-path=child|parent|local-only; subtree choice, no implicit default')
+        if action == 'save':
+            operation.add_argument('--approve', required=True, help='exact capture-plan approval_sha256')
+            operation.add_argument('--ack-local-only', action='store_true')
+        if action in ('restore-parent', 'enter-child'):
+            operation.add_argument('--parent-snapshot', required=True)
+        if action == 'restore-parent':
+            operation.add_argument('--destination', type=Path, required=True)
+        if action == 'enter-child':
+            operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--child-path', required=True)
+        _json_option(operation)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
     _json_option(context)
@@ -668,11 +688,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:1] == ["composition"]:
+    if argv[:1] == ["composition"] and argv[1:2] not in (["save"], ["restore-parent"], ["enter-child"]):
         args = build_parser().parse_args(argv)
         try:
             result = dispatch(args, Path("."))
-        except (OSError, ValueError):
+        except (OSError, RuntimeError, TypeError, ValueError):
             result = {"ok": False, "error": "Composition preview refused unsafe or unavailable input"}
         result = _bounded_json_result(result)
         _write_runtime_result(result)
@@ -829,7 +849,7 @@ def _requires_oauth(args) -> bool:
             return any(dimension.provider == "r2" for dimension in registry.dimensions.values())
         except ValueError:
             return getattr(args, "backend", "r2") == "r2"
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         source_dimension = _copy_source_dimension(args)
@@ -863,7 +883,7 @@ def _provider_error_boundary(args):
             selected = connection_configs(private_config() or {}).get(args.connection)
         elif args.command in {
             "encryption", "doctor", "projects", "rooms", "snapshots", "snapshot",
-            "hydrate", "enter", "serve", "link", "repair", "room-store",
+            "hydrate", "enter", "serve", "link", "repair", "room-store", "composition",
         }:
             selected = _effective_dimension(args)
         else:
@@ -876,7 +896,7 @@ def _provider_error_boundary(args):
 def _requires_encryption(args) -> bool:
     if args.command == "dimensions":
         return getattr(args, "with_hierarchy", False) and (_dimensions_have_provider(args, "minio") or _dimensions_have_provider(args, "s3"))
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         return False
@@ -1609,6 +1629,43 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
+        if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
+            from .composition_lifecycle import (
+                capture_plan,
+                hydrate_composition,
+                provider_runtime,
+                save_composition,
+            )
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
+                raise ValueError('composition requires an explicit provider Dimension')
+            if getattr(args, 'expected_domain', None):
+                from dataclasses import replace
+                dimension = replace(dimension, encryption_domain_id=args.expected_domain)
+            if args.composition_command in ('capture-plan', 'save'):
+                assignments = []
+                for value in args.assign:
+                    path, separator, outcome = value.rpartition('=')
+                    if not separator:
+                        raise ValueError('capture assignment requires path=outcome')
+                    assignments.append({'path': path, 'outcome': outcome})
+                preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
+                if args.composition_command == 'capture-plan':
+                    return preview
+                if args.approve != preview['approval_sha256']:
+                    raise ValueError('capture approval is stale or missing')
+                if preview['local_only_acknowledgement_required'] and not args.ack_local_only:
+                    raise ValueError('explicit acknowledgement of unprotected local-only content is required')
+            try:
+                with provider_runtime(instance, dimension, getattr(args, '_selected_encryption_material', None), args.namespace) as (authority, factory, private):
+                    if args.composition_command == 'save':
+                        return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
+                                                args.approve, authority, factory, private)
+                    return hydrate_composition(dimension, args.namespace, args.parent_room, args.parent_snapshot,
+                                               args.workspace if args.composition_command == 'enter-child' else args.destination,
+                                               authority, factory, private, child_path=getattr(args, 'child_path', None))
+            except Exception:  # noqa: BLE001 - never expose provider or identity diagnostics from composition transport.
+                raise ValueError('Composition operation could not be verified; preserve source and resume using the same namespace') from None
         if args.composition_command == "inventory":
             from .directory_inventory import serve
             serve(args.workspace, sys.stdin, sys.stdout)
