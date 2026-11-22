@@ -152,3 +152,64 @@ def test_namespace_marker_fences_ordinary_save_without_guard_and_when_moved(tmp_
     assert not context_status(moved)["ok"]
     with pytest.raises(ValueError, match="composed Save"):
         require_uncomposed_workspace(moved)
+
+
+@pytest.mark.parametrize('rule, excluded, included', [
+    ('child/reports/**', 'reports/new.txt', 'other/reports/new.txt'),
+    ('*/reports/**', 'reports/new.txt', 'other/reports/new.txt'),
+    ('**/reports/**', 'other/reports/new.txt', 'safe/new.txt'),
+    ('child/report?.txt', 'report1.txt', 'other/report1.txt'),
+])
+def test_child_view_preserves_inherited_rules_for_future_paths(tmp_path, rule, excluded, included):
+    from josh_room.workspace_policy import load_capture_policy
+    source, dimension, assignments, _ = fixture(tmp_path)
+    (source / '.josh-roomignore').write_text(rule + '\n')
+    preview = capture_plan(source, dimension, '1' * 32, 'parent', assignments)
+    view = tmp_path / 'view'
+    _child_view(source, 'child', view, preview['request'])
+    policy = load_capture_policy(view)
+    assert policy.is_excluded(excluded)
+    assert not policy.is_excluded(included)
+
+
+def test_content_digest_distinguishes_entry_types_and_framed_boundaries(tmp_path):
+    from josh_room.composition_lifecycle import _content_digest
+    root = tmp_path / 'payload'
+    root.mkdir()
+    (root / 'entry').mkdir(mode=0o700)
+    directory = _content_digest(root)
+    (root / 'entry').rmdir()
+    (root / 'entry').touch(mode=0o700)
+    assert _content_digest(root) != directory
+    # The old unframed stream could absorb an entire subsequent entry header.
+    (root / 'entry').unlink()
+    (root / 'a').write_bytes(b'b\x00420\x00')
+    before = _content_digest(root)
+    (root / 'a').write_bytes(b'')
+    (root / 'b').touch()
+    assert _content_digest(root) != before
+
+
+@pytest.mark.parametrize('recovered', [False, True])
+def test_capture_refuses_unexpected_actual_parent_before_descriptor_publication(tmp_path, recovered):
+    import shutil
+    from types import SimpleNamespace
+
+    from josh_room.composition_lifecycle import _capture
+    from josh_room.restic_store import SnapshotEntry
+    source, dimension, _, _ = fixture(tmp_path)
+    source = source / 'child'
+    snapshot = SimpleNamespace(snapshot_id='a' * 64, tree_id='b' * 64,
+                               parent_snapshot_id='f' * 64, time='2026-11-22T00:00:00Z')
+    def restore(_snapshot, target):
+        shutil.copytree(source, target)
+    store = SimpleNamespace(
+        snapshots=lambda **_: [snapshot] if recovered else [], snapshot=lambda _: snapshot,
+        snapshot_backup_summary=lambda _: SimpleNamespace(data_added=123, data_added_packed=99),
+        backup=lambda *_, **__: SimpleNamespace(snapshot_id=snapshot.snapshot_id),
+        entries=lambda _: [SnapshotEntry('.', 'dir', None, 0o700, None),
+                           SnapshotEntry('sub', 'dir', None, 0o700, None),
+                           SnapshotEntry('sub/file.txt', 'file', 24, 0o644, None)], restore=restore)
+    with pytest.raises(ValueError, match='ancestry'):
+        _capture(source, store, tmp_path, {'logical_jat_id': 'jat-output', 'room_id': 'child'},
+                 dimension, dimension.encryption_domain_id, claim=lambda: None)

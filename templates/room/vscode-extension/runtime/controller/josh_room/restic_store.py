@@ -162,6 +162,12 @@ class SnapshotInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class SnapshotBackupSummary:
+    data_added: int
+    data_added_packed: int
+
+
+@dataclass(frozen=True, slots=True)
 class SnapshotInventoryItem:
     snapshot_id: str
     tree_id: str
@@ -1040,6 +1046,23 @@ class ResticStore:
         snapshot = parse_snapshot(output, snapshot_id)
         self._snapshot_info[snapshot_id] = snapshot
         return snapshot
+
+    def snapshot_backup_summary(self, snapshot_id: str) -> SnapshotBackupSummary:
+        """Read authenticated persisted accounting; never substitute unknown zeroes."""
+        self._require_initialized()
+        snapshot_id = _validate_snapshot_id(snapshot_id)
+        _code, raw = self._capture(["cat", "snapshot", snapshot_id])
+        value = _load_json(raw)
+        if not isinstance(value, dict) or value.get("id", snapshot_id) != snapshot_id:
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+        _parse_snapshot_record({**value, "id": snapshot_id}, snapshot_id)
+        summary = value.get("summary")
+        if not isinstance(summary, dict):
+            raise ResticStoreError(ResticStoreErrorCode.INVALID_OUTPUT)
+        return SnapshotBackupSummary(
+            _nonnegative_integer(summary.get("data_added")),
+            _nonnegative_integer(summary.get("data_added_packed")),
+        )
 
     @staticmethod
     def _tag_args(tags):
