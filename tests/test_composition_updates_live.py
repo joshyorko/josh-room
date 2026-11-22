@@ -338,3 +338,63 @@ def test_lost_backup_reply_recovers_nonzero_accounting_and_refuses_wrong_parent(
         store.open_existing()
         assert descriptor['parent_snapshot_id'] == store.snapshot(descriptor['snapshot_id']).parent_snapshot_id
         assert len(store.snapshots()) == 4
+
+
+def test_legacy_lossy_baseline_refuses_fresh_operation_without_any_publication(runtime, monkeypatch):
+    from josh_room import composition_lifecycle
+
+    r = runtime
+    (r.source / '.josh-roomignore').write_text('a/reports/**\n')
+    original = composition_lifecycle._capture
+    def old_capture(*args, **kwargs):
+        kwargs.pop('inherited_policy', None)
+        return original(*args, **kwargs)
+    # Reproduce the old actual capture format: no rule semantics for paths not
+    # present yet, and no authenticated descriptor provenance.
+    with monkeypatch.context() as legacy:
+        legacy.setattr(composition_lifecycle, '_inherited_exclusions', lambda *_: ())
+        legacy.setattr(composition_lifecycle, '_capture', old_capture)
+        _, target, child = entered(r)
+    (target / 'a/reports').mkdir()
+    (target / 'a/reports/private.txt').write_text('synthetic must never upload')
+    writes = r.transport.writes
+    baseline, _ = r.authority.read()
+    with pytest.raises(ValueError, match='verified inherited-rule provenance'):
+        update(r, target, child, operation='fresh-new-operation')
+    # A user-editable comment cannot impersonate authenticated provenance.
+    policy = target / 'a/.josh-roomignore'
+    policy.write_text(policy.read_text() + '# inherited-rules-v1\n')
+    with pytest.raises(ValueError, match='verified inherited-rule provenance'):
+        update(r, target, child, operation='another-new-operation')
+    current, _ = r.authority.read()
+    assert r.transport.writes == writes and current == baseline
+    assert context_status(target / 'a')['snapshot_id'] == child['snapshot_id']
+    assert (target / 'a/reports/private.txt').read_text() == 'synthetic must never upload'
+    with r.factory(current['secret']) as store:
+        store.open_existing()
+        assert len(store.snapshots()) == 3
+
+
+def test_verified_provenance_and_hash_rule_survive_fresh_child_save(runtime):
+    r = runtime
+    (r.source / '.josh-roomignore').write_text('a/#reports/**\n')
+    _, target, child = entered(r)
+    envelope, _ = r.authority.read()
+    records = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots']
+    assert r.authority.descriptor(records[child['snapshot_id']]).to_dict()['source']['composition_policy'] == 'inherited-rules-v1'
+    (target / 'a/#reports').mkdir()
+    (target / 'a/#reports/private.txt').write_text('synthetic must never upload')
+    (target / 'a/file.txt').write_text('approved provenance source edit')
+    plan = update(r, target, child, operation='fresh-verified')
+    result = update(r, target, child, operation='fresh-verified', approval=plan['approval_sha256'])
+    envelope, _ = r.authority.read()
+    record = envelope['state']['dimension_catalog']['projects'][child['room_id']]['snapshots'][result['snapshot_id']]
+    assert r.authority.descriptor(record).to_dict()['source']['composition_policy'] == 'inherited-rules-v1'
+    with r.factory(envelope['secret']) as store:
+        store.open_existing()
+        proof = r.private / 'verified-hash-rule-proof'
+        store.restore(record['workspace_snapshot_id'], proof)
+        assert len(store.snapshots()) == 4
+    assert not (proof / '#reports').exists()
+    assert (proof / 'file.txt').read_text() == 'approved provenance source edit'
+    assert '\\#reports/**' in (proof / '.josh-roomignore').read_text().splitlines()

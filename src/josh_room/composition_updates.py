@@ -17,6 +17,7 @@ from .catalog import Catalog, corroborate_logical_snapshot
 from .composition import MANIFEST, parse_manifest, portable_path, validate_manifest
 from .composition_lifecycle import (
     CONTENT_DIGEST_ALGORITHM,
+    INHERITED_POLICY,
     _admitted_source,
     _capture,
     _commit,
@@ -221,6 +222,8 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
     if latest not in accepted:
         raise ValueError('child latest advanced; select its exact baseline')
     record, previous = _descriptor(authority, state, room, baseline)
+    if previous.to_dict()['source'].get('composition_policy') != INHERITED_POLICY:
+        raise ValueError('legacy child baseline lacks verified inherited-rule provenance; safe policy reconciliation is required before any update')
     if Path(workspace).resolve() == private.resolve() or Path(workspace).resolve() in private.resolve().parents:
         raise ValueError('private runtime must be outside child source')
     view, plan = _child_view(workspace, private, namespace, room, baseline, accepted)
@@ -261,7 +264,7 @@ def save_child(workspace, dimension, namespace, room, baseline, operation_id,
                 nonlocal envelope, etag
                 envelope, etag = _claim(authority, envelope, etag, plan)
             descriptor, scan = _capture(view, store, private, plan, dimension,
-                authority.binding['encryption_domain_id'], claim=claim, parent=previous)
+                authority.binding['encryption_domain_id'], claim=claim, parent=previous, inherited_policy=INHERITED_POLICY)
             value = descriptor.to_dict()
             if value['parent_logical_jat_id'] != baseline or value['workspace']['parent_snapshot_id'] != record['workspace_snapshot_id']:
                 raise ValueError('child update lineage differs')

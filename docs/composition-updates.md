@@ -82,3 +82,11 @@ approval digest. An uncommitted old entry requires reconciliation; a completed
 entry may be followed by a newly approved operation at its exact saved baseline.
 Neither retries nor history are silently upgraded. Tagged snapshot retries recover
 real persisted byte counts and verify actual payload ancestry before publication.
+
+Every child update also requires authenticated `source.composition_policy` equal
+to `inherited-rules-v1` on its exact baseline before any staging or publication.
+This is independent of operation ID and hash version. New initial captures stamp
+it only after proving the rebased policy view; verified updates retain it. Legacy
+descriptors remain readable/restorable but cannot authorize new child writes.
+Editing an ignore-file comment cannot supply provenance. Legacy-policy
+reconciliation is not implemented and never happens implicitly.
