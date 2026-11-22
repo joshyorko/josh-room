@@ -139,8 +139,8 @@ No real credentials, host keyring, source Room mutations or release actions
 were used. Windows recovery now has a focused non-release CI lane with checksum-pinned
 Restic 0.19.1, real encrypted three-point file/Unicode-subtree extraction,
 current-file comparison, hardlink/junction/writer denial, and no-clobber races.
-Its result remains pending until the exact-head job completes. Wire-byte counts
-and text diff policy remain open.
+The exact source job passed all four native cases on Windows x64 with Restic
+0.19.1; see the receipt below. Wire-byte counts and text diff policy remain open.
 
 ## Native Windows comparison boundary
 
@@ -162,3 +162,18 @@ not a skipped native vertical. Catalog authority in that job remains a
 synthetic fixture; Restic, NTFS handles, private ACLs, junction denial, current
 comparison, selected writes and no-clobber promotion are actual Windows
 operations. This does not prove Windows provider/keyring or installed VSIX UI.
+
+## Hosted native Windows result
+
+At implementation source `ddc330341a9a6914f09d807f6c63b0fb4d978b66`,
+[the ordinary Windows recovery job](https://github.com/joshyorko/josh-room/actions/runs/45034616072/job/137245466482)
+passed **4 tests, 0 failed, 0 skipped**, in 13.82 seconds with Python 3.13.17
+and checksum-pinned Restic 0.19.1. The tests performed real encrypted Restic
+file/Unicode-subtree recovery and native current-file comparison, hardlink,
+junction and writer rejection, existing-destination and racing-destination
+preservation, unchanged current file/Room marker, and no staging residue.
+Catalog authority remained a synthetic fixture. This closes the focused
+headless Windows recovery gate, not Windows live-provider/keyring or installed
+native VSIX UI acceptance. The [sanitized receipt](receipts/issue-209-windows-recovery.json)
+links the uploaded pin/JUnit evidence and records its artifact digest. Wire
+bytes remain unmeasured and are not inferred from plaintext blob counts.
