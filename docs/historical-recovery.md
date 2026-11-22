@@ -82,3 +82,32 @@ successfully into disposable isolated extension/user directories; installed
 controller help and source byte checks (package JSON ignores VS Code-added
 installation metadata) are separate from UI acceptance.
 No installed interactive QuickPick/diff or live provider acceptance is claimed.
+
+## Installed native helper acceptance, 2026-11-22
+
+At source `a112b891bcc429e688b870498decc23c067e3347`, the built VSIX was
+installed in disposable user/extension directories under VS Code Insiders
+1.148.0 (`0d15d4d60248e35fac1a3fe234d74ed780e15691`, Linux x64). A private
+Xvfb display with TCP disabled hosted the real native QuickPick and Save
+Dialog. An acceptance-driver extension loaded the byte-matched **installed**
+`recovery-actions.js`, passed real VS Code APIs, and dispatched its requests
+through the installed CLI parser/recovery implementation against the real
+pinned encrypted Restic fixture. Catalog authority was injected synthetic
+fixture context, not a live provider/keyring or the registered row command.
+
+Observed and inspected screens: pinned `jat-ui-old` directory listing,
+`changed.txt` actions, current-file digest comparison (`modified`), native
+absent-destination Save Dialog, and recovered JSON receipt. The recovered
+file was exactly six bytes with SHA-256
+`b640e840b19d378660b32fb51ae18d67dccb4a8596a29e7bd72c1b2ae5928f41`.
+Its extraction reported one file, 1,212 plaintext blob bytes and two blob
+calls. All three current-workspace file hashes (including the 2 MiB unrelated
+binary) matched the pre-recovery inventory. Zero staging directories remained.
+Canceling the subsequent picker ended the session without another write.
+These are native **installed helper** results, not production row-command,
+managed RCC/controller, provider ciphertext-authority or keyring acceptance.
+Text diffs are still withheld; the comparison surface is JSON metadata.
+
+The initial disposable D-Bus probe found no `org.freedesktop.secrets` service.
+A bounded task-owned container setup is being evaluated independently; the
+user's real keyring and credentials are never used for this acceptance.
