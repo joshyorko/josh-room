@@ -152,6 +152,7 @@ async function main() {
       JOSH_ROOM_ACCEPTANCE_PORT: String(await reservePort()),
       PYTHONPATH: path.join(installed, "runtime/controller"),
       LOCALAPPDATA: path.join(base, "local-appdata"), APPDATA: path.join(base, "appdata"),
+      TEMP: path.join(base, "provider-runtime"), TMP: path.join(base, "provider-runtime"),
       PATH: path.join(tools, "age/age") + path.delimiter + process.env.PATH };
     fixtureEnv = env;
     delete env.JOSH_ROOM_RESULT_FILE;
@@ -212,6 +213,15 @@ async function main() {
     await cdp.choose("Compare with current workspace");
     await until(async () => (await cdp.widget())?.rows.some(value => value.includes("code.py")), "pinned tree after compare");
     await cdp.key("Escape", "Escape", 27);
+    const editorPoint = await until(async () => cdp.evaluate(`(() => {
+      const node = document.querySelector('.monaco-diff-editor .editor.modified .view-lines');
+      if (!node) return null; const box = node.getBoundingClientRect();
+      return box.width && box.height ? {x:box.left+20,y:box.top+8}:null;
+    })()`), "native diff editor surface");
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...editorPoint, button: "left", clickCount: 1 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...editorPoint, button: "left", clickCount: 1 });
+    await until(async () => cdp.evaluate(`Boolean(document.activeElement?.closest('.monaco-diff-editor .editor.modified'))`), "modified native editor focus");
+    await cdp.send("Input.insertText", { text: "synthetic forbidden edit" });
     await cdp.command("Recovery fixture verify diff");
     await until(() => fs.existsSync(path.join(base, "ui-diff.json")), "native diff verification");
     if (JSON.parse(await fsp.readFile(path.join(base, "ui-diff.json"))).state !== "PASS") throw new Error("Native readonly text diff failed");
@@ -293,7 +303,7 @@ async function main() {
     }
     receipt.state = failure ? "FAIL" : "PASS";
     await fsp.writeFile(path.join(evidence, "installed-windows-recovery.json"), JSON.stringify(receipt, null, 2));
-    await fsp.rm(base, { recursive: true, force: true });
+    await fsp.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
   if (failure) throw failure;
 }

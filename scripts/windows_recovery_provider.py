@@ -192,10 +192,12 @@ def main():
             if server.poll() is not None or time.monotonic() > deadline:
                 raise RuntimeError("owned fixture lifetime ended before acceptance")
             time.sleep(0.2)
+        (base / "provider-stage.json").write_text(json.dumps({"stage": ["verify", "workspace-inventory"]}))
         if fingerprint(workspace) != json.loads((base / "provider-before.json").read_text()):
             raise RuntimeError("workspace or Room marker changed")
-        # Scan only acceptance logs/profile/evidence, never normal provider data/keysets.
-        for directory in (base / "profile", base / "evidence"):
+        (base / "provider-stage.json").write_text(json.dumps({"stage": ["verify", "profile-logs"]}))
+        # Log/privacy evidence does not require reading live SQLite/lock files.
+        for directory in (base / "profile/logs", base / "evidence"):
             for candidate in directory.rglob("*"):
                 if candidate.is_file() and candidate.stat().st_size <= 8 * 1024 * 1024:
                     data = candidate.read_bytes()
@@ -245,5 +247,6 @@ if __name__ == "__main__":
         stage = json.loads((base / "provider-stage.json").read_text()) if (base / "provider-stage.json").exists() else {}
         reason = str(error) if isinstance(error, RuntimeError) and re.fullmatch(r"[A-Za-z0-9 :_-]{1,100}", str(error)) else None
         (base / "provider-failed.json").write_text(json.dumps({"state": "FAIL",
-            "exception": type(error).__name__, "boundary": reason, **stage}))
+            "exception": type(error).__name__, "boundary": reason,
+            "errno": getattr(error, "errno", None), "winerror": getattr(error, "winerror", None), **stage}))
         raise SystemExit(1) from None

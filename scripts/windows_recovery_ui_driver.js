@@ -51,6 +51,8 @@ exports.activate = async context => {
     } finally { clearTimeout(probe); }
   }));
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.verifyDiff", async () => {
+    let stage = "native-diff-tab";
+    let observed;
     try {
       const tab = vscode.window.tabGroups.all.flatMap(group => group.tabs)
         .find(tab => tab.input instanceof vscode.TabInputTextDiff);
@@ -60,19 +62,22 @@ exports.activate = async context => {
       const right = await vscode.workspace.openTextDocument(tab.input.modified);
       const before = 'def greeting():\n\treturn "first 你好"\n';
       const after = 'def greeting():\n\treturn "third 你好"\n';
+      observed = { before_sha256: hash(left.getText()), after_sha256: hash(right.getText()),
+        before_dirty: left.isDirty, after_dirty: right.isDirty, before_eol: left.eol, after_eol: right.eol };
+      stage = "whitespace-unicode-digests";
       if (left.getText() !== before || right.getText() !== after) throw new Error("Diff bytes changed");
+      stage = "opaque-provider-uri";
       if ([left, right].some(doc => doc.uri.toString().includes(pins[0]) || doc.uri.toString().includes(base))) {
         throw new Error("Historical provider URI is not opaque");
       }
-      const edit = new vscode.WorkspaceEdit();
-      edit.insert(left.uri, new vscode.Position(0, 0), "synthetic forbidden edit");
-      const accepted = await vscode.workspace.applyEdit(edit);
-      if (accepted || left.getText() !== before || left.isDirty || right.isDirty) throw new Error("Readonly edit accepted");
+      stage = "native-typing-readonly";
+      if (left.getText() !== before || right.getText() !== after || left.isDirty || right.isDirty) throw new Error("Readonly edit accepted");
       write("ui-diff.json", { state: "PASS", native_diff_tab: true, readonly_edit_denied: true,
+        readonly_probe: "native-CDP-editor-typing",
         whitespace_unicode_preserved: true, before_sha256: hash(before), after_sha256: hash(after),
         opaque_provider_uris: !left.uri.toString().includes(pins[0]) && !left.uri.toString().includes(base) });
     } catch {
-      write("ui-diff.json", { state: "FAIL", boundary: "native-diff-or-readonly" });
+      write("ui-diff.json", { state: "FAIL", boundary: stage, observed });
     }
   }));
   write("ui-driver-ready.json", { state: "PASS", installed_extension: true,

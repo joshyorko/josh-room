@@ -175,7 +175,7 @@ input to native QuickPick, command palette and the simple Save Dialog.
 
 The intended acceptance covers the pinned tree, current comparison in an
 actual native readonly diff tab, exact tab/Unicode text preservation, rejected
-editor writes, one-file extraction to an absent destination and picker
+native editor typing, one-file extraction to an absent destination and picker
 cancellation. Separate actual CLI overwrite denial verifies existing target
 bytes. A complete before/after workspace inventory includes the Room marker
 and unrelated synthetic files. Only sanitized JSON evidence is uploaded; raw
@@ -183,7 +183,8 @@ profile, runtime, server data, logs and credentials are removed. Missing
 dependencies or native UI fail closed and leave a failure receipt, never a
 fixture substitute or a passing Windows UI claim.
 Windows `LOCALAPPDATA` and `APPDATA`, as well as the explicit controller paths,
-point inside the owned task root. Partial failure receipts separately report
+and `TEMP`/`TMP` point inside the owned task root. Log scans cover text logs
+and retained evidence rather than live profile SQLite/lock files. Partial failure receipts separately report
 completed public CLI stages and native credential cleanup. CLI failures retain
 only their error code and a bounded shared-policy diagnostic with generated
 keys and Windows paths removed; raw controller output is never uploaded.
