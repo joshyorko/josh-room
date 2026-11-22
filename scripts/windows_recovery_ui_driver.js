@@ -27,13 +27,19 @@ exports.activate = async context => {
   let invocation = 0;
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.start", async () => {
     const current = ++invocation;
+    write("ui-command-started.json", { invocation: current, pin: pins[0] });
     try {
       const result = await vscode.commands.executeCommand("joshRoom.browseRecoveryPoint", {
         id: "synthetic-room", dimension: { id: "recovery-fixture", provider: "minio" }, snapshot_id: pins[0],
       });
       write("ui-command-finished.json", { result, pin: pins[0], invocation: current });
-    } catch {
-      write("ui-command-failed.json", { state: "FAIL", boundary: "registered-command" });
+    } catch (error) {
+      const message = String(error.message || "").toLowerCase();
+      write("ui-command-failed.json", { state: "FAIL", boundary: "registered-command",
+        invocation: current, error_type: ["TypeError", "Error", "RangeError"].includes(error.name) ? error.name : "other",
+        categories: ["private", "authorization", "snapshot", "logical", "path", "provider", "runtime", "trust"]
+          .filter(category => message.includes(category)),
+        controller_exit: Number.isSafeInteger(error.controller_exit_status) ? error.controller_exit_status : null });
     }
   }));
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.verifyDiff", async () => {

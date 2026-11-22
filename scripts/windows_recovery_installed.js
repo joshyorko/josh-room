@@ -187,7 +187,25 @@ async function main() {
       path.join(base, "provider-workspace")], { env, stdio: "ignore" });
     await until(() => fs.existsSync(path.join(base, "ui-driver-ready.json")), "installed extension activation", 90000);
     cdp = await connect(port);
-    await cdp.command("Recovery fixture start");
+    const recoveryPins = JSON.parse(await fsp.readFile(path.join(base, "provider-pins.json")));
+    const startBrowse = async invocation => {
+      await cdp.command("Recovery fixture start");
+      await until(async () => {
+        try { return JSON.parse(await fsp.readFile(path.join(base, "ui-command-started.json"))).invocation === invocation; }
+        catch { return false; }
+      }, "registered start invocation");
+      await until(async () => {
+        if (fs.existsSync(path.join(base, "ui-command-failed.json"))) throw new Error("Registered recovery command failed before tree");
+        const widget = await cdp.widget();
+        if (widget?.rows.some(value => value.includes(recoveryPins[0]))) {
+          await cdp.choose(recoveryPins[0]);
+          receipt.native_exact_point_chooser = "PASS";
+          return false;
+        }
+        return widget?.rows.some(value => value.includes("code.py"));
+      }, "registered pinned file tree");
+    };
+    await startBrowse(1);
     await cdp.choose("code.py");
     await cdp.choose("Compare with current workspace");
     await until(async () => (await cdp.widget())?.rows.some(value => value.includes("code.py")), "pinned tree after compare");
@@ -195,7 +213,7 @@ async function main() {
     await cdp.command("Recovery fixture verify diff");
     await until(() => fs.existsSync(path.join(base, "ui-diff.json")), "native diff verification");
     if (JSON.parse(await fsp.readFile(path.join(base, "ui-diff.json"))).state !== "PASS") throw new Error("Native readonly text diff failed");
-    await cdp.command("Recovery fixture start");
+    await startBrowse(2);
     await cdp.choose("code.py");
     await cdp.choose("Recover selection…");
     const destination = path.join(base, "recovered-one-file");
@@ -220,7 +238,18 @@ async function main() {
     receipt.recovered_sha256 = digest(expected);
     receipt.cancelled_without_extra_writes = true;
     receipt.cancelled_exact_pin = cancelled.pin;
-  } catch (error) { failure = error; receipt.failed_boundary = error.message; }
+  } catch (error) {
+    failure = error; receipt.failed_boundary = error.message;
+    if (cdp) {
+      try {
+        const widget = await cdp.widget();
+        receipt.native_widget = { present: Boolean(widget), row_count: widget?.rows.length || 0,
+          known_choices: ["code.py", "nested", "Recovery fixture start", "Compare with current workspace", "Recover selection"]
+            .filter(value => widget?.rows.some(row => row.includes(value))),
+          text_sha256: widget ? digest(widget.text) : null };
+      } catch { receipt.native_widget = { diagnostic: "unavailable" }; }
+    }
+  }
   finally {
     cdp?.socket.close();
     if (editor?.pid && editor.exitCode === null) {
@@ -231,7 +260,8 @@ async function main() {
       await fsp.writeFile(path.join(base, "stop-provider"), "stop");
       await until(() => provider.exitCode !== null, "owned native credential cleanup", 30000);
       for (const name of ["provider-ready.json", "provider-failed.json", "provider-cli-failed.json",
-        "provider-progress.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
+        "provider-progress.json", "ui-driver-ready.json", "ui-command-started.json", "ui-command-finished.json",
+        "ui-command-failed.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
         if (fs.existsSync(path.join(base, name))) {
           const value = JSON.parse(await fsp.readFile(path.join(base, name)));
           await fsp.writeFile(path.join(evidence, name), JSON.stringify(value, null, 2));

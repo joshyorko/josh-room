@@ -192,11 +192,15 @@ then run `node scripts/windows_recovery_installed.js`. Never use a production
 profile or a shared Windows vault. Linux execution intentionally refuses this
 qualification rather than simulating Windows custody or UI.
 
-Until its exact-head CI receipt is available, this job is **implemented but
-Windows installed acceptance is NOT RUN**. The pre-existing Windows recovery
-tests prove pinned Restic/current-file/extraction guards, not this installed
-provider/native UI chain. Other providers and immutable runtime promotion
-remain separate gates.
+The [native Windows provider/CLI receipt](receipts/issue-209-windows-provider-cli.json)
+records partial qualification at source `32048dd`: installed package parity,
+real provider/native custody, three production snapshots, exact historical
+inspection, overwrite refusal, workspace/marker preservation and cleanup
+passed. The separate native ACL test job also passed. The installed UI trial
+failed at picker navigation after renderer/driver activation; Browse, native
+diff and selective recovery UI acceptance remain **unproven**. Existing Windows
+recovery tests do not substitute for that UI chain. Other providers and
+immutable runtime promotion remain separate gates.
 
 ## Cleanup and remaining gates
 

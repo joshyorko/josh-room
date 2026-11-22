@@ -1,0 +1,40 @@
+{
+  "gate": "native-windows-installed-provider-cli",
+  "status": "PASS",
+  "partial_qualification": true,
+  "source_head": "32048dd8cef81be46077f2024c2dd839280abd71",
+  "tested_merge_sha": "bddac37024c0893fa81ef63ae19250b0e3179922",
+  "platform": "windows-latest x64",
+  "runtime": "installed-source-Python-local-build-fallback-not-immutable-RCC",
+  "storage": "real loopback MinIO, not an emulator",
+  "job": "https://github.com/joshyorko/josh-room/actions/runs/45056213135/job/137311938397",
+  "artifact": "https://github.com/joshyorko/josh-room/actions/runs/45056213135/artifacts/14767860958",
+  "artifact_sha256": "604c6fb24c2a276efb7caacb748a79f44d12e59a221b0875fe87937e81785121",
+  "vsix_sha256": "f60e1efb16e466e4cc02a03778d0a83cac579fe559856898d61317ab2895535e",
+  "installed_package_files_compared": 114,
+  "native_custody": "windows-credential-locker",
+  "provider_credential_roundtrip": "PASS",
+  "operational_identity_and_room_store_secret_roundtrips": "PASS",
+  "production_cli": {
+    "provider_bucket_create": "PASS",
+    "encryption_initialize": "PASS",
+    "snapshot_create_count": 3,
+    "exact_historical_inspect_digest": "PASS",
+    "extract_existing_destination_refusal": "PASS"
+  },
+  "workspace_and_room_marker_unchanged": true,
+  "provider_credentials_absent_from_profile_logs": true,
+  "owned_native_targets_confirmed_absent_after_cleanup": 4,
+  "unrelated_native_targets_touched": 0,
+  "native_acl_test_job": "https://github.com/joshyorko/josh-room/actions/runs/45056213135/job/137311938652",
+  "native_acl_test_job_status": "PASS",
+  "installed_ui_status": "FAIL",
+  "installed_ui_boundary": "native picker navigation timed out after renderer and driver activation",
+  "unproven": [
+    "native registered Browse picker completion",
+    "native readonly diff editor",
+    "native registered selective recovery and cancellation",
+    "immutable feature RCC artifact",
+    "other providers and integrated release acceptance"
+  ]
+}
