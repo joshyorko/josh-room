@@ -954,7 +954,10 @@ async function writeEncryptionHandoff(environment, material) {
   fs.chmodSync(directory, 0o700);
   const filename = path.join(directory, "material.identity");
   try {
-    fs.writeFileSync(filename, identity.endsWith("\n") ? identity : `${identity}\n`, { mode: 0o600 });
+    if (process.platform === "win32") await require("./windows-handoff").prepareWindowsHandoff(directory);
+    fs.writeFileSync(filename, identity.endsWith("\n") ? identity : `${identity}\n`, {
+      mode: 0o600, flag: process.platform === "win32" ? "r+" : "w",
+    });
     fs.chmodSync(filename, 0o600);
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -6322,6 +6325,8 @@ async function editStorageSettings(item) {
 }
 
 Object.assign(module.exports.__test__, {
+  cacheEncryptionMaterial,
+  readEncryptionMaterial,
   JAT_SERVE_MODES,
   JatToolsProvider,
   jatBuild,

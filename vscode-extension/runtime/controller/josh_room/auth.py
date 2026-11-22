@@ -882,6 +882,8 @@ def _write_encryption_identity(path: Path, value: str) -> Path:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(fd, "w") as handle:
+            if os.name == "nt":
+                protect_private_file(temporary)
             handle.write(value.rstrip("\n") + "\n")
             handle.flush()
             os.fsync(handle.fileno())
@@ -903,7 +905,11 @@ def _material_for_keyset(
         raise ValueError("existing encryption identity handoff is required")
     if identity_path is not None and (require_existing_identity or Path(identity_path).exists()):
         path = Path(identity_path)
-        if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("encryption identity handoff is unsafe")
+        if os.name == "nt":
+            verify_private_path(path, directory=False)
+        elif stat.S_IMODE(path.stat().st_mode) & 0o077:
             raise ValueError("encryption identity handoff is unsafe")
         if path.stat().st_size > 16 * 1024:
             raise ValueError("encryption identity handoff is too large")

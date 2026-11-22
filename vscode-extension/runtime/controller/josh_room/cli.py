@@ -1196,9 +1196,15 @@ def _encryption_material_ready() -> bool:
         return False
     try:
         path = Path(identity)
-        identity_ready = path.is_file() and not path.is_symlink() and not (path.stat().st_mode & 0o077) \
-            and _valid_identity(path.read_text())
-    except OSError:
+        identity_ready = path.is_file() and not path.is_symlink()
+        if identity_ready:
+            if os.name == "nt":
+                from .private_paths import verify_private_path
+                verify_private_path(path, directory=False)
+            else:
+                identity_ready = not (path.stat().st_mode & 0o077)
+        identity_ready = identity_ready and _valid_identity(path.read_text())
+    except (OSError, RuntimeError):
         identity_ready = False
     recipients = _recipients()
     return identity_ready and len(recipients) >= 2 and len(set(recipients)) >= 2

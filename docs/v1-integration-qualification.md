@@ -220,6 +220,26 @@ digest to match. Registered create/update regressions cover known and unknown
 commitment, cancellation and exact retry. This is a UI receipt correction;
 agent Save availability remains false pending final integrated qualification.
 
+## Windows installed checkpoint integration
+
+#220 at `5e05954ead917d7a4b8af18300e2fa6801a848ae` is now included. Its
+[installed Windows job](https://github.com/joshyorko/josh-room/actions/runs/45068423905/job/137349700818)
+passed alongside the native private-runtime and recovery jobs. Two environment
+qualification/consumer checks were still pending at integration; no final
+all-green claim is made for that source. The ordinary combined workflow now
+runs its installed-recovery job and retains both viewer and runtime-adapter
+Node suites. The only conflicts were the Node test command and the handoff
+test's platform-aware identity fixture; both sets of behavior are retained.
+
+Canonical auth keeps Windows native private ACL verification/protection before
+identity bytes, POSIX admission, and required-existing handoff refusal. The
+extension's Windows handoff producer coexists with the current agent retry
+corrections; controller and template mirrors are regenerated from that merged
+canonical source. Source-lane evidence does not qualify this new combined SHA.
+The Windows installed recovery fixture still explicitly selects installed-source
+Python, so its successful native UI/provider/keyring flow is not immutable RCC
+feature acceptance. Final combined installed qualification remains required.
+
 ## Compatibility and rollback
 
 [The bounded source probe](receipts/v1-source-compatibility.json) compares
