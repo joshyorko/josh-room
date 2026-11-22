@@ -198,8 +198,17 @@ it requires the test wheel installed in the task user base and a previously
 Store-exported archive at `/task/component-from-store.tar.zst`, plus an absent
 private exact prefix. It must only run inside the disposable target container.
 
-NOT RUN/SKIP: installed native chooser's new positive installed row after this
-checkpoint, managed RCC controller/JAT artifact, native Windows installed restore
+PASS: the packaged VSIX was installed in a disposable profile. Its real native
+picker rendered the conditional installed row using the actual container CLI
+capability, then cancelled cleanly. See installed-prefix-picker.json/.png and
+the committed driver. Full registered Save with this new installed row remains
+NOT RUN; this native UI proof does not replace the separate actual CLI closure test.
+
+Retained CI setup failure: Windows first failed because this repository has no
+uv.lock but the added command used --locked; removed only that unsupported flag.
+The exact-head rerun remains separate from local Python and Linux proof.
+
+NOT RUN/SKIP: managed RCC controller/JAT artifact, native Windows installed restore
 (deliberately unavailable; refusal/schema CI added), macOS, other formula/runtime
 hashes, locales/NSS/services, cross-distro/prefix portability, whole Homebrew
 manager, full work-jatt binary capture and verified native reinstallation.
