@@ -1,0 +1,21 @@
+{
+  "runtime": "explicit local-build-fallback Python override; NOT managed RCC artifact",
+  "provider": "verified real loopback MinIO",
+  "secretService": "isolated task-only production Secret Service",
+  "stages": [
+    {
+      "registeredCommand": "joshRoom.new",
+      "result": "saved",
+      "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic New Chooser Dimension: Synthetic Chooser Folder: ${TASK_ROOT}/new-workspace Capture: Workspace plus the explicit component plan below Initial full capture \u00b7 Logical entries: 3 Workspace scan: 1.7 KB Restic data estimate: determined by Save hauler_content: keep \u2014 absent homebrew_recovery: keep \u2014 absent rcc_environment: keep \u2014 absent",
+      "markerSnapshot": "50807409b1844da6bef21e53358ffaaf"
+    },
+    {
+      "registeredCommand": "joshRoom.saveFolderAs",
+      "result": "saved",
+      "preview": "Source: Josh Room\nSave\nCancel\nRoom: Synthetic New Chooser Dimension: Synthetic Chooser Folder: ${TASK_ROOT}/new-workspace Capture: Workspace plus the explicit component plan below Save Preview \u00b7 Logical entries: 3 Workspace scan: 1.7 KB Restic data estimate: determined by Save hauler_content: keep \u2014 absent homebrew_recovery: keep \u2014 absent rcc_environment: keep \u2014 absent",
+      "markerSnapshot": "9dc56f1e9ec14e4d97fb01897c2b8367"
+    }
+  ],
+  "ok": true,
+  "runtimeAdapter": "source-controller override, not managed RCC"
+}

@@ -1,0 +1,22 @@
+{
+  "runtime": "installed VSIX native picker; capability from actual installed Debian fixture CLI; Save not invoked",
+  "ok": true,
+  "positiveRowRendered": true,
+  "cancellationPassed": true,
+  "capability": {
+    "homebrew_installed": {
+      "available": true,
+      "format": "josh-room-homebrew-installed-v1",
+      "platform": {
+        "ID": "debian",
+        "VERSION_ID": "12",
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "prefix": "/home/linuxbrew/.linuxbrew",
+      "reason": "conditional: tested Hello 2.12.3 and loader/libc hashes only; source admission checked in Preview"
+    },
+    "ok": true
+  },
+  "installedVersion": "0.1.52"
+}

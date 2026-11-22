@@ -67,3 +67,81 @@ Known capture, cancellation, deletion-confirmation, and publication errors keep
 their existing receipts. A stage is not evidence of completed capture or
 publication; validate the controller RCC receipt and any inner capture receipt
 separately.
+
+## Native Save component chooser (draft checkpoint)
+
+New Room, Save Current Room and Save Folder As Room share one native multi-select.
+Workspace is always included under the reviewed capture policy. Optional rows
+request `keep`, `refresh`, or `omit` for the three existing closed descriptor
+slots. Unchecking a row omits its reference only from the new recovery point;
+immutable previous descriptors remain recoverable. Existing components default
+to keep; RCC refreshes from root robot.yaml when selected. Non-secret mode choices persist in VS Code host global state, under a hashed
+source/Dimension/Room key. Paths to external content and credentials are never
+persisted. Refreshing external content always requires a new explicit source
+selection; remembered modes do not confer authorization.
+
+Preview and create receive the same version-1 `--component-selection` JSON:
+
+```json
+{"format_version":1,"components":{"rcc_environment":"refresh","homebrew_recovery":"keep","hauler_content":"keep"}}
+```
+
+Unknown slots, modes and versions fail closed. Explicit selections bypass local
+workspace-only no-op caches; the backend resolves component identities before
+comparing against the previous descriptor. Preview reports pending/reused/absent/
+excluded, and the receipt reports actual descriptor references. `captured-or-reused`
+means the resolver verified the selected material but does not distinguish a
+content-addressed reuse from a new component backup. Estimated workspace bytes
+are not total component bytes or a promised upload size. Preview does not run
+installers or RCC capture. Selection is not authorization: existing host policy,
+Dimension encryption, workspace validation and provider checks still apply.
+
+Homebrew has three distinct meanings:
+
+- **Brewfile-only recipe directory:** choose a folder containing exactly one
+  regular, non-symlink, non-hardlinked Brewfile, at most 1 MiB. The controller
+  packages these inert bytes privately, then uses existing JAT validation and
+  the `homebrew_recovery` lifecycle. Extra files are rejected; use a prepared
+  recovery archive for a fuller existing JAT export. This never runs Ruby,
+  `brew bundle`, installers, or restore scripts. Native reinstallation is a
+  separate user-approved operation; versions and cold-host reinstallation have
+  not been verified by this checkpoint.
+- **Prepared recovery archive:** existing validated `--brew-archive` semantics,
+  independently of a Brewfile recipe. It does not establish installed binaries.
+- **Installed prefix/binaries:** conditional support for the qualified Hello build or the
+  declared jq/oniguruma/Homebrew-glibc runtime closure on Debian 12 x86_64, at `/home/linuxbrew/.linuxbrew` only. The
+  chooser offers an explicit installed selection after offline platform discovery;
+  Preview additionally checks owner-controlled source directories, receipt-declared
+  `homebrew/core` bottle provenance and a supported runtime graph. V1 Hello keeps
+  its qualified hashes. V2 jq follows installed jq→oniguruma metadata plus the
+  explicit installed Homebrew glibc prerequisite, checks ELF library/SONAME/search
+  and required/provided symbol versions, and stores only reached runtime files
+  and receipts. Linux headers are recorded as metadata-only, not restored as
+  header contents. Other package families and unresolved/foreign runtimes fail closed.
+  The selected format saves its declared regular files and source runtime files,
+  file modes and SHA256 values in the existing `homebrew_recovery` archive slot.
+  Contained relative aliases replace the observed source loader alias;
+  the preview/manifest records that normalization. No Homebrew repository, cache,
+  configuration or unrelated formula is included. V2 permits only contained
+  sibling-basename library links plus fixed opt/bin/runtime aliases. This restores the
+  qualified package closure, not the Homebrew manager or an arbitrary prefix.
+  See [qualification and restore commands](homebrew-feasibility.md).
+
+OCI refresh supports all tagged images, explicit image references, an explicit
+Hauler manifest or an explicitly selected additional file. RCC artifacts remain platform bound. Agent state is unavailable in this
+main-based controller. Draft #210's Codex capability is history-only with missing
+Dimension admission; T3 and Claude capture are blocked. No auth state is copied,
+no second agent picker is added, and no unqualified provider becomes selectable.
+Full #188 capability/admission integration remains a separate acceptance gate.
+
+Preview tokens bind the Room, Dimension, source path, prior logical snapshot,
+capture policy, selection and explicit external input bytes. Save checks a
+supplied token before preparation, after component resolution, and before
+publication. OCI tags are resolved during Save rather than pinned by preview.
+Installed native Save/preview/repeat/cancel are verified on Linux with an explicit
+source-controller local-build-fallback override and disposable real provider/
+Secret Service; managed RCC artifact execution and Windows/macOS remain
+unqualified. Those limits
+must remain visible in PR evidence; it is not completion of issue #190 or release
+qualification. Logical JAT v1 gains no new slots; existing copy/export/verify/
+remove reachability continues to operate on the three validated component types.

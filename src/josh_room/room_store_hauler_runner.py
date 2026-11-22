@@ -818,7 +818,7 @@ def _brew_decoded_stream(archive: Path):
                 terminate_owned_process(process)
             process.stdout.close()
         return
-    with archive.open("rb") as raw, zstandard.ZstdDecompressor(max_window_size=128 * 1024).stream_reader(raw) as decoded:
+    with archive.open("rb") as raw, zstandard.ZstdDecompressor(max_window_size=128 * 1024 * 1024).stream_reader(raw) as decoded:
         yield decoded
 
 

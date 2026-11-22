@@ -1139,7 +1139,7 @@ test("Save Room asks for a Dimension before creating when no selection exists", 
   vscode.quickPickResponses.push(
     { create: true },
     { dimension: { id: "backup", display_name: "Backup", provider: "minio" } },
-    { label: "Workspace only", allImages: false },
+    [],
   );
   vscode.infoResponses.push("Continue", "Save");
 
@@ -1186,7 +1186,7 @@ for (const repairDecision of ["Clean stale worktree records and retry", "Cancel"
   extension.__test__.setStatusItem(statusItem);
   vscode.openDialogResponses.push([{ fsPath: source }]);
   vscode.inputBoxResponses.push("Synthetic Room");
-  vscode.quickPickResponses.push({ create: true }, dimension, { label: "Workspace only", allImages: false });
+  vscode.quickPickResponses.push({ create: true }, dimension, []);
   vscode.warningResponses.push(repairDecision);
   vscode.infoResponses.push("Continue", "Save");
 
@@ -1307,7 +1307,7 @@ for (const forceCreate of [false, true]) for (const refreshFailure of [false, tr
   vscode.openDialogResponses.push([{ fsPath: source }]);
   vscode.inputBoxResponses.push("Test Room");
   if (!forceCreate) vscode.quickPickResponses.push({ create: true });
-  vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+  vscode.quickPickResponses.push([]);
   vscode.infoResponses.push("Continue", "Save");
   assert.equal(await extension.__test__.saveRoom({ forceCreate }), "saved");
   assert.equal(spawnHarness.calls.filter(({ args }) => args[0] === "snapshot" && args[1] === "create").length, 1);
@@ -1376,7 +1376,7 @@ test("Save Room to a fresh MinIO Dimension continues without dismissing its read
   vscode.quickPickResponses.push(
     { create: true },
     { label: "Import Existing Recovery Key", action: "import" },
-    { label: "Workspace only", allImages: false },
+    [],
   );
   vscode.infoResponses.push("Continue", "Save");
 
@@ -1608,7 +1608,7 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
   writeStatMarker(root, { project_id: project.id, display_name: project.display_name });
   vscode.openDialogResponses.push([{ fsPath: root }]);
   vscode.quickPickResponses.push({ label: "Demo Room", project });
-  vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+  vscode.quickPickResponses.push([]);
   return { vscode, extension, project, dimension, statusItem, infoCalls, warningCalls, watcherCallbacks, spawnHarness,
     get secretReads() { return secretReads; } };
 }
@@ -1652,7 +1652,7 @@ test("native Save previews the Room Store and reports logical, scanned, and Rest
 
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
 
-  const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot");
+  const snapshotCalls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
   assert.deepEqual(snapshotCalls.map((call) => call.args[1]), ["preview", "create"]);
   assert.ok(fixture.infoCalls.some(([message]) => /Initial full capture/.test(message)));
   assert.ok(fixture.infoCalls.some(([message]) => message === "Saved “Demo Room”."));
@@ -1723,178 +1723,71 @@ test("native Save confirms suspicious deletions with the exact preview token", a
   assert.match(fixture.warningCalls[0][0], /Demo Room/);
 });
 
-for (const externalComponents of [false, true]) test(`trusted no-event Save ${externalComponents ? "rechecks external components" : "checks native metadata without secret work"}`, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-fast-noop-"));
-  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
+for (const externalComponents of [false, true]) test(`repeat Save resolves controller components even with a trusted workspace receipt: ${externalComponents}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-repeat-components-"));
   const fixture = createNativeSaveFixture(root, {
-    preview: nativePreview({ previous_entry_count: 3, restic_data_added_bytes: 1024, rcc_capture_pending: false }),
-    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
-      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
-      capture_policy_sha256: policySha },
-    saveResult: {
-      ok: true,
-      status: "saved",
-      project_id: "demo-room",
-      snapshot_id: "jat-2",
-      scanned_bytes: 12345,
-      data_added_bytes: 1024,
-      dimension_id: "backup",
-      encryption_domain_id: "domain-a",
-      workspace_signature: "c".repeat(64),
-      signature_algorithm: "josh-room-stat-v1",
-      capture_policy_sha256: policySha,
-      has_external_components: externalComponents,
-    },
-    onSave: (_args, { root: saveRoot, project }) => {
-      project.latest = "jat-2";
-      project.snapshots = [{ snapshot_id: "jat-2" }];
-      writeStatMarker(saveRoot, {
-        snapshot_id: "jat-2",
-        workspace_signature: "c".repeat(64),
-        capture_policy_sha256: policySha,
-      });
-    },
+    preview: nativePreview(),
+    saveResult: { ok: true, status: "saved", has_external_components: externalComponents },
   });
   fixture.vscode.infoResponses.push("Save", undefined);
-
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  const callsAfterSave = fixture.spawnHarness.calls.length;
-  const secretReadsAfterSave = fixture.secretReads;
   fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
-  fixture.vscode.quickPickResponses.push(
-    { label: "Demo Room", project: fixture.project, allImages: false },
-    { label: "Workspace only", allImages: false },
-  );
-  fixture.vscode.infoResponses.push(...(externalComponents ? ["Save", undefined] : ["Already saved", "Save", undefined]));
-
-  const samples = [];
-  for (let index = 0; index < (externalComponents ? 1 : 30); index += 1) {
-    if (index) {
-      fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
-      fixture.vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
-      fixture.vscode.infoResponses.push(undefined);
-    }
-    const started = process.hrtime.bigint();
-    assert.equal(await fixture.extension.__test__.saveRoom(), externalComponents ? "saved" : "already-saved");
-    samples.push(Number(process.hrtime.bigint() - started) / 1e6);
-  }
-  if (externalComponents) {
-    assert.ok(fixture.spawnHarness.calls.length > callsAfterSave);
-    assert.ok(fixture.secretReads > secretReadsAfterSave);
-  } else {
-    assert.equal(fixture.spawnHarness.calls.length, callsAfterSave + 2 * samples.length);
-    assert.equal(fixture.spawnHarness.calls.slice(callsAfterSave).every((call) => call.args[0] === "status"), true);
-    assert.equal(fixture.secretReads, secretReadsAfterSave);
-    assert.ok(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"));
-    if (process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH) fs.writeFileSync(
-      process.env.JOSH_ROOM_TEST_EDITOR_BENCHMARK_PATH,
-      `${JSON.stringify({ fixture: "real Save command with synthetic native UI and prior verified receipt", samples_ms: samples,
-        controller_calls: 2 * samples.length, secret_reads: 0, provider_jat_restic_calls: 0 })}\n`,
-    );
-  }
-  assert.equal(fixture.statusItem.text.includes("Saved"), true);
+  fixture.vscode.quickPickResponses.push({ project: fixture.project }, []);
+  fixture.vscode.infoResponses.push("Save", undefined);
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  const operations = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
+  assert.deepEqual(operations.map(call => call.args[1]), ["preview", "create", "preview", "create"]);
+  assert.ok(operations.every(call => call.args.includes("--component-selection")));
 });
 
-for (const boundary of ["image choice", "completion choice"]) test(`a change during trusted Save ${boundary} reaches the Room Store`, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-ui-race-"));
-  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
-  const source = path.join(root, "source.txt");
-  fs.writeFileSync(source, "initial");
-  const fixture = createNativeSaveFixture(root, {
-    statusResult: { ok: true, state: "clean", path_matches: true, signature_matches: true,
-      policy_matches: true, workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
-      capture_policy_sha256: policySha },
-    preview: nativePreview({ previous_entry_count: 3, rcc_capture_pending: false }),
-    saveResult: {
-      ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2",
-      dimension_id: "backup", encryption_domain_id: "domain-a",
-      workspace_signature: "c".repeat(64), signature_algorithm: "josh-room-stat-v1",
-      capture_policy_sha256: policySha,
-    },
-    onSave: (_args, { root: saveRoot, project }) => {
-      project.latest = "jat-2";
-      project.snapshots = [{ snapshot_id: "jat-2" }];
-      writeStatMarker(saveRoot, { snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha });
-    },
-  });
-  await fixture.extension.__test__.startDirtyTracking({ subscriptions: [] });
-  fixture.vscode.infoResponses.push("Save", undefined);
-  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  const createsBefore = fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length;
+for (const boundary of ["component choice", "preview confirmation"]) test(`a change during Save ${boundary} still reaches controller create`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-selection-race-"));
+  const fixture = createNativeSaveFixture(root, { preview: nativePreview(), saveResult: { ok: true, status: "saved" } });
   let changed = false;
-  const invalidate = async () => {
-    if (changed) return;
-    changed = true;
-    fs.writeFileSync(source, "changed");
-    await fixture.watcherCallbacks[0].didChange({ fsPath: source });
-  };
-  if (boundary === "image choice") {
+  const change = () => { fs.writeFileSync(path.join(root, "changed.txt"), "synthetic change"); changed = true; };
+  if (boundary === "component choice") {
     const original = fixture.vscode.window.showQuickPick;
     fixture.vscode.window.showQuickPick = async (items, options) => {
       const result = await original(items, options);
-      if (options.title === "Include local OCI images?") await invalidate();
+      if (options.title === "What should this recovery point preserve?") change();
       return result;
     };
   } else {
     const original = fixture.vscode.window.showInformationMessage;
     fixture.vscode.window.showInformationMessage = async (...args) => {
-      const result = await original(...args);
-      if (args[0] === "Already saved — 0 bytes uploaded") await invalidate();
-      return result;
-    };
-  }
-  fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
-  fixture.vscode.quickPickResponses.push({ allImages: false }, { label: "Demo Room", project: fixture.project });
-  fixture.vscode.infoResponses.push(...(boundary === "completion choice" ? ["Done", "Save", undefined] : ["Save", undefined]));
-  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  assert.equal(changed, true);
-  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length, createsBefore + 1);
-});
-
-for (const changeAt of ["before prompt", "during prompt"]) test(`a Git object change ${changeAt} without a watcher event cannot use cached no-op Save`, async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-git-no-event-"));
-  const policySha = require("./dirty").loadCapturePolicy(root).sha256;
-  let changed = false;
-  const fixture = createNativeSaveFixture(root, {
-    statusResult: () => ({ ok: !changed, state: changed ? "changed" : "clean", path_matches: true,
-      signature_matches: !changed, policy_matches: true, workspace_signature: (changed ? "d" : "c").repeat(64),
-      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha }),
-    preview: nativePreview({ rcc_capture_pending: false }),
-    saveResult: { ok: true, status: "saved", project_id: "demo-room", snapshot_id: "jat-2",
-      dimension_id: "backup", encryption_domain_id: "domain-a", workspace_signature: "c".repeat(64),
-      signature_algorithm: "josh-room-stat-v1", capture_policy_sha256: policySha },
-    onSave: (_args, { root: saveRoot, project }) => {
-      project.latest = "jat-2";
-      project.snapshots = [{ snapshot_id: "jat-2" }];
-      writeStatMarker(saveRoot, { snapshot_id: "jat-2", workspace_signature: "c".repeat(64), capture_policy_sha256: policySha });
-    },
-  });
-  fixture.vscode.infoResponses.push("Save", undefined);
-  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  const changeGit = () => {
-    fs.mkdirSync(path.join(root, ".git", "objects", "ab"), { recursive: true });
-    fs.writeFileSync(path.join(root, ".git", "objects", "ab", "local-object"), "synthetic object");
-    changed = true; // Deliberately do not dispatch a VS Code watcher event.
-  };
-  if (changeAt === "before prompt") changeGit();
-  else {
-    const original = fixture.vscode.window.showInformationMessage;
-    fixture.vscode.window.showInformationMessage = async (...args) => {
       const answer = await original(...args);
-      if (args[0] === "Already saved — 0 bytes uploaded") changeGit();
+      if (args.includes("Save")) change();
       return answer;
     };
   }
-  fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
-  fixture.vscode.quickPickResponses.push({ allImages: false }, { project: fixture.project });
-  fixture.vscode.infoResponses.push(...(changeAt === "before prompt" ? ["Save", undefined] : ["Done", "Save", undefined]));
+  fixture.vscode.infoResponses.push("Save", undefined);
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
-  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[0] === "status").length, changeAt === "before prompt" ? 1 : 2);
-  assert.equal(fixture.spawnHarness.calls.filter((call) => call.args[1] === "create").length, 2);
-  assert.equal(fixture.infoCalls.some(([message]) => message === "Already saved — 0 bytes uploaded"), changeAt === "during prompt");
+  assert.equal(changed, true);
+  assert.equal(fixture.spawnHarness.calls.filter(call => call.args[1] === "create").length, 1);
 });
 
-test("a mode change invalidates the trusted Save receipt and reaches the Room Store", async () => {
+for (const changeAt of ["before chooser", "during chooser"]) test(`Git object changes ${changeAt} cannot bypass controller Save`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-git-selection-"));
+  const fixture = createNativeSaveFixture(root, { preview: nativePreview(), saveResult: { ok: true, status: "saved" } });
+  const changeGit = () => {
+    fs.mkdirSync(path.join(root, ".git", "objects", "ab"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git", "objects", "ab", "local-object"), "synthetic object");
+  };
+  if (changeAt === "before chooser") changeGit();
+  else {
+    const original = fixture.vscode.window.showQuickPick;
+    fixture.vscode.window.showQuickPick = async (items, options) => {
+      const result = await original(items, options);
+      if (options.title === "What should this recovery point preserve?") changeGit();
+      return result;
+    };
+  }
+  fixture.vscode.infoResponses.push("Save", undefined);
+  assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  assert.deepEqual(fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities").map(call => call.args[1]), ["preview", "create"]);
+});
+
+test("changing the selected components reaches controller preview and create with the same plan", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-mode-change-"));
   const policySha = require("./dirty").loadCapturePolicy(root).sha256;
   const fixture = createNativeSaveFixture(root, {
@@ -1926,8 +1819,8 @@ test("a mode change invalidates the trusted Save receipt and reaches the Room St
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
   fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
   fixture.vscode.quickPickResponses.push(
-    { label: "Workspace + all tagged local OCI images", allImages: true },
     { label: "Demo Room", project: fixture.project },
+    [{ id: "hauler_content" }], "All tagged local OCI images",
   );
   fixture.vscode.infoResponses.push("Save", undefined);
 
@@ -1936,6 +1829,11 @@ test("a mode change invalidates the trusted Save receipt and reaches the Room St
   const creates = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "create");
   assert.equal(creates.length, 2);
   assert.equal(creates[1].args.includes("--all-images"), true);
+  const previews = fixture.spawnHarness.calls.filter(call => call.args[0] === "snapshot" && call.args[1] === "preview");
+  const selection = call => JSON.parse(call.args[call.args.indexOf("--component-selection") + 1]);
+  assert.deepEqual(selection(previews[1]), selection(creates[1]));
+  assert.equal(selection(creates[0]).components.hauler_content, "omit");
+  assert.equal(selection(creates[1]).components.hauler_content, "refresh");
 });
 
 test("choosing another Room invalidates the trusted Save receipt and preserves destination selection", async () => {
@@ -1973,11 +1871,11 @@ test("choosing another Room invalidates the trusted Save receipt and preserves d
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
   fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
   fixture.vscode.quickPickResponses.push(
-    { label: "Workspace only", allImages: false },
     { create: true },
+    [],
   );
   fixture.vscode.inputBoxResponses.push("Another Room");
-  fixture.vscode.infoResponses.push("Choose another Room", "Continue", "Save", undefined);
+  fixture.vscode.infoResponses.push("Continue", "Save", undefined);
 
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
 
@@ -2038,7 +1936,7 @@ for (const invalidation of ["workspace edit", "capture policy edit", "Room rebin
   fixture.vscode.openDialogResponses.push([{ fsPath: root }]);
   fixture.vscode.quickPickResponses.push(
     { label: "Demo Room", project: fixture.project },
-    { label: "Workspace only", allImages: false },
+    [],
   );
   fixture.vscode.infoResponses.push("Save", undefined);
 
@@ -4519,7 +4417,7 @@ test("root extension storage commands parse through the actual Python CLI contra
 
   assert.equal(await extension.__test__.addStorage(), "added");
   const vectors = spawnHarness.calls.map((entry) => entry.args);
-  const python = path.join(__dirname, "..", ".venv", "bin", "python");
+  const python = process.env.JOSH_ROOM_TEST_PYTHON || path.join(__dirname, "..", ".venv", "bin", "python");
   const parser = spawnSync(fs.existsSync(python) ? python : "python3", ["-c", [
     "import json, sys",
     "from josh_room.cli import build_parser",
@@ -6725,7 +6623,7 @@ for (const { forceCreate, decision } of [
   vscode.openDialogResponses.push([{ fsPath: source }]);
   vscode.inputBoxResponses.push("Synthetic Room");
   if (!forceCreate) vscode.quickPickResponses.push({ create: true });
-  vscode.quickPickResponses.push({ label: "Workspace only", allImages: false });
+  vscode.quickPickResponses.push([]);
   vscode.infoResponses.push("Continue", decision);
   assert.equal(await extension.__test__.saveRoom({ forceCreate }), decision === "Save" ? "saved" : "cancelled");
   const operations = spawnHarness.calls.map(({ args }) => args.slice(0, 2).join(" "));
@@ -6979,10 +6877,10 @@ for (const provider of ["r2", "minio"]) {
 test("R2 native Save previews the selected capture scope and respects a no-op receipt", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-r2-native-save-"));
   const fixture = createNativeSaveFixture(root, { provider: "r2", preview: nativePreview(), saveResult: { ok: true, status: "already-saved" } });
-  fixture.vscode.quickPickResponses[1] = { label: "Workspace and images", allImages: true };
+  fixture.vscode.quickPickResponses.splice(1, 1, [{ id: "hauler_content" }], "All tagged local OCI images");
   fixture.vscode.infoResponses.push("Save");
   assert.equal(await fixture.extension.__test__.saveRoom(), "already-saved");
-  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot");
+  const calls = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] !== "homebrew-capabilities");
   assert.deepEqual(calls.map((call) => call.args[1]), ["preview", "create"]);
   assert.ok(calls.every((call) => call.args.includes("--all-images")));
 });
@@ -7027,11 +6925,12 @@ test("ready native encryption recovery actions are provider-scoped to MinIO and 
   assert.doesNotMatch(require("./package.json").contributes.commands.find((command) => command.command === "joshRoom.initializeEncryption").title, /MinIO/);
 });
 
-test("Save Current Room reuses the capture choice made for that Room in this session", async () => {
+test("Save Current Room offers component customization on every Save", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-save-scope-"));
   const fixture = createNativeSaveFixture(root, { preview: nativePreview(), saveResult: { ok: true, status: "saved" } });
   fixture.vscode.infoResponses.push("Save", undefined, "Save", undefined);
   assert.equal(await fixture.extension.__test__.saveRoom(), "saved");
+  fixture.vscode.quickPickResponses.push([]);
   assert.equal(await fixture.extension.__test__.saveRoom({ current: true }), "saved");
   const creates = fixture.spawnHarness.calls.filter((call) => call.args[0] === "snapshot" && call.args[1] === "create");
   assert.equal(creates.length, 2);

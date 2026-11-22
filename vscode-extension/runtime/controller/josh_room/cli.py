@@ -529,6 +529,15 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_remove.add_argument("--expected-snapshots", help="comma-separated snapshot IDs from the confirmed inventory")
     _json_option(snapshot_remove)
     snapshot = commands.add_parser("snapshot")
+    homebrew = commands.add_parser("homebrew")
+    homebrew_commands = homebrew.add_subparsers(dest="homebrew_command", required=True)
+    for action in ("plan-restore", "restore"):
+        command = homebrew_commands.add_parser(action)
+        command.add_argument("--archive", type=Path, required=True)
+        command.add_argument("--prefix", type=Path, required=True)
+        if action == "restore":
+            command.add_argument("--confirm-manifest-sha256", required=True)
+        _json_option(command)
     snapshot_commands = snapshot.add_subparsers(dest="snapshot_command", required=True)
     snapshot_create = snapshot_commands.add_parser("create")
     snapshot_create.add_argument("project")
@@ -542,6 +551,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-deletion",
         help="confirm the exact mass-deletion plan returned by snapshot preview",
     )
+    snapshot_create.add_argument("--component-plan-token", help="validate reviewed component inputs and target")
     _json_option(snapshot_create)
     snapshot_preview = snapshot_commands.add_parser("preview")
     snapshot_preview.add_argument("project")
@@ -554,7 +564,20 @@ def build_parser() -> argparse.ArgumentParser:
     for command in (snapshot_create, snapshot_preview):
         command.add_argument("--hauler-manifest", dest="hauler_manifests", type=Path, action="append", default=[])
         command.add_argument("--hauler-file", dest="hauler_files", nargs=2, action="append", default=[], metavar=("PATH", "NAME"))
+        command.add_argument("--brew-installed-prefix", type=Path, help="explicit qualified installed Homebrew closure; not a Brewfile recipe")
+        command.add_argument("--brew-formula", help="qualified installed Hello or jq with its declared library/runtime closure")
+        command.add_argument("--brew-directory", type=Path, help="Brewfile-only recipe export directory; never installed binaries")
+        command.add_argument("--component-selection", help="versioned explicit Save component selection JSON")
         command.add_argument("--brew-archive", type=Path, help="reuse a saved Homebrew recovery archive in the native Room Store")
+    installed_capabilities = snapshot_commands.add_parser("homebrew-capabilities")
+    _json_option(installed_capabilities)
+    brew_export = snapshot_commands.add_parser("export-homebrew")
+    brew_export.add_argument("project")
+    brew_export.add_argument("--snapshot", required=True)
+    brew_export.add_argument("--dimension", required=True)
+    brew_export.add_argument("--backend", choices=("r2","minio","s3"), default="minio")
+    brew_export.add_argument("--output", type=Path, required=True)
+    _json_option(brew_export)
     for action in ("inspect", "export", "serve", "extract"):
         snapshot_action = snapshot_commands.add_parser(action)
         snapshot_action.add_argument("project")
@@ -743,6 +766,35 @@ def main(argv=None):
         return _exit_code(result)
     initialize_system_trust()
     args = build_parser().parse_args(argv)
+    if args.command == "homebrew":
+        import tarfile
+
+        import zstandard
+
+        from .homebrew_prefix import PrefixError, plan_restore, restore
+
+        try:
+            with sigterm_cancellation():
+                if args.homebrew_command == "plan-restore":
+                    value = plan_restore(args.archive, args.prefix)
+                else:
+                    value = restore(
+                        args.archive, args.prefix,
+                        expected_manifest_sha256=args.confirm_manifest_sha256,
+                    )
+        except (KeyboardInterrupt, CLICancelled):
+            value = {"ok": False, "status": "cancelled"}
+        except PrefixError as error:
+            value = {"ok": False, "error": "installed-homebrew-unavailable", "reason": str(error)}
+        except (OSError, ValueError, TypeError, RuntimeError, tarfile.TarError, zstandard.ZstdError):
+            value = {"ok": False, "error": "installed Homebrew restore refused invalid, incompatible or colliding input"}
+        emit(value, getattr(args, "json", False))
+        return 0 if value.get("ok") else 1
+    if args.command == "snapshot" and args.snapshot_command == "homebrew-capabilities":
+        from .homebrew_prefix import capabilities
+
+        emit({"ok": True, "homebrew_installed": capabilities()}, getattr(args, "json", False))
+        return 0
     if args.command == "snapshot" and args.snapshot_command in {"create", "preview"}:
         from .composition import require_uncomposed_workspace
         try:
@@ -2310,6 +2362,19 @@ def dispatch(args, instance: Path) -> dict:
         dimension_id = catalog.dimension_id or getattr(getattr(backend, "config", None), "dimension_id", None) or getattr(args, "dimension", None) or ("local" if backend is None else None)
         return {"ok": True, "dimension_id": dimension_id, "revision": catalog.body["revision"], "project": args.project, "latest": project["latest"], "snapshots": list(project["snapshots"].values())}
     if args.command == "snapshot":
+        if args.snapshot_command == "export-homebrew":
+            if args.snapshot == "latest":
+                raise ValueError("Homebrew component export requires an immutable snapshot identity")
+            from .room_store_export import materialize_components
+            with _open_room_store_context(args, instance, project_id=args.project, snapshot_id=args.snapshot) as context:
+                if context.selected_descriptor is None:
+                    raise ValueError("selected logical snapshot is unavailable")
+                with materialize_components(context.selected_descriptor, context.store, context.private_dir) as material:
+                    if material.brew_archive is None:
+                        raise ValueError("selected snapshot has no Homebrew recovery component")
+                    from .homebrew_prefix import export_archive
+
+                    return export_archive(material.brew_archive, args.output)
         if args.snapshot_command in {"inspect", "export", "serve", "extract"}:
             jat_root = _jat_root()
             with _open_room_store_context(
@@ -2466,7 +2531,7 @@ def dispatch(args, instance: Path) -> dict:
                     components=components,
                     **capture_options,
                 )
-                if (Path(source) / "robot.yaml").is_file():
+                if not capture_options.get("component_selection") and (Path(source) / "robot.yaml").is_file():
                     result["rcc_capture_pending"] = True
                 return result
             return save_room_store(
@@ -2479,6 +2544,7 @@ def dispatch(args, instance: Path) -> dict:
                 display_name=display_name,
                 confirmation_token=getattr(args, "confirm_deletion", None),
                 preflight_scan=getattr(args, "_local_workspace_evidence", None),
+                component_plan_token=getattr(args, "component_plan_token", None),
                 rcc_runtime=(
                     os.environ.get("JOSH_ROOM_RCC_EXE")
                     if os.environ.get("JOSH_ROOM_EXTENSION_MODE") == "1"
@@ -2488,6 +2554,8 @@ def dispatch(args, instance: Path) -> dict:
                 **capture_options,
                 **({"jat_root": _jat_root()} if capture_options else {}),
             )
+        if getattr(args, "component_selection", None) is not None:
+            raise ValueError("explicit component selection requires a native Room Store backend")
         if args.snapshot_command == "preview":
             raise ValueError("snapshot preview is available for native Room Store saves")
         recipients = _recipients()
@@ -2863,16 +2931,35 @@ def _native_capture_options(args) -> dict:
     files = [(Path(path), name) for path, name in (getattr(args, "hauler_files", ()) or ())]
     if images and all_images:
         raise ValueError("select explicit local images or all local images, not both")
-    options = {}
+    from .component_selection import selection_request
+    request = selection_request(getattr(args, "component_selection", None))
+    if getattr(args, "component_plan_token", None) is not None and request is None:
+        raise ValueError("a component plan token requires an explicit component selection")
+    options = {"component_selection": request} if request is not None else {}
     if images or all_images or manifests or files:
         options["hauler_selection"] = {"images": images, "all_images": all_images, "manifests": manifests, "files": files}
     homebrew = getattr(args, "brew_archive", None)
-    if homebrew is None:
+    if homebrew is None and request is None:
         configured = (private_config() or {}).get("homebrew_recovery")
         if isinstance(configured, dict) and configured.get("archive"):
             homebrew = Path(configured["archive"])
+    installed_prefix = getattr(args, "brew_installed_prefix", None)
+    installed_formula = getattr(args, "brew_formula", None)
+    if (installed_prefix is None) != (installed_formula is None):
+        raise ValueError("installed Homebrew selection requires prefix and formula")
+    if installed_prefix is not None:
+        if not request or request["components"]["homebrew_recovery"] != "refresh":
+            raise ValueError("installed Homebrew capture requires explicit refresh selection")
+        options["homebrew_installed"] = {"prefix": installed_prefix, "formula": installed_formula}
+    directory = getattr(args, "brew_directory", None)
+    if directory is not None:
+        if homebrew is not None:
+            raise ValueError("select a Homebrew archive or recipe directory")
+        options["homebrew_directory"] = directory
     if homebrew is not None:
         options["homebrew_archive"] = homebrew
+    if sum(value is not None for value in (homebrew, directory, installed_prefix)) > 1:
+        raise ValueError("select only one Homebrew recipe, archive or installed closure input")
     return options
 
 
@@ -3422,6 +3509,8 @@ def _json_safe(value, *, key="", depth=0):
     if depth > 8:
         return "<result depth limit>"
     lowered = key.lower()
+    if key == "component_plan_token":
+        return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else "<redacted>"
     if lowered not in _JSON_PUBLIC_CONFIRMATION_KEYS and (
         lowered in _JSON_SENSITIVE_KEYS
         or any(part in lowered for part in ("secret", "password", "token"))
