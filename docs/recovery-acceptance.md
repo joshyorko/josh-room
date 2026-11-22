@@ -229,6 +229,12 @@ diff and selective recovery UI acceptance remain **unproven**. Existing Windows
 recovery tests do not substitute for that UI chain. Other providers and
 immutable runtime promotion remain separate gates.
 
+The [existing-handoff progression receipt](receipts/issue-209-windows-existing-handoff.json)
+at source `059c923` separately proves native pre-write protection, real VS Code
+SecretStorage, and registered tree/compare calls with verified existing private
+handoffs. Its UI trial stopped at the harness's editor-focus check; native
+typing rejection and selective extraction through that route remain unproven.
+
 ## Cleanup and remaining gates
 
 Close only the isolated VS Code process, stop the observed MinIO session and

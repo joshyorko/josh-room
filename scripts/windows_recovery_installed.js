@@ -176,6 +176,7 @@ async function main() {
       publisher: "synthetic", version: "0.0.1", engines: { vscode: "^1.90.0" },
       main: "extension.js", activationEvents: ["onStartupFinished"], contributes: { commands: [
         { command: "recoveryFixture.start", title: "Recovery fixture start" },
+        { command: "recoveryFixture.focusDiff", title: "Recovery fixture focus diff" },
         { command: "recoveryFixture.verifyDiff", title: "Recovery fixture verify diff" },
       ] } }));
     await fsp.mkdir(path.join(profile, "User"), { recursive: true });
@@ -214,14 +215,9 @@ async function main() {
     await cdp.choose("Compare with current workspace");
     await until(async () => (await cdp.widget())?.rows.some(value => value.includes("code.py")), "pinned tree after compare");
     await cdp.key("Escape", "Escape", 27);
-    const editorPoint = await until(async () => cdp.evaluate(`(() => {
-      const node = document.querySelector('.monaco-diff-editor .editor.modified .view-lines');
-      if (!node) return null; const box = node.getBoundingClientRect();
-      return box.width && box.height ? {x:box.left+20,y:box.top+8}:null;
-    })()`), "native diff editor surface");
-    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", ...editorPoint, button: "left", clickCount: 1 });
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...editorPoint, button: "left", clickCount: 1 });
-    await until(async () => cdp.evaluate(`Boolean(document.activeElement?.closest('.monaco-diff-editor .editor.modified'))`), "modified native editor focus");
+    await cdp.command("Recovery fixture focus diff");
+    await until(() => fs.existsSync(path.join(base, "ui-editor-focus.json")), "native editor focus receipt");
+    if (JSON.parse(await fsp.readFile(path.join(base, "ui-editor-focus.json"))).state !== "PASS") throw new Error("Native diff focus failed");
     await cdp.send("Input.insertText", { text: "synthetic forbidden edit" });
     await cdp.command("Recovery fixture verify diff");
     await until(() => fs.existsSync(path.join(base, "ui-diff.json")), "native diff verification");
@@ -293,7 +289,7 @@ async function main() {
       await until(() => provider.exitCode !== null, "owned native credential cleanup", 30000);
       for (const name of ["provider-ready.json", "provider-failed.json", "provider-cli-failed.json",
         "provider-progress.json", "ui-driver-ready.json", "ui-command-started.json", "ui-command-finished.json",
-        "ui-command-failed.json", "ui-process-state.json", "ui-controller-summary.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
+        "ui-command-failed.json", "ui-process-state.json", "ui-controller-summary.json", "ui-editor-focus.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
         if (fs.existsSync(path.join(base, name))) {
           const value = JSON.parse(await fsp.readFile(path.join(base, name)));
           await fsp.writeFile(path.join(evidence, name), JSON.stringify(value, null, 2));
