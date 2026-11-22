@@ -28,6 +28,14 @@ exports.activate = async context => {
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.start", async () => {
     const current = ++invocation;
     write("ui-command-started.json", { invocation: current, pin: pins[0] });
+    const probe = setTimeout(() => {
+      const children = process._getActiveHandles().filter(handle => Array.isArray(handle.spawnargs)
+        && handle.spawnargs.includes("josh_room"));
+      write("ui-process-state.json", { invocation: current, native_controller_children: children.map(child => {
+        const offset = child.spawnargs.indexOf("josh_room");
+        return { pid: child.pid, command: child.spawnargs.slice(offset + 1, offset + 3) };
+      }) });
+    }, 5000);
     try {
       const result = await vscode.commands.executeCommand("joshRoom.browseRecoveryPoint", {
         id: "synthetic-room", dimension: { id: "recovery-fixture", provider: "minio" }, snapshot_id: pins[0],
@@ -40,7 +48,7 @@ exports.activate = async context => {
         categories: ["private", "authorization", "snapshot", "logical", "path", "provider", "runtime", "trust"]
           .filter(category => message.includes(category)),
         controller_exit: Number.isSafeInteger(error.controller_exit_status) ? error.controller_exit_status : null });
-    }
+    } finally { clearTimeout(probe); }
   }));
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.verifyDiff", async () => {
     try {

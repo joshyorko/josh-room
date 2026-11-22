@@ -96,7 +96,7 @@ async function main() {
   const evidence = process.env.JOSH_ROOM_WINDOWS_RECOVERY_EVIDENCE;
   if (!evidence) throw new Error("Explicit sanitized evidence directory required");
   await fsp.mkdir(evidence, { recursive: true });
-  let editor, provider, cdp;
+  let editor, provider, cdp, fixtureEnv;
   let failure = null;
   const receipt = { state: "FAIL", source_sha: process.env.GITHUB_SHA || "local",
     pr_head_sha: process.env.JOSH_ROOM_ACCEPTANCE_HEAD_SHA || "local",
@@ -153,6 +153,7 @@ async function main() {
       PYTHONPATH: path.join(installed, "runtime/controller"),
       LOCALAPPDATA: path.join(base, "local-appdata"), APPDATA: path.join(base, "appdata"),
       PATH: path.join(tools, "age/age") + path.delimiter + process.env.PATH };
+    fixtureEnv = env;
     delete env.JOSH_ROOM_RESULT_FILE;
     delete env.JOSH_ROOM_CREDENTIAL_FILE;
     const providerErrors = fs.openSync(path.join(base, "provider-errors.log"), "w");
@@ -254,6 +255,13 @@ async function main() {
             .filter(value => [...document.querySelectorAll('.monaco-dialog-box,.notification-list-item')]
               .some(node => node.innerText.toLowerCase().includes(value.toLowerCase())))
         }))()`);
+        const notification = await cdp.evaluate(`[...document.querySelectorAll('.notification-list-item')].map(node=>node.innerText).join(' ').slice(0,16000)`);
+        if (notification && fixtureEnv) {
+          const sanitized = spawnSync(python, [path.join(__dirname, "windows_recovery_provider.py"), "--sanitize-ui"], {
+            env: fixtureEnv, input: notification, encoding: "utf8", timeout: 10000, maxBuffer: 65536,
+          });
+          receipt.native_notification = sanitized.status === 0 ? JSON.parse(sanitized.stdout) : { diagnostic: "sanitizer unavailable" };
+        }
       } catch { receipt.native_widget = { diagnostic: "unavailable" }; }
     }
   }
@@ -268,7 +276,7 @@ async function main() {
       await until(() => provider.exitCode !== null, "owned native credential cleanup", 30000);
       for (const name of ["provider-ready.json", "provider-failed.json", "provider-cli-failed.json",
         "provider-progress.json", "ui-driver-ready.json", "ui-command-started.json", "ui-command-finished.json",
-        "ui-command-failed.json", "ui-controller-summary.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
+        "ui-command-failed.json", "ui-process-state.json", "ui-controller-summary.json", "ui-diff.json", "custody-cleanup.json", "preservation.json"]) {
         if (fs.existsSync(path.join(base, name))) {
           const value = JSON.parse(await fsp.readFile(path.join(base, name)));
           await fsp.writeFile(path.join(evidence, name), JSON.stringify(value, null, 2));

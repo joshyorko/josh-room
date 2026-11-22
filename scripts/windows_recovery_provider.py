@@ -43,6 +43,20 @@ def public_cli_failure(body, *, forbidden=()):
     return result
 
 
+def sanitize_ui_stdin():
+    """Redact owned native-vault values before UI diagnostics can reach a file."""
+    base = Path(os.environ["JOSH_ROOM_ACCEPTANCE_ROOT"]).resolve(strict=True)
+    targets = json.loads((base / "owned-vault-targets.json").read_text())
+    if len(targets) != 4 or not all(
+        isinstance(profile, str) and profile.startswith(("recovery-fixture-", "encryption-", "room-store-"))
+        for profile, _field in targets
+    ):
+        raise RuntimeError("owned fixture target ledger invalid")
+    forbidden = tuple(keyring.secure_lookup(profile, field) for profile, field in targets)
+    message = sys.stdin.buffer.read(16384).decode("utf-8", errors="replace")
+    print(json.dumps(public_cli_failure({"error": message}, forbidden=forbidden)))
+
+
 def main():
     if sys.platform != "win32":
         raise RuntimeError("native Windows is required")
@@ -219,9 +233,14 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        if sys.argv[1:] == ["--sanitize-ui"]:
+            sanitize_ui_stdin()
+        else:
+            main()
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         # Never retain raw exception/provider text; even synthetic keys stay private.
+        if sys.argv[1:] == ["--sanitize-ui"]:
+            raise SystemExit(1) from None
         base = Path(os.environ["JOSH_ROOM_ACCEPTANCE_ROOT"])
         stage = json.loads((base / "provider-stage.json").read_text()) if (base / "provider-stage.json").exists() else {}
         reason = str(error) if isinstance(error, RuntimeError) and re.fullmatch(r"[A-Za-z0-9 :_-]{1,100}", str(error)) else None
