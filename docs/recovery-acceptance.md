@@ -196,7 +196,7 @@ parent ACLs and records only action/exit-status metadata. It refuses missing
 handoffs. This preserves provider, keyset, ciphertext and recipient binding in
 the real CLI, and makes fresh-vault fallback insufficient for UI acceptance.
 
-The intended acceptance covers the pinned tree, current comparison in an
+The acceptance covers the pinned tree, current comparison in an
 actual native readonly diff tab, exact tab/Unicode text preservation, rejected
 native editor typing, one-file extraction to an absent destination and picker
 cancellation. Separate actual CLI overwrite denial verifies existing target
@@ -224,16 +224,30 @@ records partial qualification at source `32048dd`: installed package parity,
 real provider/native custody, three production snapshots, exact historical
 inspection, overwrite refusal, workspace/marker preservation and cleanup
 passed. The separate native ACL test job also passed. The installed UI trial
-failed at picker navigation after renderer/driver activation; Browse, native
-diff and selective recovery UI acceptance remain **unproven**. Existing Windows
-recovery tests do not substitute for that UI chain. Other providers and
-immutable runtime promotion remain separate gates.
+failed at picker navigation after renderer/driver activation. This is retained
+as historical partial evidence, not the final installed qualification.
 
 The [existing-handoff progression receipt](receipts/issue-209-windows-existing-handoff.json)
 at source `059c923` separately proves native pre-write protection, real VS Code
 SecretStorage, and registered tree/compare calls with verified existing private
-handoffs. Its UI trial stopped at the harness's editor-focus check; native
-typing rejection and selective extraction through that route remain unproven.
+handoffs. Its UI trial stopped at the harness's editor-focus check.
+
+The [completed installed Windows receipt](receipts/issue-209-windows-installed.json)
+binds the passing trial to source `d9b5c336a842e403b5efb2e771195658d7e66fd0`,
+tested merge `cd640746253a4162c1aa0890dc090c9ce542e465`, and the retained
+workflow artifact. Actual registered Browse, current comparison in a native
+readonly diff, rejected native CDP typing, one-file extraction, and cancellation
+all passed. Whitespace/Unicode digests, the exact historical pin, workspace and
+marker preservation, and owned credential cleanup passed. The six tree/diff/
+extract calls all used verified existing extension-generated private handoffs
+after real SecretStorage seeding. Package parity compared 115 installed files.
+The separate native recovery job passed 24 tests and skipped five POSIX-only
+tests; native inherited-ACL, foreign-ACE and file-reparse denials passed.
+The simple Save Dialog is driven through its settled parent-directory listing
+before submitting the absent filename, rather than racing asynchronous
+directory navigation. These results qualify the disclosed source-Python
+fallback on native Windows with synthetic real MinIO; they do not qualify an
+immutable feature RCC artifact, other providers, or integrated release behavior.
 
 ## Cleanup and remaining gates
 
@@ -245,6 +259,7 @@ shared workstations.
 
 A passing trial proves the registered native action, real provider/age/Restic
 and native keyring chain with a **source-Python runtime override**. It does not
-prove immutable RCC packaging, Windows, wire transfer counts, text-preview
-policy, syntax diff editors, or production acceptance. Those remain separate
-qualification gates; v1.0.0 stays on owner hold.
+prove immutable RCC packaging, wire transfer counts, other providers, or
+production acceptance. The Windows receipt separately proves its native
+readonly text diff and provider/custody/UI chain at the named source. Integrated
+runtime qualification remains separate; v1.0.0 stays on owner hold.
