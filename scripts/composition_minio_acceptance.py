@@ -18,6 +18,19 @@ from josh_room.config import save_private_config
 
 
 def main():
+    # A qualification fixture must never inherit a real provider/identity handoff.
+    for name in (
+        "JOSH_ROOM_IDENTITY",
+        "JOSH_ROOM_ENCRYPTION_MATERIAL",
+        "JOSH_ROOM_PROVIDER_CREDENTIALS",
+        "JOSH_ROOM_SELECTED_RECIPIENTS",
+        "JOSH_ROOM_RECIPIENTS",
+        "JOSH_ROOM_DEVICE_PROFILE",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+    ):
+        os.environ.pop(name, None)
     parser = argparse.ArgumentParser(description=__doc__)
 
     parser.add_argument("--scratch", type=Path, required=True)

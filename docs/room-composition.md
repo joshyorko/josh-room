@@ -118,7 +118,9 @@ idempotent. Never remove a source guard or delete snapshots to force a retry.
 Real Restic/age tests with synthetic SQLite S3 transport establish encrypted
 capture and restore logic, not a real cloud-provider or installed-extension
 qualification. Report loopback MinIO, Windows, installed VSIX and remote R2/S3
-evidence separately. v1.0.0 remains on OWNER HOLD.
+evidence separately. v1.0.0 remains on OWNER HOLD. See the
+[synthetic Linux acceptance receipt](receipts/issue-198/README.md)
+for installed VSIX/source-runtime evidence and the separate unproven gates.
 
 ## Read-only safety evidence
 

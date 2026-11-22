@@ -87,6 +87,8 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
     assert commands == {
         "joshRoom.checkWorkspace",
         "joshRoom.splitWorkspace",
+        "joshRoom.saveCatalog",
+        "joshRoom.enterChild",
         "joshRoom.addStorage",
         "joshRoom.connectCloudflare",
         "joshRoom.reconnectCloudflare",

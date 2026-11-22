@@ -322,6 +322,8 @@ def _content_digest(root):
 
 
 def _capture(root, store, private, slot, dimension, domain, *, claim, parent=None):
+    from .room_store_bridge import _room_version, _source_platform
+    producer_version, producer_platform = _room_version(), _source_platform()
     policy = load_capture_policy(root)
     before = scan_workspace_for_status(root)
     tag = ("composition:" + slot["logical_jat_id"],)
@@ -383,10 +385,10 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
         },
         "source": {},
         "producer": {
-            "josh_room_version": "0.1.0",
+            "josh_room_version": producer_version,
             "restic_version": "0.19.1",
-            "source_platform": "linux-x64",
-            "restore_platforms": ["linux-x64"],
+            "source_platform": producer_platform,
+            "restore_platforms": [producer_platform],
         },
     }
     if parent:

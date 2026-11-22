@@ -9,6 +9,7 @@ import io
 import os
 import shutil
 import sqlite3
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +28,7 @@ from josh_room.restic_store import ResticStore
 
 NAMESPACE = "1" * 32
 DOMAIN = "00000000-0000-4000-8000-000000000001"
+pytestmark = pytest.mark.integration
 
 
 class SQLiteS3:
@@ -72,6 +74,10 @@ class SQLiteS3:
 def runtime(tmp_path):
     if not all(shutil.which(tool) for tool in ("restic", "age", "age-keygen")):
         pytest.skip("requires actual local Restic and age")
+    executable = os.environ.get('JOSH_ROOM_TEST_RESTIC', shutil.which('restic'))
+    version = subprocess.run([executable, 'version'], capture_output=True, text=True, check=False)
+    if version.returncode or version.stdout.split()[:2] != ['restic', '0.19.1']:
+        pytest.skip('requires the repository-pinned Restic 0.19.1; set JOSH_ROOM_TEST_RESTIC')
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
     identity = generate_identity(private / "operational.age")
@@ -151,10 +157,19 @@ def save(runtime):
     )
 
 
-def test_actual_child_parent_save_and_whole_child_hydration(runtime):
+def test_actual_child_parent_save_and_whole_child_hydration(runtime, monkeypatch):
     r = runtime
+    monkeypatch.setenv("JOSH_ROOM_EXTENSION_VERSION", "0.1.52")
     result = save(r)
     assert result["status"] == "saved" and result["child_count"] == 2
+    envelope, _ = r.authority.read()
+    record = envelope["state"]["dimension_catalog"]["projects"]["parent"]["snapshots"][
+        result["parent_snapshot_id"]
+    ]
+    assert (
+        r.authority.descriptor(record).to_dict()["producer"]["josh_room_version"]
+        == "0.1.52"
+    )
     assert (r.source / "a/file.txt").read_text() == "child a original\n"
     assert not (r.source / MANIFEST).exists()
     target = r.tmp / "entered-parent"
