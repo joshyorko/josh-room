@@ -949,7 +949,10 @@ def _selected_encryption_environment(args, instance: Path):
     backend = _backend_for_args(args, instance)
     handoff = os.environ.get("JOSH_ROOM_ENCRYPTION_MATERIAL")
     if handoff:
-        material = resolve_encryption_material(selected, backend, identity_path=Path(handoff), allow_initialize=False)
+        material = resolve_encryption_material(
+            selected, backend, identity_path=Path(handoff),
+            require_existing_identity=True, allow_initialize=False,
+        )
         with _encryption_material_environment(material):
             yield material
         return
