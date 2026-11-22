@@ -83,8 +83,59 @@ def test_room_status_is_offline_content_free_and_root_free(authorized, monkeypat
     assert str(authorized.root) not in encoded and str(authorized.workspace) not in encoded
     assert "private synthetic body" not in encoded
     assert profile["admission"] == "revalidation-required"
+    assert profile["room_reference_allowed"] is False
     assert all(not value["selectable"] for value in result["capabilities"]["providers"].values())
     assert before == sorted(path.relative_to(authorized.root).as_posix() for path in authorized.root.rglob("*"))
+
+
+@pytest.mark.parametrize("scope,flag,expected", [("personal", True, True), ("oss", True, True), ("homelab", True, True), ("personal", False, False), ("work", True, False)])
+def test_room_status_reports_only_explicit_supported_reference_opt_in(authorized, monkeypatch, scope, flag, expected):
+    authorized.policy["format"] = admission.FORMAT_V3
+    authorized.grant.update(scope=scope, profile=scope, allow_room_reference=flag)
+    authorized.binding["profile"] = scope
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    write(authorized.root / native.POLICY, {"format": native.FORMAT, "binding": authorized.binding, "recipients": authorized.grant["recipients"]})
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("status opt-in metadata must remain offline")
+
+    monkeypatch.setattr(native, "_admit", forbidden)
+    profile = status(authorized)["profiles"][0]
+    assert profile["room_reference_allowed"] is expected
+    assert profile["tools"] == ["claude", "codex"]
+    assert profile["state"] == "configured"
+    assert str(authorized.root) not in json.dumps(profile)
+    assert "allow_room_reference" not in profile
+
+
+def test_profile_selector_is_invalidated_when_room_opt_in_is_revoked(authorized):
+    authorized.policy["format"] = admission.FORMAT_V3
+    authorized.grant["allow_room_reference"] = True
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    reference = status(authorized)["profiles"][0]["profile_ref"]
+    options = {"dimension": "synthetic", "room": "demo", "workspace": authorized.workspace, "profile_ref": reference, "tool": "claude"}
+    assert discovery.resolve_profile(**options)["profile_root"] == str(authorized.root)
+    authorized.grant["allow_room_reference"] = False
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    with pytest.raises(native.NativeAgentError, match="selector-stale-or-unavailable"):
+        discovery.resolve_profile(**options)
+    updated = status(authorized)["profiles"][0]
+    assert updated["profile_ref"] != reference and updated["room_reference_allowed"] is False
+
+
+def test_v3_local_discovery_still_returns_only_metadata_when_reference_opt_in_is_false(authorized):
+    authorized.policy["format"] = admission.FORMAT_V3
+    authorized.grant["allow_room_reference"] = False
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    assert discover(authorized)["sessions"][0]["provider_session_id"] == SESSION
+
+
+@pytest.mark.parametrize("flag", [0, 1, "true", None])
+def test_room_status_refuses_malformed_reference_opt_in(authorized, flag):
+    authorized.policy["format"] = admission.FORMAT_V3
+    authorized.grant["allow_room_reference"] = flag
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    assert status(authorized)["profiles"] == []
 
 
 def test_missing_or_other_room_grant_is_unavailable_without_mutation(authorized):

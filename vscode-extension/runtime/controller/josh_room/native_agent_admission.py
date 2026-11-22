@@ -1,4 +1,4 @@
-"""Host-owned admission for local native session references, separate from PCC."""
+"""Host-owned admission for explicitly scoped native references, separate from PCC."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from .private_paths import verify_private_path
 
 FORMAT = "josh-room.native-agent-admission.v1"
 FORMAT_V2 = "josh-room.native-agent-admission.v2"
+FORMAT_V3 = "josh-room.native-agent-admission.v3"
 POLICY_FILE = "native-agent-admission.json"
 MAX_POLICY_BYTES = 64 * 1024
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -33,6 +34,7 @@ _FIELDS = {
     "dimension", "room", "profile", "workspace", "profile_root", "repository", "scope",
     "local_reference_root", "encryption_domain_id", "key_generation", "recipients",
 }
+_ROOM_OPERATIONS = frozenset({"room-capture", "room-verify", "room-materialize", "room-copy", "room-export", "room-remove"})
 
 
 class AdmissionError(ValueError):
@@ -99,13 +101,17 @@ def _repository(raw):
 
 
 def _grant(raw, version):
-    expected = _FIELDS | ({"tools"} if version == FORMAT_V2 else set())
+    if version not in {FORMAT, FORMAT_V2, FORMAT_V3}:
+        _fail("native-admission-invalid-policy")
+    expected = _FIELDS | ({"tools"} if version != FORMAT else set()) | ({"allow_room_reference"} if version == FORMAT_V3 else set())
     if not isinstance(raw, dict) or set(raw) != expected:
         _fail("native-admission-invalid-policy")
-    if version == FORMAT_V2:
+    if version != FORMAT:
         tools = raw["tools"]
         if not isinstance(tools, list) or not tools or any(not isinstance(value, str) or value not in {"codex", "claude"} for value in tools) or len(set(tools)) != len(tools):
             _fail("native-admission-invalid-tools")
+    if version == FORMAT_V3 and type(raw["allow_room_reference"]) is not bool:
+        _fail("native-admission-invalid-policy")
     for name in ("dimension", "room", "profile"):
         if not isinstance(raw[name], str) or not _LABEL.fullmatch(raw[name]):
             _fail("native-admission-invalid-policy")
@@ -128,6 +134,10 @@ def _grant(raw, version):
     validate_encryption_domain_id(raw["encryption_domain_id"])
     _recipients(raw["recipients"])
     return raw
+
+
+def room_reference_allowed(grant, version):
+    return version == FORMAT_V3 and grant["allow_room_reference"] is True and grant["scope"] in {"personal", "oss", "homelab"}
 
 
 def _git_output(workspace, *arguments):
@@ -211,6 +221,12 @@ def _current_keyset(dimension):
     return keyset
 
 
+def authority_digest(version, tool, grant, physical_binding, key_generation):
+    authority = {"format": version, "tool": tool, "grant": grant,
+                 "physical_binding": physical_binding, "key_generation": key_generation}
+    return hashlib.sha256(json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def require_admission(binding, recipients, *, profile_root, operation, destination=None, config_home=None, tool="codex"):
     """Revalidate a host grant and enrolled keyset before reading native content.
 
@@ -221,7 +237,7 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
     try:
         if tool not in {"codex", "claude"}:
             _fail("native-admission-tool-unqualified")
-        if operation not in {"configure", "launch", "capture", "verify", "restore", "materialize-session", "discover", "import-history"}:
+        if operation not in {"configure", "launch", "capture", "verify", "restore", "materialize-session", "discover", "import-history"} | _ROOM_OPERATIONS:
             _fail("native-admission-operation-denied")
         if not isinstance(binding, dict) or set(binding) != {"dimension", "room", "profile", "workspace"}:
             _fail("native-admission-binding-mismatch")
@@ -231,7 +247,7 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
             _fail("native-admission-unsafe-policy")
         verify_private_path(directory, directory=True)
         policy = _read_private_json(directory / POLICY_FILE)
-        if not isinstance(policy, dict) or set(policy) != {"format", "grants"} or policy["format"] not in {FORMAT, FORMAT_V2} or not isinstance(policy["grants"], list) or not 1 <= len(policy["grants"]) <= 64:
+        if not isinstance(policy, dict) or set(policy) != {"format", "grants"} or policy["format"] not in {FORMAT, FORMAT_V2, FORMAT_V3} or not isinstance(policy["grants"], list) or not 1 <= len(policy["grants"]) <= 64:
             _fail("native-admission-invalid-policy")
         grants = [_grant(raw, policy["format"]) for raw in policy["grants"]]
         identities = [(grant["dimension"], grant["room"], grant["profile"], grant["workspace"]) for grant in grants]
@@ -241,9 +257,14 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
         if len(matches) != 1:
             _fail("native-admission-not-authorized")
         grant = matches[0]
-        tools = grant["tools"] if policy["format"] == FORMAT_V2 else ["codex"]
+        tools = ["codex"] if policy["format"] == FORMAT else grant["tools"]
         if tool not in tools:
             _fail("native-admission-tool-not-authorized")
+        if operation in _ROOM_OPERATIONS:
+            if policy["format"] != FORMAT_V3 or not grant["allow_room_reference"]:
+                _fail("native-admission-room-reference-not-authorized")
+            if not room_reference_allowed(grant, policy["format"]):
+                _fail("native-admission-work-reference-unqualified")
         source = _canonical(profile_root, exists=False)
         if str(source) != grant["profile_root"]:
             _fail("native-admission-profile-root-mismatch")
@@ -254,11 +275,11 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
         if _observed_repository(workspace) != _repository(grant["repository"]):
             _fail("native-admission-repository-mismatch")
         selected = DimensionRegistry(_read_private_json(directory / "config.json")).select(binding["dimension"])
-        if selected.auth_state == "disconnected" or selected.encryption_domain_id != grant["encryption_domain_id"]:
+        if selected.auth_state == "disconnected" or selected.encryption_domain_id not in {None, grant["encryption_domain_id"]}:
             _fail("native-admission-dimension-mismatch")
         if _recipients(recipients) != _recipients(grant["recipients"]):
             _fail("native-admission-recipient-mismatch")
-        if operation in {"capture", "verify", "restore", "materialize-session"}:
+        if operation in {"capture", "verify", "restore", "materialize-session", "room-materialize"}:
             if destination is None:
                 _fail("native-admission-reference-required")
             reference = _canonical(destination, exists=False)
@@ -270,9 +291,8 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
             _fail("native-admission-keyset-mismatch")
         if _recipients([keyset.operational_recipient, *keyset.recovery_recipients]) != _recipients(grant["recipients"]):
             _fail("native-admission-recipient-mismatch")
-        authority = {"format": policy["format"], "tool": tool, "grant": grant, "physical_binding": keyset.binding, "key_generation": keyset.key_generation}
-        digest = hashlib.sha256(json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        return {"admitted": True, "tool": tool, "scope": grant["scope"], "destination": "local-only", "key_generation": keyset.key_generation, "authority_sha256": digest, "native_resume_verified": False}
+        digest = authority_digest(policy["format"], tool, grant, keyset.binding, keyset.key_generation)
+        return {"admitted": True, "tool": tool, "scope": grant["scope"], "destination": "room-reference" if operation in _ROOM_OPERATIONS else "local-only", "key_generation": keyset.key_generation, "authority_sha256": digest, "native_resume_verified": False}
     except AdmissionError:
         raise
     except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.SubprocessError, BotoCoreError, ClientError):

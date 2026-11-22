@@ -46,6 +46,9 @@
     "onCommand:joshRoom.serve",
     "onCommand:joshRoom.inspectLogicalSnapshot",
     "onCommand:joshRoom.agentSessionsStatus",
+    "onCommand:joshRoom.agentRecoveryStatus",
+    "onCommand:joshRoom.captureAgentRecovery",
+    "onCommand:joshRoom.restoreAgentRecovery",
     "onCommand:joshRoom.exportPortableJat",
     "onCommand:joshRoom.extractLogicalSnapshot",
     "onCommand:joshRoom.verifyRoomStore",
@@ -206,6 +209,21 @@
         "command": "joshRoom.agentSessionsStatus",
         "title": "Josh: Agent Sessions…",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "joshRoom.agentRecoveryStatus",
+        "title": "Josh: Agent Recovery Status",
+        "icon": "$(search)"
+      },
+      {
+        "command": "joshRoom.captureAgentRecovery",
+        "title": "Josh: Capture Agent History Reference",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "joshRoom.restoreAgentRecovery",
+        "title": "Josh: Restore Native Agent History",
+        "icon": "$(history)"
       },
       {
         "command": "joshRoom.exportPortableJat",
@@ -480,6 +498,21 @@
           "command": "joshRoom.inspectLogicalSnapshot",
           "when": "view == joshRoom.rooms && viewItem == logical-jat",
           "group": "logical@1"
+        },
+        {
+          "command": "joshRoom.agentRecoveryStatus",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "agent-history@1"
+        },
+        {
+          "command": "joshRoom.captureAgentRecovery",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "agent-history@2"
+        },
+        {
+          "command": "joshRoom.restoreAgentRecovery",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "agent-history@3"
         },
         {
           "command": "joshRoom.exportPortableJat",

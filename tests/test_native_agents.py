@@ -382,6 +382,125 @@ def test_single_session_materialization_refuses_used_profile(profile, identities
     assert list((cold / "codex").iterdir()) == []
 
 
+def _bound_reference_fixture(profile, identities, tmp_path):
+    root, binding = profile
+    original = rollout(root, binding)
+    source = tmp_path / "bound-history.age"
+    agents.capture(root, output=source, recipients=identities[1], **binding)
+    destination_binding = {**binding, "dimension": "copied-dimension", "room": "copied-room", "profile": "copied-profile"}
+    destination = tmp_path / "bound-profile"
+    agents.configure(destination, recipients=identities[1], **destination_binding)
+    options = {"source": source, "identity_paths": identities[0][:1], "archive_binding": binding,
+               "session_id": "019aaa00-0000-7000-8000-000000000001", **destination_binding}
+    return root, original, destination, options
+
+
+def test_bound_materialization_preserves_native_identity_under_destination_authority(profile, identities, tmp_path, monkeypatch):
+    root, original, destination, options = _bound_reference_fixture(profile, identities, tmp_path)
+    expected = original.read_bytes()
+    admissions = []
+
+    def admitted(binding, recipients, **kwargs):
+        admissions.append((binding, recipients, kwargs))
+        return {"admitted": True, "authority_sha256": "synthetic-destination-authority"}
+
+    monkeypatch.setattr(agents, "_admit", admitted)
+    result = agents._materialize_bound_session(destination, **options)
+    restored = destination / original.relative_to(root)
+    assert restored.read_bytes() == expected
+    assert result["state"] == "history-materialized" and result["native_resume_verified"] is False
+    assert len(admissions) >= 2
+    for binding, recipients, operation in admissions:
+        assert binding["dimension"] == "copied-dimension" and binding["room"] == "copied-room"
+        assert binding["profile"] == "copied-profile" and binding["workspace"] == str(options["workspace"])
+        assert recipients == sorted(identities[1])
+        assert operation == {"root": destination, "operation": "room-materialize", "destination": options["source"], "tool": "codex"}
+    assert agents._materialize_bound_session(destination, **options)["recovered_commit"] is True
+    restored.write_bytes(b"existing different native state")
+    with pytest.raises(agents.NativeAgentError, match="target-mismatch"):
+        agents._materialize_bound_session(destination, **options)
+    assert restored.read_bytes() == b"existing different native state"
+
+
+def test_bound_materialization_accepts_separately_rewrapped_destination_recipients(profile, identities, tmp_path):
+    root, original, destination, options = _bound_reference_fixture(profile, identities, tmp_path)
+    expected = original.read_bytes()
+    document = json.loads(agents._decrypt_to_memory(options["source"], identities[0][:1]))
+    keys, recipients = [], []
+    for index in range(2):
+        key = tmp_path / f"destination-{index}.agekey"
+        subprocess.run(["age-keygen", "-o", str(key)], check=True, capture_output=True)
+        key.chmod(0o600)
+        keys.append(key)
+        recipients.append(subprocess.run(["age-keygen", "-y", str(key)], check=True, capture_output=True, text=True).stdout.strip())
+    document["recipients"] = sorted(recipients)
+    policy = json.loads((destination / agents.POLICY).read_bytes())
+    policy["recipients"] = sorted(recipients)
+    (destination / agents.POLICY).write_text(json.dumps(policy))
+    copied = tmp_path / "destination-history.age"
+    with copied.open("wb") as encrypted:
+        subprocess.run(["age", "-r", recipients[0], "-r", recipients[1]], input=json.dumps(document).encode(), stdout=encrypted, stderr=subprocess.DEVNULL, check=True)
+    copied.chmod(0o600)
+    result = agents._materialize_bound_session(destination, **{**options, "source": copied, "identity_paths": keys[:1]})
+    assert result["native_resume_verified"] is False
+    assert (destination / original.relative_to(root)).read_bytes() == expected
+
+
+@pytest.mark.parametrize("change", ["workspace", "recipient", "stale-authority", "busy", "archive-binding"])
+def test_bound_materialization_refuses_mismatched_or_unavailable_destination(profile, identities, tmp_path, monkeypatch, change):
+    root, original, destination, options = _bound_reference_fixture(profile, identities, tmp_path)
+    expected = original.read_bytes()
+    if change == "workspace":
+        other = tmp_path / "other-workspace"
+        other.mkdir(mode=0o700)
+        options["archive_binding"] = {**options["archive_binding"], "workspace": other}
+        reason = "path-mismatch"
+    elif change == "recipient":
+        policy = json.loads((destination / agents.POLICY).read_bytes())
+        policy["recipients"] = ["age1" + "a" * 58, "age1" + "b" * 58]
+        (destination / agents.POLICY).write_text(json.dumps(policy))
+        reason = "recipient-mismatch"
+    elif change == "archive-binding":
+        options["archive_binding"] = {**options["archive_binding"], "room": "unverified-room"}
+        reason = "invalid-recovery-manifest"
+    elif change == "stale-authority":
+        calls = []
+
+        def changed(*args, **kwargs):
+            calls.append(kwargs)
+            return {"authority_sha256": str(len(calls))}
+
+        monkeypatch.setattr(agents, "_admit", changed)
+        reason = "admission-denied"
+    else:
+        with agents._lock(destination), pytest.raises(agents.NativeAgentError, match="profile-busy"):
+            agents._materialize_bound_session(destination, **options)
+        assert not list((destination / "codex").iterdir())
+        return
+    with pytest.raises(agents.NativeAgentError, match=reason):
+        agents._materialize_bound_session(destination, **options)
+    assert not (destination / original.relative_to(root)).exists()
+    assert original.read_bytes() == expected
+
+
+def test_decryption_memory_helper_enforces_limit_without_plaintext_staging(profile, identities, tmp_path):
+    root, binding = profile
+    original = rollout(root, binding)
+    reference = tmp_path / "memory-only.age"
+    agents.capture(root, output=reference, recipients=identities[1], **binding)
+    before = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
+    data = agents._decrypt_to_memory(reference, identities[0][:1])
+    assert json.loads(data)["binding"]["room"] == binding["room"]
+    assert agents._decrypt_to_memory(reference, identities[0][:1], maximum=len(data)) == data
+    with pytest.raises(agents.NativeAgentError, match="native-history-limit"):
+        agents._decrypt_to_memory(reference, identities[0][:1], maximum=len(data) - 1)
+    for invalid in (0, -1, True, agents.MAX_BYTES * 2 + 1):
+        with pytest.raises(agents.NativeAgentError, match="native-decryption-limit-invalid"):
+            agents._decrypt_to_memory(reference, identities[0][:1], maximum=invalid)
+    assert before == {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
+    assert original.read_bytes()
+
+
 @pytest.mark.parametrize("phase", ["before", "after"])
 def test_killed_native_session_materialization_recovers_absent_or_complete(profile, identities, tmp_path, phase):
     import select

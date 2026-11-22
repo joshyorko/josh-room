@@ -114,6 +114,12 @@ def capabilities():
         },
         "storage": "explicit-local-encrypted-reference",
         "automatic_room_restore": False,
+        "room_reference": {
+            "contract_version": 1, "format": "josh-room.agent-references.v1", "mode": "history-only",
+            "storage": "dimension-encrypted-sidecar", "opt_in": "host-grant-v3",
+            "providers": ["codex", "claude"], "selectable": False, "save_integration": False,
+            "native_resume_verified": False,
+        },
         "experimental": True,
         "admission_requirement": "host-grant-and-current-keyset-required",
         "capture_consistency": "linux-kernel-read-leases-and-inventory-fences",
@@ -520,8 +526,9 @@ def capture(root, *, output, recipients, tool="codex", **binding):
     return {"ok": True, "state": "history-available", "files": len(entries), "native_resume_verified": False}
 
 
-def _decode(source, identity_paths, binding, tool="codex"):
-    tool = _tool(tool)
+def _decrypt_to_memory(source, identity_paths, maximum=MAX_BYTES * 2):
+    if type(maximum) is not int or not 1 <= maximum <= MAX_BYTES * 2:
+        _fail("native-decryption-limit-invalid")
     source = _canonical(source)
     verify_private_path(source.parent, directory=True)
     source_info = _file(source, MAX_BYTES * 2)
@@ -560,7 +567,7 @@ def _decode(source, identity_paths, binding, tool="codex"):
                     if not chunk:
                         break
                     size += len(chunk)
-                    if size > MAX_BYTES * 2:
+                    if size > maximum:
                         _fail("native-history-limit")
                     chunks.append(chunk)
             data = b"".join(chunks)
@@ -569,6 +576,12 @@ def _decode(source, identity_paths, binding, tool="codex"):
         finally:
             if process.poll() is None:
                 terminate_owned_process(process)
+    return data
+
+
+def _decode(source, identity_paths, binding, tool="codex"):
+    tool = _tool(tool)
+    data = _decrypt_to_memory(source, identity_paths)
     try:
         document = _json(data)
         if set(document) != {"format", "binding", "recipients", "provider", "mode", "entries"} or document["format"] != _native_format(tool) or document["provider"] != tool or document["mode"] != "history-only":
@@ -630,17 +643,38 @@ def _fresh_session_target(root, relative, *, allow_materialized=False, tool="cod
 
 
 def materialize_session(root, *, source, identity_paths, session_id, tool="codex", **binding):
+    return _materialize_session(
+        root, source=source, identity_paths=identity_paths, session_id=session_id,
+        tool=tool, archive_binding=None, operation="materialize-session", **binding,
+    )
+
+
+def _materialize_bound_session(root, *, source, identity_paths, archive_binding, session_id, tool="codex", **binding):
+    if not isinstance(archive_binding, dict) or set(archive_binding) != {"dimension", "room", "profile", "workspace"}:
+        _fail("profile-binding-mismatch")
+    archive_binding = _binding(**archive_binding)
+    return _materialize_session(
+        root, source=source, identity_paths=identity_paths, session_id=session_id,
+        tool=tool, archive_binding=archive_binding, operation="room-materialize", **binding,
+    )
+
+
+def _materialize_session(root, *, source, identity_paths, archive_binding, operation, session_id, tool, **binding):
     from .native_agent_materialization import MaterializationError, anonymous_file
 
     tool = _tool(tool)
     binding = _binding(**binding)
+    if archive_binding is None:
+        archive_binding = binding
+    if archive_binding["workspace"] != binding["workspace"]:
+        _fail("path-mismatch")
     root = _load(root, binding)
     recipients = _json(_read(root / POLICY, 4096))["recipients"]
-    admission = _admit(binding, recipients, root=root, operation="materialize-session", destination=source, tool=tool)
+    admission = _admit(binding, recipients, root=root, operation=operation, destination=source, tool=tool)
     if not isinstance(session_id, str) or str(uuid.UUID(session_id)) != session_id:
         _fail("invalid-native-session")
     with _lock(root), sigterm_cancellation():
-        entries, recovered_recipients = _decode(source, identity_paths, binding, tool)
+        entries, recovered_recipients = _decode(source, identity_paths, archive_binding, tool)
         if recipients != recovered_recipients:
             _fail("profile-recipient-mismatch")
         selected = [(path, data) for path, data in entries.items()
@@ -652,7 +686,7 @@ def materialize_session(root, *, source, identity_paths, session_id, tool="codex
         _fresh_session_target(root, relative, allow_materialized=True, tool=tool)
 
         def revalidate(*, allow_materialized=False):
-            if _admit(binding, recipients, root=root, operation="materialize-session", destination=source, tool=tool) != admission:
+            if _admit(binding, recipients, root=root, operation=operation, destination=source, tool=tool) != admission:
                 _fail("native-admission-changed")
             _fresh_session_target(root, relative, allow_materialized=allow_materialized, tool=tool)
             for directory in (target.parent, *target.parent.parents):

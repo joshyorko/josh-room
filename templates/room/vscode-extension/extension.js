@@ -5148,7 +5148,20 @@ function contextSnapshot(context) {
   return snapshots.find((snapshot) => (snapshot.snapshot_id || snapshot.id) === context.snapshot_id);
 }
 
-async function selectedLogicalSnapshot(preselected, title) {
+async function selectedLogicalSnapshot(preselected, title, { selectedRowOnly = false } = {}) {
+  if (selectedRowOnly) {
+    const project = roomProject(preselected);
+    const dimension = explicitDimensionId(preselected);
+    const snapshotId = snapshotIdentity(preselected);
+    const snapshot = preselected?.snapshot || (project?.snapshots || project?.jats || [])
+      .find((entry) => (entry.snapshot_id || entry.id) === snapshotId);
+    if (!project?.id || !dimension || !snapshotId || snapshotId === "latest"
+        || snapshot?.payload_kind !== "room-store-v1") {
+      await vscode.window.showInformationMessage("Choose a specific logical JAT recovery-point row in Josh Rooms for agent recovery.");
+      return undefined;
+    }
+    return { ...project, project_id: project.id, dimension_id: dimension, snapshot_id: snapshotId };
+  }
   const context = await explicitRoomContext(preselected, title);
   if (!context) return undefined;
   if (contextSnapshot(context)?.payload_kind !== "room-store-v1") {
@@ -5300,6 +5313,130 @@ function agentSessionsSummary(result) {
     return `${label}: ${states.has(state) ? state : "unavailable"}; restore blocked`;
   });
   return [...lines, "Native continuation is unverified. Recovery is opt-in through josh-room agents. Save and Enter do not include agent state."].join("\n");
+}
+
+function agentRecoveryArgs(action, context, extra = []) {
+  const dimension = explicitDimensionId(context);
+  if (!dimension || !context?.project_id || !context.snapshot_id || context.snapshot_id === "latest") {
+    throw new Error("Choose a specific Room recovery point for agent history.");
+  }
+  return ["agents", action, "--dimension", dimension, "--room", context.project_id,
+    "--snapshot", context.snapshot_id, ...extra, "--json"];
+}
+
+function assertHistoryReferenceReceipt(result) {
+  if (result?.ok !== true || result.history_only !== true || result.native_resume_verified !== false
+      || result.original_t3_identity_restored === true) {
+    throw new Error("Agent recovery returned an unsupported history receipt.");
+  }
+}
+
+async function agentRecoveryStatus(preselected) {
+  assertWorkspaceTrusted("inspect agent recovery references");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Agent Recovery", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-status", context), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (!["reference-absent", "history-reference"].includes(result.state) || !Array.isArray(result.entries)) {
+    throw new Error("Agent recovery returned an unsupported reference status.");
+  }
+  await vscode.window.showInformationMessage([
+    `Recovery point: ${context.snapshot_id}`,
+    result.state === "reference-absent" ? "No agent history reference is attached to this recovery point."
+      : `${result.entries.length} encrypted native-history reference${result.entries.length === 1 ? "" : "s"}.`,
+    "History only. Native continuation and original T3 app-thread restoration are unverified.",
+    "Room Save and Enter do not include agent state.",
+  ].join("\n"), { modal: true });
+  return "inspected";
+}
+
+async function chooseAgentRecoveryProfile(context) {
+  const cwd = activeWorkspace();
+  const result = await runJoshRoom(["agents", "room-status", "--dimension", explicitDimensionId(context),
+    "--room", context.project_id, "--workspace", cwd, "--json"], cwd);
+  const profiles = (Array.isArray(result.profiles) ? result.profiles : []).filter((profile) =>
+    /^[0-9a-f]{64}$/.test(profile.profile_ref || "") && profile.room_reference_allowed === true
+    && ["personal", "oss", "homelab"].includes(profile.scope) && profile.state === "configured"
+    && Array.isArray(profile.tools) && profile.tools.some((tool) => ["codex", "claude"].includes(tool)));
+  if (!profiles.length) {
+    await vscode.window.showInformationMessage("No configured profile has explicit Room history-reference permission for this Room and workspace.");
+    return undefined;
+  }
+  let profile = profiles[0];
+  if (profiles.length > 1) {
+    const selected = await vscode.window.showQuickPick(profiles.map((entry) => ({
+      label: `${entry.scope} profile ${entry.profile_ref.slice(0, 8)}`,
+      description: "Encrypted history reference only", profile_ref: entry.profile_ref,
+    })), { title: "Josh: Agent Recovery", placeHolder: "Choose an explicitly authorized profile" });
+    if (!selected) return undefined;
+    profile = profiles.find((entry) => entry.profile_ref === selected.profile_ref);
+    if (!profile) throw new Error("Choose a currently authorized recovery profile.");
+  }
+  const tools = [...new Set(profile.tools.filter((tool) => ["codex", "claude"].includes(tool)))];
+  let tool = tools[0];
+  if (tools.length > 1) {
+    const selected = await vscode.window.showQuickPick(tools.map((entry) => ({
+      label: entry === "codex" ? "Codex CLI" : "Claude Code", tool: entry,
+      description: "Native history only",
+    })), { title: "Josh: Agent Recovery", placeHolder: "Choose a native history format" });
+    if (!selected) return undefined;
+    if (!tools.includes(selected.tool)) throw new Error("Choose an authorized native history format.");
+    tool = selected.tool;
+  }
+  return { profile, tool, extra: ["--workspace", cwd, "--profile-ref", profile.profile_ref, "--tool", tool] };
+}
+
+async function captureAgentRecovery(preselected) {
+  assertWorkspaceTrusted("capture an encrypted agent history reference");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Capture Agent History", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const selection = await chooseAgentRecoveryProfile(context);
+  if (!selection) return "cancelled";
+  const confirmed = await vscode.window.showInformationMessage(
+    `Capture encrypted native history for recovery point ${context.snapshot_id}? The controller requires this exact saved workspace. This does not enable native continuation or Room Save inclusion.`,
+    { modal: true }, "Capture History Reference",
+  );
+  if (confirmed !== "Capture History Reference") return "cancelled";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-capture", context, selection.extra), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (result.state !== "history-reference") throw new Error("Agent capture returned an unsupported reference state.");
+  await vscode.window.showInformationMessage("Encrypted native-history reference captured for the selected recovery point. Native continuation remains unverified.");
+  return "captured";
+}
+
+async function restoreAgentRecovery(preselected) {
+  assertWorkspaceTrusted("restore one native agent history file");
+  const context = await selectedLogicalSnapshot(preselected, "Josh: Restore Agent History", { selectedRowOnly: true });
+  if (!context) return "unavailable";
+  const selection = await chooseAgentRecoveryProfile(context);
+  if (!selection) return "cancelled";
+  const verified = await runJoshRoom(agentRecoveryArgs("recovery-verify", context, selection.extra), activeWorkspace());
+  assertHistoryReferenceReceipt(verified);
+  const sessions = (Array.isArray(verified.sessions) ? verified.sessions : []).filter((session) =>
+    session.tool === selection.tool && session.cwd_matches === true
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(session.provider_session_id || ""));
+  if (!sessions.length) {
+    await vscode.window.showInformationMessage("No verified native history matches the approved workspace and selected recovery point.");
+    return "unavailable";
+  }
+  const selected = await vscode.window.showQuickPick(sessions.map((session) => ({
+    label: `${selection.tool === "codex" ? "Codex" : "Claude"} ${session.provider_session_id}`,
+    description: "Restore one native history file", provider_session_id: session.provider_session_id,
+  })), { title: "Josh: Restore Agent History", placeHolder: "Choose a verified native session" });
+  if (!selected) return "cancelled";
+  const session = sessions.find((entry) => entry.provider_session_id === selected.provider_session_id);
+  if (!session) throw new Error("Choose a verified native session.");
+  const confirmed = await vscode.window.showWarningMessage(
+    "Restore one native history file into the approved profile. Existing files will not be overwritten. This does not resume a model or restore the original T3 app-thread identity.",
+    { modal: true }, "Restore Native History",
+  );
+  if (confirmed !== "Restore Native History") return "cancelled";
+  const result = await runJoshRoom(agentRecoveryArgs("recovery-restore", context,
+    [...selection.extra, "--session-id", session.provider_session_id]), activeWorkspace());
+  assertHistoryReferenceReceipt(result);
+  if (result.state !== "history-materialized") throw new Error("Agent restore returned an unsupported materialization state.");
+  await vscode.window.showInformationMessage("Native history file restored. No model was resumed; native continuation remains unverified.");
+  return "restored";
 }
 
 async function exportPortableJat(preselected) {
@@ -5627,6 +5764,9 @@ function activateNative(context) {
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.agentSessionsStatus", agentSessionsStatus);
+  register(context, "joshRoom.agentRecoveryStatus", agentRecoveryStatus);
+  register(context, "joshRoom.captureAgentRecovery", captureAgentRecovery);
+  register(context, "joshRoom.restoreAgentRecovery", restoreAgentRecovery);
   register(context, "joshRoom.exportPortableJat", exportPortableJat);
   register(context, "joshRoom.extractLogicalSnapshot", extractLogicalSnapshot);
   register(context, "joshRoom.verifyRoomStore", verifyRoomStore);
@@ -5877,6 +6017,9 @@ Object.assign(module.exports.__test__, {
   inspectLogicalSnapshot,
   agentSessionsStatus,
   agentSessionsSummary,
+  agentRecoveryStatus,
+  captureAgentRecovery,
+  restoreAgentRecovery,
   exportPortableJat,
   extractLogicalSnapshot,
   verifyRoomStore,

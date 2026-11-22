@@ -1,5 +1,11 @@
 # Native agent recovery checkpoint
 
+The explicit [Room-bound encrypted reference lifecycle](native-agent-references.md)
+extends this local history slice with v3 host opt-in, exact historical bindings,
+Copy/export/remove/reconcile handling and registered native status/capture/restore.
+Closed JAT/PCC schemas and Save selectors stay unchanged. V1/v2 grants remain
+local-only; remote work references and native continuation remain unqualified.
+
 This opt-in checkpoint isolates a Room-owned T3 process and preserves allowlisted
 Codex and qualified Claude session files in independently versioned age-encrypted
 local references.

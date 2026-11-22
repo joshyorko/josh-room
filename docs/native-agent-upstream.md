@@ -167,6 +167,13 @@ T3-mediated preservation.
 
 ## T3 and Claude recovery follow-up
 
+The explicit [Room-reference contract](native-agent-references.md) now retains
+the qualified native files beside exact logical recovery points without changing
+catalog/JAT/PCC schemas. Real native Secret Service/MinIO and installed-command
+acceptance are separate from upstream continuation. Copy re-encrypts native
+bytes for the destination and preserves original provenance; no provider login,
+credential store or T3 database is copied. All new-turn claims remain unverified.
+
 The [authenticated provider-history import acceptance](t3-provider-import-acceptance.md)
 now qualifies the existing T3 scan/import surface for both cold-materialized
 synthetic native formats, with original provider UUIDs and new derived T3 IDs.

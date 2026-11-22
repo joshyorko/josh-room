@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import native_agent_reference
+from .cancellation import CLICancelled
 from .catalog import corroborate_logical_snapshot
 from .jat import run_extract, run_serve
 from .logical_jat import LogicalJat
@@ -78,6 +80,7 @@ class LogicalCatalogRemoval:
     identities: frozenset[LogicalJatIdentity]
     snapshot_trees: dict[ResticSnapshotRef, str]
     object_cleanup_pending: tuple[str, ...]
+    agent_reference_receipts: tuple[dict, ...] = ()
 
 
 def _selected_logical_record(context) -> tuple[dict, LogicalJat]:
@@ -180,7 +183,11 @@ def inspect_logical_jat(record: dict, descriptor: LogicalJat) -> dict[str, Any]:
 
 def inspect_selected_room_store(context) -> dict[str, Any]:
     record, descriptor = _selected_logical_record(context)
-    return {"ok": True, **inspect_logical_jat(record, descriptor)}
+    result = {"ok": True, **inspect_logical_jat(record, descriptor)}
+    agent_recovery = native_agent_reference.inspect_reference(context)
+    if agent_recovery is not None:
+        result["agent_recovery"] = agent_recovery
+    return result
 
 
 def export_logical_jat(
@@ -191,6 +198,7 @@ def export_logical_jat(
     cancellation=None,
 ) -> dict[str, Any]:
     _record, descriptor = _selected_logical_record(context)
+    native_agent_reference.preflight_export(context, output)
     try:
         result = export_portable_jat(
             descriptor=descriptor,
@@ -202,7 +210,7 @@ def export_logical_jat(
         )
     except PortableExportError as error:
         raise RoomStoreLifecycleError(str(error), code="portable-export-failed") from None
-    return {
+    response = {
         "ok": True,
         "logical_jat_id": result.logical_jat_id,
         "status": result.status,
@@ -213,6 +221,17 @@ def export_logical_jat(
         "estimated_required_bytes": result.estimated_required_bytes,
         "available_bytes": result.available_bytes,
     }
+    try:
+        agent_recovery = native_agent_reference.export_reference(context, output)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, KeyboardInterrupt, CLICancelled):
+        raise RoomStoreLifecycleError(
+            "portable export completed but agent recovery export requires reconciliation",
+            code="agent-reference-export-uncertain",
+            result={"portable_export_committed": True, "agent_recovery_state": "uncertain", "reconciliation_required": True},
+        ) from None
+    if agent_recovery is not None:
+        response["agent_recovery"] = agent_recovery
+    return response
 
 
 @contextmanager
@@ -303,6 +322,7 @@ def copy_logical_jat_as_new(
     publish_descriptor = getattr(destination_context, "publish_descriptor", None)
     if not callable(publish_descriptor):
         raise RoomStoreLifecycleError("destination catalog writer is unavailable", code="destination-writer-unavailable")
+    native_agent_reference.preflight_copy(source_context, destination_context, destination_room_id)
     body = source_descriptor.to_dict()
     body["logical_jat_id"] = uuid.uuid4().hex
     body["room_id"] = destination_room_id
@@ -353,7 +373,28 @@ def copy_logical_jat_as_new(
             },
         )
         raise failure from error
-    return {
+    try:
+        agent_recovery = native_agent_reference.copy_reference(
+            source_context, destination_context, destination_room_id, body["logical_jat_id"],
+        )
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, KeyboardInterrupt, CLICancelled):
+        _write_copy_receipt(
+            destination_context.instance,
+            operation_id,
+            {"operation": "same-dimension-copy", "operation_id": operation_id,
+             "status": "reconciliation-required", "publication_state": "committed",
+             "source_room_id": source_context.project_id,
+             "source_logical_jat_id": source_descriptor.to_dict()["logical_jat_id"],
+             "destination_room_id": destination_room_id, "logical_jat_id": body["logical_jat_id"],
+             "agent_recovery_state": "uncertain", "reconciliation_required": True},
+        )
+        raise RoomStoreLifecycleError(
+            "Copy published the workspace but agent recovery requires reconciliation",
+            code="agent-reference-copy-uncertain",
+            result={"publication_state": "committed", "agent_recovery_state": "uncertain",
+                    "reconciliation_required": True, "receipt_id": operation_id},
+        ) from None
+    result = {
         "ok": True,
         "status": "published",
         "source_room_id": source_context.project_id,
@@ -363,6 +404,10 @@ def copy_logical_jat_as_new(
         "workspace_snapshot_id": descriptor.to_dict()["workspace"]["snapshot_id"],
         "data_uploaded": 0,
     }
+    if agent_recovery is not None:
+        result["agent_recovery"] = agent_recovery
+        result["data_uploaded"] += agent_recovery["data_uploaded"]
+    return result
 
 
 def _copy_component_files(name: str, materialized) -> tuple[tuple[Path, str], ...]:
@@ -579,6 +624,7 @@ def copy_logical_jat_to_dimension(
     publish_descriptor = getattr(destination_context, "publish_descriptor", None)
     if not callable(publish_descriptor):
         raise RoomStoreLifecycleError("destination catalog writer is unavailable", code="destination-writer-unavailable")
+    native_agent_reference.preflight_copy(source_context, destination_context, destination_room_id)
 
     source_body = source_descriptor.to_dict()
     destination_parent = getattr(destination_context, "selected_descriptor", None)
@@ -751,7 +797,18 @@ def copy_logical_jat_to_dimension(
                         },
                     ) from error
                 publication_state = "committed"
-                return {
+                try:
+                    agent_recovery = native_agent_reference.copy_reference(
+                        source_context, destination_context, destination_room_id, descriptor_body["logical_jat_id"],
+                    )
+                except (OSError, RuntimeError, ValueError, TypeError, KeyError, KeyboardInterrupt, CLICancelled):
+                    raise RoomStoreLifecycleError(
+                        "Copy published the workspace but agent recovery requires reconciliation",
+                        code="agent-reference-copy-uncertain",
+                        result={"publication_state": "committed", "agent_recovery_state": "uncertain",
+                                "reconciliation_required": True},
+                    ) from None
+                result = {
                     "ok": True,
                     "status": "published",
                     "source_room_id": source_context.project_id,
@@ -767,6 +824,10 @@ def copy_logical_jat_to_dimension(
                     },
                     "data_uploaded": workspace_summary.data_added + component_data_added,
                 }
+                if agent_recovery is not None:
+                    result["agent_recovery"] = agent_recovery
+                    result["data_uploaded"] += agent_recovery["data_uploaded"]
+                return result
     except RoomStoreLifecycleError as error:
         receipt_id = _cross_copy_failure_receipt(
             destination_context,
@@ -814,7 +875,7 @@ def reconcile_room_store(context, descriptors=None) -> dict[str, Any]:
         context.store.snapshots(),
     )
     to_snapshot_ids = lambda refs: sorted(reference.snapshot_id for reference in refs)
-    return {
+    result = {
         "ok": True,
         "dimension_id": index.dimension_id,
         "catalog_revision": index.catalog_revision,
@@ -828,6 +889,10 @@ def reconcile_room_store(context, descriptors=None) -> dict[str, Any]:
         "legacy_objects": sorted(report.legacy_objects),
         "destructive_cleanup_performed": False,
     }
+    agent_recovery = native_agent_reference.reconcile_references(context, descriptors=descriptors)
+    if agent_recovery is not None:
+        result["agent_recovery"] = agent_recovery
+    return result
 
 
 def verify_room_store(
@@ -933,6 +998,11 @@ def remove_logical_catalog_records(
                 )
                 removable_objects.update(removable)
 
+    agent_reference_receipts = tuple(native_agent_reference.close_for_records(context, selected, descriptors))
+    agent_receipt_fields = (
+        {"agent_reference_receipts": list(agent_reference_receipts)}
+        if agent_reference_receipts else {}
+    )
     recipients = [
         context.material.recipient,
         *context.material.keyset.recovery_recipients,
@@ -944,6 +1014,7 @@ def remove_logical_catalog_records(
     except Exception as error:  # noqa: BLE001 - provider publication errors carry commit certainty metadata.
         published = getattr(error, "published", None)
         state = "rejected" if published is False else "uncertain"
+        reconciliation_required = published is not False or bool(agent_reference_receipts)
         _write_copy_receipt(
             context.instance,
             operation_id,
@@ -955,7 +1026,8 @@ def remove_logical_catalog_records(
                 "room_ids": sorted({identity.room_id for identity in selected}),
                 "catalog_revision": index.catalog_revision,
                 "restic_snapshot_ids": sorted(reference.snapshot_id for reference in unreachable),
-                "reconciliation_required": published is not False,
+                "reconciliation_required": reconciliation_required,
+                **agent_receipt_fields,
             },
         )
         raise RoomStoreLifecycleError(
@@ -963,8 +1035,9 @@ def remove_logical_catalog_records(
             code="catalog-removal-uncertain",
             result={
                 "publication_state": state,
-                "reconciliation_required": published is not False,
+                "reconciliation_required": reconciliation_required,
                 "receipt_id": operation_id,
+                **({"agent_recovery_state": "captures-closed"} if agent_reference_receipts else {}),
             },
         ) from None
 
@@ -990,6 +1063,7 @@ def remove_logical_catalog_records(
                 ),
                 "descriptor_object_keys_pending": object_cleanup_pending,
                 "reconciliation_required": True,
+                **agent_receipt_fields,
             },
         )
     return LogicalCatalogRemoval(
@@ -1001,6 +1075,7 @@ def remove_logical_catalog_records(
         identities=selected,
         snapshot_trees=snapshot_trees,
         object_cleanup_pending=tuple(object_cleanup_pending),
+        agent_reference_receipts=agent_reference_receipts,
     )
 
 
@@ -1023,6 +1098,10 @@ def complete_logical_catalog_removal(
             "fresh Room Store context does not match the delete receipt",
             code="delete-context-mismatch",
         )
+    agent_receipt_fields = (
+        {"agent_reference_receipts": list(pending.agent_reference_receipts)}
+        if pending.agent_reference_receipts else {}
+    )
     if pending.object_cleanup_pending:
         _write_copy_receipt(
             fresh_context.instance,
@@ -1038,6 +1117,7 @@ def complete_logical_catalog_removal(
                 ),
                 "descriptor_object_keys_pending": list(pending.object_cleanup_pending),
                 "reconciliation_required": True,
+                **agent_receipt_fields,
             },
         )
         return {
@@ -1082,6 +1162,7 @@ def complete_logical_catalog_removal(
                 ),
                 "reconciliation_required": True,
                 "error_type": type(error).__name__,
+                **agent_receipt_fields,
             },
         )
         return {
@@ -1091,6 +1172,29 @@ def complete_logical_catalog_removal(
             "receipt_id": pending.operation_id,
             "reconciliation_required": True,
         }
+    agent_recovery = None
+    if pending.agent_reference_receipts:
+        try:
+            agent_recovery = native_agent_reference.complete_removed_references(
+                fresh_context, pending.agent_reference_receipts, descriptors=descriptors,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, KeyboardInterrupt, CLICancelled):
+            agent_recovery = {"state": "cleanup-pending", "reconciliation_required": True}
+        if agent_recovery is not None:
+            agent_receipt_fields["agent_recovery"] = agent_recovery
+        if agent_recovery is not None and agent_recovery.get("reconciliation_required") is True:
+            _write_copy_receipt(
+                fresh_context.instance,
+                pending.operation_id,
+                {"operation": "remove-logical-catalog-records", "operation_id": pending.operation_id,
+                 "status": "agent-cleanup-pending", "publication_state": "committed",
+                 "catalog_revision": fresh_context.catalog.body["revision"],
+                 "restic_snapshot_ids_to_recheck": sorted(reference.snapshot_id for reference in pending.snapshot_trees),
+                 "reconciliation_required": True, **agent_receipt_fields},
+            )
+            return {"ok": True, "status": "cleanup-pending", "restic_snapshots_forgotten": [],
+                    "receipt_id": pending.operation_id, "agent_recovery": agent_recovery,
+                    "reconciliation_required": True}
     candidates = frozenset(
         reference
         for reference in pending.snapshot_trees
@@ -1146,6 +1250,7 @@ def complete_logical_catalog_removal(
                     "restic_snapshot_ids_pending": present,
                     "reconciliation_required": True,
                     "error_type": type(error).__name__,
+                    **agent_receipt_fields,
                 },
             )
             return {
@@ -1154,6 +1259,7 @@ def complete_logical_catalog_removal(
                 "restic_snapshots_forgotten": [],
                 "receipt_id": pending.operation_id,
                 "reconciliation_required": True,
+                **agent_receipt_fields,
             }
     if missing or still_referenced:
         _write_copy_receipt(
@@ -1170,6 +1276,7 @@ def complete_logical_catalog_removal(
                 ),
                 "missing_from_restic_snapshot_ids": sorted(missing),
                 "reconciliation_required": True,
+                **agent_receipt_fields,
             },
         )
     else:
@@ -1184,9 +1291,10 @@ def complete_logical_catalog_removal(
                 "catalog_revision": fresh_context.catalog.body["revision"],
                 "restic_snapshots_forgotten": sorted(forgotten),
                 "reconciliation_required": False,
+                **agent_receipt_fields,
             },
         )
-    return {
+    result = {
         "ok": True,
         "status": "removed",
         "restic_snapshots_forgotten": sorted(forgotten),
@@ -1195,3 +1303,6 @@ def complete_logical_catalog_removal(
         "never_pruned": True,
         "never_unlocked": True,
     }
+    if agent_recovery is not None:
+        result["agent_recovery"] = agent_recovery
+    return result

@@ -237,3 +237,39 @@ recovery, original T3 app identity, broader Claude records, all native new turns
 Save reference lifecycle, native Windows and installed VSIX UI remain unqualified.
 Every Save selector remains false. No existing user/provider authentication,
 hosted/model/paid call, merge or release publication occurred.
+
+## Durable Room-reference lifecycle checkpoint
+
+2026-11-22, Linux, source changes atop
+`35673f9b8b9955a1853ca8995c392d8e27aa0165`. This checkpoint adds explicit
+history-only references, not Save integration or provider continuation.
+
+| Gate | Observed result |
+| --- | --- |
+| Normal enrolled admission | PASS, real disposable MinIO plus isolated native Secret Service, no mocked keyset or credential handoff. Codex/Claude capture/verify, revoked grant, stale generation and missing-live-keyset refusal. Normal unset config domain remains bound by the live keyset. Opt-in suite: 3 passed, 1 explicit exclusive-mutation skip. [Receipt](native-agent-live-admission.md). |
+| Durable lifecycle | PASS, real capture/status/verify, exact older point and stale refusal, same-cwd normal cold Room hydrate, separate fresh native restores/retry, independently encrypted Copy, source removal/copy independence and reconcile/removal: 1 passed in 62.76s; deletion-guard repeat passed in 61.85s. |
+| Normal portable export | PASS, published managed JAT v0.1.18 dependency in task-private RCC home, source-controller override. Original capsule plus separate encrypted native companion; both formats verify/restore: 1 passed in 36.89s. No Hauler/PCC slot changes. |
+| Cross-Dimension Copy | PASS, fresh disposable bucket/domain/identities, rewrap, normal cold Room/native restore and source-removal independence: 1 passed in 50.91s. No source identity/credential copying. |
+| Registered installed commands | PASS, all three actual commands repeated on the final package: pinned status, explicit capture and fresh-profile native restore. Built-in dialogs/pickers/confirmations observed and used; no injected catalog/provider/keyring result. [Exact runtime disclosure](native-agent-reference-acceptance.md). |
+| Final package/installed parity | PASS, 81 canonical Python modules and extension source byte-identical; installed manifest differs only by `__metadata`. No auth stores, native ciphertext or private keys bundled. VSIX SHA-256 `29a6985a862354252d649391ff4297e2bb7d513ac27498a05dfadd70c3c366a9`. Final registered callbacks exercise the actual-context authority guard. |
+| Focused schema/backend/native-reference suite | PASS, 415 passed, 1 skipped in 5.64s. Includes unchanged closed schemas, v3 opt-in/old-grant denial, path/history/scope boundaries, CAS/orphan receipts, unique UUIDs, copy/export/remove, live-catalog object protection, physical-context admission and real SIGTERM after sidecar CAS. |
+| Normal CLI/bridge/export/operations/references | PASS, 138 passed, 2 skipped in 88.12s with branch-pinned Restic 0.19.1. Initial host Restic 0.20.0 run failed 8 cases; selecting the already verified pinned executable fixed those environment failures without weakening tests/source. |
+| Other native/import/controller regressions | PASS, 102 passed, 37 explicit optional skips in 1.81s. Actual native-provider/installed trials are recorded separately, not counted as passing skipped cases. |
+| Full Node suite | PASS, 389 passed, 2 existing skips in 4.37s, including 8 new registered-command cases. |
+| Security review | PASS after fixing publication-time grant fences, credential-handoff rejection, cancellation/cleanup uncertainty and duplicate UUIDs. Final review also checked live-catalog candidate protection and exact actual-context admission digest binding. Post-encryption CAS guards, fsynced pre-upload candidate receipts, authenticated deletion receipts and hydrated-marker scope were independently reviewed. Invalid encrypted metadata cannot echo private values. |
+
+Native plaintext is never placed in named staging. The encrypted sidecar binds
+the exact historical descriptor/workspace/policy and retains original native
+provenance through re-encryption. Capture requires the original source stat
+baseline; restore permits a clean normal-hydration baseline under current host
+authority. That is not proof of original workspace-content equivalence.
+
+The installed trial deliberately uses `local-build-fallback` with installed
+controller source and public age executables in a disposable Python prefix.
+The managed JAT dependency is real; a new immutable feature-controller RCC
+artifact and native Windows are NOT qualified. Native new turns/original T3 app
+recovery, remote work references/R2, broader native formats, repeated captures at
+an unchanged point and offline import/rebinding remain separate gates. Every
+agent Save selector stays false; #190 acknowledged that no Save wiring follows
+from this optional capability. No existing provider/user auth, model/paid call,
+merge or publication was used. Release hold remains unchanged.

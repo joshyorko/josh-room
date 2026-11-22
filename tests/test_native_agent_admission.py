@@ -112,6 +112,25 @@ def test_rotated_or_other_dimension_keyset_is_denied(authorized, change):
         check(authorized)
 
 
+@pytest.mark.parametrize("change", [None, "domain", "generation", "recipient", "physical-bucket"])
+def test_unset_config_domain_requires_matching_live_keyset(authorized, change):
+    authorized.dimension.pop("encryption_domain_id")
+    write(authorized.directory / "config.json", {"dimensions": {"synthetic": authorized.dimension}})
+    if change is None:
+        assert check(authorized)["admitted"] is True
+        return
+    if change == "domain":
+        authorized.keyset.encryption_domain_id = "22222222-2222-4222-8222-222222222222"
+    elif change == "generation":
+        authorized.keyset.key_generation = 2
+    elif change == "recipient":
+        authorized.keyset.recovery_recipients = ("age1" + "c" * 58,)
+    else:
+        authorized.keyset.binding = "other-physical-bucket"
+    with pytest.raises(admission.AdmissionError):
+        check(authorized)
+
+
 def test_observed_repository_cannot_be_replaced_by_environment_claims(authorized, monkeypatch):
     other = authorized.workspace.parent / "other"
     other.mkdir()
@@ -351,3 +370,114 @@ def test_v2_claude_gate_e2e(authorized, monkeypatch, tmp_path, scope):
 @pytest.mark.parametrize("operation", ["discover", "import-history"])
 def test_explicit_history_access_uses_authority_without_reference_destination(authorized, operation):
     assert check(authorized, operation=operation, destination=None)["admitted"] is True
+
+
+ROOM_OPERATIONS = ["room-capture", "room-verify", "room-materialize", "room-copy", "room-export", "room-remove"]
+
+
+def room_grant(case, *, allowed=True, scope="personal"):
+    case.policy["format"] = admission.FORMAT_V3
+    case.grant.update(tools=["codex", "claude"], allow_room_reference=allowed, scope=scope, profile=scope)
+    case.binding["profile"] = scope
+    write(case.directory / admission.POLICY_FILE, case.policy)
+
+
+@pytest.mark.parametrize("version", [admission.FORMAT, admission.FORMAT_V2])
+@pytest.mark.parametrize("operation", ROOM_OPERATIONS)
+def test_existing_grants_cannot_authorize_room_reference_operations(authorized, monkeypatch, version, operation):
+    authorized.policy["format"] = version
+    if version == admission.FORMAT_V2:
+        authorized.grant["tools"] = ["codex", "claude"]
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+
+    def forbidden(*args):
+        pytest.fail("local-only grants must fail before any provider read")
+
+    monkeypatch.setattr(admission, "_current_keyset", forbidden)
+    with pytest.raises(admission.AdmissionError, match="^native-admission-room-reference-not-authorized$"):
+        check(authorized, operation=operation)
+
+
+@pytest.mark.parametrize("tool", ["codex", "claude"])
+@pytest.mark.parametrize("operation", ROOM_OPERATIONS)
+def test_v3_explicit_room_opt_in_admits_exact_tool_and_live_keyset(authorized, tool, operation):
+    room_grant(authorized)
+    result = check(authorized, operation=operation, tool=tool)
+    assert result["admitted"] is True and result["destination"] == "room-reference"
+    assert result["tool"] == tool and result["scope"] == "personal"
+    assert result["native_resume_verified"] is False
+    assert str(authorized.workspace) not in json.dumps(result)
+
+
+@pytest.mark.parametrize("scope", ["personal", "oss", "homelab"])
+def test_room_reference_scope_is_explicit_and_local_operations_stay_local(authorized, scope):
+    room_grant(authorized, scope=scope)
+    assert check(authorized, operation="room-capture")["destination"] == "room-reference"
+    assert check(authorized, tool="claude")["destination"] == "local-only"
+
+
+@pytest.mark.parametrize("operation", ROOM_OPERATIONS)
+def test_false_room_opt_in_never_authorizes_a_room_operation(authorized, monkeypatch, operation):
+    room_grant(authorized, allowed=False)
+    assert check(authorized)["destination"] == "local-only"
+
+    def forbidden(*args):
+        pytest.fail("disabled Room references must fail before provider reads")
+
+    monkeypatch.setattr(admission, "_current_keyset", forbidden)
+    with pytest.raises(admission.AdmissionError, match="room-reference-not-authorized"):
+        check(authorized, operation=operation)
+
+
+@pytest.mark.parametrize("flag", [None, 0, 1, "true", [], {}])
+def test_v3_opt_in_is_a_strict_boolean(authorized, flag):
+    room_grant(authorized, allowed=flag)
+    with pytest.raises(admission.AdmissionError, match="invalid-policy"):
+        check(authorized)
+
+
+@pytest.mark.parametrize("change", ["missing-flag", "unknown-field", "old-format-flag", "unknown-format"])
+def test_room_reference_policy_version_and_fields_are_closed(authorized, change):
+    room_grant(authorized)
+    if change == "missing-flag":
+        authorized.grant.pop("allow_room_reference")
+    elif change == "unknown-field":
+        authorized.grant["implicit_upload"] = True
+    elif change == "old-format-flag":
+        authorized.policy["format"] = admission.FORMAT_V2
+    else:
+        authorized.policy["format"] = "josh-room.native-agent-admission.v4"
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    with pytest.raises(admission.AdmissionError, match="invalid-policy"):
+        check(authorized)
+
+
+@pytest.mark.parametrize("operation", ROOM_OPERATIONS)
+def test_v3_work_stays_local_even_when_room_opt_in_is_true(authorized, monkeypatch, operation):
+    room_grant(authorized, scope="work")
+    assert check(authorized, tool="claude")["destination"] == "local-only"
+
+    def forbidden(*args):
+        pytest.fail("work Room references must fail before provider reads")
+
+    monkeypatch.setattr(admission, "_current_keyset", forbidden)
+    with pytest.raises(admission.AdmissionError, match="^native-admission-work-reference-unqualified$"):
+        check(authorized, operation=operation)
+
+
+def test_room_materialization_keeps_the_approved_encrypted_reference_path(authorized, tmp_path):
+    room_grant(authorized)
+    for destination in (None, tmp_path / "outside.age", authorized.references):
+        with pytest.raises(admission.AdmissionError, match="reference-(?:required|denied)"):
+            check(authorized, operation="room-materialize", destination=destination)
+    assert check(authorized, operation="room-materialize")["destination"] == "room-reference"
+
+
+def test_room_opt_in_revocation_changes_the_authority_digest(authorized):
+    room_grant(authorized)
+    before = check(authorized)["authority_sha256"]
+    authorized.grant["allow_room_reference"] = False
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    assert check(authorized)["authority_sha256"] != before
+    with pytest.raises(admission.AdmissionError, match="room-reference-not-authorized"):
+        check(authorized, operation="room-capture")

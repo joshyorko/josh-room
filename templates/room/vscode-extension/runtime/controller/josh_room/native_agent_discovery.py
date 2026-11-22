@@ -30,7 +30,7 @@ def _matching_grants(dimension, room, workspace):
     verify_private_path(directory, directory=True)
     policy = authority._read_private_json(directory / authority.POLICY_FILE)
     if (not isinstance(policy, dict) or set(policy) != {"format", "grants"}
-            or policy["format"] not in {authority.FORMAT, authority.FORMAT_V2}
+            or policy["format"] not in {authority.FORMAT, authority.FORMAT_V2, authority.FORMAT_V3}
             or not isinstance(policy["grants"], list) or not 1 <= len(policy["grants"]) <= 64):
         native._fail("native-room-authority-invalid")
     grants = [authority._grant(grant, policy["format"]) for grant in policy["grants"]]
@@ -45,7 +45,7 @@ def _matching_grants(dimension, room, workspace):
             native._fail("native-room-authority-unsafe")
         encoded = json.dumps({"format": policy["format"], "grant": grant}, sort_keys=True, separators=(",", ":")).encode()
         reference = hashlib.sha256(encoded).hexdigest()
-        tools = grant["tools"] if policy["format"] == authority.FORMAT_V2 else ["codex"]
+        tools = ["codex"] if policy["format"] == authority.FORMAT else grant["tools"]
         matching.append((reference, grant, sorted(tools)))
     return matching
 
@@ -64,6 +64,7 @@ def room_status(*, dimension, room, workspace):
         return result
     for reference, grant, tools in matching:
         profile = {"profile_ref": reference, "scope": grant["scope"], "tools": tools,
+                   "room_reference_allowed": grant.get("allow_room_reference") is True and grant["scope"] != "work",
                    "state": "unavailable", "admission": "revalidation-required"}
         binding = {name: grant[name] for name in ("dimension", "room", "profile", "workspace")}
         try:
@@ -92,6 +93,12 @@ def _resolve(dimension, room, workspace, profile_ref, tool):
     if tool not in tools:
         native._fail("native-admission-tool-not-authorized")
     return grant
+
+
+def resolve_profile(*, dimension, room, workspace, profile_ref, tool):
+    """Resolve a private controller grant; callers must still obtain live admission."""
+    workspace = _scope(dimension, room, workspace)
+    return _resolve(dimension, room, workspace, profile_ref, native._tool(tool))
 
 
 def discover(*, dimension, room, workspace, profile_ref, tool):

@@ -10,6 +10,20 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="action", required=True)
     capabilities = commands.add_parser("capabilities")
     capabilities.add_argument("--json", action="store_true")
+    for action in ("recovery-status", "recovery-capture", "recovery-verify", "recovery-restore"):
+        command = commands.add_parser(action)
+        command.add_argument("--dimension", required=True)
+        command.add_argument("--room", required=True)
+        command.add_argument("--snapshot", required=True)
+        command.add_argument("--json", action="store_true")
+        if action != "recovery-status":
+            command.add_argument("--workspace", type=Path, required=True)
+            command.add_argument("--profile-ref", required=True)
+            command.add_argument("--tool", choices=("codex", "claude"), required=True)
+        if action in {"recovery-verify", "recovery-restore"}:
+            command.add_argument("--export", type=Path)
+        if action == "recovery-restore":
+            command.add_argument("--session-id", required=True)
     for action in ("room-status", "discover"):
         command = commands.add_parser(action)
         command.add_argument("--dimension", required=True)
@@ -50,6 +64,10 @@ def dispatch(args):
 
     if args.action == "capabilities":
         return {"ok": True, **native_agents.capabilities()}
+    if args.action.startswith("recovery-"):
+        from .native_agent_reference_cli import dispatch as recovery_dispatch
+
+        return recovery_dispatch(args)
     if args.action in {"room-status", "discover"}:
         from . import native_agent_discovery
 
@@ -82,16 +100,20 @@ def dispatch(args):
 
 
 def main(argv=None) -> int:
-    from .cancellation import CLICancelled
+    from .cancellation import CLICancelled, sigterm_cancellation
     from .native_agents import NativeAgentError
 
     args = build_parser().parse_args(argv)
     try:
-        result = dispatch(args)
+        with sigterm_cancellation():
+            result = dispatch(args)
     except NativeAgentError as error:
         result = {"ok": False, "state": "commit-uncertain" if error.committed else "blocked", "error": str(error)}
         if error.committed:
             result.update(committed=True, native_resume_verified=False)
+        for field in ("sidecar_published", "orphaned"):
+            if hasattr(error, field):
+                result[field] = getattr(error, field)
     except (OSError, RuntimeError, ValueError, TypeError):
         result = {"ok": False, "state": "blocked", "error": "Native agent operation refused unsafe or unavailable input"}
     except (KeyboardInterrupt, CLICancelled):
