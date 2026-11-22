@@ -7,7 +7,7 @@ metadata and split guards, including materialized namespace children: it must
 not accidentally save them to the legacy repository. No unload or migration of
 existing Rooms is supported. The discovery previews below remain read-only.
 
-## First writable vertical: Linux, one approved operation per namespace
+## Writable capture: Linux, one initial approved capture per namespace
 
 Use an already initialized MinIO/S3/R2 Dimension with a configured encryption
 domain and root provider endpoint (no endpoint path aliases). Generate a fresh
@@ -77,7 +77,9 @@ refused. `latest` is never a fallback. A versioned v4 path-bound marker retains 
 is removed; clean reopen additionally checks the exact local guard. A split guard prevents ordinary Save
 from writing an entered child into the legacy store. Updating a materialized child
 inside its existing namespace is a later operation; this increment does not
-claim that ordinary Save updates the composition pin. No automatic unload,
+claim that ordinary Save updates the composition pin. The additive
+[child Save and explicit parent pin refresh](composition-updates.md) extend a
+saved namespace while preserving all historical pins. No automatic unload,
 activation/terminal hydration, or selected-file restore is added.
 
 Native commands are `Josh: Save Catalog Room` and `Josh: Enter Child Room`.

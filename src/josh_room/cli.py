@@ -494,6 +494,22 @@ def build_parser() -> argparse.ArgumentParser:
             operation.add_argument('--workspace', type=Path, required=True)
             operation.add_argument('--child-path', required=True)
         _json_option(operation)
+    for action in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
+        operation = composition_commands.add_parser(action)
+        operation.add_argument('--dimension', required=True)
+        operation.add_argument('--namespace', required=True)
+        operation.add_argument('--operation-id', required=True, help='stable ID retained for crash retry')
+        if action in ('plan-child-save', 'save-child'):
+            operation.add_argument('--workspace', type=Path, required=True)
+            operation.add_argument('--room', required=True)
+            operation.add_argument('--child-snapshot', required=True, help='specific saved baseline, never latest')
+        else:
+            operation.add_argument('--parent-room', required=True)
+            operation.add_argument('--parent-snapshot', required=True)
+            operation.add_argument('--set-child', action='append', required=True, help='relative-path=exact-logical-snapshot')
+        if action in ('save-child', 'refresh-parent-pins'):
+            operation.add_argument('--approve', required=True)
+        _json_option(operation)
     context = commands.add_parser("context", help="read offline workspace linkage context")
     context.add_argument("--workspace", type=Path, required=True)
     _json_option(context)
@@ -688,7 +704,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv[:1] == ["composition"] and argv[1:2] not in (["save"], ["restore-parent"], ["enter-child"]):
+    if argv[:1] == ["composition"] and argv[1:2] not in (["save"], ["restore-parent"], ["enter-child"],
+            ["plan-child-save"], ["save-child"], ["plan-parent-refresh"], ["refresh-parent-pins"]):
         args = build_parser().parse_args(argv)
         try:
             result = dispatch(args, Path("."))
@@ -1629,6 +1646,27 @@ def _harvest_dispatch(args, instance: Path | None = None) -> dict:
 
 def dispatch(args, instance: Path) -> dict:
     if args.command == "composition":
+        if args.composition_command in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
+            from .composition_lifecycle import provider_runtime
+            from .composition_updates import refresh_parent, save_child
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
+                raise ValueError('composition requires an explicit provider Dimension')
+            try:
+                with provider_runtime(instance, dimension, getattr(args, '_selected_encryption_material', None), args.namespace) as (authority, factory, private):
+                    if args.composition_command in ('plan-child-save', 'save-child'):
+                        return save_child(args.workspace, dimension, args.namespace, args.room, args.child_snapshot,
+                            args.operation_id, authority, factory, private, approval=getattr(args, 'approve', None))
+                    pins = {}
+                    for value in args.set_child:
+                        path, separator, snapshot = value.rpartition('=')
+                        if not separator or path in pins:
+                            raise ValueError('select distinct child-path=exact-pin entries')
+                        pins[path] = snapshot
+                    return refresh_parent(dimension, args.namespace, args.parent_room, args.parent_snapshot,
+                        args.operation_id, pins, authority, factory, private, approval=getattr(args, 'approve', None))
+            except Exception:  # noqa: BLE001 - bounded credential-free provider failure boundary.
+                raise ValueError('Composition update could not be verified; preserve source and retry the same operation ID') from None
         if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
             from .composition_lifecycle import (
                 capture_plan,

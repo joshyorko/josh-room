@@ -1,7 +1,7 @@
-"""Read-only candidate v4 contracts. No admission, publish, repair or cleanup API.
+"""Versioned namespace state and offline composition evidence validation.
 
-Inputs must be authenticated by a future caller. Offline evidence validation is
-not remote authority, migration fencing, or proof of payload availability.
+Callers must authenticate inputs. Validation alone does not establish physical
+isolation, immutable payload availability or legacy migration admission.
 """
 from __future__ import annotations
 
@@ -76,8 +76,9 @@ class CompositionSafetyState:
 
     @classmethod
     def from_dict(cls, body):
-        _object(body, "format_version contract scope revision dimension_catalog operations")
-        if type(body["format_version"]) is not int or body["format_version"] != 4 or body["contract"] != "composition-safety-v1":
+        version2 = isinstance(body, dict) and body.get('contract') == 'composition-safety-v2'
+        _object(body, "format_version contract scope revision dimension_catalog operations" + (' child_updates' if version2 else ''))
+        if type(body["format_version"]) is not int or body["format_version"] != 4 or body["contract"] not in ("composition-safety-v1", "composition-safety-v2"):
             raise ValueError("unsupported composition safety version")
         scope = body["scope"]
         _object(scope, "provider connection_id dimension_id encryption_domain_id repository_id catalog_key")
@@ -184,6 +185,41 @@ class CompositionSafetyState:
                 raise ValueError("uncommitted parent pin")
         if parent_rooms & child_rooms:
             raise ValueError("nested composition is unsupported")
+        if version2:
+            updates = body['child_updates']
+            if not isinstance(updates, dict) or len(updates) > 128:
+                raise ValueError('invalid child update inventory')
+            pending = set()
+            outputs = set()
+            for key, update in updates.items():
+                _identifier(key)
+                _object(update, 'plan plan_sha256 phase pin')
+                plan = update['plan']
+                _object(plan, 'room_id logical_jat_id expected_logical_jat_id source_path_sha256 source_records_sha256 source_identity source_signature capture_policy_sha256 content_sha256 capture_mode')
+                for field in ('room_id', 'logical_jat_id', 'expected_logical_jat_id'):
+                    _identifier(plan[field])
+                for field in ('source_path_sha256', 'source_records_sha256', 'source_signature', 'capture_policy_sha256', 'content_sha256'):
+                    _digest(plan[field])
+                identity = plan['source_identity']
+                if not isinstance(identity, list) or len(identity) != 2 or any(type(n) is not int or n < 0 for n in identity):
+                    raise ValueError('invalid child source identity')
+                if plan['capture_mode'] != 'source-only' or update['plan_sha256'] != plan_digest(plan):
+                    raise ValueError('invalid child update approval')
+                room, output, baseline = (plan[k] for k in ('room_id', 'logical_jat_id', 'expected_logical_jat_id'))
+                if room not in child_rooms or output == baseline or (room, output) in outputs:
+                    raise ValueError('invalid or duplicated child update slot')
+                outputs.add((room, output))
+                catalog.resolve_snapshot(room, baseline)
+                if update['phase'] == 'reserved':
+                    if update['pin'] is not None or output in inner['projects'][room]['snapshots'] or inner['projects'][room]['latest'] != baseline:
+                        raise ValueError('uncommitted child output or stale baseline')
+                    if room in pending or any(room in rooms and phase != 'committed' for rooms, phase, _ in used):
+                        raise ValueError('overlapping incomplete child updates')
+                    pending.add(room)
+                elif update['phase'] == 'committed':
+                    _pin(update['pin'], catalog, room, output)
+                else:
+                    raise ValueError('invalid child update phase')
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         if len(canonical) > MAX_BYTES:
             raise ValueError("composition state exceeds size limit")

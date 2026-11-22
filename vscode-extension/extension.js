@@ -2208,10 +2208,37 @@ async function enterChildRoom() {
   });
 }
 
+async function updateCompositionRoom(kind) {
+  assertWorkspaceTrusted("update a namespace Room");
+  const root = activeWorkspace();
+  const marker = currentRoom(root);
+  if (!marker?.composition_namespace) throw new Error("Open a namespace Room first.");
+  const isChild = fs.existsSync(path.join(root, ".josh-room-split.json"));
+  if ((kind === "child") !== isChild) throw new Error("Select the child Save or parent pin refresh action for this Room.");
+  if (!extensionContext?.workspaceState) throw new Error("The extension operation store is unavailable.");
+  const key = `composition.${kind}.${marker.composition_namespace}.${marker.project_id}`;
+  const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));
+  const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
+  if (!dimension) throw new Error("The namespace Dimension is not configured.");
+  const invoke = (ticket, apply) => {
+    const command = kind === "child" ? (apply ? "save-child" : "plan-child-save") : (apply ? "refresh-parent-pins" : "plan-parent-refresh");
+    const args = ["composition", command, "--dimension", marker.dimension_id, "--namespace", ticket.namespace, "--operation-id", ticket.operationId,
+      ...(kind === "child" ? ["--room", ticket.room, "--child-snapshot", ticket.baseline, "--workspace", root]
+        : ["--parent-room", ticket.room, "--parent-snapshot", ticket.baseline, "--set-child", `${ticket.child}=${ticket.pin}`]),
+      ...(apply ? ["--approve", ticket.approval] : [])];
+    return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
+  };
+  return require("./catalog-actions").updateRoom(vscode, { marker, kind, pending: extensionContext.workspaceState.get(key),
+    remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
+}
+
 async function saveRoom(options = {}) {
   assertWorkspaceTrusted("save a Room");
   const cwd = activeWorkspace();
-  if (currentRoom(cwd)?.composition_namespace) throw new Error("This Room belongs to a composition namespace. Ordinary Save cannot update it.");
+  if (currentRoom(cwd)?.composition_namespace) {
+    if (options.current && fs.existsSync(path.join(cwd, ".josh-room-split.json"))) return updateCompositionRoom("child");
+    throw new Error("This Room belongs to a composition namespace. Use explicit parent pin refresh; ordinary Save cannot update it.");
+  }
   const currentMarker = options.current ? currentRoom(cwd) : undefined;
   if (options.current && !currentMarker) {
     await vscode.window.showInformationMessage("Open a Room first, or use Save Folder As Room.");
@@ -3537,6 +3564,8 @@ function activate(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
+  register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => newRoom());
   register(context, "joshRoom.enter", enterRoom);
@@ -5551,6 +5580,8 @@ function activateNative(context) {
   register(context, "joshRoom.splitWorkspace", () => splitWorkspace());
   register(context, "joshRoom.saveCatalog", () => saveCatalogRoom());
   register(context, "joshRoom.enterChild", () => enterChildRoom());
+  register(context, "joshRoom.saveChild", () => updateCompositionRoom("child"));
+  register(context, "joshRoom.refreshCatalogPins", () => updateCompositionRoom("parent"));
   register(context, "joshRoom.checkWorkspace", checkWorkspace);
   register(context, "joshRoom.new", () => newRoom());
   register(context, "joshRoom.addStorage", addStorage);

@@ -1,7 +1,7 @@
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { saveCatalog, enterChild, relativeSource } = require("./catalog-actions");
+const { saveCatalog, enterChild, relativeSource, updateRoom } = require("./catalog-actions");
 
 test("catalog confirmation binds child, parent and local-only selections before Save", async () => {
   const dialogs = [[{ fsPath: "/synthetic/root" }], [{ fsPath: "/synthetic/root/a" }], [{ fsPath: "/synthetic/root/notes.txt" }]];
@@ -41,4 +41,46 @@ test("whole child opens only after verified immutable entry", async () => {
     open: async (target) => { opened = target; } });
   assert.equal(opened, "/synthetic/root/projects/a");
   assert.throws(() => relativeSource("/synthetic/root", "/synthetic/outside"), /inside/);
+});
+
+test("child Save persists exact approved retry before writing and clears only on verification", async () => {
+  const marker = { composition_namespace: "1".repeat(32), project_id: "child", snapshot_id: "jat-old" };
+  let pending;
+  const vscode = { window: { showWarningMessage: async (_text, options, action) => {
+    assert.match(options.detail, /Parent pins remain unchanged/); return action;
+  }, showInformationMessage: async () => {} } };
+  const callbacks = { marker, kind: "child", remember: async (ticket) => { pending = ticket; },
+    plan: async (ticket) => { assert.equal(ticket.baseline, "jat-old"); return { changed: true, approval_sha256: "approved", snapshot_id: "jat-new" }; } };
+  await assert.rejects(updateRoom(vscode, { ...callbacks, save: async (ticket) => {
+    assert.deepEqual(ticket, pending); throw new Error("lost reply");
+  } }), /lost reply/);
+  assert.equal(pending.approval, "approved");
+  const operation = pending.operationId;
+  await updateRoom(vscode, { ...callbacks, pending, save: async (ticket) => {
+    assert.equal(ticket.operationId, operation); return { ok: true, marker_verified: true, snapshot_id: "jat-new" };
+  } });
+  assert.equal(pending, undefined);
+});
+
+test("cancelled or changed pending approval cannot invoke update", async () => {
+  const marker = { composition_namespace: "1".repeat(32), project_id: "child", snapshot_id: "jat-old" };
+  const callbacks = { marker, kind: "child", remember: async () => { throw new Error("unexpected receipt"); },
+    plan: async () => ({ changed: true, approval_sha256: "new", snapshot_id: "jat-new" }),
+    save: async () => { throw new Error("unexpected write"); } };
+  const vscode = { window: { showWarningMessage: async () => undefined } };
+  assert.equal(await updateRoom(vscode, callbacks), "cancelled");
+  await assert.rejects(updateRoom(vscode, { ...callbacks, pending: { namespace: marker.composition_namespace,
+    room: "child", baseline: "jat-old", operationId: "operation", approval: "old" } }), /Pending approval changed/);
+});
+
+test("parent refresh confirms exact path and pin without rewriting the working folder", async () => {
+  const marker = { composition_namespace: "1".repeat(32), project_id: "parent", snapshot_id: "jat-parent" };
+  const inputs = ["projects/a", "jat-child-new"];
+  const vscode = { window: { showInputBox: async () => inputs.shift(), showWarningMessage: async (_text, options, action) => {
+    assert.match(options.detail, /projects\/a/); assert.match(options.detail, /jat-child-new/);
+    assert.match(options.detail, /working folders remain unchanged/); return action;
+  }, showInformationMessage: async () => {} } };
+  await updateRoom(vscode, { marker, kind: "parent", remember: async () => {},
+    plan: async (ticket) => { assert.equal(ticket.pin, "jat-child-new"); return { changed: true, approval_sha256: "digest", snapshot_id: "jat-parent-new" }; },
+    save: async (ticket) => { assert.equal(ticket.child, "projects/a"); return { ok: true, snapshot_id: "jat-parent-new" }; } });
 });

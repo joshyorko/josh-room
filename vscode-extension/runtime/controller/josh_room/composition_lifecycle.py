@@ -344,7 +344,8 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
             )
     else:
         claim()
-        summary = store.backup(root, excludes=excludes, tags=tag)
+        summary = store.backup(root, parent=parent.to_dict()['workspace']['snapshot_id'] if parent else None,
+                               excludes=excludes, tags=tag)
         snapshot = store.snapshot(summary.snapshot_id)
     entries = _validate_snapshot_entries(store.entries(snapshot.snapshot_id))
     after = scan_workspace_for_status(root)
