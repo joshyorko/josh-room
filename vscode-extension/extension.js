@@ -1145,7 +1145,12 @@ async function executeJoshRoom(args, cwd, cancellationToken, progressReporter, s
     throw error;
   }
   return new Promise((resolve, reject) => {
-    environment.JOSH_ROOM_RESULT_FILE = resultPath;
+    if (args[0] === "recovery" && args.includes("--include-text")) {
+      // Text preview is pipe-only; never put reversible content in runtime receipts.
+      delete environment.JOSH_ROOM_RESULT_FILE;
+    } else {
+      environment.JOSH_ROOM_RESULT_FILE = resultPath;
+    }
     const followers = [followProgressFile(progressPath, (event) => progressReporter?.event(sanitizeProgressEvent(event)))];
     if (["snapshot", "hydrate", "serve", "jat"].includes(args[0])) {
       const jatRoot = runtime.jatRoot || environment.JOSH_ROOM_JAT_ROOT;
@@ -5283,6 +5288,18 @@ function logicalSnapshotSummary(result) {
   ].join("\n");
 }
 
+async function browseRecoveryPoint(preselected) {
+  const context = await selectedLogicalSnapshot(preselected, "Browse Recovery Point");
+  if (!context) return "cancelled";
+  const dimensionId = explicitDimensionId(context);
+  const pinned = { ...context, dimension_id: dimensionId };
+  const dimension = context.dimension || { id: dimensionId, provider: context.provider };
+  return require("./recovery-actions").browseRecovery(vscode, pinned, (args) =>
+    runSelectedEncryption(nativeRegistry.dimensionArgs(args, dimensionId), activeWorkspace(), dimension, {
+      title: "Reading historical recovery point…", action: "historical file recovery",
+    }), activeWorkspace());
+}
+
 async function inspectLogicalSnapshot(preselected) {
   assertWorkspaceTrusted("inspect a logical JAT");
   const context = await selectedLogicalSnapshot(preselected, "Josh: Inspect Logical JAT");
@@ -5845,6 +5862,7 @@ function activateNative(context) {
   register(context, "joshRoom.deleteRoom", deleteRoom);
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
+  register(context, "joshRoom.browseRecoveryPoint", browseRecoveryPoint);
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.agentSessionsStatus", agentSessionsStatus);
   register(context, "joshRoom.agentRecoveryStatus", agentRecoveryStatus);

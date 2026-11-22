@@ -114,6 +114,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.agentRecoveryStatus",
         "joshRoom.captureAgentRecovery",
         "joshRoom.restoreAgentRecovery",
+        "joshRoom.browseRecoveryPoint",
         "joshRoom.verifyRoomStore", "joshRoom.optimizeRoomStore", "joshRoom.reconcileRoomStore",
     }
     assert package["extensionKind"] == ["workspace"]

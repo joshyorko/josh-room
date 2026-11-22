@@ -659,6 +659,27 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--dimension")
     _add_serve_options(serve)
     _json_option(serve)
+    recovery = commands.add_parser("recovery")
+    recovery_commands = recovery.add_subparsers(dest="recovery_command", required=True)
+    for action in ("tree", "inspect", "diff", "extract"):
+        command = recovery_commands.add_parser(action)
+        command.add_argument("project")
+        command.add_argument("--dimension", required=True)
+        command.add_argument("--snapshot", required=True)
+        command.add_argument("--path", default=".")
+        if action == "tree":
+            command.add_argument("--offset", type=int, default=0)
+            command.add_argument("--limit", type=int, default=100)
+        if action in {"inspect", "diff"}:
+            command.add_argument("--include-text", action="store_true")
+        if action == "diff":
+            comparison = command.add_mutually_exclusive_group(required=True)
+            comparison.add_argument("--compare-snapshot")
+            comparison.add_argument("--workspace", type=Path)
+        if action == "extract":
+            command.add_argument("--destination", type=Path, required=True)
+            command.add_argument("--dry-run", action="store_true")
+        _json_option(command)
     room_store = commands.add_parser("room-store")
     room_store_commands = room_store.add_subparsers(dest="room_store_command", required=True)
     for action in ("verify", "optimize", "reconcile"):
@@ -939,6 +960,8 @@ def _write_runtime_result(result):
     target_value = os.environ.get("JOSH_ROOM_RESULT_FILE")
     if not target_value:
         return
+    from .recovery_text import without_text_envelopes
+    result = without_text_envelopes(result)
     target = Path(target_value)
     if target.is_symlink():
         raise RuntimeError("runtime result path must not be a symlink")
@@ -979,7 +1002,7 @@ def _requires_oauth(args) -> bool:
             return any(dimension.provider == "r2" for dimension in registry.dimensions.values())
         except ValueError:
             return getattr(args, "backend", "r2") == "r2"
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition", "recovery"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         source_dimension = _copy_source_dimension(args)
@@ -1013,7 +1036,7 @@ def _provider_error_boundary(args):
             selected = connection_configs(private_config() or {}).get(args.connection)
         elif args.command in {
             "encryption", "doctor", "projects", "rooms", "snapshots", "snapshot",
-            "hydrate", "enter", "serve", "link", "repair", "room-store", "composition",
+            "hydrate", "enter", "serve", "link", "repair", "room-store", "composition", "recovery",
         }:
             selected = _effective_dimension(args)
         else:
@@ -1026,7 +1049,7 @@ def _provider_error_boundary(args):
 def _requires_encryption(args) -> bool:
     if args.command == "dimensions":
         return getattr(args, "with_hierarchy", False) and (_dimensions_have_provider(args, "minio") or _dimensions_have_provider(args, "s3"))
-    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition"}:
+    if args.command not in {"projects", "rooms", "snapshots", "snapshot", "hydrate", "enter", "serve", "link", "repair", "room-store", "composition", "recovery"}:
         return False
     if getattr(args, "snapshot_command", None) == "copy":
         return False
@@ -2716,6 +2739,23 @@ def dispatch(args, instance: Path) -> dict:
                 **_serve_options(args),
             ),
         }
+    if args.command == "recovery":
+        from .recovery import run_recovery
+        if args.snapshot == "latest":
+            raise ValueError("historical recovery requires an exact recovery point")
+        with _open_room_store_context(args, instance, project_id=args.project,
+                                      snapshot_id=args.snapshot) as context:
+            if args.recovery_command == "diff" and args.compare_snapshot:
+                from .recovery import Recovery
+                if args.compare_snapshot == "latest":
+                    raise ValueError("comparison requires an exact recovery point")
+                with _open_room_store_context(args, instance, project_id=args.project,
+                                              snapshot_id=args.compare_snapshot) as other:
+                    if (context.selected_record.get("snapshot_id") != args.snapshot
+                            or other.selected_record.get("snapshot_id") != args.compare_snapshot):
+                        raise ValueError("historical comparison identity mismatch")
+                    return Recovery(context).diff(args.path, other=Recovery(other), include_text=args.include_text)
+            return run_recovery(context, args)
     if args.command == "room-store":
         config = private_config() or {}
         dimension = DimensionRegistry(config).select(args.dimension)

@@ -1,0 +1,42 @@
+{
+  "source_sha": "ddc330341a9a6914f09d807f6c63b0fb4d978b66",
+  "status": "passed",
+  "platform": "windows-latest x64",
+  "python": "3.13.17",
+  "restic_version": "0.19.1",
+  "job": "https://github.com/joshyorko/josh-room/actions/runs/45034616072/job/137245466482",
+  "artifact": "https://github.com/joshyorko/josh-room/actions/runs/45034616072/artifacts/14759032245",
+  "artifact_sha256": "c41e7ac408384d083576fd54599fd1333ee8f5da8c06e29d11f87f937a70f324",
+  "command": "uv run pytest tests/test_recovery_windows.py -q -s --junitxml=<runner-temp>/recovery-windows.xml",
+  "passed": 4,
+  "failed": 0,
+  "skipped": 0,
+  "elapsed_seconds": 13.82,
+  "storage_authority": "synthetic catalog fixture; real encrypted local Restic repository",
+  "checks": [
+    "three immutable recovery points",
+    "selected file and Unicode subtree recovery",
+    "current-file digest comparison",
+    "current file and Room marker preservation",
+    "hardlink rejection",
+    "junction root/ancestor/destination rejection",
+    "active writer rejection",
+    "existing-destination preservation",
+    "promotion-race no-clobber",
+    "private ACL staging cleanup"
+  ],
+  "plaintext_blob_measurement": {
+    "blob_bytes_read": 5096,
+    "blob_calls": 3,
+    "selected_bytes": 6,
+    "pins": 3
+  },
+  "network_bytes_transferred": null,
+  "not_proven": [
+    "Windows live-provider/keyring",
+    "installed Windows VSIX native UI",
+    "immutable managed RCC artifact for this source",
+    "wire transfer metrics",
+    "plaintext preview and text diff policy"
+  ]
+}

@@ -71,7 +71,8 @@
     "onCommand:joshRoom.saveCatalog",
     "onCommand:joshRoom.enterChild",
     "onCommand:joshRoom.saveChild",
-    "onCommand:joshRoom.refreshCatalogPins"
+    "onCommand:joshRoom.refreshCatalogPins",
+    "onCommand:joshRoom.browseRecoveryPoint"
   ],
   "main": "./extension.js",
   "extensionKind": [
@@ -334,6 +335,10 @@
       {
         "command": "joshRoom.refreshCatalogPins",
         "title": "Josh: Refresh Catalog Child Pins"
+      },
+      {
+        "command": "joshRoom.browseRecoveryPoint",
+        "title": "Josh Room: Browse Recovery Point\u2026"
       }
     ],
     "viewsContainers": {
@@ -584,6 +589,11 @@
           "command": "joshRoom.deleteRecoveryPoint",
           "when": "view == joshRoom.rooms && (viewItem == jat || viewItem == logical-jat)",
           "group": "recovery@9"
+        },
+        {
+          "command": "joshRoom.browseRecoveryPoint",
+          "when": "view == joshRoom.rooms && viewItem == logical-jat",
+          "group": "recovery@1"
         }
       ]
     }
