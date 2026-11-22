@@ -39,6 +39,7 @@ class MemoryStore:
         self.controls = {}
         self.writes = []
         self.publication_fault = None
+        self.catalog_etag = "catalog-1"
 
     def put_bytes(self, key, body):
         digest = hashlib.sha256(body).hexdigest()
@@ -85,6 +86,14 @@ class MemoryStore:
     def delete_object(self, key):
         self.objects.pop(key, None)
         self.writes.append(("delete", key))
+
+    def conditional_catalog_put(self, body, expected_etag):
+        if expected_etag != self.catalog_etag:
+            raise R2Conflict("synthetic catalog conflict")
+        self.catalog_body = body
+        self.catalog_etag = hashlib.sha256(body).hexdigest()
+        self.writes.append(("catalog", self.catalog_etag))
+        return self.catalog_etag
 
 
 def descriptor(room, logical_id, scan):
@@ -178,8 +187,11 @@ def room(tmp_path, monkeypatch):
         return selected_grant, binding, receipt.copy()
 
     monkeypatch.setattr(reference, "_grant", admit)
-    monkeypatch.setattr(reference, "_fresh", lambda selected, room_id=None, logical_id=None:
-                        contexts[(room_id or selected.project_id, logical_id or selected.selected_record["snapshot_id"])])
+    def fresh(selected, room_id=None, logical_id=None):
+        current = contexts[(room_id or selected.project_id, logical_id or selected.selected_record["snapshot_id"])]
+        return dataclasses.replace(current, catalog_etag=current.backend.catalog_etag)
+
+    monkeypatch.setattr(reference, "_fresh", fresh)
     relative = Path("sessions/2026/11/22") / f"rollout-2026-11-22T15-00-00-{SESSION}.jsonl"
     native_file = Path(grant["profile_root"]) / "codex" / relative
     native_file.parent.mkdir(mode=0o700, parents=True)
@@ -520,6 +532,145 @@ def test_deleted_point_after_publication_reports_uncertainty_and_unreachable_his
     report = reference.reconcile_references(removed, {})
     assert report["reachable_objects"] == []
     assert report["unreachable_candidates"] == sorted(room.store.objects)
+
+
+def test_first_capture_finishes_between_absent_close_and_catalog_removal(room, monkeypatch):
+    from josh_room.room_store_lifecycle import (
+        RoomStoreLifecycleError,
+        remove_logical_catalog_records,
+    )
+
+    conditional_put = room.store.conditional_catalog_put
+    raced = False
+
+    def remove_after_capture(body, expected_etag):
+        nonlocal raced
+        if not raced:
+            raced = True
+            # Removal has already read ABSENT. Capture finishes, including its
+            # historical postcheck and pending receipt deletion, before removal CAS.
+            assert room.store.controls == {}
+            assert capture(room)["ok"] is True
+            assert reference._pending_objects(room.context) == (set(), [])
+        return conditional_put(body, expected_etag)
+
+    monkeypatch.setattr(room.store, "conditional_catalog_put", remove_after_capture)
+    identities = {LogicalJatIdentity("demo", "history-first")}
+    descriptors = {("demo", "history-first"): room.context.selected_descriptor}
+    with pytest.raises(RoomStoreLifecycleError, match="catalog removal was not confirmed") as caught:
+        remove_logical_catalog_records(room.context, identities, descriptors=descriptors)
+    assert caught.value.result["publication_state"] == "rejected"
+    assert not any(operation == "delete" for operation, _ in room.store.writes)
+    objects = set(room.store.objects)
+    report = reference.reconcile_references(room.context, descriptors)
+    assert set(report["reachable_objects"]) == objects
+    assert report["unreachable_candidates"] == []
+
+    # A refreshed explicit retry sees the completed reference, closes it and
+    # carries its authenticated candidates through normal catalog removal.
+    current = reference._fresh(room.context)
+    removal = remove_logical_catalog_records(current, identities, descriptors=descriptors)
+    assert {item["key"] for item in removal.agent_reference_receipts[0]["objects"]} == objects
+    removed = dataclasses.replace(current, catalog=Catalog.empty("archive", DOMAIN))
+    result = reference.complete_removed_references(removed, removal.agent_reference_receipts, descriptors={})
+    assert set(result["removed_objects"]) == objects
+    assert result["pending_objects"] == []
+    assert room.store.objects == {}
+
+
+def test_capture_catalog_fence_preserves_catalog_contents_and_revision(room):
+    before = room.context.catalog.body
+    etag = room.store.catalog_etag
+    capture(room)
+    assert room.store.catalog_etag != etag
+    with reference._cipher_file(room.context, room.store.catalog_body) as source:
+        catalog = json.loads(native._decrypt_to_memory(source, [room.identities[0]]))
+    assert catalog == before
+    assert reference._pending_objects(room.context) == (set(), [])
+
+
+@pytest.mark.parametrize("fault", ["rejected", "lost-response", "cancelled", "interrupted"])
+def test_catalog_publication_fence_fault_keeps_known_native_candidates(room, monkeypatch, fault):
+    conditional_put = room.store.conditional_catalog_put
+
+    def failed_fence(body, expected_etag):
+        if fault == "rejected":
+            raise R2Conflict("synthetic deletion won")
+        conditional_put(body, expected_etag)
+        if fault == "lost-response":
+            raise R2PublicationError("synthetic lost fence response", published=True)
+        if fault == "cancelled":
+            raise CLICancelled
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(room.store, "conditional_catalog_put", failed_fence)
+    with pytest.raises(reference.NativeReferenceError, match="publication-uncertain") as caught:
+        capture(room)
+    assert caught.value.committed is True
+    assert caught.value.sidecar_published is True
+    removed = dataclasses.replace(room.context, catalog=Catalog.empty("archive", DOMAIN))
+    report = reference.reconcile_references(removed, {})
+    assert report["unreachable_candidates"] == sorted(room.store.objects)
+    assert report["pending_receipts"]
+    assert not any(operation == "delete" for operation, _ in room.store.writes)
+
+
+def test_removal_wins_before_first_capture_fence_and_candidates_stay_tracked(room, monkeypatch):
+    from josh_room.room_store_lifecycle import remove_logical_catalog_records
+
+    conditional_put = room.store.conditional_catalog_put
+    removal = None
+    raced = False
+
+    def delete_before_fence(body, expected_etag):
+        nonlocal raced, removal
+        if not raced:
+            raced = True
+            removal = remove_logical_catalog_records(room.context, {LogicalJatIdentity("demo", "history-first")},
+                descriptors={("demo", "history-first"): room.context.selected_descriptor})
+        return conditional_put(body, expected_etag)
+
+    monkeypatch.setattr(room.store, "conditional_catalog_put", delete_before_fence)
+    with pytest.raises(reference.NativeReferenceError, match="publication-uncertain") as caught:
+        capture(room)
+    assert caught.value.committed is True and caught.value.sidecar_published is True
+    assert removal.agent_reference_receipts[0]["objects"]
+    removed = dataclasses.replace(room.context, catalog=Catalog.empty("archive", DOMAIN))
+    report = reference.reconcile_references(removed, {})
+    objects = set(room.store.objects)
+    assert set(report["unreachable_candidates"]) == objects
+    assert report["pending_receipts"]
+    cleanup = reference.complete_removed_references(removed, removal.agent_reference_receipts, descriptors={})
+    assert set(cleanup["removed_objects"]) == objects
+
+
+@pytest.mark.parametrize("fault", ["rejected", "lost-response", "cancelled"])
+def test_copy_fence_fault_keeps_destination_candidates(room, monkeypatch, fault):
+    capture(room)
+    body = descriptor("copy", "copy-point", room.scan)
+    catalog = add_record(room.context.catalog, body, room.scan)
+    copied = dataclasses.replace(room.context, catalog=catalog, project_id="copy",
+        selected_record=catalog.resolve_snapshot("copy", "copy-point"), selected_descriptor=body)
+    room.contexts[("copy", "copy-point")] = copied
+    room.configure(copied, "copy-profile")
+    conditional_put = room.store.conditional_catalog_put
+
+    def failed_fence(data, expected_etag):
+        if fault == "rejected":
+            raise R2Conflict("synthetic deletion won")
+        conditional_put(data, expected_etag)
+        if fault == "lost-response":
+            raise R2PublicationError("synthetic lost copy response", published=True)
+        raise CLICancelled
+
+    monkeypatch.setattr(room.store, "conditional_catalog_put", failed_fence)
+    with pytest.raises(native.NativeAgentError, match="copy-uncertain") as caught:
+        reference.copy_reference(room.context, copied, "copy", "copy-point")
+    assert caught.value.committed is True
+    pending, receipts = reference._pending_objects(copied)
+    assert pending == {entry["object"]["key"] for entry in documents(room, copied)["entries"]}
+    assert receipts
+    assert pending.isdisjoint(entry["object"]["key"] for entry in documents(room)["entries"])
 
 
 def test_candidate_delete_failure_remains_pending_and_does_not_claim_removed(room):

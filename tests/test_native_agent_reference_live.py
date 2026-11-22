@@ -91,7 +91,12 @@ def live(tmp_path, monkeypatch):
     repo = Path(__file__).resolve().parents[1]
 
     def cli(*arguments, ok=True):
-        result = subprocess.run([sys.executable, "-m", "josh_room", *map(str, arguments), "--json"], env={**os.environ, "PYTHONPATH": str(repo / "src")}, capture_output=True, text=True, timeout=180, check=False)
+        environment = {**os.environ, "PYTHONPATH": str(repo / "src")}
+        # Each independent CLI must acquire its own native-keyring material,
+        # including when invoked while the parent holds an open context.
+        for name in ("JOSH_ROOM_IDENTITY", "JOSH_ROOM_ENCRYPTION_MATERIAL", "JOSH_ROOM_SELECTED_DOMAIN", "JOSH_ROOM_SELECTED_RECIPIENTS"):
+            environment.pop(name, None)
+        result = subprocess.run([sys.executable, "-m", "josh_room", *map(str, arguments), "--json"], env=environment, capture_output=True, text=True, timeout=180, check=False)
         try:
             receipt = json.loads(result.stdout)
         except ValueError:
@@ -190,6 +195,64 @@ def test_real_capture_cold_room_copy_and_reference_removal(live):
     report = value.cli("room-store", "reconcile", "--dimension", "recovery-fixture")
     assert "agent_recovery" in report
     value.cli("rooms", "remove", copied_room, "--dimension", "recovery-fixture", "--backend", "minio")
+
+
+def test_real_first_capture_after_absent_close_fences_catalog_removal(live, monkeypatch):
+    from josh_room.room_store_lifecycle import (
+        RoomStoreLifecycleError,
+        remove_logical_catalog_records,
+    )
+
+    with _selected(live) as original:
+        original_document, _ = references._load(original)
+        retained = [entry["object"] for entry in original_document["entries"]]
+    (live.workspace / "synthetic.txt").write_text("synthetic first-capture race\n")
+    point = live.cli("snapshot", "create", live.room, "--dimension", "recovery-fixture", "--backend", "minio",
+                     "--source", live.workspace)["snapshot_id"]
+    assert point != live.point
+    common = ["--dimension", "recovery-fixture", "--room", live.room, "--snapshot", point]
+    with _selected(live, point=point) as selected:
+        assert references.inspect_reference(selected) is None
+        conditional_put = selected.backend.conditional_catalog_put
+        capture_errors = []
+
+        def finish_capture_before_remove(body, expected_etag):
+            # The actual remover has read ABSENT. A separate native-keyring CLI
+            # finishes first capture before the remover sends its stale S3 CAS.
+            try:
+                receipt = live.cli("agents", "recovery-capture", *common, "--workspace", live.workspace,
+                                   "--profile-ref", live.profile_ref(), "--tool", "codex")
+                assert receipt["ok"] and receipt["history_only"]
+                assert references._pending_objects(selected) == (set(), [])
+            except Exception as error:
+                capture_errors.append(error)
+                raise
+            return conditional_put(body, expected_etag)
+
+        monkeypatch.setattr(selected.backend, "conditional_catalog_put", finish_capture_before_remove)
+        with pytest.raises(RoomStoreLifecycleError) as caught:
+            remove_logical_catalog_records(selected, [(live.room, point)])
+        if capture_errors:
+            raise capture_errors[0]
+        assert caught.value.result["publication_state"] == "rejected"
+    # The failed delete has no orphan to hide: the new exact point is live and
+    # verifiable. A fresh normal delete must retain and clean its native objects.
+    verified = live.cli("agents", "recovery-verify", *common, "--workspace", live.workspace,
+                        "--profile-ref", live.profile_ref(), "--tool", "codex")
+    assert verified["sessions"][0]["provider_session_id"] == SESSION
+    with _selected(live, point=point) as selected:
+        document, _ = references._load(selected)
+        candidates = {entry["object"]["key"] for entry in document["entries"]}
+    removed = live.cli("snapshots", "remove", live.room, point, "--dimension", "recovery-fixture", "--backend", "minio")
+    assert set(removed["agent_recovery"]["removed_objects"]) == candidates
+    assert removed["agent_recovery"]["pending_objects"] == []
+    with _selected(live) as original:
+        for reference in retained:
+            assert original.backend.get_bytes(reference["key"], expected_digest=reference["sha256"],
+                                               expected_size=reference["size"])
+        report = references.reconcile_references(original)
+        assert report["unreachable_candidates"] == []
+    live.cli("rooms", "remove", live.room, "--dimension", "recovery-fixture", "--backend", "minio")
 
 
 @pytest.mark.skipif(not os.environ.get("JOSH_ROOM_TEST_REFERENCE_JAT_RUNTIME"), reason="explicit privately acquired pinned JAT runtime receipt required")

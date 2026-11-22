@@ -91,8 +91,13 @@ proof, authenticated closure receipts permit deletion only of known unreferenced
 native ciphertext. Objects still referenced anywhere in the live catalog are
 protected even if a closure entry is misbound. Uncertain cleanup defers Restic forgetting. Encrypted closure
 metadata remains. Absent sidecars create no new remote objects. A racing first
-capture after deletion fails its historical postcheck and becomes a reported
-orphan/uncertain outcome, not a valid resurrected reference.
+capture/copy must also conditionally republish the unchanged catalog before
+discarding its pending-object receipt. Fresh age ciphertext changes the catalog
+ETag without changing its logical contents or revision. This serializes against
+a deletion that read an absent sidecar: either that stale deletion is rejected,
+or capture/copy retains its known candidates and reports an uncertain outcome.
+A fresh deletion retry sees and closes the published reference. Lost fence
+responses and cancellation retain pending receipts; they do not imply rollback.
 
 Pending object receipts are fsynced before upload. Reconcile reports reachable
 objects and known pending candidates, without global enumeration or automatic

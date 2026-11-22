@@ -232,6 +232,20 @@ def _same_history(context):
         _fail("native-reference-historical-binding-mismatch")
 
 
+def _fence_publication(context, guard):
+    # A remover may have read ABSENT before this sidecar existed. Change the
+    # shared catalog ETag before forgetting pending objects, so that remover's
+    # old CAS cannot commit after a successful capture/copy. Preserve catalog
+    # contents/revision; age randomness supplies a new ciphertext and ETag.
+    if not isinstance(context.catalog_etag, str) or not context.catalog_etag:
+        _fail("native-reference-catalog-revision-unavailable")
+    cipher = _encrypt(_canonical_json(context.catalog.body), _recipients(context))
+    guard()
+    context.backend.conditional_catalog_put(cipher, context.catalog_etag)
+    guard()
+    _same_history(context)
+
+
 def _workspace(context, workspace, *, captured_baseline=True):
     from .room_store_operations import scan_workspace_for_status
     from .workspace_state import context_status
@@ -400,7 +414,10 @@ def capture_reference(context, *, grant, tool):
     if actual != grant:
         _fail("native-profile-selector-stale-or-unavailable")
     _workspace(context, workspace)
-    _same_history(context)
+    current = _fresh(context)
+    if _target(current) != _target(context):
+        _fail("native-reference-historical-binding-mismatch")
+    context = current
     document, etag = _load(context)
     if document is not None and (document["captures_closed"] or any((entry["profile"], entry["tool"]) == (binding["profile"], tool) for entry in document["entries"])):
         _fail("native-reference-capture-closed-or-collision")
@@ -448,6 +465,7 @@ def capture_reference(context, *, grant, tool):
         if _grant(context, binding["profile"], tool, workspace, "room-capture") != (grant, binding, admitted):
             _fail("native-admission-changed")
         _same_history(context)
+        _fence_publication(context, commit_guard)
         pending.unlink()
         return {"ok": True, **inspect_reference(context)}
     except (KeyError, ValueError, RuntimeError, OSError, BotoCoreError, ClientError, KeyboardInterrupt, CLICancelled) as error:
@@ -580,6 +598,7 @@ def copy_reference(source_context, destination_context, destination_room_id, des
                              "captures_closed": document["captures_closed"], "entries": entries}, None, before_commit=guard)
         guard()
         _same_history(destination)
+        _fence_publication(destination, guard)
         pending.unlink()
     except (KeyError, ValueError, RuntimeError, OSError, BotoCoreError, ClientError, KeyboardInterrupt, CLICancelled):
         if affected:

@@ -273,3 +273,35 @@ an unchanged point and offline import/rebinding remain separate gates. Every
 agent Save selector stays false; #190 acknowledged that no Save wiring follows
 from this optional capability. No existing provider/user auth, model/paid call,
 merge or publication was used. Release hold remains unchanged.
+
+## First-capture/removal race repair
+
+2026-11-22, Linux, source changes atop
+`b9fdc885c63876c12e079eea0133222aa0fe242e`. Independent review found that a
+first capture could finish after removal read an absent sidecar but before its
+catalog CAS. The successful capture had discarded its pending receipt, leaving
+no candidate in the removal receipt or later reconciliation.
+
+Capture and Copy now fence successful publication through the existing catalog
+CAS before discarding pending receipts. Catalog contents and logical revision
+stay unchanged; fresh age ciphertext changes the ETag. Either the stale deletion
+is rejected, or the publisher retains its known candidates and reports an
+uncertain outcome. Opt-out deletion still creates no native objects. The
+existing live-catalog object protection and authenticated removal receipts are
+unchanged.
+
+| Gate | Observed result |
+| --- | --- |
+| Reproduced regression | FAIL before repair: the deterministic absent-close/finished-capture ordering and four fence fault cases all exposed missing serialization. |
+| Affected tests | PASS, `python -B -m pytest -p no:cacheprovider tests/test_native_agent_reference.py tests/test_room_store_lifecycle.py tests/test_repository_boundary.py -q`: 103 passed in 4.13s. Includes both race orderings, unchanged catalog contents/revision, capture/copy fence rejection, lost response, cancellation/interruption, prior deletion guards and exact command inventory. Real age with synthetic in-memory provider storage. |
+| Boundary regressions | PASS, controller artifact, public storage safety, S3 backend/schema, encryption-domain and Dimension-schema suites: 127 passed in 3.14s. |
+| Real cold lifecycle | PASS, the affected `cold_room` case with a fresh disposable enrolled MinIO and isolated native Secret Service: normal cold Room hydrate, both fresh native history restores/retry, independent Copy, source removal and reference reconciliation. |
+| Real absent-sidecar ordering | PASS, `test_real_first_capture_after_absent_close_fences_catalog_removal`: 1 passed, 3 deselected in 37.94s. A separate normal native-keyring CLI finishes first capture after the remover reads ABSENT. Its stale S3 catalog CAS is rejected; the point remains verifiable. Fresh normal deletion removes exactly its native candidates with none pending, preserves older-point objects and leaves no unreachable reconciliation candidates. |
+| Initial live harness failure | FAIL, the combined run returned 1 passed/1 failed/2 deselected in 79.90s. The nested CLI inherited the parent context's temporary encryption-handoff variables and correctly refused them. The harness now removes only those scoped variables from the child environment, forcing independent native-keyring acquisition. Production guards were not changed. Only the failed race case was rerun; the cold lifecycle pass is retained. |
+| Absent live opt-in | SKIPPED as intended, all 4 real-provider cases in 0.05s without explicit disposable fixture configuration. |
+| Source parity | PASS, both bundled controller copies byte-identical to the canonical changed module. Ruff and `git diff --check` passed. |
+
+The previous installed VSIX receipt predates this repair. This checkpoint does
+not claim a rebuilt/installed VSIX, new immutable controller artifact, Windows
+qualification or a native new turn. No extension JavaScript changed. All Save
+selectors remain false; no release or publication action is authorized.
