@@ -192,7 +192,7 @@ async function main() {
       Object.assign(env, processOptions.env);
       receipt.rcc_process_scope = { home_private: true, mamba_root_private: true,
         temp_private: path.dirname(env.TEMP) === base && env.TMP === env.TEMP,
-        cwd_installed_controller: true, archive_deadline_ms: 180000 };
+        cwd_installed_controller: true, archive_deadline_ms: 300000 };
       const record = event => {
         receipt.rcc_phases ||= {};
         // Bounded local metadata only. RCC archive import is quiet until it

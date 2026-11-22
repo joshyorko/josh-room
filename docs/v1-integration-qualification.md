@@ -344,6 +344,14 @@ The product's version guard is unchanged; full native recovery still requires th
 actual next job result. The failed receipt and successful owned-target cleanup
 remain retained separately.
 
+The `a727ba3` rerun instead reached the acquisition cutoff during cold
+materialization: verified content, one materialization and four Hololib entries
+existed, with one Holotree entry at 180,014 ms. The same immutable archive had
+completed in 110,439 and 124,667 ms in earlier runs. The next existing test allows
+one bounded 300-second acquisition attempt; interpreter, provider and UI limits
+remain unchanged. There is no retry loop, cache/pin substitution, solve or skipped
+verification. A further acquisition timeout remains a blocker rather than a pass.
+
 The exact combined baseline `e67bc289059766db51c7320773305d6e47089e41`
 passed all ten ordinary checks, with two intentional publication skips and no
 unresolved review threads. Its independent recheck closed both remaining UI

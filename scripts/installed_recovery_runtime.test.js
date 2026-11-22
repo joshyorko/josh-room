@@ -57,9 +57,9 @@ test("RCC timeout retains exact phase and safe progress without argv, paths or r
   const records = [];
   let clock = 0;
   assert.throws(() => runCandidatePhase("acquire-archive", "private/rcc.exe", ["private/archive"], {
-    record: event => records.push(event), now: () => clock++ * 180000,
+    record: event => records.push(event), now: () => clock++ * 300000,
     invoke: (_command, _args, options) => {
-      assert.equal(options.timeout, 180000);
+      assert.equal(options.timeout, 300000);
       return { status: null, error: { code: "ETIMEDOUT" }, stdout: "private identity content",
         stderr: "private/account/path Progress: 14/15 extracting archive" };
     },

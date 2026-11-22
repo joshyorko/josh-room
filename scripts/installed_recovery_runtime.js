@@ -32,7 +32,7 @@ function candidateProcessOptions(base, rccHome, controllerRoot, environment) {
 
 function runCandidatePhase(phase, command, args, { env, cwd, record,
   invoke = spawnSync, now = Date.now } = {}) {
-  const deadlines = { "acquire-archive": 180000, "interpreter-probe": 60000 };
+  const deadlines = { "acquire-archive": 300000, "interpreter-probe": 60000 };
   if (!Object.hasOwn(deadlines, phase) || typeof record !== "function") throw new Error("Invalid RCC qualification phase");
   const started = now();
   const event = { phase, state: "RUNNING", deadline_ms: deadlines[phase] };
