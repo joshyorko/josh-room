@@ -267,8 +267,9 @@ completion.
 
 The [native agent recovery checkpoint](docs/native-agent-recovery.md) provides
 host-admitted T3 process isolation and encrypted Codex session-file capture and
-verification. All native restoration is blocked pending crash-safe materialization.
-Codex capture is history-only; T3 and Claude native capture remain blocked. Normal Save and Enter are unchanged.
+verification. Explicit single-session Codex history materialization uses a Linux
+anonymous-inode transaction; whole-profile native restore remains blocked.
+Codex capture/materialization are history-only; T3 and Claude native capture remain blocked. Normal Save and Enter are unchanged.
 
 ## Evidence and current limits
 

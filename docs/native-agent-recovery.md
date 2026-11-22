@@ -10,7 +10,7 @@ Normal Save and Enter do not enable, capture, or restore agent profiles.
 | Provider | This checkpoint | Native cold-resumed new turn |
 | --- | --- | --- |
 | T3 Code | Dedicated process home and provider environment; database capture blocked | NOT RUN; unsafe database projection unresolved |
-| Codex CLI | Admitted sessions-only encrypted capture and in-memory verification; history-only, restore blocked | NOT RUN; provider authentication and a real new-turn acceptance remain required |
+| Codex CLI | Admitted native-file capture/verification and explicit single-session materialization; history-only, whole-profile restore blocked | NOT RUN; provider authentication and a real new-turn acceptance remain required |
 | Claude Code | Dedicated process environment only; capture blocked | NOT RUN; versioned safe capture policy unresolved |
 | Antigravity | Research only | Unsupported |
 | OpenCode | Research only | Unsupported |
@@ -80,9 +80,10 @@ capture or release it as durable native-session support.
   original inventory before publication. Unsupported filesystems, lease breaks,
   source changes, and changed admission reject publication. This proves selected
   file consistency, not that every unmanaged T3 server is stopped.
-- Crash-safe native materialization remains unavailable. Restore never creates
+- Crash-safe whole-profile native materialization remains unavailable. Restore never creates
   plaintext staging, including on cancellation or SIGKILL. In-memory verification
-  remains available; it does not restore a usable native home.
+  remains available. A separate single-session operation is described below;
+  it does not qualify whole-profile restore or native continuation.
 - Only the pinned Codex `0.171.0` JSONL subset is accepted. Other versions,
   compressed rollouts, referenced dependencies, and archived sessions are
   unsupported. Encrypted native-byte verification does not prove provider acceptance.
@@ -135,3 +136,39 @@ local command, not a restorable Room component. Unknown versions, providers, or
 states must be unavailable in Save. No row can report included from these fields.
 The [coordination comment](https://github.com/joshyorko/josh-room/issues/190#issuecomment-7080438208)
 records this boundary. Save/Enter and logical JAT v1 have no agent-state component.
+
+
+## Single-session history materialization
+
+`agents materialize-session` takes the existing explicit profile binding, encrypted
+`--source`, private `--identity` path, and original `--session-id`. It selects exactly
+one approved Codex JSONL file from the encrypted reference. Ambiguous/missing IDs
+fail closed. The target must be a separately configured, host-admitted fresh
+profile at the canonical workspace location. Existing T3/Claude state, other Codex
+files, unknown directories, mismatched native content, or a busy owned profile
+prevent materialization. The original general `restore` operation stays blocked.
+
+The Linux implementation writes verified native bytes into an anonymous
+`O_TMPFILE` inode. After file fsync and renewed host admission, it uses
+`linkat(AT_EMPTY_PATH)` to publish one complete, absent-target file. Parent
+directories are fsynced and their identity rechecked. An unsupported filesystem,
+missing kernel feature/privilege, or path collision has no named-file fallback.
+It does not copy auth, indexes, configuration, attachments, or other session files.
+
+Before commit, SIGKILL releases the anonymous inode without a visible plaintext
+stage. Empty native directory metadata can remain and is safe to retry. After
+commit, the complete final history file can remain even if the process never
+returns a receipt. An uncertain post-link cancellation, fsync, or parent-path
+outcome reports `commit-uncertain` with `committed: true`. Do not delete or overwrite
+that file automatically. Retry the same operation; a matching complete final file
+in an otherwise fresh profile is verified under read leases and acknowledged with
+`recovered_commit: true`. Different existing content is preserved and rejected.
+
+This is a single-file namespace transaction, not a multi-file/home transaction,
+forensic block erasure, or native-resume acceptance. SIGKILL behavior was exercised
+on Linux 7.3.1 x86_64 with tmpfs. Disk-backed filesystems and actual power-loss
+recovery are unqualified. A local tmpfs profile is volatile and must not be treated
+as durable storage. The independent encrypted reference remains the recovery unit.
+Every provider still reports `restore: "blocked"` and `selectable: false` for
+issue #190; Codex additionally reports its separate history-only
+`materialize_session` capability. No Save/Enter integration is enabled.

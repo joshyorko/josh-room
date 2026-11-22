@@ -257,6 +257,13 @@ def test_real_core_capture_and_verify_require_host_admission(authorized, monkeyp
     reference = authorized.references / "retained.age"
     assert agents.capture(root, output=reference, recipients=recipients, **authorized.binding)["ok"]
     assert agents.verify(root, source=reference, identity_paths=keys[:1], **authorized.binding)["ok"]
+    cold = tmp_path / "cold-profile"
+    authorized.grant["profile_root"] = str(cold)
+    write(authorized.directory / admission.POLICY_FILE, authorized.policy)
+    agents.configure(cold, recipients=recipients, **authorized.binding)
+    materialized = agents.materialize_session(cold, source=reference, identity_paths=keys[:1], session_id="11111111-1111-4111-8111-111111111111", **authorized.binding)
+    assert materialized["native_resume_verified"] is False
+    assert (cold / target.relative_to(root)).read_bytes() == target.read_bytes()
     (authorized.directory / admission.POLICY_FILE).unlink()
     with pytest.raises(agents.NativeAgentError, match="admission"):
         agents.capture(root, output=authorized.references / "denied.age", recipients=recipients, **authorized.binding)

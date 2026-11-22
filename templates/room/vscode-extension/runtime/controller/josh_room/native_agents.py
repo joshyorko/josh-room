@@ -40,6 +40,10 @@ CODEX_VERSION = "0.171.0"
 class NativeAgentError(ValueError):
     """A public-safe reason code without source content or paths."""
 
+    def __init__(self, code, *, committed=False):
+        self.committed = committed
+        super().__init__(code)
+
 
 def _fail(reason):
     raise NativeAgentError(reason)
@@ -86,7 +90,7 @@ def capabilities():
         "native_resume_verified": False,
         "providers": {
             "t3": {"capture": "blocked", "reason": "effect-outbox-and-schema-audit-required", "launch": "dedicated-linux-profile", "restore": "blocked", "selectable": False},
-            "codex": {"capture": "history-only", "reason": "new-turn-acceptance-not-run", "allowlist": "dedicated sessions rollout JSONL only", "restore": "blocked", "restore_reason": "crash-safe-materialization-unavailable", "selectable": False},
+            "codex": {"capture": "history-only", "reason": "new-turn-acceptance-not-run", "allowlist": "dedicated sessions rollout JSONL only", "restore": "blocked", "restore_reason": "crash-safe-materialization-unavailable", "materialize_session": "history-only-single-file", "selectable": False},
             "claude": {"capture": "blocked", "reason": "native-policy-and-cold-resume-not-qualified", "restore": "blocked", "selectable": False},
         },
         "storage": "explicit-local-encrypted-reference",
@@ -480,3 +484,73 @@ def verify(root, *, source, identity_paths, **binding):
 def restore(root, *, source, identity_paths, **binding):
     # Named plaintext directories cannot survive SIGKILL safely on ordinary filesystems.
     _fail("crash-safe-materialization-unavailable")
+
+
+def _fresh_session_target(root, relative, *, allow_materialized=False):
+    allowed = set(Path(relative).parents) - {Path(".")}
+    for name in ("t3", "claude"):
+        if any((root / name).iterdir()):
+            _fail("native-profile-not-fresh")
+    for directory, dirs, files in os.walk(root / "codex", followlinks=False):
+        for name in files:
+            if not allow_materialized or (Path(directory) / name).relative_to(root / "codex").as_posix() != relative:
+                _fail("native-profile-not-fresh")
+        for name in dirs:
+            path = Path(directory) / name
+            _canonical(path)
+            verify_private_path(path, directory=True)
+            if path.relative_to(root / "codex") not in allowed:
+                _fail("native-profile-not-fresh")
+
+
+def materialize_session(root, *, source, identity_paths, session_id, **binding):
+    from .native_agent_materialization import MaterializationError, anonymous_file
+
+    binding = _binding(**binding)
+    root = _load(root, binding)
+    recipients = _json(_read(root / POLICY, 4096))["recipients"]
+    admission = _admit(binding, recipients, root=root, operation="materialize-session", destination=source)
+    if not isinstance(session_id, str) or str(uuid.UUID(session_id)) != session_id:
+        _fail("invalid-native-session")
+    with _lock(root), sigterm_cancellation():
+        entries, recovered_recipients = _decode(source, identity_paths, binding)
+        if recipients != recovered_recipients:
+            _fail("profile-recipient-mismatch")
+        selected = [(path, data) for path, data in entries.items()
+                    if _json(data.splitlines()[0])["payload"]["id"] == session_id]
+        if len(selected) != 1:
+            _fail("native-session-missing-or-ambiguous")
+        relative, payload = selected[0]
+        target = root / "codex" / relative
+        _fresh_session_target(root, relative, allow_materialized=True)
+
+        def revalidate(*, allow_materialized=False):
+            if _admit(binding, recipients, root=root, operation="materialize-session", destination=source) != admission:
+                _fail("native-admission-changed")
+            _fresh_session_target(root, relative, allow_materialized=allow_materialized)
+            for directory in (target.parent, *target.parent.parents):
+                if directory.is_relative_to(root) or directory == root.parent:
+                    _fsync_directory(directory)
+
+        if target.exists() or target.is_symlink():
+            with _capture_barrier(root) as (barrier, expected):
+                if barrier.read(target, MAX_BYTES) != payload:
+                    _fail("native-materialization-target-mismatch")
+                revalidate(allow_materialized=True)
+                os.fsync(barrier.sources[target])
+                if _inventory(root) != expected:
+                    _fail("source-changed")
+                barrier.check()
+            return {"ok": True, "state": "history-materialized", "recovered_commit": True,
+                    "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest(),
+                    "scope": "single-session-history-only", "native_resume_verified": False}
+
+        for parent in reversed(target.parent.parents):
+            if parent.is_relative_to(root / "codex") and not parent.exists():
+                parent.mkdir(mode=0o700)
+        target.parent.mkdir(mode=0o700, exist_ok=True)
+        try:
+            result = anonymous_file(target, payload, before_commit=revalidate)
+        except MaterializationError as error:
+            raise NativeAgentError(str(error), committed=error.committed) from None
+    return {**result, "scope": "single-session-history-only", "native_resume_verified": False}

@@ -71,3 +71,40 @@ Remaining gates are live-provider admission acceptance, R2 custody integration,
 crash-safe native materialization, native cold-restored new turns for every
 provider, and installed VSIX/Windows qualification. No merge, release staging,
 deployment, or release publication was performed.
+
+## Anonymous single-session materialization follow-up
+
+This follow-up starts at `609c2f6bd59a5c29509e61f7c9dac089b1b807c8`.
+An unprivileged Linux probe proved `O_TMPFILE` and `linkat(AT_EMPTY_PATH)` work on
+the tested tmpfs. The new explicit `materialize-session` command applies that
+single-file transaction to one validated Codex session selected from an admitted
+encrypted reference. Whole-profile `restore` and every Save component remain
+blocked. This is native-file history recovery, not provider continuation.
+
+| Check | Observed result |
+| --- | --- |
+| Native admission/core/CLI/leases/materialization, controller artifact, repository boundary and public safety | PASS, 148 tests. Same focused command as above plus `tests/test_native_agent_materialization.py`. |
+| Anonymous-inode primitive | PASS, 19 tests. No-overwrite targets, unsupported filesystems, short writes, callback denial, directory replacement, fsync uncertainty, cancellation and SIGKILL before/after publication. |
+| Cold native history pipeline | PASS, real age capture/decrypt, fresh configured profile, one original version-pinned JSONL materialized at its native relative path, byte equality, changed-file refusal and idempotent completed-commit recovery. Host authority is synthetic/mocked; no provider turn. |
+| Interrupted native pipeline | PASS, real encrypted native fixture in a new helper process killed before/after link. Before link: absent file and successful retry. After link: complete matching file and successful recovered-commit verification. |
+| Personal/work gate integration | PASS, real Git observation, synthetic host grants/current keyset and real age plus anonymous materialization. No native auth material copied. |
+| Independent security/comment review | PASS after fixing a post-check parent-rename race and the post-link cancellation/assignment gap. Uncertain committed outcomes now reach CLI receipts. No comment findings. |
+| Extension tests | PASS, 375 passed, 2 existing skips. |
+| Ruff, whitespace, controller/template parity, VSIX packaging | PASS. VSIX SHA256 `b2b3b4d6cdf3039f125e98faf240ceb3781766a76864e4fb5352ac2547b5d47c`. |
+| Runtime | Linux 7.3.1 x86_64, uid 1000, tmpfs. Disk-backed filesystem qualification, physical power-loss testing and forensic erasure NOT RUN and NOT CLAIMED. |
+| Native provider new-turn acceptance | NOT RUN for T3, Codex and Claude. No paid calls. History file materialization does not establish a resumable provider home. |
+
+No named plaintext temporary file is created. Before link, the last FD close
+reclaims the unreachable inode. After link, the complete final file may remain;
+a receipt can report committed uncertainty. Retry verifies the exact expected
+native bytes under a read lease and never overwrites different state. Parent
+metadata is synced and post-link canonical identity is checked before success.
+
+Remaining missing primitives are a credential-free, consistent multi-file native
+home recovery transaction and supported provider continuation after that recovery.
+T3 additionally needs a closed database projection excluding auth and runnable
+effects. Claude still needs a qualified versioned source policy. Safe remaining
+work is disk-backed transaction qualification, per-provider native import/selection
+acceptance, and owner-approved real new-turn tests after native authentication
+is established separately. R2 custody and live MinIO/S3 admission remain untested.
+Release hold remains unchanged.

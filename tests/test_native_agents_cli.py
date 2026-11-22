@@ -99,3 +99,21 @@ def test_chooser_contract_fails_closed_for_every_provider(capsys):
         assert provider["selectable"] is False
         assert provider["restore"] == "blocked"
     assert result["providers"]["codex"]["restore_reason"] == "crash-safe-materialization-unavailable"
+
+
+def test_single_session_materialization_requires_explicit_selection():
+    with pytest.raises(SystemExit):
+        native_agents_cli.build_parser().parse_args(["materialize-session"])
+
+
+def test_materialization_uncertain_commit_is_reported_truthfully(monkeypatch, capsys, tmp_path):
+    flags = binding(tmp_path)
+
+    def uncertain(*args, **kwargs):
+        raise native_agents.NativeAgentError("materialization-commit-uncertain", committed=True)
+
+    monkeypatch.setattr(native_agents, "materialize_session", uncertain)
+    assert cli.main(["agents", "materialize-session", *flags, "--source", str(tmp_path / "reference.age"), "--identity", str(tmp_path / "identity"), "--session-id", "11111111-1111-4111-8111-111111111111"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["state"] == "commit-uncertain" and result["committed"] is True
+    assert result["native_resume_verified"] is False

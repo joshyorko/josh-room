@@ -347,3 +347,84 @@ def test_new_native_file_during_encryption_prevents_publication(profile, identit
     with pytest.raises(agents.NativeAgentError, match="source-changed"):
         agents.capture(root, output=output, recipients=identities[1], **binding)
     assert not output.exists()
+
+
+def test_single_session_cold_materialization_and_completed_commit_recovery(profile, identities, tmp_path):
+    root, binding = profile
+    target = rollout(root, binding)
+    payload = target.read_bytes()
+    reference = tmp_path / "retained.age"
+    agents.capture(root, output=reference, recipients=identities[1], **binding)
+    cold = tmp_path / "cold-profile"
+    agents.configure(cold, recipients=identities[1], **binding)
+    options = {"source": reference, "identity_paths": identities[0][:1], "session_id": "019aaa00-0000-7000-8000-000000000001", **binding}
+    result = agents.materialize_session(cold, **options)
+    assert result["state"] == "history-materialized" and result["native_resume_verified"] is False
+    restored = cold / target.relative_to(root)
+    assert restored.read_bytes() == payload
+    assert agents.materialize_session(cold, **options)["recovered_commit"] is True
+    restored.write_bytes(b"existing different user state")
+    with pytest.raises(agents.NativeAgentError, match="target-mismatch"):
+        agents.materialize_session(cold, **options)
+    assert restored.read_bytes() == b"existing different user state"
+
+
+def test_single_session_materialization_refuses_used_profile(profile, identities, tmp_path):
+    root, binding = profile
+    rollout(root, binding)
+    reference = tmp_path / "retained.age"
+    agents.capture(root, output=reference, recipients=identities[1], **binding)
+    cold = tmp_path / "cold-profile"
+    agents.configure(cold, recipients=identities[1], **binding)
+    (cold / "t3/userdata").mkdir(mode=0o700)
+    with pytest.raises(agents.NativeAgentError, match="profile-not-fresh"):
+        agents.materialize_session(cold, source=reference, identity_paths=identities[0][:1], session_id="019aaa00-0000-7000-8000-000000000001", **binding)
+    assert list((cold / "codex").iterdir()) == []
+
+
+@pytest.mark.parametrize("phase", ["before", "after"])
+def test_killed_native_session_materialization_recovers_absent_or_complete(profile, identities, tmp_path, phase):
+    import select
+
+    root, binding = profile
+    target = rollout(root, binding)
+    expected = target.read_bytes()
+    reference = tmp_path / "retained.age"
+    agents.capture(root, output=reference, recipients=identities[1], **binding)
+    cold = tmp_path / "cold-profile"
+    agents.configure(cold, recipients=identities[1], **binding)
+    script = """import sys,time
+from pathlib import Path
+from josh_room import native_agents as agents,native_agent_materialization as materialization
+agents._admit=lambda *a,**k: {}
+actual=materialization._link_anonymous
+phase=sys.argv[5]
+def interrupted_link(*args):
+    if phase=='after': actual(*args)
+    print('ready',flush=True)
+    time.sleep(60)
+materialization._link_anonymous=interrupted_link
+agents.materialize_session(Path(sys.argv[1]),source=Path(sys.argv[2]),identity_paths=[Path(sys.argv[3])],session_id='019aaa00-0000-7000-8000-000000000001',dimension='synthetic-dimension',room='demo-room',profile='synthetic-profile',workspace=Path(sys.argv[4]))
+"""
+    environment = dict(os.environ, PYTHONPATH=str(Path(agents.__file__).parents[1]))
+    child = subprocess.Popen([sys.executable, "-c", script, str(cold), str(reference), str(identities[0][0]), str(binding["workspace"]), phase], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+    try:
+        assert select.select([child.stdout], [], [], 5)[0]
+        assert child.stdout.readline().strip() == b"ready"
+        child.kill()
+        child.wait(timeout=5)
+        final = cold / target.relative_to(root)
+        if phase == "before":
+            assert not final.exists()
+        else:
+            assert final.read_bytes() == expected
+        result = agents.materialize_session(cold, source=reference, identity_paths=identities[0][:1], session_id="019aaa00-0000-7000-8000-000000000001", **binding)
+        assert result["native_resume_verified"] is False
+        assert final.read_bytes() == expected
+        assert not list(cold.rglob(".native-*"))
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+        child.stdout.close()
+        child.stderr.close()
