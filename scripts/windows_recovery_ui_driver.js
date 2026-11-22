@@ -4,6 +4,7 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { applyInstalledRuntime } = require("./installed_recovery_runtime");
 const base = process.env.JOSH_ROOM_ACCEPTANCE_ROOT;
 const hash = value => crypto.createHash("sha256").update(value).digest("hex");
 const write = (name, value) => fs.writeFileSync(path.join(base, name), JSON.stringify(value));
@@ -11,8 +12,8 @@ const write = (name, value) => fs.writeFileSync(path.join(base, name), JSON.stri
 exports.activate = async context => {
   const target = vscode.extensions.getExtension("joshyorko.josh-room");
   if (!target) throw new Error("Candidate VSIX was not installed");
-  const extension = require(path.join(target.extensionPath, "extension"));
-  extension.__test__.setRuntimeForTests({
+  await target.activate();
+  const runtimeModuleCount = applyInstalledRuntime(target.extensionPath, {
     command: process.env.JOSH_ROOM_ACCEPTANCE_PYTHON,
     args: args => ["-m", "josh_room", ...args, "--json"],
     env: { PYTHONPATH: path.join(target.extensionPath, "runtime/controller"),
@@ -22,7 +23,6 @@ exports.activate = async context => {
       XDG_RUNTIME_DIR: path.join(base, "provider-runtime") },
     mode: "local-build-fallback",
   });
-  await target.activate();
   const pins = JSON.parse(fs.readFileSync(path.join(base, "provider-pins.json"), "utf8"));
   let invocation = 0;
   context.subscriptions.push(vscode.commands.registerCommand("recoveryFixture.start", async () => {
@@ -76,5 +76,6 @@ exports.activate = async context => {
     }
   }));
   write("ui-driver-ready.json", { state: "PASS", installed_extension: true,
-    runtime: "source-Python-fallback-not-immutable-RCC", command: "joshRoom.browseRecoveryPoint" });
+    runtime: "source-Python-fallback-not-immutable-RCC", command: "joshRoom.browseRecoveryPoint",
+    activated_runtime_modules_matched: runtimeModuleCount });
 };

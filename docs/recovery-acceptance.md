@@ -164,7 +164,10 @@ installed UI/provider job. Existing explicit material handoffs keep their
 current admission; this does not relax legacy handoff checks.
 
 A small development driver selects the installed controller source using the
-existing `local-build-fallback` test hook. **This explicitly does not qualify an
+existing `local-build-fallback` test hook after activation, matching the loaded
+entry module by canonical path (case-insensitively on Windows). It fails closed
+if the activated module hook cannot be found, rather than silently starting an
+unintended artifact import. **This explicitly does not qualify an
 immutable RCC feature artifact.** It registers harness entry points which call
 the actual `joshRoom.browseRecoveryPoint`; it does not replace pickers, provider
 calls, CLI results or recovery callbacks. Loopback Electron CDP sends real key

@@ -169,6 +169,7 @@ async function main() {
     const driver = path.join(base, "driver");
     await fsp.mkdir(driver);
     await fsp.copyFile(path.join(__dirname, "windows_recovery_ui_driver.js"), path.join(driver, "extension.js"));
+    await fsp.copyFile(path.join(__dirname, "installed_recovery_runtime.js"), path.join(driver, "installed_recovery_runtime.js"));
     await fsp.writeFile(path.join(driver, "package.json"), JSON.stringify({ name: "recovery-fixture",
       publisher: "synthetic", version: "0.0.1", engines: { vscode: "^1.90.0" },
       main: "extension.js", activationEvents: ["onStartupFinished"], contributes: { commands: [

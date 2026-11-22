@@ -71,7 +71,7 @@ jobs:
         run: uv run python scripts/request_release.py validate --root . --branch "$SOURCE_BRANCH"
       - run: uv run ruff check src tests
       - run: uv run pytest -q
-      - run: node --test vscode-extension/*.test.js scripts/verify_node_version.test.js
+      - run: node --test vscode-extension/*.test.js scripts/verify_node_version.test.js scripts/installed_recovery_runtime.test.js
       - run: node --experimental-strip-types --test omp-extension/tests/*.test.mjs
       - run: git diff --check
 
@@ -148,6 +148,8 @@ jobs:
         run: |
           node scripts/verify_node_version.js --minimum $env:NODE_VERSION --source-sha $env:GITHUB_SHA --report (Join-Path $env:RUNNER_TEMP "windows-recovery-node.json")
           if ($LASTEXITCODE -ne 0) { throw "Patched Node runtime verification failed" }
+          node --test scripts/installed_recovery_runtime.test.js
+          if ($LASTEXITCODE -ne 0) { throw "Installed runtime adapter regression failed" }
           $python = uv run python -c "import sys; print(sys.executable)"
           if ($LASTEXITCODE -ne 0) { throw "Project Python unavailable" }
           $env:JOSH_ROOM_ACCEPTANCE_PYTHON = $python.Trim()
