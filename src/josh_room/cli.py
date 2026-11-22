@@ -3373,8 +3373,7 @@ def _json_safe(value, *, key="", depth=0):
     if depth > 8:
         return "<result depth limit>"
     lowered = key.lower()
-    # A public content digest is not a credential-bearing token.
-    if lowered == "component_plan_token":
+    if key == "component_plan_token":
         return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else "<redacted>"
     if lowered not in _JSON_PUBLIC_CONFIRMATION_KEYS and (
         lowered in _JSON_SENSITIVE_KEYS

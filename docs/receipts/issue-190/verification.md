@@ -27,9 +27,9 @@ runner, a minimal separate test-driver extension as `--extensionDevelopmentPath`
 and loopback `--remote-debugging-port=19390`. The screenshot is of the actual
 installed native UI. This exercises the installed picker module and activation;
 it does **not** invoke a complete Save through the registered commands.
-`installed-picker.json` records that limit explicitly. Full installed Save needs
-an isolated enrolled synthetic provider/Secret Service and qualified managed
-runtime. Coordination with #209 is in progress; never use the real host keyring.
+`installed-picker.json` records that limit explicitly. That initial picker trial did not perform Save. The later registered Save trial
+below uses isolated real provider/Secret Service; managed RCC artifact execution
+is still separate. Never use the real host keyring.
 
 The native run exposed that trailing separator-only unavailable rows disappear
 in VS Code. They are now visible explicitly unavailable entries; selecting one
@@ -103,3 +103,57 @@ Actual pinned local Restic regression with synthetic Homebrew archive bytes:
 PASS unchanged-workspace + changed-selected-archive creates a new logical point;
 unchanged archive and explicit keep return already-saved; explicit omit retains
 historical encrypted objects. JAT validation is a fixture here, not managed JAT.
+
+## Registered installed Save with real disposable provider
+
+PASS: actual installed `joshRoom.save`, native chooser and coherent preview,
+normal controller encryption/catalog/Restic publication against real pinned
+loopback MinIO and production Secret Service on its own task-only D-Bus/socket.
+The sequence saved a new point, repeated as already-saved, then cancelled a
+preview after another source edit. A subsequent normal CLI catalog read verified
+exactly four points (three seeded plus one registered Save), preserving the
+three earlier points and the same latest/marker on repeat and cancellation.
+See `registered-save.json`, `registered-save-preview.png` and the driver.
+
+Runtime limitation: the installed registered handler uses its existing
+`__test__.setRuntimeForTests` with an explicit `local-build-fallback` Python
+command loading the installed VSIX's controller sources. This bypasses managed
+RCC artifact selection only. Native keyring, provider, CLI, capture policy,
+preview token, Restic and publication paths are real. An empty task-local JAT
+log root satisfies the adapter's log follower contract; no JAT binary or artifact
+was represented as present and no JAT-owned component capture was tested.
+This is **not managed RCC artifact acceptance**.
+
+The fixture followed #209's isolated recipe: a no-network unprivileged
+Secret Service container, generated provider credentials kept only in its
+production keyring, hash-verified official MinIO on task-specific loopback
+ports, normal bucket/encryption enrollment, transient recovery handoff removed
+after enrollment, and an observed foreground MinIO runner for test lifetime.
+A too-permissive task runtime directory was refused and fixed before seeding.
+The initial adapter omitted JAT's log-root field; adding an empty log root fixed
+the test adapter without changing product security. The first real registered
+create then exposed the CLI public-token redaction bug, which was repaired and
+retested successfully. No failed attempt is counted as success.
+
+Remaining gates: managed RCC execution, managed JAT Homebrew roundtrip, external
+component real-provider selection, fresh installed Homebrew closure safety,
+Windows/macOS native UI and #188 Dimension-authorized agent capture.
+
+Final exact-case public field hardening: `component_plan_token` only, with an
+exact lowercase SHA256 shape. Uppercase field aliases, malformed/non-string/
+uppercase/short/long values, unrelated token/credential fields and sensitive
+parents retain default redaction. Independent read-only narrow review found no
+redaction bypass. Preview → bounded JSON → create success and replay after a
+new latest snapshot rejection: PASS with pinned local Restic. Exact-key
+serializer/CLI/security suite: PASS 115. Final repackaged registered Save
+sequence passed again; catalog count rose by exactly one (4 → 5) and retained
+all prior points, with repeat/cancel adding none.
+
+Actual installed `joshRoom.new` and `joshRoom.saveFolderAs` also PASS against
+the same isolated real provider/keyring in a separate synthetic source folder.
+They traversed actual native folder/name/Room/onboarding controls and the same
+component chooser/preview. New Room created the project; Save Folder As wrote
+a second distinct point bound to that Room/Dimension. The built-in native
+simple folder dialog setting was enabled only in the disposable VS Code
+profile. No picker API was mocked. See `registered-new-folder.json` and driver.
+Both retain the explicit source-Python override limitation.

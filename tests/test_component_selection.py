@@ -111,3 +111,16 @@ def test_cli_json_preserves_only_public_plan_digest_and_redacts_credentials(caps
     assert result['other_token'] == '<redacted>'
     emit({'ok': True, 'component_plan_token': 'not-a-public-digest'}, True)
     assert json.loads(capsys.readouterr().out)['component_plan_token'] == '<redacted>'
+
+
+@pytest.mark.parametrize('malformed', [None, 123, {}, ['a' * 64], 'A' * 64, 'a' * 63, 'a' * 65])
+def test_public_plan_digest_exception_rejects_malformed_shapes(malformed):
+    from josh_room.cli import _bounded_json_result
+    assert _bounded_json_result({'component_plan_token': malformed})['component_plan_token'] == '<redacted>'
+
+
+def test_public_plan_digest_does_not_weaken_other_secret_keys():
+    from josh_room.cli import _bounded_json_result
+    keys = ['password', 'access_key_id', 'secret_access_key', 'identity', 'session_token', 'nested_token', 'component_plan_token_other', 'COMPONENT_PLAN_TOKEN', 'component-plan-token']
+    result = _bounded_json_result(dict.fromkeys(keys, 'a' * 64))
+    assert set(result.values()) == {'<redacted>'}

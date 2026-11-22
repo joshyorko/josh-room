@@ -126,7 +126,10 @@ Preview tokens bind the Room, Dimension, source path, prior logical snapshot,
 capture policy, selection and explicit external input bytes. Save checks a
 supplied token before preparation, after component resolution, and before
 publication. OCI tags are resolved during Save rather than pinned by preview.
-Installed VSIX interaction and Windows/macOS remain unqualified. Those limits
+Installed native Save/preview/repeat/cancel are verified on Linux with an explicit
+source-controller local-build-fallback override and disposable real provider/
+Secret Service; managed RCC artifact execution and Windows/macOS remain
+unqualified. Those limits
 must remain visible in PR evidence; it is not completion of issue #190 or release
 qualification. Logical JAT v1 gains no new slots; existing copy/export/verify/
 remove reachability continues to operate on the three validated component types.

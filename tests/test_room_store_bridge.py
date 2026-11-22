@@ -1937,7 +1937,11 @@ def test_component_preview_token_refuses_new_latest_before_capture(tmp_path, mon
     (workspace / 'notes.txt').write_text('synthetic one')
     request = {'format_version': 1, 'components': dict.fromkeys(COMPONENTS, 'keep')}
     preview = bridge.preview_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request)
-    bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request)
+    from josh_room.cli import _bounded_json_result
+    preview = json.loads(json.dumps(_bounded_json_result(preview)))
+    assert len(preview['component_plan_token']) == 64
+    first = bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request, component_plan_token=preview['component_plan_token'])
+    assert first['status'] == 'saved'
     with pytest.raises(bridge.RoomStoreBridgeError, match='stale'):
         bridge.save_room_store(tmp_path / 'instance', dimension, 'synthetic-room', workspace, material, components=[], component_selection=request, component_plan_token=preview['component_plan_token'])
 
