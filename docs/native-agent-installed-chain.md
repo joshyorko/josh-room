@@ -104,9 +104,10 @@ It is a one-turn fixture; a repeat requires newly registered fresh restores.
 
 The combined installed/source-override/local-test-backend gate is now qualified.
 It does not qualify immutable RCC, hosted accounts, general native formats,
-Windows, automatic Save/Enter integration or original-T3 restoration. Optional
-T3-mediated continuation remains blocked by the separate
-[strict-policy restriction](t3-synthetic-continuation-restriction.md). Production
+Windows, automatic Save/Enter integration or original-T3 restoration. A separate
+[contained T3 imported-Codex prototype](t3-contained-codex-continuation.md)
+subsequently qualified a synthetic turn, not this installed Room-to-T3 chain.
+Claude-through-T3 remains unrun. Production
 capabilities and all Save selectors remain unchanged/false. No merge, release
 staging or release publication was performed. See the
 [usable-mode matrix](native-agent-usable-modes.md) for owner review.

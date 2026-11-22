@@ -358,7 +358,7 @@ for deterministic local test backends with a disclosed source-runtime override.
 | Final public/controller/format boundaries | PASS, staged storage safety, repository inventory, controller artifact/parity, closed Claude-format and default combined-test suites: 112 passed, 2 explicit opt-out skips in 3.33s. Ruff, staged whitespace and unchanged production/controller diff checks passed. |
 | Opt-out/namespace boundaries | Default combined test: 2 skipped in 0.07s without a private receipt. Explicit host-namespace attempts: 2 expected guard failures in 0.09s before receipt reads/native invocation. |
 | Independent static review | SCOPED PASS for exact restored-file flow, namespace ordering, source/package/installed comparisons, absent source, Room marker, native IDs/context/turns and comments. Static/whitespace only; actual UI/provider evidence retained separately. No syscall or independent runtime rerun claimed. |
-| Optional T3 continuation | BLOCKED by versioned strict-policy contract, no turn/server/auth session attempted. T3 `.5098` source forces the Codex plan tool after launch overrides; Claude supplies tools/MCP/SDK Stop hooks without an established strict-disable setting. No production worker/security boundary changed. |
+| Optional T3 continuation at this checkpoint | NOT RUN in this installed chain. The then-reported blanket strict-tools prerequisite was subsequently superseded by the separate contained Codex prototype below. No production worker/security boundary changed. |
 
 The existing installed-source `local-build-fallback` override ran the **installed
 controller**, not an immutable new RCC artifact. Source/package parity and real
@@ -366,10 +366,45 @@ registered execution do not establish immutable runtime, hosted accounts or
 Windows qualification. The [combined receipt](native-agent-installed-chain.md)
 records actual runtime/artifact details and setup/probe failures. The
 [usable-mode matrix](native-agent-usable-modes.md) distinguishes runnable narrow
-modes from required broader scope; the [T3 restriction](t3-synthetic-continuation-restriction.md)
-identifies its minimal upstream policy need.
+modes from required broader scope; the [T3 restriction correction](t3-synthetic-continuation-restriction.md)
+separates later contained-Codex evidence from the remaining original-T3 API gap.
 
 All owned native/workbench/Xvfb/MinIO/keyring processes and task images were
 stopped before task cleanup. Shared runtime caches/base images were preserved.
 Save selectors remain false, original-T3 restoration remains unsupported, and
 the owner release hold remains. No merge, release staging or publication occurred.
+
+## Contained T3 imported-Codex continuation follow-up
+
+2026-11-22. Two fresh real-age cold-file prototypes completed supported
+`agentSessions.scan/import` and a normal T3-adapter Codex turn each. Original
+native UUID/cwd/prefix survived; T3 used a **new derived app ID**. Each attempt
+made one authenticated deterministic loopback POST, declared seven top-level
+tools/namespaces and executed zero tools. Native output persisted; workspace
+content stayed unchanged. One T3 run/attempt/provider turn completed, with the
+expected provider-start/checkpoint effects and no scheduled tasks or
+tool/subagent items. This is not zero-effect or original-T3 restoration evidence.
+
+The read-only-rootfs, no-external-route container exposed only owned fixtures and
+exact read-only public runtimes. Local disposable control/backend credentials
+were separate from existing user/provider auth. No hosted/paid calls occurred.
+See [exact runtime pins, declarations, containment and limits](t3-contained-codex-continuation.md).
+This was a bounded prototype, not a committed regression suite or installed
+Room/MinIO-to-T3 chain. Claude-through-T3 remains not run. Production guards and
+all-false Save selectors remain unchanged; an empty declaration list is no
+longer reported as an intrinsic upstream requirement for this contained case.
+
+## Claude recapture and immutable history v2
+
+Dependent draft #219 adds closed Claude policy/archive v2 and immutable captures
+at one unchanged Room point. See the [source-bound acceptance receipt](native-capture-history-acceptance.md)
+and [versioned contract](native-capture-history-contract.md) for exact gates.
+The real native Claude loopback cycle retains all 14 rows through a second cold
+restore; fixture history/lifecycle and independent security checks pass. The
+full pinned-Restic Python suite has 2923 passes and 58 explicit skips, and Node
+has 396 passes and 2 existing skips. Fresh native-custody MinIO history lifecycle
+passed, and rebuilt installed commands exercised both providers' captures,
+zero-write no-ops and explicit historical cold restores. Four installed receipt
+assertions passed independently in the parent. These are separate gates; none is
+inferred from package parity or fixture tests. All selectors
+remain false, and the owner release hold remains.

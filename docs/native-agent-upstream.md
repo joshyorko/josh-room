@@ -12,9 +12,9 @@ no credential was copied, and no hosted model request was made for this audit.
 
 | Harness | Examined version | Supported upstream location / continuation surface | Josh Room acceptance gate |
 | --- | --- | --- | --- |
-| T3 Code | Earlier `.5085`; current installed `0.1.12-nightly.20261122.5098` separately audited at public source `1d028248683f90f405b2d8e7b71682e3b67317ed` | `--base-dir` / `T3CODE_HOME`; one server-wide home; `userdata/statev2.sqlite`; provider-specific continuation bindings | Dedicated-profile launch can be isolated. Whole-database capture is blocked: database includes authentication and runnable outbox state. Native cold continuation NOT PROVEN. |
-| Codex CLI | Installed `0.171.0`; public source `cf3ff1530d821ec2d26452da4971d8e3e7d18d25` | `CODEX_HOME`; `sessions`, `archived_sessions`; `codex resume SESSION_ID`; `--all` disables cwd picker filtering | Original-ID cold native resume plus one turn verified through the installed app-server against a deterministic loopback Responses backend. Hosted/account and T3-mediated continuity remain unqualified. |
-| Claude Code | Installed `2.1.310` | `CLAUDE_CONFIG_DIR` documented location contract; installed `claude --resume ID` / `--continue`; directory-associated history | Narrow main linear text-only native-file slice plus original-ID cold native resume/one turn verified against a deterministic loopback Messages backend. Richer post-turn recapture is refused; hosted/account and T3-mediated continuation remain unqualified. |
+| T3 Code | Earlier `.5085`; current installed `0.1.12-nightly.20261122.5098` separately audited at public source `1d028248683f90f405b2d8e7b71682e3b67317ed` | `--base-dir` / `T3CODE_HOME`; one server-wide home; `userdata/statev2.sqlite`; provider-specific continuation bindings | Dedicated-profile launch can be isolated. Whole-database capture is blocked: database includes authentication and runnable outbox state. [Contained imported-Codex turns](t3-contained-codex-continuation.md) preserve native identity under a new T3 ID; original-T3 restoration and Claude-through-T3 remain unqualified. |
+| Codex CLI | Installed `0.171.0`; public source `cf3ff1530d821ec2d26452da4971d8e3e7d18d25` | `CODEX_HOME`; `sessions`, `archived_sessions`; `codex resume SESSION_ID`; `--all` disables cwd picker filtering | Original-ID cold native resume plus one turn verified through the installed app-server against a deterministic loopback Responses backend; separate contained T3 import/turn prototypes also passed. Hosted/account and general T3 continuity remain unqualified. |
+| Claude Code | Installed `2.1.310` | `CLAUDE_CONFIG_DIR` documented location contract; installed `claude --resume ID` / `--continue`; directory-associated history | Narrow main linear text history plus original-ID cold resume/one deterministic loopback turn. [Closed archive/policy v2](claude-recapture-v2.md) now recaptures all observed 14 tool-free post-turn rows and supports a second cold restore at the same Room point. Unknown/delta trace formats, hosted/account and T3-mediated continuation remain unqualified. |
 | OpenCode | Public source `ee5fe34e136488a1839ac73bcca8321c51a31b75`; CLI package `2.3.0` | Explicit `OPENCODE_DB`; channel-aware SQLite filename; public session/storage APIs need version-specific qualification | Optional follow-up only. Current database credential service stores OAuth/API credential values; copying the database is unsafe. No installed synthetic cold-resume evidence. |
 | Antigravity | No installed/versioned native persistence contract qualified | Official documentation entry point inspected; no supported portable native storage/restore contract established | Optional follow-up only. No safe allowlist, versioned schema, licensing qualification or synthetic cold-resume evidence. |
 
@@ -217,8 +217,9 @@ continuation remain unverified, and every Save selector stays unavailable.
 
 The later [installed durable-reference chain](native-agent-installed-chain.md)
 qualifies the reviewed controller through actual registered restore and direct
-native turns with deterministic local backends. The optional T3-mediated turn
-audit found a separate [strict-policy restriction](t3-synthetic-continuation-restriction.md):
-Codex request overrides force a plan tool, and no supported Claude strict
-tools/MCP/hooks-disable policy was established. No production worker boundary
-was relaxed and no T3 turn was attempted.
+native turns with deterministic local backends. The later
+[contained T3 imported-Codex receipt](t3-contained-codex-continuation.md) records two
+successful normal-adapter synthetic turns, seven top-level declarations and zero
+tool calls. This [supersedes the blanket empty-tools prerequisite](t3-synthetic-continuation-restriction.md),
+without qualifying Claude-through-T3, hosted/account use or original-T3 recovery.
+No production worker boundary was relaxed; all Save selectors remain false.

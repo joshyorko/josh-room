@@ -7389,7 +7389,8 @@ test("Room Agent Sessions passes the chosen opaque profile and rejects continuat
   assert.deepEqual(unsupported.quickPickCalls, []);
 });
 
-function agentRecoveryFixture({ profiles, receiptOverrides, sessions } = {}) {
+function agentRecoveryFixture({ profiles, receiptOverrides, sessions, captures, statusOverrides,
+  captureOverrides, verifyOverrides, restoreOverrides } = {}) {
   const mock = createVscodeMock(__dirname);
   const profile = { profile_ref: "a".repeat(64), scope: "personal", state: "configured",
     tools: ["codex"], room_reference_allowed: true, profile_root: "/private/never-show" };
@@ -7401,14 +7402,20 @@ function agentRecoveryFixture({ profiles, receiptOverrides, sessions } = {}) {
   const row = { project, snapshot: project.snapshots[0], snapshot_id: point };
   const receipt = { ok: true, history_only: true, native_resume_verified: false,
     original_t3_identity_restored: false, ...receiptOverrides };
+  const capture = { profile: "personal", tool: "codex", scope: "personal", created_at: "2026-11-22T12:34:56+00:00",
+    capture_id: "c".repeat(64), content_sha256: "d".repeat(64), legacy: false, capture_closed: false };
   const harness = createSpawnHarness(({ args }) => {
     assert.equal(args[0], "agents", "agent recovery must not load catalog through the VSIX credential path");
     if (args[1] === "room-status") return { stdout: JSON.stringify({ ok: true, profiles: profiles || [profile] }) };
     if (args[1] === "recovery-status") return { stdout: JSON.stringify({ ...receipt,
-      state: "history-reference", entries: [{ profile: "personal", tool: "codex", scope: "personal" }] }) };
-    if (args[1] === "recovery-capture") return { stdout: JSON.stringify({ ...receipt, state: "history-reference" }) };
-    if (args[1] === "recovery-verify") return { stdout: JSON.stringify({ ...receipt, sessions: sessions || [session] }) };
-    if (args[1] === "recovery-restore") return { stdout: JSON.stringify({ ...receipt, state: "history-materialized" }) };
+      state: "history-reference", contract_version: 2, format: "josh-room.agent-references.v2",
+      entries: captures || [capture], ...statusOverrides }) };
+    if (args[1] === "recovery-capture") return { stdout: JSON.stringify({ ...receipt, state: "history-reference",
+      capture_id: capture.capture_id, created: true, noop: false, data_uploaded: 128, ...captureOverrides }) };
+    if (args[1] === "recovery-verify") return { stdout: JSON.stringify({ ...receipt, sessions: sessions || [session],
+      capture_id: args[args.indexOf("--capture-id") + 1], ...verifyOverrides }) };
+    if (args[1] === "recovery-restore") return { stdout: JSON.stringify({ ...receipt, state: "history-materialized",
+      capture_id: args[args.indexOf("--capture-id") + 1], ...restoreOverrides }) };
     throw new Error("Unexpected agent recovery operation");
   });
   const extension = loadExtension(mock.vscode, harness.spawn);
@@ -7416,7 +7423,7 @@ function agentRecoveryFixture({ profiles, receiptOverrides, sessions } = {}) {
   extension.__test__.setExtensionContextForTests({ secrets: { get: async () => {
     throw new Error("agent recovery must not copy VSIX credentials");
   } } });
-  return { ...mock, extension, harness, profile, session, row, point, receipt };
+  return { ...mock, extension, harness, profile, session, row, point, receipt, capture };
 }
 
 test("agent recovery commands are registered lazily on logical JAT rows", () => {
@@ -7452,7 +7459,17 @@ test("agent recovery status binds the selected older point and stays metadata-on
   assert.match(fixture.infoCalls[0][0], /History only/);
   assert.match(fixture.infoCalls[0][0], /continuation.*unverified/);
   assert.match(fixture.infoCalls[0][0], /Save and Enter do not include agent state/);
+  assert.match(fixture.infoCalls[0][0], /Codex · 2026-11-22T12:34:56\+00:00 · c{12}…/);
   assert.deepEqual(fixture.quickPickCalls, []);
+});
+
+test("agent recovery absent and filtered-empty references cannot restore a capture", async () => {
+  for (const statusOverrides of [{ state: "reference-absent", format: null, entries: [] }, { entries: [] }]) {
+    const fixture = agentRecoveryFixture({ statusOverrides });
+    assert.equal(await fixture.extension.__test__.restoreAgentRecovery(fixture.row), "unavailable");
+    assert.deepEqual(fixture.harness.calls.map((call) => call.args[1]), ["room-status", "recovery-status"]);
+    assert.deepEqual(fixture.quickPickCalls, []);
+  }
 });
 
 test("agent recovery capture requires explicit reference opt-in before mutation", async () => {
@@ -7485,8 +7502,14 @@ test("agent recovery restore verifies the selected history then restores only it
   fixture.quickPickResponses.push({ provider_session_id: fixture.session.provider_session_id });
   fixture.warningResponses.push("Restore Native History");
   assert.equal(await fixture.extension.__test__.restoreAgentRecovery(fixture.row), "restored");
-  assert.deepEqual(fixture.harness.calls.map((call) => call.args[1]), ["room-status", "recovery-verify", "recovery-restore"]);
-  const args = fixture.harness.calls[2].args;
+  assert.deepEqual(fixture.harness.calls.map((call) => call.args[1]), ["room-status", "recovery-status", "recovery-verify", "recovery-restore"]);
+  assert.deepEqual(fixture.harness.calls[1].args, ["agents", "recovery-status", "--dimension", "backup",
+    "--room", "demo-room", "--snapshot", fixture.point, "--workspace", __dirname,
+    "--profile-ref", fixture.profile.profile_ref, "--tool", "codex", "--json"]);
+  for (const call of fixture.harness.calls.slice(2)) {
+    assert.equal(call.args[call.args.indexOf("--capture-id") + 1], fixture.capture.capture_id);
+  }
+  const args = fixture.harness.calls[3].args;
   assert.equal(args[args.indexOf("--snapshot") + 1], fixture.point);
   assert.equal(args[args.indexOf("--session-id") + 1], fixture.session.provider_session_id);
   assert.match(fixture.warningCalls[0][0], /Existing files will not be overwritten/);
@@ -7497,11 +7520,11 @@ test("agent recovery restore verifies the selected history then restores only it
 test("agent recovery restore cancellation and unsupported receipts never materialize", async () => {
   const cancelled = agentRecoveryFixture();
   assert.equal(await cancelled.extension.__test__.restoreAgentRecovery(cancelled.row), "cancelled");
-  assert.equal(cancelled.harness.calls.length, 2);
+  assert.equal(cancelled.harness.calls.length, 3);
   const denied = agentRecoveryFixture();
   denied.quickPickResponses.push({ provider_session_id: denied.session.provider_session_id });
   assert.equal(await denied.extension.__test__.restoreAgentRecovery(denied.row), "cancelled");
-  assert.equal(denied.harness.calls.length, 2);
+  assert.equal(denied.harness.calls.length, 3);
   const unsupported = agentRecoveryFixture({ receiptOverrides: { native_resume_verified: true } });
   await assert.rejects(unsupported.extension.__test__.restoreAgentRecovery(unsupported.row), /unsupported history receipt/);
   assert.equal(unsupported.harness.calls.length, 2);
@@ -7518,7 +7541,98 @@ test("agent recovery rejects forged profile and session picker values", async ()
   const session = agentRecoveryFixture();
   session.quickPickResponses.push({ provider_session_id: "22222222-2222-4222-8222-222222222222" });
   await assert.rejects(session.extension.__test__.restoreAgentRecovery(session.row), /verified native session/);
-  assert.equal(session.harness.calls.length, 2);
+  assert.equal(session.harness.calls.length, 3);
+});
+
+test("agent recovery explicitly selects among immutable captures before choosing a native UUID", async () => {
+  const first = agentRecoveryFixture().capture;
+  const second = { ...first, capture_id: "e".repeat(64), created_at: "2026-11-22T13:34:56.123456Z" };
+  const fixture = agentRecoveryFixture({ captures: [first, second] });
+  fixture.quickPickResponses.push({ capture_id: first.capture_id }, { provider_session_id: fixture.session.provider_session_id });
+  fixture.warningResponses.push("Restore Native History");
+  assert.equal(await fixture.extension.__test__.restoreAgentRecovery(fixture.row), "restored");
+  assert.deepEqual(fixture.quickPickCalls[0].items.map((entry) => entry.capture_id), [first.capture_id, second.capture_id]);
+  assert.match(fixture.quickPickCalls[0].options.placeHolder, /no latest capture/);
+  for (const call of fixture.harness.calls.slice(2)) {
+    assert.equal(call.args[call.args.indexOf("--capture-id") + 1], first.capture_id);
+  }
+  assert.equal(fixture.quickPickCalls[1].items[0].provider_session_id, fixture.session.provider_session_id);
+});
+
+test("agent recovery selects a single legacy capture by its stable explicit ID", async () => {
+  const capture = { ...agentRecoveryFixture().capture, legacy: true, content_sha256: null };
+  const fixture = agentRecoveryFixture({ captures: [capture], statusOverrides: { format: "josh-room.agent-references.v1" } });
+  fixture.quickPickResponses.push({ provider_session_id: fixture.session.provider_session_id });
+  fixture.warningResponses.push("Restore Native History");
+  assert.equal(await fixture.extension.__test__.restoreAgentRecovery(fixture.row), "restored");
+  assert.equal(fixture.quickPickCalls.length, 1);
+  for (const call of fixture.harness.calls.slice(2)) {
+    assert.equal(call.args[call.args.indexOf("--capture-id") + 1], capture.capture_id);
+  }
+});
+
+test("agent recovery capture-picker cancellation and stale selection stop before verification", async () => {
+  const first = agentRecoveryFixture().capture;
+  const captures = [first, { ...first, capture_id: "e".repeat(64) }];
+  const cancelled = agentRecoveryFixture({ captures });
+  assert.equal(await cancelled.extension.__test__.restoreAgentRecovery(cancelled.row), "cancelled");
+  assert.deepEqual(cancelled.harness.calls.map((call) => call.args[1]), ["room-status", "recovery-status"]);
+  const stale = agentRecoveryFixture({ captures });
+  stale.quickPickResponses.push({ capture_id: "f".repeat(64) });
+  await assert.rejects(stale.extension.__test__.restoreAgentRecovery(stale.row), /currently retained/);
+  assert.equal(stale.harness.calls.length, 2);
+  assert.deepEqual(stale.warningCalls, []);
+});
+
+test("agent recovery rejects unknown contracts and malformed capture metadata before any picker", async () => {
+  const capture = agentRecoveryFixture().capture;
+  for (const statusOverrides of [{ contract_version: 1 }, { contract_version: 3 }, { contract_version: undefined },
+    { format: "josh-room.agent-references.v3" }, { original_t3_identity_restored: undefined }]) {
+    const fixture = agentRecoveryFixture({ statusOverrides });
+    await assert.rejects(fixture.extension.__test__.restoreAgentRecovery(fixture.row), /unsupported reference status/);
+    assert.equal(fixture.harness.calls.length, 2);
+    assert.deepEqual(fixture.quickPickCalls, []);
+  }
+  for (const changed of [{ capture_id: "not-an-id" }, { capture_id: [capture.capture_id] },
+    { content_sha256: [capture.content_sha256] }, { content_sha256: null }, { legacy: true },
+    { created_at: "2026-02-30T12:34:56Z" }, { created_at: "2026-11-22T12:34:56" },
+    { created_at: [capture.created_at] }, { capture_closed: "false" }, { tool: "claude" },
+    { scope: "work" }, { profile: "/private/profile" }, { profile: ["personal"] }]) {
+    const fixture = agentRecoveryFixture({ captures: [{ ...capture, ...changed }] });
+    await assert.rejects(fixture.extension.__test__.restoreAgentRecovery(fixture.row), /unsupported capture history/);
+    assert.equal(fixture.harness.calls.length, 2);
+    assert.deepEqual(fixture.quickPickCalls, []);
+  }
+  const duplicate = agentRecoveryFixture({ captures: [capture, capture] });
+  await assert.rejects(duplicate.extension.__test__.restoreAgentRecovery(duplicate.row), /unsupported capture history/);
+});
+
+test("agent recovery rejects mismatched verification or materialization capture identities", async () => {
+  const mismatch = agentRecoveryFixture({ verifyOverrides: { capture_id: "f".repeat(64) } });
+  await assert.rejects(mismatch.extension.__test__.restoreAgentRecovery(mismatch.row), /different capture identity/);
+  assert.equal(mismatch.harness.calls.length, 3);
+  assert.deepEqual(mismatch.quickPickCalls, []);
+  const missing = agentRecoveryFixture({ verifyOverrides: { capture_id: undefined } });
+  await assert.rejects(missing.extension.__test__.restoreAgentRecovery(missing.row), /different capture identity/);
+  const restore = agentRecoveryFixture({ restoreOverrides: { capture_id: "f".repeat(64) } });
+  restore.quickPickResponses.push({ provider_session_id: restore.session.provider_session_id });
+  restore.warningResponses.push("Restore Native History");
+  await assert.rejects(restore.extension.__test__.restoreAgentRecovery(restore.row), /different capture identity/);
+  assert.equal(restore.infoCalls.length, 0);
+});
+
+test("agent recovery reports unchanged capture as already retained without an upload", async () => {
+  const fixture = agentRecoveryFixture({ captureOverrides: { noop: true, created: false, data_uploaded: 0 } });
+  fixture.infoResponses.push("Capture History Reference");
+  assert.equal(await fixture.extension.__test__.captureAgentRecovery(fixture.row), "captured");
+  assert.match(fixture.infoCalls[1][0], /already retained/);
+  assert.match(fixture.infoCalls[1][0], /No new data was uploaded/);
+  for (const captureOverrides of [{ noop: true }, { noop: true, created: false, data_uploaded: 128 },
+    { noop: true, created: false, data_uploaded: false }]) {
+    const contradictory = agentRecoveryFixture({ captureOverrides });
+    contradictory.infoResponses.push("Capture History Reference");
+    await assert.rejects(contradictory.extension.__test__.captureAgentRecovery(contradictory.row), /unsupported no-op receipt/);
+  }
 });
 
 test("recovery text stays pipe-only and absent from runtime files logs and progress", async () => {

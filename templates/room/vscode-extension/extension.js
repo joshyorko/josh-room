@@ -5510,19 +5510,48 @@ function assertHistoryReferenceReceipt(result) {
   }
 }
 
+function agentRecoveryEntries(result, selection) {
+  assertHistoryReferenceReceipt(result);
+  if (result.contract_version !== 2 || result.original_t3_identity_restored !== false
+      || !["reference-absent", "history-reference"].includes(result.state)
+      || !Array.isArray(result.entries) || result.entries.length > 64
+      || (result.state === "reference-absent" ? result.entries.length !== 0 || result.format !== null
+        : !["josh-room.agent-references.v1", "josh-room.agent-references.v2"].includes(result.format))) {
+    throw new Error("Agent recovery returned an unsupported reference status.");
+  }
+  const ids = new Set();
+  for (const entry of result.entries) {
+    const stamp = entry?.created_at;
+    const date = typeof stamp === "string" ? stamp.slice(0, 10) : "";
+    if (typeof entry?.capture_id !== "string" || !/^[0-9a-f]{64}$/.test(entry.capture_id) || ids.has(entry.capture_id)
+        || typeof entry.profile !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(entry.profile)
+        || !["codex", "claude"].includes(entry.tool) || !["personal", "oss", "homelab"].includes(entry.scope)
+        || typeof entry.legacy !== "boolean" || entry.legacy !== (result.format === "josh-room.agent-references.v1")
+        || typeof entry.capture_closed !== "boolean"
+        || !(entry.legacy && entry.content_sha256 === null
+          || typeof entry.content_sha256 === "string" && /^[0-9a-f]{64}$/.test(entry.content_sha256))
+        || typeof stamp !== "string"
+        || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(stamp)
+        || !Number.isFinite(Date.parse(stamp)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date
+        || selection && (entry.tool !== selection.tool || entry.scope !== selection.profile.scope)) {
+      throw new Error("Agent recovery returned an unsupported capture history.");
+    }
+    ids.add(entry.capture_id);
+  }
+  return result.entries;
+}
+
 async function agentRecoveryStatus(preselected) {
   assertWorkspaceTrusted("inspect agent recovery references");
   const context = await selectedLogicalSnapshot(preselected, "Josh: Agent Recovery", { selectedRowOnly: true });
   if (!context) return "unavailable";
   const result = await runJoshRoom(agentRecoveryArgs("recovery-status", context), activeWorkspace());
-  assertHistoryReferenceReceipt(result);
-  if (!["reference-absent", "history-reference"].includes(result.state) || !Array.isArray(result.entries)) {
-    throw new Error("Agent recovery returned an unsupported reference status.");
-  }
+  const entries = agentRecoveryEntries(result);
   await vscode.window.showInformationMessage([
     `Recovery point: ${context.snapshot_id}`,
     result.state === "reference-absent" ? "No agent history reference is attached to this recovery point."
       : `${result.entries.length} encrypted native-history reference${result.entries.length === 1 ? "" : "s"}.`,
+    ...entries.map((entry) => `${entry.tool === "codex" ? "Codex" : "Claude"} · ${entry.created_at} · ${entry.capture_id.slice(0, 12)}…`),
     "History only. Native continuation and original T3 app-thread restoration are unverified.",
     "Room Save and Enter do not include agent state.",
   ].join("\n"), { modal: true });
@@ -5579,7 +5608,12 @@ async function captureAgentRecovery(preselected) {
   const result = await runJoshRoom(agentRecoveryArgs("recovery-capture", context, selection.extra), activeWorkspace());
   assertHistoryReferenceReceipt(result);
   if (result.state !== "history-reference") throw new Error("Agent capture returned an unsupported reference state.");
-  await vscode.window.showInformationMessage("Encrypted native-history reference captured for the selected recovery point. Native continuation remains unverified.");
+  if (result.noop === true && (result.created !== false || result.data_uploaded !== 0)) {
+    throw new Error("Agent capture returned an unsupported no-op receipt.");
+  }
+  await vscode.window.showInformationMessage(result.noop === true
+    ? "This native history is already retained for the selected recovery point. No new data was uploaded. Native continuation remains unverified."
+    : "Encrypted native-history reference captured for the selected recovery point. Native continuation remains unverified.");
   return "captured";
 }
 
@@ -5589,8 +5623,27 @@ async function restoreAgentRecovery(preselected) {
   if (!context) return "unavailable";
   const selection = await chooseAgentRecoveryProfile(context);
   if (!selection) return "cancelled";
-  const verified = await runJoshRoom(agentRecoveryArgs("recovery-verify", context, selection.extra), activeWorkspace());
+  const status = await runJoshRoom(agentRecoveryArgs("recovery-status", context, selection.extra), activeWorkspace());
+  const captures = agentRecoveryEntries(status, selection);
+  if (!captures.length) {
+    await vscode.window.showInformationMessage("No retained native history matches the selected profile and recovery point.");
+    return "unavailable";
+  }
+  let capture = captures[0];
+  if (captures.length > 1) {
+    const picked = await vscode.window.showQuickPick(captures.map((entry) => ({
+      label: `${entry.tool === "codex" ? "Codex" : "Claude"} · ${entry.created_at}`,
+      description: `${entry.capture_id.slice(0, 12)}…${entry.legacy ? " · Legacy history" : ""}`,
+      capture_id: entry.capture_id,
+    })), { title: "Josh: Choose Agent History Capture", placeHolder: "Choose a retained capture; no latest capture is selected automatically" });
+    if (!picked) return "cancelled";
+    capture = captures.find((entry) => entry.capture_id === picked.capture_id);
+    if (!capture) throw new Error("Choose a currently retained agent capture.");
+  }
+  const captureArgs = [...selection.extra, "--capture-id", capture.capture_id];
+  const verified = await runJoshRoom(agentRecoveryArgs("recovery-verify", context, captureArgs), activeWorkspace());
   assertHistoryReferenceReceipt(verified);
+  if (verified.capture_id !== capture.capture_id) throw new Error("Agent verification returned a different capture identity.");
   const sessions = (Array.isArray(verified.sessions) ? verified.sessions : []).filter((session) =>
     session.tool === selection.tool && session.cwd_matches === true
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(session.provider_session_id || ""));
@@ -5611,9 +5664,12 @@ async function restoreAgentRecovery(preselected) {
   );
   if (confirmed !== "Restore Native History") return "cancelled";
   const result = await runJoshRoom(agentRecoveryArgs("recovery-restore", context,
-    [...selection.extra, "--session-id", session.provider_session_id]), activeWorkspace());
+    [...captureArgs, "--session-id", session.provider_session_id]), activeWorkspace());
   assertHistoryReferenceReceipt(result);
   if (result.state !== "history-materialized") throw new Error("Agent restore returned an unsupported materialization state.");
+  if (result.capture_id !== undefined && result.capture_id !== capture.capture_id) {
+    throw new Error("Agent restore returned a different capture identity.");
+  }
   await vscode.window.showInformationMessage("Native history file restored. No model was resumed; native continuation remains unverified.");
   return "restored";
 }

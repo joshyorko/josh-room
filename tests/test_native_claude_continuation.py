@@ -191,10 +191,10 @@ def resume_restored_claude(tmp_path, *, workspace, config, relative, payload):
         for path in directory.rglob("*"):
             if path.is_file():
                 assert credential.encode() not in path.read_bytes()
-    # Native continuation appends runtime metadata beyond the admitted capture
-    # subset. This acceptance does not silently widen that safety boundary.
+    assert validate(str(relative), rows, str(workspace), policy_version=2) == SESSION
+    # Legacy archives retain their original closed policy.
     with pytest.raises(ClaudeHistoryError):
-        validate(str(relative), rows, str(workspace))
+        validate(str(relative), rows, str(workspace), policy_version=1)
     receipt = {"provider": "claude", "version": "2.1.310", "backend": "deterministic-loopback",
                       "provider_session_id": SESSION, "native_new_turn_observed": True,
                       "hosted_provider_acceptance": False, "requests": 1, "tools": 0,

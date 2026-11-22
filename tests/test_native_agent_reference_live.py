@@ -132,10 +132,12 @@ def live(tmp_path, monkeypatch):
     common = ["--dimension", "recovery-fixture", "--room", room, "--snapshot", point]
     assert cli("agents", "recovery-status", *common)["state"] == "reference-absent"
     selector = profile_ref()
+    capture_ids = {}
     for tool in ("codex", "claude"):
         receipt = cli("agents", "recovery-capture", *common, "--workspace", workspace, "--profile-ref", selector, "--tool", tool)
         assert receipt["history_only"] and not receipt["native_resume_verified"]
-    return SimpleNamespace(base=base, tmp=tmp_path, cli=cli, room=room, workspace=workspace, point=point, common=common, policy=policy, grant=grant, save_policy=save_policy, configure=configure, profile_ref=profile_ref, originals=originals)
+        capture_ids[tool] = receipt["capture_id"]
+    return SimpleNamespace(base=base, tmp=tmp_path, cli=cli, room=room, workspace=workspace, point=point, common=common, policy=policy, grant=grant, save_policy=save_policy, configure=configure, profile_ref=profile_ref, originals=originals, capture_ids=capture_ids)
 
 
 def _selected(live, room=None, point=None):
@@ -151,13 +153,13 @@ def test_real_capture_cold_room_copy_and_reference_removal(live):
         for entry in original["entries"]:
             assert b"synthetic native question" not in references._blob(context, entry)
     for tool in ("codex", "claude"):
-        receipt = value.cli("agents", "recovery-verify", *value.common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(), "--tool", tool)
+        receipt = value.cli("agents", "recovery-verify", *value.common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(), "--tool", tool, "--capture-id", value.capture_ids[tool])
         assert receipt["sessions"] == [{"provider_session_id": SESSION, "tool": tool, "cwd_matches": True}]
     # A newer point must not silently replace the selected older reference.
     (value.workspace / "synthetic.txt").write_text("synthetic newer workspace\n")
     newer = value.cli("snapshot", "create", value.room, "--dimension", "recovery-fixture", "--backend", "minio", "--source", value.workspace)["snapshot_id"]
     assert newer != value.point
-    result = value.cli("agents", "recovery-restore", *value.common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(), "--tool", "codex", "--session-id", SESSION, ok=False)
+    result = value.cli("agents", "recovery-restore", *value.common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(), "--tool", "codex", "--session-id", SESSION, "--capture-id", value.capture_ids["codex"], ok=False)
     assert result["state"] == "blocked"
     value.workspace.rename(value.tmp / "before-hydrate")
     value.cli("hydrate", value.room, "--snapshot", value.point, "--dimension", "recovery-fixture", "--backend", "minio", "--destination", value.workspace, "--ide", "terminal")
@@ -166,7 +168,7 @@ def test_real_capture_cold_room_copy_and_reference_removal(live):
         value.grant["profile_root"] = str(target)
         value.save_policy()
         value.configure(value.room, target)
-        flags = [*value.common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(), "--tool", tool, "--session-id", SESSION]
+        flags = [*value.common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(), "--tool", tool, "--session-id", SESSION, "--capture-id", value.capture_ids[tool]]
         receipt = value.cli("agents", "recovery-restore", *flags)
         relative, original_bytes = value.originals[tool]
         assert (target / tool / relative).read_bytes() == original_bytes
@@ -190,7 +192,7 @@ def test_real_capture_cold_room_copy_and_reference_removal(live):
     value.cli("rooms", "remove", value.room, "--dimension", "recovery-fixture", "--backend", "minio")
     copied_common = ["--dimension", "recovery-fixture", "--room", copied_room, "--snapshot", copied_point]
     for tool in ("codex", "claude"):
-        result = value.cli("agents", "recovery-verify", *copied_common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(copied_room), "--tool", tool)
+        result = value.cli("agents", "recovery-verify", *copied_common, "--workspace", value.workspace, "--profile-ref", value.profile_ref(copied_room), "--tool", tool, "--capture-id", value.capture_ids[tool])
         assert result["sessions"][0]["provider_session_id"] == SESSION
     report = value.cli("room-store", "reconcile", "--dimension", "recovery-fixture")
     assert "agent_recovery" in report
@@ -211,6 +213,7 @@ def test_real_first_capture_after_absent_close_fences_catalog_removal(live, monk
                      "--source", live.workspace)["snapshot_id"]
     assert point != live.point
     common = ["--dimension", "recovery-fixture", "--room", live.room, "--snapshot", point]
+    captured = []
     with _selected(live, point=point) as selected:
         assert references.inspect_reference(selected) is None
         conditional_put = selected.backend.conditional_catalog_put
@@ -223,6 +226,7 @@ def test_real_first_capture_after_absent_close_fences_catalog_removal(live, monk
                 receipt = live.cli("agents", "recovery-capture", *common, "--workspace", live.workspace,
                                    "--profile-ref", live.profile_ref(), "--tool", "codex")
                 assert receipt["ok"] and receipt["history_only"]
+                captured.append(receipt["capture_id"])
                 assert references._pending_objects(selected) == (set(), [])
             except Exception as error:
                 capture_errors.append(error)
@@ -238,7 +242,7 @@ def test_real_first_capture_after_absent_close_fences_catalog_removal(live, monk
     # The failed delete has no orphan to hide: the new exact point is live and
     # verifiable. A fresh normal delete must retain and clean its native objects.
     verified = live.cli("agents", "recovery-verify", *common, "--workspace", live.workspace,
-                        "--profile-ref", live.profile_ref(), "--tool", "codex")
+                        "--profile-ref", live.profile_ref(), "--tool", "codex", "--capture-id", captured[0])
     assert verified["sessions"][0]["provider_session_id"] == SESSION
     with _selected(live, point=point) as selected:
         document, _ = references._load(selected)
@@ -282,7 +286,7 @@ def test_real_normal_export_companion_and_native_restore(live, monkeypatch):
         live.grant["profile_root"] = str(target)
         live.save_policy()
         live.configure(live.room, target)
-        flags = [*live.common, "--workspace", live.workspace, "--profile-ref", live.profile_ref(), "--tool", tool, "--export", companion]
+        flags = [*live.common, "--workspace", live.workspace, "--profile-ref", live.profile_ref(), "--tool", tool, "--export", companion, "--capture-id", live.capture_ids[tool]]
         verified = live.cli("agents", "recovery-verify", *flags)
         assert verified["sessions"][0]["provider_session_id"] == SESSION
         restored = live.cli("agents", "recovery-restore", *flags, "--session-id", SESSION)
@@ -339,11 +343,11 @@ def test_real_cross_dimension_rewrap_and_cold_restore(live):
     live.cli("hydrate", destination_room, "--snapshot", point, "--dimension", dimension, "--backend", "minio", "--destination", live.workspace, "--ide", "terminal")
     selector = live.cli("agents", "room-status", "--dimension", dimension, "--room", destination_room, "--workspace", live.workspace)["profiles"][0]["profile_ref"]
     result = live.cli("agents", "recovery-restore", "--dimension", dimension, "--room", destination_room, "--snapshot", point,
-                      "--workspace", live.workspace, "--profile-ref", selector, "--tool", "codex", "--session-id", SESSION)
+                      "--workspace", live.workspace, "--profile-ref", selector, "--tool", "codex", "--session-id", SESSION, "--capture-id", live.capture_ids["codex"])
     relative, original = live.originals["codex"]
     assert (target / "codex" / relative).read_bytes() == original
     assert result["native_resume_verified"] is False
     live.cli("rooms", "remove", live.room, "--dimension", "recovery-fixture", "--backend", "minio")
     live.cli("agents", "recovery-verify", "--dimension", dimension, "--room", destination_room, "--snapshot", point,
-             "--workspace", live.workspace, "--profile-ref", selector, "--tool", "codex")
+             "--workspace", live.workspace, "--profile-ref", selector, "--tool", "codex", "--capture-id", live.capture_ids["codex"])
     live.cli("rooms", "remove", destination_room, "--dimension", dimension, "--backend", "minio")

@@ -99,6 +99,10 @@ def test_chooser_contract_fails_closed_for_every_provider(capsys):
         assert provider["selectable"] is False
         assert provider["restore"] == "blocked"
     assert result["providers"]["codex"]["restore_reason"] == "crash-safe-materialization-unavailable"
+    reference = result["room_reference"]
+    assert reference["contract_version"] == 2 and reference["format"] == "josh-room.agent-references.v2"
+    assert reference["selectable"] is False and reference["save_integration"] is False
+    assert reference["native_resume_verified"] is False
 
 
 def test_single_session_materialization_requires_explicit_selection():
