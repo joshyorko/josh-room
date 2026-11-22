@@ -11,6 +11,7 @@ import re
 import stat
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from .private_paths import protect_private_directory, protect_private_file
 from .room_store_lifecycle import RoomStoreLifecycleError, _selected_logical_record
@@ -340,7 +341,10 @@ def run_recovery(context, args):
         fail("recovery-exact-snapshot-required")
     if context.selected_record is None or context.selected_record.get("snapshot_id") != args.snapshot:
         fail("recovery-exact-snapshot-required")
-    recovery = Recovery(context)
+    return _run_action(Recovery(context), args)
+
+
+def _run_action(recovery, args):
     if args.recovery_command == "tree":
         return recovery.tree(args.path, args.offset, args.limit)
     if args.recovery_command == "diff":
@@ -348,3 +352,52 @@ def run_recovery(context, args):
     if args.recovery_command == "inspect":
         return recovery.inspect(args.path, include_text=args.include_text)
     return recovery.extract(args.path, args.destination, args.dry_run)
+
+def recover_namespace_child(args, dimension, authority, store_factory):
+    """Recover from committed child history under one authenticated namespace read."""
+    from .catalog import Catalog
+    from .composition_updates import _descriptor, _open
+
+    envelope, _, state = _open(authority, args.namespace)
+    domain = authority.binding["encryption_domain_id"]
+    if args.expected_domain is not None and args.expected_domain != domain:
+        fail("recovery-child-scope-mismatch")
+    body = state.to_dict()
+    pins = {(pin["room_id"], pin["logical_jat_id"]): pin["descriptor_sha256"]
+            for op in body["operations"].values() if op["phase"] == "committed"
+            for pin in op["child_pins"].values()}
+    for update in body.get("child_updates", {}).values():
+        if update["phase"] == "committed":
+            pin = update["pin"]
+            pins[pin["room_id"], pin["logical_jat_id"]] = pin["descriptor_sha256"]
+
+    snapshots = [args.snapshot]
+    if args.recovery_command == "diff" and args.compare_snapshot is not None:
+        snapshots.append(args.compare_snapshot)
+    if any(pin == "latest" or (args.project, pin) not in pins for pin in snapshots):
+        fail("recovery-uncommitted-child-pin")
+    catalog = Catalog.from_body(body["dimension_catalog"])
+    selected = []
+    for pin in snapshots:
+        record, descriptor = _descriptor(authority, state, args.project, pin)
+        value = descriptor.to_dict()
+        if (record["snapshot_id"] != pin or record["ciphertext_sha256"] != pins[args.project, pin]
+                or value["encryption_domain_id"] != domain or value["dimension_id"] != dimension.dimension_id):
+            fail("recovery-child-scope-mismatch")
+        selected.append((record, descriptor))
+
+    with store_factory(envelope["secret"]) as store:
+        repository = store.open_existing()
+        if repository.repository_id != envelope["repository_id"]:
+            fail("recovery-child-repository-mismatch")
+        selections = []
+        for record, descriptor in selected:
+            context = SimpleNamespace(project_id=args.project, selected_record=record, selected_descriptor=descriptor,
+                                      catalog=catalog, store=store, material=authority.material, dimension=dimension,
+                                      repository_info=repository)
+            recovery = Recovery(context)
+            recovery.identity.update(namespace=args.namespace, encryption_domain_id=domain)
+            selections.append(recovery)
+        if len(selections) == 2:
+            return selections[0].diff(args.path, other=selections[1], include_text=args.include_text)
+        return _run_action(selections[0], args)

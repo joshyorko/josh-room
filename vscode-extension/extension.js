@@ -5353,15 +5353,35 @@ function logicalSnapshotSummary(result) {
 }
 
 async function browseRecoveryPoint(preselected) {
-  const context = await selectedLogicalSnapshot(preselected, "Browse Recovery Point");
+  const { browseRecovery, currentChildPin, isChildSnapshotId } = require("./recovery-actions");
+  const root = activeWorkspace();
+  const child = !preselected && currentChildPin(root);
+  let context;
+  if (child) {
+    assertWorkspaceTrusted("browse child recovery");
+    const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined,
+      undefined, { localConfigurationOnly: true }));
+    const dimension = dimensions.find((row) => (row.id || row.dimension_id) === child.dimension_id);
+    if (!dimension || (dimension.encryption_domain_id && dimension.encryption_domain_id !== child.encryption_domain_id)) {
+      throw new Error("The current child Dimension binding differs.");
+    }
+    const point = await vscode.window.showInputBox({ title: "Exact child recovery point to browse",
+      value: child.snapshot_id, ignoreFocusOut: true, validateInput: (id) =>
+        isChildSnapshotId(id) ? undefined : "Use the committed child snapshot ID (jat- followed by 32 lowercase hex digits)." });
+    if (!point) return "cancelled";
+    context = { ...child, dimension, snapshot_id: point };
+  } else {
+    const selected = await selectedLogicalSnapshot(preselected, "Browse Recovery Point");
+    if (selected) context = { ...selected, namespace: undefined };
+  }
   if (!context) return "cancelled";
   const dimensionId = explicitDimensionId(context);
   const pinned = { ...context, dimension_id: dimensionId };
   const dimension = context.dimension || { id: dimensionId, provider: context.provider };
-  return require("./recovery-actions").browseRecovery(vscode, pinned, (args) =>
-    runSelectedEncryption(nativeRegistry.dimensionArgs(args, dimensionId), activeWorkspace(), dimension, {
+  return browseRecovery(vscode, pinned, (args) =>
+    runSelectedEncryption(nativeRegistry.dimensionArgs(args, dimensionId), root, dimension, {
       title: "Reading historical recovery point…", action: "historical file recovery",
-    }), activeWorkspace());
+    }), root);
 }
 
 async function inspectLogicalSnapshot(preselected) {

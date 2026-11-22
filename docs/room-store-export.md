@@ -95,11 +95,29 @@ Status, copy actions and image references use those URLs, never 8080/5000 guesse
 A localhost connection URL does not imply a localhost-only listener. Normal
 startup/status wording names the actual fileserver scope; it never describes
 wildcard artifact serving as private.
-The startup file is removed by JAT on shutdown. Room watches the per-session
+JAT removes the startup file on graceful shutdown. An interrupted managed
+process may leave that caller-owned file behind; it is not proof that a listener
+is still running. The extension removes its entire private invocation directory
+when the terminal closes and verifies session liveness before copying pull
+references. CLI callers must use a fresh private startup path per invocation;
+Room does not delete an arbitrary caller-supplied path on cancellation. A
+verified RCC signal exit and Ctrl-C are reported as cancellation, not success
+or an artifact identity mismatch. Room watches the per-session
 controller result, RCC receipt, terminal lifecycle and an interruption-safe
 command completion marker during startup, surfacing
 export/unsupported-runtime failure immediately rather than waiting on a default
 port. There is no browser action service or Room-owned port allocator.
+
+On Linux, foreground Serve uses a task-scoped child guard with an anonymous
+lifetime pipe owned only by the Room CLI. The guard blocks on that pipe and
+the RCC pidfd; controller disappearance closes the pipe and terminates the
+owned RCC/JAT descendants, including detached listeners. It exits with the
+operation and creates no persistent service, state file or polling task.
+Linux without pidfd support fails before starting a listener. On Windows, the
+dedicated Serve CLI joins an anonymous kill-on-close Job Object before spawning
+RCC; setup or nested-job refusal fails before Serve. Native platform tests must
+qualify these guarantees. Forced death of the Linux guard itself or a hostile
+late detached fork is outside the owned-process cleanup guarantee.
 
 This is a source-level integration with the JAT dynamic-serving branch. Current
 released JAT pins lack startup reporting; source preflight fails before Room

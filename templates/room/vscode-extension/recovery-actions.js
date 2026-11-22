@@ -1,5 +1,45 @@
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+const { isRoomMarker } = require("./dirty");
+
+function readLocalBinding(root, name) {
+  const fd = fs.openSync(path.join(root, name), fs.constants.O_RDONLY
+    | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
+  try {
+    const info = fs.fstatSync(fd);
+    if (!info.isFile() || info.nlink !== 1 || info.size > 64 * 1024) throw new Error("Invalid current child metadata.");
+    const bytes = Buffer.alloc(info.size + 1);
+    if (fs.readSync(fd, bytes) !== info.size) throw new Error("Current child metadata changed.");
+    return JSON.parse(bytes.subarray(0, info.size).toString("utf8"));
+  } finally { fs.closeSync(fd); }
+}
+
+function isChildSnapshotId(id) {
+  return typeof id === "string" && /^jat-[a-f0-9]{32}$/.test(id);
+}
+
+function currentChildPin(root) {
+  let marker;
+  try { marker = readLocalBinding(root, ".josh-room.json"); }
+  catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
+  if (marker.format_version !== 4) return undefined;
+  const real = fs.realpathSync(root);
+  const digest = crypto.createHash("sha256").update(real).digest("hex");
+  if (process.platform !== "linux" || real !== path.resolve(root) || !isRoomMarker(marker)
+      || !isChildSnapshotId(marker.snapshot_id)
+      || marker.workspace_path_sha256 !== digest) throw new Error("Current namespace marker binding differs.");
+  const guard = readLocalBinding(root, ".josh-room-split.json");
+  if (!guard || Object.keys(guard).length !== 3 || guard.namespace !== marker.composition_namespace
+      || guard.room_id !== marker.project_id || guard.snapshot_id !== marker.snapshot_id) {
+    throw new Error("Current child guard binding differs.");
+  }
+  return { project_id: marker.project_id, snapshot_id: marker.snapshot_id, dimension_id: marker.dimension_id,
+    encryption_domain_id: marker.encryption_domain_id, namespace: marker.composition_namespace };
+}
+
 // Keep the original authenticated point through navigation, paging and cancellation.
 async function browseRecovery(vscode, context, run, workspace) {
   const pin = Object.freeze({ ...context });
@@ -8,9 +48,18 @@ async function browseRecovery(vscode, context, run, workspace) {
   }
   const invoke = async (action, path, extra = []) => {
     const result = await run(["recovery", action, pin.project_id, "--snapshot", pin.snapshot_id,
-      "--path", path, ...extra]);
+      ...(pin.namespace ? ["--namespace", pin.namespace, "--expected-domain", pin.encryption_domain_id] : []), "--path", path, ...extra]);
     if (!result || result.snapshot_id !== pin.snapshot_id || result.dimension_id !== pin.dimension_id
       || result.room_id !== pin.project_id) throw new Error("Historical recovery identity changed.");
+    if (pin.namespace) {
+      const matches = (row, snapshot) => row?.snapshot_id === snapshot && row.room_id === pin.project_id
+        && row.dimension_id === pin.dimension_id && row.namespace === pin.namespace
+        && row.encryption_domain_id === pin.encryption_domain_id;
+      const compare = extra.indexOf("--compare-snapshot");
+      if (!matches(result, pin.snapshot_id) || (compare >= 0 && !matches(result.compare_to, extra[compare + 1]))) {
+        throw new Error("Historical child recovery identity changed.");
+      }
+    }
     return result;
   };
   const textViews = require("./recovery-text");
@@ -64,4 +113,4 @@ async function browseRecovery(vscode, context, run, workspace) {
     }
   }
 }
-module.exports = { browseRecovery };
+module.exports = { browseRecovery, currentChildPin, isChildSnapshotId };

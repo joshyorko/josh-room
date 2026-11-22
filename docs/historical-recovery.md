@@ -1,7 +1,22 @@
 # Historical file recovery (draft)
 
 `josh-room recovery tree|inspect|diff|extract ROOM --dimension DIMENSION --snapshot EXACT_ID --path RELATIVE --json`
-uses the existing authenticated catalog/descriptor context, including ciphertext
+
+For a composed child, also pass `--namespace NAMESPACE`; the optional
+`--expected-domain DOMAIN` checks the current child's encryption-domain binding.
+The command opens that namespace's authenticated authority and repository and
+accepts only an exact committed child capture or update pin. Both pins in a diff
+must belong to the same namespace, Room and Dimension. It does not look up a
+missing child pin in the ordinary catalog or resolve `latest`.
+
+In a trusted, hydrated Linux child Room, **Browse Recovery Point…** from the
+command palette validates the current v4 marker, its workspace binding and split
+guard, then asks for the exact `jat-` plus 32 hexadecimal digits to browse. The
+marker pin is the initial suggestion. The existing selected-row action retains
+ordinary catalog recovery. Namespace/domain identity stays bound through
+navigation, comparison and extraction; these commands never change child pins,
+parent pins, catalogs or the current marker.
+Ordinary recovery uses the existing authenticated catalog/descriptor context, including ciphertext
 verification and Dimension credentials. `latest` is rejected. The selected
 Logical JAT must match its catalog, Dimension, encryption domain and repository.
 The Restic snapshot tree must match the descriptor. There are no catalog writes,

@@ -1,16 +1,20 @@
 import ast
+import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
 
 from robocorp import log
 
+from .cancellation import CLICancelled
 from .cancellation import terminate_owned_process as _terminate_process
 from .progress import report_progress
 from .workspace_policy import CapturePolicy, load_capture_policy
@@ -61,7 +65,8 @@ def _diagnostic(stderr: str) -> str:
 
 
 def _run_cli(
-    argv: list[str], timeout: float | None, *, cwd: Path | None = None, env: dict[str, str] | None = None
+    argv: list[str], timeout: float | None, *, cwd: Path | None = None,
+    env: dict[str, str] | None = None, guard_owner: bool = False,
 ) -> tuple[int, str, str]:
     """Run one bounded subprocess and return (exit status, capped stdout, redacted diagnostic)."""
     options = {
@@ -73,24 +78,65 @@ def _run_cli(
     }
     if os.name != "nt":
         options["start_new_session"] = True
+    lifetime_read = None
+    lifetime_write = None
+
+    def close_lifetime():
+        nonlocal lifetime_write
+        if lifetime_write is not None:
+            descriptor, lifetime_write = lifetime_write, None
+            os.close(descriptor)
+
+    if guard_owner:
+        if os.name == "nt":
+            from .serve_job_windows import ensure_serve_job
+
+            ensure_serve_job()
+        elif sys.platform.startswith("linux") and hasattr(os, "pidfd_open"):
+            lifetime_read, lifetime_write = os.pipe2(os.O_CLOEXEC)
+            options["pass_fds"] = (lifetime_read,)
+            argv = [sys.executable, "-I", str(Path(__file__).with_name("serve_process_guard.py")),
+                    str(lifetime_read), "--", *argv]
+        else:
+            raise JATError("Foreground Serve process supervision is unavailable")
     try:
-        process = subprocess.Popen(argv, **options)
-    except OSError as error:
-        raise JATError(
-            "JAT runtime execution is unavailable",
-            {"command": "RCC execution", "exit_status": None, "error_type": type(error).__name__},
-        ) from None
+        try:
+            process = subprocess.Popen(argv, **options)
+        except OSError as error:
+            raise JATError(
+                "JAT runtime execution is unavailable",
+                {"command": "RCC execution", "exit_status": None, "error_type": type(error).__name__},
+            ) from None
+    except BaseException:
+        close_lifetime()
+        raise
+    finally:
+        if lifetime_read is not None:
+            os.close(lifetime_read)
+
+    def stop():
+        if lifetime_write is None:
+            _terminate_process(process)
+            return
+        close_lifetime()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            _terminate_process(process)
+
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        _terminate_process(process)
+        stop()
         raise JATError(
             "JAT operation timed out",
             {"command": "RCC execution", "exit_status": None, "timed_out": True},
         ) from error
     except BaseException:
-        _terminate_process(process)
+        stop()
         raise
+    finally:
+        close_lifetime()
     return process.returncode, (stdout or "")[-_STDOUT_LIMIT:], _diagnostic(stderr)
 
 
@@ -159,7 +205,9 @@ def _rcc_receipt_path(root: Path, task: str) -> Path:
     return root / "output" / f".rcc-{task.lower()}-{uuid.uuid4().hex}.json"
 
 
-def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
+def _validate_rcc_receipt(
+    path: Path, artifact: str, exit_status: int, *, allow_interrupted: bool = False,
+) -> None:
     if not path.is_file():
         raise JATError("managed RCC did not produce its execution receipt")
     try:
@@ -174,8 +222,22 @@ def _validate_rcc_receipt(path: Path, artifact: str, exit_status: int) -> None:
         raise JATError("managed RCC produced an incomplete execution receipt")
     observed = receipt.get("artifactDigest", receipt.get("artifact_digest"))
     reported = receipt.get("exitCode", receipt.get("exit_code", receipt.get("exit")))
-    if observed != artifact or type(reported) is not int or reported != exit_status:
+    if observed != artifact or type(reported) is not int:
         raise JATError("managed RCC execution receipt does not match the selected artifact")
+    if reported != exit_status:
+        verification = receipt.get("verification")
+        if (
+            allow_interrupted and reported == -1 and exit_status == 255
+            and isinstance(verification, dict) and verification.get("valid") is True
+            and verification.get("artifactDigest") == artifact
+        ):
+            # RCC records a signalled child as -1; the process exit byte is 255.
+            # This is cancellation, never a successful JAT operation.
+            raise CLICancelled({
+                "stage": "jat-serve", "exit_status": reported,
+                "rcc_exit_status": exit_status,
+            })
+        raise JATError("managed RCC execution receipt exit status does not match its wrapper")
 
 
 def _managed_runtime(jat_root: Path) -> tuple[str, str, dict[str, str]] | None:
@@ -423,10 +485,15 @@ def _run_jat_cli(jat_root: Path, cli_args: list[str], *, foreground: bool = Fals
     try:
         report_progress("jat", f"Running jat {operation} through RCC")
         timeout = None if foreground else float(os.environ.get("JOSH_ROOM_JAT_TIMEOUT", "3600"))
-        exit_status, stdout, stderr = _run_cli(argv, timeout, **run_kwargs)
+        exit_status, stdout, stderr = _run_cli(
+            argv, timeout, guard_owner=foreground and operation == "serve", **run_kwargs,
+        )
         diagnostic = _diagnostic(f"{stdout} {stderr}")
         if managed is not None:
-            _validate_rcc_receipt(rcc_receipt, artifact, exit_status)
+            _validate_rcc_receipt(
+                rcc_receipt, artifact, exit_status,
+                allow_interrupted=foreground and operation == "serve",
+            )
         result = _extract_operation_result(stdout)
         if result is None:
             message = "JAT CLI did not produce a machine-readable result"
@@ -573,6 +640,24 @@ def require_serve_startup(jat_root: Path) -> None:
         raise JATError("Acquired JAT runtime does not support automatic Serve endpoint reporting; update the pinned JAT runtime")
 
 
+@contextlib.contextmanager
+def _serve_hangup_cancellation():
+    if not hasattr(signal, "SIGHUP") or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.getsignal(signal.SIGHUP)
+
+    def cancel(_signum, _frame):
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        raise CLICancelled({"stage": "jat-serve"})
+
+    signal.signal(signal.SIGHUP, cancel)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
 def run_serve(
     jat_root: Path, haul: Path, *, mode: str = "auto",
     fileserver_port: int = 0, registry_port: int = 0, startup_file: Path | None = None,
@@ -588,11 +673,15 @@ def run_serve(
         startup_file = Path(os.environ["JOSH_ROOM_SERVE_STARTUP_FILE"])
     if startup_file is not None:
         options += ["--startup-file", str(startup_file)]
-    return _run_jat_cli(
-        jat_root,
-        ["serve", "--haul", str(haul), "--mode", str(mode), *options, "--json"],
-        foreground=True,
-    )
+    try:
+        with _serve_hangup_cancellation():
+            return _run_jat_cli(
+                jat_root,
+                ["serve", "--haul", str(haul), "--mode", str(mode), *options, "--json"],
+                foreground=True,
+            )
+    except KeyboardInterrupt:
+        raise CLICancelled({"stage": "jat-serve"}) from None
 
 
 def run_inspect(jat_root: Path, haul: Path) -> dict:

@@ -663,6 +663,8 @@ def build_parser() -> argparse.ArgumentParser:
     recovery_commands = recovery.add_subparsers(dest="recovery_command", required=True)
     for action in ("tree", "inspect", "diff", "extract"):
         command = recovery_commands.add_parser(action)
+        command.add_argument("--namespace", help="explicit composition namespace for a committed child Room pin")
+        command.add_argument("--expected-domain", help="verify the current child marker encryption domain")
         command.add_argument("project")
         command.add_argument("--dimension", required=True)
         command.add_argument("--snapshot", required=True)
@@ -2741,6 +2743,22 @@ def dispatch(args, instance: Path) -> dict:
         }
     if args.command == "recovery":
         from .recovery import run_recovery
+        if args.namespace is not None:
+            from .composition_authority import namespace_prefix
+            from .composition_lifecycle import provider_runtime
+            from .recovery import recover_namespace_child
+
+            namespace_prefix(args.namespace)
+            dimension = _effective_dimension(args)
+            if dimension is None or dimension.provider not in {"minio", "s3", "r2"}:
+                raise ValueError("child recovery requires an explicit object-store Dimension")
+            material = getattr(args, "_selected_encryption_material", None)
+            with sdk_error_boundary(dimension), provider_runtime(
+                instance, dimension, material, args.namespace
+            ) as (authority, factory, _private):
+                return recover_namespace_child(args, dimension, authority, factory)
+        if args.expected_domain is not None:
+            raise ValueError("a child marker domain requires an explicit namespace")
         if args.snapshot == "latest":
             raise ValueError("historical recovery requires an exact recovery point")
         with _open_room_store_context(args, instance, project_id=args.project,
