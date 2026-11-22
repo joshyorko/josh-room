@@ -53,13 +53,17 @@ def test_ui_diagnostic_uses_native_target_values_only_in_memory(tmp_path, monkey
 
 @pytest.mark.parametrize("exit_code", [0, 1])
 def test_candidate_cli_receipt_binds_actual_positive_and_negative_exit(tmp_path, exit_code):
-    (tmp_path / "provider-runtime").mkdir()
+    (tmp_path / "rcc-command-receipts").mkdir()
+    runtime = tmp_path / "provider-runtime"
+    runtime.mkdir()
+    (runtime / "synthetic-marker").write_text("unchanged runtime")
+    before = fixture.fingerprint(runtime)
     candidate = {"command": "owned-rcc", "artifact": "sha256:" + "a" * 64}
     receipts = []
 
     def run(command, **options):
         receipt = Path(command[command.index("--receipt-file") + 1])
-        assert receipt.parent == tmp_path / "provider-runtime"
+        assert receipt.parent == tmp_path / "rcc-command-receipts"
         assert command.index("--receipt-file") < command.index("--inherit-streams") < command.index("--")
         assert options == {"capture_output": True, "timeout": 120, "check": False}
         receipt.write_text(json.dumps({"artifactDigest": candidate["artifact"], "exitCode": exit_code}))
@@ -70,12 +74,13 @@ def test_candidate_cli_receipt_binds_actual_positive_and_negative_exit(tmp_path,
         result, verified = fixture._run_cli(tmp_path, ["recovery", "inspect"], candidate, run=run)
         assert result.returncode == exit_code
         assert verified == {"artifact": candidate["artifact"], "exit_code": exit_code, "verified": True}
+        assert fixture.fingerprint(runtime) == before
     assert receipts[0] != receipts[1]
 
 
 @pytest.mark.parametrize("kind", ["missing", "malformed", "artifact", "exit", "string-exit", "boolean-exit"])
 def test_candidate_cli_refuses_unverified_receipt(tmp_path, kind):
-    (tmp_path / "provider-runtime").mkdir()
+    (tmp_path / "rcc-command-receipts").mkdir()
     candidate = {"command": "owned-rcc", "artifact": "sha256:" + "a" * 64}
 
     def run(command, **_):

@@ -112,7 +112,7 @@ def _run_cli(base, args, candidate, *, run=subprocess.run):
         artifact = candidate.get("artifact")
         if not isinstance(artifact, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", artifact):
             raise RuntimeError("candidate CLI artifact is invalid")
-        receipt_path = base / "provider-runtime" / f"cli-rcc-{uuid.uuid4().hex}.json"
+        receipt_path = base / "rcc-command-receipts" / f"cli-rcc-{uuid.uuid4().hex}.json"
         prefix = [candidate["command"], "--no-build", "env", "exec", "--artifact", artifact,
                   "--permissive-local", "--receipt-file", str(receipt_path),
                   "--inherit-streams", "--", "python"]
@@ -168,6 +168,10 @@ def main():
         directory = base / name
         directory.mkdir(exist_ok=bool(candidate and name == "provider-runtime"))
         protect_private_directory(directory)
+    if candidate:
+        receipt_directory = base / "rcc-command-receipts"
+        receipt_directory.mkdir()
+        protect_private_directory(receipt_directory)
     os.environ.update({"JOSH_ROOM_CONFIG_DIR": str(base / "provider-config"),
                        "XDG_STATE_HOME": str(base / "provider-state"),
                        "XDG_CACHE_HOME": str(base / "provider-cache"),

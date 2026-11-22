@@ -352,6 +352,14 @@ one bounded 300-second acquisition attempt; interpreter, provider and UI limits
 remain unchanged. There is no retry loop, cache/pin substitution, solve or skipped
 verification. A further acquisition timeout remains a blocker rather than a pass.
 
+The `fcdd2eb` job acquired the archive, verified the interpreter, created all
+three encrypted snapshots, listed Dimensions and inspected the historical point.
+It then rejected the missing identity as required, but its no-runtime-mutation
+assertion also counted the harness's newly written RCC execution receipt. Receipts
+now live in a separate protected metadata directory outside the runtime being
+checked. The complete runtime/workspace/remote/vault comparisons remain unchanged;
+no filenames are excluded from them. Full native UI recovery remains pending.
+
 The exact combined baseline `e67bc289059766db51c7320773305d6e47089e41`
 passed all ten ordinary checks, with two intentional publication skips and no
 unresolved review threads. Its independent recheck closed both remaining UI
