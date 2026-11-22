@@ -73,6 +73,27 @@ def test_local_policy_at_child_root_is_supported_and_bound(tmp_path):
     assert preview["approval_sha256"] != changed["approval_sha256"]
 
 
+def test_copy_keeps_admitted_directory_when_original_path_is_replaced(tmp_path, monkeypatch):
+    from josh_room import composition_lifecycle
+    source, _, _, preview = fixture(tmp_path)
+    original_copy = composition_lifecycle._copy_paths
+    original = tmp_path / 'admitted-original'
+    substituted = tmp_path / 'substituted'
+    def replaced_path(*args, **kwargs):
+        source.rename(original)
+        (source / 'child/sub').mkdir(parents=True)
+        (source / 'child/sub/file.txt').write_text('unapproved replacement payload')
+        try:
+            return original_copy(*args, **kwargs)
+        finally:
+            source.rename(substituted)
+            original.rename(source)
+    monkeypatch.setattr(composition_lifecycle, '_copy_paths', replaced_path)
+    view = tmp_path / 'view'
+    _child_view(source, 'child', view, preview['request'])
+    assert (view / 'sub/file.txt').read_text() == 'approved synthetic bytes'
+
+
 def test_capture_plan_runtime_refusal_is_bounded_json(tmp_path, monkeypatch, capsys):
     from josh_room import cli
 

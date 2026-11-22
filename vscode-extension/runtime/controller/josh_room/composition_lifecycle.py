@@ -153,10 +153,14 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
             "policy_sha256": child_policy.sha256,
             "approved_paths_sha256": plan_digest(allowed),
             "capture_mode": "source-only",
+            "records_sha256": plan_digest(
+                _records(workspace / child, child_scan.paths)
+            ),
         }
     request = {
         "namespace": namespace,
         "source_identity": source_identity,
+        "source_records_sha256": plan_digest(_records(workspace, scan.paths)),
         "dimension_id": dimension.dimension_id,
         "destination_binding": dimension_binding(
             dimension, dimension.encryption_domain_id
@@ -184,6 +188,54 @@ def capture_plan(workspace, dimension, namespace, parent_room, assignments):
 
 def _slot(namespace, label):
     return uuid.uuid5(uuid.UUID(hex=namespace), label).hex
+
+
+def _record_stat(info):
+    return [
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    ]
+
+
+def _records(source, paths, root_fd=None):
+    fd = _directory(source) if root_fd is None else os.dup(root_fd)
+    try:
+        result = {".": _record_stat(os.fstat(fd))}
+        for path in paths:
+            current = os.dup(fd)
+            try:
+                parts = Path(path).parts
+                for part in parts[:-1]:
+                    child = os.open(
+                        part,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=current,
+                    )
+                    os.close(current)
+                    current = child
+                result[path] = _record_stat(
+                    os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
+                )
+            finally:
+                os.close(current)
+        return result
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _admitted_source(source, request):
+    fd = _directory(source)
+    try:
+        if [os.fstat(fd).st_dev, os.fstat(fd).st_ino] != request["source_identity"]:
+            raise ValueError("approved source identity changed")
+        yield fd
+    finally:
+        os.close(fd)
 
 
 @contextmanager
@@ -345,11 +397,12 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
     return LogicalJat.from_dict(value), before
 
 
-def _copy_paths(source, target, paths):
+def _copy_paths(source, target, paths, *, source_fd=None, records=None):
     """Read every payload through no-follow descriptors rooted at the source."""
-    root_fd = _directory(source)
+    root_fd = _directory(source) if source_fd is None else os.dup(source_fd)
     modes = []
     try:
+        records = _records(source, paths, root_fd) if records is None else records
         policy = load_capture_policy(source, directory_fd=root_fd)
         ignore = _read_ignore(source, directory_fd=root_fd) or b""
         for relative in sorted(
@@ -360,13 +413,19 @@ def _copy_paths(source, target, paths):
             parts = Path(relative).parts
             fd = os.dup(root_fd)
             try:
-                for part in parts[:-1]:
+                for index, part in enumerate(parts[:-1]):
                     child = os.open(
                         part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
                     )
+                    expected = records.get("/".join(parts[: index + 1]))
+                    if expected is None or _record_stat(os.fstat(child)) != expected:
+                        os.close(child)
+                        raise ValueError("approved ancestor identity changed")
                     os.close(fd)
                     fd = child
                 info = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+                if records.get(relative) != _record_stat(info):
+                    raise ValueError("approved payload metadata changed")
                 if info.st_dev != os.fstat(root_fd).st_dev:
                     raise ValueError("capture crossed a filesystem boundary")
                 destination = target / relative
@@ -385,10 +444,10 @@ def _copy_paths(source, target, paths):
                         destination.open("xb") as output,
                     ):
                         current = os.fstat(stream.fileno())
-                        if not stat.S_ISREG(current.st_mode) or (
-                            current.st_dev,
-                            current.st_ino,
-                        ) != (info.st_dev, info.st_ino):
+                        if (
+                            not stat.S_ISREG(current.st_mode)
+                            or _record_stat(current) != records[relative]
+                        ):
                             raise ValueError("capture file identity changed")
                         shutil.copyfileobj(stream, output)
                         final = os.fstat(stream.fileno())
@@ -426,12 +485,11 @@ def _finish_view(target, expected_paths, modes):
 
 
 def _child_view(source, child, target, request):
-    fd = _directory(source)
-    try:
-        if [os.fstat(fd).st_dev, os.fstat(fd).st_ino] != request["source_identity"]:
-            raise ValueError("approved source identity changed")
-    finally:
-        os.close(fd)
+    with _admitted_source(source, request) as fd:
+        return _build_child_view(source, child, target, request, fd)
+
+
+def _build_child_view(source, child, target, request, source_fd):
     root_policy = load_capture_policy(source)
     root_scan = _scan_workspace(
         source, replace(root_policy, capture_mode="source-only")
@@ -449,6 +507,7 @@ def _child_view(source, child, target, request):
         "policy_sha256": child_policy.sha256,
         "approved_paths_sha256": plan_digest(sorted(allowed)),
         "capture_mode": "source-only",
+        "records_sha256": plan_digest(_records(original, child_scan.paths)),
     }
     if (
         evidence != request["child_evidence"][child]
@@ -465,7 +524,30 @@ def _child_view(source, child, target, request):
         )
     ]
     target.mkdir(mode=0o700)
-    original_ignore, modes = _copy_paths(original, target, allowed)
+    root_records = _records(source, root_scan.paths, source_fd)
+    if plan_digest(root_records) != request["source_records_sha256"]:
+        raise ValueError("approved source records changed before staging")
+    child_fd = os.dup(source_fd)
+    try:
+        for index, part in enumerate(Path(child).parts):
+            opened = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=child_fd
+            )
+            os.close(child_fd)
+            child_fd = opened
+            if (
+                _record_stat(os.fstat(child_fd))
+                != root_records["/".join(Path(child).parts[: index + 1])]
+            ):
+                raise ValueError("approved child directory changed")
+        child_records = _records(original, child_scan.paths, child_fd)
+        if plan_digest(child_records) != evidence["records_sha256"]:
+            raise ValueError("approved child records changed before staging")
+        original_ignore, modes = _copy_paths(
+            original, target, allowed, source_fd=child_fd, records=child_records
+        )
+    finally:
+        os.close(child_fd)
     lines = [
         line
         for line in original_ignore.splitlines()
@@ -492,12 +574,11 @@ def _child_view(source, child, target, request):
 
 
 def _parent_view(source, target, assignments, manifest, request):
-    fd = _directory(source)
-    try:
-        if [os.fstat(fd).st_dev, os.fstat(fd).st_ino] != request["source_identity"]:
-            raise ValueError("approved source identity changed")
-    finally:
-        os.close(fd)
+    with _admitted_source(source, request) as fd:
+        return _build_parent_view(source, target, assignments, manifest, request, fd)
+
+
+def _build_parent_view(source, target, assignments, manifest, request, source_fd):
     target.mkdir(mode=0o700)
     policy = load_capture_policy(source)
     scan = _scan_workspace(source, replace(policy, capture_mode="source-only"))
@@ -515,7 +596,12 @@ def _parent_view(source, target, assignments, manifest, request):
         allowed.update(
             parent.as_posix() for parent in Path(path).parents if parent != Path(".")
         )
-    original, modes = _copy_paths(source, target, allowed)
+    source_records = _records(source, scan.paths, source_fd)
+    if plan_digest(source_records) != request["source_records_sha256"]:
+        raise ValueError("approved parent records changed before staging")
+    original, modes = _copy_paths(
+        source, target, allowed, source_fd=source_fd, records=source_records
+    )
     lines = [
         line
         for line in original.splitlines()
@@ -760,6 +846,7 @@ def _restore(
     display_name,
     before_promote=None,
     child_namespace=None,
+    namespace=None,
 ):
     metadata = descriptor.to_dict()
     operations = RoomStoreOperations(
@@ -807,7 +894,7 @@ def _restore(
             signature_algorithm=scan.signature_algorithm,
             capture_policy_sha256=scan.capture_policy_sha256,
             path_binding=target,
-            composition_namespace=child_namespace,
+            composition_namespace=namespace or child_namespace,
         )
 
     destination = Path(os.path.abspath(destination))
@@ -883,6 +970,7 @@ def hydrate_composition(
                 private,
                 dimension,
                 "Catalog Room",
+                namespace=namespace,
             )
         else:
             portable_path(child_path)
