@@ -2215,6 +2215,11 @@ async function updateCompositionRoom(kind) {
   if (!marker?.composition_namespace) throw new Error("Open a namespace Room first.");
   const isChild = fs.existsSync(path.join(root, ".josh-room-split.json"));
   if ((kind === "child") !== isChild) throw new Error("Select the child Save or parent pin refresh action for this Room.");
+  if (kind === "child" && (vscode.workspace.textDocuments || []).some((document) => {
+    if (!document.isDirty || document.uri?.scheme !== "file") return false;
+    const relative = path.relative(root, document.uri.fsPath);
+    return relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  })) throw new Error("Save the child Room's editor files before capturing its disk content.");
   if (!extensionContext?.workspaceState) throw new Error("The extension operation store is unavailable.");
   const key = `composition.${kind}.${marker.composition_namespace}.${marker.project_id}`;
   const dimensions = dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true }));

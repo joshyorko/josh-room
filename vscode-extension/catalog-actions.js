@@ -84,7 +84,7 @@ async function updateRoom(vscode, { marker, kind, pending, remember, plan, save 
   if (ticket.approval && ticket.approval !== preview.approval_sha256) throw new Error("Pending approval changed. Preserve the operation receipt; do not start a blind retry.");
   const action = kind === "child" ? "Save child Room" : "Publish refreshed parent pin";
   const approved = await vscode.window.showWarningMessage(`${action}?`, { modal: true,
-    detail: `${kind === "child" ? "Source-only child capture. Parent pins remain unchanged." : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
+    detail: `${kind === "child" ? "Source-only child capture from disk. Editor buffers are not captured. Parent pins remain unchanged." : "Only the explicitly selected child reference changes. Existing parent versions and working folders remain unchanged."}\nBaseline: ${ticket.baseline}\n${ticket.child ? `Child: ${ticket.child}\nSelected pin: ${ticket.pin}\n` : ""}Operation: ${ticket.operationId}\n${preview.changed ? "A new immutable recovery point will be published." : "Content is unchanged; no new recovery point will be published."}` }, action);
   if (approved !== action) return "cancelled";
   ticket = { ...ticket, approval: preview.approval_sha256, output: preview.snapshot_id };
   await remember(ticket);

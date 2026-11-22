@@ -1,5 +1,7 @@
 """Metadata-only negative tests; synthetic identities, no provider access."""
 import copy
+import json
+from pathlib import Path
 
 import pytest
 from test_composition_transaction import stages
@@ -56,3 +58,20 @@ def test_historical_parent_pin_cannot_be_replaced_during_child_reservation():
     body['operations']['operation']['manifest_sha256'] = '0' * 64
     with pytest.raises(ValueError, match='manifest'):
         _require_extension(previous, body)
+
+
+def test_v2_schema_resolves_closed_v1_shapes_and_update_ledger():
+    jsonschema = pytest.importorskip('jsonschema')
+    from referencing import Registry, Resource
+    directory = Path(__file__).resolve().parents[1] / 'schemas'
+    registry = Registry()
+    for name in ('dimension-catalog-v3.schema.json', 'composition-safety-v1.schema.json'):
+        value = json.loads((directory / name).read_text())
+        registry = registry.with_resource(value['$id'], Resource.from_contents(value))
+    schema = json.loads((directory / 'composition-safety-v2.schema.json').read_text())
+    validator = jsonschema.Draft202012Validator(schema, registry=registry)
+    _, body = reserved()
+    validator.validate(body)
+    body['child_updates']['update']['unknown'] = True
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(body)

@@ -119,12 +119,20 @@
             ]
           },
           "pin": {
-            "type": [
-              "object",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "composition-safety-v1.schema.json#/$defs/pin"
+              },
+              {
+                "type": "null"
+              }
             ]
           }
         }
+      },
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
       }
     }
   }

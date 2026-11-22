@@ -36,6 +36,8 @@ def main():
     parser.add_argument("--scratch", type=Path, required=True)
     parser.add_argument("--minio", type=Path, required=True)
     parser.add_argument("--secret-service-bus", type=Path, required=True)
+    parser.add_argument('--qualify-updates', action='store_true', help='also verify independent child Save and explicit parent pin refresh')
+    parser.add_argument('--hold-for-native', action='store_true', help='keep only this owned fixture server until its stop-native file exists')
     args = parser.parse_args()
     scratch = args.scratch.resolve(strict=True)
     bus = args.secret_service_bus.resolve(strict=True)
@@ -199,6 +201,13 @@ def main():
         (source / "b/file.txt").write_text("synthetic child B")
         (source / "local/file.txt").write_text("synthetic local only")
         (source / "notes.txt").write_text("synthetic parent note")
+        legacy_inventory = None
+        if args.qualify_updates:
+            legacy = base / 'legacy-source'
+            legacy.mkdir()
+            (legacy / 'legacy.txt').write_text('immutable synthetic legacy bytes')
+            cli('snapshot', 'create', 'synthetic-legacy', '--source', str(legacy), '--backend', 'minio', '--dimension', 'composition-fixture')
+            legacy_inventory = cli('snapshots', 'list', 'synthetic-legacy', '--backend', 'minio', '--dimension', 'composition-fixture')
         common = [
             "--dimension",
             "composition-fixture",
@@ -285,11 +294,62 @@ def main():
             "parent_only_then_whole_child": True,
             "source_unmodified": True,
         }
+        if args.qualify_updates:
+            child_root = entered / 'projects/a'
+            (child_root / 'file.txt').write_text('synthetic independently saved child')
+            update_args = ['--dimension', 'composition-fixture', '--namespace', saved['namespace'],
+                           '--room', child['room_id'], '--child-snapshot', child['snapshot_id'],
+                           '--workspace', str(child_root), '--operation-id', 'fixture-child-update']
+            update_plan = cli('composition', 'plan-child-save', *update_args)
+            updated = cli('composition', 'save-child', *update_args, '--approve', update_plan['approval_sha256'])
+            assert updated['marker_verified'] and not updated['parent_refreshed']
+            assert cli('composition', 'save-child', *update_args, '--approve', update_plan['approval_sha256'])['snapshot_id'] == updated['snapshot_id']
+            refresh_args = [*common, '--parent-snapshot', saved['parent_snapshot_id'], '--operation-id', 'fixture-pin-refresh',
+                            '--set-child', 'projects/a=' + updated['snapshot_id']]
+            refresh_plan = cli('composition', 'plan-parent-refresh', *refresh_args)
+            refreshed = cli('composition', 'refresh-parent-pins', *refresh_args, '--approve', refresh_plan['approval_sha256'])
+            assert not refreshed['workspace_modified']
+            assert cli('composition', 'refresh-parent-pins', *refresh_args, '--approve', refresh_plan['approval_sha256'])['snapshot_id'] == refreshed['snapshot_id']
+            for name, parent_pin, expected_child, expected_bytes in (
+                ('old', saved['parent_snapshot_id'], child['snapshot_id'], 'synthetic child A original'),
+                ('new', refreshed['snapshot_id'], updated['snapshot_id'], 'synthetic independently saved child'),
+            ):
+                target = base / ('restore-' + name)
+                cli('composition', 'restore-parent', *common, '--parent-snapshot', parent_pin, '--destination', str(target))
+                selected = cli('composition', 'enter-child', *common, '--parent-snapshot', parent_pin, '--workspace', str(target), '--child-path', 'projects/a')
+                assert selected['snapshot_id'] == expected_child
+                assert (target / 'projects/a/file.txt').read_text() == expected_bytes
+                assert not (target / 'b').exists() and not (target / 'local').exists()
+            noop_args = [*update_args]
+            noop_args[noop_args.index('--child-snapshot') + 1] = updated['snapshot_id']
+            noop_args[noop_args.index('--operation-id') + 1] = 'fixture-child-noop'
+            noop = cli('composition', 'plan-child-save', *noop_args)
+            assert not noop['changed']
+            assert cli('composition', 'save-child', *noop_args, '--approve', noop['approval_sha256'])['catalog_writes'] is False
+            parent_noop_args = [*refresh_args]
+            parent_noop_args[parent_noop_args.index('--parent-snapshot') + 1] = refreshed['snapshot_id']
+            parent_noop_args[parent_noop_args.index('--operation-id') + 1] = 'fixture-parent-noop'
+            parent_noop = cli('composition', 'plan-parent-refresh', *parent_noop_args)
+            assert not parent_noop['changed']
+            assert cli('composition', 'refresh-parent-pins', *parent_noop_args, '--approve', parent_noop['approval_sha256'])['catalog_writes'] is False
+            assert cli('snapshots', 'list', 'synthetic-legacy', '--backend', 'minio', '--dimension', 'composition-fixture') == legacy_inventory
+            assert (source / 'projects/a/file.txt').read_text() == 'synthetic child A original'
+            assert (source / 'b/file.txt').read_text() == 'synthetic child B'
+            assert (source / 'notes.txt').read_text() == 'synthetic parent note'
+            receipt.update(child_update_pin=updated['snapshot_id'], refreshed_parent_pin=refreshed['snapshot_id'],
+                old_parent_old_child_bytes_verified=True, new_parent_new_child_bytes_verified=True,
+                update_and_refresh_retry_verified=True, child_noop_verified=True, parent_noop_verified=True, legacy_inventory_unchanged=True)
         receipt["source_sha"] = subprocess.run(
             ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
         ).stdout.strip()
         (base / "loopback-receipt.json").write_text(json.dumps(receipt, indent=2))
         print(json.dumps(receipt))
+        if args.hold_for_native:
+            ready = {'fixture_root': str(base), 'parent_working': str(base / 'restore-new' if args.qualify_updates else entered),
+                     'child_room': child['room_id'], 'receipt': receipt, 'legacy_inventory': legacy_inventory}
+            (scratch / 'native-ready.json').write_text(json.dumps(ready))
+            while not (base / 'stop-native').exists():
+                time.sleep(0.5)
     finally:
         server.terminate()
         server.wait(timeout=20)
