@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import ctypes
+import errno
 import hashlib
 import json
 import math
@@ -15,10 +17,12 @@ import os
 import re
 import selectors
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -317,6 +321,39 @@ def status(root, **binding):
     return {"ok": True, "state": state, "admission": "revalidation-required", **capabilities()}
 
 
+def _start_server(root, binding, executable, port, environment, lock_fd, *, desktop=False):
+    arguments = [executable, "serve", "--base-dir", str(root / "t3")]
+    if desktop:
+        arguments.extend(["--mode", "desktop"])
+    arguments.extend(["--host", "127.0.0.1", "--port", str(port), "--no-browser"])
+    if not desktop:
+        arguments.append(binding["workspace"])
+    options = {}
+    if desktop:
+        if (threading.active_count() != 1 or len(list(Path("/proc/self/task").iterdir())) != 1
+                or Path(executable).stat().st_mode & (stat.S_ISUID | stat.S_ISGID)):
+            _fail("t3-import-child-lifetime-unavailable")
+        try:
+            if os.getxattr(executable, "security.capability"):
+                _fail("t3-import-child-lifetime-unavailable")
+        except OSError as error:
+            if error.errno not in {errno.ENODATA, errno.ENOTSUP}:
+                _fail("t3-import-child-lifetime-unavailable")
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+        parent = os.getpid()
+
+        def bind_parent():
+            if prctl(1, signal.SIGKILL, 0, 0, 0) != 0 or os.getppid() != parent:
+                os._exit(126)
+
+        options["preexec_fn"] = bind_parent
+    return subprocess.Popen(
+        arguments, cwd=binding["workspace"], env=environment, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True, pass_fds=(lock_fd,),
+        **options,
+    )
+
+
 def launch(root, *, executable="t3", port=3773, tool="codex", **binding):
     tool = _tool(tool)
     binding = _binding(**binding)
@@ -330,11 +367,7 @@ def launch(root, *, executable="t3", port=3773, tool="codex", **binding):
     environment = dict(os.environ)
     environment.update(T3CODE_HOME=str(root / "t3"), CODEX_HOME=str(root / "codex"), CLAUDE_CONFIG_DIR=str(root / "claude"))
     with _lock(root) as lock_fd, sigterm_cancellation():
-        process = subprocess.Popen(
-            [executable, "serve", "--base-dir", str(root / "t3"), "--host", "127.0.0.1", "--port", str(port), "--no-browser", binding["workspace"]],
-            cwd=binding["workspace"], env=environment, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True, pass_fds=(lock_fd,),
-        )
+        process = _start_server(root, binding, executable, port, environment, lock_fd)
         try:
             code = process.wait()
         finally:

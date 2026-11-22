@@ -175,6 +175,15 @@ gap. Providers were explicitly unavailable; loopback control was authenticated
 and external networking was blocked. Room's UI exposes status/discovery only;
 production automatic import and native continuation remain unavailable.
 
+The subsequent [owned-server qualification](t3-owned-import-acceptance.md) adds
+explicit import through a newly spawned dedicated server. It uses the same
+supported auth and scan/import APIs, with hash-pinned T3 and Node's built-in
+WebSocket rather than an external RPC dependency. A temporary namespace job
+keeps server/client egress isolated while the existing host controller performs
+current-keyset admission. No foreign PID/endpoint attachment or general
+attestation service is introduced. This qualifies a narrow history operation,
+not healthy-provider startup or continuation.
+
 The [current T3 audit](t3-native-recovery-audit.md) separates installed `.5098`
 no-turn evidence from earlier `.5085` startup tests. T3's native provider import
 preserves provider history but derives a new app identity; it cannot recover an

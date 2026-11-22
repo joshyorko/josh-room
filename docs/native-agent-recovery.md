@@ -79,9 +79,39 @@ cold-materialized synthetic Codex and Claude files using a fresh authenticated
 local server. It preserves the provider-native UUID but derives a **new** T3
 app-thread ID. Both messages, exact cwd, retry behavior and zero runnable effects
 passed with external egress blocked. This is an imported-history/native-provider
-fallback, not original T3-thread restoration or a proven new turn. Automatic
-production import still requires a verified owned server and a supported startup
-policy. See the [acceptance conditions and parser limits](t3-provider-import-acceptance.md).
+fallback, not original T3-thread restoration or a proven new turn. See the
+[transport acceptance conditions and parser limits](t3-provider-import-acceptance.md).
+
+`agents import-history` is the separate explicit owned-server operation. It
+accepts an authorized profile and qualified T3 executable, never a PID, URL or
+existing server. The host controller rechecks the current Dimension keyset over
+its normal admission path; a temporary private-pipe job owns a fresh user/network
+namespace containing only loopback. T3 and its authenticated RPC client run there
+with fresh HOME, sanitized environment, disabled provider executables and pinned
+T3/Node builds. The existing dedicated-profile launcher and operation lock remain
+the process authority. PID/start-time, executable, cwd, actual provider homes and
+process-owned listener checks precede authenticated RPC.
+
+Only a fresh T3 directory and allowlisted provider-history roots are accepted.
+The operation imports all discovered histories for the exact project, then stops
+its server, revokes disposable local control sessions through supported T3 APIs,
+and checks stopped native state for runnable work. It does not attach to or alter
+a running shared server. Example with synthetic private paths:
+
+```sh
+josh-room agents import-history --dimension demo --room demo-room \
+  --profile personal --workspace /workspaces/demo \
+  --profile-root /secure/native/demo --tool codex \
+  --t3-executable /opt/t3-qualified/t3 --json
+```
+
+Only the exact Linux runtime hashes in
+[owned-import acceptance](t3-owned-import-acceptance.md) are qualified. Unsupported
+builds and platforms fail closed. Cancellation or verification/cleanup failure
+after a possible import reports `commit-uncertain`; a populated T3 destination
+is refused on another call. Crash recovery of partially imported T3 state is
+unavailable. This explicit history fallback does not enable automatic import,
+native continuation, original T3 identity recovery or Room Save inclusion.
 
 ## Draft-only safety limits
 

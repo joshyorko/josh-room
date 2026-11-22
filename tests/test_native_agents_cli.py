@@ -125,3 +125,32 @@ def test_claude_cli_requires_explicit_tool_selector_and_keeps_save_unavailable(t
     assert args.tool == "claude"
     support = native_agents.capabilities()["providers"]["claude"]
     assert support["capture"] == "history-only" and support["selectable"] is False and support["restore"] == "blocked"
+
+
+def test_import_cli_keeps_uncertainty_and_bypasses_global_auth_runtime(tmp_path, monkeypatch, capsys):
+    from josh_room import native_agent_import_job
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("native import must not initialize generic auth or runtime")
+
+    def uncertain(*args, **kwargs):
+        raise native_agents.NativeAgentError("t3-import-outcome-uncertain", committed=True)
+
+    for name in ("initialize_system_trust", "_instance_root", "_write_runtime_result"):
+        monkeypatch.setattr(cli, name, forbidden)
+    monkeypatch.setattr(native_agent_import_job, "import_history", uncertain)
+    flags = binding(tmp_path)
+    assert cli.main(["agents", "import-history", *flags, "--t3-executable", "/synthetic/t3", "--tool", "claude"]) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["state"] == "commit-uncertain" and receipt["committed"] is True
+    assert receipt["native_resume_verified"] is False
+    assert str(tmp_path) not in json.dumps(receipt)
+
+
+def test_import_cli_refuses_unqualified_windows_before_runtime_or_profile(tmp_path, monkeypatch, capsys):
+    flags = binding(tmp_path)
+    monkeypatch.setattr(native_agents.sys, "platform", "win32")
+    assert cli.main(["agents", "import-history", *flags, "--t3-executable", "/synthetic/t3"]) == 1
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["error"] == "platform-not-qualified"
+    assert not (tmp_path / "profile").exists()

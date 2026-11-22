@@ -209,3 +209,31 @@ pending verified owned-server/process/environment and startup-policy checks;
 project-wide import is not a single-session operation. Original T3 app identity,
 healthy-provider continuation and an actual native new turn remain unverified.
 All #190 Save selectors remain false. No merge, release or publication occurred.
+
+## Explicit owned-server history import checkpoint
+
+2026-11-22, Linux, source changes atop
+`af3af2fe2271b25b76ee9ba3f460d1ea9dfc34d4`. The earlier status/discovery UI stays
+read-only. A separate explicit CLI operation now starts, verifies, uses and stops
+its own fresh dedicated T3 server; it cannot attach to a supplied PID or URL.
+
+| Check | Result |
+| --- | --- |
+| Real ordinary-host command backend / namespace worker | PASS, Codex and Claude imports plus worker-SIGKILL containment: 3 passed in 14.66s. Real cold native files, actual T3/Node, repeated synthetic host admission. Both normal imports preserve native UUID, derive a new T3 ID, retain both messages/exact cwd and revoke disposable control sessions. Zero runnable work. [Exact receipt](t3-owned-import-acceptance.md). |
+| Worker SIGKILL | PASS, actual T3 child dead/zombie and profile lock reacquired before parent cleanup. Parent reports committed uncertainty; native bytes unchanged, runnable tables zero. No abrupt-death revocation or partial-T3 crash recovery claim. |
+| Import/auth fault acceptance | Retained PASS, 22 isolated backend cases; 2 exposed-host refusal skips exercised separately. Post-import cancellation/revoke failure preserve uncertainty; pre-start failure and lost issuance output revoke fresh sessions through supported list/revoke. No model call. |
+| Ownership/process/endpoint | PASS, 17 real synthetic process/socket tests, including foreign endpoint, reused identity, cwd/home/profile mismatch and unsupported primitives. Actual imported-server identity checked before and after RPC. |
+| Private job protocol | PASS, 19 tests; uncached initial/per-gate/final authority, stale baseline refusal, abrupt exit/cancellation uncertainty, hostile protocol redaction, trusted unshare, environment scrub and actual caller-cwd package-shadow exclusion. |
+| Final focused Python/controller suite | PASS, 269 passed, 30 skipped in 3.77s. Skips: 27 opt-in owned-import cases, 2 opt-in transport cases and optional Claude SDK. Installed-runtime acceptance is recorded separately above, not counted as passing skips. |
+| Full VSIX Node suite | PASS, 381 passed, 2 existing skips in 4.45s. No installed rendering/native Windows claim. |
+| Security review | PASS after fixing unverified RPC dependencies, credential-lifetime recovery, cancellation uncertainty, Python package shadowing and child orphaning. Final source re-review found no remaining blocker in this scope. |
+| Package parity | PASS, vsce 4.0.0; 79 canonical Python modules byte-identical in controller/template/package, extension parity, no auth stores or vendor SDK. VSIX SHA-256 `7105e8a2591272a1cc0d6814ac510982a03c2706657922b03fe0170355f1f89c`. |
+
+The host admission controller may read the enrolled Dimension's current keyset;
+T3 and its RPC client have no external/provider network route. Real enrolled
+Dimension admission was not exercised here. Hash-pinned runtime support is narrow
+and providers remain disabled. General restoration, partially populated T3
+recovery, original T3 app identity, broader Claude records, all native new turns,
+Save reference lifecycle, native Windows and installed VSIX UI remain unqualified.
+Every Save selector remains false. No existing user/provider authentication,
+hosted/model/paid call, merge or release publication occurred.

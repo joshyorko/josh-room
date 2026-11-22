@@ -221,7 +221,7 @@ def require_admission(binding, recipients, *, profile_root, operation, destinati
     try:
         if tool not in {"codex", "claude"}:
             _fail("native-admission-tool-unqualified")
-        if operation not in {"configure", "launch", "capture", "verify", "restore", "materialize-session", "discover"}:
+        if operation not in {"configure", "launch", "capture", "verify", "restore", "materialize-session", "discover", "import-history"}:
             _fail("native-admission-operation-denied")
         if not isinstance(binding, dict) or set(binding) != {"dimension", "room", "profile", "workspace"}:
             _fail("native-admission-binding-mismatch")

@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "discover":
             command.add_argument("--profile-ref", required=True)
             command.add_argument("--tool", choices=("codex", "claude"), required=True)
-    for action in ("plan", "status", "configure", "launch", "capture", "verify", "restore", "materialize-session"):
+    for action in ("plan", "status", "configure", "launch", "capture", "verify", "restore", "materialize-session", "import-history"):
         command = commands.add_parser(action)
         command.add_argument("--profile-root", type=Path, required=True)
         command.add_argument("--dimension", required=True)
@@ -27,10 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--profile", required=True)
         command.add_argument("--workspace", type=Path, required=True)
         command.add_argument("--json", action="store_true")
-        if action in {"configure", "launch", "capture", "verify", "materialize-session"}:
+        if action in {"configure", "launch", "capture", "verify", "materialize-session", "import-history"}:
             command.add_argument("--tool", choices=("codex", "claude", "t3"), default="codex")
         if action == "launch":
             command.add_argument("--port", type=int, default=3773)
+        if action == "import-history":
+            command.add_argument("--t3-executable", type=Path, required=True)
         if action in {"configure", "capture"}:
             command.add_argument("--recipient", action="append", required=True)
         if action == "capture":
@@ -56,6 +58,11 @@ def dispatch(args):
             return native_agent_discovery.discover(**options, profile_ref=args.profile_ref, tool=args.tool)
         return native_agent_discovery.room_status(**options)
     binding = {"dimension": args.dimension, "room": args.room, "profile": args.profile, "workspace": args.workspace}
+    if args.action == "import-history":
+        native_agents._linux()
+        from .native_agent_import_job import import_history
+
+        return import_history(args.profile_root, executable=args.t3_executable, tool=args.tool, **binding)
     action = "status" if args.action == "plan" else args.action
     options = {}
     if hasattr(args, "tool"):
