@@ -89,8 +89,12 @@ def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypat
 @pytest.mark.parametrize("admitted", [False, True])
 @pytest.mark.parametrize("scope", ["personal", "work", "unknown"])
 def test_history_chooser_pilot_requires_each_current_profile_grant(tmp_path, monkeypatch, admitted, scope):
-    from josh_room import native_agent_discovery, native_agent_reference
-    from josh_room import room_store_operations, workspace_policy
+    from josh_room import (
+        native_agent_discovery,
+        native_agent_reference,
+        room_store_operations,
+        workspace_policy,
+    )
 
     monkeypatch.setattr(save.sys, "platform", "linux")
     monkeypatch.setattr(workspace_policy, "load_capture_policy", lambda *_: SimpleNamespace(sha256="a" * 64))
