@@ -702,6 +702,28 @@ def test_backup_uses_parent_relative_dot_and_returns_noop_without_snapshot(tmp_p
     assert result.effective_parent_id == "b" * 64
 
 
+def test_composition_backup_attaches_an_exact_tag_for_crash_reconciliation(tmp_path):
+    workspace = tmp_path / 'source'
+    workspace.mkdir()
+    store, factory = initialized_store(tmp_path, [FakeProcess(summary('b' * 64))])
+    with store:
+        store.backup(workspace, tags=('composition:jat-synthetic-slot',))
+    assert factory.calls[-1].args[1:] == [
+        'backup', '--json', '--skip-if-unchanged', '--no-scan',
+        '--tag', 'composition:jat-synthetic-slot', '--', '.',
+    ]
+
+
+@pytest.mark.parametrize('tags', [('untrusted,tag',), ('../path',), ('line\nbreak',), ('-option',), ('valid',) * 5])
+def test_invalid_capture_tags_never_start_backup(tmp_path, tags):
+    workspace = tmp_path / 'source'
+    workspace.mkdir()
+    store, factory = initialized_store(tmp_path, [])
+    with store, pytest.raises(api().ResticStoreError):
+        store.backup(workspace, tags=tags)
+    assert not any('backup' in call.args for call in factory.calls)
+
+
 def test_no_scan_progress_can_omit_estimated_totals_without_losing_summary_accounting(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1319,3 +1341,26 @@ def test_maintenance_commands_use_bound_repository_not_inherited_restic_authorit
         assert "RESTIC_PASSWORD" not in call.kwargs["env"]
         assert "AWS_PROFILE" not in call.kwargs["env"]
         assert "synthetic-unrelated-secret" not in " ".join(call.args)
+
+
+@pytest.mark.parametrize('summary_value', [None, {}, {'data_added': True, 'data_added_packed': 3}, {'data_added': 8, 'data_added_packed': None}])
+def test_persisted_snapshot_accounting_refuses_missing_or_invalid_counts(tmp_path, summary_value):
+    module = api()
+    record = {'tree': 'b' * 64, 'paths': ['/synthetic/room'], 'time': '2026-11-22T00:00:00Z', 'summary': summary_value}
+    store, _factory = make_store(tmp_path, [FakeProcess(restic_version()), FakeProcess(config()), FakeProcess(json.dumps(record).encode())])
+    with store:
+        store.open_existing()
+        with pytest.raises(module.ResticStoreError) as failure:
+            store.snapshot_backup_summary('a' * 64)
+        assert failure.value.code == module.ResticStoreErrorCode.INVALID_OUTPUT
+
+
+def test_persisted_snapshot_accounting_uses_exact_nonzero_counts_and_read_only_cat(tmp_path):
+    record = {'tree': 'b' * 64, 'paths': ['/synthetic/room'], 'time': '2026-11-22T00:00:00Z',
+              'summary': {'data_added': 8192, 'data_added_packed': 7168}}
+    store, factory = make_store(tmp_path, [FakeProcess(restic_version()), FakeProcess(config()), FakeProcess(json.dumps(record).encode())])
+    with store:
+        store.open_existing()
+        summary_value = store.snapshot_backup_summary('a' * 64)
+    assert (summary_value.data_added, summary_value.data_added_packed) == (8192, 7168)
+    assert factory.calls[-1].args[-3:] == ['cat', 'snapshot', 'a' * 64]

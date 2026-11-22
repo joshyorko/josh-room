@@ -1,10 +1,128 @@
-# Composable Rooms: preview contract
+# Composable Rooms: explicit namespace capture and pinned entry
 
-Issue #198 PR A currently supplies a **read-only contract and planner**, not a
-working split, composed recovery, child Enter, or unload. Existing Save/Enter
-contracts remain in force for ordinary Rooms. Save now refuses reserved
-composition metadata and split guards, even when user-excluded. Do not create
-parent exclusions from a proposal.
+Ordinary full-Room Save remains the default. The explicit catalog mode now has
+separate CLI capture and entry operations backed by age-encrypted namespace
+state and an isolated Restic repository. Existing ordinary Save refuses catalog
+metadata and split guards, including materialized namespace children: it must
+not accidentally save them to the legacy repository. No unload or migration of
+existing Rooms is supported. The discovery previews below remain read-only.
+
+## First writable vertical: Linux, one approved operation per namespace
+
+Use an already initialized MinIO/S3/R2 Dimension with a configured encryption
+domain and root provider endpoint (no endpoint path aliases). Generate a fresh
+32-character lowercase UUID hex namespace locally. It is a public locator, not
+an authorization token. Provider credentials and age identities still come from
+the existing selected-Dimension enrollment/keyring flow. No login or bucket
+administration is added.
+
+```sh
+josh-room composition capture-plan --dimension synthetic-dimension \
+  --namespace 11111111111111111111111111111111 --parent-room synthetic-parent \
+  --workspace /synthetic/source --assign .=local-only \
+  --assign projects/service-a=child --assign notes.txt=parent --json
+```
+
+If the configured Dimension has no cached encryption domain, add
+`--expected-domain <domain-UUID-from-enrollment-receipt>` to both planning and
+Save. This is non-secret; the runtime corroborates it against authenticated
+provider material after approval.
+
+Review the returned request and `approval_sha256`. Repeat those exact arguments
+with `composition save`, adding `--approve <approval_sha256>` and
+`--ack-local-only`. Every eligible path needs an explicit subtree assignment:
+`child`, `parent`, or `local-only`. There is no implicit capture of unchecked
+content. Overlapping non-root assignments are currently rejected, including a
+parent override beneath a local-only subtree. The explicit root assignment can
+set the reviewed default for all remaining paths. Existing exclusions remain
+exclusions; child allowlists also apply inherited parent exclusions. Inherited rules
+are rebased into the child policy, including wildcard matches for files created
+after hydration; they are not reduced to the paths present at capture time. Invalid or
+stale approval fails closed. Approval binds namespace, source/policy/child
+inventory metadata, provider, connection, physical bucket and encryption domain.
+
+This first vertical is **source-only for both parent and children**: Git history
+is intentionally excluded. It captures one to 32 independent whole children in
+the unchanged sealed v1 manifest, not thousands of publications. Linked sources,
+unsupported layouts, existing bound Room conversion and optional RCC/Homebrew/
+Hauler components are not admitted. Source files and original ignore rules are
+never edited or removed. Private allowlisted capture copies are made outside the
+source; this trades additional scratch space and reads for explicit isolation.
+No constant-space or large-workspace performance claim is made.
+
+Children are independently saved Logical JATs. The parent captures only its
+canonical pinned manifest, generated source-only policy, empty ancestor
+directories for nested child paths, and selected parent-owned content. Before
+parent commit, the actual Restic snapshot is restored privately to verify exact
+metadata bytes and zero child entries. No exclusion is installed in the source.
+
+The returned receipt contains the namespace and exact parent recovery point.
+Restore that parent into a new absent destination, then enter one whole child:
+
+```sh
+josh-room composition restore-parent --dimension synthetic-dimension \
+  --namespace 11111111111111111111111111111111 --parent-room synthetic-parent \
+  --parent-snapshot <exact-parent-logical-jat> --destination /synthetic/new-parent --json
+josh-room composition enter-child --dimension synthetic-dimension \
+  --namespace 11111111111111111111111111111111 --parent-room synthetic-parent \
+  --parent-snapshot <exact-parent-logical-jat> --workspace /synthetic/new-parent \
+  --child-path projects/service-a --json
+```
+
+Entry authenticates the namespace, committed parent pin and descriptor, restores
+the immutable parent manifest privately, compares its digest and local bytes,
+requires a clean path-bound parent marker and parent exclusion, then restores
+the exact pinned child through existing private staging/no-replace promotion.
+It verifies the final child's marker and policy/signature. A matching clean
+materialization can be reopened; dirty/differently bound content or links are
+refused. `latest` is never a fallback. A versioned v4 path-bound marker retains namespace membership even if a guard
+is removed; clean reopen additionally checks the exact local guard. A split guard prevents ordinary Save
+from writing an entered child into the legacy store. Updating a materialized child
+inside its existing namespace is a later operation; this increment does not
+claim that ordinary Save updates the composition pin. No automatic unload,
+activation/terminal hydration, or selected-file restore is added.
+
+Native commands are `Josh: Save Catalog Room` and `Josh: Enter Child Room`.
+New Room offers Save one Room first, or explicit Catalog configuration. Catalog
+configuration selects a source, child folders and optional parent-owned
+files/folders with native dialogs, then shows the source-only/local-only review.
+Cancel before confirmation never invokes provider Save. Entry asks for the
+namespace receipt and exact relative child path; it opens the folder only after
+verified entry. Installed VSIX qualification remains separate from Node fixtures.
+
+## Retention, namespace isolation and interruption limits
+
+All authority state and encrypted descriptors live below
+`composition/v1/<namespace>/`; payloads use a distinct
+`composition/v1/<namespace>/payload-restic-v1` repository and fresh secret.
+The encrypted reservation is create-only and read back before Restic init;
+verified repository identity is bound before capture. No legacy catalog,
+descriptor, keyset or Restic repository is migrated or rewritten. There is no
+namespace delete, forget, Optimize, unpin, copy/move or garbage-collection API.
+Historical records/pins are retained. Existing supported legacy cleanup only
+addresses root object keys and the root `room-store/v1` repository, so an
+in-flight legacy Delete or Optimize cannot address the new namespace at the
+unchanged physical endpoint/bucket. Raw administrative deletion, bucket lifecycle
+rules and differently configured endpoint/proxy aliases are outside this
+guarantee. This is namespace isolation, not an exclusive-principal claim.
+
+Resume Save with the same namespace and unchanged approval. Slot IDs are durable;
+child record plus pin, and parent record plus committed phase, use single CAS
+updates with exact encrypted-state readback. A slot is claimed by CAS before
+backup to prevent two owners starting it. An interrupted single tagged snapshot
+is privately restored and content-compared with the approved capture view before
+reuse. Multiple matches, changed source/policy, conflicting CAS, or a claim with
+no completed snapshot stop without deleting any data. A claim interrupted before
+backup currently requires operator reconciliation or a new namespace; automatic
+lease takeover is not implemented. An already committed exact operation is
+idempotent. Never remove a source guard or delete snapshots to force a retry.
+
+Real Restic/age tests with synthetic SQLite S3 transport establish encrypted
+capture and restore logic, not a real cloud-provider or installed-extension
+qualification. Report loopback MinIO, Windows, installed VSIX and remote R2/S3
+evidence separately. v1.0.0 remains on OWNER HOLD. See the
+[synthetic Linux acceptance receipt](receipts/issue-198/README.md)
+for installed VSIX/source-runtime evidence and the separate unproven gates.
 
 ## Read-only safety evidence
 
@@ -178,7 +296,41 @@ Use the project-local `verify-discovery-admission` skill when changing admission
 alias handling, iterator failures or pagination. This checks a finite scope; it
 does not prove arbitrary filesystem safety or any Save/publication behavior.
 
-## Hard gates before enabling split publication
+## Shared legacy repository migration remains blocked
+
+### Synthetic transaction qualification
+
+`composition_transaction` now implements candidate-v4 metadata transitions:
+reserve operation and logical slots, record a child and its pin atomically,
+prepare canonical manifest/policy digests, then record the parent and committed
+phase atomically. An operation ID cannot change its approved plan, recorded
+outputs are immutable, and retries do not allocate new slots. The manifest uses
+the exact reserved child JAT, never the current latest JAT.
+
+`persist_candidate` qualifies those transitions against an injected synthetic CAS
+store. It checks the paired body/ETag baseline and reads back the entire desired
+state after a write or uncertain reply. Process loss propagates; reopening and
+repeating first checks for the exact desired state. A conflicting or unconfirmed
+outcome stops rather than blindly repeating a write. Tests use durable SQLite
+commits and process-loss injection before/after every phase, not a live provider.
+
+This metadata module itself has **no production adapter or CLI write command**. Its `committed`
+phase describes candidate metadata only, not a verified saved parent. It does
+not capture payloads, inspect an immutable parent tree, prove Restic reachability,
+establish an exclusive authority, migrate catalogs or modify owner files. The
+ordinary Save guard remains in place. The explicit namespace lifecycle above
+supplies separate capture/entry commands; installed UX remains independently
+qualified.
+
+Independent Astra design review reconfirmed the shared-repository migration blocker on 2026-11-22:
+a new Dimension/connection/catalog key does not establish physical repository
+isolation. An independently provisioned physical bucket with exclusive writer
+access from creation is a possible prerequisite, but current adapters cannot
+verify that condition. An arbitrary local `retention-locked` flag is insufficient.
+Existing v3 writers already past CAS can still delete shared descriptor objects or
+Restic data. A later read-only Astra review approved the fresh, physically
+prefixed namespace design above for unchanged endpoints/buckets. No provider
+write is authorized merely by synthetic transaction test results.
 
 1. **Historical pin retention.** `room_store_references.build_reference_index`
    indexes catalog records and logical descriptor references, not manifests in
@@ -227,3 +379,26 @@ fail-closed workspace checks and #146's explicit source-only mode remain intact.
 planner is separate. #190 selects Save **components**, not child directories;
 this patch does not add a competing component picker or alter Save. #188 owns
 agent session recovery and remains out of scope.
+
+### Capture reconciliation integrity
+
+Tagged interrupted captures require authenticated persisted Restic byte-accounting
+counts and the exact expected payload parent before descriptor publication. Missing
+or invalid counts and wrong ancestry stop reconciliation; unknown added bytes are
+never reported as zero. Payload comparisons frame each entry with its path, type,
+mode and byte length, so an empty file and empty directory are distinct. Existing
+immutable descriptors remain readable and are verified from restored payloads.
+New child descriptors authenticate `source.composition_policy=inherited-rules-v2`
+only after the rebased private-view proof. Generated leading `#` rules are escaped
+as `\#` and decoded identically by Python and the native dirty-state reader.
+Previously saved policies and snapshots are never rewritten. Historical descriptors
+without provenance remain readable/restorable, but child updates from those
+baselines refuse even a fresh operation ID. User-editable policy comments cannot
+supply provenance. Safe legacy-policy reconciliation is not implemented; retain
+the old recovery points and use an explicitly approved new capture rather than
+blindly upgrading a descriptor or retrying with another operation ID.
+
+Experimental v1 provenance remains readable but cannot authorize child updates.
+The v2 writer requires the live/private/restored effective policy digest to match
+the exact authenticated baseline through publication, including for fresh/no-op
+operations. Policy changes require reconciliation, which remains unsupported.

@@ -24,6 +24,9 @@ _RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$", *(f"com{i}" for i 
 
 def require_uncomposed_workspace(root: Path) -> None:
     """Refuse unsupported composed Save, even if metadata is user-excluded."""
+    from .workspace_state import context_status
+    if context_status(root).get('composition_namespace'):
+        raise ValueError('composed Save is blocked; use the explicit namespace lifecycle')
     for name in (MANIFEST, SPLIT_GUARD):
         try:
             (Path(root) / name).lstat()

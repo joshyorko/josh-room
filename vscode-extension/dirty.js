@@ -95,8 +95,10 @@ function compileCapturePolicy(defaults = readDefaultCapturePolicy(), { ignoreTex
     if (Buffer.byteLength(ignoreText, "utf8") > MAX_IGNORE_BYTES) throw new Error("workspace ignore file exceeds 64 KiB");
     let userRuleCount = 0;
     for (const line of ignoreText.split("\n")) {
-      const rule = line.trim();
-      if (!rule || rule.startsWith("#")) continue;
+      let rule = line.trim();
+      if (!rule) continue;
+      if (rule.startsWith("\\#")) rule = rule.slice(1);
+      else if (rule.startsWith("#")) continue;
       if (rule.startsWith("!")) throw new Error("workspace ignore rules cannot reinclude paths");
       if (userRuleCount >= MAX_IGNORE_RULES) throw new Error("workspace ignore file has too many rules");
       userRuleCount += 1;
@@ -541,7 +543,7 @@ module.exports.workspaceFingerprint = workspaceFingerprint;
 function isRoomMarker(marker) {
   const digest = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   return Boolean(
-    marker && [1, 2, 3].includes(marker.format_version)
+    marker && [1, 2, 3, 4].includes(marker.format_version)
     && typeof marker.project_id === "string"
     && typeof marker.display_name === "string"
     && marker.display_name.length > 0
@@ -550,7 +552,9 @@ function isRoomMarker(marker) {
       && typeof marker.dimension_id === "string"
       && digest(marker.workspace_fingerprint)
       && digest(marker.workspace_path_sha256)
-    )) || (marker.format_version === 3 && (
+    )) || ([3, 4].includes(marker.format_version) && (
+      (marker.format_version !== 4 || /^[a-f0-9]{32}$/.test(marker.composition_namespace))
+      &&
       typeof marker.snapshot_id === "string"
       && typeof marker.dimension_id === "string"
       && typeof marker.encryption_domain_id === "string"
