@@ -344,7 +344,8 @@
       },
       {
         "command": "joshRoom.explore3D",
-        "title": "Josh: Explore Room in 3D\u2026"
+        "title": "Josh: Explore Room in 3D\u2026",
+        "icon": "$(globe)"
       },
       {
         "command": "joshRoom.stopRoomView",
@@ -608,7 +609,7 @@
         {
           "command": "joshRoom.explore3D",
           "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
-          "group": "room@5"
+          "group": "room@1"
         }
       ]
     }

@@ -196,6 +196,8 @@ def test_real_vsix_contains_the_owned_runtime_contract(tmp_path):
 
     with zipfile.ZipFile(output) as archive:
         names = set(archive.namelist())
+        assert "extension/room-view.js" in names
+        assert "extension/room-view-target.js" in names
         assert "extension/runtime.js" in names
         assert "extension/runtime/manifest.json" in names
         assert "extension/runtime/restic-manifest.json" in names

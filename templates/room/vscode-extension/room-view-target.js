@@ -8,16 +8,24 @@ const { isRoomMarker } = require("./dirty");
 function roomViewTargets(folders = []) {
   return folders.flatMap(folder => {
     if (folder.uri.scheme !== "file") return [];
-    const root = path.resolve(folder.uri.fsPath);
+    const openedRoot = path.resolve(folder.uri.fsPath);
     let fd;
     try {
-      if (fs.realpathSync(root) !== root || !fs.lstatSync(root).isDirectory()) return [];
+      const metadata = fs.lstatSync(openedRoot);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) return [];
+      const root = fs.realpathSync(openedRoot);
       fd = fs.openSync(path.join(root, ".josh-room.json"), fs.constants.O_RDONLY
         | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       const info = fs.fstatSync(fd);
       if (!info.isFile() || info.nlink !== 1 || info.size > 65536) return [];
       const bytes = Buffer.alloc(info.size + 1);
-      if (fs.readSync(fd, bytes) !== info.size) return [];
+      let offset = 0;
+      while (offset < bytes.length) {
+        const count = fs.readSync(fd, bytes, offset, bytes.length - offset);
+        if (!count) break;
+        offset += count;
+      }
+      if (offset !== info.size) return [];
       const marker = JSON.parse(bytes.subarray(0, info.size).toString("utf8"));
       const digest = crypto.createHash("sha256").update(root).digest("hex");
       if (!isRoomMarker(marker) || marker.format_version === 1 || marker.workspace_path_sha256 !== digest) return [];

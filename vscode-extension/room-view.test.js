@@ -8,7 +8,7 @@ const test = require("node:test");
 
 const { launchRoomView, validateRoomViewInfo } = require("./room-view");
 
-function createHarness({ autoStart = true, info = {
+function createHarness({ autoStart = true, pid = 1_987_654_321, preamble = "", onSpawn, info = {
   ok: true,
   command: "view-serve",
   host: "127.0.0.1",
@@ -18,8 +18,9 @@ function createHarness({ autoStart = true, info = {
 } } = {}) {
   const calls = [];
   const child = new EventEmitter();
-  child.pid = 1_987_654_321;
+  child.pid = pid;
   child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
   child.kill = (signal) => {
     child.lastSignal = signal;
     if (!child.closed) {
@@ -37,16 +38,22 @@ function createHarness({ autoStart = true, info = {
     },
   };
   const vscode = {
+    UIKind: { Web: 2 },
     workspace: { isTrusted: true },
     Uri: { parse: (value) => ({ value }) },
-    env: { openExternal: async (uri) => { opened.push(uri.value); return true; } },
+    env: { uiKind: 1, openExternal: async (uri) => { opened.push(uri.value); return true; } },
   };
   const spawn = (command, args, options) => {
     calls.push({ command, argv: args, options, child });
-    if (autoStart) setImmediate(() => child.stdout.emit("data", Buffer.from(`${JSON.stringify(info)}\n`)));
+    onSpawn?.({ child, args, options });
+    if (autoStart) setImmediate(() => child.stdout.emit("data", Buffer.from(`${preamble}${JSON.stringify(info)}\n`)));
     return child;
   };
-  return { calls, child, opened, runtime, spawn, vscode };
+  const kill = (pidValue, signal) => {
+    assert.equal(pidValue, -child.pid);
+    child.kill(signal);
+  };
+  return { calls, child, opened, runtime, spawn, kill, vscode };
 }
 
 test("launcher starts the exact selected Room workspace through the managed runtime and opens verified loopback URL", async () => {
@@ -60,7 +67,7 @@ test("launcher starts the exact selected Room workspace through the managed runt
     cwd,
     env: harness.runtime.env,
     detached: true,
-    stdio: ["ignore", "pipe", "ignore"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
   assert.deepEqual(runtimeCall.args, [
     "view", "serve", "--provider", "room", "--workspace", cwd,
@@ -89,6 +96,11 @@ test("launcher blocks non-Linux and remote VS Code before spawning", async () =>
   untrusted.vscode.workspace.isTrusted = false;
   await assert.rejects(launchRoomView({ ...untrusted, cwd: "/workspace", platform: "linux" }), /trusted VS Code workspace/);
   assert.equal(untrusted.calls.length, 0);
+
+  const web = createHarness();
+  web.vscode.env.uiKind = web.vscode.UIKind.Web;
+  await assert.rejects(launchRoomView({ ...web, cwd: "/workspace", platform: "linux" }), /VS Code for the web/);
+  assert.equal(web.calls.length, 0);
 });
 
 test("startup URL validation rejects non-loopback, mismatched port, and non-HTTP results", () => {
@@ -102,8 +114,53 @@ test("startup URL validation rejects non-loopback, mismatched port, and non-HTTP
 
 test("invalid startup data stops the child and does not expose raw output", async () => {
   const harness = createHarness({ info: { ok: false, error: "synthetic private detail" } });
-  await assert.rejects(launchRoomView({ ...harness, cwd: "/workspace", platform: "linux" }), { code: "ROOM_VIEW_STARTUP_INVALID" });
+  await assert.rejects(launchRoomView({ ...harness, cwd: "/workspace", platform: "linux" }), { code: "ROOM_VIEW_CONTROLLER_FAILED" });
   assert.equal(harness.child.lastSignal, "SIGKILL");
+});
+
+test("bounded RCC preambles and blank lines are ignored before the view startup JSON", async () => {
+  const harness = createHarness({ preamble: "RCC status: starting\n\n" });
+  const session = await launchRoomView({ ...harness, cwd: "/workspace", platform: "linux" });
+  await session.dispose();
+  assert.equal(harness.opened.length, 1);
+});
+
+test("stderr diagnostics are bounded, sanitized, and never expose URL tokens", async () => {
+  const harness = createHarness({ onSpawn: ({ child }) => setImmediate(() => {
+    child.stderr.emit("data", Buffer.from("failed at http://127.0.0.1:41873/?token=secret-value\n"));
+  }) });
+  const diagnostics = [];
+  const session = await launchRoomView({
+    ...harness,
+    cwd: "/workspace",
+    platform: "linux",
+    sanitizeDiagnostic: (line) => line,
+    onDiagnostic: (line) => diagnostics.push(line),
+  });
+  assert.match(diagnostics[0], /token=\[redacted\]/);
+  assert.doesNotMatch(diagnostics[0], /secret-value/);
+  await session.dispose();
+});
+
+test("prestartup receipt must be bounded, regular, and match the selected controller", async () => {
+  const harness = createHarness({ autoStart: false, onSpawn: ({ args, child }) => {
+    const index = args.indexOf("--receipt-file");
+    fs.writeFileSync(args[index + 1], JSON.stringify({ artifactDigest: "sha256:wrong" }));
+    setImmediate(() => child.emit("close", 1));
+  } });
+  harness.runtime.controllerArtifact = "sha256:expected";
+  await assert.rejects(launchRoomView({ ...harness, cwd: "/workspace", platform: "linux" }), { code: "ROOM_VIEW_RECEIPT_MISMATCH" });
+  assert.equal(fs.existsSync(harness.calls.find((call) => call.args).receipt), false);
+});
+
+test("asynchronous spawn error without a PID cleans up without waiting for a process close", async () => {
+  const harness = createHarness({ autoStart: false, pid: undefined, onSpawn: ({ child }) => {
+    setImmediate(() => child.emit("error", new Error("private spawn detail")));
+  } });
+  const started = Date.now();
+  await assert.rejects(launchRoomView({ ...harness, cwd: "/workspace", platform: "linux" }), { code: "ROOM_VIEW_SPAWN_FAILED" });
+  assert.ok(Date.now() - started < 250);
+  assert.equal(fs.existsSync(harness.calls.find((call) => call.args).receipt), false);
 });
 
 test("cancellation during startup terminates the process and removes its receipt directory", async () => {

@@ -39,7 +39,7 @@ Startup can be cancelled from its progress notification.
 
 Windows and macOS are unsupported for this live workspace action because the
 provider requires safe descriptor-relative reads. Remote SSH, WSL, Codespaces
-and devcontainer extension hosts are explicitly unsupported: the extension does
+and devcontainer extension hosts, plus web-hosted VS Code, are explicitly unsupported: the extension does
 not forward ports, rewrite localhost to a remote host, or expose an unprotected
 listener. Use a local Linux window instead. These limits do not change the
 platform support of other Room commands.
@@ -58,7 +58,8 @@ with the candidate VSIX installed in a task-private `--extensions-dir` and
 synthetic Room named `synthetic-room` in `synthetic-dimension` with a path-bound
 marker. The driver executes the registered Explore and Stop commands and uses
 the actual pinned managed controller. It intercepts only the browser handoff,
-checks authenticated HTTP 200 and listener shutdown, and writes metadata-only
+checks authenticated HTTP 200, actual workspace state, unauthenticated/method
+denials, and listener shutdown, and writes metadata-only
 `installed.jsonl` evidence. This does **not** qualify visible browser rendering,
 3D navigation, or OS default-browser integration.
 

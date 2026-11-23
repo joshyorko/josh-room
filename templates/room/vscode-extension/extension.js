@@ -6006,15 +6006,18 @@ snapshotCopyArgs = nativeRegistry.snapshotCopyArgs;
 let roomViewSession;
 let roomViewStarting = false;
 let roomViewCancellation;
+let roomViewPending;
 
 async function stopRoomView() {
   roomViewCancellation?.cancel();
+  try { await roomViewPending; } catch { /* launch owns its startup cleanup */ }
   await roomViewSession?.dispose();
+  outputChannel?.info("Room View stopped");
 }
 
 async function exploreRoom3D(item, { launch = require("./room-view").launchRoomView } = {}) {
-  assertWorkspaceTrusted("explore a Room in 3D");
-  if (vscode.env.remoteName) throw new Error("Explore Room in 3D requires a local Linux VS Code window. Remote/SSH/devcontainer browser forwarding is not supported; no port was exposed.");
+  if (vscode.workspace.isTrusted !== true) throw new Error("Workspace Trust is required to explore a Room in 3D.");
+  if (vscode.env.remoteName || (vscode.UIKind && vscode.env.uiKind === vscode.UIKind.Web)) throw new Error("Explore Room in 3D requires a local Linux VS Code window. Remote/SSH/devcontainer browser forwarding is not supported; no port was exposed.");
   if (process.platform !== "linux") throw new Error("Explore Room in 3D requires Linux safe filesystem reads. Windows and macOS are not supported for this action.");
   if (roomViewStarting) throw new Error("Room View is already starting. Cancel or wait for that launch.");
   roomViewStarting = true;
@@ -6037,8 +6040,8 @@ async function exploreRoom3D(item, { launch = require("./room-view").launchRoomV
       const token = cancellation?.token || progressToken;
       const subscription = progressToken.onCancellationRequested(() => cancellation?.cancel());
       if (progressToken.isCancellationRequested) cancellation?.cancel();
-      try {
-        const reporter = { event: event => progress.report({ message: event.message || event.phase || "Preparing runtime" }) };
+      roomViewPending = (async () => {
+        const reporter = { event: event => progress.report({ message: sanitizeControllerText(event?.message || event?.phase || "Preparing runtime") }) };
         const runtime = await runtimeFor(target.root, ["view", "serve"], reporter, token);
         assertWorkspaceTrusted("explore a Room in 3D");
         const fresh = roomViewTargets(vscode.workspace.workspaceFolders).find(entry => entry.root === target.root
@@ -6046,17 +6049,34 @@ async function exploreRoom3D(item, { launch = require("./room-view").launchRoomV
         if (!fresh) throw new Error("The selected Room binding changed. Select the Room again.");
         const env = managedRuntime.mergeRuntimeEnvironment(process.env, runtime.env || {});
         for (const key of Object.keys(env)) {
-          if (/^JOSH_ROOM_(PROVIDER_CREDENTIALS|ENCRYPTION|RECOVERY|RESULT_FILE)/.test(key)) delete env[key];
+          if ((key.startsWith("JOSH_ROOM_") && !Object.hasOwn(runtime.env || {}, key))
+              || /^JOSH_ROOM_(IDENTITY|RUNTIME_CREDENTIALS|RUNTIME_CONFIG|RUNTIME_PROFILE|PROVIDER_CREDENTIALS|ENCRYPTION|RECOVERY|SELECTED_|RECIPIENTS|RESULT_FILE|PROGRESS_FILE)/.test(key)
+              || /^(AWS_|CLOUDFLARE_|CF_|AZURE_|GOOGLE_APPLICATION_CREDENTIALS$)/.test(key)) delete env[key];
         }
-        roomViewSession = await launch({ runtime: { ...runtime, env }, cwd: fresh.root, vscode, cancellationToken: token });
-      } finally {
+        const session = await launch({ runtime: { ...runtime, env }, cwd: fresh.root, vscode, cancellationToken: token,
+          sanitizeDiagnostic: sanitizeControllerText,
+          onDiagnostic: message => outputChannel?.warn(message) });
+        if (token.isCancellationRequested || vscode.workspace.isTrusted !== true) {
+          await session.dispose();
+          throw cancellationError();
+        }
+        roomViewSession = session;
+        outputChannel?.info("Room View opened in browser; use Josh: Stop Room 3D Viewer to stop it");
+      })();
+      try { await roomViewPending; } finally {
+        roomViewPending = undefined;
         subscription?.dispose();
         cancellation?.dispose();
         roomViewCancellation = undefined;
       }
     });
-  } finally { roomViewStarting = false; }
+  } finally {
+    roomViewStarting = false;
+    if (statusItem) refreshRoomStatus();
+  }
 }
+
+module.exports.deactivate = stopRoomView;
 
 function activateNative(context) {
   extensionContext = context;
@@ -6137,13 +6157,10 @@ function activateNative(context) {
   register(context, "joshRoom.serve", serveRoom);
   register(context, "joshRoom.serveLogicalSnapshot", serveRoom);
   register(context, "joshRoom.browseRecoveryPoint", browseRecoveryPoint);
-  register(context, "joshRoom.explore3D", exploreRoom3D);
-  register(context, "joshRoom.stopRoomView", stopRoomView);
+  register(context, "joshRoom.explore3D", item => exploreRoom3D(item));
+  register(context, "joshRoom.stopRoomView", () => stopRoomView());
   context.subscriptions.push({ dispose: () => { void stopRoomView(); } });
   if (vscode.workspace.onDidChangeWorkspaceFolders) context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => { void stopRoomView(); }));
-  if (vscode.workspace.onDidChangeWorkspaceTrust) context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceTrust(() => {
-    if (!vscode.workspace.isTrusted) void stopRoomView();
-  }));
   register(context, "joshRoom.inspectLogicalSnapshot", inspectLogicalSnapshot);
   register(context, "joshRoom.agentSessionsStatus", agentSessionsStatus);
   register(context, "joshRoom.agentRecoveryStatus", agentRecoveryStatus);
@@ -6456,6 +6473,7 @@ Object.assign(module.exports.__test__, {
   terminateChild,
   serveRoom,
   exploreRoom3D,
+  stopRoomView,
   selectDimension,
   setRuntimeForTests(value) {
     testRuntime = value;

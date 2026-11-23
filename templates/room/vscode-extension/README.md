@@ -40,4 +40,4 @@ in 3D…**, or use **Josh: Explore Room in 3D…** in the Command Palette. No gl
 CLI, Save, or new Logical JAT is required. **Josh: Stop Room 3D Viewer** stops
 the session; closing only the browser tab does not. Windows and remote/SSH/WSL/
 devcontainer windows currently fail closed for this action. See
-[Room View](../docs/room-view.md) for lifecycle and security limits.
+[Room View](https://github.com/joshyorko/josh-room/blob/main/docs/room-view.md) for lifecycle and security limits.

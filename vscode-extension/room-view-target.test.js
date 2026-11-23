@@ -29,3 +29,17 @@ test("Room selection binds open roots to Dimension and Room, never cwd or histor
   fs.writeFileSync(path.join(folders[1].uri.fsPath, ".josh-room.json"), "x".repeat(65537));
   assert.deepEqual(roomViewTargets(folders), []);
 });
+
+test("symlinked OS ancestors resolve to the bound root, but a symlinked workspace is rejected", t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "room-view-home-"));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const realHome = path.join(base, "var-home"); fs.mkdirSync(realHome);
+  const root = path.join(realHome, "room"); fs.mkdirSync(root);
+  const alias = path.join(base, "home"); fs.symlinkSync(realHome, alias);
+  fs.writeFileSync(path.join(root, ".josh-room.json"), JSON.stringify({ format_version: 2,
+    project_id: "room", dimension_id: "dimension", display_name: "Synthetic", snapshot_id: "jat-1",
+    workspace_fingerprint: "a".repeat(64), workspace_path_sha256: crypto.createHash("sha256").update(root).digest("hex") }));
+  assert.equal(roomViewTargets([{ uri: { scheme: "file", fsPath: path.join(alias, "room") } }])[0].root, root);
+  const directAlias = path.join(base, "workspace-alias"); fs.symlinkSync(root, directAlias);
+  assert.deepEqual(roomViewTargets([{ uri: { scheme: "file", fsPath: directAlias } }]), []);
+});

@@ -7961,3 +7961,107 @@ test("3D launcher uses selected open Room root without Save or hydration", async
   vscode.workspace.isTrusted = false;
   await assert.rejects(extension.__test__.exploreRoom3D(), /Workspace Trust/);
 });
+
+function roomViewCommandFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-view-lifecycle-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeMarker(root);
+  const { vscode, statusItem } = createVscodeMock(root);
+  vscode.env = {}; vscode.UIKind = { Web: 2 };
+  vscode.workspace.isTrusted = true;
+  vscode.workspace.workspaceFolders = [{ uri: { scheme: "file", fsPath: root } }];
+  vscode.CancellationTokenSource = class {
+    constructor() {
+      const events = new EventEmitter();
+      this.token = { isCancellationRequested: false, onCancellationRequested: cb => {
+        events.on("cancel", cb); return { dispose: () => events.off("cancel", cb) };
+      } };
+      this.cancel = () => { this.token.isCancellationRequested = true; events.emit("cancel"); };
+    }
+    dispose() {}
+  };
+  const extension = loadExtension(vscode, () => { throw new Error("unexpected controller operation"); });
+  extension.__test__.setStatusItem(statusItem);
+  return { root, vscode, statusItem, extension, item: { kind: "room", project: { id: "demo-room" }, dimension: { id: "archive" } } };
+}
+
+test("Room View removes ambient identity/cloud env and resets cold-start status", async t => {
+  const { extension, item, statusItem } = roomViewCommandFixture(t);
+  const names = ["JOSH_ROOM_IDENTITY", "JOSH_ROOM_RUNTIME_CREDENTIALS", "AWS_ACCESS_KEY_ID", "CLOUDFLARE_API_TOKEN"];
+  const prior = names.map(name => process.env[name]);
+  t.after(() => names.forEach((name, index) => { if (prior[index] === undefined) delete process.env[name]; else process.env[name] = prior[index]; }));
+  names.forEach(name => { process.env[name] = "synthetic"; });
+  await extension.__test__.exploreRoom3D(item, { launch: async options => {
+    for (const name of names) assert.equal(options.runtime.env[name], undefined);
+    statusItem.text = "$(sync~spin) Josh Room";
+    return { active: false, async dispose() {} };
+  } });
+  assert.doesNotMatch(statusItem.text, /sync~spin/);
+});
+
+test("deactivate waits for in-flight launch and closes a session returned after cancellation", async t => {
+  const { extension, item } = roomViewCommandFixture(t);
+  let release;
+  let started;
+  const entered = new Promise(resolve => { started = resolve; });
+  let disposed = false;
+  const launch = extension.__test__.exploreRoom3D(item, { launch: async () => {
+    started(); await new Promise(resolve => { release = resolve; });
+    return { active: true, async dispose() { disposed = true; } };
+  } });
+  await entered;
+  let stopFinished = false;
+  const stop = extension.deactivate().then(() => { stopFinished = true; });
+  await Promise.resolve(); assert.equal(stopFinished, false);
+  release();
+  await assert.rejects(launch, /cancelled/i);
+  await stop;
+  assert.equal(disposed, true);
+});
+
+test("Room View blocks web and unknown trust before runtime or workspace reads", async t => {
+  const { extension, vscode } = roomViewCommandFixture(t);
+  vscode.workspace.isTrusted = undefined;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /Workspace Trust/);
+  vscode.workspace.isTrusted = true;
+  vscode.env.uiKind = 2;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /local Linux/);
+});
+
+test("Room View palette selects explicitly and concurrent launch is rejected", async t => {
+  const { extension, vscode, root } = roomViewCommandFixture(t);
+  const target = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders)[0];
+  vscode.quickPickResponses.push(target);
+  let release;
+  let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const operation = extension.__test__.exploreRoom3D(undefined, { launch: async options => {
+    assert.equal(options.cwd, root); entered(); await new Promise(resolve => { release = resolve; });
+    return { active: false, async dispose() {} };
+  } });
+  await ready;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /already starting/);
+  release(); await operation;
+});
+
+test("Room View repeats require explicit replacement, and public command ignores DI arguments", async t => {
+  const fixture = roomViewCommandFixture(t);
+  const { extension, vscode, item, root } = fixture;
+  let stops = 0;
+  let launches = 0;
+  const options = { launch: async () => { launches += 1; return { active: true, async dispose() { stops += 1; } }; } };
+  await extension.__test__.exploreRoom3D(item, options);
+  await extension.__test__.exploreRoom3D(item, options);
+  assert.equal(launches, 1); assert.equal(stops, 0);
+  vscode.warningResponses.push("Stop and explore");
+  await extension.__test__.exploreRoom3D(item, options);
+  assert.equal(launches, 2); assert.equal(stops, 1);
+  await extension.deactivate(); assert.equal(stops, 2);
+  const callbacks = new Map();
+  vscode.commands.registerCommand = (name, callback) => { callbacks.set(name, callback); return { dispose() {} }; };
+  activateTestExtension(extension, root, vscode);
+  vscode.workspace.isTrusted = undefined;
+  let injected = false;
+  await callbacks.get("joshRoom.explore3D")(item, { launch: () => { injected = true; } });
+  assert.equal(injected, false);
+});
