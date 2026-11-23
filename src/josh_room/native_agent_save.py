@@ -907,28 +907,39 @@ def status(instance, dimension, material, room, workspace):
             "profiles": [],
         },
     }
-    if (
-        not SAVE_ADAPTER_QUALIFIED
-        or sys.platform != "linux"
-        or dimension.provider != "minio"
-    ):
+    if not SAVE_ADAPTER_QUALIFIED or sys.platform != "linux" or dimension.provider != "minio":
+        result["agent_save"]["reason"] = (
+            "native-save-disabled" if not SAVE_ADAPTER_QUALIFIED else
+            "native-save-unsupported-platform" if sys.platform != "linux" else
+            "native-save-unsupported-provider"
+        )
         return result
     from .native_agent_discovery import resolve_profile, room_status
     from .native_agent_reference import _grant
     from .room_store_operations import scan_workspace_for_status
     from .workspace_policy import load_capture_policy
 
+    discovery = room_status(dimension=dimension.dimension_id, room=room, workspace=workspace)
+    if not discovery["profiles"]:
+        reason = discovery.get("reason")
+        result["agent_save"]["reason"] = reason if reason in {
+            "native-room-authority-unavailable", "native-room-profile-unavailable"
+        } else "native-save-admission-unavailable"
+        return result
+    result["agent_save"]["reason"] = "native-save-profile-admission-failed"
     policy = load_capture_policy(Path(workspace))
     scan = scan_workspace_for_status(Path(workspace))
     with open_scope(
         instance, dimension, material, room, workspace, policy.sha256, scan.signature
     ) as scope:
-        for candidate in room_status(
-            dimension=dimension.dimension_id, room=room, workspace=workspace
-        )["profiles"]:
+        for candidate in discovery["profiles"]:
             if not candidate.get("room_reference_allowed") or candidate.get("scope") not in {
                 "personal", "oss", "homelab"
             }:
+                result["agent_save"]["reason"] = (
+                    "native-save-work-scope-unqualified" if candidate.get("scope") == "work"
+                    else "native-save-room-reference-not-authorized"
+                )
                 continue
             for tool in candidate["tools"]:
                 if tool not in {"codex", "claude"}:
@@ -949,6 +960,7 @@ def status(instance, dimension, material, room, workspace):
                         "room-capture",
                     )
                     if admitted_grant != grant:
+                        result["agent_save"]["reason"] = "native-save-profile-changed"
                         continue
                 except (OSError, RuntimeError, ValueError):
                     continue
@@ -961,4 +973,6 @@ def status(instance, dimension, material, room, workspace):
                     }
                 )
     result["agent_save"]["available"] = bool(result["agent_save"]["profiles"])
+    if result["agent_save"]["available"]:
+        result["agent_save"].pop("reason", None)
     return result

@@ -1590,7 +1590,7 @@ test("dirty tracking marks watcher changes immediately without rescanning each e
   assert.equal(statusCalls(), startupStatusCalls);
 });
 
-function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult, agentStatus, provider = "minio" } = {}) {
+function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResult, agentStatus, sessionInventory, provider = "minio" } = {}) {
   const dimension = {
     id: "backup",
     display_name: "Backup",
@@ -1619,6 +1619,9 @@ function createNativeSaveFixture(root, { preview, saveResult, onSave, statusResu
     }
     if (args[0] === "snapshot" && args[1] === "agent-save-status") {
       return { stdout: JSON.stringify(agentStatus || { ok: true, agent_save: { contract_version: 1, mode: "history-only", available: false, profiles: [] } }) };
+    }
+    if (args[0] === "agents" && args[1] === "inventory") {
+      return { stdout: JSON.stringify({ ok: true, session_inventory: sessionInventory }) };
     }
     if (args[0] === "snapshot" && args[1] === "preview") {
       return { stdout: JSON.stringify(preview) };
@@ -1773,6 +1776,23 @@ for (const mismatch of ["domain", "algorithm", "current-policy"]) test(`partial 
   else if (mismatch === "algorithm") result.signature_algorithm = "unknown";
   else fs.writeFileSync(path.join(root, ".josh-roomignore"), "new-exclusion/\n");
   assert.equal(extension.__test__.agentPartialWorkspace({ ok: false, error: "agent-save-partial", workspace_result: result }, root, "backup"), undefined);
+});
+
+test("native Save probes ordinary sessions independently without adding a capture selection", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-session-detection-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview(), saveResult: { ok: true, status: 'saved', project_id: 'demo-room', snapshot_id: 'jat-2' },
+    agentStatus: { ok: true, agent_save: { contract_version: 1, mode: 'history-only', available: false, profiles: [], reason: 'native-room-authority-unavailable' } },
+    sessionInventory: { contract_version: 1, tools: { codex: { state: 'complete', exact: 1, descendant: 0 }, t3: { state: 'complete', exact: 0, descendant: 1 } } },
+  });
+  fixture.vscode.infoResponses.push('Save');
+  assert.equal(await fixture.extension.__test__.saveRoom(), 'saved');
+  const probe = fixture.spawnHarness.calls.find(call => call.args[0] === 'agents' && call.args[1] === 'inventory');
+  assert.deepEqual(probe.args, ['agents', 'inventory', '--workspace', root, '--json']);
+  const saves = fixture.spawnHarness.calls.filter(call => call.args[0] === 'snapshot' && ['preview', 'create'].includes(call.args[1]));
+  assert.equal(saves.length, 2);
+  assert.ok(saves.every(call => !call.args.includes('--agent-selection')));
 });
 
 test("native Save previews the Room Store and reports logical, scanned, and Restic bytes separately", async () => {

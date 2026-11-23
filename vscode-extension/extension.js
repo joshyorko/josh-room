@@ -2415,7 +2415,8 @@ async function saveRoom(options = {}) {
   const choiceKey = captureChoiceKey(source, targetDimensionId, selected.project?.id || name);
   imageChoice = await require("./component-picker").pickComponents(vscode, source, sessionCaptureChoices.get(choiceKey) || require("./component-picker").storedChoice(extensionContext?.globalState, choiceKey), () => runJoshRoom(["snapshot", "homebrew-capabilities"], source),
     ["minio", "s3"].includes(targetProvider) ? () => runJoshRoom(nativeRegistry.dimensionArgs(
-      ["snapshot", "agent-save-status", name, "--source", source, "--backend", targetProvider], targetDimensionId), source) : undefined);
+      ["snapshot", "agent-save-status", name, "--source", source, "--backend", targetProvider], targetDimensionId), source) : undefined,
+    () => runJoshRoom(["agents", "inventory", "--workspace", source], source));
   if (!imageChoice) return "cancelled";
   const buildArgs = nativeRegistry.dimensionArgs(
     ["snapshot", "create", name, "--source", source, "--backend", targetProvider],

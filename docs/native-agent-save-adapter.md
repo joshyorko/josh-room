@@ -22,6 +22,51 @@ Unknown capability versions and unavailable profiles cannot authorize capture.
 Selecting a row requires an explicit opaque granted-profile choice. Nothing
 selects history by default or persists history opt-in as a component preference.
 
+### Ordinary sessions and admission diagnostics
+
+The picker also runs the independent, read-only
+`josh-room agents inventory --workspace PATH --json` metadata probe. On Linux,
+it counts ordinary Codex and T3 sessions in the exact folder and in child
+folders separately. Parent/sibling sessions are excluded. Counts are detection
+only: they neither enroll an existing home nor authorize its capture. An
+admitted row captures only the explicitly selected dedicated profile, not the
+ordinary or child-folder sessions counted alongside it. Claude remains on the
+existing granted-profile discovery path; this probe does not read Claude turns.
+
+The probe uses `CODEX_HOME` / `T3CODE_HOME`, defaulting to `~/.codex` / `~/.t3`
+in the workspace extension host. It reads only the first Codex `session_meta`
+record from active/archived JSONL files and schema-checked T3 project/thread
+metadata through a read-only SQLite connection, including committed WAL data.
+Current T3 v2 threads are recognized even when legacy thread tables are empty;
+the legacy layout is also supported. No messages, titles, private paths,
+session IDs, auth stores, or raw errors are returned to VS Code. No provider
+process, model request, recovery grant, database backup or capture is created.
+The existing offline `agents room-status` contract remains profile-only.
+
+Closed databases without a WAL use an immutable main-file observation, fenced
+by file identity/size/timestamps and journal/WAL absence. Live WAL reads use
+SQLite's normal read-only connection and read locks. SQLite may update/create
+WAL/SHM bookkeeping, including during server shutdown; this is not a guarantee
+of byte-for-byte filesystem immutability. Application tables are never written,
+and no database or provider home is copied. A changing main file or rollback
+journal refuses the observation rather than showing unverified counts.
+
+Each tool is limited to 4,096 entries/rows and one second; Codex headers have a
+256 KiB per-record and 8 MiB total read limit. Linked roots/entries, special
+files, compressed/unknown records, inaccessible databases, unsupported schemas,
+and exhausted bounds report unavailable/unsupported/incomplete discovery, not
+proof that no history exists. A complete scan with zero matches is shown
+separately. Detection remains visible when recovery admission fails.
+
+Missing host authority now retains its bounded reason through Save status,
+without opening storage or scanning workspace contents when there are no
+granted profiles. The picker explains missing/unreadable host admission,
+unmatched profiles, changed/failed grants, work-scope denial and unsupported
+platform/provider gates. Existing shared-home adoption and original T3 recovery
+still need #188; keep the existing native home until supported recovery exists.
+Do not create a grant merely to dismiss this diagnostic. General native
+continuation and installed/immutable runtime qualification are separate gates.
+
 The optional `--agent-selection` JSON is a separate closed object:
 
 ```json

@@ -97,10 +97,23 @@ def test_history_chooser_pilot_refuses_unqualified_platforms_and_providers(
 ):
     monkeypatch.setattr(save.sys, "platform", platform)
     monkeypatch.setattr(save, "open_scope", lambda *a, **k: pytest.fail("unqualified admission"))
-    assert save.status(None, SimpleNamespace(provider=provider), None, "room", tmp_path) == {
-        "ok": True,
-        "agent_save": {"contract_version": 1, "mode": "history-only", "available": False, "profiles": []},
-    }
+    result = save.status(None, SimpleNamespace(provider=provider), None, "room", tmp_path)
+    assert result["agent_save"]["available"] is False
+    assert result["agent_save"]["profiles"] == []
+    assert result["agent_save"]["reason"] == ("native-save-unsupported-provider" if platform == "linux" else "native-save-unsupported-platform")
+
+
+def test_missing_authority_reason_survives_actual_discovery_without_storage(tmp_path, monkeypatch):
+    config_home = tmp_path / "host-config"
+    config_home.mkdir(mode=0o700)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setattr(save.sys, "platform", "linux")
+    monkeypatch.setattr(save, "open_scope", lambda *a, **k: pytest.fail("missing admission opened storage"))
+    result = save.status(None, SimpleNamespace(provider="minio", dimension_id="synthetic"), None, "demo", tmp_path)
+    assert result["agent_save"]["reason"] == "native-room-authority-unavailable"
+    assert result["agent_save"]["profiles"] == []
+    assert result["agent_save"]["available"] is False
+    assert not (config_home / "josh-room").exists()
 
 
 def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypatch):

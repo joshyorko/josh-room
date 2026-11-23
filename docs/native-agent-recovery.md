@@ -87,6 +87,14 @@ conversation previews are not sent to VS Code. Discovery performs no T3 import,
 assigns no new app-thread ID and offers no Continue action. Issue #190 owns the
 shared native-component chooser; every provider remains unselectable there.
 
+The shared Save chooser additionally uses `agents inventory --workspace PATH
+--json` for bounded ordinary Codex/T3 metadata detection on Linux. It reports
+exact-folder and child-folder counts independently of host admission. Finding
+ordinary history does not enroll or capture it. See the [Save inventory limits
+and admission diagnostics](native-agent-save-adapter.md#ordinary-sessions-and-admission-diagnostics).
+This does not broaden `room-status`, authorize work uploads, or enable original
+T3 restoration or automatic shared-home adoption.
+
 T3's supported provider-history scan/import was separately qualified against
 cold-materialized synthetic Codex and Claude files using a fresh authenticated
 local server. It preserves the provider-native UUID but derives a **new** T3
