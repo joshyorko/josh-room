@@ -207,6 +207,23 @@ Key validation rules:
   upstream exception strings; instead `/state.json` records a sanitized `stale`
   object (`reason: "collector-error"`).
 
+### Live workspace queries
+
+Native workspace sessions advertise `server.filesystem` in `/state.json`.
+Start with `GET /fs/list?id=root`. Use the returned generation, object IDs and
+continuation cursor for subsequent calls. A page reports its directory,
+ancestors, entries, coverage and observed counts. During sibling validation a
+partial page can contain zero entries. Continue while a cursor is present.
+A complete listing with zero admitted entries means there are no visible
+children under the current policy. Boundaries and inaccessible listings carry
+their own status. Reopen the directory if the server revokes its generation.
+
+`/fs/inspect` returns metadata for an issued ID. `/fs/preview` reads the
+selected object under the current workspace binding and policy. Binary previews
+use `/fs/attachment` with the admitted name and digest. The server rejects
+arbitrary paths. These routes operate only on the live native workspace.
+File sizes are reported in bytes. Block heights use a bounded visual scale.
+
 ## Embedded `room-view-v1` SQLite schema
 
 ```sql
@@ -262,7 +279,8 @@ into a structured comparison view with scripts/iframes/objects stripped.
   stage pedestals connected by parent-child ground wires → upright uniform-footprint
   file blocks whose heights represent **5 quantile bins** of the metric. World
   geometry stays constant in size as item counts grow: pedestals with >16 items
-  show the 11 highest-interest items (failures first, then metric) plus an
+  show a subset (stable file order for filesystem nodes, outcome and metric
+  priority for pipeline items) plus an
   expandable `+N more` stacked-outcome block; groups with >50 items collapse
   into stage summary blocks until focused. Distance LOD simplifies far blocks
   and pedestals with ~15% hysteresis.
@@ -306,8 +324,8 @@ grid and SQL retain nodes hidden by 3D aggregation or LOD.
 `PreviewContent` stores a bounded typed body, slot, title, language, summary and
 status (`available`, `unavailable`, `redacted`, `omitted`). `ObjectLink` stores a
 validated relation and target ID. Preview and relationship data passes the same
-mandatory sanitizer as descriptor/state data. Live content uses only validated
-`GET /content/<id>/<slot>`; there is no arbitrary path route. Offline snapshots
+mandatory sanitizer as descriptor/state data. Generic providers serve validated preview slots through
+`GET /content/<id>/<slot>`. The live native workspace uses the scoped queries above. Offline snapshots
 embed the same content and links with zero network.
 
 Additive SQLite tables in `room-view-v1` are `nodes` (including computed `path`),

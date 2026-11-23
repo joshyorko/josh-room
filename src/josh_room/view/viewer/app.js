@@ -20,8 +20,15 @@
       );
 
       this.expandedDirs = new Set();
+      this.collapsedDirs = new Set();
       this.expandedPedestals = new Set();
       this.history = [];
+      this.forward = [];
+      this.fsPage = null;
+      this.fsRequest = null;
+      this.fsBusy = false;
+      this.fsCoverage = this.data.filesystem ? 'loading' : null;
+      if (this.data.filesystem) this.data.applyFilesystemNodes([this._placeholderRoot()], null);
       this.currentNodeId = 'root';
       this.failureIndex = -1;
       this.webglActive = false;
@@ -49,6 +56,22 @@
         document.getElementById('aria-live-region'),
         {
           onSelectNode: (nodeId) => this.handleNodeSelect(nodeId, { fromTree: true }),
+          onToggle: (nodeId, expand) => {
+            if (expand) this.expandDirectory(nodeId);
+            else {
+              this._remember(nodeId);
+              this.currentNodeId = nodeId;
+              this.expandedDirs.delete(nodeId);
+              this.collapsedDirs.add(nodeId);
+              this.evidence.hide();
+              this.scene3d?.clearSpotlight();
+              this._rebuildLayout({ preserveCamera: true });
+              this.ariaTree.syncFromWorld(nodeId);
+              this._updateBreadcrumbs();
+              this._renderGrid();
+              this._updateNavigationButtons();
+            }
+          },
           onExpandMore: (pedId) => this.expandPedestal(pedId),
         }
       );
@@ -61,8 +84,198 @@
       this._exposeDebugHandle();
 
       if (this.data.mode === 'live') {
+        if (this.data.filesystem) this._openFilesystem('root', { pushHistory: false });
         this._startLivePolling();
       }
+    }
+
+    _placeholderRoot() {
+      return { id: 'root', node_kind: 'directory', parent_id: null, label: '/' };
+    }
+
+    _treeId(node) {
+      return node.parent_id == null ? 'root' : global.RoomViewLayout.makeCustomNodeId(node.id);
+    }
+
+    _directoryId() {
+      const current = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      return current?.nodeType === 'item' ? current.parentId : current?.id || 'root';
+    }
+
+    _renderGrid() {
+      this.gridView.render(this.data.descriptor, this.data.state, this.layout, {
+        directoryId: this._directoryId(),
+        selectedId: this.currentNodeId,
+        coverage: this.fsCoverage,
+      });
+    }
+
+    _updateNavigationButtons() {
+      document.getElementById('btn-back').disabled = !this.history.length;
+      document.getElementById('btn-forward').disabled = !this.forward.length;
+      document.getElementById('btn-up').disabled = this.currentNodeId === 'root';
+      const badge = document.getElementById('fs-coverage');
+      const more = document.getElementById('fs-continue');
+      badge.hidden = !this.fsCoverage;
+      if (this.fsCoverage) badge.textContent = this.fsCoverage;
+      more.hidden = !this.data.filesystem || !(this.fsRetry || this.fsResume || this.fsPage?.cursor);
+      more.disabled = this.fsBusy;
+      more.textContent = this.fsRetry ? 'Retry' : 'Continue';
+    }
+
+    _remember(nodeId) {
+      if (this.currentNodeId === nodeId) return;
+      this.history.push(this.currentNodeId);
+      if (this.history.length > 40) this.history.shift();
+      this.forward.length = 0;
+    }
+
+    async _openFilesystem(id, { pushHistory = true, cursor = null, kind = null,
+      refresh = false, instant = false, moveCamera = true } = {}) {
+      this.fsRequest?.abort();
+      this.fsResume = null;
+      const previousPage = this.fsPage;
+      const previousNode = this.layout?.allTreeNodesById.get(this.currentNodeId);
+      const previousChain = previousPage
+        ? [...previousPage.ancestors, previousPage.directory, ...(previousNode?.nodeType === 'item'
+          ? [{ id: previousNode.objectId, node_kind: previousNode.nodeKind }] : [])] : [];
+      const request = new AbortController();
+      this.fsRequest = request;
+      this.fsBusy = true;
+      this.fsRetry = false;
+      const generation = this.data.fsGeneration;
+      const query = (name, params) => this.data.queryFilesystem(name, {
+        ...(generation ? { generation } : {}), ...params,
+      }, request.signal);
+      if (!refresh) {
+        this.filesystemSearch?.invalidate();
+        this.fsCoverage = 'Loading directory…';
+        this._updateNavigationButtons();
+      }
+      try {
+        let page = this.fsPage;
+        if (!kind && id !== 'root') {
+          const inspected = await query('inspect', { id });
+          kind = inspected.node.node_kind;
+        }
+        const isFile = Boolean(kind && kind !== 'directory');
+        let file = null;
+        if (isFile) {
+          const preview = await query('preview', { id });
+          file = preview.node;
+          if (page?.directory.id !== file.parent_id) {
+            page = await query('list', { id: file.parent_id });
+          }
+        } else {
+          page = await query('list', { id, ...(cursor ? { cursor } : {}) });
+        }
+        if (request.signal.aborted) return;
+        const selected = file || page.directory;
+        const selectedId = this._treeId(selected);
+        const previousId = this.currentNodeId;
+        if (pushHistory) this._remember(selectedId);
+        const nodes = new Map();
+        for (const node of [...page.ancestors, page.directory, ...page.entries, selected]) {
+          nodes.set(node.id, node);
+        }
+        this.fsPage = page;
+        const dir = nodes.get(page.directory.id);
+        nodes.set(dir.id, { ...dir, fields: { ...dir.fields, coverage: page.coverage,
+          entries_on_page: page.entries.length, examined: page.examined, omitted: page.omitted } });
+        this.fsCoverage = `${page.coverage} · ${page.entries.length} shown · ${page.examined} examined · ${page.omitted} omitted`;
+        this.currentNodeId = selectedId;
+        this.data.applyFilesystemNodes(Array.from(nodes.values()), page.generation);
+        this._syncFromData();
+        const target = this.layout.allTreeNodesById.get(selectedId);
+        const block = this.layout.nodeById.get(selectedId);
+        if (!refresh) {
+          this.scene3d?.focusNode(selectedId, { instant, moveCamera });
+          this.ariaTree.syncFromWorld(selectedId, target?.path || '/');
+        }
+        if (target && (file || (id !== 'root' && !refresh))) {
+          this.evidence.showTarget(target, this.data.descriptor, this.data.state, this.layout, {
+            quantileBin: block?.quantileBin, preserveTab: previousId === selectedId,
+          });
+        } else if (!refresh) this.evidence.hide();
+      } catch (error) {
+        if (request.signal.aborted) return;
+        this.filesystemSearch?.invalidate();
+        this.evidence.hide();
+        this.scene3d?.clearSpotlight();
+        this.fsPage = null;
+        this.fsCoverage = error.status === 409
+          ? 'Workspace changed. Reopen the root to refresh.'
+          : `Directory unavailable (${error.message}).`;
+        this.fsRetry = true;
+        this.data.applyFilesystemNodes([this._placeholderRoot()], null);
+        this.currentNodeId = 'root';
+        this._syncFromData();
+        if ((error.status === 409 || error.status === 404) && previousChain.length) {
+          try {
+            await this._restoreFilesystem(previousChain, request.signal);
+          } catch (_) {
+            if (!request.signal.aborted) {
+              this.fsRetry = true;
+              this.fsCoverage = 'Workspace unavailable. Retry from the root.';
+            }
+          }
+        }
+      } finally {
+        if (!request.signal.aborted) {
+          this.fsBusy = false;
+          this._updateNavigationButtons();
+        }
+      }
+    }
+
+    async _restoreFilesystem(chain, signal) {
+      let index = 1;
+      let directory = 'root';
+      let generation;
+      let cursor;
+      const resume = async () => {
+        this.fsResume = null;
+        this.fsBusy = true;
+        try {
+          for (let batch = 0; batch < 8; batch++) {
+            const page = await this.data.queryFilesystem('list', {
+              id: directory, ...(generation ? { generation } : {}), ...(cursor ? { cursor } : {}),
+            }, signal);
+            if (signal.aborted) return;
+            generation = page.generation;
+            cursor = page.cursor;
+            const next = page.entries.find(node => node.id === chain[index]?.id);
+            if (next?.node_kind === 'directory') {
+              directory = next.id;
+              index++;
+              cursor = null;
+              continue;
+            }
+            if (next || index === chain.length || !cursor) {
+              this.data.fsGeneration = generation;
+              this.fsPage = page;
+              this.fsRetry = false;
+              await this._openFilesystem(next?.id || directory, {
+                kind: next?.node_kind || 'directory', pushHistory: false, instant: true,
+              });
+              return;
+            }
+          }
+          this.fsResume = resume;
+          this.fsRetry = false;
+          this.fsCoverage = 'Rechecking selected path. Continue to resume.';
+        } catch (error) {
+          if (signal.aborted) return;
+          this.fsCoverage = `Workspace unavailable (${error.message}). Retry from root.`;
+          this.fsRetry = true;
+        } finally {
+          if (!signal.aborted) {
+            this.fsBusy = false;
+            this._updateNavigationButtons();
+          }
+        }
+      };
+      return resume();
     }
 
     _init3DOrFallback() {
@@ -170,12 +383,22 @@
       liveExportBtn.hidden = this.data.mode !== 'live';
 
       this._renderBottomLegend(desc);
-      this._rebuildLayout({ runEstablishingShot: isInitial, preserveCamera: !isInitial });
-      this.gridView.render(desc, state, this.layout);
+      const signature = JSON.stringify([desc, state.nodes, state.items, state.groups, this.currentNodeId]);
+      if (this.layoutSignature !== signature) {
+        const previous = this.layout;
+        this._rebuildLayout({ runEstablishingShot: isInitial, preserveCamera: !isInitial });
+        while (this.currentNodeId !== 'root' && !this.layout.allTreeNodesById.has(this.currentNodeId)) {
+          this.currentNodeId = previous?.allTreeNodesById.get(this.currentNodeId)?.parentId || 'root';
+        }
+        this.layoutSignature = signature;
+      }
+      this._renderGrid();
+      this._updateNavigationButtons();
+      if (!this.data.filesystem && this.searchInputEl.value) this._runSearch(this.searchInputEl.value);
       this.sqlConsole.renderPresets(desc);
 
       // Reconcile open inspector drawer against refreshed state after live poll!
-      if (!isInitial && this.evidence.isOpen() && this.evidence.currentObjectId) {
+      if (!this.data.filesystem && !isInitial && this.evidence.isOpen() && this.evidence.currentObjectId) {
         const objId = this.evidence.currentObjectId;
         const refreshedLeaf = this.layout.allLeavesByObjectId.get(objId);
         if (refreshedLeaf) {
@@ -202,7 +425,9 @@
 
     _rebuildLayout({ runEstablishingShot = false, preserveCamera = false } = {}) {
       this.layout = global.RoomViewLayout.buildFsnLayout(this.data.descriptor, this.data.state, {
+        selectedNodeId: this.currentNodeId,
         expandedDirs: this.expandedDirs,
+        collapsedDirs: this.collapsedDirs,
         expandedPedestals: this.expandedPedestals,
       });
       if (this.scene3d) {
@@ -212,6 +437,7 @@
           preserveCamera,
         });
       }
+      this.ariaTree.expanded = new Set(this.layout.pedestals.filter(node => !node.collapsed).map(node => node.id));
       this.ariaTree.build(this.data.descriptor, this.data.state, this.layout);
     }
 
@@ -237,10 +463,11 @@
     expandPedestal(pedestalId) {
       this.expandedPedestals.add(pedestalId);
       this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
-      this.handleNodeSelect(pedestalId, { pushHistory: false });
+      this.ariaTree.syncFromWorld(this.currentNodeId);
     }
 
     expandDirectory(dirId) {
+      this.collapsedDirs.delete(dirId);
       this.expandedDirs.add(dirId);
       this._rebuildLayout({ runEstablishingShot: false, preserveCamera: true });
     }
@@ -252,7 +479,8 @@
       while (cur && cur.parentId) {
         const parentId = cur.parentId;
         const parentPed = this.layout.nodeById.get(parentId);
-        if (parentPed && parentPed.collapsed) {
+        if (!parentPed || parentPed.collapsed) {
+          this.collapsedDirs.delete(parentId);
           this.expandedDirs.add(parentId);
           rebuilt = true;
         }
@@ -266,6 +494,11 @@
 
     handleNodeSelect(nodeId, { shiftKey = false, fromTree = false, pushHistory = true, instant = false } = {}) {
       if (!this.layout) return;
+      const logicalNode = this.layout.allTreeNodesById.get(nodeId);
+      if (this.data.filesystem && (logicalNode || nodeId === 'root' || nodeId.startsWith('node/'))) {
+        const id = logicalNode?.objectId || (nodeId === 'root' ? 'root' : decodeURIComponent(nodeId.slice(5)));
+        return this._openFilesystem(id, { kind: logicalNode?.nodeKind, pushHistory, instant, moveCamera: !shiftKey });
+      }
       let node = this.layout.nodeById.get(nodeId);
       if (!node) {
         // Node may live inside a collapsed subtree (>50) or aggregated >16 pedestal!
@@ -297,11 +530,11 @@
       }
 
       if (pushHistory && this.currentNodeId && this.currentNodeId !== nodeId) {
-        this.history.push(this.currentNodeId);
-        if (this.history.length > 40) this.history.shift();
+        this._remember(nodeId);
       }
       this.currentNodeId = nodeId;
-      document.getElementById('btn-back').disabled = this.history.length === 0;
+      this._updateNavigationButtons();
+      this._renderGrid();
 
       const freshNode = this.layout.nodeById.get(nodeId) || node;
       if (this.scene3d) {
@@ -359,15 +592,7 @@
     }
 
     ascendToParent() {
-      if (this.evidence.isOpen()) {
-        this.evidence.hide();
-        const cur = this.layout && this.layout.nodeById.get(this.currentNodeId);
-        if (cur && cur.parentId) {
-          this.handleNodeSelect(cur.parentId);
-          return;
-        }
-      }
-      const cur = this.layout && this.layout.nodeById.get(this.currentNodeId);
+      const cur = this.layout?.allTreeNodesById.get(this.currentNodeId);
       if (cur && cur.parentId) {
         this.handleNodeSelect(cur.parentId);
       } else {
@@ -376,8 +601,12 @@
     }
 
     frameAll({ instant = false } = {}) {
+      if (this.data.filesystem) return this._openFilesystem('root', { instant });
+      this._remember('root');
       this.evidence.hide();
       this.currentNodeId = 'root';
+      this._updateNavigationButtons();
+      this._renderGrid();
       if (this.scene3d) this.scene3d.frameOverview({ instant });
       this.ariaTree.syncFromWorld('root', 'Framed complete filesystem overview');
       this._updateBreadcrumbs();
@@ -386,7 +615,8 @@
     stepFailure(delta) {
       const allLeaves = (this.layout && this.layout.allLeaves) || [];
       const failures = allLeaves.filter((leaf) => global.RoomViewLayout.getLegendEntry(this.data.descriptor, leaf.kind).isFailure);
-      if (!failures.length) return;
+      if (global.RoomViewLayout.isWorkspace(this.data.descriptor) || !failures.length) return;
+      if (this.failureIndex < 0 && delta < 0) this.failureIndex = 0;
       this.failureIndex = (this.failureIndex + delta + failures.length) % failures.length;
       this.selectItemById(failures[this.failureIndex].objectId, { openInspector: true });
     }
@@ -429,6 +659,10 @@
       const spotLabel = this.spotlightMode === 'v2' ? 'Spot v2' : 'Spot base';
       const draws = this.scene3d ? ` · ${this.scene3d.stats.drawCalls} draws` : ' · 2D';
       const dirInfo = this.layout ? `${this.layout.pedestals.length} dirs · ` : '';
+      if (global.RoomViewLayout.isWorkspace(this.data.descriptor)) {
+        el.textContent = `${dirInfo}${counts.total} observed files`;
+        return;
+      }
       el.textContent = `${dirInfo}${counts.total} objects (${counts.fail} fail) · ${spotLabel}${draws}`;
     }
 
@@ -598,12 +832,26 @@
       document.getElementById('btn-theme-night').addEventListener('click', () => this._applyTheme('night'));
       document.getElementById('btn-theme-grass').addEventListener('click', () => this._applyTheme('grass'));
       document.getElementById('btn-frame-all').addEventListener('click', () => this.frameAll());
+      document.getElementById('btn-forward').addEventListener('click', () => {
+        if (!this.forward.length) return;
+        this.history.push(this.currentNodeId);
+        this.handleNodeSelect(this.forward.pop(), { pushHistory: false });
+      });
+      document.getElementById('btn-up').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('fs-continue').addEventListener('click', () => {
+        if (this.fsResume) this.fsResume();
+        else if (this.fsRetry) this._openFilesystem('root', { pushHistory: false });
+        else if (this.fsPage?.cursor) this._openFilesystem(this.fsPage.directory.id, {
+          cursor: this.fsPage.cursor, kind: 'directory', pushHistory: false,
+        });
+      });
       document.getElementById('btn-back').addEventListener('click', () => {
         if (!this.history.length) return;
         const prev = this.history.pop();
+        this.forward.push(this.currentNodeId);
         this.handleNodeSelect(prev, { pushHistory: false });
       });
-      document.getElementById('btn-inspector-close').addEventListener('click', () => this.ascendToParent());
+      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.hide());
       document.getElementById('btn-prev-fail').addEventListener('click', () => this.stepFailure(-1));
       document.getElementById('btn-next-fail').addEventListener('click', () => this.stepFailure(1));
 
@@ -650,6 +898,18 @@
       });
       window.addEventListener('beforeprint', () => this._preparePrint());
 
+      if (this.data.filesystem) {
+        this.filesystemSearch = new global.RoomViewFilesystemSearch({
+          list: (id, generation, cursor, signal) => this.data.queryFilesystem('list', {
+            id, ...(generation ? { generation } : {}), ...(cursor ? { cursor } : {}),
+          }, signal),
+          select: hit => this._openFilesystem(hit.id, { kind: hit.node_kind }),
+          directory: () => this.fsPage?.directory.id || 'root',
+          root: () => 'root',
+          generation: () => this.data.fsGeneration,
+        });
+        return;
+      }
       this.searchInputEl.addEventListener('input', () => this._runSearch(this.searchInputEl.value));
       this.searchInputEl.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') {
@@ -733,7 +993,20 @@
 
     _startLivePolling() {
       const intervalMs = Math.max(1000, (this.data.liveConfig && this.data.liveConfig.pollIntervalMs) || 5000);
-      setInterval(async () => {
+      const poll = async () => {
+        if (this.data.filesystem) {
+          if (this.fsBusy || !this.fsPage) return;
+          const selected = this.layout.allTreeNodesById.get(this.currentNodeId);
+          const page = this.fsPage;
+          try {
+            await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
+          } catch (_) {
+            if (page === this.fsPage && !this.fsBusy) {
+              return this._openFilesystem(selected?.objectId || page.directory.id, { kind: selected?.nodeKind, refresh: true, pushHistory: false });
+            }
+          }
+          return;
+        }
         try {
           await this.data.refreshLive();
           this._syncFromData({ isInitial: false });
@@ -742,7 +1015,9 @@
           staleBanner.textContent = 'STALE DATA (poll-connection-error) — retrying automatically';
           staleBanner.hidden = false;
         }
-      }, intervalMs);
+      };
+      this.refresh = poll;
+      setInterval(poll, intervalMs);
     }
 
     _exposeDebugHandle() {
@@ -801,8 +1076,7 @@
           if (app.scene3d) app.scene3d.settleAnimationsImmediately();
         },
         refreshNow: async () => {
-          await app.data.refreshLive();
-          app._syncFromData({ isInitial: false });
+          await app.refresh?.();
         },
         runSql: (q) => app.sqlConsole.execute(q),
         openTab: (tab) => app.evidence.switchTab(tab),

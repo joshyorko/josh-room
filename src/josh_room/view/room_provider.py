@@ -562,6 +562,26 @@ class RoomWorkspaceProvider:
     def describe(self) -> ViewDescriptor:
         return self._descriptor
 
+    def open_filesystem(self):
+        from .filesystem import WorkspaceFilesystem
+
+        return WorkspaceFilesystem(self)
+
+    def overview(self) -> ViewState:
+        """Live bootstrap: discover metadata and read content only on request."""
+        fd, _ = self._open_bound_root()
+        try:
+            self._capture_policy(fd)
+            now = _utc_now_iso()
+            root = NodeState("root", None, "directory", "/", now, fields={"coverage": "not-examined"})
+            return ViewState(now, now, (), (), nodes=(root,), summary={
+                "provider_kind": "native-room-workspace",
+                "freshness": "observed-live-workspace-not-snapshot",
+                "coverage": "not-examined",
+            })
+        finally:
+            os.close(fd)
+
     def _open_relative_dir(
         self,
         root_fd: int,
@@ -641,11 +661,9 @@ class RoomWorkspaceProvider:
             opened = os.fstat(fd)
             if (
                 not stat.S_ISREG(opened.st_mode)
-                or opened.st_dev != expected_info.st_dev
-                or opened.st_ino != expected_info.st_ino
                 or opened.st_nlink != 1
-                or _safe_mount_id(fd) != _safe_mount_id(dir_fd)
                 or stamp(opened) != stamp(expected_info)
+                or _safe_mount_id(fd) != _safe_mount_id(dir_fd)
                 or opened.st_size > limit
             ):
                 return None
