@@ -343,3 +343,21 @@ def test_child_index_conflicts_are_refused_before_approval(tmp_path, kind):
         expected = "tracks generated Room metadata"
     with pytest.raises(ValueError, match=expected):
         capture_plan(source, dimension, "1" * 32, "parent", assignments)
+
+
+def test_direct_save_refuses_different_binding_before_creating_envelope(tmp_path):
+    from types import SimpleNamespace
+
+    from josh_room.composition_lifecycle import save_composition
+
+    source, dimension, assignments, preview = fixture(tmp_path)
+    authority = SimpleNamespace(
+        namespace="1" * 32,
+        binding={**preview["request"]["destination_binding"], "connection_id": "other"},
+        read=lambda: (None, None),
+        put=lambda *_: pytest.fail("mismatched authority created a namespace"),
+    )
+    with pytest.raises(ValueError, match="binding"):
+        save_composition(source, dimension, authority.namespace, "parent", assignments,
+                         preview["approval_sha256"], authority,
+                         lambda *_: pytest.fail("opened Restic"), tmp_path)

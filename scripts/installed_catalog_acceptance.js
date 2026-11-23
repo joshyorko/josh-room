@@ -16,7 +16,11 @@ exports.run = async () => {
   const base = fs.realpathSync(ready.fixture_root);
   assert.equal(path.dirname(base), scratch);
   assert.equal(ready.receipt.provider, "loopback-minio");
-  const source = path.join(base, "provider-source");
+  const command = process.env.JOSH_ROOM_ACCEPTANCE_ENTRY || "joshRoom.saveCatalog";
+  assert.ok(["joshRoom.saveCatalog", "joshRoom.new"].includes(command));
+  const source = ready.native_sources?.[command] || path.join(base, "provider-source");
+  assert.equal(path.dirname(fs.realpathSync(source)), base);
+  assert.equal(fs.existsSync(path.join(source, ".josh-room.json")), false);
   const gitPath = "projects/a";
   const installed = vscode.extensions.getExtension("joshyorko.josh-room");
   assert.ok(installed);
@@ -37,15 +41,30 @@ exports.run = async () => {
   const python = process.env.JOSH_ROOM_ACCEPTANCE_PYTHON;
   const args = values => ["-m", "josh_room", ...values, "--json"];
   const cli = (...values) => JSON.parse(execFileSync(python, args(values), { cwd: base, env: { ...process.env, ...env }, timeout: 240000 }));
-  applyInstalledRuntime(installed.extensionPath, { command: python, args, env, mode: "local-build-fallback", jatArtifact: env.JOSH_ROOM_JAT_ARTIFACT, jatRoot: env.JOSH_ROOM_JAT_ROOT || base });
+  const runtimeApis = applyInstalledRuntime(installed.extensionPath, { command: python, args, env, mode: "local-build-fallback", jatArtifact: env.JOSH_ROOM_JAT_ARTIFACT, jatRoot: env.JOSH_ROOM_JAT_ROOT || base });
+  if (ready.receipt.uncached_domain_verified) {
+    const status = cli("encryption", "status", "--dimension", "composition-fixture");
+    assert.ok(status.encryption_domain_id && status.key_generation);
+    for (const api of runtimeApis) {
+      assert.ok(!(await api.readEncryptionMaterial(status)), "expected fresh editor SecretStorage");
+    }
+  }
   const renderer = await connect(Number(process.env.JOSH_ROOM_ACCEPTANCE_CDP_PORT));
   const actions = require(path.join(installed.extensionPath, "catalog-actions.js"));
   const originalSave = actions.saveCatalog;
   // Supply paths to the native OS file chooser. All Quick Picks, the approval,
   // the registered command, and the installed production callbacks are exercised.
+  let manualDomainPrompt = false;
   const syntheticDialogs = api => ({ QuickPickItemKind: api.QuickPickItemKind, window: {
     showQuickPick: api.window.showQuickPick, showWarningMessage: api.window.showWarningMessage,
-    showInputBox: api.window.showInputBox, showInformationMessage: api.window.showInformationMessage,
+    showInputBox: options => {
+      if (/encryption domain/i.test(options.title || "")) {
+        manualDomainPrompt = true;
+        throw new Error("Catalog creation requested a manual encryption domain");
+      }
+      return api.window.showInputBox(options);
+    },
+    showInformationMessage: api.window.showInformationMessage,
     showOpenDialog: async options => {
       const locations = {
         "Save Catalog Room — source": source,
@@ -57,12 +76,23 @@ exports.run = async () => {
       return [api.Uri.file(locations[options.title])];
     },
   } });
-  actions.saveCatalog = (api, callbacks) => originalSave(syntheticDialogs(api), callbacks);
+  let verifiedDomain;
+  actions.saveCatalog = (api, callbacks) => originalSave(syntheticDialogs(api), {
+    ...callbacks,
+    plan: async selection => {
+      if (ready.receipt.uncached_domain_verified) assert.ok(!selection.dimension.encryption_domain_id);
+      const preview = await callbacks.plan(selection);
+      verifiedDomain = preview.request.destination_binding.encryption_domain_id;
+      assert.notEqual(verifiedDomain.replaceAll("-", ""), selection.namespace);
+      return preview;
+    },
+  });
   const picker = require(path.join(installed.extensionPath, "component-picker.js"));
   const originalPick = picker.pickComponents;
   picker.pickComponents = (api, ...inputs) => originalPick(syntheticDialogs(api), ...inputs);
   try {
-    const result = vscode.commands.executeCommand("joshRoom.saveCatalog");
+    const result = vscode.commands.executeCommand(command);
+    if (command === "joshRoom.new") await renderer.choose("Configure Catalog Room");
     await renderer.choose("Use workspace policy");
     // Component selection first appeared after the Git-only writer.
     const next = await until(async () => {
@@ -90,17 +120,14 @@ exports.run = async () => {
     } else if (next.includes("Workspace only")) await renderer.choose("Workspace only");
     await renderer.choose("Metadata only parent");
     await renderer.choose("Synthetic Composition");
-    const domain = cli("encryption", "status", "--dimension", "composition-fixture").encryption_domain_id;
     const approvalText = () => renderer.evaluate("document.querySelector('.monaco-dialog-box')?.innerText");
-    const prompt = await until(async () => (await approvalText()) || (await renderer.widget())?.text, "domain or approval");
-    if (prompt.includes("Encryption domain")) {
-      await renderer.text(domain);
-      await renderer.key("Enter", "Enter", 13);
-    }
     const approval = await until(async () => {
+      assert.equal(manualDomainPrompt, false, "Catalog creation requested a manual encryption domain");
       const text = await approvalText();
       return text?.includes("Save this Catalog Room") && text;
     }, "visible approval", 300000);
+    assert.match(approval, /Synthetic Composition/);
+    assert.match(approval, /minio/i);
     const names = ["rcc_environment", "homebrew_recovery", "hauler_content"];
     if (handoffPath) {
       for (const name of names) assert.ok(approval.includes(name + ": refresh"), name);
@@ -127,14 +154,23 @@ exports.run = async () => {
     for (const child of [gitPath, "b"]) assert.equal(fs.existsSync(path.join(target, child)), false);
     const entered = cli("composition", "enter-child", ...common, "--workspace", target, "--child-path", gitPath);
     assert.equal(entered.marker_verified, true);
+    const domain = cli("encryption", "status", "--dimension", "composition-fixture").encryption_domain_id;
+    assert.equal(verifiedDomain, domain);
+    for (const folder of [target, path.join(target, gitPath)]) {
+      const marker = JSON.parse(fs.readFileSync(path.join(folder, ".josh-room.json")));
+      assert.equal(marker.encryption_domain_id, domain);
+    }
     const git = (root, ...values) => execFileSync("git", ["-C", path.join(root, gitPath), ...values], {
       encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
     for (const probe of [["fsck", "--full"], ["show-ref"], ["rev-parse", "HEAD"], ["ls-files", "--stage"], ["stash", "list"], ["status", "--porcelain=v1"]]) {
       assert.equal(git(target, ...probe), git(source, ...probe));
     }
     assert.equal(fs.existsSync(path.join(target, "b")), false);
-    fs.writeFileSync(path.join(scratch, "installed-catalog-receipt.json"), JSON.stringify({
-      command: "joshRoom.saveCatalog", runtime: "packaged-controller-existing-Python", file_chooser: "synthetic paths",
+    const receiptName = command === "joshRoom.new" ? "installed-new-catalog-receipt.json" : "installed-catalog-receipt.json";
+    fs.writeFileSync(path.join(scratch, receiptName), JSON.stringify({
+      command, empty_encryption_cache_verified: Boolean(ready.receipt.uncached_domain_verified),
+      uncached_dimension: Boolean(ready.receipt.uncached_domain_verified),
+      verified_plan_and_restored_descriptor_domains: true, manual_domain_input: false, runtime: "packaged-controller-existing-Python", file_chooser: "synthetic paths",
       visible_full_repository_approval: true, provider: ready.receipt.provider, parent_pin: saved.parent_snapshot_id,
       child_pin: entered.snapshot_id, git_verified: true, sibling_absent: true,
       selected_components: handoffPath ? names : [],

@@ -23,11 +23,12 @@ class S3ProviderError(RuntimeError):
         self,
         code: str,
         *,
+        provider: str = "s3",
         dimension_id: str | None = None,
         connection_id: str | None = None,
     ):
         self.result = {
-            "provider": "s3",
+            "provider": provider,
             "error_code": code,
             "recoverable": code not in {"credentials-invalid", "signature-failure"},
         }
@@ -35,7 +36,8 @@ class S3ProviderError(RuntimeError):
             self.result["dimension_id"] = dimension_id
         if connection_id:
             self.result["connection_id"] = connection_id
-        super().__init__(f"Amazon S3 operation failed: {code}")
+        name = {"s3": "Amazon S3", "minio": "MinIO", "r2": "R2"}[provider]
+        super().__init__(f"{name} operation failed: {code}")
 
 
 def _sanitized_error(error, context):
@@ -69,17 +71,18 @@ def _sanitized_error(error, context):
     else:
         label = "transport-unavailable"
     if getattr(context, "connection_id", None):
-        return S3ProviderError(label, connection_id=context.connection_id)
-    return S3ProviderError(label, dimension_id=getattr(context, "dimension_id", None))
+        return S3ProviderError(label, provider=context.provider, connection_id=context.connection_id)
+    return S3ProviderError(label, provider=context.provider, dimension_id=getattr(context, "dimension_id", None))
 
 
 @contextmanager
-def sdk_error_boundary(context):
+def sdk_error_boundary(context, *, include_compatible_providers=False):
     """Keep SDK control flow intact until an S3 operation reaches the caller."""
     try:
         yield
     except (ClientError, BotoCoreError) as error:
-        if getattr(context, "provider", None) != "s3":
+        providers = ("s3", "minio", "r2") if include_compatible_providers else ("s3",)
+        if getattr(context, "provider", None) not in providers:
             raise
         raise _sanitized_error(error, context) from None
 

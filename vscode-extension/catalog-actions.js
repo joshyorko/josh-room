@@ -27,6 +27,33 @@ function describeComponents(evidence, requested) {
   return digest ? `${modes} · reviewed artifacts ${digest}` : modes;
 }
 
+function reviewedDestination(dimension, binding) {
+  const id = dimension.id || dimension.dimension_id;
+  const physical = binding?.physical_bucket;
+  if (!binding || binding.dimension_id !== id || binding.provider !== dimension.provider
+      || !binding.connection_id || !binding.encryption_domain_id || typeof physical !== "string"
+      || !physical.startsWith(`${binding.provider}:`) || !physical.slice(physical.lastIndexOf(":") + 1)
+      || (dimension.connection_id && binding.connection_id !== dimension.connection_id)
+      || (dimension.encryption_domain_id && binding.encryption_domain_id !== dimension.encryption_domain_id)
+      || (dimension.physical_bucket && physical !== dimension.physical_bucket)
+      || (dimension.bucket && !physical.endsWith(`:${dimension.bucket}`))) {
+    throw new Error("The reviewed Catalog destination changed. Select the Dimension again.");
+  }
+  if (dimension.endpoint) {
+    const endpoint = new URL(dimension.endpoint);
+    // Composition accepts root endpoints. The controller's physical identity
+    // uses the hostname without IPv6 brackets and omits the default port.
+    const host = endpoint.hostname.replace(/^\[|\]$/g, "");
+    const authority = host + (endpoint.port ? ":" + endpoint.port : "");
+    const prefix = `${binding.provider}:${endpoint.protocol}//${authority}:`;
+    if (endpoint.pathname !== "/" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash
+        || physical.slice(0, physical.lastIndexOf(":") + 1) !== prefix) {
+      throw new Error("The reviewed Catalog destination endpoint changed. Select the Dimension again.");
+    }
+  }
+  return `${dimension.display_name || id} (${binding.dimension_id}) · ${binding.provider} · ${binding.connection_id} · ${physical}`;
+}
+
 async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save }) {
   const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!source?.length) return "cancelled";
@@ -57,16 +84,12 @@ async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save })
   const configured = await dimensions(root);
   const choice = await vscode.window.showQuickPick(configured.map((dimension) => ({ label: dimension.display_name || dimension.id, dimension })), { title: "Explicit Catalog Room destination" });
   if (!choice) return "cancelled";
-  if (!choice.dimension.encryption_domain_id) {
-    const domain = await vscode.window.showInputBox({ title: "Encryption domain from the existing enrollment receipt", prompt: "Non-secret domain ID. The provider will corroborate it after approval.",
-      validateInput: (value) => /^[a-f0-9-]{36}$/i.test(value) ? undefined : "Enter the enrollment domain UUID." });
-    if (!domain) return "cancelled";
-    choice.dimension = { ...choice.dimension, encryption_domain_id: domain };
-  }
   const namespace = crypto.randomUUID().replaceAll("-", "");
   const parentRoom = `catalog-${namespace}`;
   const selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
   const preview = await plan(selection);
+  if (preview === undefined) return "cancelled";
+  const destination = reviewedDestination(choice.dimension, preview.request?.destination_binding);
   const childSummary = assignments.filter(row => row.outcome === "child").map(row => {
     const evidence = preview.request?.child_evidence?.[row.path];
     return `${row.path} — ${describeMode(evidence?.capture_mode)}. ${describeComponents(evidence, row.component_options)}`;
@@ -74,7 +97,7 @@ async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save })
   const parentSummary = assignments.filter(row => row.outcome === "parent").map(row => `Parent content: ${row.path}`);
   const approved = await vscode.window.showWarningMessage("Save this Catalog Room and its children?", {
     modal: true,
-    detail: `${children.length} independent child Rooms. ${assignments.filter((row) => row.outcome === "parent").length} parent-owned selections. All other content stays local and unprotected. Existing source files remain in place.\n\n${[...childSummary, ...parentSummary].join("\n")}\n\nNamespace: ${namespace}`,
+    detail: `Destination: ${destination}\n${children.length} independent child Rooms. ${assignments.filter((row) => row.outcome === "parent").length} parent-owned selections. All other content stays local and unprotected. Existing source files remain in place.\n\n${[...childSummary, ...parentSummary].join("\n")}\n\nNamespace: ${namespace}`,
   }, "Save and acknowledge local-only content");
   if (approved !== "Save and acknowledge local-only content") return "cancelled";
   const result = await save(selection, preview.approval_sha256);

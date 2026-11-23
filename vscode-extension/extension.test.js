@@ -8219,3 +8219,98 @@ test("Room selection refuses an encryption-domain switch before the picker retur
   await assert.rejects(extension.__test__.exploreRoom3D(undefined, { launch: async () => { launched = true; } }), /binding changed/);
   assert.equal(launched, false);
 });
+
+for (const [command, provider, readiness, expected] of [
+  ["joshRoom.saveCatalog", "minio", "ready", "saved"],
+  ["joshRoom.new", "s3", "ready", "saved"],
+  ["joshRoom.new", "r2", "connected", "saved"],
+  ["joshRoom.saveCatalog", "minio", "uninitialized", "cancelled"],
+  ["joshRoom.saveCatalog", "s3", "legacy", "failed"],
+  ["joshRoom.saveCatalog", "minio", "domain-mismatch", "failed"],
+  ["joshRoom.saveCatalog", "r2", "expired", "cancelled"],
+]) test(`registered ${command} checks only its selected ${provider} destination (${readiness})`, async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createVscodeMock(root);
+  const { vscode } = fixture;
+  const domain = "00000000-0000-4000-8000-000000000001";
+  const dimension = { id: "fixture", display_name: "Example", provider, connection_id: "storage" };
+  if (readiness === "domain-mismatch") dimension.encryption_domain_id = "00000000-0000-4000-8000-000000000002";
+  const operations = [];
+  const harness = createSpawnHarness(({ args, options }) => {
+    const result = body => ({ stdout: JSON.stringify({ ok: true, ...body }) });
+    if (args[0] === "dimensions") {
+      assert.deepEqual(args, ["dimensions", "list", "--json"]);
+      return result({ dimensions: [dimension] });
+    }
+    assert.equal(args[args.indexOf("--dimension") + 1], "fixture");
+    if (args[0] === "auth") {
+      assert.equal(provider, "r2"); assert.equal(args[1], "status");
+      return result({ dimension_id: dimension.id, r2_room_store_state: readiness });
+    }
+    if (args[0] === "encryption") {
+      assert.notEqual(provider, "r2"); assert.equal(args[1], "status");
+      return result({ dimension_id: dimension.id, provider, state: readiness === "domain-mismatch" ? "ready" : readiness,
+        encryption_domain_id: ["domain-mismatch", "ready"].includes(readiness) ? domain : undefined, key_generation: 1 });
+    }
+    assert.equal(args[0], "composition");
+    operations.push(args[1]);
+    assert.ok(!args.includes("--expected-domain"));
+    assert.equal(Boolean(options.env.JOSH_ROOM_ENCRYPTION_MATERIAL), provider === "minio");
+    if (args[1] === "capture-plan") {
+      return result({ approval_sha256: "verified", request: { destination_binding: {
+        dimension_id: dimension.id, provider, connection_id: dimension.connection_id, encryption_domain_id: domain,
+        physical_bucket: provider + ":https://storage.example.invalid:fixture",
+      }, child_evidence: { a: { capture_mode: "full-repository" } } } });
+    }
+    assert.equal(args[args.indexOf("--approve") + 1], "verified");
+    return result({ status: "saved", parent_snapshot_id: "parent", namespace: args[args.indexOf("--namespace") + 1] });
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions: [],
+    secrets: { get: async key => provider === "minio" && key.startsWith("josh-room.encryption.v1:")
+      ? JSON.stringify({ identity: "synthetic-identity" }) : undefined } });
+  vscode.window.showInputBox = () => assert.fail("manual UUID requested");
+  if (command === "joshRoom.new") fixture.quickPickResponses.push({ id: "catalog" });
+  fixture.quickPickResponses.push({ id: "policy" }, { id: "default" }, { id: "metadata" }, { dimension });
+  fixture.openDialogResponses.push([{ fsPath: root }], [{ fsPath: path.join(root, "a") }]);
+  if (expected === "saved") fixture.warningResponses.push("Save and acknowledge local-only content");
+  const response = await fixture.commandCallbacks.get(command)();
+  assert.equal(response?.status || response, expected, JSON.stringify(fixture.errorCalls));
+  assert.deepEqual(operations, expected === "saved" ? ["capture-plan", "save"] : []);
+  if (readiness === "legacy") assert.match(fixture.errorCalls[0][0], /Migrate Encryption/);
+  if (readiness === "domain-mismatch") assert.match(fixture.errorCalls[0][0], /configured encryption domain/i);
+});
+
+test("Catalog preview and Save hand off SecretStorage provider credentials while local discovery stays offline", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-catalog-credentials-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const { vscode } = createVscodeMock(root);
+  const handoffs = [];
+  let reads = 0;
+  const stored = { profiles: { fixture: { "access-key-id": "synthetic-id", "secret-access-key": "synthetic-secret" } } };
+  const harness = createSpawnHarness(({ args, options }) => {
+    const filename = options.env.JOSH_ROOM_PROVIDER_CREDENTIALS;
+    if (["capture-plan", "save"].includes(args[1])) {
+      assert.ok(filename, "selected provider credentials missing at controller spawn");
+      assert.equal(fs.statSync(filename).mode & 0o777, 0o600);
+      assert.deepEqual(JSON.parse(fs.readFileSync(filename, "utf8")), stored);
+      assert.equal(args.includes("synthetic-secret"), false);
+      handoffs.push(filename);
+    } else assert.equal(filename, undefined);
+    return { stdout: JSON.stringify({ ok: true }) };
+  });
+  const extension = loadExtension(vscode, harness.spawn);
+  extension.__test__.setExtensionContextForTests({ secrets: { get: async key => {
+    assert.equal(key, "josh-room.credentials.v1"); reads++; return JSON.stringify(stored);
+  } } });
+  for (const action of ["inventory", "plan", "reconcile"]) {
+    await extension.__test__.runJoshRoom(["composition", action], root);
+  }
+  assert.equal(reads, 0);
+  for (const action of ["capture-plan", "save"]) {
+    await extension.__test__.runJoshRoom(["composition", action, "--dimension", "fixture"], root);
+    assert.equal(fs.existsSync(handoffs.at(-1)), false);
+  }
+  assert.equal(reads, 2);
+});

@@ -15,6 +15,8 @@
 
 ## [Unreleased]
 
+- Resolve the selected Catalog Dimension’s existing encryption domain during planning and verify it again before Save.
+
 - Preserve self-contained Git history in Catalog children across initial capture, child Save and exact-pin entry. Show the effective Git capture mode before approval.
 - Select RCC, Homebrew recovery or Hauler content per Catalog child and retain exact saved component references across parent refresh.
 
