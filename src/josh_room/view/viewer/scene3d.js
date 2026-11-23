@@ -993,11 +993,6 @@
       this._clearWorldGroup();
       this._buildWorldGeometry(layout);
       this._computeOverviewCamera(layout);
-      if (layout.bounds) {
-        const reach = Math.max(layout.bounds.spanX, layout.bounds.spanZ);
-        this.camera.far = Math.max(650, reach * 15);
-        this.camera.updateProjectionMatrix();
-      }
       this._updateBlockMatrices();
       if ((!preserveCamera || !this.manualCamera) && selected?.nodeType !== 'item') this._refitSelection();
 
@@ -1060,6 +1055,11 @@
         const towardEye = dz * cos + dy * sin;
         distance = Math.max(distance, towardEye + Math.abs(x - target.x) / horizontal,
           towardEye + Math.abs(dy * cos - dz * sin) / vertical);
+      }
+      // Width-limited portrait and split views can need a longer far plane.
+      if (this.camera.far < distance * 2) {
+        this.camera.far = distance * 2;
+        this.camera.updateProjectionMatrix();
       }
       return { target, pos: target.clone().add(new this.THREE.Vector3(0, sin * distance, cos * distance)) };
     }

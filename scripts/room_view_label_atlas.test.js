@@ -194,6 +194,21 @@ test('camera frames expanded deck corners and recenters the selected file beside
   assert.equal(scene.captureTopDownDataUrl(), 'synthetic');
   assert.equal(scene.camera, interactive);
   assert.equal(scene.safeRect.right, 864);
+  // Portrait split: only the left 120 CSS pixels are available, along the full height.
+  scene.canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 540, height: 1000 });
+  scene.frameOverlays = [overlay(126, 0, 540, 1000)];
+  scene._updateFraming();
+  const narrow = scene._directoryPose(layout.nodeById.get('root'));
+  scene.camera.position.copy(narrow.pos);
+  scene.camera.lookAt(narrow.target);
+  scene.camera.updateMatrixWorld();
+  assert.equal(scene.safeRect.width, 120);
+  for (const p of layout.pedestals.filter(p => p.parentId === 'root')) {
+    for (const x of [p.x - p.width / 2, p.x + p.width / 2]) {
+      const ndc = new THREE.Vector3(x, p.height, p.z).project(scene.camera);
+      assert.ok((ndc.x + 1) * 270 < 120 && ndc.x >= -1 && ndc.z < 1);
+    }
+  }
   const floorTarget = {};
   scene.pickables = [floorTarget];
   scene.beamV2Mesh = { visible: true };
