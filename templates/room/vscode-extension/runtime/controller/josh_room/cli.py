@@ -11,6 +11,8 @@ import uuid
 from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from . import device as _device
 from . import r2 as _r2
 from . import scheduler as _scheduler
@@ -492,7 +494,7 @@ def build_parser() -> argparse.ArgumentParser:
         operation.add_argument('--namespace', required=True)
         operation.add_argument('--parent-room', required=True)
         if action in ('capture-plan', 'save'):
-            operation.add_argument('--expected-domain', help='encryption domain from the existing enrollment receipt; required if not cached in config')
+            operation.add_argument('--expected-domain', help='optional canonical UUID4 assertion for the enrolled destination domain')
             operation.add_argument('--workspace', type=Path, required=True)
             operation.add_argument('--child-components', action='append', nargs=2, default=[],
                                    metavar=('CHILD', 'OPTIONS_JSON'), help='component selection and explicit inputs for one child')
@@ -824,10 +826,7 @@ def main(argv=None):
         from .native_agents_cli import main as agents_main
 
         return agents_main(argv[1:])
-    if argv[:1] == ["composition"] and argv[1:2] not in (
-        ["save"], ["restore-parent"], ["enter-child"], ["plan-child-save"],
-        ["save-child"], ["plan-parent-refresh"], ["refresh-parent-pins"],
-    ):
+    if argv[:1] == ["composition"] and argv[1:2] in (["inventory"], ["plan"], ["reconcile"]):
         args = build_parser().parse_args(argv)
         try:
             result = dispatch(args, Path("."))
@@ -912,9 +911,25 @@ def main(argv=None):
                             raise _encryption_authorization_required()
                         result = dispatch(args, instance)
             except (OSError, RuntimeError, TypeError, ValueError) as error:
-                result = {"ok": False, "error": str(error)}
-                if isinstance(getattr(error, "result", None), dict):
-                    result.update(error.result)
+                details = getattr(error, "result", None)
+                if getattr(args, "composition_command", None) in ("capture-plan", "save"):
+                    from .composition_lifecycle import CompositionAdmissionError
+                    from .s3_backend import S3ProviderError
+
+                    if isinstance(error, (CompositionAdmissionError, EncryptionStateError, S3ProviderError)):
+                        result = {"ok": False, "error": str(error), **details}
+                    elif isinstance(details, dict) and details.get("authorization_required") is True:
+                        result = {"ok": False, "error": "Connect encryption for the selected provider",
+                                  "error_code": "r2-authorization-required" if details.get("authorization_purpose") == "r2"
+                                                else "encryption-authorization-required",
+                                  "authorization_required": True}
+                    else:
+                        result = {"ok": False, "error": "Catalog capture could not verify the selected destination or input",
+                                  "error_code": "composition-capture-unavailable"}
+                else:
+                    result = {"ok": False, "error": str(error)}
+                    if isinstance(details, dict):
+                        result.update(details)
     except CLICancelled as error:
         cancelled = True
         result = {"ok": False, "state": "cancelled", "cancelled": True}
@@ -1063,6 +1078,8 @@ def _provider_error_boundary(args):
             return nullcontext()
     except ValueError:
         return nullcontext()
+    if getattr(args, "composition_command", None) in ("capture-plan", "save"):
+        return sdk_error_boundary(selected, catalog_capture=True)
     return sdk_error_boundary(selected)
 
 
@@ -1847,17 +1864,18 @@ def dispatch(args, instance: Path) -> dict:
                 raise ValueError('Composition update could not be verified; preserve source and retry the same operation ID') from None
         if args.composition_command in ('capture-plan', 'save', 'restore-parent', 'enter-child'):
             from .composition_lifecycle import (
+                CompositionAdmissionError,
                 capture_plan,
                 hydrate_composition,
                 provider_runtime,
+                resolve_capture_destination,
                 save_composition,
             )
             dimension = _effective_dimension(args)
             if dimension is None or dimension.provider not in ('minio', 's3', 'r2'):
-                raise ValueError('composition requires an explicit provider Dimension')
-            if getattr(args, 'expected_domain', None):
-                from dataclasses import replace
-                dimension = replace(dimension, encryption_domain_id=args.expected_domain)
+                raise CompositionAdmissionError('provider-unsupported', 'Catalog capture requires an explicit provider Dimension')
+            material = getattr(args, '_selected_encryption_material', None)
+            session = None
             if args.composition_command in ('capture-plan', 'save'):
                 assignments = []
                 for value in args.assign:
@@ -1879,21 +1897,33 @@ def dispatch(args, instance: Path) -> dict:
                         row['component_options'] = child_components[row['path']]
                     if row['path'] in overrides:
                         row['capture_mode'] = 'source-only'
-                preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
+                dimension, material, session = resolve_capture_destination(dimension, material,
+                    expected_domain=args.expected_domain)
+                try:
+                    preview = capture_plan(args.workspace, dimension, args.namespace, args.parent_room, assignments)
+                except (OSError, RuntimeError):
+                    raise CompositionAdmissionError('composition-input-unavailable',
+                        'Catalog preview could not verify the selected workspace or components') from None
                 if args.composition_command == 'capture-plan':
                     return preview
                 if args.approve != preview['approval_sha256']:
-                    raise ValueError('capture approval is stale or missing')
+                    raise CompositionAdmissionError('composition-approval-stale', 'Capture approval is stale or missing')
                 if preview['local_only_acknowledgement_required'] and not args.ack_local_only:
                     raise ValueError('explicit acknowledgement of unprotected local-only content is required')
             try:
-                with provider_runtime(instance, dimension, getattr(args, '_selected_encryption_material', None), args.namespace) as (authority, factory, private):
+                with provider_runtime(instance, dimension, material, args.namespace, authority_session=session) as (authority, factory, private):
                     if args.composition_command == 'save':
                         return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
                                                 args.approve, authority, factory, private)
                     return hydrate_composition(dimension, args.namespace, args.parent_room, args.parent_snapshot,
                                                args.workspace if args.composition_command == 'enter-child' else args.destination,
                                                authority, factory, private, child_path=getattr(args, 'child_path', None))
+            except (CLICancelled, CompositionAdmissionError):
+                raise
+            except (BotoCoreError, ClientError):
+                if args.composition_command == 'save':
+                    raise
+                raise ValueError('Composition storage request failed') from None
             except Exception:  # noqa: BLE001 - never expose provider or identity diagnostics from composition transport.
                 raise ValueError('Composition operation could not be verified; preserve source and resume using the same namespace') from None
         if args.composition_command == "inventory":

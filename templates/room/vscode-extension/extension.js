@@ -2209,17 +2209,55 @@ async function chooseCatalogComponents(root, label, updating) {
   return selected?.componentOptions;
 }
 
+async function prepareCatalogDestination(root, dimension) {
+  const id = dimension.id || dimension.dimension_id;
+  const provider = dimension.provider;
+  if (!id) throw new Error("Choose a configured Catalog destination.");
+  if (provider === "r2") {
+    const status = await runJoshRoom(["auth", "status", "--dimension", id], root);
+    if (status.dimension_id !== id || !["connected", "missing", "expired"].includes(status.r2_room_store_state)) {
+      throw new Error("Cloudflare authorization could not be verified for the selected R2 Dimension.");
+    }
+    if (status.r2_room_store_state === "connected") return true;
+    const reconnect = await vscode.window.showWarningMessage(
+      "Connect Cloudflare for the selected R2 Dimension to access its Room Store.",
+      { modal: true }, "Connect Cloudflare");
+    return reconnect === "Connect Cloudflare" && await connectCloudflare({ dimension }) === "connected";
+  }
+  if (!usesNativeEncryption(provider)) throw new Error("Select a configured MinIO, S3 or R2 Dimension.");
+  const status = await runJoshRoom(["encryption", "status", "--dimension", id], root);
+  if (status.dimension_id !== id || status.provider !== provider) {
+    throw new Error("Encryption status does not match the selected Dimension. Check its storage connection.");
+  }
+  if (status.state === "ready" && status.encryption_domain_id
+      && (!dimension.encryption_domain_id || dimension.encryption_domain_id === status.encryption_domain_id)) return true;
+  if (status.state === "legacy") throw new Error("Use Migrate Encryption on this Dimension before saving a Catalog Room.");
+  if (dimension.encryption_domain_id && dimension.encryption_domain_id !== status.encryption_domain_id) {
+    throw new Error("The configured encryption domain does not match this bucket. Verify the selected Dimension and connection.");
+  }
+  if (status.state !== "uninitialized") throw new Error("Encryption readiness could not be verified. Check the selected Dimension and connection.");
+  const initialize = await vscode.window.showWarningMessage(
+    `Initialize encryption for ${dimension.display_name || id} before creating a Catalog Room?`,
+    { modal: true }, "Initialize Encryption");
+  return initialize === "Initialize Encryption" && await connectEncryption({ dimension }) === "initialized";
+}
+
 async function saveCatalogRoom() {
   assertWorkspaceTrusted("save a Catalog Room");
   const argsFor = (selection, command) => ["composition", command, "--workspace", selection.root,
     "--dimension", selection.dimension.id || selection.dimension.dimension_id, "--namespace", selection.namespace,
-    "--parent-room", selection.parentRoom, "--expected-domain", selection.dimension.encryption_domain_id, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
+    "--parent-room", selection.parentRoom, ...selection.assignments.flatMap((row) => ["--assign", `${row.path}=${row.outcome}`,
       ...(row.capture_mode === "source-only" ? ["--child-source-only", row.path] : []),
       ...(row.component_options ? ["--child-components", row.path, JSON.stringify(row.component_options)] : [])])];
   return require("./catalog-actions").saveCatalog(vscode, {
     chooseComponents: chooseCatalogComponents,
     dimensions: async (root) => dimensionList(await runJoshRoom(["dimensions", "list"], root, undefined, undefined, undefined, { localConfigurationOnly: true })),
-    plan: (selection) => runJoshRoom(argsFor(selection, "capture-plan"), selection.root),
+    plan: async (selection) => {
+      const { root, dimension } = selection;
+      if (!await prepareCatalogDestination(root, dimension)) return undefined;
+      return runSelectedEncryption(argsFor(selection, "capture-plan"), root, dimension,
+        { title: "Checking Catalog Room…", action: "preview a Catalog Room" });
+    },
     save: (selection, approval) => runSelectedEncryption([...argsFor(selection, "save"), "--approve", approval, "--ack-local-only"], selection.root,
       selection.dimension, { title: "Saving Catalog Room…", action: "save a Catalog Room" }),
   });

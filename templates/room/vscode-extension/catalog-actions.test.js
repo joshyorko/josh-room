@@ -5,11 +5,12 @@ const { saveCatalog, enterChild, relativeSource, updateRoom } = require("./catal
 
 test("catalog confirmation binds child, parent and local-only selections before Save", async () => {
   const dialogs = [[{ fsPath: "/synthetic/root" }], [{ fsPath: "/synthetic/root/a" }], [{ fsPath: "/synthetic/root/notes.txt" }]];
-  const picks = [{ id: "policy" }, { id: "content" }, { dimension: { id: "dimension", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" } }];
+  const picks = [{ id: "policy" }, { id: "content" }, { dimension: { id: "dimension", provider: "minio", display_name: "Storage", connection_id: "synthetic-connection" } }];
   let approved = false;
   const vscode = { window: {
+    showInputBox: () => assert.fail("Catalog creation requested a manual UUID"),
     showOpenDialog: async () => dialogs.shift(), showQuickPick: async () => picks.shift(),
-    showWarningMessage: async (_, options, choice) => { assert.match(options.detail, /unprotected/); assert.match(options.detail, /a.*full-repository/); approved = true; return choice; },
+    showWarningMessage: async (_, options, choice) => { assert.match(options.detail, /Storage.*MinIO.*synthetic-connection/i); assert.match(options.detail, /unprotected/); assert.match(options.detail, /a.*full-repository/); approved = true; return choice; },
     showInformationMessage: async () => {},
   } };
   const result = await saveCatalog(vscode, {

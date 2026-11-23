@@ -304,8 +304,43 @@ def _admitted_source(source, request):
         os.close(fd)
 
 
+class CompositionAdmissionError(ValueError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.result = {"error_code": code}
+
+
+def resolve_capture_destination(dimension, selected_material, *, expected_domain=None):
+    """Authenticate only the selected bucket. No namespace or Restic access."""
+    from .encryption_domain import validate_encryption_domain_id
+    from .room_store_bridge import RoomStoreBridgeError, _resolve_material, _scope
+
+    if expected_domain is not None:
+        try:
+            validate_encryption_domain_id(expected_domain)
+        except (TypeError, ValueError):
+            raise CompositionAdmissionError(
+                "encryption-domain-invalid", "--expected-domain requires a canonical UUID4"
+            ) from None
+    try:
+        material, session = _resolve_material(dimension, selected_material, None, allow_initialize=False)
+        domain = validate_encryption_domain_id(_scope(dimension, material))
+    except RoomStoreBridgeError as error:
+        if error.code == "domain-mismatch":
+            raise CompositionAdmissionError("encryption-domain-mismatch",
+                "The configured Dimension domain differs from its enrolled keyset") from None
+        raise CompositionAdmissionError(error.result.get("error_code", error.code), str(error)) from None
+    if expected_domain is not None and expected_domain != domain:
+        raise CompositionAdmissionError("encryption-domain-mismatch",
+            "The asserted domain differs from the selected Dimension's enrolled domain")
+    if not set(material.keyset.recovery_recipients) - {material.recipient}:
+        raise CompositionAdmissionError("encryption-recovery-recipient-required",
+            "Catalog capture requires a distinct enrolled recovery recipient")
+    return replace(dimension, encryption_domain_id=domain), material, session
+
+
 @contextmanager
-def provider_runtime(instance, dimension, material, namespace):
+def provider_runtime(instance, dimension, material, namespace, *, authority_session=None):
     from .room_store_bridge import (
         _create_backend,
         _private_operation_directory,
@@ -319,7 +354,7 @@ def provider_runtime(instance, dimension, material, namespace):
     )
 
     material, _session = _resolve_material(
-        dimension, material, None, allow_initialize=False
+        dimension, material, authority_session, allow_initialize=False
     )
     _scope(dimension, material)
     # Validate bucket, TLS and credentials using the existing provider boundary.
@@ -753,7 +788,10 @@ def save_composition(
     preview = capture_plan(workspace, dimension, namespace, parent_room, assignments)
     request = preview["request"]
     if approval != preview["approval_sha256"]:
-        raise ValueError("capture approval is stale or missing")
+        raise CompositionAdmissionError("composition-approval-stale", "capture approval is stale or missing")
+    if authority.binding != request["destination_binding"]:
+        raise CompositionAdmissionError("composition-destination-mismatch",
+            "The selected physical destination differs from the approved binding")
     envelope, etag = authority.read()
     if envelope is None:
         envelope = {

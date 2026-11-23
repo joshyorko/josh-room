@@ -249,6 +249,23 @@ def _r2_authority_session(
         return session, material
     except RoomStoreBridgeError:
         raise
+    except CLICancelled:
+        raise
+    except auth.R2RoomStoreError as error:
+        code = {
+            "r2_authorization_session_unavailable": "r2-authorization-required",
+            "room_store_capability_unavailable": "r2-authorization-required",
+            "room_store_capability_expired": "r2-authorization-required",
+            "room_store_capability_invalid": "r2-authorization-required",
+            "r2_authorization_scope_mismatch": "storage-binding-invalid",
+            "room_store_scope_mismatch": "storage-binding-invalid",
+            "room_store_physical_binding_mismatch": "storage-binding-invalid",
+            "r2_encryption_domain_mismatch": "encryption-domain-mismatch",
+            "r2_encryption_recipient_mismatch": "encryption-recipient-mismatch",
+            "room_store_material_missing": "r2-room-store-setup-required",
+        }.get(str(error), "r2-room-store-unavailable")
+        raise RoomStoreBridgeError("R2 Room Store authority is unavailable",
+            code="r2-room-store-unavailable", result={"error_code": code}) from None
     except Exception:  # noqa: BLE001 - auth transport and broker diagnostics are private.
         raise RoomStoreBridgeError(
             "R2 Room Store authority is unavailable", code="r2-room-store-unavailable"

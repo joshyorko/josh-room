@@ -23,10 +23,12 @@ josh-room composition capture-plan --dimension synthetic-dimension \
   --assign projects/service-a=child --assign notes.txt=parent --json
 ```
 
-If the configured Dimension has no cached encryption domain, add
-`--expected-domain <domain-UUID-from-enrollment-receipt>` to both planning and
-Save. This is non-secret; the runtime corroborates it against authenticated
-provider material after approval.
+Planning reads the existing encryption domain from the selected provider. A
+fresh Room or editor profile needs only an initialized, accessible Dimension.
+Save verifies the binding again before reserving the namespace. Headless
+callers may pass `--expected-domain <UUID>` to assert a known domain. A
+conflict with provider material or local configuration stops the operation.
+Use the existing connection or enrollment workflow if the Dimension needs setup.
 
 Review the returned request and `approval_sha256`. Repeat those exact arguments
 with `composition save`, adding `--approve <approval_sha256>` and
