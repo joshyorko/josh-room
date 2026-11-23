@@ -1,0 +1,15 @@
+# Linux Catalog acceptance
+
+The installed driver executes the registered `joshRoom.saveCatalog` command in a disposable VS Code desktop profile. It supplies synthetic paths to the OS folder/file dialogs, drives native Quick Picks and checks the visible approval text before clicking Save. It restores the recorded parent through the installed controller and compares the selected child's Git refs, index, stash, HEAD, status and object integrity. The packaged controller runs with an explicitly supplied Python interpreter. The tests use a private enrolled MinIO endpoint and a task-owned Secret Service.
+
+## Reproduce
+
+1. Provision the private fixture using [the isolated Secret Service instructions](../../recovery-acceptance.md). Start `scripts/composition_minio_acceptance.py --hold-for-native` with that socket and the pinned MinIO executable. Wait for `native-ready.json` under the task scratch.
+2. Package the candidate VSIX and install it into `<scratch>/extensions` with a separate `--user-data-dir`. Disable workspace trust prompts in this synthetic profile and set `window.dialogStyle` to `custom`. Use a short private `XDG_RUNTIME_DIR` for the editor so its Unix socket fits.
+3. Create a startup development driver in the task scratch. Its `activate` function schedules `require(absolutePathToInstalledCatalogAcceptance).run()` after activation and records success or failure. Launch the installed editor on a private Xvfb display with `--extensionDevelopmentPath` pointing to the driver and a dedicated loopback `--remote-debugging-port`. VS Code suppresses modal approval dialogs in `--extensionTestsPath` mode.
+4. Supply `JOSH_ROOM_ACCEPTANCE_ROOT`, `JOSH_ROOM_ACCEPTANCE_CDP_PORT` and `JOSH_ROOM_ACCEPTANCE_PYTHON`. Open the fixture's `provider-source` folder. The driver writes `installed-catalog-receipt.json` after cold recovery.
+5. For component coverage, supply `JOSH_ROOM_TEST_REFERENCE_JAT_RUNTIME` from the private managed JAT/RCC acquisition. Put `age` and `age-keygen` in the controller interpreter's executable directory. Place a synthetic `robot.yaml` and `conda.yaml` in `provider-source/projects/a`, a synthetic Brewfile in `<scratch>/component-input/Brew`, and a synthetic attachment at `<scratch>/component-input/hauler.txt`. The driver selects those three components and verifies the authenticated cold child can be entered with them.
+
+After qualification, signal the fixture's `stop-native` file, stop its private keyring container and remove the task scratch. The [Git receipt](installed-git-linux.json) identifies the tested revision and VSIX.
+
+The [ordinary CLI check](git-minio-cli.json) covers a Git-only child update, unchanged Save, committed retries, explicit parent refresh, cold historical pins and legacy inventory isolation. Its source came from the named Git archive. The reporting worktree moved while the archived code ran. The [component receipt](installed-components-linux.json) covers checked-in RCC inputs, a Brewfile-only recipe and an explicitly named additional Hauler file on the same selected child. It does not qualify installed Homebrew binaries, remote providers or native Windows.

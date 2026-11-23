@@ -1,0 +1,33 @@
+{
+  "command": "joshRoom.saveCatalog",
+  "runtime": "packaged-controller-existing-Python",
+  "file_chooser": "synthetic paths",
+  "visible_full_repository_approval": true,
+  "provider": "loopback-minio",
+  "parent_pin": "jat-90e3aa60c8b9508285cff65779d782ce",
+  "child_pin": "jat-e81c60b13511536dbbc5361fb5450726",
+  "git_verified": true,
+  "sibling_absent": true,
+  "selected_components": [
+    "rcc_environment",
+    "homebrew_recovery",
+    "hauler_content"
+  ],
+  "source_sha": "347d301d907c31af82daf4fd8fa18673bae0d391",
+  "vsix_sha256": "7757c24491737aa2e43b215ef58d3a3778c44d0b977be67bc3fd6fa3ea032b51",
+  "verified_installed_files": 160,
+  "editor": "VS Code 1.147.0 Linux x64",
+  "restic": "0.19.1",
+  "age": "1.3.2",
+  "rcc": "v18.19.11",
+  "component_inputs": [
+    "synthetic robot.yaml and conda.yaml",
+    "Brewfile recipe",
+    "additional Hauler file"
+  ],
+  "rendered_approval_component_modes": [
+    "rcc_environment: refresh",
+    "homebrew_recovery: refresh",
+    "hauler_content: refresh"
+  ]
+}
