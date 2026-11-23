@@ -17,7 +17,8 @@ exports.run = async () => {
   assert.equal(path.dirname(base), scratch);
   assert.equal(ready.receipt.provider, "loopback-minio");
   const command = process.env.JOSH_ROOM_ACCEPTANCE_ENTRY || "joshRoom.saveCatalog";
-  assert.ok(["joshRoom.saveCatalog", "joshRoom.new"].includes(command));
+  const followup = ["joshRoom.enterChild", "joshRoom.refreshCatalogPins"].includes(command);
+  assert.ok(followup || ["joshRoom.saveCatalog", "joshRoom.new"].includes(command));
   const source = ready.native_sources?.[command] || path.join(base, "provider-source");
   assert.equal(path.dirname(fs.realpathSync(source)), base);
   assert.equal(fs.existsSync(path.join(source, ".josh-room.json")), false);
@@ -42,7 +43,7 @@ exports.run = async () => {
   const args = values => ["-m", "josh_room", ...values, "--json"];
   const cli = (...values) => JSON.parse(execFileSync(python, args(values), { cwd: base, env: { ...process.env, ...env }, timeout: 240000 }));
   const runtimeApis = applyInstalledRuntime(installed.extensionPath, { command: python, args, env, mode: "local-build-fallback", jatArtifact: env.JOSH_ROOM_JAT_ARTIFACT, jatRoot: env.JOSH_ROOM_JAT_ROOT || base });
-  if (ready.receipt.uncached_domain_verified) {
+  if (!followup && ready.receipt.uncached_domain_verified) {
     const status = cli("encryption", "status", "--dimension", "composition-fixture");
     assert.ok(status.encryption_domain_id && status.key_generation);
     for (const api of runtimeApis) {
@@ -50,6 +51,12 @@ exports.run = async () => {
     }
   }
   const renderer = await connect(Number(process.env.JOSH_ROOM_ACCEPTANCE_CDP_PORT));
+  if (followup) {
+    try {
+      await require("./installed_catalog_picker_acceptance").exercisePicker({ command, vscode, renderer, cli, base, ready, scratch });
+    } finally { renderer.socket.close(); }
+    return;
+  }
   const actions = require(path.join(installed.extensionPath, "catalog-actions.js"));
   const originalSave = actions.saveCatalog;
   // Supply paths to the native OS file chooser. All Quick Picks, the approval,
@@ -77,9 +84,14 @@ exports.run = async () => {
     },
   } });
   let verifiedDomain;
+  let reviewedNamespace;
+  let saveCalls = 0;
+  const cancel = process.env.JOSH_ROOM_ACCEPTANCE_CANCEL === "1";
   actions.saveCatalog = (api, callbacks) => originalSave(syntheticDialogs(api), {
     ...callbacks,
+    save: (...args) => { saveCalls++; return callbacks.save(...args); },
     plan: async selection => {
+      reviewedNamespace = selection.namespace;
       if (ready.receipt.uncached_domain_verified) assert.ok(!selection.dimension.encryption_domain_id);
       const preview = await callbacks.plan(selection);
       verifiedDomain = preview.request.destination_binding.encryption_domain_id;
@@ -125,6 +137,19 @@ exports.run = async () => {
       await renderer.text("synthetic-file");
       await renderer.key("Enter", "Enter", 13);
     }
+    if (command === "joshRoom.new") {
+      await renderer.choose("Change Git settings");
+      await until(async () => (await renderer.widget())?.text.includes("Apply settings to folders"), "Git override scope");
+      assert.equal(await renderer.evaluate(`(() => {
+        const row = [...document.querySelectorAll(".quick-input-widget .monaco-list-row")].find(row => row.innerText.trim() === "projects/a");
+        const box = row?.querySelector("[role=checkbox]");
+        if (!box || box.getAttribute("aria-checked") !== "true") return false;
+        box.click();
+        return true;
+      })()`), true);
+      await vscode.commands.executeCommand("workbench.action.acceptSelectedQuickOpenItem");
+      await renderer.choose("Files only");
+    }
     await renderer.choose("Continue to destination");
     await renderer.choose("Synthetic Composition");
     const approvalText = () => renderer.evaluate("document.querySelector('.monaco-dialog-box')?.innerText");
@@ -140,8 +165,19 @@ exports.run = async () => {
       for (const name of ["RCC environment", "Homebrew recovery", "OCI / Hauler content"]) assert.ok(approval.includes(name + " (capture)"), name);
     }
     assert.match(approval, /projects\/a[^\n]*Files and Git history/i);
-    assert.match(approval, /b[^\n]*Files and Git history[^\n]*Workspace only/);
+    assert.match(approval, command === "joshRoom.new" ? /b[^\n]*Files only[^\n]*Workspace only/i : /b[^\n]*Files and Git history[^\n]*Workspace only/);
     assert.doesNotMatch(approval, /namespace:|[a-f0-9]{32}/i);
+    if (cancel) {
+      assert.match(reviewedNamespace, /^[a-f0-9]{32}$/);
+      const ns = path.join(base, "minio-data/composition-fixture/composition/v1", reviewedNamespace);
+      assert.ok(!fs.existsSync(ns));
+      await renderer.key("Escape", "Escape", 27);
+      assert.equal(await result, "cancelled");
+      assert.equal(saveCalls, 0);
+      assert.ok(!fs.existsSync(ns));
+      fs.writeFileSync(path.join(scratch, "installed-cancel.json"), JSON.stringify({ command, save_calls: saveCalls, namespace_absent: true }));
+      return;
+    }
     assert.equal(await renderer.evaluate(`(() => {
       const button = [...document.querySelectorAll('.monaco-dialog-box .monaco-button')].find(b => b.textContent.trim() === 'Save catalog');
       if (!button) return false;
@@ -153,7 +189,9 @@ exports.run = async () => {
     const saved = await result;
     assert.equal(saved.ok, true);
     assert.deepEqual(saved.children.map(row => row.path).sort(), ["b", gitPath]);
-    assert.deepEqual(saved.children.find(row => row.path === "b").components, []);
+    const sibling = saved.children.find(row => row.path === "b");
+    assert.deepEqual(sibling.components, []);
+    assert.equal(sibling.capture_mode, command === "joshRoom.new" ? "source-only" : "full-repository");
     if (handoffPath) {
       const child = saved.children.find(row => row.path === gitPath);
       assert.deepEqual(child.components.toSorted(), names.toSorted());
@@ -182,7 +220,7 @@ exports.run = async () => {
       command, empty_encryption_cache_verified: Boolean(ready.receipt.uncached_domain_verified),
       uncached_dimension: Boolean(ready.receipt.uncached_domain_verified),
       verified_plan_and_restored_descriptor_domains: true, manual_domain_input: false, runtime: "packaged-controller-existing-Python", file_chooser: "synthetic paths",
-      bulk_selection_count: saved.children.length, receipt_ids_hidden_in_review: true,
+      bulk_selection_count: saved.children.length, sibling_capture_mode: sibling.capture_mode, select_all_then_clear_then_select_all: true, receipt_ids_hidden_in_review: true,
       visible_full_repository_approval: true, provider: ready.receipt.provider, parent_pin: saved.parent_snapshot_id,
       child_pin: entered.snapshot_id, git_verified: true, sibling_absent: true,
       selected_components: handoffPath ? names : [],
