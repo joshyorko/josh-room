@@ -62,3 +62,19 @@ def test_lost_component_backup_reply_reuses_only_exact_reserved_bytes(tmp_path, 
     else:
         assert opened.backup(stage, parent=None, cancellation=None).snapshot_id == snapshot.snapshot_id
     assert claims == ['homebrew_recovery']
+
+
+@pytest.mark.parametrize("linked", [False, True])
+def test_retained_rcc_requires_robot_in_staged_child(tmp_path, linked):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (tmp_path / "robot.yaml").write_text("tasks: {}")
+    if linked:
+        (stage / "robot.yaml").symlink_to(tmp_path / "robot.yaml")
+    previous = SimpleNamespace(to_dict=lambda: {
+        "workspace": {"repository_id": "0" * 64},
+        "components": {"rcc_environment": {"robot_relative_path": "robot.yaml"}},
+    })
+    with pytest.raises(ValueError, match="Retained RCC environment"):
+        component_plan(tmp_path, SimpleNamespace(dimension_id="dim"), "child", "1" * 64,
+                       None, previous, source=stage)

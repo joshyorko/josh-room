@@ -95,6 +95,12 @@ def _resolve(workspace, dimension, room, policy_sha256, options, previous, *, so
         return None, dict.fromkeys(COMPONENTS)
     selection, inputs = parsed
     modes = selection["components"]
+    if modes["rcc_environment"] == "keep" and previous is not None:
+        retained = previous.to_dict()["components"]["rcc_environment"]
+        if retained is not None:
+            robot = source / retained["robot_relative_path"]
+            if robot.resolve() != source.resolve() / retained["robot_relative_path"] or not robot.is_file():
+                raise ValueError("Retained RCC environment requires its saved workspace robot; restore the file or omit RCC")
     installed_capture = bridge._component_inputs(workspace, modes, **inputs)
 
     def input_token():
