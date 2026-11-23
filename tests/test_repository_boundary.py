@@ -114,7 +114,7 @@ def test_vscode_bridge_is_bundled_and_installed_without_marketplace_dependency()
         "joshRoom.agentRecoveryStatus",
         "joshRoom.captureAgentRecovery",
         "joshRoom.restoreAgentRecovery",
-        "joshRoom.browseRecoveryPoint",
+        "joshRoom.browseRecoveryPoint", "joshRoom.explore3D", "joshRoom.stopRoomView",
         "joshRoom.verifyRoomStore", "joshRoom.optimizeRoomStore", "joshRoom.reconcileRoomStore",
     }
     assert package["extensionKind"] == ["workspace"]
@@ -228,7 +228,7 @@ def test_packaged_controller_uses_the_module_entrypoint_not_a_global_script():
 
 def test_vscode_extension_root_and_template_copies_are_byte_identical():
     for name in (
-        "extension.js", "package.json", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js", "inventory-picker.js",
+        "extension.js", "package.json", "room-view.js", "room-view-target.js", "dirty.js", "progress.js", "registry.js", "provider.js", "runtime.js", "inventory-picker.js",
         "runtime/manifest.json", "runtime/controller/robot.yaml", "runtime/controller/conda.yaml",
         "runtime/controller/environment_linux_amd64_freeze.yaml", "media/room.svg",
     ):

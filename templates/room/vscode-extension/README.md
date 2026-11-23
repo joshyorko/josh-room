@@ -32,3 +32,12 @@ Dimension's context menu. Show Details opens the sanitized Save receipt.
 checkbox preview. It does not save, exclude or unload children. Publication is
 blocked pending pin retention and crash-consistent orchestration; see the
 [composition contract](https://github.com/joshyorko/josh-room/blob/main/docs/room-composition.md).
+
+## Explore an entered Room in 3D
+
+In a local Linux window, right-click the open Room row and select **Explore Room
+in 3D…**, or use **Josh: Explore Room in 3D…** in the Command Palette. No global
+CLI, Save, or new Logical JAT is required. **Josh: Stop Room 3D Viewer** stops
+the session; closing only the browser tab does not. Windows and remote/SSH/WSL/
+devcontainer windows currently fail closed for this action. See
+[Room View](../docs/room-view.md) for lifecycle and security limits.

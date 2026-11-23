@@ -7931,3 +7931,27 @@ test("Serve passes a private startup path and offers the active mapping or catal
     } finally { closed?.(terminal); }
   }
 });
+
+test("3D launcher uses selected open Room root without Save or hydration", async t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "room-3d-command-"));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const roots = ["one", "two"].map(name => { const root = path.join(base, name); fs.mkdirSync(root); writeMarker(root, { dimension_id: name }); return root; });
+  const { vscode } = createVscodeMock(roots[0]);
+  vscode.env = {};
+  vscode.workspace.isTrusted = true;
+  vscode.workspace.workspaceFolders = roots.map(root => ({ uri: { scheme: "file", fsPath: root } }));
+  const extension = loadExtension(vscode, () => { throw new Error("Save/hydration must not run"); });
+  let launched;
+  await extension.__test__.exploreRoom3D({ kind: "room", project: { id: "demo-room" }, dimension: { id: "two" } }, {
+    launch: async options => { launched = options; return { active: false, dispose() {} }; },
+  });
+  assert.equal(launched.cwd, roots[1]);
+  assert.equal(launched.runtime.command, "/test/managed-rcc");
+  assert.equal(launched.runtime.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
+  await assert.rejects(extension.__test__.exploreRoom3D({ kind: "jat", project: { id: "demo-room" }, dimension: { id: "two" } }), /Open the entered Room/);
+  vscode.env.remoteName = "dev-container";
+  await assert.rejects(extension.__test__.exploreRoom3D(), /Remote\/SSH\/devcontainer/);
+  vscode.env.remoteName = undefined;
+  vscode.workspace.isTrusted = false;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /Workspace Trust/);
+});

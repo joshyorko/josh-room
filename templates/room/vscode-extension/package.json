@@ -72,7 +72,9 @@
     "onCommand:joshRoom.enterChild",
     "onCommand:joshRoom.saveChild",
     "onCommand:joshRoom.refreshCatalogPins",
-    "onCommand:joshRoom.browseRecoveryPoint"
+    "onCommand:joshRoom.browseRecoveryPoint",
+    "onCommand:joshRoom.explore3D",
+    "onCommand:joshRoom.stopRoomView"
   ],
   "main": "./extension.js",
   "extensionKind": [
@@ -339,6 +341,14 @@
       {
         "command": "joshRoom.browseRecoveryPoint",
         "title": "Josh Room: Browse Recovery Point\u2026"
+      },
+      {
+        "command": "joshRoom.explore3D",
+        "title": "Josh: Explore Room in 3D\u2026"
+      },
+      {
+        "command": "joshRoom.stopRoomView",
+        "title": "Josh: Stop Room 3D Viewer"
       }
     ],
     "viewsContainers": {
@@ -594,6 +604,11 @@
           "command": "joshRoom.browseRecoveryPoint",
           "when": "view == joshRoom.rooms && viewItem == logical-jat",
           "group": "recovery@1"
+        },
+        {
+          "command": "joshRoom.explore3D",
+          "when": "view == joshRoom.rooms && (viewItem == room || viewItem == current-room)",
+          "group": "room@5"
         }
       ]
     }

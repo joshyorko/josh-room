@@ -16,6 +16,39 @@ sanitized state without building a separate web application per tool:
 All examples, fixtures, receipts, and screenshots in this repository use
 **synthetic data only**.
 
+## Standalone VS Code extension
+
+In a **local Linux** VS Code window, open an entered Room folder, right-click
+its Room row in the Josh Room sidebar and choose **Explore Room in 3D…**.
+The Command Palette also offers **Josh: Explore Room in 3D…** with an explicit
+choice among open, entered Rooms. The marker must match the folder, Dimension,
+and Room. Enter/open a Room first if it is not loaded in this window.
+
+This uses the VSIX's private managed controller, not a global `josh-room`
+command. It observes the current on-disk workspace without Save, hydration, or
+a new Logical JAT. Unsaved editor buffers are not included. The browser opens
+the actual allocated `127.0.0.1` URL with a per-session token; do not share that
+URL. The existing capture-policy, bounded read, sanitizer and sensitivity gates
+apply. There is no webview or hosted service.
+
+Use **Josh: Stop Room 3D Viewer** to stop the owned session. Starting another
+viewer asks to stop the existing one. Closing the VS Code window or changing
+workspace folders also stops it. Closing the browser tab alone does not stop
+the session: browser tab lifetime cannot be observed reliably by the extension.
+Startup can be cancelled from its progress notification.
+
+Windows and macOS are unsupported for this live workspace action because the
+provider requires safe descriptor-relative reads. Remote SSH, WSL, Codespaces
+and devcontainer extension hosts are explicitly unsupported: the extension does
+not forward ports, rewrite localhost to a remote host, or expose an unprotected
+listener. Use a local Linux window instead. These limits do not change the
+platform support of other Room commands.
+
+**Browse Recovery Point…** remains historical Time Machine recovery.
+**Inspect Logical JAT** inspects saved metadata; **Serve Room Content…** and
+**Serve this Logical JAT…** remain Hauler files/registry projections. Historical
+nested JAT contents are not offered as live 3D workspaces.
+
 ## CLI contract
 
 ```text
