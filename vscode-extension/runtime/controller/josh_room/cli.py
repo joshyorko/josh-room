@@ -1916,7 +1916,8 @@ def dispatch(args, instance: Path) -> dict:
                 if preview['local_only_acknowledgement_required'] and not args.ack_local_only:
                     raise ValueError('explicit acknowledgement of unprotected local-only content is required')
             try:
-                with provider_runtime(instance, dimension, material, args.namespace, authority_session=session) as (authority, factory, private):
+                with provider_runtime(instance, dimension, material, args.namespace, authority_session=session,
+                                      authority_only=args.composition_command == 'parent-children') as (authority, factory, private):
                     if args.composition_command == 'save':
                         return save_composition(args.workspace, dimension, args.namespace, args.parent_room, assignments,
                                                 args.approve, authority, factory, private)

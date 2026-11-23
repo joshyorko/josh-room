@@ -340,7 +340,7 @@ def resolve_capture_destination(dimension, selected_material, *, expected_domain
 
 
 @contextmanager
-def provider_runtime(instance, dimension, material, namespace, *, authority_session=None):
+def provider_runtime(instance, dimension, material, namespace, *, authority_session=None, authority_only=False):
     from .room_store_bridge import (
         _create_backend,
         _private_operation_directory,
@@ -369,14 +369,17 @@ def provider_runtime(instance, dimension, material, namespace, *, authority_sess
             material,
             private,
         )
+        if authority_only:
+            yield authority, None, private
+            return
         password = private / "password"
         cache = private / "cache"
         cache.mkdir(mode=0o700)
+        executable = _verified_restic_executable(
+            runtime_root=Path(instance).parent / "josh-room-runtime", install=True
+        )
 
         def store_factory(secret):
-            executable = _verified_restic_executable(
-                runtime_root=Path(instance).parent / "josh-room-runtime", install=True
-            )
             password.write_text(secret + "\n")
             password.chmod(0o600)
             return _restic_store_factory(

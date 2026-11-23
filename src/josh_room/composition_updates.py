@@ -37,7 +37,7 @@ from .composition_lifecycle import (
     _slot,
     _verify_descriptor_contract,
 )
-from .composition_safety import CompositionSafetyState, _identifier, plan_digest
+from .composition_safety import MAX_BYTES, CompositionSafetyState, _identifier, plan_digest
 from .composition_transaction import (
     canonical,
     manifest_for,
@@ -361,7 +361,7 @@ def _verify_parent_workspace(workspace, authority, room, snapshot, operation):
         raise ValueError('open the restored parent at its exact saved location')
     fd = _directory(workspace)
     try:
-        raw = _read_regular(fd, MANIFEST)
+        raw = _read_regular(fd, MANIFEST, MAX_BYTES)
     finally:
         os.close(fd)
     if hashlib.sha256(raw).hexdigest() != operation['manifest_sha256']:
