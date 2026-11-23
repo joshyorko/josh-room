@@ -978,7 +978,7 @@
         this.forward.push(this.currentNodeId);
         this.handleNodeSelect(prev, { pushHistory: false });
       });
-      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.dismiss());
+      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.dismiss({ close: true }));
       document.getElementById('btn-prev-fail').addEventListener('click', () => this.stepFailure(-1));
       document.getElementById('btn-next-fail').addEventListener('click', () => this.stepFailure(1));
 

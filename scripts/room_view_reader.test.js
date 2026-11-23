@@ -242,3 +242,26 @@ test('live inspector asks before replacing the open version of a provider item',
   reopen.click();
   assert.equal(visible, 'after');
 });
+
+test('a redacted native file offers its policy reason without requesting recovery points', () => {
+  const { drawer, file, queries } = setup(false);
+  drawer.showTarget({ ...file, kind: 'redacted', previews: [{ status: 'redacted', reason: 'withheld by policy' }] },
+    { legend: {} }, {}, {});
+  assert.equal(drawer.compareButton.hidden, true);
+  assert.equal(drawer.comparison.tab.hidden, true);
+  assert.match(drawer.summaryInfo.textContent, /withheld by policy/);
+  assert.deepEqual(queries, []);
+});
+
+test('the named Read action opens the file after Details, and Close dismisses the whole reader', () => {
+  const { drawer } = setup(true);
+  drawer.readButton.click();
+  drawer.switchTab('details');
+  drawer.dismiss();
+  assert.equal(drawer.readButton.textContent, 'Read PDF');
+  drawer.readButton.click();
+  assert.equal(drawer.activeTab, 'evidence');
+  document.querySelector = () => null;
+  drawer.dismiss({ close: true });
+  assert.equal(drawer.isOpen(), false);
+});

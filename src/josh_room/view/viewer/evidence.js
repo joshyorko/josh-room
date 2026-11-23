@@ -370,10 +370,12 @@
       if (!tabs.some(btn => !btn.hidden && btn.dataset.tab === tabName)) {
         tabName = tabs.find(btn => !btn.hidden && btn.dataset.tab !== 'compare')?.dataset.tab || 'details';
       }
+      if (this.reader && this.fileSummary.hidden && this.activeTab === this.readTab && tabName !== this.readTab) {
+        this.filePosition = this.captureReadingPosition();
+      }
       if (tabName === 'compare') this.comparison.open();
       else this.comparison.close();
       if (this.reader && tabName !== 'compare') {
-        this.readTab = tabName;
         if (tabName === 'evidence' && this.prepareAttachment) {
           this.prepareAttachment();
           this.prepareAttachment = null;
@@ -396,13 +398,12 @@
       const item = this.currentItem;
       const saved = this.readingPositions.get(this.currentObjectId);
       let position = this.summaryReading;
-      if (tab === 'compare') this.readingBeforeCompare = position;
+      if (tab === 'compare') this.filePosition = position;
       if (!position && saved && tab !== 'compare') {
         const unchanged = await this.readingUnchanged(item, saved);
         if (this.currentItem !== item || this.fileSummary.hidden || !this.isOpen()) return;
         if (unchanged) {
           position = saved;
-          tab = saved.tab === 'compare' ? tab : saved.tab;
           this.activePreviewSlot = saved.slot;
           this._renderContent(item, this.descriptor, this.layout);
           this.prepareAttachment = () => this._renderEvidence(item, saved);
@@ -418,13 +419,13 @@
       if (position && tab === 'evidence') this._restorePdfPosition(position);
     }
 
-    dismiss() {
-      if (this.reader && this.fileSummary.hidden) {
+    dismiss({ close = false } = {}) {
+      if (!close && this.reader && this.fileSummary.hidden) {
         const current = this.captureReadingPosition();
         this.releasePdfPosition?.();
-        this.summaryReading = { ...(this.activeTab === 'compare' && this.readingBeforeCompare || current),
+        this.summaryReading = { ...current,
           comparison: current.comparison, summary: true, tab: this.readTab };
-        this.readingBeforeCompare = null;
+        this.filePosition = null;
         this._rememberPosition(this.summaryReading);
         this.comparison.close();
         this.fileSummary.hidden = false;
@@ -458,6 +459,10 @@
     captureReadingPosition() {
       if (!this.isOpen() || !this.currentItem) return null;
       if (this.reader && !this.fileSummary.hidden && this.summaryReading) return this.summaryReading;
+      if (this.reader && this.activeTab !== this.readTab && this.filePosition?.id === this.currentObjectId) {
+        return { ...this.filePosition, tab: this.activeTab, detailsTop: this.tabDetailsEl.scrollTop,
+          comparison: this.comparison.capture() };
+      }
       const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
       const page = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot')).find(
         slot => slot.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top);
@@ -538,7 +543,7 @@
       this.comparison.select(null);
       this.reader = false;
       this.openCurrentVersion = null;
-      this.readingBeforeCompare = null;
+      this.filePosition = null;
       this.summaryReading = null;
       this.prepareAttachment = null;
       this.returnFocus = null;
@@ -572,7 +577,7 @@
       if (!sameObject && this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(target, reading?.comparison);
       if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
-      if (!sameObject) { this.summaryReading = null; this.readingBeforeCompare = null; }
+      if (!sameObject) { this.summaryReading = null; this.filePosition = null; }
       const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
       this.descriptor = descriptor;
       this.layout = layout;
@@ -658,6 +663,7 @@
       if (deferred && this.reader) {
         for (const panel of [this.tabContentEl, this.tabEvidenceEl, this.tabDetailsEl, this.tabTimelineEl]) panel.replaceChildren();
         this.summaryReading = null;
+        this.filePosition = null;
         this.readingPositions.delete(this.currentObjectId);
         this.comparison.select(null);
         this.fileSummary.hidden = false;
@@ -691,7 +697,6 @@
       if (summary) {
         this.summaryReading = reading || null;
         this.comparison.close();
-        if (reading) this.readTab = reading.tab === 'compare' ? this.readTab : reading.tab;
         return;
       }
 

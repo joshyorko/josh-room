@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;ffe7260549d2a9aa14ff1663588918ac3a5fdb228ba97569e5ba4c93e4ea7418&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;72c42365463a8d0f82e4508aae58192f8e4036f6f84b92e7bd9c23a09198e8c8&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -1310,7 +1310,7 @@ body:has(#fs-coverage:not([hidden])):has(#inspector-drawer:not([hidden])) .hud-b
         <button id="btn-prev-fail" class="hud-btn hud-sm" type="button" title="Previous failure ([)">[ Fail</button>
         <button id="btn-next-fail" class="hud-btn hud-sm" type="button" title="Next failure (])">Fail ]</button>
         <button id="btn-reader-back" class="hud-btn hud-sm" type="button" hidden>Back to file</button>
-        <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector (Esc)">&times;</button>
+        <button id="btn-inspector-close" class="hud-btn hud-icon-btn" type="button" aria-label="Close inspector">&times;</button>
       </div>
     </div>
     <section id="file-summary" aria-label="Selected object actions" hidden>
@@ -19233,7 +19233,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     select(target, reading = null) {
-      const id = this.data.comparison && target && ['file', 'artifact'].includes(target.nodeKind)
+      const id = this.data.comparison && target && target.kind !== 'redacted' && ['file', 'artifact'].includes(target.nodeKind)
         ? target.objectId : null;
       const generation = this.data.fsGeneration;
       this.tab.hidden = !id || !generation;
@@ -19282,7 +19282,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       } catch (err) {
         if (!pending.signal.aborted) {
           const reasons = {
-            'comparison-unsupported': 'This recovery format does not support selective comparison.',
+            'comparison-unsupported': 'Selective comparison is unavailable for this file or recovery format.',
             'comparison-unavailable': 'Could not read this recovery point. Check the Room connection and try again.',
             'comparison-stale': 'The selected recovery point changed. Reload the choices.',
             'comparison-busy': 'Another comparison is running. Try again.',
@@ -19832,10 +19832,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (!tabs.some(btn => !btn.hidden && btn.dataset.tab === tabName)) {
         tabName = tabs.find(btn => !btn.hidden && btn.dataset.tab !== 'compare')?.dataset.tab || 'details';
       }
+      if (this.reader && this.fileSummary.hidden && this.activeTab === this.readTab && tabName !== this.readTab) {
+        this.filePosition = this.captureReadingPosition();
+      }
       if (tabName === 'compare') this.comparison.open();
       else this.comparison.close();
       if (this.reader && tabName !== 'compare') {
-        this.readTab = tabName;
         if (tabName === 'evidence' && this.prepareAttachment) {
           this.prepareAttachment();
           this.prepareAttachment = null;
@@ -19858,13 +19860,12 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       const item = this.currentItem;
       const saved = this.readingPositions.get(this.currentObjectId);
       let position = this.summaryReading;
-      if (tab === 'compare') this.readingBeforeCompare = position;
+      if (tab === 'compare') this.filePosition = position;
       if (!position && saved && tab !== 'compare') {
         const unchanged = await this.readingUnchanged(item, saved);
         if (this.currentItem !== item || this.fileSummary.hidden || !this.isOpen()) return;
         if (unchanged) {
           position = saved;
-          tab = saved.tab === 'compare' ? tab : saved.tab;
           this.activePreviewSlot = saved.slot;
           this._renderContent(item, this.descriptor, this.layout);
           this.prepareAttachment = () => this._renderEvidence(item, saved);
@@ -19880,13 +19881,13 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (position && tab === 'evidence') this._restorePdfPosition(position);
     }
 
-    dismiss() {
-      if (this.reader && this.fileSummary.hidden) {
+    dismiss({ close = false } = {}) {
+      if (!close && this.reader && this.fileSummary.hidden) {
         const current = this.captureReadingPosition();
         this.releasePdfPosition?.();
-        this.summaryReading = { ...(this.activeTab === 'compare' && this.readingBeforeCompare || current),
+        this.summaryReading = { ...current,
           comparison: current.comparison, summary: true, tab: this.readTab };
-        this.readingBeforeCompare = null;
+        this.filePosition = null;
         this._rememberPosition(this.summaryReading);
         this.comparison.close();
         this.fileSummary.hidden = false;
@@ -19920,6 +19921,10 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     captureReadingPosition() {
       if (!this.isOpen() || !this.currentItem) return null;
       if (this.reader && !this.fileSummary.hidden && this.summaryReading) return this.summaryReading;
+      if (this.reader && this.activeTab !== this.readTab && this.filePosition?.id === this.currentObjectId) {
+        return { ...this.filePosition, tab: this.activeTab, detailsTop: this.tabDetailsEl.scrollTop,
+          comparison: this.comparison.capture() };
+      }
       const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
       const page = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot')).find(
         slot => slot.getBoundingClientRect().bottom > viewport.getBoundingClientRect().top);
@@ -20000,7 +20005,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.comparison.select(null);
       this.reader = false;
       this.openCurrentVersion = null;
-      this.readingBeforeCompare = null;
+      this.filePosition = null;
       this.summaryReading = null;
       this.prepareAttachment = null;
       this.returnFocus = null;
@@ -20034,7 +20039,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (!sameObject && this.reader && this.fileSummary.hidden) this._rememberPosition(this.captureReadingPosition());
       this.comparison.select(target, reading?.comparison);
       if (this.activeTab === 'compare' && !this.comparison.active && this.fileSummary.hidden) this.switchTab('content');
-      if (!sameObject) { this.summaryReading = null; this.readingBeforeCompare = null; }
+      if (!sameObject) { this.summaryReading = null; this.filePosition = null; }
       const wasSummary = sameObject && this.reader && !this.fileSummary.hidden;
       this.descriptor = descriptor;
       this.layout = layout;
@@ -20120,6 +20125,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (deferred && this.reader) {
         for (const panel of [this.tabContentEl, this.tabEvidenceEl, this.tabDetailsEl, this.tabTimelineEl]) panel.replaceChildren();
         this.summaryReading = null;
+        this.filePosition = null;
         this.readingPositions.delete(this.currentObjectId);
         this.comparison.select(null);
         this.fileSummary.hidden = false;
@@ -20153,7 +20159,6 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (summary) {
         this.summaryReading = reading || null;
         this.comparison.close();
-        if (reading) this.readTab = reading.tab === 'compare' ? this.readTab : reading.tab;
         return;
       }
 
@@ -22262,7 +22267,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         this.forward.push(this.currentNodeId);
         this.handleNodeSelect(prev, { pushHistory: false });
       });
-      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.dismiss());
+      document.getElementById('btn-inspector-close').addEventListener('click', () => this.evidence.dismiss({ close: true }));
       document.getElementById('btn-prev-fail').addEventListener('click', () => this.stepFailure(-1));
       document.getElementById('btn-next-fail').addEventListener('click', () => this.stepFailure(1));
 

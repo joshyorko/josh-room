@@ -29,7 +29,7 @@
     }
 
     select(target, reading = null) {
-      const id = this.data.comparison && target && ['file', 'artifact'].includes(target.nodeKind)
+      const id = this.data.comparison && target && target.kind !== 'redacted' && ['file', 'artifact'].includes(target.nodeKind)
         ? target.objectId : null;
       const generation = this.data.fsGeneration;
       this.tab.hidden = !id || !generation;
@@ -78,7 +78,7 @@
       } catch (err) {
         if (!pending.signal.aborted) {
           const reasons = {
-            'comparison-unsupported': 'This recovery format does not support selective comparison.',
+            'comparison-unsupported': 'Selective comparison is unavailable for this file or recovery format.',
             'comparison-unavailable': 'Could not read this recovery point. Check the Room connection and try again.',
             'comparison-stale': 'The selected recovery point changed. Reload the choices.',
             'comparison-busy': 'Another comparison is running. Try again.',
