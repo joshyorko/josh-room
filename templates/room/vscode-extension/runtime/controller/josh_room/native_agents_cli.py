@@ -10,6 +10,9 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="action", required=True)
     capabilities = commands.add_parser("capabilities")
     capabilities.add_argument("--json", action="store_true")
+    inventory = commands.add_parser("inventory")
+    inventory.add_argument("--workspace", type=Path, required=True)
+    inventory.add_argument("--json", action="store_true")
     for action in ("recovery-status", "recovery-capture", "recovery-verify", "recovery-restore"):
         command = commands.add_parser(action)
         command.add_argument("--dimension", required=True)
@@ -60,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def dispatch(args):
+    if args.action == "inventory":
+        from .native_session_inventory import inventory
+
+        return {"ok": True, "session_inventory": inventory(args.workspace)}
     from . import native_agents
 
     if args.action == "capabilities":
@@ -118,5 +125,13 @@ def main(argv=None) -> int:
         result = {"ok": False, "state": "blocked", "error": "Native agent operation refused unsafe or unavailable input"}
     except (KeyboardInterrupt, CLICancelled):
         result = {"ok": False, "state": "cancelled"}
+    if args.action == "inventory":
+        from .cli import _bounded_json_result, _write_runtime_result
+
+        try:
+            result = _bounded_json_result(result)
+            _write_runtime_result(result)
+        except (OSError, RuntimeError, ValueError, TypeError):
+            result = {"ok": False, "state": "blocked", "error": "Session inventory result receipt could not be written"}
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("ok") else 1

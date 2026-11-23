@@ -22,6 +22,94 @@ Unknown capability versions and unavailable profiles cannot authorize capture.
 Selecting a row requires an explicit opaque granted-profile choice. Nothing
 selects history by default or persists history opt-in as a component preference.
 
+### Ordinary sessions and admission diagnostics
+
+The picker also runs the independent, read-only
+`josh-room agents inventory --workspace PATH --json` metadata probe. On Linux,
+it counts ordinary Codex and T3 sessions in the exact folder and in child
+folders separately. Parent/sibling sessions are excluded. Counts are detection
+only: they neither enroll an existing home nor authorize its capture. An
+admitted row captures only the explicitly selected dedicated profile, not the
+ordinary or child-folder sessions counted alongside it. Claude remains on the
+existing granted-profile discovery path; this probe does not read Claude turns.
+
+Inventory uses the managed controller's private result receipt as well as
+stdout, so RCC stream suppression cannot erase a successful observation. A
+receipt write failure returns a blocked JSON result and a nonzero exit status
+without exposing local paths. The operation log redacts the workspace argument.
+Unsupported Save providers report the known MinIO-only capture restriction
+independently of inventory.
+
+The probe uses `CODEX_HOME` and `T3CODE_HOME` from the workspace extension host.
+An unset or empty `CODEX_HOME` uses `~/.codex`. `T3CODE_HOME` is trimmed and
+expands `~` or a `~/` prefix to the host user home. An unset or blank
+`T3CODE_HOME` uses `~/.t3`. When `VITE_DEV_SERVER_URL` is set and the T3
+home is implicit, the probe selects `~/.t3/dev`. An explicit home uses its
+`userdata` directory. Settings passed only to a separate T3 launcher are outside
+this environment-based probe. The probe reads only the first Codex `session_meta`
+record from active/archived JSONL files and schema-checked T3 project/thread
+metadata through a read-only SQLite connection, including committed WAL data.
+Current T3 v2 threads are recognized even when legacy thread tables are empty;
+the legacy table layout inside `statev2.sqlite` is also supported. A home with
+only pre-v2 `userdata/state.sqlite` is reported as unsupported, not empty;
+retained rollback copies are not counted or migrated. No messages, titles,
+private paths, session IDs, auth stores, or raw errors are returned to VS Code.
+The probe creates no provider process, model request, recovery grant, database
+backup, or capture.
+The existing offline `agents room-status` contract remains profile-only.
+All T3 metadata queries share one read transaction, including mixed legacy/v2
+identity filtering. `projection_projects` must be a real SQLite table (never a
+view), and empty-string `worktreePath`/`worktree_path` values fall back to
+`workspace_root`. Workspace and session aliases resolve to the same canonical
+folder. A missing/invalid session cwd makes the scan incomplete rather than
+claiming that no sessions exist.
+
+Closed databases without a WAL or SHM use an immutable main-file observation,
+fenced by file identity/size/timestamps and journal/WAL/SHM absence. All
+SQLite sidecars (`-wal`, `-shm`, `-journal`) are checked as owner-owned regular
+single-link files before opening and at the post-read fence; links, FIFOs,
+special files, or hardlinked sidecars fail closed immediately. The post-read
+fence runs even when an entry/time bound stops iteration, and a disappearing
+database resets counts to zero rather than returning unverified numbers. Live
+WAL reads use SQLite's normal read-only connection and read locks. SQLite may
+update/create WAL/SHM bookkeeping, including during server shutdown; this is
+not a guarantee of byte-for-byte filesystem immutability. Application tables
+are never written, and no database or provider home is copied. A changing main
+file or rollback journal refuses the observation rather than showing unverified
+counts.
+
+Each tool is limited to 4,096 entries/rows and one second. Codex limits actual
+reads to 256 KiB per record and 8 MiB total, and stops at the first newline
+without reading ahead into the transcript. When a directory exceeds the entry
+budget, the probe processes the collected file batch and returns confirmed
+counts with `partial`. The extension bounds the inventory subprocess with a
+timeout. Per-entry Codex limits, deep branches, unreadable/raced entries, and
+linked/special entries mark the scan incomplete
+(`partial`) while continuing over remaining valid sessions. Linked roots,
+inaccessible databases, unsupported schemas, and exhausted global bounds report
+unavailable/unsupported/incomplete discovery, never proof that no history
+exists, and `unavailable`/`unsupported` rows never carry non-zero counts. A
+complete scan with zero matches is shown separately. Detection remains visible
+when recovery admission fails.
+
+Missing host authority, work-only grants, and non-room-reference grants now
+retain their bounded reason through Save status offline preflight, without
+opening storage or scanning workspace contents when no eligible granted
+profiles exist. When eligible profiles exist, the status result can include a
+`denials` map keyed by `codex` or `claude` for tools whose eligible profiles all
+failed revalidation. The only per-tool values are `native-save-profile-changed`
+and `native-save-profile-admission-failed`. The picker uses that reason for the
+unavailable tool even when the other tool is admitted. This early check
+runs in the actual snapshot status CLI before encryption-material resolution,
+including a private managed result receipt; when live MinIO admission is
+needed, the extension forwards its loaded encryption material.
+The picker explains missing/unreadable host admission,
+unmatched profiles, changed/failed grants, work-scope denial and unsupported
+platform/provider gates. Existing shared-home adoption and original T3 recovery
+still need #188; keep the existing native home until supported recovery exists.
+Do not create a grant merely to dismiss this diagnostic. General native
+continuation and installed/immutable runtime qualification are separate gates.
+
 The optional `--agent-selection` JSON is a separate closed object:
 
 ```json

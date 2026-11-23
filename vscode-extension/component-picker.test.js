@@ -82,3 +82,126 @@ test('missing or failed installed capability stays unavailable', async () => {
   await pickComponents(v,'/synthetic/source',undefined,async()=>{throw new Error('unavailable');});
   assert.equal(v.calls[0].rows.some(row=>row.id==='homebrew_installed'),false);
 });
+
+const detected = { session_inventory: { contract_version: 1, tools: {
+  codex: { state: 'complete', exact: 1, descendant: 2 },
+  t3: { state: 'complete', exact: 0, descendant: 1 },
+} } };
+const noGrant = { agent_save: { contract_version: 1, mode: 'history-only', available: false, profiles: [], reason: 'native-room-authority-unavailable' } };
+
+test('detected ordinary sessions disclose exact/child scope without granting capture', async () => {
+  const v = mock([rows => rows.filter(r => /Codex HISTORY|T3 Code sessions/.test(r.label)), []]);
+  const result = await pickComponents(v, '/synthetic/source', undefined, undefined, async () => noGrant, async () => detected);
+  const rows = v.calls[0].rows;
+  assert.match(rows.find(r => /Codex HISTORY/.test(r.label)).detail, /1 session\(s\) in this folder; 2 in child folders/);
+  assert.match(rows.find(r => /Codex HISTORY/.test(r.label)).detail, /Host recovery admission is missing/);
+  assert.match(rows.find(r => /T3 Code sessions/.test(r.label)).detail, /1 in child folders.*#188/);
+  assert.ok(rows.filter(r => /Codex HISTORY|T3 Code sessions/.test(r.label)).every(r => r.unavailable && !r.picked));
+  assert.equal(result.args.includes('--agent-selection'), false);
+});
+
+test('admission failure does not suppress independent session detection', async () => {
+  const v = mock([[]]);
+  await pickComponents(v, '/synthetic/source', undefined, undefined, async () => { throw new Error('/private/credential'); }, async () => detected);
+  const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
+  assert.match(detail, /1 session.*could not be checked/);
+  assert.doesNotMatch(detail, /private|credential/);
+});
+
+test('mixed admission keeps the bounded denial on the failed tool row', async () => {
+  const v = mock([rows => rows.filter(row => row.id === 'agent_claude'), rows => rows[0]]);
+  const status = { agent_save: {
+    contract_version: 1, mode: 'history-only', available: true,
+    profiles: [{ tool: 'claude', profile_ref: 'b'.repeat(64), scope: 'personal', admitted: true }],
+    denials: { codex: 'native-save-profile-admission-failed' },
+  } };
+  const result = await pickComponents(v, '/synthetic/source', undefined, undefined, async () => status, async () => detected);
+  const codex = v.calls[0].rows.find(row => /Codex HISTORY/.test(row.label));
+  assert.equal(codex.unavailable, true);
+  assert.equal(codex.picked, false);
+  assert.match(codex.detail, /1 session.*failed current admission.*host grant and custody/);
+  assert.doesNotMatch(codex.detail, /adoption/);
+  assert.deepEqual(JSON.parse(result.args[result.args.indexOf('--agent-selection') + 1]).entries,
+    [{ tool: 'claude', profile_ref: 'b'.repeat(64) }]);
+
+  const unknown = mock([[]]);
+  status.agent_save.denials.codex = '/synthetic/private-diagnostic';
+  const noHistory = await pickComponents(unknown, '/synthetic/source', undefined, undefined, async () => status);
+  assert.doesNotMatch(unknown.calls[0].rows.find(row => /Codex HISTORY/.test(row.label)).detail, /private-diagnostic/);
+  assert.equal(noHistory.args.includes('--agent-selection'), false);
+});
+
+test('no history, unsupported format, incomplete scan and failure stay distinct', async () => {
+  for (const [state, expected] of [['complete', /No matching sessions found/], ['unsupported', /format or platform is unsupported/], ['partial', /discovery is incomplete/], ['unavailable', /discovery failed/]]) {
+    const v = mock([[]]);
+    const row = state === 'complete' ? { state, exact: 0, descendant: 0 } : { state, exact: 0, descendant: 0, reason: '/private/error' };
+    await pickComponents(v, '/synthetic/source', undefined, undefined, async () => noGrant, async () => ({ session_inventory: { contract_version: 1, tools: { codex: row } } }));
+    const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
+    assert.match(detail, expected);
+    assert.doesNotMatch(detail, /private/);
+  }
+});
+
+test('malformed agent_save structure and contradictory inventory rows fail closed', async () => {
+  for (const badAgent of [
+    { contract_version: 1, mode: 'history-only', available: true, profiles: [{ tool: 't3', profile_ref: 'a'.repeat(64), scope: 'personal', admitted: true }] },
+    { contract_version: 1, mode: 'history-only', available: true, profiles: [] },
+    { contract_version: 1, mode: 'history-only', available: false, profiles: [{ tool: 'codex', profile_ref: 'a'.repeat(64), scope: 'personal', admitted: true }] },
+    { contract_version: 1, mode: 'history-only', available: 'yes', profiles: [] },
+  ]) {
+    const v = mock([[]]);
+    await pickComponents(v, '/synthetic/source', undefined, undefined, async () => ({ agent_save: badAgent }));
+    const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
+    assert.match(detail, /Recovery admission could not be checked/);
+  }
+  for (const badRow of [
+    { state: 'complete', exact: 0, descendant: 0, reason: 'discovery-failed' },
+    { state: 'unavailable', exact: 2, descendant: 0, reason: 'discovery-failed' },
+    { state: 'unsupported', exact: 0, descendant: 1, reason: 'unsupported-format' },
+  ]) {
+    const v = mock([[]]);
+    await pickComponents(v, '/synthetic/source', undefined, undefined, async () => noGrant, async () => ({ session_inventory: { contract_version: 1, tools: { codex: badRow } } }));
+    const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
+    assert.match(detail, /Session detection unavailable; session absence is not established/);
+  }
+});
+
+test('unknown inventory versions and invalid counts never become found history', async () => {
+  for (const value of [{ contract_version: 2, tools: detected.session_inventory.tools }, { contract_version: 1, tools: { codex: { state: 'complete', exact: -1, descendant: 0 } } }]) {
+    const v = mock([[]]);
+    const result = await pickComponents(v, '/synthetic/source', undefined, undefined, async () => ({ agent_save: { ...noGrant.agent_save, reason: '/private/error' } }), async () => ({ session_inventory: value }));
+    const detail = v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail;
+    assert.match(detail, /detection unavailable/);
+    assert.doesNotMatch(detail, /private/);
+    assert.equal(result.args.includes('--agent-selection'), false);
+  }
+});
+
+test('admitted profile selection still excludes detected ordinary/child sessions', async () => {
+  const v = mock([rows => rows.filter(r => r.tool === 'codex'), rows => rows[0]]);
+  const result = await pickComponents(v, '/synthetic/source', undefined, undefined, async () => admitted, async () => detected);
+  assert.match(v.calls[0].rows.find(r => r.tool === 'codex').detail, /not ordinary or child-folder sessions/);
+  assert.deepEqual(JSON.parse(result.args[result.args.indexOf('--agent-selection') + 1]).entries, [{ tool: 'codex', profile_ref: 'a'.repeat(64) }]);
+});
+
+test('missing host directory traverses real Python discovery and adapter into the picker', { skip: process.platform !== 'linux' }, async t => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const root = path.resolve(__dirname, '..');
+  const python = path.join(root, '.venv/bin/python');
+  if (!fs.existsSync(python)) { t.skip('repository Python environment unavailable'); return; }
+  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'josh-room-picker-'));
+  try {
+    const code = `import json,sys; from pathlib import Path; from types import SimpleNamespace; from josh_room.native_agent_save import status; from josh_room.native_session_inventory import inventory; p=Path(sys.argv[1]); r=status(None,SimpleNamespace(provider='minio',dimension_id='synthetic'),None,'demo',p); r['session_inventory']=inventory(p); print(json.dumps(r))`;
+    const run = spawnSync(python, ['-B', '-c', code, directory], { cwd: root, encoding: 'utf8', env: { ...process.env, XDG_CONFIG_HOME: directory, CODEX_HOME: path.join(directory, 'codex'), T3CODE_HOME: path.join(directory, 't3') } });
+    assert.equal(run.status, 0, run.stderr);
+    const actual = JSON.parse(run.stdout);
+    assert.equal(actual.agent_save.reason, 'native-room-authority-unavailable');
+    const v = mock([[]]);
+    const result = await pickComponents(v, directory, undefined, undefined, async () => actual, async () => actual);
+    assert.match(v.calls[0].rows.find(r => /Codex HISTORY/.test(r.label)).detail, /Host recovery admission is missing/);
+    assert.equal(result.args.includes('--agent-selection'), false);
+    assert.equal(fs.existsSync(path.join(directory, 'josh-room')), false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

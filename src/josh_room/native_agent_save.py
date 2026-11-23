@@ -896,8 +896,8 @@ def save(
             raise
 
 
-def status(instance, dimension, material, room, workspace):
-    """Metadata-only narrow availability. Global producer capabilities stay false."""
+def _profile_status(dimension, room, workspace):
+    """Offline profile admission; never resolve encryption material or storage."""
     result = {
         "ok": True,
         "agent_save": {
@@ -907,29 +907,66 @@ def status(instance, dimension, material, room, workspace):
             "profiles": [],
         },
     }
-    if (
-        not SAVE_ADAPTER_QUALIFIED
-        or sys.platform != "linux"
-        or dimension.provider != "minio"
-    ):
+    if not SAVE_ADAPTER_QUALIFIED or sys.platform != "linux" or dimension.provider != "minio":
+        result["agent_save"]["reason"] = (
+            "native-save-disabled" if not SAVE_ADAPTER_QUALIFIED else
+            "native-save-unsupported-platform" if sys.platform != "linux" else
+            "native-save-unsupported-provider"
+        )
+        return result, []
+    from .native_agent_discovery import room_status
+
+    discovery = room_status(dimension=dimension.dimension_id, room=room, workspace=workspace)
+    profiles = discovery.get("profiles") or []
+    if not profiles:
+        reason = discovery.get("reason")
+        result["agent_save"]["reason"] = reason if reason in {
+            "native-room-authority-unavailable", "native-room-profile-unavailable"
+        } else "native-save-admission-unavailable"
+        return result, []
+    eligible = [
+        candidate for candidate in profiles
+        if candidate.get("room_reference_allowed")
+        and candidate.get("scope") in {"personal", "oss", "homelab"}
+        and any(tool in {"codex", "claude"} for tool in candidate.get("tools", ()))
+    ]
+    if not eligible:
+        if any(candidate.get("scope") == "work" for candidate in profiles):
+            result["agent_save"]["reason"] = "native-save-work-scope-unqualified"
+        elif any(
+            not candidate.get("room_reference_allowed")
+            or candidate.get("scope") not in {"personal", "oss", "homelab"}
+            for candidate in profiles
+        ):
+            result["agent_save"]["reason"] = "native-save-room-reference-not-authorized"
+        else:
+            result["agent_save"]["reason"] = "native-save-profile-admission-failed"
+    return result, eligible
+
+
+def admission_preflight(dimension, room, workspace):
+    result, eligible = _profile_status(dimension, room, workspace)
+    return result if not eligible else None
+
+
+def status(instance, dimension, material, room, workspace):
+    """Metadata-only narrow availability. Global producer capabilities stay false."""
+    result, eligible = _profile_status(dimension, room, workspace)
+    if not eligible:
         return result
-    from .native_agent_discovery import resolve_profile, room_status
+    from .native_agent_discovery import resolve_profile
     from .native_agent_reference import _grant
     from .room_store_operations import scan_workspace_for_status
     from .workspace_policy import load_capture_policy
 
+    agent_save = result["agent_save"]
+    denials = {}
     policy = load_capture_policy(Path(workspace))
     scan = scan_workspace_for_status(Path(workspace))
     with open_scope(
         instance, dimension, material, room, workspace, policy.sha256, scan.signature
     ) as scope:
-        for candidate in room_status(
-            dimension=dimension.dimension_id, room=room, workspace=workspace
-        )["profiles"]:
-            if not candidate.get("room_reference_allowed") or candidate.get("scope") not in {
-                "personal", "oss", "homelab"
-            }:
-                continue
+        for candidate in eligible:
             for tool in candidate["tools"]:
                 if tool not in {"codex", "claude"}:
                     continue
@@ -949,10 +986,12 @@ def status(instance, dimension, material, room, workspace):
                         "room-capture",
                     )
                     if admitted_grant != grant:
+                        denials[tool] = "native-save-profile-changed"
                         continue
                 except (OSError, RuntimeError, ValueError):
+                    denials.setdefault(tool, "native-save-profile-admission-failed")
                     continue
-                result["agent_save"]["profiles"].append(
+                agent_save["profiles"].append(
                     {
                         "tool": tool,
                         "profile_ref": candidate["profile_ref"],
@@ -960,5 +999,14 @@ def status(instance, dimension, material, room, workspace):
                         "admitted": True,
                     }
                 )
-    result["agent_save"]["available"] = bool(result["agent_save"]["profiles"])
+    for profile in agent_save["profiles"]:
+        denials.pop(profile["tool"], None)
+    if denials:
+        agent_save["denials"] = denials
+    agent_save["available"] = bool(agent_save["profiles"])
+    if not agent_save["available"]:
+        agent_save["reason"] = (
+            "native-save-profile-changed" if "native-save-profile-changed" in denials.values()
+            else "native-save-profile-admission-failed"
+        )
     return result
