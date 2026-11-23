@@ -166,6 +166,47 @@ def test_closed_wal_database_does_not_create_sidecars(homes):
     assert {p.name: p.read_bytes() for p in path.parent.iterdir()} == before
 
 
+def test_legacy_only_database_is_unsupported_not_complete_empty(homes):
+    connection, path = database(homes, v2=False)
+    add_thread(connection, "exact", v2=False)
+    add_thread(connection, "child", v2=False, path=str(homes / "child"))
+    connection.close()
+    legacy = path.with_name("state.sqlite")
+    path.rename(legacy)
+    before = legacy.read_bytes()
+    assert inventory.inventory(homes)["tools"]["t3"] == {"state": "unsupported", "exact": 0, "descendant": 0, "reason": "unsupported-format"}
+    assert legacy.read_bytes() == before
+    assert not path.exists()
+
+
+def test_legacy_rollback_file_does_not_double_count_current_database(homes):
+    connection, path = database(homes)
+    add_thread(connection, "current")
+    connection.close()
+    path.with_name("state.sqlite").write_bytes(path.read_bytes())
+    assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 1, "descendant": 0}
+
+
+@pytest.mark.parametrize("padding", [" ", "\t", "\n"])
+def test_t3_home_matches_launcher_whitespace_normalization(homes, monkeypatch, padding):
+    connection, _path = database(homes)
+    add_thread(connection, "one")
+    connection.close()
+    monkeypatch.setenv("T3CODE_HOME", padding + os.environ["T3CODE_HOME"] + padding)
+    assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 1, "descendant": 0}
+
+
+def test_blank_t3_home_uses_default_home(homes, monkeypatch):
+    connection, path = database(homes)
+    add_thread(connection, "one")
+    connection.close()
+    default = homes.parent / ".t3"
+    path.parent.parent.rename(default)
+    monkeypatch.setenv("HOME", str(homes.parent))
+    monkeypatch.setenv("T3CODE_HOME", " \t ")
+    assert inventory.inventory(homes)["tools"]["t3"]["exact"] == 1
+
+
 def test_mixed_t3_layouts_keep_distinct_histories_but_v2_overrides_legacy(homes):
     connection, _path = database(homes)
     add_thread(connection, "legacy-only", v2=False)

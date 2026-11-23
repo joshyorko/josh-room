@@ -45,7 +45,10 @@ def _match(result, cwd, workspace):
 
 
 def _home(variable, default):
-    path = Path(os.environ.get(variable, str(Path.home() / default)))
+    value = os.environ.get(variable)
+    if variable == "T3CODE_HOME" and value is not None:
+        value = value.strip() or None
+    path = Path(value if value is not None else Path.home() / default)
     if not path.is_absolute() or ".." in path.parts:
         raise ValueError("invalid-home")
     # Permit OS aliases above the home, but never a linked session root.
@@ -148,7 +151,13 @@ def _t3(workspace):
     opened = False
     try:
         with _directory(_home("T3CODE_HOME", ".t3")) as home, _directory("userdata", parent=home) as directory:
-            info = os.stat("statev2.sqlite", dir_fd=directory, follow_symlinks=False)
+            try:
+                info = os.stat("statev2.sqlite", dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                # Pre-v2 homes are not empty. Do not migrate/read their older
+                # schema implicitly or include retained rollback databases.
+                os.stat("state.sqlite", dir_fd=directory, follow_symlinks=False)
+                return {**result, "state": "unsupported", "reason": "unsupported-format"}
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
                 raise ValueError("unsafe-database")
             path = Path(f"/proc/self/fd/{directory}/statev2.sqlite")

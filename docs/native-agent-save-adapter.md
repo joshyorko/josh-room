@@ -43,7 +43,11 @@ in the workspace extension host. It reads only the first Codex `session_meta`
 record from active/archived JSONL files and schema-checked T3 project/thread
 metadata through a read-only SQLite connection, including committed WAL data.
 Current T3 v2 threads are recognized even when legacy thread tables are empty;
-the legacy layout is also supported. No messages, titles, private paths,
+the legacy table layout inside `statev2.sqlite` is also supported. A home with
+only pre-v2 `userdata/state.sqlite` is reported as unsupported, not empty;
+retained rollback copies are not counted or migrated. `T3CODE_HOME` follows the
+launcher's whitespace trimming, with blank values using the default home.
+No messages, titles, private paths,
 session IDs, auth stores, or raw errors are returned to VS Code. No provider
 process, model request, recovery grant, database backup or capture is created.
 The existing offline `agents room-status` contract remains profile-only.
