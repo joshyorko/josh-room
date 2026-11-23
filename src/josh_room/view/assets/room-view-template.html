@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; script-src 'unsafe-inline' blob: 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src 'self' blob: data:; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none';">
-  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;f9366c33cb34a9bcd6476b94fce0d87a6c74bb28dd4493d927392042e7d78c03&quot;}">
+  <meta name="josh-room-view" content="{&quot;libraries&quot;:{&quot;pdfjs&quot;:{&quot;gzip_bytes&quot;:98752,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:352645,&quot;raw_sha256&quot;:&quot;27fc2a057a00f92a4334ad06e17dbd7259912954e9fb7f76400bcca5fd190a9c&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;pdfjs-worker&quot;:{&quot;gzip_bytes&quot;:402193,&quot;license&quot;:&quot;Apache-2.0&quot;,&quot;package&quot;:&quot;pdfjs-dist&quot;,&quot;raw_bytes&quot;:1375838,&quot;raw_sha256&quot;:&quot;1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36&quot;,&quot;version&quot;:&quot;4.10.38&quot;},&quot;sqljs&quot;:{&quot;gzip_bytes&quot;:16961,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:48863,&quot;raw_sha256&quot;:&quot;43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;sqljs-wasm&quot;:{&quot;gzip_bytes&quot;:318567,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;sql.js&quot;,&quot;raw_bytes&quot;:652953,&quot;raw_sha256&quot;:&quot;083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b&quot;,&quot;version&quot;:&quot;1.12.0&quot;},&quot;three&quot;:{&quot;gzip_bytes&quot;:170881,&quot;license&quot;:&quot;MIT&quot;,&quot;package&quot;:&quot;three&quot;,&quot;raw_bytes&quot;:691648,&quot;raw_sha256&quot;:&quot;08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7&quot;,&quot;version&quot;:&quot;0.170.0&quot;}},&quot;schema_version&quot;:1,&quot;template_version&quot;:&quot;room-view-template-v1&quot;,&quot;viewer_source_sha256&quot;:&quot;e10dca6ed01ffe003375f037f9b84ed802dbc40d93987c2ab191d6daf5956d1e&quot;}">
   <title>Josh Room View — 3D Filesystem Navigator</title>
   <style>
 :root {
@@ -19847,6 +19847,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     switchTab(tabName) {
+      if (tabName !== 'evidence') this.releasePdfPosition?.();
       const tabs = Array.from(this.drawerEl.querySelectorAll('.tab-btn'));
       if (!tabs.some(btn => !btn.hidden && btn.dataset.tab === tabName)) {
         tabName = tabs.find(btn => !btn.hidden && btn.dataset.tab !== 'compare')?.dataset.tab || 'details';
@@ -19895,12 +19896,14 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       this.readerOpener = opener;
       this.switchTab(tab);
       if (position && tab !== 'compare') this._restoreTextScroll(position);
-      if (opener) this.readerBack.focus();
+      if (opener) this.readerBack.focus({ preventScroll: true });
+      if (position && tab === 'evidence') this._restorePdfPosition(position);
     }
 
     dismiss() {
       if (this.reader && this.fileSummary.hidden) {
         const current = this.captureReadingPosition();
+        this.releasePdfPosition?.();
         this.summaryReading = { ...(this.activeTab === 'compare' && this.readingBeforeCompare || current),
           comparison: current.comparison, summary: true, tab: this.readTab };
         this.readingBeforeCompare = null;
@@ -19962,6 +19965,34 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
       if (scroll) {
         scroll.scrollTop = position.textTop || 0;
         scroll.scrollLeft = position.textLeft || 0;
+      }
+    }
+
+    _restorePdfPosition(position) {
+      this.releasePdfPosition?.();
+      const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
+      const slots = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot'));
+      const page = slots?.[position.page - 1];
+      if (!page || !viewport.clientHeight) return;
+      // Keep the measured page point fixed while lazy canvases replace placeholders.
+      const align = () => {
+        if (!viewport.clientHeight) return;
+        const delta = page.getBoundingClientRect().top - viewport.getBoundingClientRect().top + (position.pageOffset || 0);
+        if (Math.abs(delta) > 0.5) viewport.scrollTop += delta;
+        viewport.scrollLeft = position.pdfLeft || 0;
+      };
+      align();
+      const observer = new ResizeObserver(align);
+      observer.observe(viewport);
+      for (const slot of slots.slice(0, position.page)) observer.observe(slot);
+      const events = new AbortController();
+      this.releasePdfPosition = () => {
+        observer.disconnect();
+        events.abort();
+        this.releasePdfPosition = null;
+      };
+      for (const event of ['pointerdown', 'wheel', 'keydown']) {
+        this.tabEvidenceEl.addEventListener(event, this.releasePdfPosition, { capture: true, passive: true, signal: events.signal });
       }
     }
 
@@ -20505,6 +20536,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
     }
 
     _teardownPdf() {
+      this.releasePdfPosition?.();
       if (this._pdfObserver) {
         this._pdfObserver.disconnect();
         this._pdfObserver = null;
@@ -20669,10 +20701,7 @@ pipTDdWLdkSNG9LRhDjwl1Zm8/7/+r8FLbtiwI0KAA==
         const landing = slots[(reading?.page || 1) - 1] || slots[0];
         await renderPageIntoSlot(landing);
         if (reqSeq !== this._attRequestSeq) return;
-        if (reading) {
-          viewportEl.scrollTop = landing.offsetTop - slots[0].offsetTop + (reading.pageOffset || 0);
-          viewportEl.scrollLeft = reading.pdfLeft || 0;
-        }
+        if (reading) this._restorePdfPosition(reading);
 
         btnFitW.addEventListener('click', () => { this._pdfFitMode = 'width'; this._pdfScale = 1.0; rerenderVisible(); });
         btnFitP.addEventListener('click', () => { this._pdfFitMode = 'page'; this._pdfScale = 1.0; rerenderVisible(); });

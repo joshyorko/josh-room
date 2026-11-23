@@ -187,3 +187,41 @@ test('a frozen observation containing only PDF metadata offers details', () => {
   drawer.readButton.click();
   assert.equal(drawer.activeTab, 'details');
 });
+
+test('resuming the mounted PDF restores its page offset through late layout and releases it on scroll input', async () => {
+  const { drawer } = setup(true);
+  drawer.readButton.click();
+  let pageTop = 448;
+  const viewport = {
+    clientHeight: 340, scrollTop: 620, scrollLeft: 8,
+    getBoundingClientRect: () => ({ top: 50 }),
+  };
+  const page = { dataset: { pageNum: '2' }, getBoundingClientRect: () => ({
+    top: 50 + pageTop - viewport.scrollTop, bottom: 550 + pageTop - viewport.scrollTop,
+  }) };
+  const first = { dataset: { pageNum: '1' }, getBoundingClientRect: () => ({ bottom: -12 }) };
+  viewport.querySelectorAll = () => [first, page];
+  drawer.tabEvidenceEl.querySelector = selector => selector === '.pdf-viewport'
+    ? viewport : { getAttribute: () => 'sample.pdf' };
+  let resize;
+  let disconnected = false;
+  global.ResizeObserver = class {
+    constructor(callback) { resize = callback; }
+    observe() {}
+    disconnect() { disconnected = true; }
+  };
+  try {
+    drawer.dismiss();
+    viewport.scrollTop = 820;
+    await drawer._openReader('evidence', drawer.readButton);
+    assert.equal(viewport.scrollTop, 620);
+    pageTop += 48;
+    resize();
+    assert.equal(viewport.scrollTop - pageTop, 172);
+    drawer.tabEvidenceEl.dispatchEvent(new Event('wheel'));
+    assert.equal(disconnected, true);
+    assert.equal(drawer.releasePdfPosition, null);
+  } finally {
+    delete global.ResizeObserver;
+  }
+});

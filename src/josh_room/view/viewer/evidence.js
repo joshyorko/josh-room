@@ -383,6 +383,7 @@
     }
 
     switchTab(tabName) {
+      if (tabName !== 'evidence') this.releasePdfPosition?.();
       const tabs = Array.from(this.drawerEl.querySelectorAll('.tab-btn'));
       if (!tabs.some(btn => !btn.hidden && btn.dataset.tab === tabName)) {
         tabName = tabs.find(btn => !btn.hidden && btn.dataset.tab !== 'compare')?.dataset.tab || 'details';
@@ -431,12 +432,14 @@
       this.readerOpener = opener;
       this.switchTab(tab);
       if (position && tab !== 'compare') this._restoreTextScroll(position);
-      if (opener) this.readerBack.focus();
+      if (opener) this.readerBack.focus({ preventScroll: true });
+      if (position && tab === 'evidence') this._restorePdfPosition(position);
     }
 
     dismiss() {
       if (this.reader && this.fileSummary.hidden) {
         const current = this.captureReadingPosition();
+        this.releasePdfPosition?.();
         this.summaryReading = { ...(this.activeTab === 'compare' && this.readingBeforeCompare || current),
           comparison: current.comparison, summary: true, tab: this.readTab };
         this.readingBeforeCompare = null;
@@ -498,6 +501,34 @@
       if (scroll) {
         scroll.scrollTop = position.textTop || 0;
         scroll.scrollLeft = position.textLeft || 0;
+      }
+    }
+
+    _restorePdfPosition(position) {
+      this.releasePdfPosition?.();
+      const viewport = this.tabEvidenceEl.querySelector('.pdf-viewport');
+      const slots = viewport && Array.from(viewport.querySelectorAll('.pdf-page-slot'));
+      const page = slots?.[position.page - 1];
+      if (!page || !viewport.clientHeight) return;
+      // Keep the measured page point fixed while lazy canvases replace placeholders.
+      const align = () => {
+        if (!viewport.clientHeight) return;
+        const delta = page.getBoundingClientRect().top - viewport.getBoundingClientRect().top + (position.pageOffset || 0);
+        if (Math.abs(delta) > 0.5) viewport.scrollTop += delta;
+        viewport.scrollLeft = position.pdfLeft || 0;
+      };
+      align();
+      const observer = new ResizeObserver(align);
+      observer.observe(viewport);
+      for (const slot of slots.slice(0, position.page)) observer.observe(slot);
+      const events = new AbortController();
+      this.releasePdfPosition = () => {
+        observer.disconnect();
+        events.abort();
+        this.releasePdfPosition = null;
+      };
+      for (const event of ['pointerdown', 'wheel', 'keydown']) {
+        this.tabEvidenceEl.addEventListener(event, this.releasePdfPosition, { capture: true, passive: true, signal: events.signal });
       }
     }
 
@@ -1041,6 +1072,7 @@
     }
 
     _teardownPdf() {
+      this.releasePdfPosition?.();
       if (this._pdfObserver) {
         this._pdfObserver.disconnect();
         this._pdfObserver = null;
@@ -1205,10 +1237,7 @@
         const landing = slots[(reading?.page || 1) - 1] || slots[0];
         await renderPageIntoSlot(landing);
         if (reqSeq !== this._attRequestSeq) return;
-        if (reading) {
-          viewportEl.scrollTop = landing.offsetTop - slots[0].offsetTop + (reading.pageOffset || 0);
-          viewportEl.scrollLeft = reading.pdfLeft || 0;
-        }
+        if (reading) this._restorePdfPosition(reading);
 
         btnFitW.addEventListener('click', () => { this._pdfFitMode = 'width'; this._pdfScale = 1.0; rerenderVisible(); });
         btnFitP.addEventListener('click', () => { this._pdfFitMode = 'page'; this._pdfScale = 1.0; rerenderVisible(); });
