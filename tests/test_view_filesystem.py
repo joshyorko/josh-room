@@ -223,10 +223,14 @@ def test_scene_sample_preserves_interactive_handles_and_continuations(tmp_path, 
     assert adapter.inspect(top["selected.txt"]["id"], gen)["node"]["label"] == "selected.txt"
     # An interactive continuation retains authority even across a changed sampled file.
     (tmp_path / "first" / first["entries"][0]["label"]).write_text("changed")
-    with pytest.raises(ViewValidationError) as failure:
-        adapter.listing(top["first"]["id"], gen, sample=True)
-    assert failure.value.code == "filesystem-stale"
+    refreshed = adapter.listing(top["first"]["id"], gen, sample=True)
+    assert refreshed["entries"][0]["id"] == selected
+    assert refreshed["entries"][0]["fields"]["file_bytes"] == len("changed")
     assert adapter.listing(active, gen, start["cursor"])["entries"]
+    # The interactive page evicted this selection. Its sampled copy cannot revive it.
+    with pytest.raises(ViewValidationError) as failure:
+        adapter.inspect(selected, gen)
+    assert failure.value.code == "filesystem-unknown"
     adapter.close()
 
 
@@ -241,3 +245,46 @@ def test_scene_sample_requires_known_scope_and_full_alias_admission(tmp_path):
         with pytest.raises(ViewValidationError):
             adapter.listing(*args, sample=True)
     adapter.close()
+
+
+def test_scene_recovers_changed_visited_directory_without_navigation(tmp_path):
+    folder = tmp_path / "visited"
+    nested = folder / "subfolder"
+    nested.mkdir(parents=True)
+    (nested / "example.txt").touch()
+    adapter = RoomWorkspaceProvider(tmp_path).open_filesystem()
+    gen, top = entries(adapter)
+    visited = top["visited"]["id"]
+    _, old = entries(adapter, visited, gen)
+    child = old["subfolder"]["id"]
+    (folder / "new.txt").touch()
+    (folder / "unsafe").symlink_to("new.txt")
+    (folder / "venv").mkdir()
+    with pytest.raises(ViewValidationError) as stale_branch:
+        adapter.listing(child, gen, sample=True)
+    assert stale_branch.value.code == "filesystem-scene-entry-stale"
+    for _ in range(2):
+        recovered = adapter.listing(visited, gen, sample=True)
+        assert [n["label"] for n in recovered["entries"]] == ["subfolder", "new.txt"]
+        assert recovered["omitted"] == 2
+        assert adapter.listing(child, gen, sample=True)["entries"][0]["label"] == "example.txt"
+    with pytest.raises(ViewValidationError) as selection:
+        adapter.inspect(child, gen)
+    assert selection.value.code == "filesystem-stale"
+
+
+@pytest.mark.parametrize("change", ["root", "policy"])
+def test_scene_never_classifies_generation_revocation_as_local(tmp_path, change):
+    folder = tmp_path / "branch"
+    folder.mkdir()
+    policy = tmp_path / ".josh-roomignore"
+    policy.write_text("# initial\n")
+    adapter = RoomWorkspaceProvider(tmp_path).open_filesystem()
+    gen, top = entries(adapter)
+    if change == "root":
+        (tmp_path / "Branch").mkdir()
+    else:
+        policy.write_text("branch/**\n")
+    with pytest.raises(ViewValidationError) as stale:
+        adapter.listing(top["branch"]["id"], gen, sample=True)
+    assert stale.value.code == "filesystem-stale"

@@ -160,7 +160,8 @@ class WorkspaceFilesystem:
         self._handles.move_to_end(entry.id)
         if len(self._handles) > _MAX_HANDLES:
             self._handles.move_to_end("root")
-            self._handles.popitem(last=False)
+            evicted, _ = self._handles.popitem(last=False)
+            self._sample_handles.pop(evicted, None)
 
     def _bootstrap(self):
         fd, _ = self.provider._open_bound_root()
@@ -179,7 +180,7 @@ class WorkspaceFilesystem:
     def _boundary(self, entry, fd):
         return self.provider._dir_boundary_kind(fd, self.provider._root.joinpath(*entry.parts), is_root=not entry.parts)
 
-    def _open_entry(self, entry):
+    def _open_entry(self, entry, *, refresh_directory=False):
         fd, _ = self.provider._open_bound_root()
         try:
             policy = self.provider._capture_policy(fd)
@@ -208,7 +209,13 @@ class WorkspaceFilesystem:
                     child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                     os.close(fd)
                     fd = child
-                if stamp(os.fstat(fd)) != stamp(component.info) or _safe_mount_id(fd) != mount:
+                observed = stamp(os.fstat(fd))
+                expected = stamp(component.info)
+                # The admitted name and inode still belong to the unchanged parent.
+                # A scene sample can start a fresh scan of this directory's children.
+                if refresh_directory and index and component is entry:
+                    observed, expected = observed[:2], expected[:2]
+                if observed != expected or _safe_mount_id(fd) != mount:
                     if index == 0:
                         self._clear()
                     raise _stale()
@@ -219,16 +226,35 @@ class WorkspaceFilesystem:
             os.close(fd)
             raise
 
+    def _validate_sample_root(self, generation):
+        if self._generation != generation:
+            raise _stale()
+        try:
+            fd, _ = self._open_entry(self._handles["root"])
+            os.close(fd)
+        except ViewValidationError:
+            self._clear()
+            raise
+        except (OSError, ValueError):
+            self._clear()
+            raise _stale() from None
+
     @contextmanager
     def _bound(self, object_id, generation, *, sample=False):
         if generation != self._generation or generation is None:
             raise _stale()
-        entry = self._handles.get(object_id) or self._sample_handles.get(object_id)
+        primary = self._handles.get(object_id)
+        sampled = self._sample_handles.get(object_id)
+        entry = (sampled or primary) if sample else (primary or sampled)
         if entry is None:
+            if sample:
+                self._validate_sample_root(generation)
             raise _unknown()
         try:
-            fd, policy = self._open_entry(entry)
+            fd, policy = self._open_entry(entry, refresh_directory=sample)
             try:
+                if sample and entry.parent and stat.S_ISDIR(entry.info.st_mode):
+                    entry = replace(entry, info=os.fstat(fd))
                 if not sample:
                     self._remember(entry)
                 yield entry, fd, policy
@@ -237,12 +263,17 @@ class WorkspaceFilesystem:
             finally:
                 os.close(fd)
         except ViewValidationError as error:
-            if error.code == "workspace-binding-changed" or (not sample and error.code == "filesystem-stale"):
+            if sample and entry.parent and error.code == "filesystem-stale":
+                self._validate_sample_root(generation)
+                raise ViewValidationError("filesystem-scene-entry-stale", "scene branch changed") from None
+            if error.code in {"workspace-binding-changed", "filesystem-stale"}:
                 self._clear()
             raise
         except (OSError, ValueError):
-            if not sample:
-                self._clear()
+            if sample and entry.parent:
+                self._validate_sample_root(generation)
+                raise ViewValidationError("filesystem-scene-entry-stale", "scene branch changed") from None
+            self._clear()
             raise _stale() from None
 
     def _child(self, parent, fd, policy, name, *, sample=False):
@@ -268,14 +299,10 @@ class WorkspaceFilesystem:
         token = hashlib.blake2s(identity.encode(), key=self._key, digest_size=16).hexdigest()
         child = Entry(f"n-{token}", parent, parts, info)
         if sample:
-            previous = self._handles.get(child.id) or self._sample_handles.get(child.id)
-            if previous and stamp(previous.info) != stamp(child.info):
-                raise _stale()
-            if child.id not in self._handles:
-                self._sample_handles[child.id] = child
-                self._sample_handles.move_to_end(child.id)
-                if len(self._sample_handles) > _MAX_SAMPLE_HANDLES:
-                    self._sample_handles.popitem(last=False)
+            self._sample_handles[child.id] = child
+            self._sample_handles.move_to_end(child.id)
+            if len(self._sample_handles) > _MAX_SAMPLE_HANDLES:
+                self._sample_handles.popitem(last=False)
         else:
             self._remember(child)
         return child
