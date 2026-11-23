@@ -472,6 +472,8 @@
     // Pass 1: Measure every directory's pedestal dimensions & recursive subtree width
     const measureDir = (dir) => {
       const isRoot = dir.depth === 0;
+      const explicitlyCollapsed = opts.collapsedDirs?.has(dir.id)
+        && (!selectedAncestors.has(dir.id) || selected?.id === dir.id);
       const autoCollapsed = (
         !isRoot &&
         dir.dirChildren.length > 0 &&
@@ -486,7 +488,9 @@
       const visibleLeafCount = aggregatedLeaves ? AGGREGATE_TOP_K + 1 : dir.leafChildren.length;
 
       let dims;
-      if (autoCollapsed) {
+      if (explicitlyCollapsed) {
+        dims = pedestalDimensionsForCount(0, { minWidth: isRoot ? 6.4 : 4.4, minDepth: 2.9 });
+      } else if (autoCollapsed) {
         const w = Math.max(5.8, dir.dirChildren.length * 1.18 + 1.6);
         dims = { cols: dir.dirChildren.length, rows: 1, width: w, depth: 3.3, height: 0.54 };
       } else if (isRoot) {
@@ -499,7 +503,7 @@
         dims = pedestalDimensionsForCount(visibleLeafCount, { minWidth: minW, minDepth: minD });
       }
 
-      const childPlans = autoCollapsed ? [] : dir.dirChildren.map((child) => measureDir(child));
+      const childPlans = explicitlyCollapsed || autoCollapsed ? [] : dir.dirChildren.map((child) => measureDir(child));
 
       // Split into 2 staggered tiers ONLY for wide legacy groups (>=5 direct subdirs & no grandchildren)
       const useTwoTierRows = (
@@ -532,6 +536,7 @@
       return {
         dir,
         autoCollapsed,
+        explicitlyCollapsed,
         aggregatedLeaves,
         visibleLeafCount,
         dims,
@@ -659,7 +664,7 @@
         coverage: d.fields?.coverage,
         height: plan.dims.height,
         counts: d.counts,
-        collapsed: plan.autoCollapsed,
+        collapsed: Boolean(plan.explicitlyCollapsed || plan.autoCollapsed),
         aggregated: plan.aggregatedLeaves,
         hiddenCount: plan.aggregatedLeaves ? d.leafChildren.length - AGGREGATE_TOP_K : 0,
         childDirCount: d.dirChildren.length,
@@ -672,6 +677,7 @@
         parentPed.childrenIds.push(pedNode.id);
       }
 
+      if (plan.explicitlyCollapsed) return pedNode;
       if (plan.autoCollapsed) {
         // SpaceTree collapsed child-directory summary towers directly on this pedestal
         const kids = d.dirChildren;

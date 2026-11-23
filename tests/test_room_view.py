@@ -572,6 +572,29 @@ def test_scoped_filesystem_transport_boundary(tmp_path):
         assert "filesystem" not in generic.collector.current_payload()["server"]
 
 
+def test_scoped_query_rechecks_binding_before_writing_response(tmp_path, monkeypatch):
+    root = tmp_path / "room"
+    root.mkdir()
+    (root / "example.txt").write_text("synthetic content")
+    provider = RoomWorkspaceProvider(root)
+    with RoomViewServer(provider, interval_seconds=60) as server:
+        listing = json.loads(_raw_http(server.port, "GET", "/fs/list?id=root")[2])
+        node = listing["entries"][0]
+        read = server._filesystem.preview
+
+        def move_after_preview(*args):
+            result = read(*args)
+            root.rename(tmp_path / "moved")
+            return result
+
+        monkeypatch.setattr(server._filesystem, "preview", move_after_preview)
+        args = urlencode({"id": node["id"], "generation": listing["generation"]})
+        status, _, body = _raw_http(server.port, "GET", "/fs/preview?" + args)
+        assert status == 409 and b"synthetic content" not in body
+        assert provider.binding_invalidated
+        assert not server.collector.current_payload()["state"].get("nodes")
+
+
 def test_live_server_sensitive_export_requires_ack_and_optional_token():
     provider = SyntheticPipelineProvider(preset="sensitive")
     with RoomViewServer(provider, port=0, require_token=True) as server:

@@ -125,3 +125,16 @@ test('staggered rows of differently sized expanded directories have disjoint foo
     }
   }
 });
+
+test('explicit collapse hides files and subdirectories while preserving a selected descendant', () => {
+  const nodes = branch(2);
+  nodes.push({ id: 'inner', parent_id: 'dir', node_kind: 'directory', label: 'Inner' });
+  const collapsedDirs = new Set(['node/dir']);
+  const layout = selectedNodeId => buildFsnLayout(workspace, { nodes }, { collapsedDirs, selectedNodeId });
+  const collapsed = layout('node/dir');
+  assert.equal(collapsed.nodeById.get('node/dir').collapsed, true);
+  assert.deepEqual(collapsed.nodeById.get('node/dir').childrenIds, []);
+  assert.equal(collapsed.nodeById.has('node/inner'), false);
+  assert.equal(collapsed.allTreeNodesById.has('node/inner'), true);
+  assert.equal(layout('node/f01').nodeById.has('node/f01'), true);
+});

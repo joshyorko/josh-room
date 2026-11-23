@@ -18,8 +18,12 @@ from pathlib import Path
 from ..composition import portable_path
 from ..directory_inventory import stamp
 from .contract import Attachment, AttachmentRef, NodeState, ViewValidationError
-from .room_provider import _alias_key, _classify_file, _safe_display_label, _safe_mount_id
-
+from .room_provider import (
+    _alias_key,
+    _classify_file,
+    _safe_display_label,
+    _safe_mount_id,
+)
 
 _SCAN_BATCH = 128
 _PAGE = 48
@@ -132,12 +136,14 @@ class WorkspaceFilesystem:
         self._policy_hash = None
         self._handles = OrderedDict()
         self._cursors = OrderedDict()
+        self._last_page = None
 
     def _clear(self):
         for scan in self._cursors.values():
             scan.close()
         self._cursors.clear()
         self._handles.clear()
+        self._last_page = None
         self._generation = None
 
     def close(self):
@@ -184,9 +190,14 @@ class WorkspaceFilesystem:
                     if policy.is_excluded("/".join(component.parts)):
                         raise _stale()
                     if stat.S_ISREG(component.info.st_mode):
-                        current = os.stat(name, dir_fd=fd, follow_symlinks=False)
-                        if stamp(current) != stamp(component.info) or current.st_nlink != 1:
-                            raise _stale()
+                        probe = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=fd)
+                        try:
+                            current = os.fstat(probe)
+                            if (stamp(current) != stamp(component.info) or current.st_nlink != 1
+                                    or _safe_mount_id(probe) != mount):
+                                raise _stale()
+                        finally:
+                            os.close(probe)
                         break
                     child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                     os.close(fd)
@@ -285,11 +296,22 @@ class WorkspaceFilesystem:
                           "entries": rows, "cursor": None, "examined": 0, "omitted": 0}
                 if boundary in _BLOCKED:
                     result["coverage"] = boundary
+                    result["directory"]["fields"]["coverage"] = boundary
                     return result
                 if cursor is not None:
+                    # A parent re-list may have issued the same directory ID with a
+                    # newer stamp. Continuations belong to the original observation.
+                    # Replay the most recent continuation if a GET/HEAD reply was lost.
+                    key = (object_id, generation, cursor)
+                    if self._last_page and self._last_page[0] == key:
+                        observed, _ = self._open_entry(self._last_page[1])
+                        os.close(observed)
+                        return self._last_page[2]
                     scan = self._cursors.get(cursor)
                     if scan is None or scan.entry.id != object_id:
                         raise _unknown()
+                    observed, _ = self._open_entry(scan.entry)
+                    os.close(observed)
                     del self._cursors[cursor]
                 else:
                     scan = SiblingScan(entry, fd)
@@ -317,6 +339,10 @@ class WorkspaceFilesystem:
                     if not retained:
                         scan.close()
                 result.update(examined=scan.examined, omitted=scan.omitted)
+                result["directory"]["fields"].update(
+                    coverage=result["coverage"], examined=scan.examined, omitted=scan.omitted)
+                if cursor is not None:
+                    self._last_page = (key, entry, result)
                 return result
 
     def inspect(self, object_id, generation):
