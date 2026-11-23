@@ -221,7 +221,12 @@ class _SnapshotProviderAdapter:
         return self._descriptor
 
     def state(self) -> ViewState:
+        self.assert_binding()
         return self._state
+
+    def assert_binding(self) -> None:
+        if getattr(self._collector.provider, "binding_invalidated", False) is True:
+            raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
 
     def attachment(self, item_id: str, name: str):
         return self._collector.provider.attachment(item_id, name)
@@ -422,6 +427,7 @@ class RoomViewServer:
                             template_path=owner._template_path,
                             policy=owner._policy,
                         )
+                        snapshot_provider.assert_binding()
                     except (ValueError, OSError):
                         self._send_json(
                             HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -456,6 +462,7 @@ class RoomViewServer:
                             template_path=owner._template_path,
                             policy=owner._policy,
                         )
+                        snapshot_provider.assert_binding()
                     except SensitivityAckRequiredError as error:
                         self._send_json(HTTPStatus.CONFLICT, error.result, head_only=head_only)
                         return

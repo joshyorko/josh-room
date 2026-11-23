@@ -1301,6 +1301,25 @@ def test_observed_root_loss_permanently_revokes_state_previews_and_attachments(t
     assert not provider._attachment_index
 
 
+@pytest.mark.parametrize("endpoint", ["/export.html?ack=1", "/export-preview.json"])
+def test_export_rejects_artifact_if_its_attachment_read_revokes_binding(tmp_path, endpoint):
+    root = tmp_path / "room"
+    root.mkdir()
+    (root / "example.txt").write_text("synthetic preview")
+    (root / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(root)
+    with RoomViewServer(provider, port=0, interval_seconds=60, workspace=root) as server:
+        assert server.collector.current_payload()["state"]["items"]
+        server.collector.stop()  # Export itself must be the first observer.
+        root.rename(tmp_path / "moved")
+        status, _, body = _raw_http(server.port, "GET", endpoint)
+        assert status == 500
+        assert b"example.txt" not in body
+        assert b"synthetic preview" not in body
+        assert provider.binding_invalidated
+        assert not server.collector.current_payload()["state"]["items"]
+
+
 def test_controller_startup_checks_selected_domain_namespace_and_directory(tmp_path):
     from josh_room.workspace_state import write_stat_workspace_marker
 
