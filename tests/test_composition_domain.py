@@ -214,7 +214,7 @@ def test_minio_encryption_status_sanitizes_sdk_denial(tmp_path, monkeypatch, cap
 
     selected = dimension()
     registry = SimpleNamespace(select=lambda _: selected)
-    monkeypatch.setattr(cli, "private_config", lambda: {})
+    monkeypatch.setattr(cli, "private_config", dict)
     monkeypatch.setattr(cli, "DimensionRegistry", lambda _: registry)
     monkeypatch.setattr(cli, "_instance_root", lambda: tmp_path)
     monkeypatch.delenv("JOSH_ROOM_RESULT_FILE", raising=False)
