@@ -59,8 +59,10 @@ def test_jat_sigterm_kills_detached_descendant_that_holds_output_pipes(tmp_path)
     pid_file = tmp_path / "detached-child.pid"
     descendant = (
         "import os, signal, sys, time; "
+        "from pathlib import Path; "
         "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        f"open({str(pid_file)!r}, 'w').write(str(os.getpid())); "
+        f"pid_file = Path({str(pid_file)!r}); temporary = pid_file.with_suffix('.tmp'); "
+        "temporary.write_text(str(os.getpid())); temporary.replace(pid_file); "
         "print('descendant-ready', flush=True); time.sleep(30)"
     )
     rcc = (
