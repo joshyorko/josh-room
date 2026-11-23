@@ -10,6 +10,8 @@ import time
 import unicodedata
 from pathlib import Path
 
+from .composition_git_index import validate_child_index
+from .composition_git_integrity import object_format
 from .workspace_onboarding import _directory
 from .workspace_policy import _parts, load_capture_policy
 
@@ -85,12 +87,15 @@ def validate_child_git(root: Path, paths, mode: str) -> None:
             raise ValueError("Catalog child submodules are unsupported; save the repository as one ordinary Room")
         if parts[-1] == ".gitmodules" or (parts[-1] == ".git" and not (root / path).is_dir()):
             raise ValueError("Catalog child submodules and gitfiles are unsupported; save the repository as one ordinary Room")
+        if parts[-1] == ".git":
+            validate_child_index(root / path, object_format(root / path), child_root=path == ".git")
         if ".git" in parts:
             index = parts.index(".git")
             if parts[index + 1:index + 2] in (["modules"], ["worktrees"]):
                 raise ValueError("Catalog child submodules and linked worktrees are unsupported")
             if parts[-1].endswith(".lock"):
                 raise ValueError("Git lock present; finish the Git operation before saving")
+
 
 
 def validate_paths(paths) -> None:

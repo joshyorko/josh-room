@@ -291,3 +291,25 @@ def test_local_only_repository_cannot_lend_one_parent_file(tmp_path):
     assignments.append({"path": "other/readme", "outcome": "parent"})
     with pytest.raises(ValueError, match="one Room"):
         capture_plan(source, dimension, "1" * 32, "parent", assignments)
+
+
+@pytest.mark.parametrize("kind", ["tracked-policy", "deleted-working-copy", "gitlink-without-gitmodules"])
+def test_child_index_conflicts_are_refused_before_approval(tmp_path, kind):
+    import subprocess
+
+    source, dimension, assignments, _ = fixture(tmp_path)
+    child = source / "child"
+    subprocess.run(["git", "init", "-q", "--template=", child], check=True)
+    policy = child / ".josh-roomignore"
+    policy.write_text("# tracked child policy\n")
+    if kind == "gitlink-without-gitmodules":
+        subprocess.run(["git", "-C", child, "update-index", "--add", "--cacheinfo",
+                        "160000," + "a" * 40 + ",dependency"], check=True)
+        expected = "gitlinks"
+    else:
+        subprocess.run(["git", "-C", child, "add", ".josh-roomignore"], check=True)
+        if kind == "deleted-working-copy":
+            policy.unlink()
+        expected = "tracks generated Room metadata"
+    with pytest.raises(ValueError, match=expected):
+        capture_plan(source, dimension, "1" * 32, "parent", assignments)

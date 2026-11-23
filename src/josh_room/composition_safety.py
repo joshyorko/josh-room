@@ -56,7 +56,7 @@ def plan_digest(plan: dict) -> str:
 
 def _versioned_plan(body, plan):
     if not isinstance(plan, dict):
-        raise ValueError("invalid composition plan")
+        raise ValueError("invalid composition plan")  # noqa: TRY004 - invalid decoded ledger data
     if "plan_version" not in plan:
         return False
     if body["contract"] != "composition-safety-v3" or type(plan["plan_version"]) is not int or plan["plan_version"] != 3:

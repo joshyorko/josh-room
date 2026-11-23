@@ -106,6 +106,7 @@ def test_legacy_reserved_update_refuses_resume_before_payload_or_authority_write
 
 def test_full_repository_child_update_stages_git_only_changes(tmp_path, monkeypatch):
     import subprocess
+
     from josh_room import composition_updates
     from josh_room.workspace_policy import load_capture_policy
 

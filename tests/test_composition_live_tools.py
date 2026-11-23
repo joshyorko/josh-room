@@ -262,7 +262,12 @@ def test_actual_child_parent_save_and_whole_child_hydration(runtime, monkeypatch
 
 def test_git_only_child_update_and_historical_cold_hydration(runtime):
     from josh_room.composition_updates import refresh_parent, save_child
-    from scripts.git_recovery_acceptance import advance_catalog_git, catalog_repository, contents, identity
+    from scripts.git_recovery_acceptance import (
+        advance_catalog_git,
+        catalog_repository,
+        contents,
+        identity,
+    )
 
     r = runtime
     for name in ("a", "b"):

@@ -11,7 +11,12 @@ import json
 
 from .catalog import Catalog
 from .composition import validate_manifest
-from .composition_safety import CompositionSafetyState, _CONTRACTS, _identifier, plan_digest
+from .composition_safety import (
+    _CONTRACTS,
+    CompositionSafetyState,
+    _identifier,
+    plan_digest,
+)
 
 
 def canonical(body):

@@ -14,7 +14,15 @@ import uuid
 from pathlib import Path
 
 from .catalog import Catalog, corroborate_logical_snapshot
-from .composition import MANIFEST, parse_manifest, portable_path, validate_child_git, validate_manifest, validate_payload_path
+from .composition import (
+    MANIFEST,
+    parse_manifest,
+    portable_path,
+    validate_child_git,
+    validate_manifest,
+    validate_payload_path,
+)
+from .composition_git_integrity import verify_staged_git
 from .composition_lifecycle import (
     CONTENT_DIGEST_ALGORITHM,
     INHERITED_POLICY,
@@ -25,8 +33,8 @@ from .composition_lifecycle import (
     _copy_paths,
     _finish_view,
     _records,
-    _verify_descriptor_contract,
     _slot,
+    _verify_descriptor_contract,
 )
 from .composition_safety import CompositionSafetyState, _identifier, plan_digest
 from .composition_transaction import (
@@ -79,6 +87,7 @@ def _proof(store, descriptor, private):
     if set(entries) - {'.'} != scan.paths:
         raise ValueError('saved inventory differs from effective policy')
     validate_child_git(target, scan.paths, policy.capture_mode)
+    verify_staged_git(target, scan.paths, policy.capture_mode, private)
     return target
 
 

@@ -21,15 +21,16 @@ from .composition import (
     parse_manifest,
     portable_path,
     require_uncomposed_workspace,
+    validate_child_git,
     validate_paths,
     validate_payload_path,
-    validate_child_git,
 )
 from .composition_authority import (
     CompositionAuthority,
     dimension_binding,
     namespace_prefix,
 )
+from .composition_git_integrity import verify_staged_git
 from .composition_safety import CompositionSafetyState, _identifier, plan_digest
 from .composition_transaction import (
     _require_extension,
@@ -396,6 +397,7 @@ def _capture(root, store, private, slot, dimension, domain, *, claim, parent=Non
     producer_version, producer_platform = _room_version(), _source_platform()
     policy = load_capture_policy(root)
     before = scan_workspace_for_status(root)
+    verify_staged_git(root, before.paths, policy.capture_mode, private)
     tag = ("composition:" + slot["logical_jat_id"],)
     prior = store.snapshots(tags=tag)
     if len(prior) > 1:
@@ -995,7 +997,8 @@ def _restore(
                 )
         scan = scan_workspace_for_status(stage)
         if child_namespace:
-            validate_child_git(stage, scan.paths, metadata["capture_mode"])
+            validate_child_git(stage.resolve(strict=True), scan.paths, metadata["capture_mode"])
+            verify_staged_git(stage, scan.paths, metadata["capture_mode"], private)
         if (load_capture_policy(stage).capture_mode != metadata["capture_mode"]
                 or scan.capture_policy_sha256 != metadata["capture_policy_sha256"]):
             raise ValueError("restored policy differs from descriptor")
