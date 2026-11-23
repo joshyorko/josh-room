@@ -1,0 +1,172 @@
+{
+  "source_commit": "f185b618a3ced7eccda5dcc765258cd953bf2e8b",
+  "viewer_template_sha256": "369e3d275c6671dee5d7deecb323e8caf48ee4755cf50488c7152d4ddebc4547",
+  "question": "Which settings.py controls application retry behavior, and how did its retry delay change between two chosen saved points and the live file?",
+  "answer": {
+    "application": "src/app/settings.py",
+    "earlier_point_A": {
+      "snapshot": "7710cede4fd7455bb7dc4073ef48cb32",
+      "RETRY_DELAY": 15
+    },
+    "later_point_B": {
+      "snapshot": "c57838a6433242f89ec5b21a6f4b2359",
+      "RETRY_DELAY": 30
+    },
+    "live": {
+      "RETRY_DELAY": 45,
+      "MAX_ATTEMPTS": 4
+    },
+    "decoys": {
+      "docs/settings.py": "EXAMPLE = True",
+      "tests/fixtures/settings.py": "FAKE_DELAY = 0"
+    }
+  },
+  "backend": "Disposable enrolled MinIO Room Store, Linux Secret Service, age keyset and restic snapshots. The native observation viewer used the authenticated comparison broker and recovery CLI.",
+  "method": "Uninterrupted Chrome viewport recording at 10 fps per task, driven by browser mouse and keyboard inputs. Typed search, clicked result paths, clicked visible scene geometry and list entries. No edited transitions or added UI.",
+  "environment": "Headless desktop Chrome, software WebGL. Native viewer served from the exact archived commit; browser qualification does not exercise installation.",
+  "limits": [
+    "The shared T3 preview lost its recording/tab during the continuity pilot. The final recordings use the repository Chrome/CDP qualification approach.",
+    "Lookup timing is one automated sample per mode from root to selected application file. The 3D pass includes two 800 ms camera settle waits. This is not a human speed benchmark.",
+    "Revisiting the file opens the summary. Clicking Compare restores and re-verifies the previous selected point automatically.",
+    "Night is exercised at 1280x800. Grass is exercised at 1280x800 and 390x844; the recording scales to a fixed 960x600 frame. The removal is an external change to the synthetic source file while the viewer remains read-only."
+  ],
+  "clips": {
+    "investigation.webm": {
+      "sha256": "2b4c1f80b712527fe717a133116a354ec3a22bc11a68df09210557a5ff877bd1",
+      "bytes": 435978,
+      "duration_seconds": 45.2,
+      "events": [
+        {
+          "event": "3D lookup",
+          "clicks": 3,
+          "elapsed_ms": 3541,
+          "path": "/src/app/settings.py",
+          "ms": 3542
+        },
+        {
+          "event": "Live application policy",
+          "delay": 45,
+          "ms": 4860
+        },
+        {
+          "event": "Saved vs live",
+          "point": "7710cede4fd7455bb7dc4073ef48cb32",
+          "before": 15,
+          "after": 45,
+          "ms": 18484
+        },
+        {
+          "event": "Saved vs live",
+          "point": "c57838a6433242f89ec5b21a6f4b2359",
+          "before": 30,
+          "after": 45,
+          "ms": 29612
+        },
+        {
+          "event": "Visited adjacent file",
+          "ms": 31524
+        },
+        {
+          "event": "Back restored comparison",
+          "point": "c57838a6433242f89ec5b21a6f4b2359",
+          "ms": 41999
+        },
+        {
+          "event": "List lookup",
+          "clicks": 3,
+          "elapsed_ms": 1829,
+          "path": "/src/app/settings.py",
+          "ms": 45256
+        },
+        {
+          "event": "Completed",
+          "pointer_clicks": 18,
+          "ms": 45256
+        }
+      ]
+    },
+    "native-continuity.webm": {
+      "sha256": "47d447ccb0883ab8759318e6d44b8614e5eb0ec5825764891fc7c28767616de5",
+      "bytes": 575190,
+      "duration_seconds": 39.6,
+      "events": [
+        {
+          "event": "Search complete",
+          "matches": 3,
+          "status": "Whole workspace / \u00b7 Search complete for admitted entries \u00b7 3 matches \u00b7 108 admitted entries \u00b7 1 omitted",
+          "ms": 2551
+        },
+        {
+          "event": "Disambiguated path",
+          "path": "/docs/settings.py",
+          "content": "EXAMPLE = True",
+          "ms": 3716
+        },
+        {
+          "event": "Disambiguated path",
+          "path": "/tests/fixtures/settings.py",
+          "content": "FAKE_DELAY = 0",
+          "ms": 5889
+        },
+        {
+          "event": "Disambiguated path",
+          "path": "/src/app/settings.py",
+          "content": "RETRY_DELAY = 45",
+          "ms": 7939
+        },
+        {
+          "event": "Saved vs live",
+          "point": "c57838a6433242f89ec5b21a6f4b2359",
+          "before": 30,
+          "after": 45,
+          "ms": 18061
+        },
+        {
+          "event": "Pagination preserved pinned result",
+          "count": 44,
+          "point": "c57838a6433242f89ec5b21a6f4b2359",
+          "ms": 19423
+        },
+        {
+          "event": "Mode switch retained comparison",
+          "ms": 20649
+        },
+        {
+          "event": "Back restored exact pin after visiting neighbor",
+          "point": "c57838a6433242f89ec5b21a6f4b2359",
+          "ms": 29516
+        },
+        {
+          "event": "Automatic poll retained exact diff",
+          "ms": 35518
+        },
+        {
+          "event": "Narrow live comparison",
+          "width": 390,
+          "scrollWidth": 390,
+          "ms": 36428
+        },
+        {
+          "event": "Removed live file revoked",
+          "location": "/src/app",
+          "staleContentVisible": false,
+          "ms": 38737
+        },
+        {
+          "event": "Completed",
+          "pointer_clicks": 26,
+          "ms": 39737
+        }
+      ],
+      "search_coverage": "108 admitted entries, 1 omitted; 3 matches within these admitted entries."
+    }
+  },
+  "screenshots": [
+    "native-narrow-comparison.png",
+    "native-point-A.png",
+    "native-point-B.png",
+    "native-removal.png",
+    "native-room.png",
+    "native-search.png"
+  ]
+}
