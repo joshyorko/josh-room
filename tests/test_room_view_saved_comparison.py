@@ -131,3 +131,14 @@ def test_comparison_is_digest_only_under_session_and_server_policy(tmp_path, mon
         assert receipt["unified_diff"] is None
     finally:
         adapter.close()
+
+
+def test_native_view_launch_parser_accepts_broker_socket(tmp_path):
+    from josh_room.cli import build_parser
+
+    socket_path = tmp_path / "comparison.sock"
+    options = build_parser().parse_args([
+        "view", "serve", "--provider", "room", "--workspace", str(tmp_path),
+        "--require-token", "--comparison-socket", str(socket_path), "--json",
+    ])
+    assert options.comparison_socket == socket_path
