@@ -6038,7 +6038,8 @@ async function exploreRoom3D(item, { launch = require("./room-view").launchRoomV
       const subscription = progressToken.onCancellationRequested(() => cancellation?.cancel());
       if (progressToken.isCancellationRequested) cancellation?.cancel();
       try {
-        const runtime = await runtimeFor(target.root, ["view", "serve"], progress, token);
+        const reporter = { event: event => progress.report({ message: event.message || event.phase || "Preparing runtime" }) };
+        const runtime = await runtimeFor(target.root, ["view", "serve"], reporter, token);
         assertWorkspaceTrusted("explore a Room in 3D");
         const fresh = roomViewTargets(vscode.workspace.workspaceFolders).find(entry => entry.root === target.root
           && entry.marker.project_id === target.marker.project_id && entry.marker.dimension_id === target.marker.dimension_id);

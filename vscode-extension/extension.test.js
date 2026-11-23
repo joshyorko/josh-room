@@ -7941,6 +7941,12 @@ test("3D launcher uses selected open Room root without Save or hydration", async
   vscode.workspace.isTrusted = true;
   vscode.workspace.workspaceFolders = roots.map(root => ({ uri: { scheme: "file", fsPath: root } }));
   const extension = loadExtension(vscode, () => { throw new Error("Save/hydration must not run"); });
+  extension.__test__.setRuntimeForTests(undefined);
+  extension.__test__.setExtensionContextForTests({ extensionPath: base, globalStorageUri: { fsPath: base }, extension: { packageJSON: extensionPackageJson } });
+  extension.__test__.setRuntimeReadinessForTests(Promise.resolve({
+    rcc: { executable: "/test/managed-rcc" }, controller: { artifact: "sha256:" + "a".repeat(64) },
+    controllerRoot: "/test/bundled-controller", mode: "managed",
+  }));
   let launched;
   await extension.__test__.exploreRoom3D({ kind: "room", project: { id: "demo-room" }, dimension: { id: "two" } }, {
     launch: async options => { launched = options; return { active: false, dispose() {} }; },

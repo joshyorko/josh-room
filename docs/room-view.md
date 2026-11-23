@@ -49,6 +49,19 @@ platform support of other Room commands.
 **Serve this Logical JAT…** remain Hauler files/registry projections. Historical
 nested JAT contents are not offered as live 3D workspaces.
 
+### Installed launcher verification
+
+`scripts/installed_room_view_acceptance.js` is a VS Code extension-test driver.
+Run it with `--extensionTestsPath` in a disposable development-host profile,
+with the candidate VSIX installed in a task-private `--extensions-dir` and
+`JOSH_ROOM_ACCEPTANCE_ROOT` pointing to that task directory. Open a trusted
+synthetic Room named `synthetic-room` in `synthetic-dimension` with a path-bound
+marker. The driver executes the registered Explore and Stop commands and uses
+the actual pinned managed controller. It intercepts only the browser handoff,
+checks authenticated HTTP 200 and listener shutdown, and writes metadata-only
+`installed.jsonl` evidence. This does **not** qualify visible browser rendering,
+3D navigation, or OS default-browser integration.
+
 ## CLI contract
 
 ```text
