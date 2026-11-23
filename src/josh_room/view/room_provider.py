@@ -372,6 +372,9 @@ class RoomWorkspaceProvider:
         include_previews: bool = True,
         include_attachments: bool = True,
         sensitivity: str = "internal",
+        expected_room_id: str | None = None,
+        expected_dimension_id: str | None = None,
+        expected_binding: dict | None = None,
     ) -> None:
         if not _HAS_DIR_FD or not getattr(os, "O_NOFOLLOW", 0):
             raise ViewValidationError("workspace-platform-unsupported", "safe descriptor-relative workspace reads unavailable")
@@ -412,7 +415,31 @@ class RoomWorkspaceProvider:
         except OSError as error:
             raise ViewValidationError("workspace-unavailable", "workspace root is unavailable or unsafe") from error
         try:
-            _ = load_capture_policy(self._root, directory_fd=fd if _HAS_DIR_FD else None)
+            root_stat = os.fstat(fd)
+            self._root_identity = (root_stat.st_dev, root_stat.st_ino)
+            self._context = context_status(self._root)
+            self._binding = self._binding_identity(self._context)
+            self._binding_invalidated = False
+            actual_binding = {
+                "room_id": self._context.get("project_id"),
+                "dimension_id": self._context.get("dimension_id"),
+                "encryption_domain_id": self._context.get("encryption_domain_id"),
+                "composition_namespace": self._context.get("composition_namespace"),
+                "device": str(root_stat.st_dev), "inode": str(root_stat.st_ino),
+            }
+            if expected_binding is not None and (not self._context.get("linked") or expected_binding != actual_binding):
+                raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+            if (expected_room_id is None) != (expected_dimension_id is None):
+                raise ViewValidationError("workspace-binding-required", "Room View requires both expected Room and Dimension")
+            if expected_room_id is not None and (
+                not self._context.get("linked")
+                or self._context.get("project_id") != expected_room_id
+                or self._context.get("dimension_id") != expected_dimension_id
+            ):
+                raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+            _ = self._capture_policy(fd)
+        except ViewValidationError:
+            raise
         except (OSError, ValueError) as error:
             raise ViewValidationError("workspace-policy-invalid", "workspace capture policy could not be loaded") from error
         finally:
@@ -420,8 +447,65 @@ class RoomWorkspaceProvider:
 
         self._descriptor = self._build_descriptor()
 
+    @staticmethod
+    def _binding_identity(context: dict) -> tuple:
+        # Save can advance snapshot/signature metadata without changing the Room.
+        return tuple(context.get(key) for key in (
+            "state", "linked", "path_matches", "dimension_id", "project_id",
+            "encryption_domain_id", "composition_namespace",
+        ))
+
+    def _assert_binding(self, directory_fd: int) -> dict:
+        info = os.fstat(directory_fd)
+        context = context_status(self._root)
+        with self._lock:
+            if (self._binding_invalidated or (info.st_dev, info.st_ino) != self._root_identity
+                    or self._binding_identity(context) != self._binding):
+                raise self._invalidate_binding()
+        return context
+
+    def verify_binding(self) -> None:
+        fd, _ = self._open_bound_root()
+        os.close(fd)
+
+    @property
+    def binding_invalidated(self) -> bool:
+        with self._lock:
+            return self._binding_invalidated
+
+    def _invalidate_binding(self) -> ViewValidationError:
+        with self._lock:
+            self._binding_invalidated = True
+            self._attachment_index.clear()
+        return ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+
+    def _open_bound_root(self) -> tuple[int, dict]:
+        try:
+            fd = _directory(self._root)
+        except OSError as error:
+            raise self._invalidate_binding() from error
+        try:
+            return fd, self._assert_binding(fd)
+        except (OSError, ValueError) as error:
+            os.close(fd)
+            raise self._invalidate_binding() from error
+
+    def _capture_policy(self, directory_fd: int) -> CapturePolicy:
+        # Managed RCC always sets ROBOCORP_HOME. Descriptor-bound policy cannot
+        # resolve runtime paths; refuse overlap rather than weakening its guards.
+        runtime_value = os.environ.get("ROBOCORP_HOME")
+        if runtime_value:
+            try:
+                runtime = Path(runtime_value).resolve()
+                root = self._root.resolve()
+            except (OSError, RuntimeError) as error:
+                raise ViewValidationError("workspace-policy-invalid", "runtime boundary is unavailable") from error
+            if runtime == root or runtime in root.parents or root in runtime.parents:
+                raise ViewValidationError("workspace-runtime-overlap", "Room View cannot observe the managed runtime directory")
+        return load_capture_policy(self._root, directory_fd=directory_fd if _HAS_DIR_FD else None)
+
     def _build_descriptor(self) -> ViewDescriptor:
-        ctx = context_status(self._root)
+        ctx = self._context
         title = "Room Workspace"
         if ctx.get("linked") and isinstance(ctx.get("display_name"), str):
             safe_name = _safe_display_label(ctx["display_name"], "room-display-name")
@@ -749,10 +833,7 @@ class RoomWorkspaceProvider:
         started = time.monotonic()
         deadline = started + self._max_seconds
         now_iso = _utc_now_iso()
-        try:
-            root_fd = _directory(self._root)
-        except OSError as error:
-            raise ViewValidationError("workspace-unavailable", "workspace root is unavailable or unsafe") from error
+        root_fd, ctx = self._open_bound_root()
 
         omissions: set[str] = set()
         new_attachments: dict[tuple[str, str], _AttachmentRecord] = {}
@@ -762,14 +843,7 @@ class RoomWorkspaceProvider:
             root_dev = root_stat.st_dev
             root_stamp = stamp(root_stat)
             root_mount = _safe_mount_id(root_fd)
-            runtime_value = os.environ.get("ROBOCORP_HOME")
-            runtime = Path(runtime_value) if runtime_value and Path(runtime_value).is_dir() else None
-            policy: CapturePolicy = load_capture_policy(
-                self._root,
-                active_runtime_root=runtime,
-                directory_fd=root_fd if _HAS_DIR_FD else None,
-            )
-            ctx = context_status(self._root)
+            policy = self._capture_policy(root_fd)
 
             nodes_list: list[NodeState] = []
             items_list: list[ItemState] = []
@@ -1064,11 +1138,7 @@ class RoomWorkspaceProvider:
             # Post-scan integrity check: verify policy and root directory identity did not drift.
             policy_drifted = False
             try:
-                after_policy = load_capture_policy(
-                    self._root,
-                    active_runtime_root=runtime,
-                    directory_fd=root_fd if _HAS_DIR_FD else None,
-                )
+                after_policy = self._capture_policy(root_fd)
                 after_stamp = stamp(os.fstat(root_fd))
                 if after_policy.sha256 != policy.sha256 or after_stamp != root_stamp:
                     policy_drifted = True
@@ -1244,6 +1314,7 @@ class RoomWorkspaceProvider:
             if omissions:
                 summary["omissions"] = ",".join(sorted(omissions))[:140]
 
+            self._assert_binding(root_fd)
             return ViewState(
                 taken_at=now_iso,
                 since=now_iso,
@@ -1261,19 +1332,12 @@ class RoomWorkspaceProvider:
         if record is None:
             return None
         try:
-            root_fd = _directory(self._root)
-        except OSError:
+            root_fd, _ = self._open_bound_root()
+        except (OSError, ValueError):
             return None
         try:
             root_stat = os.fstat(root_fd)
-            if (root_stat.st_dev, root_stat.st_ino) != record.root_identity:
-                return None
-            runtime_value = os.environ.get("ROBOCORP_HOME")
-            runtime = Path(runtime_value) if runtime_value and Path(runtime_value).is_dir() else None
-            policy = load_capture_policy(
-                self._root, active_runtime_root=runtime,
-                directory_fd=root_fd if _HAS_DIR_FD else None,
-            )
+            policy = self._capture_policy(root_fd)
             if policy.sha256 != record.policy_sha256 or policy.is_excluded("/".join(record.rel_parts)):
                 return None
             root_dev = root_stat.st_dev
@@ -1299,6 +1363,7 @@ class RoomWorkspaceProvider:
                 return None
             if hashlib.sha256(data).hexdigest() != record.sha256:
                 return None
+            self._assert_binding(root_fd)
             return Attachment(name=name, media_type=record.media_type, data=data)
         except (OSError, ValueError):
             return None

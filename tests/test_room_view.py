@@ -1179,3 +1179,258 @@ def test_saved_capsule_manifest_provider_and_hauler_spike_harness(tmp_path):
     assert fixture_report["checks"]["jat_archive_projection"]["exposes_nested_live_paths"] is False
     assert fixture_report["checks"]["multi_file_projection"]["one_shot_projection_frozen_after_live_edit"] is True
     assert fixture_report["checks"]["security_gate"]["unauthenticated_host_exposure_permitted"] is False
+
+
+def test_room_provider_in_managed_rcc_keeps_descriptor_policy(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "example.txt").write_text("synthetic content\n")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    monkeypatch.setenv("ROBOCORP_HOME", str(runtime))
+    provider = RoomWorkspaceProvider(workspace)
+    assert "example.txt" in {item.label for item in provider.state().items}
+    from josh_room.view.server import ViewCollector
+    collector = ViewCollector(provider, workspace=workspace)
+    assert collector.current_payload()["state"]["items"]
+    monkeypatch.setenv("ROBOCORP_HOME", str(workspace / "runtime"))
+    with pytest.raises(ViewValidationError, match="managed runtime"):
+        RoomWorkspaceProvider(workspace)
+
+
+def test_live_room_binding_cannot_switch_dimensions_or_serve_old_attachments(tmp_path):
+    from josh_room.view.server import ViewCollector
+    from josh_room.workspace_state import write_workspace_marker
+
+    def bind(dimension):
+        write_workspace_marker(tmp_path, dimension_id=dimension, project_id="demo",
+                               display_name=dimension, snapshot_id="snap", workspace_fingerprint="a" * 64)
+
+    bind("alpha")
+    (tmp_path / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(tmp_path)
+    collector = ViewCollector(provider, workspace=tmp_path)
+    image = next(item for item in collector.current_payload()["state"]["items"] if item["label"] == "diagram.png")
+    attachment = image["attachments"][0]
+    assert provider.attachment(image["id"], attachment["name"]) is not None
+    bind("beta")
+    (tmp_path / "beta.txt").touch()
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+    assert provider.attachment(image["id"], attachment["name"]) is None
+
+
+def test_room_provider_requires_selected_binding_but_allows_save_in_same_room(tmp_path):
+    from josh_room.workspace_state import write_workspace_marker
+
+    def bind(snapshot):
+        write_workspace_marker(tmp_path, dimension_id="alpha", project_id="demo",
+                               display_name="Synthetic", snapshot_id=snapshot, workspace_fingerprint="a" * 64)
+    bind("snap-1")
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_room_id="demo", expected_dimension_id="beta")
+    provider = load_provider("room", workspace=tmp_path, expected_room_id="demo", expected_dimension_id="alpha")
+    (tmp_path / "example.txt").write_text("synthetic content")
+    bind("snap-2")
+    assert [item.label for item in provider.state().items] == ["example.txt"]
+    (tmp_path / ".josh-room.json").unlink()
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        provider.state()
+    bind("snap-2")
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        provider.state()
+
+
+def test_rebind_invalidates_even_when_new_capture_policy_is_invalid(tmp_path):
+    from josh_room.view.server import ViewCollector
+    from josh_room.workspace_state import write_workspace_marker
+
+    def bind(dimension):
+        write_workspace_marker(tmp_path, dimension_id=dimension, project_id="demo",
+                               display_name=dimension, snapshot_id="snap", workspace_fingerprint="a" * 64)
+    bind("alpha")
+    (tmp_path / "alpha.txt").write_text("synthetic")
+    provider = RoomWorkspaceProvider(tmp_path)
+    collector = ViewCollector(provider, workspace=tmp_path)
+    assert collector.current_payload()["state"]["items"]
+    bind("beta")
+    (tmp_path / ".josh-roomignore").write_text("# josh-room capture-mode: invalid\n")
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+    bind("alpha")
+    (tmp_path / ".josh-roomignore").unlink()
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+
+
+@pytest.mark.parametrize("observe_via", ["poll", "attachment"])
+@pytest.mark.parametrize("replace_root", [False, True])
+def test_observed_root_loss_permanently_revokes_state_previews_and_attachments(tmp_path, observe_via, replace_root):
+    from josh_room.view.server import ViewCollector
+    from josh_room.workspace_state import write_workspace_marker
+
+    root = tmp_path / "room"
+    root.mkdir()
+    write_workspace_marker(root, dimension_id="alpha", project_id="demo", display_name="Synthetic",
+                           snapshot_id="snap", workspace_fingerprint="a" * 64)
+    (root / "example.txt").write_text("synthetic preview")
+    (root / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(root)
+    collector = ViewCollector(provider, workspace=root)
+    image = next(item for item in collector.current_payload()["state"]["items"] if item["label"] == "diagram.png")
+    attachment = image["attachments"][0]
+    preview_item = next(item for item in collector.current_payload()["state"]["items"] if item.get("previews"))
+    slot = preview_item["previews"][0]["slot"]
+    assert collector.lookup_preview(preview_item["id"], slot) is not None
+    moved = tmp_path / "moved"
+    root.rename(moved)
+    if replace_root:
+        root.mkdir()
+    if observe_via == "poll":
+        collector.poll_once()
+    else:
+        assert provider.attachment(image["id"], attachment["name"]) is None
+    assert not collector.current_payload()["state"]["items"]
+    assert collector.lookup_preview(preview_item["id"], slot) is None
+    if replace_root:
+        root.rmdir()
+    moved.rename(root)
+    collector.poll_once()
+    assert not collector.current_payload()["state"]["items"]
+    assert provider.attachment(image["id"], attachment["name"]) is None
+    assert not provider._attachment_index
+
+
+@pytest.mark.parametrize("endpoint", ["/export.html?ack=1", "/export-preview.json"])
+def test_export_rejects_artifact_if_its_attachment_read_revokes_binding(tmp_path, endpoint):
+    root = tmp_path / "room"
+    root.mkdir()
+    (root / "example.txt").write_text("synthetic preview")
+    (root / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(root)
+    with RoomViewServer(provider, port=0, interval_seconds=60, workspace=root) as server:
+        assert server.collector.current_payload()["state"]["items"]
+        server.collector.stop()  # Export itself must be the first observer.
+        root.rename(tmp_path / "moved")
+        status, _, body = _raw_http(server.port, "GET", endpoint)
+        assert status == 500
+        assert b"example.txt" not in body
+        assert b"synthetic preview" not in body
+        assert provider.binding_invalidated
+        assert not server.collector.current_payload()["state"]["items"]
+
+
+def test_controller_startup_checks_selected_domain_namespace_and_directory(tmp_path):
+    from josh_room.workspace_state import write_stat_workspace_marker
+
+    write_stat_workspace_marker(tmp_path, dimension_id="alpha", encryption_domain_id="domain-two",
+                                project_id="demo", snapshot_id="snap", display_name="Synthetic",
+                                workspace_signature="a" * 64, signature_algorithm="josh-room-stat-v1", capture_policy_sha256="b" * 64)
+    info = tmp_path.stat()
+    binding = {"room_id": "demo", "dimension_id": "alpha", "encryption_domain_id": "domain-one",
+               "composition_namespace": None, "device": str(info.st_dev), "inode": str(info.st_ino)}
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_binding=binding)
+    binding["encryption_domain_id"] = "domain-two"
+    assert load_provider("room", workspace=tmp_path, expected_binding=binding).state()
+    binding["composition_namespace"] = "a" * 32
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_binding=binding)
+    binding["composition_namespace"] = None
+    binding["inode"] = str(info.st_ino + 1)
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        load_provider("room", workspace=tmp_path, expected_binding=binding)
+
+
+def test_token_protected_view_survives_private_port_remap_without_allowing_dns_hosts():
+    import http.client
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    with RoomViewServer(SyntheticPipelineProvider(preset="small"), port=0, require_token=True) as server:
+        class Forward(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=3)
+                try:
+                    connection.request("GET", self.path, headers={"Host": self.headers["Host"]})
+                    response = connection.getresponse()
+                    body = response.read()
+                    self.send_response(response.status)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                finally:
+                    connection.close()
+
+        proxy = ThreadingHTTPServer(("127.0.0.1", 0), Forward)
+        thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+        thread.start()
+        try:
+            mapped_port = proxy.server_port
+            assert mapped_port != server.port
+            status, _, _ = _raw_http(mapped_port, "GET", f"/state.json?token={server.token}")
+            assert status == 200
+            status, _, _ = _raw_http(mapped_port, "GET", f"/state.json?token={server.token}", headers={"Host": f"[::1]:{mapped_port}"})
+            assert status == 200
+            status, _, _ = _raw_http(mapped_port, "GET", "/state.json")
+            assert status == 403
+            status, _, _ = _raw_http(mapped_port, "GET", f"/state.json?token={server.token}", headers={"Host": f"untrusted.invalid:{mapped_port}"})
+            assert status == 403
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+            thread.join(timeout=3)
+
+@pytest.mark.parametrize("endpoint", ["/export.html?ack=1", "/export-preview.json", "/export.html?ack=1&no_attachments=1"])
+def test_text_only_export_checks_root_before_sensitivity_and_without_poll(tmp_path, endpoint):
+    root = tmp_path / "room"
+    root.mkdir()
+    (root / "example.txt").write_text("synthetic private preview")
+    (root / ".josh-roomignore").write_text("# josh-room sensitivity: restricted\n")
+    provider = RoomWorkspaceProvider(root)
+    with RoomViewServer(provider, port=0, interval_seconds=60, workspace=root) as server:
+        server.collector.stop()
+        root.rename(tmp_path / "moved")
+        root.mkdir()
+        status, _, body = _raw_http(server.port, "GET", endpoint)
+        assert status == 500
+        assert b"accounting" not in body
+        assert b"synthetic private preview" not in body
+        assert provider.binding_invalidated
+
+
+@pytest.mark.parametrize("endpoint,max_size", [("/export.html", 10_000_000), ("/export.html?ack=1", 100)])
+def test_export_revocation_precedes_ack_and_size_accounting(tmp_path, monkeypatch, endpoint, max_size):
+    (tmp_path / "diagram.png").write_bytes(_synthetic_png_bytes())
+    provider = RoomWorkspaceProvider(tmp_path)
+    original = provider.attachment
+    def revoke(item_id, name):
+        provider._invalidate_binding()
+        return original(item_id, name)
+    with RoomViewServer(provider, port=0, interval_seconds=60, workspace=tmp_path, max_export_bytes=max_size) as server:
+        server.collector.stop()
+        monkeypatch.setattr(provider, "attachment", revoke)
+        status, _, body = _raw_http(server.port, "GET", endpoint)
+        assert status == 500
+        assert b"accounting" not in body
+        assert b"preview" not in body
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        build_offline_export(provider, workspace=tmp_path, sensitivity_ack=True)
+
+
+def test_startup_binding_precedes_invalid_policy_and_requires_linked_room(tmp_path):
+    from josh_room.workspace_state import write_workspace_marker
+    info = tmp_path.stat()
+    binding = {"room_id": None, "dimension_id": None, "encryption_domain_id": None,
+               "composition_namespace": None, "device": str(info.st_dev), "inode": str(info.st_ino)}
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        RoomWorkspaceProvider(tmp_path, expected_binding=binding)
+    write_workspace_marker(tmp_path, dimension_id="alpha", project_id="demo", display_name="Synthetic",
+                           snapshot_id="snap", workspace_fingerprint="a" * 64)
+    (tmp_path / ".josh-roomignore").write_text("# josh-room capture-mode: invalid\n")
+    binding.update(room_id="other", dimension_id="alpha")
+    with pytest.raises(ViewValidationError, match="binding changed"):
+        RoomWorkspaceProvider(tmp_path, expected_binding=binding)

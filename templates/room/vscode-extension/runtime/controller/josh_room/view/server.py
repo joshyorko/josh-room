@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import secrets
+import sys
 import threading
 import time
 from datetime import UTC, datetime
@@ -126,9 +127,12 @@ class ViewCollector:
                 policy=self._policy,
                 extra_sanitizer=extra_sanitizer,
             )
-        except ViewValidationError:
+        except ViewValidationError as error:
             with self._lock:
-                self._mark_stale_locked("sanitization-rejected")
+                if error.code == "workspace-binding-changed":
+                    self._state = self._empty_stale_state("workspace-binding-changed")
+                else:
+                    self._mark_stale_locked("sanitization-rejected")
             return
         except Exception:  # noqa: BLE001 - provider errors become safe stale markers
             with self._lock:
@@ -138,6 +142,11 @@ class ViewCollector:
         with self._lock:
             self._last_ok = sanitized.taken_at
             self._state = sanitized
+            self._clear_invalid_binding_locked()
+
+    def _clear_invalid_binding_locked(self) -> None:
+        if getattr(self._provider, "binding_invalidated", False) is True:
+            self._state = self._empty_stale_state("workspace-binding-changed")
 
     def _mark_stale_locked(self, reason: str) -> None:
         current = self._state
@@ -156,6 +165,7 @@ class ViewCollector:
     def lookup_preview(self, object_id: str, slot: str) -> dict[str, object] | None:
         """Return an already-sanitized read-only preview slot from the active snapshot."""
         with self._lock:
+            self._clear_invalid_binding_locked()
             for node in self._state.nodes:
                 if node.id == object_id:
                     for prev in node.previews:
@@ -170,6 +180,7 @@ class ViewCollector:
 
     def current_payload(self) -> dict[str, object]:
         with self._lock:
+            self._clear_invalid_binding_locked()
             return {
                 "descriptor": self._descriptor.to_dict(),
                 "state": self._state.to_dict(),
@@ -203,6 +214,7 @@ class _SnapshotProviderAdapter:
     def __init__(self, collector: ViewCollector) -> None:
         self._collector = collector
         with collector._lock:
+            collector._clear_invalid_binding_locked()
             self._descriptor = collector._descriptor
             self._state = collector._state
 
@@ -210,10 +222,23 @@ class _SnapshotProviderAdapter:
         return self._descriptor
 
     def state(self) -> ViewState:
+        self.assert_binding()
         return self._state
 
+    def verify_binding(self) -> None:
+        self.assert_binding()
+
+    def assert_binding(self) -> None:
+        verify = getattr(self._collector.provider, "verify_binding", None)
+        if callable(verify):
+            verify()
+        if getattr(self._collector.provider, "binding_invalidated", False) is True:
+            raise ViewValidationError("workspace-binding-changed", "Room workspace binding changed; launch Room View again")
+
     def attachment(self, item_id: str, name: str):
-        return self._collector.provider.attachment(item_id, name)
+        result = self._collector.provider.attachment(item_id, name)
+        self.assert_binding()
+        return result
 
 
 class RoomViewServer:
@@ -259,7 +284,19 @@ class RoomViewServer:
 
             def _check_host(self) -> bool:
                 host = (self.headers.get("Host") or "").strip().lower()
-                if host not in self._allowed_hosts():
+                forwarded_loopback = False
+                if owner._token:
+                    try:
+                        authority = urlsplit(f"http://{host}")
+                        forwarded_loopback = (
+                            authority.hostname in {"localhost", "127.0.0.1", "::1"}
+                            and authority.port is not None and 0 < authority.port <= 65535
+                            and not authority.username and not authority.password
+                            and not authority.path and not authority.query and not authority.fragment
+                        )
+                    except ValueError:
+                        pass
+                if host not in self._allowed_hosts() and not forwarded_loopback:
                     self._send_json(
                         HTTPStatus.FORBIDDEN,
                         {"ok": False, "error": "forbidden-host-header"},
@@ -399,6 +436,7 @@ class RoomViewServer:
                             template_path=owner._template_path,
                             policy=owner._policy,
                         )
+                        snapshot_provider.assert_binding()
                     except (ValueError, OSError):
                         self._send_json(
                             HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -433,11 +471,15 @@ class RoomViewServer:
                             template_path=owner._template_path,
                             policy=owner._policy,
                         )
-                    except SensitivityAckRequiredError as error:
-                        self._send_json(HTTPStatus.CONFLICT, error.result, head_only=head_only)
-                        return
-                    except ExportSizeLimitError as error:
-                        self._send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, error.result, head_only=head_only)
+                        snapshot_provider.assert_binding()
+                    except (SensitivityAckRequiredError, ExportSizeLimitError) as error:
+                        try:
+                            snapshot_provider.assert_binding()
+                        except (ValueError, OSError):
+                            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "export-failed"}, head_only=head_only)
+                            return
+                        status = HTTPStatus.CONFLICT if isinstance(error, SensitivityAckRequiredError) else HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+                        self._send_json(status, error.result, head_only=head_only)
                         return
                     except (ValueError, OSError):
                         self._send_json(
@@ -610,6 +652,7 @@ def serve_forever_cli(
     require_token: bool = False,
     json_mode: bool = False,
     max_seconds: float | None = None,
+    stop_on_stdin_eof: bool = False,
 ) -> dict[str, object]:
     """Run the localhost Room View server until interrupted (or max_seconds)."""
     server = RoomViewServer(
@@ -633,6 +676,27 @@ def serve_forever_cli(
         print(json.dumps(info, sort_keys=True), flush=True)
     else:
         print(f"Room View serving (read-only, localhost) at {server.url}", flush=True)
+    if stop_on_stdin_eof:
+        # The extension owns the pipe writer. EOF also covers a crashed owner,
+        # without trusting the RCC leader's lifetime or leaving an idle server.
+        owner_closed = threading.Event()
+
+        def wait_for_owner() -> None:
+            try:
+                while sys.stdin.buffer.read(1):
+                    pass
+            except (OSError, ValueError):
+                pass
+            finally:
+                owner_closed.set()
+
+        server.start_background()
+        threading.Thread(target=wait_for_owner, name="room-view-owner", daemon=True).start()
+        try:
+            owner_closed.wait(max_seconds)
+        finally:
+            server.shutdown()
+        return info
     if max_seconds is not None:
         server.start_background()
         try:

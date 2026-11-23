@@ -549,6 +549,9 @@ def build_offline_export(
         include_attachments=include_attachments,
         room_id=room_id,
     )
+    verify = getattr(provider, "verify_binding", None)
+    if callable(verify):
+        verify()
     db_gzip = gzip_deterministic(sqlite_bytes)
     db_b64 = base64.b64encode(db_gzip).decode("ascii")
     db_sha256 = hashlib.sha256(sqlite_bytes).hexdigest()

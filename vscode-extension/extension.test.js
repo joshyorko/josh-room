@@ -8030,3 +8030,192 @@ test("Serve passes a private startup path and offers the active mapping or catal
     } finally { closed?.(terminal); }
   }
 });
+
+test("3D launcher uses selected open Room root without Save or hydration", async t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "room-3d-command-"));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const roots = ["one", "two"].map(name => { const root = path.join(base, name); fs.mkdirSync(root); writeMarker(root, { dimension_id: name }); return root; });
+  const { vscode } = createVscodeMock(roots[0]);
+  vscode.env = {};
+  vscode.workspace.isTrusted = true;
+  vscode.workspace.workspaceFolders = roots.map(root => ({ uri: { scheme: "file", fsPath: root } }));
+  const extension = loadExtension(vscode, () => { throw new Error("Save/hydration must not run"); });
+  extension.__test__.setRuntimeForTests(undefined);
+  extension.__test__.setExtensionContextForTests({ extensionPath: base, globalStorageUri: { fsPath: base }, extension: { packageJSON: extensionPackageJson } });
+  extension.__test__.setRuntimeReadinessForTests(Promise.resolve({
+    rcc: { executable: "/test/managed-rcc" }, controller: { artifact: "sha256:" + "a".repeat(64) },
+    controllerRoot: "/test/bundled-controller", mode: "managed",
+  }));
+  let launched;
+  await extension.__test__.exploreRoom3D({ kind: "room", project: { id: "demo-room" }, dimension: { id: "two" } }, {
+    launch: async options => { launched = options; return { active: false, dispose() {} }; },
+  });
+  assert.equal(launched.cwd, roots[1]);
+  assert.equal(launched.runtime.command, "/test/managed-rcc");
+  assert.equal(launched.runtime.env.JOSH_ROOM_PROVIDER_CREDENTIALS, undefined);
+  await assert.rejects(extension.__test__.exploreRoom3D({ kind: "jat", project: { id: "demo-room" }, dimension: { id: "two" } }), /Open the entered Room/);
+  vscode.env.remoteName = "dev-container";
+  await assert.rejects(extension.__test__.exploreRoom3D(), /privately forward Room View/);
+  vscode.env.remoteName = undefined;
+  vscode.workspace.isTrusted = false;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /Workspace Trust/);
+});
+
+function roomViewCommandFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "room-view-lifecycle-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeMarker(root);
+  const { vscode, statusItem } = createVscodeMock(root);
+  vscode.env = {}; vscode.UIKind = { Web: 2 };
+  vscode.workspace.isTrusted = true;
+  vscode.workspace.workspaceFolders = [{ uri: { scheme: "file", fsPath: root } }];
+  vscode.CancellationTokenSource = class {
+    constructor() {
+      const events = new EventEmitter();
+      this.token = { isCancellationRequested: false, onCancellationRequested: cb => {
+        events.on("cancel", cb); return { dispose: () => events.off("cancel", cb) };
+      } };
+      this.cancel = () => { this.token.isCancellationRequested = true; events.emit("cancel"); };
+    }
+    dispose() {}
+  };
+  const extension = loadExtension(vscode, () => { throw new Error("unexpected controller operation"); });
+  extension.__test__.setStatusItem(statusItem);
+  return { root, vscode, statusItem, extension, item: { kind: "room", project: { id: "demo-room" }, dimension: { id: "archive" } } };
+}
+
+test("Room View removes ambient identity/cloud env and resets cold-start status", async t => {
+  const { extension, item, statusItem } = roomViewCommandFixture(t);
+  const names = ["JOSH_ROOM_IDENTITY", "JOSH_ROOM_RUNTIME_CREDENTIALS", "AWS_ACCESS_KEY_ID", "CLOUDFLARE_API_TOKEN"];
+  const prior = names.map(name => process.env[name]);
+  t.after(() => names.forEach((name, index) => { if (prior[index] === undefined) delete process.env[name]; else process.env[name] = prior[index]; }));
+  names.forEach(name => { process.env[name] = "synthetic"; });
+  await extension.__test__.exploreRoom3D(item, { launch: async options => {
+    for (const name of names) assert.equal(options.runtime.env[name], undefined);
+    statusItem.text = "$(sync~spin) Josh Room";
+    return { active: false, async dispose() {} };
+  } });
+  assert.doesNotMatch(statusItem.text, /sync~spin/);
+});
+
+test("deactivate waits for in-flight launch and closes a session returned after cancellation", async t => {
+  const { extension, item } = roomViewCommandFixture(t);
+  let release;
+  let started;
+  const entered = new Promise(resolve => { started = resolve; });
+  let disposed = false;
+  const launch = extension.__test__.exploreRoom3D(item, { launch: async () => {
+    started(); await new Promise(resolve => { release = resolve; });
+    return { active: true, async dispose() { disposed = true; } };
+  } });
+  await entered;
+  let stopFinished = false;
+  const stop = extension.deactivate().then(() => { stopFinished = true; });
+  await Promise.resolve(); assert.equal(stopFinished, false);
+  release();
+  await assert.rejects(launch, /cancelled/i);
+  await stop;
+  assert.equal(disposed, true);
+});
+
+test("Room View blocks web and unknown trust before runtime or workspace reads", async t => {
+  const { extension, vscode } = roomViewCommandFixture(t);
+  vscode.workspace.isTrusted = undefined;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /Workspace Trust/);
+  vscode.workspace.isTrusted = true;
+  vscode.env.uiKind = 2;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /VS Code for the web/);
+});
+
+test("Room View palette selects explicitly and concurrent launch is rejected", async t => {
+  const { extension, vscode, root } = roomViewCommandFixture(t);
+  const target = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders)[0];
+  vscode.quickPickResponses.push(target);
+  let release;
+  let entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const operation = extension.__test__.exploreRoom3D(undefined, { launch: async options => {
+    assert.equal(options.cwd, root); entered(); await new Promise(resolve => { release = resolve; });
+    return { active: false, async dispose() {} };
+  } });
+  await ready;
+  await assert.rejects(extension.__test__.exploreRoom3D(), /already starting/);
+  release(); await operation;
+});
+
+test("Room View repeats require explicit replacement, and public command ignores DI arguments", async t => {
+  const fixture = roomViewCommandFixture(t);
+  const { extension, vscode, item, root } = fixture;
+  let stops = 0;
+  let launches = 0;
+  const options = { launch: async () => { launches += 1; return { active: true, async dispose() { stops += 1; } }; } };
+  await extension.__test__.exploreRoom3D(item, options);
+  await extension.__test__.exploreRoom3D(item, options);
+  assert.equal(launches, 1); assert.equal(stops, 0);
+  vscode.warningResponses.push("Stop and explore");
+  await extension.__test__.exploreRoom3D(item, options);
+  assert.equal(launches, 2); assert.equal(stops, 1);
+  await extension.deactivate(); assert.equal(stops, 2);
+  const callbacks = new Map();
+  vscode.commands.registerCommand = (name, callback) => { callbacks.set(name, callback); return { dispose() {} }; };
+  activateTestExtension(extension, root, vscode);
+  vscode.workspace.isTrusted = undefined;
+  let injected = false;
+  await callbacks.get("joshRoom.explore3D")(item, { launch: () => { injected = true; } });
+  assert.equal(injected, false);
+});
+
+test("review regression: deactivate invalidates the open picker", async t => {
+  const { extension, vscode } = roomViewCommandFixture(t);
+  const [target] = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders);
+  const picker = Promise.withResolvers();
+  vscode.window.showQuickPick = () => picker.promise;
+  let launches = 0;
+  const operation = extension.__test__.exploreRoom3D(undefined, {
+    launch: async () => { launches++; return { active: true, dispose() {} }; },
+  });
+  await extension.deactivate();
+  picker.resolve(target);
+  await operation.catch(() => {});
+  await extension.deactivate();
+  assert.equal(launches, 0);
+});
+
+test("review regression: viewer excludes ambient MinIO credentials", async t => {
+  const { extension, item } = roomViewCommandFixture(t);
+  const previous = process.env.MINIO_ROOT_PASSWORD;
+  process.env.MINIO_ROOT_PASSWORD = "synthetic";
+  t.after(() => { if (previous === undefined) delete process.env.MINIO_ROOT_PASSWORD; else process.env.MINIO_ROOT_PASSWORD = previous; });
+  await extension.__test__.exploreRoom3D(item, { launch: async ({ runtime }) => {
+    assert.equal(Object.hasOwn(runtime.env, "MINIO_ROOT_PASSWORD"), false);
+    return { active: false, dispose() {} };
+  } });
+});
+
+test("Stop releases a pending picker so an explicit Room can launch immediately", async t => {
+  const { extension, vscode, item } = roomViewCommandFixture(t);
+  const [target] = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders);
+  const picker = Promise.withResolvers();
+  vscode.window.showQuickPick = () => picker.promise;
+  let launches = 0;
+  const options = { launch: async () => { launches++; return { active: true, dispose() {} }; } };
+  const old = extension.__test__.exploreRoom3D(undefined, options);
+  await extension.__test__.stopRoomView();
+  await extension.__test__.exploreRoom3D(item, options);
+  picker.resolve(target); await old.catch(() => {});
+  assert.equal(launches, 1);
+  await extension.deactivate();
+});
+
+test("Room selection refuses an encryption-domain switch before the picker returns", async t => {
+  const { extension, vscode, root } = roomViewCommandFixture(t);
+  writeStatMarker(root, { dimension_id: "archive", encryption_domain_id: "domain-one" });
+  const [target] = require("./room-view-target").roomViewTargets(vscode.workspace.workspaceFolders);
+  vscode.window.showQuickPick = async () => {
+    writeStatMarker(root, { dimension_id: "archive", encryption_domain_id: "domain-two" });
+    return target;
+  };
+  let launched = false;
+  await assert.rejects(extension.__test__.exploreRoom3D(undefined, { launch: async () => { launched = true; } }), /binding changed/);
+  assert.equal(launched, false);
+});
