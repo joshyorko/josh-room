@@ -24,9 +24,10 @@ def observe(context, args):
         "workspace_snapshot_id": args.expected_workspace_snapshot,
         "encryption_domain_id": args.expected_domain,
     }
-    if any(value is not None for value in expected.values()):
-        if not all(value and context.selected_record.get(key) == value for key, value in expected.items()):
-            fail("recovery-exact-snapshot-required")
+    if any(value is not None for value in expected.values()) and not all(
+        value and context.selected_record.get(key) == value for key, value in expected.items()
+    ):
+        fail("recovery-exact-snapshot-required")
     path = args.path
     recovery = _Observation(context)
     if recovery.preview_policy(path):

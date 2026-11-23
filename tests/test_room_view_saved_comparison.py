@@ -26,8 +26,8 @@ def test_observe_enforces_all_expected_pin_fields_before_fetching_any_tree_or_fi
     node, blobs = file()
     context = synthetic([node], blobs).context
     row = context.selected_record
-    expected = dict(expected_tree=row["tree_id"], expected_domain=row["encryption_domain_id"],
-                    expected_workspace_snapshot=row["workspace_snapshot_id"], expected_ciphertext=row["ciphertext_sha256"])
+    expected = {"expected_tree": row["tree_id"], "expected_domain": row["encryption_domain_id"],
+                    "expected_workspace_snapshot": row["workspace_snapshot_id"], "expected_ciphertext": row["ciphertext_sha256"]}
     result = observe(context, args("old.txt", **expected))
     assert result["file"]["sha256"] == hashlib.sha256(b"old\n").hexdigest()
     assert result["ciphertext_sha256"] == row["ciphertext_sha256"]
@@ -52,7 +52,7 @@ def test_saved_policy_refusal_precedes_content_fetch_and_digest_disclosure():
 
 
 def test_file_absence_and_oversize_are_distinct_and_skip_unrelated_blobs():
-    node, blobs = file()
+    node, _blobs = file()
     node["size"] = 2 * 1024 * 1024
     context = synthetic([node], {}).context
     assert observe(context, args("missing.txt"))["file"] is None

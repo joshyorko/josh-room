@@ -17,7 +17,11 @@ from pathlib import Path
 from ..recovery_text import MAX_TEXT_BYTES, text_preview
 from .contract import ViewValidationError
 from .room_provider import _classify_file
-from .sanitizer import DEFAULT_SANITIZATION_POLICY, _check_json_structure_safe, _check_safe_text
+from .sanitizer import (
+    DEFAULT_SANITIZATION_POLICY,
+    _check_json_structure_safe,
+    _check_safe_text,
+)
 
 MAX_FILE = 1024 * 1024
 MAX_WIRE = 65536
