@@ -1,6 +1,9 @@
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
+from test_composition_oci import export
 from test_room_store_export import REPOSITORY_ID, _descriptor, _Restic
 
 from josh_room.component_selection import COMPONENTS
@@ -52,6 +55,15 @@ def test_legacy_omitted_missing_and_changed_component_refs_rejected():
 def test_reachable_and_exact_component_refs(tmp_path, fault):
     descriptor = _descriptor()
     store = _Restic(descriptor)
+    archive = tmp_path / "synthetic.tar.zst"
+    references = [{**ref, "kind": "image"} for ref in export(archive)]
+    data = archive.read_bytes()
+    archive.unlink()
+    details = {"archive_sha256": hashlib.sha256(data).hexdigest(), "archive_size": len(data), "references": references}
+    body = descriptor.to_dict()
+    body["components"]["hauler_content"].update(details)
+    descriptor = LogicalJat.from_dict(body)
+    store.data["2" * 64] = {"hauler-content.tar.zst": data, "metadata.json": json.dumps({"format_version": 1, **details}).encode()}
     store.open_existing = lambda: SimpleNamespace(
         repository_id="0" * 64 if fault == "cross-namespace" else REPOSITORY_ID, repository_format=2
     )

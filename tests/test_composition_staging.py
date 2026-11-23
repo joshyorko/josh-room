@@ -305,7 +305,8 @@ def test_initial_component_approval_keeps_local_options_out_of_request(tmp_path,
     options = {"homebrew_directory": "/synthetic/private-recovery-input", "component_selection": selection}
     approved = {"selection": selection, "inputs_sha256": "1" * 64, "artifacts_sha256": "2" * 64}
 
-    def preview(workspace, selected_dimension, room, policy_sha256, component_options):
+    def preview(workspace, selected_dimension, room, policy_sha256, component_options, *, admitted_paths):
+        assert "sub/file.txt" in admitted_paths
         assert (workspace, selected_dimension, component_options) == (source / "child", dimension, options)
         return approved
 
