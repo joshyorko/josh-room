@@ -32,6 +32,7 @@ JS_MODULES_ORDER = (
     "grid2d.js",
     "evidence.js",
     "sql_console.js",
+    "filesystem_search.js",
     "app.js",
     "bootstrap.js",
 )
