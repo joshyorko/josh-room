@@ -1022,7 +1022,8 @@
           try {
             await this.data.queryFilesystem('inspect', { id: selected?.objectId || page.directory.id, generation: page.generation });
             if (page === this.fsPage && !this.fsBusy) await this.filesystemSearch.validateDisplayed();
-          } catch (_) {
+          } catch (error) {
+            if (error.status === 429) return;
             if (page === this.fsPage && !this.fsBusy) {
               return this._openFilesystem(selected?.objectId || page.directory.id, { kind: selected?.nodeKind, refresh: true, pushHistory: false });
             }

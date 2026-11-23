@@ -1026,6 +1026,7 @@ function shellQuote(value) {
 }
 
 function sanitizeControllerArgv(argv) {
+  if (argv[0] === "recovery" && argv[1] === "observe") return ["recovery", "observe", "[selected file redacted]"];
   if (argv[0] === "composition") return ["composition", "plan", "[local selection redacted]"];
   if (argv[0] === "agents" && argv[1] === "inventory") return ["agents", "inventory", "[local workspace redacted]"];
   const sanitized = [];
@@ -6156,7 +6157,34 @@ async function exploreRoom3D(item, { launch = require("./room-view").launchRoomV
               || /^JOSH_ROOM_(IDENTITY|RUNTIME_CREDENTIALS|RUNTIME_CONFIG|RUNTIME_PROFILE|PROVIDER_CREDENTIALS|ENCRYPTION|RECOVERY|SELECTED_|RECIPIENTS|RESULT_FILE|PROGRESS_FILE)/.test(key)
               || /^(AWS_|CLOUDFLARE_|CF_|AZURE_|GOOGLE_APPLICATION_CREDENTIALS$)/.test(key)) delete env[key];
         }
-        const session = await launch({ runtime: { ...runtime, env }, cwd: fresh.root, vscode, cancellationToken: token,
+        // Authenticated reads execute in the installed controller directory. Looking at
+        // the live Room never imports or executes code from the selected workspace.
+        const controllerDirectory = path.join(__dirname, "runtime", "controller");
+        const assertComparisonScope = () => {
+          assertCurrent();
+          if (!roomViewTargets(vscode.workspace.workspaceFolders).some(entry => entry.root === fresh.root
+              && JSON.stringify(entry.binding) === JSON.stringify(fresh.binding))) throw cancellationError();
+        };
+        const withLifetime = async (signal, operation) => {
+          if (signal.aborted) throw cancellationError();
+          const cancellation = new vscode.CancellationTokenSource();
+          const cancel = () => cancellation.cancel();
+          signal.addEventListener("abort", cancel, { once: true });
+          try { return await operation(cancellation.token); }
+          finally { signal.removeEventListener("abort", cancel); cancellation.dispose(); }
+        };
+        const comparisonQuery = fresh.binding.encryption_domain_id && !fresh.binding.composition_namespace
+          ? require("./room-view-comparison").comparisonQueries(fresh.binding,
+            signal => withLifetime(signal, async token => {
+              const catalog = await runJoshRoom(["dimensions", "list"], controllerDirectory, token,
+                undefined, undefined, { localConfigurationOnly: true });
+              return dimensionList(catalog).find(row => row.id === fresh.binding.dimension_id);
+            }),
+            (args, dimension, signal) => withLifetime(signal, token => runSelectedEncryption(args, controllerDirectory,
+              dimension, { action: "compare a saved file", cancellationToken: token,
+                timeoutMs: 45000, progressReporter: { event() {} } })),
+            assertComparisonScope) : undefined;
+        const session = await launch({ runtime: { ...runtime, env }, comparisonQuery, cwd: fresh.root, vscode, cancellationToken: token,
           roomBinding: fresh.binding,
           sanitizeDiagnostic: sanitizeControllerText,
           onDiagnostic: message => outputChannel?.warn(message) });

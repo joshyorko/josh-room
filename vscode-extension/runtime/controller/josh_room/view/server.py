@@ -256,6 +256,8 @@ class _SnapshotProviderAdapter:
 _FS_PARAMS = {
     "/fs/list": {"id", "generation", "cursor"},
     "/fs/inspect": {"id", "generation"},
+    "/fs/points": {"id", "generation"},
+    "/fs/compare": {"id", "generation", "point"},
     "/fs/preview": {"id", "generation"},
     "/fs/attachment": {"id", "generation", "name", "digest"},
 }
@@ -263,7 +265,7 @@ _FS_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _FS_MAX_BYTES = 1024 * 1024
 
 
-def _filesystem_result(adapter, path: str, query: dict[str, list[str]], policy: SanitizationPolicy):
+def _filesystem_result(adapter, path: str, query: dict[str, list[str]], policy: SanitizationPolicy, comparison=None):
     """Accept only opaque capabilities; apply the same node sanitizer used for exports."""
     values = {key: items[0] for key, items in query.items() if key != "token"}
     if values.keys() - _FS_PARAMS[path] or any(len(items) != 1 for items in query.values()):
@@ -276,6 +278,13 @@ def _filesystem_result(adapter, path: str, query: dict[str, list[str]], policy: 
         raise ViewValidationError("invalid-query", "generation is required")
     if any(not _FS_TOKEN.fullmatch(value) for value in (generation, cursor) if value is not None):
         raise ViewValidationError("invalid-query", "invalid generation or cursor")
+    if path in {"/fs/points", "/fs/compare"}:
+        if comparison is None:
+            raise ViewValidationError("comparison-unsupported", "saved comparison requires native launch")
+        point = values.get("point")
+        if path == "/fs/compare" and not re.fullmatch(r"[0-9a-f]{32}", point or ""):
+            raise ViewValidationError("invalid-query", "invalid saved point")
+        return json.dumps(comparison.query(adapter, object_id, generation, point), separators=(",", ":")).encode()
     if path == "/fs/attachment":
         name = validate_attachment_name(values.get("name"))
         digest = validate_sha256(values.get("digest"))
@@ -320,6 +329,7 @@ class RoomViewServer:
         interval_seconds: float = 5.0,
         workspace: Path | None = None,
         require_token: bool = False,
+        comparison_socket: Path | None = None,
         max_export_bytes: int = DEFAULT_MAX_SIZE_BYTES,
         template_path: Path | None = None,
         policy: SanitizationPolicy = DEFAULT_SANITIZATION_POLICY,
@@ -336,6 +346,12 @@ class RoomViewServer:
         self._template_path = template_path
         self._policy = policy
         self._token = secrets.token_urlsafe(24) if require_token else None
+        self._comparison = None
+        if comparison_socket is not None:
+            if not require_token or not isinstance(provider, RoomWorkspaceProvider):
+                raise ValueError("Saved comparison requires a native token-protected viewer")
+            from .saved_comparison import SavedComparison
+            self._comparison = SavedComparison(comparison_socket, policy)
         self._base_template = load_viewer_template(template_path)
 
         owner = self
@@ -470,7 +486,7 @@ class RoomViewServer:
                     try:
                         if owner._filesystem is None:
                             raise ViewValidationError("filesystem-stale", "session closed")
-                        result = _filesystem_result(owner._filesystem, path, query, owner._policy)
+                        result = _filesystem_result(owner._filesystem, path, query, owner._policy, owner._comparison)
                         owner.collector.provider.verify_binding()
                     finally:
                         owner._fs_lock.release()
@@ -480,6 +496,10 @@ class RoomViewServer:
                         "workspace-binding-changed": HTTPStatus.CONFLICT,
                         "filesystem-unknown": HTTPStatus.NOT_FOUND,
                         "response-too-large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                        "comparison-unsupported": HTTPStatus.UNPROCESSABLE_ENTITY,
+                        "comparison-unavailable": HTTPStatus.SERVICE_UNAVAILABLE,
+                        "comparison-stale": HTTPStatus.CONFLICT,
+                        "comparison-busy": HTTPStatus.TOO_MANY_REQUESTS,
                     }
                     error(public_errors.get(exc.code, HTTPStatus.BAD_REQUEST),
                           exc.code if exc.code in public_errors else "invalid-filesystem-query")
@@ -543,9 +563,12 @@ class RoomViewServer:
                     return
 
                 if path == "/state.json":
+                    payload = owner.collector.current_payload()
+                    if owner._comparison is not None:
+                        payload["server"]["comparison"] = True
                     self._send_json(
                         HTTPStatus.OK,
-                        owner.collector.current_payload(),
+                        payload,
                         head_only=head_only,
                     )
                     return
@@ -803,6 +826,7 @@ def serve_forever_cli(
     interval: float = 5.0,
     workspace: Path | None = None,
     require_token: bool = False,
+    comparison_socket: Path | None = None,
     json_mode: bool = False,
     max_seconds: float | None = None,
     stop_on_stdin_eof: bool = False,
@@ -814,6 +838,7 @@ def serve_forever_cli(
         interval_seconds=interval,
         workspace=workspace,
         require_token=require_token,
+        comparison_socket=comparison_socket,
     )
     info = {
         "ok": True,

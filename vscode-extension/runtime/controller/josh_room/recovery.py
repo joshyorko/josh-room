@@ -118,22 +118,13 @@ class Recovery:
         data = self.content(node)
         return {"type": "file", "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
-    def preview(self, path):
-        from .recovery_text import MAX_TEXT_BYTES, text_preview
+    def preview_policy(self, path):
         from .workspace_policy import (
             CapturePolicy,
             _parts,
             _read_defaults,
             _user_patterns,
         )
-        try:
-            node = self.selected(path)
-        except RoomStoreLifecycleError as error:
-            if error.code == "recovery-path-absent":
-                return {"state": "absent"}
-            raise
-        if node.get("type") != "file":
-            return {"state": "not-file"}
         try:
             _raw, defaults = _read_defaults()
             ignore = None
@@ -147,6 +138,21 @@ class Recovery:
                 return {"state": "excluded"}
         except (ValueError, RuntimeError):
             return {"state": "capture-policy-unavailable"}
+        return None
+
+    def preview(self, path):
+        from .recovery_text import MAX_TEXT_BYTES, text_preview
+        try:
+            node = self.selected(path)
+        except RoomStoreLifecycleError as error:
+            if error.code == "recovery-path-absent":
+                return {"state": "absent"}
+            raise
+        if node.get("type") != "file":
+            return {"state": "not-file"}
+        refusal = self.preview_policy(path)
+        if refusal:
+            return refusal
         if type(node.get("size")) is not int or node["size"] > MAX_TEXT_BYTES:
             return {"state": "oversized"}
         return text_preview(path, self.content(node, budget=MAX_TEXT_BYTES))
@@ -341,6 +347,9 @@ def run_recovery(context, args):
         fail("recovery-exact-snapshot-required")
     if context.selected_record is None or context.selected_record.get("snapshot_id") != args.snapshot:
         fail("recovery-exact-snapshot-required")
+    if args.recovery_command == "observe":
+        from .recovery_observation import observe
+        return observe(context, args)
     return _run_action(Recovery(context), args)
 
 
@@ -351,7 +360,9 @@ def _run_action(recovery, args):
         return recovery.diff(args.path, workspace=args.workspace, include_text=args.include_text)
     if args.recovery_command == "inspect":
         return recovery.inspect(args.path, include_text=args.include_text)
-    return recovery.extract(args.path, args.destination, args.dry_run)
+    if args.recovery_command == "extract":
+        return recovery.extract(args.path, args.destination, args.dry_run)
+    fail("recovery-unsupported-action")
 
 def recover_namespace_child(args, dimension, authority, store_factory):
     """Recover from committed child history under one authenticated namespace read."""

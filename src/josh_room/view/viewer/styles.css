@@ -460,8 +460,13 @@ body {
   border: 1px solid var(--border-strong);
 }
 
+.saved-point-select { display: block; max-width: 100%; margin: 4px 0 10px; }
+.saved-comparison-result dd { margin: 0 0 8px; overflow-wrap: anywhere; font-family: var(--font-mono); }
+.saved-comparison-result pre { max-width: 100%; overflow: auto; }
+
 .drawer-tabs {
   display: flex;
+  flex-wrap: wrap;
   border-bottom: 1px solid var(--border);
   padding: 0 8px;
   gap: 4px;

@@ -72,6 +72,19 @@ change the platform support of other Room commands.
 **Serve this Logical JAT…** remain Hauler files/registry projections. Historical
 nested JAT contents are not offered as live 3D workspaces.
 
+### Compare a live file with a recovery point
+
+From an enrolled Room launched by the native extension, select a file and open **Compare**.
+Choose the dated saved recovery point, then **Compare with live file**. The receipt
+identifies the Logical JAT, immutable workspace snapshot and tree. It shows saved
+and live byte counts, admitted SHA-256 digests and a text diff when available.
+A missing saved file is labeled as added in the live Room. Each result covers
+one file at the time of the request. Select Compare again to check a later edit.
+
+Portable snapshots do not support this selective comparison. The CLI workspace
+viewer, saved-manifest viewer and frozen HTML do not connect to recovery storage.
+Use **Browse Recovery Point…** in the native extension for historical browsing.
+
 ### Installed launcher verification
 
 `scripts/installed_room_view_acceptance.js` is a VS Code extension-test driver.

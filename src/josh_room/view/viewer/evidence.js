@@ -296,6 +296,8 @@
       this.tabDetailsEl = document.getElementById('tab-details');
       this.tabEvidenceEl = document.getElementById('tab-evidence');
       this.tabTimelineEl = document.getElementById('tab-timeline');
+      this.comparison = new global.RoomSavedComparison(dataLayer, document.getElementById('tab-compare'),
+        document.getElementById('btn-compare-tab'));
       this.lightboxEl = document.getElementById('lightbox-modal');
       this.lightboxImg = document.getElementById('lightbox-img');
       this.lightboxCaption = document.getElementById('lightbox-caption');
@@ -335,6 +337,9 @@
     }
 
     switchTab(tabName) {
+      if (tabName === 'compare' && this.comparison.tab.hidden) tabName = 'content';
+      if (tabName === 'compare') this.comparison.open();
+      else this.comparison.close();
       this.activeTab = tabName;
       this.drawerEl.querySelectorAll('.tab-btn').forEach((btn) => {
         const active = btn.getAttribute('data-tab') === tabName;
@@ -372,6 +377,7 @@
     }
 
     hide() {
+      this.comparison.select(null);
       this._attRequestSeq++;
       this._teardownPdf();
       this.lightboxEl.hidden = true;
@@ -392,6 +398,8 @@
     }
 
     showTarget(target, descriptor, state, layout, { quantileBin = null, preserveTab = false, reading = null, deferContent = false } = {}) {
+      this.comparison.select(target);
+      if (this.activeTab === 'compare' && !this.comparison.active) this.switchTab('content');
       const sameObject = this.currentObjectId === (target.objectId || target.id);
       const fingerprint = JSON.stringify([target.previews || [], target.attachments || []]);
       if (preserveTab && sameObject && fingerprint === this.contentFingerprint) {

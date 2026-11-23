@@ -40,6 +40,7 @@ def register_view_subparser(commands, json_option) -> None:
     serve.add_argument("--manifest", type=Path, help="LogicalJat JSON manifest path (required for --provider capsule-manifest)")
     serve.add_argument("--require-token", action="store_true", help="require a random per-session URL token")
     serve.add_argument("--stop-on-stdin-eof", action="store_true", help=argparse.SUPPRESS)
+    serve.add_argument("--comparison-socket", type=Path, help=argparse.SUPPRESS)
     serve.add_argument("--expected-workspace-binding", type=json.loads, help=argparse.SUPPRESS)
     serve.add_argument("--expected-room-id", help="require this live Room identity before serving")
     serve.add_argument("--expected-dimension-id", help="require this live Dimension identity before serving")
@@ -119,6 +120,9 @@ def dispatch_view(args) -> dict[str, object]:
         )
 
     if sub == "serve":
+        socket_path = getattr(args, "comparison_socket", None)
+        if socket_path and not (args.provider == "room" and args.expected_workspace_binding and args.require_token):
+            raise ValueError("Saved comparison requires a bound Room and a token-protected viewer")
         provider = load_provider(
             args.provider,
             workspace=args.workspace,
@@ -130,6 +134,7 @@ def dispatch_view(args) -> dict[str, object]:
         return serve_forever_cli(
             provider,
             port=args.port,
+            comparison_socket=socket_path,
             interval=args.interval,
             workspace=args.workspace,
             require_token=bool(args.require_token),

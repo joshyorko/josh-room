@@ -106,11 +106,13 @@ __TPL_JOSH_ROOM_VIEW_STYLES__
       <button class="tab-btn active" role="tab" aria-selected="true" data-tab="content" type="button">Content <span id="content-count-badge" class="tab-count">0</span></button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="details" type="button">Details</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="evidence" type="button">Evidence <span id="evidence-count-badge" class="tab-count">0</span></button>
+      <button id="btn-compare-tab" class="tab-btn" role="tab" aria-controls="tab-compare" aria-selected="false" data-tab="compare" type="button" hidden>Compare</button>
       <button class="tab-btn" role="tab" aria-selected="false" data-tab="timeline" type="button">Timeline</button>
     </div>
     <div id="tab-content" class="drawer-body" role="tabpanel"></div>
     <div id="tab-details" class="drawer-body" role="tabpanel" hidden></div>
     <div id="tab-evidence" class="drawer-body" role="tabpanel" hidden></div>
+    <div id="tab-compare" class="drawer-body" role="tabpanel" aria-labelledby="btn-compare-tab" hidden></div>
     <div id="tab-timeline" class="drawer-body" role="tabpanel" hidden></div>
   </aside>
 

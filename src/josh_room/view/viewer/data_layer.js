@@ -350,6 +350,7 @@
       this.sensitivity = initialPayload.sensitivity;
       this.meta = initialPayload.meta || {};
       this.filesystem = mode === 'live' && initialPayload.server?.filesystem === true;
+      this.comparison = this.filesystem && initialPayload.server?.comparison === true;
       this.fsGeneration = null;
       this._blobCache = new Map();
       this._indexAttachments();
@@ -399,6 +400,10 @@
       if (!resp.ok) {
         const error = new Error(`Filesystem request failed (HTTP ${resp.status})`);
         error.status = resp.status;
+        if (operation === 'points' || operation === 'compare') {
+          const detail = await resp.json().catch(() => null);
+          error.code = detail?.error;
+        }
         throw error;
       }
       return resp.json();
