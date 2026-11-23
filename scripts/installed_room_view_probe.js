@@ -25,14 +25,34 @@ async function probe(url) {
   const unauthenticated = await request(new URL("/", url));
   const post = await request(url, "POST");
   const stateUrl = new URL(url); stateUrl.pathname = "/state.json";
-  let state;
-  for (let attempt = 0; attempt < 40; attempt++) {
-    state = await request(stateUrl, "GET", true);
-    if (state.status !== 200 || state.body.includes("example.txt")) break;
-    await new Promise(resolve => setTimeout(resolve, 250));
-  }
+  const state = await request(stateUrl, "GET", true);
   const payload = JSON.parse(state.body);
-  const hasFixture = payload.state?.items?.some(item => item.label === "example.txt") === true;
+  const listing = new URL(url);
+  listing.pathname = "/fs/list";
+  listing.searchParams.set("id", "root");
+  let hasFixture = false;
+  if (payload.server?.filesystem === true) {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const response = await request(listing, "GET", true);
+      if (response.status !== 200) break;
+      const page = JSON.parse(response.body);
+      const file = page.entries.find(entry => entry.label === "example.txt");
+      if (file) {
+        const preview = new URL(url);
+        preview.pathname = "/fs/preview";
+        preview.searchParams.set("id", file.id);
+        preview.searchParams.set("generation", page.generation);
+        const result = await request(preview, "GET", true);
+        hasFixture = result.status === 200 && JSON.parse(result.body).node?.previews?.some(
+          slot => slot.status === "available" && typeof slot.body === "string"
+        );
+        break;
+      }
+      if (!page.cursor) break;
+      listing.searchParams.set("generation", page.generation);
+      listing.searchParams.set("cursor", page.cursor);
+    }
+  }
   if (root.status !== 200 || unauthenticated.status !== 403 || post.status !== 405 || state.status !== 200 || !hasFixture) {
     throw new Error("Installed viewer failed root/state/authentication/method fixture checks");
   }
