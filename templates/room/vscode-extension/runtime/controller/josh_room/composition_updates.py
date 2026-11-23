@@ -37,7 +37,12 @@ from .composition_lifecycle import (
     _slot,
     _verify_descriptor_contract,
 )
-from .composition_safety import MAX_BYTES, CompositionSafetyState, _identifier, plan_digest
+from .composition_safety import (
+    MAX_BYTES,
+    CompositionSafetyState,
+    _identifier,
+    plan_digest,
+)
 from .composition_transaction import (
     canonical,
     manifest_for,
@@ -368,10 +373,13 @@ def _verify_parent_workspace(workspace, authority, room, snapshot, operation):
         raise ValueError('local parent manifest differs from its saved recovery point')
 
 
-def parent_children(workspace, authority, namespace, room, snapshot):
+def parent_children(workspace, authority, namespace, room, snapshot, *, child_path=None, offset=0, revision=None):
     """Read immutable choices for the exact entered parent from its namespace ledger."""
     _, _, state = _open(authority, namespace)
     body = state.to_dict()
+    if ((revision is not None and revision != body['revision'])
+            or (offset or child_path is not None) and revision is None):
+        raise ValueError('Catalog choices changed; reopen the picker')
     committed = [op for op in body['operations'].values() if op['phase'] == 'committed']
     parent = next((op for op in committed if (op['parent_pin']['room_id'],
                    op['parent_pin']['logical_jat_id']) == (room, snapshot)), None)
@@ -387,16 +395,41 @@ def parent_children(workspace, authority, namespace, room, snapshot):
             pin = update['pin']
             history.setdefault(pin['room_id'], set()).add(pin['logical_jat_id'])
     projects = body['dimension_catalog']['projects']
-    children = []
-    for path, pin in sorted(parent['child_pins'].items()):
-        child = pin['room_id']
+    result = {'ok': True, 'namespace': namespace, 'parent_room_id': room, 'parent_snapshot_id': snapshot,
+              'revision': body['revision'], 'current_parent': projects[room]['latest'] == snapshot}
+    if child_path is None:
+        rows = [{'path': path, 'room_id': pin['room_id'], 'snapshot_id': pin['logical_jat_id'],
+                 'other_point_count': len(history[pin['room_id']]) - 1}
+                for path, pin in sorted(parent['child_pins'].items())]
+        key = 'children'
+    else:
+        pin = parent['child_pins'].get(child_path)
+        if pin is None:
+            raise ValueError('selected child path is absent from the saved parent')
+        child, current = pin['room_id'], pin['logical_jat_id']
         records = projects[child]['snapshots']
-        points = [{'snapshot_id': point, 'created_at': records[point]['created_at']}
-                  for point in sorted(history[child], key=lambda point: (records[point]['created_at'], point), reverse=True)]
-        children.append({'path': path, 'room_id': child, 'snapshot_id': pin['logical_jat_id'],
-                         'recovery_points': points})
-    return {'ok': True, 'namespace': namespace, 'parent_room_id': room, 'parent_snapshot_id': snapshot,
-            'current_parent': projects[room]['latest'] == snapshot, 'children': children}
+        points = sorted(history[child] - {current}, key=lambda point: (records[point]['created_at'], point), reverse=True)
+        rows = [{'snapshot_id': point, 'created_at': records[point]['created_at']} for point in points]
+        result.update(child_path=child_path, child_room_id=child, pinned_snapshot_id=current)
+        key = 'recovery_points'
+    return _picker_page(result, key, rows, offset)
+
+
+def _picker_page(result, key, rows, offset):
+    if type(offset) is not int or offset < 0 or offset >= len(rows) and offset != 0:
+        raise ValueError('invalid Catalog picker offset')
+    # Leave room under the CLI/extension 64 KiB ceiling for the envelope and
+    # escaped Unicode, and under the JSON sanitizer's 128-item array limit.
+    page = []
+    size = 0
+    for row in rows[offset:offset + 64]:
+        row_size = len(json.dumps(row, ensure_ascii=True)) + 2
+        if size + row_size > 48 * 1024:
+            break
+        page.append(row)
+        size += row_size
+    end = offset + len(page)
+    return {**result, key: page, 'next_offset': end if end < len(rows) else None}
 
 
 def refresh_parent(dimension, namespace, room, baseline, operation_id, pins,

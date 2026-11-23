@@ -512,6 +512,10 @@ def build_parser() -> argparse.ArgumentParser:
             operation.add_argument('--workspace', type=Path, required=True)
         if action == 'enter-child':
             operation.add_argument('--child-path', required=True)
+        if action == 'parent-children':
+            operation.add_argument('--child-path', help='list alternative exact recovery points for this child')
+            operation.add_argument('--offset', type=int, default=0)
+            operation.add_argument('--revision', type=int, help='namespace revision from the child list')
         _json_option(operation)
     for action in ('plan-child-save', 'save-child', 'plan-parent-refresh', 'refresh-parent-pins'):
         operation = composition_commands.add_parser(action)
@@ -1923,7 +1927,8 @@ def dispatch(args, instance: Path) -> dict:
                                                 args.approve, authority, factory, private)
                     if args.composition_command == 'parent-children':
                         from .composition_updates import parent_children
-                        return parent_children(args.workspace, authority, args.namespace, args.parent_room, args.parent_snapshot)
+                        return parent_children(args.workspace, authority, args.namespace, args.parent_room, args.parent_snapshot,
+                                               child_path=args.child_path, offset=args.offset, revision=args.revision)
                     return hydrate_composition(dimension, args.namespace, args.parent_room, args.parent_snapshot,
                                                args.workspace if args.composition_command == 'enter-child' else args.destination,
                                                authority, factory, private, child_path=getattr(args, 'child_path', None))

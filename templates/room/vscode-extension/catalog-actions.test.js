@@ -37,8 +37,10 @@ test("cancelling catalog review never invokes Save", async () => {
 
 const parentMarker = { composition_namespace: "1".repeat(32), dimension_id: "dimension", project_id: "parent", snapshot_id: "parent-pin" };
 const children = { ok: true, namespace: parentMarker.composition_namespace, parent_room_id: "parent", parent_snapshot_id: "parent-pin",
-  current_parent: true, children: [{ path: "projects/a", room_id: "a", snapshot_id: "pinned-a",
-    recovery_points: [{ snapshot_id: "pinned-a", created_at: "old" }, { snapshot_id: "jat-child-new", created_at: "new" }] }] };
+  current_parent: true, revision: 1, next_offset: null, children: [{ path: "projects/a", room_id: "a", snapshot_id: "pinned-a",
+    other_point_count: 1 }] };
+const childHistory = { ...children, child_path: "projects/a", child_room_id: "a", pinned_snapshot_id: "pinned-a",
+  recovery_points: [{ snapshot_id: "jat-child-new", created_at: "new" }] };
 
 test("whole child opens only after verified immutable entry", async () => {
   const vscode = { window: { showQuickPick: async rows => rows[0], showInformationMessage: async () => {} } };
@@ -95,7 +97,7 @@ test("parent refresh confirms exact path and pin without rewriting the working f
     assert.match(options.detail, /projects\/a/); assert.match(options.detail, /jat-child-new/);
     assert.match(options.detail, /working folders remain unchanged/); return action;
   }, showInformationMessage: async () => {} } };
-  await updateRoom(vscode, { marker, kind: "parent", listChildren: async () => children, remember: async () => {},
+  await updateRoom(vscode, { marker, kind: "parent", listChildren: async (_, page) => page.childPath ? childHistory : children, remember: async () => {},
     plan: async (ticket) => { assert.equal(ticket.pin, "jat-child-new"); return { changed: true, approval_sha256: "digest", snapshot_id: "jat-parent-new" }; },
     save: async (ticket) => { assert.equal(ticket.child, "projects/a"); return { ok: true, snapshot_id: "jat-parent-new" }; } });
 });
@@ -238,4 +240,26 @@ test("bulk component choices apply once to a group and can be cleared on one chi
     }, save: () => assert.fail("cancelled review") });
   assert.equal(result, "cancelled");
   assert.deepEqual(scopes, [["/synthetic/a", "/synthetic/b", "/synthetic/c"], ["/synthetic/a"]]);
+});
+
+test("refresh pages all saved child paths and allows choosing a later history page", async () => {
+  const reads = [];
+  const listChildren = async (_, query) => {
+    reads.push(query);
+    if (!query.childPath) {
+      if (!query.offset) return { ...children, children: [], next_offset: 1 };
+      return children;
+    }
+    if (!query.offset) return { ...childHistory, next_offset: 64 };
+    return { ...childHistory, recovery_points: [{ snapshot_id: "jat-older", created_at: "earlier" }] };
+  };
+  let pick = 0;
+  const vscode = { window: { showQuickPick: async items => ++pick === 2 ? items.find(row => row.more) : items[0],
+    showWarningMessage: async (_title, _options, action) => action, showInformationMessage: async () => {} } };
+  await updateRoom(vscode, { marker: parentMarker, kind: "parent", listChildren,
+    remember: async () => {}, plan: async ticket => {
+      assert.equal(ticket.pin, "jat-older");
+      return { approval_sha256: "approved", snapshot_id: "new-parent", changed: true };
+    }, save: async () => ({ ok: true, snapshot_id: "new-parent" }) });
+  assert.deepEqual(reads.map(page => [page.offset, page.revision]), [[0, undefined], [1, 1], [0, 1], [64, 1]]);
 });

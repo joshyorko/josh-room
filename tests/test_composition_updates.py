@@ -154,7 +154,12 @@ def test_parent_children_reads_only_exact_parent_and_committed_points(tmp_path, 
     result = updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')
     assert result['current_parent'] and result['parent_snapshot_id'] == 'jat-parent'
     assert result['children'] == [{'path': 'projects/-child folder', 'room_id': 'child', 'snapshot_id': 'jat-child',
-                                   'recovery_points': [{'snapshot_id': 'jat-child', 'created_at': '2026-11-18T12:00:00Z'}]}]
+                                   'other_point_count': 0}]
+    history = updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent',
+                                      revision=result['revision'], child_path='projects/-child folder')
+    assert history['recovery_points'] == [] and history['next_offset'] is None
+    with pytest.raises(ValueError, match='choices changed'):
+        updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent', revision=result['revision'] - 1)
     with pytest.raises(ValueError, match='unavailable'):
         updates.parent_children(tmp_path, authority, namespace, 'parent', 'latest')
     marker['path_matches'] = False
@@ -164,3 +169,29 @@ def test_parent_children_reads_only_exact_parent_and_committed_points(tmp_path, 
     manifest.write_text('{}')
     with pytest.raises(ValueError, match='manifest differs'):
         updates.parent_children(tmp_path, authority, namespace, 'parent', 'jat-parent')
+
+
+@pytest.mark.parametrize("inventory", ["32-long-child-paths", "129-versions"])
+def test_picker_pages_round_trip_every_row_through_cli_json(inventory):
+    from josh_room.cli import _bounded_json_result
+    from josh_room.composition_updates import _picker_page
+
+    if inventory == "32-long-child-paths":
+        # Each component fits a native 255-byte filename. The escaped JSON
+        # encoding of all 32 paths together exceeds a single controller reply.
+        prefix = "/".join(["🦕" * 59] * 8)
+        rows = [dict(path=f"{prefix}/{i}", room_id=f"child-{i}", snapshot_id=f"jat-{i}", other_point_count=1)
+                for i in range(32)]
+        key = "children"
+    else:
+        rows = [dict(snapshot_id=f"jat-{i}", created_at="2026-11-18T12:00:00Z") for i in range(129)]
+        key = "recovery_points"
+    offset, received, pages = 0, [], 0
+    while offset is not None:
+        page = _picker_page({'ok': True, 'revision': 42}, key, rows, offset)
+        wire = _bounded_json_result(page)
+        assert len(json.dumps(wire).encode()) < 65536 and wire == page
+        received.extend(wire[key])
+        pages += 1
+        offset = wire['next_offset']
+    assert pages > 1 and received == rows

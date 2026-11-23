@@ -2276,10 +2276,12 @@ async function saveCatalogRoom() {
   });
 }
 
-function listCatalogChildren(root, dimension, marker) {
+function listCatalogChildren(root, dimension, marker, { childPath, offset, revision }) {
   return runSelectedEncryption(["composition", "parent-children", "--workspace", root,
     "--dimension", marker.dimension_id, "--namespace", marker.composition_namespace,
-    "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id], root,
+    "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id,
+    ...(childPath ? ["--child-path", childPath] : []), ...(offset ? ["--offset", String(offset)] : []),
+    ...(revision === undefined ? [] : ["--revision", String(revision)])], root,
   dimension, { title: "Reading saved child Rooms…", action: "read the entered Catalog parent" });
 }
 
@@ -2292,7 +2294,7 @@ async function enterChildRoom() {
   const dimension = dimensions.find((row) => (row.id || row.dimension_id) === marker.dimension_id);
   if (!dimension) throw new Error("The parent Dimension is not configured.");
   return require("./catalog-actions").enterChild(vscode, {
-    root, marker, listChildren: () => listCatalogChildren(root, dimension, marker),
+    root, marker, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     enter: ({ namespace, child }) => runSelectedEncryption(["composition", "enter-child", "--workspace", root, "--dimension", marker.dimension_id,
       "--namespace", namespace, "--parent-room", marker.project_id, "--parent-snapshot", marker.snapshot_id, "--child-path", child], root,
     dimension, { title: "Entering pinned child Room…", action: "enter a child Room" }),
@@ -2326,7 +2328,7 @@ async function updateCompositionRoom(kind) {
       ...(apply ? ["--approve", ticket.approval] : [])];
     return runSelectedEncryption(args, root, dimension, { title: apply ? "Saving namespace Room…" : "Checking exact namespace baseline…", action: "update a namespace Room" });
   };
-  return require("./catalog-actions").updateRoom(vscode, { marker, kind, listChildren: () => listCatalogChildren(root, dimension, marker),
+  return require("./catalog-actions").updateRoom(vscode, { marker, kind, listChildren: (selected, page) => listCatalogChildren(root, dimension, selected, page),
     chooseComponents: () => chooseCatalogComponents(root, marker.project_id, true), pending: extensionContext.workspaceState.get(key),
     remember: (ticket) => extensionContext.workspaceState.update(key, ticket), plan: (ticket) => invoke(ticket, false), save: (ticket) => invoke(ticket, true) });
 }

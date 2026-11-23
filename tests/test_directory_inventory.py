@@ -256,6 +256,7 @@ def test_recoverable_lookup_does_not_close_session(tmp_path):
 
 def test_inventory_protocol_page_limit_preserves_all_candidates(tmp_path):
     import io
+
     from josh_room.directory_inventory import serve
 
     names = [f"repo-{i:02}" for i in range(59)]

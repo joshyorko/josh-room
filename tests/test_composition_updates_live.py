@@ -141,15 +141,17 @@ def test_changed_child_save_and_explicit_refresh_keep_old_parent_exact(runtime, 
     assert not same['changed']
     assert refresh(r, parent, {'a': child['snapshot_id']}, operation='same-pins', approval=same['approval_sha256'])['status'] == 'unchanged'
     assert r.transport.writes == writes
-    def choices():
+    def choices(*extra):
         parsed = cli.build_parser().parse_args(['composition', 'parent-children', '--workspace', str(target),
-            '--parent-room', 'parent', '--parent-snapshot', parent, '--namespace', NAMESPACE, '--dimension', 'dimension'])
+            '--parent-room', 'parent', '--parent-snapshot', parent, '--namespace', NAMESPACE, '--dimension', 'dimension', *extra])
         return cli.dispatch(parsed, r.tmp / 'instance')
     available = choices()
     assert available['current_parent']
     row = next(row for row in available['children'] if row['path'] == 'a')
     assert row['snapshot_id'] == child['snapshot_id']
-    assert {point['snapshot_id'] for point in row['recovery_points']} == {child['snapshot_id'], saved['snapshot_id']}
+    assert row['other_point_count'] == 1
+    history_page = choices('--child-path', 'a', '--revision', str(available['revision']))
+    assert [point['snapshot_id'] for point in history_page['recovery_points']] == [saved['snapshot_id']]
     assert r.transport.writes == writes
     plan = invoke('plan-parent-refresh', pin=saved['snapshot_id'])
     latest = invoke('refresh-parent-pins', pin=saved['snapshot_id'], approval=plan['approval_sha256'])

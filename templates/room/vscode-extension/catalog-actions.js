@@ -134,19 +134,52 @@ async function chooseChild(vscode, marker, listChildren, refresh) {
   if (!marker?.composition_namespace || !marker?.project_id || !marker?.snapshot_id || !marker?.dimension_id) {
     throw new Error("Open a restored Catalog parent first.");
   }
-  const response = await listChildren(marker);
-  if (!response?.ok || response.namespace !== marker.composition_namespace
-      || response.parent_room_id !== marker.project_id || response.parent_snapshot_id !== marker.snapshot_id
-      || !Array.isArray(response.children)) throw new Error("The verified parent changed. Reopen its recovery point.");
-  if (refresh && !response.current_parent) throw new Error("Enter the current parent recovery point before refreshing its pins.");
-  const choices = response.children.filter(row => !refresh || row.recovery_points.some(p => p.snapshot_id !== row.snapshot_id))
-    .map(row => ({ label: row.path, description: `Pinned to ${row.snapshot_id}`, row }));
+  const choices = [];
+  let revision, offset = 0;
+  do {
+    const page = await listChildren(marker, { revision, offset });
+    checkPickerPage(page, marker, revision, offset, refresh);
+    if (!Array.isArray(page.children) || page.children.length > 32 || offset + page.children.length > 32) {
+      throw new Error("Invalid Catalog child inventory.");
+    }
+    revision = page.revision;
+    for (const row of page.children) {
+      if (!refresh || row.other_point_count > 0) choices.push({ label: row.path, description: `Pinned to ${row.snapshot_id}`, row });
+    }
+    offset = page.next_offset;
+  } while (offset !== null);
   if (!choices.length) {
     await vscode.window.showInformationMessage(refresh ? "All child Rooms are pinned to their only saved recovery point." : "This parent has no child Rooms.");
     return undefined;
   }
   const selected = await vscode.window.showQuickPick(choices, { title: refresh ? "Refresh child pin" : "Enter child Room" });
-  return selected?.row;
+  return selected && { ...selected.row, revision };
+}
+
+function checkPickerPage(page, marker, revision, offset, refresh) {
+  if (!page?.ok || page.namespace !== marker.composition_namespace || page.parent_room_id !== marker.project_id
+      || page.parent_snapshot_id !== marker.snapshot_id || !Number.isSafeInteger(page.revision)
+      || (revision !== undefined && revision !== page.revision)
+      || (page.next_offset !== null && (!Number.isSafeInteger(page.next_offset) || page.next_offset <= offset))) {
+    throw new Error("The verified parent changed. Reopen its recovery point.");
+  }
+  if (refresh && !page.current_parent) throw new Error("Enter the current parent recovery point before refreshing its pins.");
+}
+
+async function chooseRecoveryPoint(vscode, marker, child, listChildren) {
+  let offset = 0;
+  for (;;) {
+    const page = await listChildren(marker, { revision: child.revision, offset, childPath: child.path });
+    checkPickerPage(page, marker, child.revision, offset, true);
+    if (page.child_path !== child.path || page.child_room_id !== child.room_id || page.pinned_snapshot_id !== child.snapshot_id
+        || !Array.isArray(page.recovery_points)) throw new Error("The selected child changed. Reopen its recovery points.");
+    const choices = page.recovery_points.map(point => ({ label: point.created_at, description: point.snapshot_id, point }));
+    if (page.next_offset !== null) choices.push({ label: "More recovery points…", more: true });
+    const selected = await vscode.window.showQuickPick(choices, {
+      title: `Choose a saved recovery point for ${child.path}`, matchOnDescription: true });
+    if (!selected?.more) return selected?.point;
+    offset = page.next_offset;
+  }
 }
 
 async function enterChild(vscode, { root, marker, listChildren, enter, open }) {
@@ -183,12 +216,9 @@ async function updateRoom(vscode, { marker, kind, pending, remember, chooseCompo
     if (kind === "parent") {
       const child = await chooseChild(vscode, marker, listChildren, true);
       if (!child) return "cancelled";
-      const choices = child.recovery_points.filter(point => point.snapshot_id !== child.snapshot_id)
-        .map(point => ({ label: point.created_at, description: point.snapshot_id, point }));
-      const selected = await vscode.window.showQuickPick(choices, {
-        title: `Choose a saved recovery point for ${child.path}`, matchOnDescription: true });
+      const selected = await chooseRecoveryPoint(vscode, marker, child, listChildren);
       if (!selected) return "cancelled";
-      ticket = { ...ticket, child: child.path, pin: selected.point.snapshot_id };
+      ticket = { ...ticket, child: child.path, pin: selected.snapshot_id };
     }
   }
   // Re-select explicit external inputs on retry. Only the approval and operation

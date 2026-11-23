@@ -1190,6 +1190,7 @@ def hydrate_composition(
             original = context_status(root)
             if (
                 not original["ok"]
+                or original.get("composition_namespace") != namespace
                 or original.get("project_id") != room
                 or original.get("snapshot_id") != snapshot
                 or original.get("dimension_id") != dimension.dimension_id
