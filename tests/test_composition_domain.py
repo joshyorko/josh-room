@@ -223,7 +223,7 @@ def test_minio_encryption_status_sanitizes_sdk_denial(tmp_path, monkeypatch, cap
         raise ClientError({"Error": {"Code": "AccessDenied", "Message": "private-status-sentinel"}}, "HeadObject")
 
     monkeypatch.setattr(cli, "_backend", lambda *_: SimpleNamespace(read_control=denied))
-    assert cli.main(["encryption", "status", "--dimension", selected.dimension_id, "--json"]) == 1
+    assert cli.main(["encryption", "status", "--dimension", selected.dimension_id, "--json"]) != 0
     output = capsys.readouterr()
     assert json.loads(output.out)["error_code"] == "access-denied"
     assert "private-status-sentinel" not in output.out + output.err

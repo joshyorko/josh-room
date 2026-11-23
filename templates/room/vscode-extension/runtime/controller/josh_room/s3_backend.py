@@ -76,12 +76,12 @@ def _sanitized_error(error, context):
 
 
 @contextmanager
-def sdk_error_boundary(context, *, catalog_capture=False):
+def sdk_error_boundary(context, *, include_compatible_providers=False):
     """Keep SDK control flow intact until an S3 operation reaches the caller."""
     try:
         yield
     except (ClientError, BotoCoreError) as error:
-        providers = ("s3", "minio", "r2") if catalog_capture else ("s3",)
+        providers = ("s3", "minio", "r2") if include_compatible_providers else ("s3",)
         if getattr(context, "provider", None) not in providers:
             raise
         raise _sanitized_error(error, context) from None

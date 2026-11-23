@@ -27,6 +27,33 @@ function describeComponents(evidence, requested) {
   return digest ? `${modes} · reviewed artifacts ${digest}` : modes;
 }
 
+function reviewedDestination(dimension, binding) {
+  const id = dimension.id || dimension.dimension_id;
+  const physical = binding?.physical_bucket;
+  if (!binding || binding.dimension_id !== id || binding.provider !== dimension.provider
+      || !binding.connection_id || !binding.encryption_domain_id || typeof physical !== "string"
+      || !physical.startsWith(`${binding.provider}:`) || !physical.slice(physical.lastIndexOf(":") + 1)
+      || (dimension.connection_id && binding.connection_id !== dimension.connection_id)
+      || (dimension.encryption_domain_id && binding.encryption_domain_id !== dimension.encryption_domain_id)
+      || (dimension.physical_bucket && physical !== dimension.physical_bucket)
+      || (dimension.bucket && !physical.endsWith(`:${dimension.bucket}`))) {
+    throw new Error("The reviewed Catalog destination changed. Select the Dimension again.");
+  }
+  if (dimension.endpoint) {
+    const endpoint = new URL(dimension.endpoint);
+    // Composition accepts root endpoints. The controller's physical identity
+    // uses the hostname without IPv6 brackets and omits the default port.
+    const host = endpoint.hostname.replace(/^\[|\]$/g, "");
+    const authority = host + (endpoint.port ? ":" + endpoint.port : "");
+    const prefix = `${binding.provider}:${endpoint.protocol}//${authority}:`;
+    if (endpoint.pathname !== "/" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash
+        || physical.slice(0, physical.lastIndexOf(":") + 1) !== prefix) {
+      throw new Error("The reviewed Catalog destination endpoint changed. Select the Dimension again.");
+    }
+  }
+  return `${dimension.display_name || id} (${binding.dimension_id}) · ${binding.provider} · ${binding.connection_id} · ${physical}`;
+}
+
 async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save }) {
   const source = await vscode.window.showOpenDialog({ title: "Save Catalog Room — source", canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
   if (!source?.length) return "cancelled";
@@ -62,8 +89,7 @@ async function saveCatalog(vscode, { dimensions, chooseComponents, plan, save })
   const selection = { root, assignments, namespace, parentRoom, dimension: choice.dimension };
   const preview = await plan(selection);
   if (preview === undefined) return "cancelled";
-  const destination = [choice.label || choice.dimension.display_name || choice.dimension.id || choice.dimension.dimension_id,
-    choice.dimension.provider, choice.dimension.connection_id].filter(Boolean).join(" · ");
+  const destination = reviewedDestination(choice.dimension, preview.request?.destination_binding);
   const childSummary = assignments.filter(row => row.outcome === "child").map(row => {
     const evidence = preview.request?.child_evidence?.[row.path];
     return `${row.path} — ${describeMode(evidence?.capture_mode)}. ${describeComponents(evidence, row.component_options)}`;

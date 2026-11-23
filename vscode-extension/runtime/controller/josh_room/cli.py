@@ -1078,8 +1078,10 @@ def _provider_error_boundary(args):
             return nullcontext()
     except ValueError:
         return nullcontext()
-    if getattr(args, "composition_command", None) in ("capture-plan", "save"):
-        return sdk_error_boundary(selected, catalog_capture=True)
+    if getattr(args, "composition_command", None) in ("capture-plan", "save") or (
+        getattr(args, "encryption_command", None) == "status" and getattr(selected, "provider", None) == "minio"
+    ):
+        return sdk_error_boundary(selected, include_compatible_providers=True)
     return sdk_error_boundary(selected)
 
 

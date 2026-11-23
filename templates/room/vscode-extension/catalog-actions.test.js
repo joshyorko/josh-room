@@ -3,19 +3,22 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { saveCatalog, enterChild, relativeSource, updateRoom } = require("./catalog-actions");
 
+const binding = { provider: "minio", dimension_id: "dimension", connection_id: "synthetic-connection",
+  encryption_domain_id: "00000000-0000-4000-8000-000000000001", physical_bucket: "minio:https://storage.example.invalid:fixture" };
+
 test("catalog confirmation binds child, parent and local-only selections before Save", async () => {
   const dialogs = [[{ fsPath: "/synthetic/root" }], [{ fsPath: "/synthetic/root/a" }], [{ fsPath: "/synthetic/root/notes.txt" }]];
-  const picks = [{ id: "policy" }, { id: "content" }, { dimension: { id: "dimension", provider: "minio", display_name: "Storage", connection_id: "synthetic-connection" } }];
+  const picks = [{ id: "policy" }, { id: "content" }, { dimension: { id: "dimension", provider: "minio", display_name: "Storage", endpoint: "https://STORAGE.example.invalid:443/", bucket: "fixture", connection_id: "synthetic-connection" } }];
   let approved = false;
   const vscode = { window: {
     showInputBox: () => assert.fail("Catalog creation requested a manual UUID"),
     showOpenDialog: async () => dialogs.shift(), showQuickPick: async () => picks.shift(),
-    showWarningMessage: async (_, options, choice) => { assert.match(options.detail, /Storage.*MinIO.*synthetic-connection/i); assert.match(options.detail, /unprotected/); assert.match(options.detail, /a.*full-repository/); approved = true; return choice; },
+    showWarningMessage: async (_, options, choice) => { assert.match(options.detail, /Storage.*MinIO.*synthetic-connection/i); assert.ok(options.detail.includes(binding.physical_bucket)); assert.match(options.detail, /unprotected/); assert.match(options.detail, /a.*full-repository/); approved = true; return choice; },
     showInformationMessage: async () => {},
   } };
   const result = await saveCatalog(vscode, {
-    dimensions: async () => [{ id: "dimension", encryption_domain_id: "00000000-0000-4000-8000-000000000001" }],
-    plan: async (selection) => { assert.equal(approved, false); assert.deepEqual(selection.assignments, [{ path: ".", outcome: "local-only" }, { path: "a", outcome: "child" }, { path: "notes.txt", outcome: "parent" }]); return { request: { child_evidence: { a: { capture_mode: "full-repository" } } }, approval_sha256: "approved" }; },
+    dimensions: async () => [{ id: "dimension", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" }],
+    plan: async (selection) => { assert.equal(approved, false); assert.deepEqual(selection.assignments, [{ path: ".", outcome: "local-only" }, { path: "a", outcome: "child" }, { path: "notes.txt", outcome: "parent" }]); return { request: { destination_binding: binding, child_evidence: { a: { capture_mode: "full-repository" } } }, approval_sha256: "approved" }; },
     save: async (selection, approval) => { assert.equal(approved, true); assert.equal(approval, "approved"); return { ok: true, namespace: selection.namespace, parent_snapshot_id: "exact-pin" }; },
   });
   assert.equal(result.ok, true);
@@ -27,8 +30,8 @@ test("cancelling catalog review never invokes Save", async () => {
     showOpenDialog: async () => [{ fsPath: ++dialog === 1 ? "/synthetic/root" : "/synthetic/root/a" }],
     showQuickPick: async (rows) => rows[0], showWarningMessage: async () => undefined,
   } };
-  const result = await saveCatalog(vscode, { dimensions: async () => [{ id: "dimension", encryption_domain_id: "00000000-0000-4000-8000-000000000001" }],
-    plan: async () => ({ request: { child_evidence: { a: { capture_mode: "source-only" } } }, approval_sha256: "digest" }), save: async () => { throw new Error("unapproved Save"); } });
+  const result = await saveCatalog(vscode, { dimensions: async () => [{ id: "dimension", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" }],
+    plan: async () => ({ request: { destination_binding: binding, child_evidence: { a: { capture_mode: "source-only" } } }, approval_sha256: "digest" }), save: async () => { throw new Error("unapproved Save"); } });
   assert.equal(result, "cancelled");
 });
 
@@ -93,7 +96,7 @@ test("child-specific mode and component inputs reach both plan and approved capt
   const options = { component_selection: { format_version: 1, components }, homebrew_directory: "/synthetic/recipe" };
   const dialogs = [[{ fsPath: source }], children.map(name => ({ fsPath: source + "/" + name }))];
   const picks = [{ id: "policy" }, { id: "source-only" }, { id: "metadata" },
-    { dimension: { id: "test", encryption_domain_id: "00000000-0000-4000-8000-000000000001" } }];
+    { dimension: { id: "test", provider: "minio", encryption_domain_id: "00000000-0000-4000-8000-000000000001" } }];
   const vscode = { window: {
     showOpenDialog: async () => dialogs.shift(), showQuickPick: async () => picks.shift(),
     showWarningMessage: async (_title, settings, action) => {
@@ -115,7 +118,7 @@ test("child-specific mode and component inputs reach both plan and approved capt
         { path: children[0], outcome: "child", component_options: options },
         { path: children[1], outcome: "child", capture_mode: "source-only" },
       ]);
-      return { approval_sha256: "test", request: { child_evidence: {
+      return { approval_sha256: "test", request: { destination_binding: { ...binding, dimension_id: "test" }, child_evidence: {
         [children[0]]: { capture_mode: "full-repository", component_plan: { selection: options.component_selection } },
         [children[1]]: { capture_mode: "source-only" },
       } } };
@@ -153,4 +156,20 @@ test("retry retains approval without persisting explicit external component path
     return { ok: true, marker_verified: true, snapshot_id: "new", components: { homebrew_recovery: {} } };
   } });
   assert.equal(pending, undefined);
+});
+
+for (const [field, value] of Object.entries({
+  provider: "s3", dimension_id: "other-dimension", connection_id: "other-connection",
+  physical_bucket: "minio:https://storage.example.invalid:other-bucket",
+  endpoint: "minio:https://other.example.invalid:fixture", encryption_domain_id: "00000000-0000-4000-8000-000000000002",
+})) test(`Catalog refuses changed ${field} before approval`, async () => {
+  const dialogs = [[{ fsPath: "/synthetic/root" }], [{ fsPath: "/synthetic/root/a" }]];
+  const dimension = { id: binding.dimension_id, provider: binding.provider, connection_id: binding.connection_id,
+    encryption_domain_id: binding.encryption_domain_id, endpoint: "https://storage.example.invalid", bucket: "fixture" };
+  const vscode = { window: { showOpenDialog: async () => dialogs.shift(), showQuickPick: async rows => rows[0],
+    showWarningMessage: () => assert.fail("unexpected approval") } };
+  await assert.rejects(saveCatalog(vscode, { dimensions: async () => [dimension],
+    plan: async () => ({ request: { destination_binding: { ...binding, [field === "endpoint" ? "physical_bucket" : field]: value },
+      child_evidence: { a: { capture_mode: "full-repository" } } } }),
+    save: () => assert.fail("unexpected save") }), /destination.*changed/i);
 });
