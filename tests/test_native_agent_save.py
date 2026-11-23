@@ -213,6 +213,45 @@ def test_history_chooser_disabled_gate_never_opens_authority(tmp_path, monkeypat
     assert save.status(None, SimpleNamespace(provider="minio"), None, "room", tmp_path)["agent_save"]["available"] is False
 
 
+@pytest.mark.parametrize("failure", ["changed", "admission-failed"])
+def test_status_preserves_failed_tool_reason_when_another_tool_is_admitted(tmp_path, monkeypatch, failure):
+    from josh_room import (
+        native_agent_discovery,
+        native_agent_reference,
+        room_store_operations,
+        workspace_policy,
+    )
+
+    monkeypatch.setattr(save.sys, "platform", "linux")
+    profile = {"room_reference_allowed": True, "scope": "personal", "tools": ["codex", "claude"], "profile_ref": "a" * 64}
+    monkeypatch.setattr(native_agent_discovery, "room_status", lambda **_: {"profiles": [profile]})
+    resolved = {"profile": "synthetic", "scope": "personal"}
+    monkeypatch.setattr(native_agent_discovery, "resolve_profile", lambda **_: resolved)
+    monkeypatch.setattr(workspace_policy, "load_capture_policy", lambda *_: SimpleNamespace(sha256="b" * 64))
+    monkeypatch.setattr(room_store_operations, "scan_workspace_for_status", lambda *_: SimpleNamespace(signature="c" * 64))
+
+    @contextmanager
+    def opened(*_):
+        yield SimpleNamespace(context=None)
+
+    def grant(_context, _profile, tool, *_):
+        if tool == "claude":
+            return resolved, None, None
+        if failure == "changed":
+            return {**resolved, "scope": "homelab"}, None, None
+        raise ValueError("synthetic-private-diagnostic")
+
+    monkeypatch.setattr(save, "open_scope", opened)
+    monkeypatch.setattr(native_agent_reference, "_grant", grant)
+    dimension = SimpleNamespace(provider="minio", dimension_id="synthetic")
+    result = save.status(None, dimension, None, "demo", tmp_path)["agent_save"]
+    assert result["available"] is True
+    assert result["profiles"] == [{"tool": "claude", "scope": "personal", "profile_ref": "a" * 64, "admitted": True}]
+    assert result["denials"] == {"codex": f"native-save-profile-{failure}"}
+    assert "reason" not in result
+    assert "synthetic-private-diagnostic" not in json.dumps(result)
+
+
 @pytest.mark.parametrize(
     "platform, provider, enabled",
     [("win32", "minio", True), ("linux", "s3", True), ("linux", "minio", False)],

@@ -12,6 +12,8 @@ const admissionMessages = {
   'native-save-profile-changed': 'The recovery grant changed. Revalidate the dedicated profile before capture.',
   'native-save-profile-admission-failed': 'The recovery profile failed current admission. Check its host grant and custody before capture.',
 };
+const profileDenialReasons = new Set(['native-save-profile-changed', 'native-save-profile-admission-failed']);
+const noAdmittedProfile = 'No currently admitted recovery profile; existing shared-home adoption needs #188.';
 
 function sessionSummary(inventory, tool) {
   const row = inventory?.contract_version === 1 ? inventory.tools?.[tool] : undefined;
@@ -41,6 +43,7 @@ function validAgentProfile(profile) {
 async function pickComponents(vscode, source, previous, discoverInstalled, discoverAgents, discoverSessions) {
   let agentProfiles = [];
   let agentReason = 'Recovery admission could not be checked. No history capture is authorized.';
+  let agentDenials;
   if (discoverAgents) {
     try {
       const candidate = (await discoverAgents())?.agent_save;
@@ -53,7 +56,10 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
           ? candidate.profiles.length > 0 && candidate.profiles.every(validAgentProfile)
           : candidate.profiles.length === 0);
       if (validStructure) {
-        agentReason = Object.hasOwn(admissionMessages, candidate.reason) ? admissionMessages[candidate.reason] : 'No currently admitted recovery profile; existing shared-home adoption needs #188.';
+        agentDenials = candidate.denials;
+        const reason = candidate.reason;
+        agentReason = typeof reason === 'string' && Object.hasOwn(admissionMessages, reason)
+          && !(agentDenials && profileDenialReasons.has(reason)) ? admissionMessages[reason] : noAdmittedProfile;
         if (candidate.available) agentProfiles = candidate.profiles;
       }
     } catch (_) { /* Unavailable admission never authorizes capture. */ }
@@ -75,10 +81,14 @@ async function pickComponents(vscode, source, previous, discoverInstalled, disco
   const defaults = previous?.request?.components || {
     rcc_environment: robot ? 'refresh' : 'keep', homebrew_recovery: 'keep', hauler_content: 'keep',
   };
+  const reasonFor = tool => {
+    const denial = agentDenials?.[tool];
+    return profileDenialReasons.has(denial) ? admissionMessages[denial] : agentReason;
+  };
   const unavailable = [
     ...(!installed.available ? [{ label: 'Homebrew installed prefix / binaries', detail: 'Unavailable: requires qualified Debian 12 x64, owner-controlled exact prefix, supported Hello or declared jq runtime closure.' }] : []),
-    ...(!agentProfiles.some(p => p.tool === 'codex') ? [{ label: 'Codex HISTORY', detail: `${sessionSummary(inventory, 'codex')} ${agentReason} Authentication is never copied.` }] : []),
-    ...(!agentProfiles.some(p => p.tool === 'claude') ? [{ label: 'Claude HISTORY', detail: `${agentReason} Authentication is never copied.` }] : []),
+    ...(!agentProfiles.some(p => p.tool === 'codex') ? [{ label: 'Codex HISTORY', detail: `${sessionSummary(inventory, 'codex')} ${reasonFor('codex')} Authentication is never copied.` }] : []),
+    ...(!agentProfiles.some(p => p.tool === 'claude') ? [{ label: 'Claude HISTORY', detail: `${reasonFor('claude')} Authentication is never copied.` }] : []),
     { label: 'T3 Code sessions', detail: `${sessionSummary(inventory, 't3')} T3 recovery remains blocked by #188. Keep the existing home until supported recovery is available; no shared database capture.` },
   ];
   const rows = [

@@ -1841,6 +1841,39 @@ test("native Save probes ordinary sessions independently without adding a captur
   assert.ok(saves.every(call => !call.args.includes('--agent-selection')));
 });
 
+test('registered Save shows the failed tool grant alongside an admitted tool', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'josh-room-mixed-admission-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fixture = createNativeSaveFixture(root, {
+    preview: nativePreview(), saveResult: { ok: true, status: 'saved', project_id: 'demo-room', snapshot_id: 'jat-2' },
+    agentStatus: { ok: true, agent_save: {
+      contract_version: 1, mode: 'history-only', available: true,
+      profiles: [{ tool: 'claude', profile_ref: 'b'.repeat(64), scope: 'personal', admitted: true }],
+      denials: { codex: 'native-save-profile-changed' },
+    } },
+    sessionInventory: { contract_version: 1, tools: { codex: { state: 'complete', exact: 1, descendant: 0 } } },
+  });
+  const original = fixture.vscode.window.showQuickPick;
+  let historyRows;
+  fixture.vscode.window.showQuickPick = async (rows, options) => {
+    if (rows.some(row => row.id === 'agent_claude')) historyRows = rows;
+    return original(rows, options);
+  };
+  const subscriptions = [];
+  fixture.extension.activate({ extensionPath: root, globalStorageUri: { fsPath: root }, subscriptions,
+    secrets: { get: async key => key.startsWith('josh-room.encryption.v1:') ? JSON.stringify({ identity: 'synthetic-identity' }) : undefined } });
+  t.after(() => { for (const entry of subscriptions) entry.dispose?.(); });
+  fixture.vscode.infoResponses.push('Save');
+  assert.equal(await fixture.commandCallbacks.get('joshRoom.saveFolderAs')(), 'saved');
+  const codex = historyRows.find(row => /Codex HISTORY/.test(row.label));
+  assert.equal(codex.unavailable, true);
+  assert.match(codex.detail, /1 session.*recovery grant changed/);
+  assert.equal(historyRows.find(row => row.id === 'agent_claude').picked, false);
+  const saves = fixture.spawnHarness.calls.filter(call => call.args[0] === 'snapshot' && ['preview', 'create'].includes(call.args[1]));
+  assert.equal(saves.length, 2);
+  assert.ok(saves.every(call => !call.args.includes('--agent-selection')));
+});
+
 test("native Save previews the Room Store and reports logical, scanned, and Restic bytes separately", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "josh-room-native-save-preview-"));
   const fixture = createNativeSaveFixture(root, {

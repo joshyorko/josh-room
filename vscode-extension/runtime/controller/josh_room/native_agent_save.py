@@ -959,7 +959,8 @@ def status(instance, dimension, material, room, workspace):
     from .room_store_operations import scan_workspace_for_status
     from .workspace_policy import load_capture_policy
 
-    result["agent_save"]["reason"] = "native-save-profile-admission-failed"
+    agent_save = result["agent_save"]
+    denials = {}
     policy = load_capture_policy(Path(workspace))
     scan = scan_workspace_for_status(Path(workspace))
     with open_scope(
@@ -985,11 +986,12 @@ def status(instance, dimension, material, room, workspace):
                         "room-capture",
                     )
                     if admitted_grant != grant:
-                        result["agent_save"]["reason"] = "native-save-profile-changed"
+                        denials[tool] = "native-save-profile-changed"
                         continue
                 except (OSError, RuntimeError, ValueError):
+                    denials.setdefault(tool, "native-save-profile-admission-failed")
                     continue
-                result["agent_save"]["profiles"].append(
+                agent_save["profiles"].append(
                     {
                         "tool": tool,
                         "profile_ref": candidate["profile_ref"],
@@ -997,7 +999,14 @@ def status(instance, dimension, material, room, workspace):
                         "admitted": True,
                     }
                 )
-    result["agent_save"]["available"] = bool(result["agent_save"]["profiles"])
-    if result["agent_save"]["available"]:
-        result["agent_save"].pop("reason", None)
+    for profile in agent_save["profiles"]:
+        denials.pop(profile["tool"], None)
+    if denials:
+        agent_save["denials"] = denials
+    agent_save["available"] = bool(agent_save["profiles"])
+    if not agent_save["available"]:
+        agent_save["reason"] = (
+            "native-save-profile-changed" if "native-save-profile-changed" in denials.values()
+            else "native-save-profile-admission-failed"
+        )
     return result

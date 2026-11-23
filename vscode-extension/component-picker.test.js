@@ -108,6 +108,29 @@ test('admission failure does not suppress independent session detection', async 
   assert.doesNotMatch(detail, /private|credential/);
 });
 
+test('mixed admission keeps the bounded denial on the failed tool row', async () => {
+  const v = mock([rows => rows.filter(row => row.id === 'agent_claude'), rows => rows[0]]);
+  const status = { agent_save: {
+    contract_version: 1, mode: 'history-only', available: true,
+    profiles: [{ tool: 'claude', profile_ref: 'b'.repeat(64), scope: 'personal', admitted: true }],
+    denials: { codex: 'native-save-profile-admission-failed' },
+  } };
+  const result = await pickComponents(v, '/synthetic/source', undefined, undefined, async () => status, async () => detected);
+  const codex = v.calls[0].rows.find(row => /Codex HISTORY/.test(row.label));
+  assert.equal(codex.unavailable, true);
+  assert.equal(codex.picked, false);
+  assert.match(codex.detail, /1 session.*failed current admission.*host grant and custody/);
+  assert.doesNotMatch(codex.detail, /adoption/);
+  assert.deepEqual(JSON.parse(result.args[result.args.indexOf('--agent-selection') + 1]).entries,
+    [{ tool: 'claude', profile_ref: 'b'.repeat(64) }]);
+
+  const unknown = mock([[]]);
+  status.agent_save.denials.codex = '/synthetic/private-diagnostic';
+  const noHistory = await pickComponents(unknown, '/synthetic/source', undefined, undefined, async () => status);
+  assert.doesNotMatch(unknown.calls[0].rows.find(row => /Codex HISTORY/.test(row.label)).detail, /private-diagnostic/);
+  assert.equal(noHistory.args.includes('--agent-selection'), false);
+});
+
 test('no history, unsupported format, incomplete scan and failure stay distinct', async () => {
   for (const [state, expected] of [['complete', /No matching sessions found/], ['unsupported', /format or platform is unsupported/], ['partial', /discovery is incomplete/], ['unavailable', /discovery failed/]]) {
     const v = mock([[]]);

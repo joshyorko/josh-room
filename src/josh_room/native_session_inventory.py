@@ -45,11 +45,8 @@ def _match(result, cwd, workspace):
         result["descendant"] += 1
 
 
-def _home(variable, default):
-    value = os.environ.get(variable)
-    if variable == "T3CODE_HOME" and value is not None:
-        value = value.strip() or None
-    path = Path(value if value is not None else Path.home() / default)
+def _home(value, default):
+    path = Path(value) if value else Path.home() / default
     if not path.is_absolute() or ".." in path.parts:
         raise ValueError("invalid-home")
     # Permit OS aliases above the home, but never a linked session root.
@@ -79,23 +76,27 @@ def _codex(workspace):
     result = _result()
     deadline = time.monotonic() + MAX_SECONDS
     visited = read_bytes = 0
+    entries_exhausted = False
     identities = set()
 
     def check():
-        if visited > MAX_ENTRIES or read_bytes > MAX_READ_BYTES or time.monotonic() > deadline:
+        if time.monotonic() > deadline:
             raise _Limit
 
     def mark_partial(reason):
         result.update(state="partial", reason=reason)
 
     def walk(directory, depth=0):
-        nonlocal visited, read_bytes
+        nonlocal visited, read_bytes, entries_exhausted
         entries = []
         try:
             with os.scandir(directory) as iterator:
                 for entry in iterator:
-                    visited += 1
                     check()
+                    if visited == MAX_ENTRIES:
+                        entries_exhausted = True
+                        break
+                    visited += 1
                     entries.append(entry)
         except FileNotFoundError:
             mark_partial("source-changed")
@@ -103,7 +104,7 @@ def _codex(workspace):
         except OSError:
             mark_partial("discovery-failed")
             return
-        # Recent date directories/rollouts first when a large home reaches a bound.
+        # Within each collected batch, inspect recent date directories/rollouts first.
         for entry in sorted(entries, key=lambda item: item.name, reverse=True):
             check()
             try:
@@ -118,6 +119,8 @@ def _codex(workspace):
             if is_link:
                 mark_partial("unsafe-entry")
             elif is_dir:
+                if entries_exhausted:
+                    continue
                 if depth >= 4:
                     mark_partial("inventory-limit")
                     continue
@@ -138,20 +141,34 @@ def _codex(workspace):
                     mark_partial("unsafe-entry" if error.errno in {errno.ELOOP, errno.ENXIO, errno.EISDIR} else "discovery-failed")
                     continue
                 try:
-                    with os.fdopen(fd, "rb") as stream:
-                        info = os.fstat(stream.fileno())
-                        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
-                            mark_partial("unsafe-entry")
-                            continue
-                        data = stream.readline(min(MAX_HEADER_BYTES, MAX_READ_BYTES - read_bytes) + 1)
-                        read_bytes += len(data)
-                        check()
-                        if len(data) > MAX_HEADER_BYTES:
-                            mark_partial("inventory-limit")
-                            continue
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
+                        mark_partial("unsafe-entry")
+                        continue
+                    remaining = MAX_READ_BYTES - read_bytes
+                    if not remaining:
+                        raise _Limit
+                    data = bytearray()
+                    # Stop exactly at the newline without reading transcript bytes ahead.
+                    for offset in range(min(MAX_HEADER_BYTES, remaining)):
+                        if offset % 256 == 0:
+                            check()
+                        byte = os.read(fd, 1)
+                        if not byte:
+                            break
+                        read_bytes += 1
+                        data.extend(byte)
+                        if byte == b"\n":
+                            break
+                    else:
+                        mark_partial("inventory-limit")
+                        continue
+                    check()
                 except OSError:
                     mark_partial("discovery-failed")
                     continue
+                finally:
+                    os.close(fd)
                 try:
                     header = json.loads(data)
                     payload = header.get("payload") if isinstance(header, dict) else None
@@ -170,8 +187,10 @@ def _codex(workspace):
                 mark_partial("unsupported-format")
 
     try:
-        with _directory(_home("CODEX_HOME", ".codex")) as home:
+        with _directory(_home(os.environ.get("CODEX_HOME"), ".codex")) as home:
             for name in ("sessions", "archived_sessions"):
+                if entries_exhausted:
+                    break
                 try:
                     directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=home)
                 except FileNotFoundError:
@@ -183,6 +202,8 @@ def _codex(workspace):
                     walk(directory)
                 finally:
                     os.close(directory)
+            if entries_exhausted:
+                mark_partial("inventory-limit")
     except FileNotFoundError:
         pass
     except _Limit:
@@ -197,7 +218,13 @@ def _t3(workspace):
     deadline = time.monotonic() + MAX_SECONDS
     opened = False
     try:
-        with _directory(_home("T3CODE_HOME", ".t3")) as home, _directory("userdata", parent=home) as directory:
+        home_value = os.environ.get("T3CODE_HOME", "").strip()
+        state_dir = "dev" if not home_value and os.environ.get("VITE_DEV_SERVER_URL") else "userdata"
+        if home_value == "~":
+            home_value = str(Path.home())
+        elif home_value.startswith(("~/", "~\\")):
+            home_value = str(Path.home() / home_value[2:].lstrip("/"))
+        with _directory(_home(home_value, ".t3")) as home, _directory(state_dir, parent=home) as directory:
             try:
                 info = os.stat("statev2.sqlite", dir_fd=directory, follow_symlinks=False)
             except FileNotFoundError:

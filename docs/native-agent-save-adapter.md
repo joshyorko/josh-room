@@ -34,22 +34,28 @@ ordinary or child-folder sessions counted alongside it. Claude remains on the
 existing granted-profile discovery path; this probe does not read Claude turns.
 
 Inventory uses the managed controller's private result receipt as well as
-stdout, so RCC stream suppression cannot erase a successful observation. Its
-operation log redacts the local workspace argument. Unsupported Save providers
-report the known MinIO-only capture restriction independently of inventory.
+stdout, so RCC stream suppression cannot erase a successful observation. A
+receipt write failure returns a blocked JSON result and a nonzero exit status
+without exposing local paths. The operation log redacts the workspace argument.
+Unsupported Save providers report the known MinIO-only capture restriction
+independently of inventory.
 
-The probe uses `CODEX_HOME` / `T3CODE_HOME`, defaulting to `~/.codex` / `~/.t3`
-in the workspace extension host. It reads only the first Codex `session_meta`
+The probe uses `CODEX_HOME` and `T3CODE_HOME` from the workspace extension host.
+An unset or empty `CODEX_HOME` uses `~/.codex`. `T3CODE_HOME` is trimmed and
+expands `~` or a `~/` prefix to the host user home. An unset or blank
+`T3CODE_HOME` uses `~/.t3`. When `VITE_DEV_SERVER_URL` is set and the T3
+home is implicit, the probe selects `~/.t3/dev`. An explicit home uses its
+`userdata` directory. Settings passed only to a separate T3 launcher are outside
+this environment-based probe. The probe reads only the first Codex `session_meta`
 record from active/archived JSONL files and schema-checked T3 project/thread
 metadata through a read-only SQLite connection, including committed WAL data.
 Current T3 v2 threads are recognized even when legacy thread tables are empty;
 the legacy table layout inside `statev2.sqlite` is also supported. A home with
 only pre-v2 `userdata/state.sqlite` is reported as unsupported, not empty;
-retained rollback copies are not counted or migrated. `T3CODE_HOME` follows the
-launcher's whitespace trimming, with blank values using the default home.
-No messages, titles, private paths,
-session IDs, auth stores, or raw errors are returned to VS Code. No provider
-process, model request, recovery grant, database backup or capture is created.
+retained rollback copies are not counted or migrated. No messages, titles,
+private paths, session IDs, auth stores, or raw errors are returned to VS Code.
+The probe creates no provider process, model request, recovery grant, database
+backup, or capture.
 The existing offline `agents room-status` contract remains profile-only.
 All T3 metadata queries share one read transaction, including mixed legacy/v2
 identity filtering. `projection_projects` must be a real SQLite table (never a
@@ -72,10 +78,13 @@ are never written, and no database or provider home is copied. A changing main
 file or rollback journal refuses the observation rather than showing unverified
 counts.
 
-Each tool is limited to 4,096 entries/rows and one second; Codex headers have a
-256 KiB per-record and 8 MiB total read limit, and the extension bounds the
-inventory subprocess with a timeout. Per-entry Codex limits, deep branches,
-unreadable/raced entries, and linked/special entries mark the scan incomplete
+Each tool is limited to 4,096 entries/rows and one second. Codex limits actual
+reads to 256 KiB per record and 8 MiB total, and stops at the first newline
+without reading ahead into the transcript. When a directory exceeds the entry
+budget, the probe processes the collected file batch and returns confirmed
+counts with `partial`. The extension bounds the inventory subprocess with a
+timeout. Per-entry Codex limits, deep branches, unreadable/raced entries, and
+linked/special entries mark the scan incomplete
 (`partial`) while continuing over remaining valid sessions. Linked roots,
 inaccessible databases, unsupported schemas, and exhausted global bounds report
 unavailable/unsupported/incomplete discovery, never proof that no history
@@ -86,8 +95,11 @@ when recovery admission fails.
 Missing host authority, work-only grants, and non-room-reference grants now
 retain their bounded reason through Save status offline preflight, without
 opening storage or scanning workspace contents when no eligible granted
-profiles exist. When eligible profiles do exist, their admission failure
-reasons are not overwritten by unrelated ineligible profiles. This early check
+profiles exist. When eligible profiles exist, the status result can include a
+`denials` map keyed by `codex` or `claude` for tools whose eligible profiles all
+failed revalidation. The only per-tool values are `native-save-profile-changed`
+and `native-save-profile-admission-failed`. The picker uses that reason for the
+unavailable tool even when the other tool is admitted. This early check
 runs in the actual snapshot status CLI before encryption-material resolution,
 including a private managed result receipt; when live MinIO admission is
 needed, the extension forwards its loaded encryption material.

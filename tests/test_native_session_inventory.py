@@ -3,6 +3,8 @@
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ def homes(tmp_path, monkeypatch):
     workspace.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     monkeypatch.setenv("T3CODE_HOME", str(tmp_path / "t3"))
+    monkeypatch.delenv("VITE_DEV_SERVER_URL", raising=False)
     return workspace
 
 
@@ -29,8 +32,8 @@ def rollout(cwd, name="a", *, archived=False):
     return path
 
 
-def database(workspace, *, v2=True, wal=False):
-    path = Path(os.environ["T3CODE_HOME"]) / "userdata/statev2.sqlite"
+def database(workspace, *, v2=True, wal=False, state_dir="userdata"):
+    path = Path(os.environ["T3CODE_HOME"]) / state_dir / "statev2.sqlite"
     path.parent.mkdir(parents=True)
     connection = sqlite3.connect(path)
     if wal:
@@ -108,6 +111,51 @@ def test_entry_limit_is_reported_as_incomplete(homes, monkeypatch):
     rollout(homes)
     monkeypatch.setattr(inventory, "MAX_ENTRIES", 1)
     assert inventory.inventory(homes)["tools"]["codex"]["reason"] == "inventory-limit"
+
+
+def test_codex_flat_archive_retains_counts_at_entry_limit(homes, monkeypatch):
+    for name in ("a", "b", "c"):
+        rollout(homes, name, archived=True)
+    monkeypatch.setattr(inventory, "MAX_ENTRIES", 2)
+    assert inventory.inventory(homes)["tools"]["codex"] == {
+        "state": "partial", "exact": 2, "descendant": 0, "reason": "inventory-limit",
+    }
+
+
+@pytest.mark.parametrize("second_header_bytes", [None, 9])
+def test_codex_reads_only_header_bytes_within_total_budget(homes, monkeypatch, second_header_bytes):
+    first = rollout(homes, "z", archived=True)
+    second = rollout(homes, "a", archived=True)
+    header_size = first.read_bytes().index(b"\n") + 1
+    assert second.read_bytes().index(b"\n") + 1 == header_size
+    first.write_bytes(first.read_bytes() + b"synthetic transcript body\n" * 500)
+    if second_header_bytes is not None:
+        monkeypatch.setattr(inventory, "MAX_READ_BYTES", header_size + second_header_bytes)
+
+    original_open, original_close = os.open, os.close
+    opened = {}
+    offsets = {}
+
+    def track_open(path, *args, **kwargs):
+        fd = original_open(path, *args, **kwargs)
+        if path in {first.name, second.name}:
+            opened[path] = os.dup(fd)
+        return fd
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", track_open)
+        try:
+            result = inventory.inventory(homes)["tools"]["codex"]
+            offsets = {name: os.lseek(fd, 0, os.SEEK_CUR) for name, fd in opened.items()}
+        finally:
+            for fd in opened.values():
+                original_close(fd)
+
+    assert offsets == {first.name: header_size, second.name: second_header_bytes or header_size}
+    if second_header_bytes is None:
+        assert result == {"state": "complete", "exact": 2, "descendant": 0}
+    else:
+        assert result == {"state": "partial", "exact": 1, "descendant": 0, "reason": "inventory-limit"}
 
 
 def test_disappearing_rollout_does_not_hide_other_sessions_or_claim_complete(homes, monkeypatch):
@@ -207,6 +255,46 @@ def test_blank_t3_home_uses_default_home(homes, monkeypatch):
     assert inventory.inventory(homes)["tools"]["t3"]["exact"] == 1
 
 
+def test_empty_codex_home_uses_default_home(homes, monkeypatch):
+    path = rollout(homes)
+    path.parents[4].rename(homes.parent / ".codex")
+    monkeypatch.setenv("HOME", str(homes.parent))
+    monkeypatch.setenv("CODEX_HOME", "")
+    assert inventory.inventory(homes)["tools"]["codex"] == {"state": "complete", "exact": 1, "descendant": 0}
+
+
+@pytest.mark.parametrize("home", ["~/t3", "  ~/t3  ", "~\\t3", "~"])
+def test_t3_home_expands_literal_user_home(homes, monkeypatch, home):
+    connection, path = database(homes)
+    add_thread(connection, "one")
+    connection.close()
+    monkeypatch.setenv("HOME", str(homes.parent if home != "~" else path.parents[1]))
+    monkeypatch.setenv("T3CODE_HOME", home)
+    assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 1, "descendant": 0}
+
+
+@pytest.mark.parametrize("explicit_home", [None, " \t ", "~/t3"])
+def test_t3_development_url_selects_effective_state_directory(homes, monkeypatch, explicit_home):
+    monkeypatch.setenv("HOME", str(homes.parent))
+    monkeypatch.setenv("VITE_DEV_SERVER_URL", "http://localhost:5173")
+    if explicit_home == "~/t3":
+        selected, alternate = "userdata", "dev"
+    else:
+        monkeypatch.setenv("T3CODE_HOME", str(homes.parent / ".t3"))
+        selected, alternate = "dev", "userdata"
+    connection, _path = database(homes, state_dir=selected)
+    add_thread(connection, "selected")
+    connection.close()
+    connection, _path = database(homes, state_dir=alternate)
+    add_thread(connection, "alternate", path=str(homes / "child"))
+    connection.close()
+    if explicit_home is None:
+        monkeypatch.delenv("T3CODE_HOME")
+    else:
+        monkeypatch.setenv("T3CODE_HOME", explicit_home)
+    assert inventory.inventory(homes)["tools"]["t3"] == {"state": "complete", "exact": 1, "descendant": 0}
+
+
 def test_mixed_t3_layouts_keep_distinct_histories_but_v2_overrides_legacy(homes):
     connection, _path = database(homes)
     add_thread(connection, "legacy-only", v2=False)
@@ -284,6 +372,23 @@ def test_inventory_writes_private_managed_result_receipt(homes, capsys, monkeypa
     assert native_agents_cli.main(["inventory", "--workspace", str(homes), "--json"]) == 0
     assert json.loads(target.read_text()) == json.loads(capsys.readouterr().out)
     assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_inventory_receipt_failure_is_sanitized_on_both_cli_streams(homes, monkeypatch):
+    rollout(homes)
+    parent = homes.parent / "synthetic-private-receipt-parent"
+    parent.touch()
+    monkeypatch.setenv("JOSH_ROOM_RESULT_FILE", str(parent / "result.json"))
+    result = subprocess.run(
+        [sys.executable, "-m", "josh_room", "agents", "inventory", "--workspace", str(homes), "--json"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert json.loads(result.stdout) == {
+        "ok": False, "state": "blocked", "error": "Session inventory result receipt could not be written",
+    }
+    assert str(parent) not in result.stdout
 
 
 @pytest.mark.parametrize(

@@ -128,7 +128,10 @@ def main(argv=None) -> int:
     if args.action == "inventory":
         from .cli import _bounded_json_result, _write_runtime_result
 
-        result = _bounded_json_result(result)
-        _write_runtime_result(result)
+        try:
+            result = _bounded_json_result(result)
+            _write_runtime_result(result)
+        except (OSError, RuntimeError, ValueError, TypeError):
+            result = {"ok": False, "state": "blocked", "error": "Session inventory result receipt could not be written"}
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("ok") else 1
